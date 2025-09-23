@@ -402,7 +402,7 @@ fn evaluatePureExpression(self: *Repl, module_env: *ModuleEnv) ![]const u8 {
     var layout_cache = layout_mod.Store.init(module_env, &module_env.types) catch |err| {
         return try std.fmt.allocPrint(self.allocator, "Layout cache error: {}", .{err});
     };
-    defer layout_cache.deinit();
+    defer layout_cache.deinitWithInterner();
 
     // Clear eval stack to prevent memory corruption from previous evaluations
     self.eval_stack.used = 0;

@@ -49,6 +49,21 @@ pub fn getGlobalFieldInterner() !*base.Ident.Store {
     return ptr;
 }
 
+/// Clean up the global field interner - call this at the end of all tests
+pub fn cleanupGlobalFieldInterner() void {
+    global_interner_mutex.lock();
+    defer global_interner_mutex.unlock();
+
+    if (global_field_interner) |interner| {
+        std.debug.print("Cleaning up global field interner at {*}\n", .{interner});
+        interner.deinit(test_allocator);
+        test_allocator.destroy(interner);
+        global_field_interner = null;
+    } else {
+        std.debug.print("No global field interner to clean up\n", .{});
+    }
+}
+
 /// Helper function to run an expression and expect a specific error.
 pub fn runExpectError(src: []const u8, expected_error: eval.EvalError, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
@@ -670,4 +685,10 @@ test "nominal type context preservation - regression prevention" {
     // This should work correctly now with nominal type context preservation
     try runExpectBool("(|x| !x)(Bool.True)", false, .no_trace);
     try runExpectBool("(|x| !x)(Bool.False)", true, .no_trace);
+}
+
+// Cleanup test - runs last to clean up global resources
+test "zzz_cleanup_helpers_global_interner" {
+    // Named with zzz prefix to run last (tests run alphabetically)
+    cleanupGlobalFieldInterner();
 }

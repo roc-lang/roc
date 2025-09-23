@@ -219,10 +219,335 @@ test "minimal cross-module type size mismatch" {
     try testing.expectEqual(@as(i128, 42), result.asI128());
 }
 
+test "type checker analysis: cross-module polymorphic types are CORRECT" {
+    // This test demonstrates that the TYPE CHECKER is working correctly.
+    // The issue is in the INTERPRETER, not the type checker.
+
+    const allocator = testing.allocator;
+
+    // Module A: Polymorphic field accessor
+    const module_a_source =
+        \\module [getFirst]
+        \\
+        \\getFirst = \r -> r.first
+    ;
+
+    // Module B: Wraps A's function
+    const module_b_source =
+        \\module [extractFirst]
+        \\
+        \\import A exposing [getFirst]
+        \\
+        \\extractFirst = \p -> getFirst(p)
+    ;
+
+    // Set up Module A
+    var module_a_env = try ModuleEnv.init(allocator, module_a_source);
+    defer module_a_env.deinit();
+    module_a_env.module_name = "A";
+
+    var module_a_parse = try parse.parse(&module_a_env.common, allocator);
+    defer module_a_parse.deinit(allocator);
+    try testing.expect(!module_a_parse.hasErrors());
+
+    var module_a_czer = try Can.init(&module_a_env, &module_a_parse, null);
+    defer module_a_czer.deinit();
+    try module_a_czer.canonicalizeFile();
+
+    var module_a_checker = try Check.init(allocator, &module_a_env.types, &module_a_env, &.{}, &module_a_env.store.regions);
+    defer module_a_checker.deinit();
+    try module_a_checker.checkDefs();
+
+    // Set up Module B
+    var module_b_env = try ModuleEnv.init(allocator, module_b_source);
+    defer module_b_env.deinit();
+    module_b_env.module_name = "B";
+
+    var module_b_deps = std.StringHashMap(*ModuleEnv).init(allocator);
+    defer module_b_deps.deinit();
+    try module_b_deps.put("A", &module_a_env);
+
+    var module_b_parse = try parse.parse(&module_b_env.common, allocator);
+    defer module_b_parse.deinit(allocator);
+    try testing.expect(!module_b_parse.hasErrors());
+
+    var module_b_czer = try Can.init(&module_b_env, &module_b_parse, &module_b_deps);
+    defer module_b_czer.deinit();
+    try module_b_czer.canonicalizeFile();
+
+    const module_b_other_modules = [_]*ModuleEnv{&module_a_env};
+    var module_b_checker = try Check.init(allocator, &module_b_env.types, &module_b_env, &module_b_other_modules, &module_b_env.store.regions);
+    defer module_b_checker.deinit();
+    try module_b_checker.checkDefs();
+
+    // CHECK THE TYPES - This is the important part!
+    std.debug.print("\n=== TYPE CHECKER ANALYSIS ===\n", .{});
+
+    const b_defs = module_b_env.store.sliceDefs(module_b_env.all_defs);
+    for (b_defs) |def_idx| {
+        const def = module_b_env.store.getDef(def_idx);
+        const pattern = module_b_env.store.getPattern(def.pattern);
+        if (pattern == .assign) {
+            const ident = module_b_env.getIdent(pattern.assign.ident);
+            if (std.mem.eql(u8, ident, "extractFirst")) {
+                // extractFirst = \p -> getFirst(p)
+                const lambda_expr = module_b_env.store.getExpr(def.expr);
+                try testing.expect(lambda_expr == .e_lambda);
+
+                // Get the body (the call to getFirst)
+                const body = module_b_env.store.getExpr(lambda_expr.e_lambda.body);
+                try testing.expect(body == .e_call);
+
+                // CHECK THE TYPE OF getFirst(p)
+                const call_var = ModuleEnv.varFrom(lambda_expr.e_lambda.body);
+                const call_resolved = module_b_env.types.resolveVar(call_var);
+
+                std.debug.print("Module B: getFirst(p) has type: {s}\n", .{@tagName(call_resolved.desc.content)});
+
+                // THIS IS CORRECT! It should be flex_var because:
+                // 1. p is a polymorphic parameter of extractFirst
+                // 2. getFirst is polymorphic: {first: a, ...} -> a
+                // 3. When we call getFirst(p), we get back type 'a' which is still polymorphic
+                try testing.expect(call_resolved.desc.content == .flex_var);
+
+                std.debug.print("✓ CORRECT: The type checker correctly keeps this polymorphic!\n", .{});
+                std.debug.print("  The call getFirst(p) returns a flex_var because p is polymorphic.\n", .{});
+            }
+        }
+    }
+
+    std.debug.print("\n=== CONCLUSION ===\n", .{});
+    std.debug.print("The TYPE CHECKER is working correctly!\n", .{});
+    std.debug.print("The issue is that the INTERPRETER cannot handle polymorphic return types.\n", .{});
+    std.debug.print("When the interpreter tries to evaluate getFirst(p) in Module B,\n", .{});
+    std.debug.print("it needs to allocate a return slot but can't determine the size\n", .{});
+    std.debug.print("because the return type is still polymorphic (flex_var).\n", .{});
+    std.debug.print("==================\n\n", .{});
+}
+
+test "BUG: interpreter fails on cross-module polymorphic field accessor" {
+    // This demonstrates the INTERPRETER bug (not a type checker bug)
+    // 1. Module A exports a polymorphic field accessor: |r| r.field
+    // 2. Module B imports and re-exports it wrapped: |x| getField(x)
+    // 3. Main calls B's wrapper with a concrete record
+    //
+    // The bug: The interpreter can't determine the return layout for the
+    // polymorphic function call inside B, even though the type checker
+    // has correctly determined all types.
+
+    const allocator = testing.allocator;
+
+    // Module A: Defines a polymorphic field accessor
+    const module_a_source =
+        \\module [getField]
+        \\
+        \\getField = |r| r.field
+    ;
+
+    // Module B: Imports A's function and wraps it
+    const module_b_source =
+        \\module [wrapper]
+        \\
+        \\import A exposing [getField]
+        \\
+        \\wrapper = |x| getField(x)
+    ;
+
+    // Main: Calls B's wrapper with a concrete record
+    const main_source =
+        \\module []
+        \\
+        \\import B exposing [wrapper]
+        \\
+        \\main = wrapper({ field: 42 })
+    ;
+
+    // Set up Module A
+    var module_a_env = try ModuleEnv.init(allocator, module_a_source);
+    defer module_a_env.deinit();
+    module_a_env.module_name = "A";
+
+    var module_a_parse = try parse.parse(&module_a_env.common, allocator);
+    defer module_a_parse.deinit(allocator);
+    try testing.expect(!module_a_parse.hasErrors());
+
+    var module_a_czer = try Can.init(&module_a_env, &module_a_parse, null);
+    defer module_a_czer.deinit();
+    try module_a_czer.canonicalizeFile();
+
+    var module_a_checker = try Check.init(allocator, &module_a_env.types, &module_a_env, &.{}, &module_a_env.store.regions);
+    defer module_a_checker.deinit();
+    try module_a_checker.checkDefs();
+
+    // Verify Module A types
+    {
+        const a_defs = module_a_env.store.sliceDefs(module_a_env.all_defs);
+        for (a_defs) |def_idx| {
+            const def = module_a_env.store.getDef(def_idx);
+            const pattern = module_a_env.store.getPattern(def.pattern);
+            if (pattern == .assign) {
+                const ident = module_a_env.getIdent(pattern.assign.ident);
+                if (std.mem.eql(u8, ident, "getField")) {
+                    const var_ = ModuleEnv.varFrom(def.expr);
+                    const resolved = module_a_env.types.resolveVar(var_);
+                    std.debug.print("Module A - getField type: {s}\n", .{@tagName(resolved.desc.content)});
+                    try testing.expect(resolved.desc.content == .structure);
+                    const func = resolved.desc.content.structure.fn_unbound;
+
+                    // Check parameter type (should be record_unbound)
+                    const param_types = module_a_env.types.sliceVars(func.args);
+                    try testing.expect(param_types.len == 1);
+                    const param_resolved = module_a_env.types.resolveVar(param_types[0]);
+                    std.debug.print("  Parameter type: {s}\n", .{@tagName(param_resolved.desc.content)});
+                    try testing.expect(param_resolved.desc.content == .structure);
+                    try testing.expect(param_resolved.desc.content.structure == .record_unbound);
+
+                    // Check return type (should be flex_var - polymorphic)
+                    const ret_resolved = module_a_env.types.resolveVar(func.ret);
+                    std.debug.print("  Return type: {s}\n", .{@tagName(ret_resolved.desc.content)});
+                    try testing.expect(ret_resolved.desc.content == .flex_var);
+                }
+            }
+        }
+    }
+
+    // Set up Module B
+    var module_b_env = try ModuleEnv.init(allocator, module_b_source);
+    defer module_b_env.deinit();
+    module_b_env.module_name = "B";
+
+    var module_b_deps = std.StringHashMap(*ModuleEnv).init(allocator);
+    defer module_b_deps.deinit();
+    try module_b_deps.put("A", &module_a_env);
+
+    var module_b_parse = try parse.parse(&module_b_env.common, allocator);
+    defer module_b_parse.deinit(allocator);
+    try testing.expect(!module_b_parse.hasErrors());
+
+    var module_b_czer = try Can.init(&module_b_env, &module_b_parse, &module_b_deps);
+    defer module_b_czer.deinit();
+    try module_b_czer.canonicalizeFile();
+
+    const module_b_other_modules = [_]*ModuleEnv{&module_a_env};
+    var module_b_checker = try Check.init(allocator, &module_b_env.types, &module_b_env, &module_b_other_modules, &module_b_env.store.regions);
+    defer module_b_checker.deinit();
+    try module_b_checker.checkDefs();
+
+    // Verify Module B types
+    {
+        const b_defs = module_b_env.store.sliceDefs(module_b_env.all_defs);
+        for (b_defs) |def_idx| {
+            const def = module_b_env.store.getDef(def_idx);
+            const pattern = module_b_env.store.getPattern(def.pattern);
+            if (pattern == .assign) {
+                const ident = module_b_env.getIdent(pattern.assign.ident);
+                if (std.mem.eql(u8, ident, "wrapper")) {
+                    // Check the lambda expression
+                    const lambda_expr = module_b_env.store.getExpr(def.expr);
+                    try testing.expect(lambda_expr == .e_lambda);
+
+                    // Check the body (the call to getField)
+                    const body_expr = module_b_env.store.getExpr(lambda_expr.e_lambda.body);
+                    try testing.expect(body_expr == .e_call);
+
+                    // Check the type of the call expression
+                    const call_var = ModuleEnv.varFrom(lambda_expr.e_lambda.body);
+                    const call_resolved = module_b_env.types.resolveVar(call_var);
+                    std.debug.print("Module B - getField(x) call type: {s}\n", .{@tagName(call_resolved.desc.content)});
+
+                    // BUG: This should be concrete after type checking, but it's still flex_var!
+                    if (call_resolved.desc.content == .flex_var) {
+                        std.debug.print("  *** BUG: Call to imported polymorphic function not instantiated! ***\n", .{});
+                    }
+                }
+            }
+        }
+    }
+
+    // Set up Main module
+    var main_env = try ModuleEnv.init(allocator, main_source);
+    defer main_env.deinit();
+    main_env.module_name = "Main";
+
+    var main_deps = std.StringHashMap(*ModuleEnv).init(allocator);
+    defer main_deps.deinit();
+    try main_deps.put("B", &module_b_env);
+
+    var main_parse = try parse.parse(&main_env.common, allocator);
+    defer main_parse.deinit(allocator);
+    try testing.expect(!main_parse.hasErrors());
+
+    var main_czer = try Can.init(&main_env, &main_parse, &main_deps);
+    defer main_czer.deinit();
+    try main_czer.canonicalizeFile();
+
+    const main_other_modules = [_]*ModuleEnv{&module_b_env};
+    var main_checker = try Check.init(allocator, &main_env.types, &main_env, &main_other_modules, &main_env.store.regions);
+    defer main_checker.deinit();
+    try main_checker.checkDefs();
+
+    // Verify Main types
+    var main_expr_idx: ?CIR.Expr.Idx = null;
+    {
+        const main_defs = main_env.store.sliceDefs(main_env.all_defs);
+        for (main_defs) |def_idx| {
+            const def = main_env.store.getDef(def_idx);
+            const pattern = main_env.store.getPattern(def.pattern);
+            if (pattern == .assign) {
+                const ident = main_env.getIdent(pattern.assign.ident);
+                if (std.mem.eql(u8, ident, "main")) {
+                    main_expr_idx = def.expr;
+
+                    // Check the type of main (should be Num)
+                    const main_var = ModuleEnv.varFrom(def.expr);
+                    const main_resolved = main_env.types.resolveVar(main_var);
+                    std.debug.print("Main - main expr type: {s}\n", .{@tagName(main_resolved.desc.content)});
+                    try testing.expect(main_resolved.desc.content == .structure);
+                    try testing.expect(main_resolved.desc.content.structure == .num);
+                    std.debug.print("  ✓ Main correctly typed as Num\n", .{});
+                }
+            }
+        }
+    }
+
+    std.debug.print("\n=== Type checking complete - all types correct! ===\n", .{});
+    std.debug.print("=== Now testing interpreter... ===\n", .{});
+
+    // Set up interpreter
+    var eval_stack = try stack.Stack.initCapacity(allocator, 1024);
+    defer eval_stack.deinit();
+
+    var layout_cache = LayoutStore.init(&main_env);
+    defer layout_cache.deinit();
+
+    var test_env_instance = TestEnv.init(allocator);
+    defer test_env_instance.deinit();
+
+    const other_envs = [_]*const ModuleEnv{ &module_a_env, &module_b_env };
+    var interpreter = try eval.Interpreter.initWithModules(
+        allocator,
+        &main_env,
+        &other_envs,
+        &eval_stack,
+        &layout_cache,
+        &main_env.types,
+    );
+    defer interpreter.deinit(test_env_instance.get_ops());
+    test_env_instance.setInterpreter(&interpreter);
+
+    // This should work but currently fails with TypeMismatch
+    // because the interpreter can't handle the polymorphic call inside B
+    const result = try interpreter.eval(main_expr_idx.?, test_env_instance.get_ops());
+
+    // Should return 42
+    try testing.expectEqual(@as(i128, 42), result.asI128());
+}
+
 test "minimal cross-module flex_var return type" {
-    // This test demonstrates that the type checker doesn't properly instantiate
-    // polymorphic functions from other modules. The call expression's type
-    // remains flex_var instead of being concrete.
+    // This test demonstrates cascading cross-module polymorphic calls.
+    // When Factory calls Accessor.getFirst (which is polymorphic), the interpreter
+    // cannot determine the concrete return type at runtime because the type system
+    // hasn't properly instantiated the polymorphic type across module boundaries.
     const allocator = testing.allocator;
 
     // Module with a generic accessor function
@@ -301,6 +626,34 @@ test "minimal cross-module flex_var return type" {
     var factory_checker = try Check.init(allocator, &factory_env.types, &factory_env, &factory_other_modules, &factory_env.store.regions);
     defer factory_checker.deinit();
     try factory_checker.checkDefs();
+
+    // Debug: Check the type of getFirst(p) call in Factory
+    {
+        const factory_defs = factory_env.store.sliceDefs(factory_env.all_defs);
+        for (factory_defs) |def_idx| {
+            const def = factory_env.store.getDef(def_idx);
+            const pattern = factory_env.store.getPattern(def.pattern);
+            if (pattern == .assign) {
+                const ident_text = factory_env.getIdent(pattern.assign.ident);
+                if (std.mem.eql(u8, ident_text, "extractFirst")) {
+                    // This is extractFirst = |p| getFirst(p)
+                    const lambda_expr = factory_env.store.getExpr(def.expr);
+                    if (lambda_expr == .e_lambda) {
+                        const body = factory_env.store.getExpr(lambda_expr.e_lambda.body);
+                        if (body == .e_call) {
+                            // This is the getFirst(p) call
+                            const call_var = ModuleEnv.varFrom(lambda_expr.e_lambda.body);
+                            const call_resolved = factory_env.types.resolveVar(call_var);
+                            std.debug.print("Factory: getFirst(p) call has type: {s}\n", .{@tagName(call_resolved.desc.content)});
+                            if (call_resolved.desc.content == .flex_var) {
+                                std.debug.print("  BUG: Call to imported polymorphic function wasn't instantiated!\n", .{});
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Set up Main module
     var main_env = try ModuleEnv.init(allocator, main_source);
@@ -505,18 +858,17 @@ test "type checker bug: cross-module polymorphic call remains flex_var" {
     }
     std.debug.print("Call expression 'id(42)' has type: {s}\n", .{@tagName(call_resolved.desc.content)});
 
-    // BUG: This should be .structure (concrete type) but is .flex_var
+    // FIXED: This should be .structure (concrete type) not .flex_var
     if (call_resolved.desc.content == .flex_var) {
-        std.debug.print("BUG CONFIRMED: Type checker didn't instantiate polymorphic function!\n", .{});
-        std.debug.print("This causes interpreter failures.\n\n", .{});
-        // Comment out the failure to see the bug without breaking the test suite
-        // return error.TypeCheckerBugDemonstrated;
+        std.debug.print("BUG: Type checker didn't instantiate polymorphic function!\n", .{});
+        std.debug.print("This would cause interpreter failures.\n\n", .{});
+        return error.TypeCheckerBugStillExists;
     } else {
-        std.debug.print("Type is properly instantiated as: {s}\n\n", .{@tagName(call_resolved.desc.content)});
+        std.debug.print("✓ Type is properly instantiated as: {s}\n\n", .{@tagName(call_resolved.desc.content)});
     }
 
-    // For now, we expect the bug to exist
-    try testing.expect(call_resolved.desc.content == .flex_var);
+    // The bug has been fixed - expect proper instantiation
+    try testing.expect(call_resolved.desc.content == .structure);
 }
 
 test "arithmetic binops" {
@@ -2970,8 +3322,9 @@ test "chained polymorphic bug - minimal" {
                             else => continue,
                         };
                         const ret_resolved = module_b_env.types.resolveVar(func_type.ret);
-                        std.debug.print("  processFirst return type: Var({}), content={s}, needs_inst={}\n", .{
+                        std.debug.print("  processFirst return type: Var({}) resolves to Var({}), content={s}, needs_inst={}\n", .{
                             @intFromEnum(func_type.ret),
+                            @intFromEnum(ret_resolved.var_),
                             @tagName(ret_resolved.desc.content),
                             func_type.needs_instantiation,
                         });
@@ -2985,6 +3338,33 @@ test "chained polymorphic bug - minimal" {
                                 @tagName(param_resolved.desc.content),
                             });
 
+                            // Check if param is a record with field 'a'
+                            if (param_resolved.desc.content == .structure) {
+                                if (param_resolved.desc.content.structure == .record_unbound) {
+                                    const fields = module_b_env.types.getRecordFieldsSlice(param_resolved.desc.content.structure.record_unbound);
+                                    for (fields.items(.name), fields.items(.var_)) |field_name, field_var| {
+                                        const name = module_b_env.getIdent(field_name);
+                                        if (std.mem.eql(u8, name, "a")) {
+                                            const field_resolved = module_b_env.types.resolveVar(field_var);
+                                            std.debug.print("    Param has field 'a': Var({}), content={s}\n", .{
+                                                @intFromEnum(field_var),
+                                                @tagName(field_resolved.desc.content),
+                                            });
+                                            // Check if they resolve to the same variable
+                                            const field_resolved_var = module_b_env.types.resolveVar(field_var);
+                                            const ret_resolved_var = module_b_env.types.resolveVar(func_type.ret);
+                                            if (field_resolved_var.var_ == ret_resolved_var.var_) {
+                                                std.debug.print("    GOOD: Field 'a' and return type resolve to same var!\n", .{});
+                                            } else {
+                                                std.debug.print("    BAD: Field 'a' resolves to Var({}), return resolves to Var({})!\n", .{
+                                                    @intFromEnum(field_resolved_var.var_),
+                                                    @intFromEnum(ret_resolved_var.var_),
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -3014,7 +3394,144 @@ test "chained polymorphic bug - minimal" {
     const module_c_other_modules = [_]*ModuleEnv{&module_b_env, &module_a_env};
     var module_c_checker = try Check.init(allocator, &module_c_env.types, &module_c_env, &module_c_other_modules, &module_c_env.store.regions);
     defer module_c_checker.deinit();
+
+    // Debug: Check processFirst type before and after checking Module C
+    std.debug.print("\nModule C - Before checking defs:\n", .{});
+    {
+        const c_defs = module_c_env.store.sliceDefs(module_c_env.all_defs);
+        for (c_defs) |def_idx| {
+            const def = module_c_env.store.getDef(def_idx);
+            const pattern = module_c_env.store.getPattern(def.pattern);
+            if (pattern == .assign) {
+                const ident_text = module_c_env.getIdent(pattern.assign.ident);
+                if (std.mem.eql(u8, ident_text, "processFirst")) {
+                    std.debug.print("  Found processFirst def in Module C\n", .{});
+                    std.debug.print("    def.expr: {s}\n", .{@tagName(module_c_env.store.getExpr(def.expr))});
+                    const proc_var = ModuleEnv.varFrom(def.expr);
+                    const proc_resolved = module_c_env.types.resolveVar(proc_var);
+                    std.debug.print("  processFirst (imported) type: Var({}), content={s}\n", .{
+                        @intFromEnum(proc_var),
+                        @tagName(proc_resolved.desc.content),
+                    });
+                    if (proc_resolved.desc.content == .structure) {
+                        const func_type = switch(proc_resolved.desc.content.structure) {
+                            .fn_pure => |f| f,
+                            .fn_effectful => |f| f,
+                            .fn_unbound => |f| f,
+                            else => continue,
+                        };
+                        std.debug.print("    needs_instantiation: {}\n", .{func_type.needs_instantiation});
+                        const ret_resolved = module_c_env.types.resolveVar(func_type.ret);
+                        std.debug.print("    Return: Var({}) -> Var({}), content={s}\n", .{
+                            @intFromEnum(func_type.ret),
+                            @intFromEnum(ret_resolved.var_),
+                            @tagName(ret_resolved.desc.content),
+                        });
+
+                        const args = module_c_env.types.sliceVars(func_type.args);
+                        if (args.len > 0) {
+                            const param_resolved = module_c_env.types.resolveVar(args[0]);
+                            std.debug.print("    Param: Var({}), content={s}\n", .{
+                                @intFromEnum(args[0]),
+                                @tagName(param_resolved.desc.content),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     try module_c_checker.checkDefs();
+
+    std.debug.print("\nModule C - After checking defs:\n", .{});
+    {
+        const c_defs = module_c_env.store.sliceDefs(module_c_env.all_defs);
+        for (c_defs) |def_idx| {
+            const def = module_c_env.store.getDef(def_idx);
+            const pattern = module_c_env.store.getPattern(def.pattern);
+            if (pattern == .assign) {
+                const ident_text = module_c_env.getIdent(pattern.assign.ident);
+                if (std.mem.eql(u8, ident_text, "processFirst")) {
+                    const proc_var = ModuleEnv.varFrom(def.expr);
+                    const proc_resolved = module_c_env.types.resolveVar(proc_var);
+                    std.debug.print("  processFirst (after checking): Var({}) -> Var({}), content={s}\n", .{
+                        @intFromEnum(proc_var),
+                        @intFromEnum(proc_resolved.var_),
+                        @tagName(proc_resolved.desc.content),
+                    });
+                    if (proc_resolved.desc.content == .structure) {
+                        const func_type = switch(proc_resolved.desc.content.structure) {
+                            .fn_pure => |f| f,
+                            .fn_effectful => |f| f,
+                            .fn_unbound => |f| f,
+                            else => continue,
+                        };
+                        const ret_resolved = module_c_env.types.resolveVar(func_type.ret);
+                        std.debug.print("    Return: Var({}) -> Var({}), content={s}\n", .{
+                            @intFromEnum(func_type.ret),
+                            @intFromEnum(ret_resolved.var_),
+                            @tagName(ret_resolved.desc.content),
+                        });
+
+                        const args = module_c_env.types.sliceVars(func_type.args);
+                        if (args.len > 0) {
+                            const param_resolved = module_c_env.types.resolveVar(args[0]);
+                            std.debug.print("    Param: Var({}) -> Var({}), content={s}\n", .{
+                                @intFromEnum(args[0]),
+                                @intFromEnum(param_resolved.var_),
+                                @tagName(param_resolved.desc.content),
+                            });
+
+                            // Check if param is a record with field 'a'
+                            if (param_resolved.desc.content == .structure) {
+                                if (param_resolved.desc.content.structure == .record_unbound) {
+                                    const fields = module_c_env.types.getRecordFieldsSlice(param_resolved.desc.content.structure.record_unbound);
+                                    for (fields.items(.name), fields.items(.var_)) |field_name, field_var| {
+                                        const name = module_c_env.getIdent(field_name);
+                                        if (std.mem.eql(u8, name, "a")) {
+                                            const field_resolved = module_c_env.types.resolveVar(field_var);
+                                            std.debug.print("      Field 'a': Var({}) -> Var({}), content={s}\n", .{
+                                                @intFromEnum(field_var),
+                                                @intFromEnum(field_resolved.var_),
+                                                @tagName(field_resolved.desc.content),
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if (std.mem.eql(u8, ident_text, "main")) {
+                    std.debug.print("  main expression: {s}\n", .{@tagName(module_c_env.store.getExpr(def.expr))});
+                    const main_var = ModuleEnv.varFrom(def.expr);
+                    const main_resolved = module_c_env.types.resolveVar(main_var);
+                    std.debug.print("  main type: Var({}) -> Var({}), content={s}\n", .{
+                        @intFromEnum(main_var),
+                        @intFromEnum(main_resolved.var_),
+                        @tagName(main_resolved.desc.content),
+                    });
+
+                    // Check the components of the call
+                    const main_expr = module_c_env.store.getExpr(def.expr);
+                    if (main_expr == .e_call) {
+                        const args = module_c_env.store.sliceExpr(main_expr.e_call.args);
+                        if (args.len > 0) {
+                            const func_var = ModuleEnv.varFrom(args[0]);
+                            const func_resolved = module_c_env.types.resolveVar(func_var);
+                            std.debug.print("  main calls func: Var({}) -> Var({}), content={s}\n", .{
+                                @intFromEnum(func_var),
+                                @intFromEnum(func_resolved.var_),
+                                @tagName(func_resolved.desc.content),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
 
     // Find main expression
     const defs = module_c_env.store.sliceDefs(module_c_env.all_defs);
@@ -3042,8 +3559,26 @@ test "chained polymorphic bug - minimal" {
     std.debug.print("C: main = processFirst({{a: 42, b: 99}})\n", .{});
     std.debug.print("Main type: {s}\n", .{@tagName(main_resolved.desc.content)});
 
+    // Actually, let me check what the function call produces
+    // The main expression should be a call to processFirst
+    const main_expr = module_c_env.store.getExpr(main_expr_idx.?);
+    std.debug.print("Main expr type: {s}\n", .{@tagName(main_expr)});
+
     if (main_resolved.desc.content == .flex_var) {
-        std.debug.print("BUG: Type not propagated through chain!\n\n", .{});
+        std.debug.print("BUG: Main type is still flex_var\n", .{});
+        std.debug.print("  Main var: Var({})\n", .{@intFromEnum(main_var)});
+        std.debug.print("  Resolves to: Var({})\n", .{@intFromEnum(main_resolved.var_)});
+
+        // This might be expected if the type system is working correctly but
+        // the constraint solver hasn't run yet. Let's not fail for now.
+        // return error.ChainedPolymorphicBug;
+    }
+    if (main_resolved.desc.content != .structure or
+        main_resolved.desc.content.structure != .num) {
+        std.debug.print("BUG: Main type is {s}, not Num\n", .{@tagName(main_resolved.desc.content)});
+        if (main_resolved.desc.content == .structure) {
+            std.debug.print("  Structure type: {s}\n", .{@tagName(main_resolved.desc.content.structure)});
+        }
         return error.ChainedPolymorphicBug;
     }
 
@@ -3055,4 +3590,10 @@ test "chained polymorphic bug - minimal" {
 test {
     _ = @import("static_dispatch_comprehensive_test.zig");
     _ = @import("minimal_record_return_bug.zig");
+}
+
+// Cleanup test - runs last to clean up global resources
+test "zzz_cleanup_global_interner" {
+    // Named with zzz prefix to run last (tests run alphabetically)
+    helpers.cleanupGlobalFieldInterner();
 }

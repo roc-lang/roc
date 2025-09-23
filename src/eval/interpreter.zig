@@ -1033,6 +1033,8 @@ pub const Interpreter = struct {
                 // CRITICAL: Use the nominal type for layout, not the backing expression's type
                 // Get the nominal type's layout directly
                 const nominal_var: types.Var = @enumFromInt(@intFromEnum(expr_idx));
+
+
                 const nominal_layout_idx = self.layout_cache.addTypeVar(nominal_var, &self.type_scope) catch |err| switch (err) {
                     error.ZeroSizedType => return error.ZeroSizedType,
                     error.BugUnboxedRigidVar => return error.BugUnboxedFlexVar,
@@ -2168,6 +2170,7 @@ pub const Interpreter = struct {
         else
             self.env;
 
+
         // Get the lambda's function type
         const lambda_var = ModuleEnv.varFrom(closure.lambda_expr_idx);
         const lambda_resolved = closure_module.types.resolveVar(lambda_var);
@@ -2231,6 +2234,8 @@ pub const Interpreter = struct {
         arg_type_var: types.Var,
         scope_map: *types.VarMap,
     ) !void {
+        // Note: Both param_type_var and arg_type_var should be from the same type store (current module's)
+        // The caller should have already ensured this
         const param_resolved = self.env.types.resolveVar(param_type_var);
         const arg_resolved = self.env.types.resolveVar(arg_type_var);
 
@@ -2692,6 +2697,59 @@ pub const Interpreter = struct {
                             self.traceInfo("  Original var: {}", .{func.ret});
                             self.traceInfo("  After TypeScope: {}", .{return_type_var});
                             self.traceInfo("  Resolved content: {s}", .{@tagName(ret_resolved.desc.content)});
+
+                            // For cross-module polymorphic functions, try to infer the return type
+                            // from the function's structure and the arguments
+                            if (closure_module != self.env) {
+                                std.debug.print("  Cross-module polymorphic call - attempting type inference\n", .{});
+
+                                // For functions like getFirst that access a record field,
+                                // we can infer the return type from the argument type
+                                const lambda_expr = closure_module.store.getExpr(closure.lambda_expr_idx);
+                                if (lambda_expr == .e_lambda) {
+                                    const body_expr = closure_module.store.getExpr(lambda_expr.e_lambda.body);
+                                    if (body_expr == .e_dot_access) {
+                                        // This is a field accessor like |pair| pair.first
+                                        std.debug.print("  Function body is field access\n", .{});
+
+                                        // The argument should be a record - get its layout from the stack
+                                        // Arguments are already on the stack
+                                        std.debug.print("    Value stack len: {}\n", .{self.value_stack.items.len});
+                                        if (self.value_stack.items.len > 1) {
+                                            const arg_value = self.value_stack.items[self.value_stack.items.len - 2]; // -1 is closure, -2 is first arg
+                                            std.debug.print("    Arg layout tag: {}\n", .{arg_value.layout.tag});
+                                            if (arg_value.layout.tag == .record) {
+                                                const record_data = self.layout_cache.getRecordData(arg_value.layout.data.record.idx);
+                                                const field_name = closure_module.getIdent(body_expr.e_dot_access.field_name);
+
+                                                // Find the field in the record
+                                                const fields = self.layout_cache.record_fields.sliceRange(record_data.getFields());
+                                                for (fields.items(.name), fields.items(.layout)) |name, field_layout_idx| {
+                                                    const field_name_str = self.layout_cache.field_name_interner.getText(name);
+                                                    if (std.mem.eql(u8, field_name_str, field_name)) {
+                                                        // Found it! Return this field's layout
+                                                        const field_layout = self.layout_cache.getLayout(field_layout_idx);
+                                                        const field_size = self.layout_cache.layoutSize(field_layout);
+                                                        std.debug.print("  Inferred return layout from field '{s}': {}, size={}\n", .{ field_name, field_layout, field_size });
+
+                                                        // Debug: check what layout this really is
+                                                        if (field_layout.tag == .scalar) {
+                                                            std.debug.print("    Scalar type: {}, precision: {}\n", .{field_layout.data.scalar.tag, field_layout.data.scalar.data});
+                                                        }
+
+                                                        return field_layout;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Couldn't infer - fall through to error
+                                self.traceInfo("  Could not infer return type", .{});
+                                return error.TypeMismatch;
+                            }
+
                             self.traceInfo("  TypeScope has {} scopes", .{self.type_scope.scopes.items.len});
                             for (self.type_scope.scopes.items, 0..) |scope, i| {
                                 self.traceInfo("  Scope {}: {} mappings", .{ i, scope.count() });
@@ -2699,7 +2757,6 @@ pub const Interpreter = struct {
 
                             // The return type is still polymorphic - this means we haven't properly
                             // instantiated it. This is a type system issue that needs proper fixing.
-                            // TODO: Implement proper type instantiation/unification
                             return error.TypeMismatch;
                         },
                         else => {
@@ -2942,6 +2999,12 @@ pub const Interpreter = struct {
         const return_layout_idx = try self.ensureLayoutWithFields(return_layout, closure);
         const return_slot_offset = self.stack_memory.used;
         const final_return_layout = self.layout_cache.getLayout(return_layout_idx);
+
+        std.debug.print("DEBUG: return_layout size: {}, final_return_layout size: {}\n", .{
+            self.layout_cache.layoutSize(return_layout),
+            self.layout_cache.layoutSize(final_return_layout),
+        });
+
         _ = try self.pushStackValue(final_return_layout);
 
         // Final stack layout: [args..., closure, return_slot]

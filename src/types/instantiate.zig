@@ -86,13 +86,26 @@ pub const Instantiate = struct {
         const resolved = self.store.resolveVar(initial_var);
         const resolved_var = resolved.var_;
 
+        // Debug instantiation
+        if (@intFromEnum(initial_var) == 96 or @intFromEnum(initial_var) == 97) {
+            std.debug.print("  Instantiating Var({}): resolved to Var({}), content={s}\n", .{
+                @intFromEnum(initial_var),
+                @intFromEnum(resolved_var),
+                @tagName(resolved.desc.content),
+            });
+        }
+
+
         // Check if we've already instantiated this variable
         if (self.seen_vars_subs.get(resolved_var)) |fresh_var| {
-            // std.debug.print("  Instantiate: Reusing Var({}) -> Var({}) from cache (initial was Var({}))\n", .{
-            //     @intFromEnum(resolved_var),
-            //     @intFromEnum(fresh_var),
-            //     @intFromEnum(initial_var),
-            // });
+            // Debug reuse
+            if (@intFromEnum(initial_var) == 96 or @intFromEnum(initial_var) == 97) {
+                std.debug.print("    Reusing cached: Var({}) -> Var({})\n", .{
+                    @intFromEnum(resolved_var),
+                    @intFromEnum(fresh_var),
+                });
+            }
+            // Reusing from cache
             return fresh_var;
         }
 
@@ -124,11 +137,6 @@ pub const Instantiate = struct {
                 // Remember this substitution for recursive references (important for linked variables like in |x| x)
                 try self.seen_vars_subs.put(resolved_var, fresh_var);
 
-                // std.debug.print("  Instantiate: Created fresh Var({}) for flex_var Var({}) (initial was Var({}))\n", .{
-                //     @intFromEnum(fresh_var),
-                //     @intFromEnum(resolved_var),
-                //     @intFromEnum(initial_var),
-                // });
 
                 return fresh_var;
             },
@@ -137,6 +145,15 @@ pub const Instantiate = struct {
 
                 // Create a fresh variable with the instantiated content
                 const fresh_var = try self.store.freshFromContentWithRank(fresh_content, ctx.current_rank);
+
+                // Debug cache insertion
+                if (@intFromEnum(initial_var) == 96 or @intFromEnum(initial_var) == 97) {
+                    std.debug.print("    Caching: Var({}) -> Var({}), content={s}\n", .{
+                        @intFromEnum(resolved_var),
+                        @intFromEnum(fresh_var),
+                        @tagName(fresh_content),
+                    });
+                }
 
                 // Remember this substitution for recursive references
                 try self.seen_vars_subs.put(resolved_var, fresh_var);
@@ -274,6 +291,7 @@ pub const Instantiate = struct {
         }
 
         const fresh_ret = try self.instantiateVar(func.ret, ctx);
+
         const fresh_args_range = try self.store.appendVars(fresh_args.items);
         return Func{
             .args = fresh_args_range,
@@ -322,6 +340,7 @@ pub const Instantiate = struct {
 
     fn instantiateTagUnion(self: *Self, tag_union: TagUnion, ctx: *Ctx) std.mem.Allocator.Error!TagUnion {
         const tags_slice = self.store.getTagsSlice(tag_union.tags);
+
 
         var fresh_tags = std.ArrayList(Tag).init(self.store.gpa);
         defer fresh_tags.deinit();

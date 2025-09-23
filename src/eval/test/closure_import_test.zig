@@ -104,7 +104,7 @@ test "minimal closure import - return closure from imported module" {
     defer eval_stack.deinit();
 
     var layout_cache = try LayoutStore.init(&main_env, &main_env.types);
-    defer layout_cache.deinit();
+    defer layout_cache.deinitWithInterner();
 
     var test_env_instance = TestEnv.init(allocator);
     defer test_env_instance.deinit();

@@ -219,7 +219,7 @@ test "Repl - minimal interpreter integration" {
 
     // Step 7: Create layout cache
     var layout_cache = try LayoutStore.init(&module_env, &module_env.types);
-    defer layout_cache.deinit();
+    defer layout_cache.deinitWithInterner();
 
     // Step 8: Create interpreter
     var interpreter = try eval.Interpreter.init(gpa, cir, &eval_stack, &layout_cache, &module_env.types);

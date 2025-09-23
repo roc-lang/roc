@@ -38,18 +38,37 @@ pub fn copyVar(
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Var {
-    // Check if we've already copied this variable
-    if (var_mapping.get(source_var)) |dest_var| {
+    // Resolve the variable first to handle redirects
+    const resolved = source_store.resolveVar(source_var);
+    const resolved_var = resolved.var_;
+
+    // Check if we've already copied this RESOLVED variable
+    // This ensures that variables redirecting to the same target get the same copy
+    if (var_mapping.get(resolved_var)) |dest_var| {
+        // Debug: show reuse
+        if (source_var == @as(Var, @enumFromInt(87)) or source_var == @as(Var, @enumFromInt(96))) {
+            std.debug.print("copyVar: Reusing Var({}) -> Var({}) for source Var({})\n", .{
+                @intFromEnum(resolved_var),
+                @intFromEnum(dest_var),
+                @intFromEnum(source_var),
+            });
+        }
+        // Also record the mapping for the original variable
+        if (source_var != resolved_var) {
+            try var_mapping.put(source_var, dest_var);
+        }
         return dest_var;
     }
-
-    const resolved = source_store.resolveVar(source_var);
 
     // Create a placeholder variable first to break cycles
     const placeholder_var = try dest_store.fresh();
 
-    // Record the mapping immediately to handle recursive types
-    try var_mapping.put(source_var, placeholder_var);
+    // Record the mapping for BOTH the original and resolved variable
+    // This ensures consistency when variables redirect to each other
+    try var_mapping.put(resolved_var, placeholder_var);
+    if (source_var != resolved_var) {
+        try var_mapping.put(source_var, placeholder_var);
+    }
 
     // Now copy the content (which may recursively reference this variable)
     const dest_content = try copyContent(source_store, dest_store, resolved.desc.content, var_mapping, source_idents, dest_idents, allocator);
@@ -217,6 +236,8 @@ fn copyFunc(
     return Func{
         .args = dest_args_range,
         .ret = dest_ret,
+        // Preserve the original needs_instantiation flag - the function still needs
+        // instantiation when called to establish proper type constraints
         .needs_instantiation = func.needs_instantiation,
     };
 }

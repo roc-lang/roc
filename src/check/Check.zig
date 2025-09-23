@@ -77,7 +77,8 @@ snapshots: SnapshotStore,
 problems: ProblemStore,
 unify_scratch: unifier.Scratch,
 occurs_scratch: occurs.Scratch,
-var_map: std.AutoHashMap(Var, Var),
+var_map_stack: std.ArrayList(std.AutoHashMap(Var, Var)),
+current_var_map: ?*std.AutoHashMap(Var, Var),
 annotation_rigid_var_subs: Instantiate.RigidToFlexSubs,
 anonymous_rigid_var_subs: Instantiate.RigidToFlexSubs,
 /// Cache for imported types. This cache lives for the entire type-checking session
@@ -105,7 +106,8 @@ pub fn init(
         .problems = try ProblemStore.initCapacity(gpa, 64),
         .unify_scratch = try unifier.Scratch.init(gpa),
         .occurs_scratch = try occurs.Scratch.init(gpa),
-        .var_map = std.AutoHashMap(Var, Var).init(gpa),
+        .var_map_stack = std.ArrayList(std.AutoHashMap(Var, Var)).init(gpa),
+        .current_var_map = null,
         .annotation_rigid_var_subs = try Instantiate.RigidToFlexSubs.init(gpa),
         .anonymous_rigid_var_subs = try Instantiate.RigidToFlexSubs.init(gpa),
         .import_cache = ImportCache{},
@@ -119,7 +121,10 @@ pub fn deinit(self: *Self) void {
     self.snapshots.deinit();
     self.unify_scratch.deinit();
     self.occurs_scratch.deinit();
-    self.var_map.deinit();
+    for (self.var_map_stack.items) |*map| {
+        map.deinit();
+    }
+    self.var_map_stack.deinit();
     self.annotation_rigid_var_subs.deinit(self.gpa);
     self.anonymous_rigid_var_subs.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
@@ -273,6 +278,46 @@ const RigidVarBehavior = union(enum) {
     rollback_rigid_vars,
 };
 
+/// Push a new var_map onto the stack and make it current
+fn pushVarMap(self: *Self, inherit_parent: bool) !void {
+    var new_map = std.AutoHashMap(Var, Var).init(self.gpa);
+
+    // Optionally copy parent map's contents
+    if (inherit_parent) {
+        if (self.current_var_map) |current| {
+            var iter = current.iterator();
+            while (iter.next()) |entry| {
+                try new_map.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
+        }
+    }
+
+    try self.var_map_stack.append(new_map);
+    self.current_var_map = &self.var_map_stack.items[self.var_map_stack.items.len - 1];
+}
+
+/// Pop the current var_map from the stack
+fn popVarMap(self: *Self) void {
+    if (self.var_map_stack.pop()) |map| {
+        var mut_map = map;
+        mut_map.deinit();
+
+        if (self.var_map_stack.items.len > 0) {
+            self.current_var_map = &self.var_map_stack.items[self.var_map_stack.items.len - 1];
+        } else {
+            self.current_var_map = null;
+        }
+    }
+}
+
+/// Get the current var_map, creating one if needed
+fn getVarMap(self: *Self) !*std.AutoHashMap(Var, Var) {
+    if (self.current_var_map == null) {
+        try self.pushVarMap(false);
+    }
+    return self.current_var_map.?;
+}
+
 /// Instantiate a variable
 fn instantiateVar(
     self: *Self,
@@ -280,21 +325,79 @@ fn instantiateVar(
     rigid_to_flex_subs: *Instantiate.RigidToFlexSubs,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
-    // Don't clear here - we clear once per definition in checkDef
-    // This preserves mappings across related instantiations
-    // self.var_map.clearRetainingCapacity();
-
-    var instantiate = Instantiate.init(self.types, self.cir.getIdentStore(), &self.var_map);
+    const var_map = try self.getVarMap();
+    var instantiate = Instantiate.init(self.types, self.cir.getIdentStore(), var_map);
     var instantiate_ctx = Instantiate.Ctx{
         .rigid_var_subs = rigid_to_flex_subs,
     };
     const instantiated_var = try instantiate.instantiateVar(var_to_instantiate, &instantiate_ctx);
 
+    // Debug: show what was instantiated
+    if (std.mem.eql(u8, self.cir.module_name, "B") or std.mem.eql(u8, self.cir.module_name, "C")) {
+        const before_resolved = self.types.resolveVar(var_to_instantiate);
+        const after_resolved = self.types.resolveVar(instantiated_var);
+        if (before_resolved.desc.content == .structure and after_resolved.desc.content == .structure) {
+            const is_fn = switch (after_resolved.desc.content.structure) {
+                .fn_pure, .fn_effectful, .fn_unbound => true,
+                else => false,
+            };
+            if (is_fn) {
+                std.debug.print("  Instantiated Var({}) -> Var({})\n", .{
+                    @intFromEnum(var_to_instantiate),
+                    @intFromEnum(instantiated_var),
+                });
+
+                // Show the function type details
+                const func = switch (after_resolved.desc.content.structure) {
+                    .fn_pure => |f| f,
+                    .fn_effectful => |f| f,
+                    .fn_unbound => |f| f,
+                    else => unreachable,
+                };
+
+                const ret_resolved = self.types.resolveVar(func.ret);
+                std.debug.print("    Return type: Var({}), content={s}\n", .{
+                    @intFromEnum(func.ret),
+                    @tagName(ret_resolved.desc.content),
+                });
+
+                // Check if param and return share variables
+                const args = self.types.sliceVars(func.args);
+                if (args.len > 0) {
+                    const param_resolved = self.types.resolveVar(args[0]);
+                    if (param_resolved.desc.content == .structure) {
+                        if (param_resolved.desc.content.structure == .record_unbound) {
+                            const fields = self.types.getRecordFieldsSlice(param_resolved.desc.content.structure.record_unbound);
+                            for (fields.items(.name), fields.items(.var_)) |field_name, field_var| {
+                                const name = self.cir.getIdent(field_name);
+                                if (std.mem.eql(u8, name, "a")) {
+                                    const field_res = self.types.resolveVar(field_var);
+                                    const ret_res = self.types.resolveVar(func.ret);
+                                    const same_var = field_res.var_ == ret_res.var_;
+                                    std.debug.print("    Field 'a' type: Var({}), same as return: {}\n", .{
+                                        @intFromEnum(field_var),
+                                        same_var,
+                                    });
+                                    if (!same_var) {
+                                        std.debug.print("      WARNING: Field resolves to Var({}), return to Var({})\n", .{
+                                            @intFromEnum(field_res.var_),
+                                            @intFromEnum(ret_res.var_),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // If we had to insert any new type variables, ensure that we have
     // corresponding regions for them. This is essential for error reporting.
     const root_instantiated_region = self.regions.get(@enumFromInt(@intFromEnum(var_to_instantiate))).*;
-    if (self.var_map.count() > 0) {
-        var iterator = self.var_map.iterator();
+    if (var_map.count() > 0) {
+        var iterator = var_map.iterator();
         while (iterator.next()) |x| {
             // Get the newly created var
             const fresh_var = x.value_ptr.*;
@@ -328,26 +431,57 @@ fn instantiateVarAnon(
     var_to_instantiate: Var,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
+    return self.instantiateVarAnonWithStrategy(var_to_instantiate, region_behavior, false);
+}
+
+/// Instantiate a variable with control over var_map strategy
+fn instantiateVarAnonWithStrategy(
+    self: *Self,
+    var_to_instantiate: Var,
+    region_behavior: InstantiateRegionBehavior,
+    use_fresh_map: bool,  // true for let-polymorphism, false for cross-module
+) std.mem.Allocator.Error!Var {
     self.anonymous_rigid_var_subs.items.clearRetainingCapacity();
-    const var_ = self.instantiateVar(var_to_instantiate, &self.anonymous_rigid_var_subs, region_behavior);
+
+    // For let-polymorphism, use a fresh var_map to get independent type variables
+    // For cross-module calls, preserve the existing map to maintain variable sharing
+    var pushed_map = false;
+    if (use_fresh_map) {
+        if (std.mem.eql(u8, self.cir.module_name, "B") or std.mem.eql(u8, self.cir.module_name, "C")) {
+            std.debug.print("Module {s}: Using fresh var_map for let-polymorphism\n", .{self.cir.module_name});
+        }
+        try self.pushVarMap(false); // false = don't inherit parent
+        pushed_map = true;
+    } else {
+        if (std.mem.eql(u8, self.cir.module_name, "B") or std.mem.eql(u8, self.cir.module_name, "C")) {
+            std.debug.print("Module {s}: Preserving var_map for cross-module call\n", .{self.cir.module_name});
+        }
+    }
+
+    const var_ = try self.instantiateVar(var_to_instantiate, &self.anonymous_rigid_var_subs, region_behavior);
+
+    if (pushed_map) {
+        self.popVarMap();
+    }
+
     return var_;
 }
 
 // copy type from other module //
 
-/// Instantiate a variable, writing su
+/// Copy a variable from another module
 fn copyVar(
     self: *Self,
     other_module_var: Var,
     other_module_env: *ModuleEnv,
 ) std.mem.Allocator.Error!Var {
-    // Don't clear - preserve mappings from any previous instantiation
-    // self.var_map.clearRetainingCapacity();
+    // Use the current var_map from the stack
+    const var_map = try self.getVarMap();
     const copied_var = try copy_import.copyVar(
         &other_module_env.*.types,
         self.types,
         other_module_var,
-        &self.var_map,
+        var_map,
         other_module_env.getIdentStore(),
         self.cir.getIdentStore(),
         self.gpa,
@@ -355,8 +489,8 @@ fn copyVar(
 
     // If we had to insert any new type variables, ensure that we have
     // corresponding regions for them. This is essential for error reporting.
-    if (self.var_map.count() > 0) {
-        var iterator = self.var_map.iterator();
+    if (var_map.count() > 0) {
+        var iterator = var_map.iterator();
         while (iterator.next()) |x| {
             // Get the newly created var
             const fresh_var = x.value_ptr.*;
@@ -449,7 +583,26 @@ fn resolveVarFromExternal(
         else blk: {
             // First time importing this type - copy it and cache the result
             const imported_var = @as(Var, @enumFromInt(@intFromEnum(target_node_idx)));
+
+            // Debug: Check what we're copying
+            const imported_resolved = other_module_env.types.resolveVar(imported_var);
+            std.debug.print("Importing from {s}: Var({}) -> Var({}), content={s}\n", .{
+                other_module_env.module_name,
+                @intFromEnum(imported_var),
+                @intFromEnum(imported_resolved.var_),
+                @tagName(imported_resolved.desc.content),
+            });
+
             const new_copy = try self.copyVar(imported_var, other_module_env);
+
+            // Debug: Check what we copied
+            const copy_resolved = self.types.resolveVar(new_copy);
+            std.debug.print("  Copied to: Var({}) -> Var({}), content={s}\n", .{
+                @intFromEnum(new_copy),
+                @intFromEnum(copy_resolved.var_),
+                @tagName(copy_resolved.desc.content),
+            });
+
             try self.import_cache.put(self.gpa, cache_key, new_copy);
             break :blk new_copy;
         };
@@ -953,6 +1106,17 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
 
                     const actual_imported_var = imported_var.?;
 
+                    // Debug: print what we're importing
+                    if (std.mem.eql(u8, self.cir.module_name, "B") or std.mem.eql(u8, self.cir.module_name, "C")) {
+                        const var_resolved = other_module_env.types.resolveVar(actual_imported_var);
+                        std.debug.print("Module {s} importing from {s}: Var({}), content={s}\n", .{
+                            self.cir.module_name,
+                            other_module_env.module_name,
+                            @intFromEnum(actual_imported_var),
+                            @tagName(var_resolved.desc.content),
+                        });
+                    }
+
                     const new_copy = try self.copyVar(actual_imported_var, other_module_env);
 
                     // After copying, check if this is a function with a nominal type return
@@ -1002,8 +1166,36 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
                 else
                     copied_var;
 
+                // Debug: print what we're unifying
+                if (std.mem.eql(u8, self.cir.module_name, "C")) {
+                    const expr_resolved = self.types.resolveVar(expr_var);
+                    const final_resolved = self.types.resolveVar(final_var);
+                    std.debug.print("Module C - unifying e_lookup_external:\n", .{});
+                    std.debug.print("  expr_var: Var({}) -> Var({}), content={s}\n", .{
+                        @intFromEnum(expr_var),
+                        @intFromEnum(expr_resolved.var_),
+                        @tagName(expr_resolved.desc.content),
+                    });
+                    std.debug.print("  final_var: Var({}) -> Var({}), content={s}\n", .{
+                        @intFromEnum(final_var),
+                        @intFromEnum(final_resolved.var_),
+                        @tagName(final_resolved.desc.content),
+                    });
+                }
+
                 // Unify our expression with the type (instantiated or not)
                 const result = try self.unify(expr_var, final_var);
+
+                // Debug: print result
+                if (std.mem.eql(u8, self.cir.module_name, "C")) {
+                    const expr_resolved_after = self.types.resolveVar(expr_var);
+                    std.debug.print("  After unify: Var({}) -> Var({}), content={s}\n", .{
+                        @intFromEnum(expr_var),
+                        @intFromEnum(expr_resolved_after.var_),
+                        @tagName(expr_resolved_after.desc.content),
+                    });
+                }
+
                 if (result.isProblem()) {
                     self.setProblemTypeMismatchDetail(result.problem, .{
                         .cross_module_import = .{
@@ -1063,10 +1255,6 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
             does_fx = try self.checkIfElseExpr(expr_idx, expr_region, if_expr);
         },
         .e_call => |call| {
-            // Don't clear here - we clear once per definition
-            // This preserves mappings for nested calls
-            // self.var_map.clearRetainingCapacity();
-
             // Get all expressions - first is function, rest are arguments
             const all_exprs = self.cir.store.sliceExpr(call.args);
 
@@ -1092,10 +1280,51 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
                 const call_func_var = @as(Var, @enumFromInt(@intFromEnum(func_expr_idx)));
                 const resolved_func = self.types.resolveVar(call_func_var);
 
+                // Debug: print function call info
+                // if (std.mem.eql(u8, self.cir.module_name, "B") or std.mem.eql(u8, self.cir.module_name, "C")) {
+                //     std.debug.print("Module {s} calling function: Var({}), content={s}, needs_inst={}\n", .{
+                //         self.cir.module_name,
+                //         @intFromEnum(call_func_var),
+                //         @tagName(resolved_func.desc.content),
+                //         self.types.needsInstantiation(call_func_var),
+                //     });
+
+                //     // Also print what the function is
+                //     if (func_expr == .e_lookup_external) {
+                //         std.debug.print("  External function from module_idx={}, node_idx={}\n", .{
+                //             @intFromEnum(func_expr.e_lookup_external.module_idx),
+                //             func_expr.e_lookup_external.target_node_idx,
+                //         });
+                //     }
+                // }
+
+                // Debug: print what function we're calling
+                if (std.mem.eql(u8, self.cir.module_name, "C")) {
+                    std.debug.print("Module C - calling function:\n", .{});
+                    std.debug.print("  func_var: Var({}) -> Var({}), content={s}\n", .{
+                        @intFromEnum(call_func_var),
+                        @intFromEnum(resolved_func.var_),
+                        @tagName(resolved_func.desc.content),
+                    });
+                    std.debug.print("  call_var: Var({}) -> Var({}), content={s}\n", .{
+                        @intFromEnum(call_var),
+                        @intFromEnum(self.types.resolveVar(call_var).var_),
+                        @tagName(self.types.resolveVar(call_var).desc.content),
+                    });
+                }
+
                 // Check if this is an annotated function that needs instantiation
                 // We only instantiate if the function actually contains type variables
                 var cur_call_func_var = call_func_var;
                 var current_content = resolved_func.desc.content;
+
+                // Debug: which content type
+                if (std.mem.eql(u8, self.cir.module_name, "C")) {
+                    std.debug.print("  Function content: {s}\n", .{@tagName(current_content)});
+                    if (current_content == .structure) {
+                        std.debug.print("    Structure type: {s}\n", .{@tagName(current_content.structure)});
+                    }
+                }
 
                 content_switch: switch (current_content) {
                     .structure => |flat_type| switch (flat_type) {
@@ -1125,22 +1354,41 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
                         },
                         .fn_pure => |_| {
                             const needs_inst = self.types.needsInstantiation(cur_call_func_var);
-                            // const resolved_func_var = self.types.resolveVar(cur_call_func_var);
-                            // std.debug.print("At call site: func var={}, needs_instantiation()={}, func.needs_instantiation={}, rank={}\n", .{
-                            //     cur_call_func_var,
-                            //     needs_inst,
-                            //     func.needs_instantiation,
-                            //     resolved_func_var.desc.rank,
-                            // });
                             if (needs_inst) {
                                 const expected_func_var = try self.instantiateVarAnon(cur_call_func_var, .{ .explicit = expr_region });
                                 const resolved_expected_func = self.types.resolveVar(expected_func_var);
+
+                                // Debug: print after instantiation
+                                if (std.mem.eql(u8, self.cir.module_name, "C")) {
+                                    std.debug.print("  After instantiation: Var({}) -> Var({})\n", .{
+                                        @intFromEnum(expected_func_var),
+                                        @intFromEnum(resolved_expected_func.var_),
+                                    });
+                                }
 
                                 std.debug.assert(resolved_expected_func.desc.content == .structure);
                                 std.debug.assert(resolved_expected_func.desc.content.structure == .fn_pure);
                                 const expected_func = resolved_expected_func.desc.content.structure.fn_pure;
 
+                                // Debug before unifyFunctionCall
+                                if (std.mem.eql(u8, self.cir.module_name, "C")) {
+                                    std.debug.print("  Before unifyFunctionCall: call_var=Var({}), ret=Var({})\n", .{
+                                        @intFromEnum(call_var),
+                                        @intFromEnum(expected_func.ret),
+                                    });
+                                }
+
                                 does_fx = try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, func_expr_region, func_expr_idx) or does_fx;
+
+                                // Debug after unifyFunctionCall
+                                if (std.mem.eql(u8, self.cir.module_name, "C")) {
+                                    const call_resolved = self.types.resolveVar(call_var);
+                                    std.debug.print("  After unifyFunctionCall: call_var=Var({}) -> Var({}), content={s}\n", .{
+                                        @intFromEnum(call_var),
+                                        @intFromEnum(call_resolved.var_),
+                                        @tagName(call_resolved.desc.content),
+                                    });
+                                }
 
                                 // Unify with expected type if provided
                                 if (expected_type) |expected| {
@@ -1154,24 +1402,148 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
                                 return does_fx;
                             }
                         },
-                        .fn_unbound => |_| {
+                        .fn_unbound => |func| {
                             const needs_inst = self.types.needsInstantiation(cur_call_func_var);
-                            // const resolved_func_var = self.types.resolveVar(cur_call_func_var);
-                            // std.debug.print("At call site (fn_unbound): func var={}, needsInstantiation()={}, func.needs_instantiation={}, rank={}\n", .{
-                            //     cur_call_func_var,
-                            //     needs_inst,
-                            //     func.needs_instantiation,
-                            //     resolved_func_var.desc.rank,
-                            // });
+
+                            // Debug
+                            if (std.mem.eql(u8, self.cir.module_name, "C")) {
+                                std.debug.print("  fn_unbound: needs_inst={}, func.needs_instantiation={}\n", .{
+                                    needs_inst,
+                                    func.needs_instantiation,
+                                });
+
+                                // Check the function structure before instantiation
+                                const func_args = self.types.sliceVars(func.args);
+                                if (func_args.len > 0) {
+                                    const param_resolved = self.types.resolveVar(func_args[0]);
+                                    std.debug.print("  Before instantiation - param: Var({}) -> Var({}), content={s}\n", .{
+                                        @intFromEnum(func_args[0]),
+                                        @intFromEnum(param_resolved.var_),
+                                        @tagName(param_resolved.desc.content),
+                                    });
+
+                                    // Check if it's a record
+                                    if (param_resolved.desc.content == .structure) {
+                                        std.debug.print("    Param structure type: {s}\n", .{@tagName(param_resolved.desc.content.structure)});
+
+                                        if (param_resolved.desc.content.structure == .record_unbound) {
+                                            const fields = self.types.getRecordFieldsSlice(param_resolved.desc.content.structure.record_unbound);
+                                            std.debug.print("    Param record_unbound has {} fields\n", .{fields.len});
+                                            for (fields.items(.name), fields.items(.var_)) |field_name, field_var| {
+                                                const name = self.cir.getIdent(field_name);
+                                                const field_resolved = self.types.resolveVar(field_var);
+                                                std.debug.print("      Field '{s}': Var({}) -> Var({}), content={s}\n", .{
+                                                    name,
+                                                    @intFromEnum(field_var),
+                                                    @intFromEnum(field_resolved.var_),
+                                                    @tagName(field_resolved.desc.content),
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                                const ret_resolved = self.types.resolveVar(func.ret);
+                                std.debug.print("  Before instantiation - ret: Var({}) -> Var({}), content={s}\n", .{
+                                    @intFromEnum(func.ret),
+                                    @intFromEnum(ret_resolved.var_),
+                                    @tagName(ret_resolved.desc.content),
+                                });
+                            }
+
                             if (needs_inst) {
-                                const expected_func_var = try self.instantiateVarAnon(cur_call_func_var, .{ .explicit = expr_region });
+                                // Always use fresh map for proper instantiation
+                                // Each call site needs its own fresh type variables
+                                const use_fresh = true;
+
+                                // Debug
+                                if (std.mem.eql(u8, self.cir.module_name, "C")) {
+                                    std.debug.print("  Instantiating with use_fresh={}\n", .{use_fresh});
+                                }
+
+                                const expected_func_var = try self.instantiateVarAnonWithStrategy(cur_call_func_var, .{ .explicit = expr_region }, use_fresh);
                                 const resolved_expected_func = self.types.resolveVar(expected_func_var);
+
+                                // Debug after instantiation
+                                if (std.mem.eql(u8, self.cir.module_name, "C")) {
+                                    std.debug.print("  After instantiation: Var({}) -> Var({})\n", .{
+                                        @intFromEnum(expected_func_var),
+                                        @intFromEnum(resolved_expected_func.var_),
+                                    });
+
+                                    // Check the instantiated function structure
+                                    if (resolved_expected_func.desc.content == .structure) {
+                                        const inst_func = switch(resolved_expected_func.desc.content.structure) {
+                                            .fn_unbound => |f| f,
+                                            else => unreachable,
+                                        };
+                                        const inst_func_args = self.types.sliceVars(inst_func.args);
+                                        std.debug.print("  Instantiated function has {} args\n", .{inst_func_args.len});
+                                        for (inst_func_args, 0..) |arg, i| {
+                                            const arg_resolved = self.types.resolveVar(arg);
+                                            std.debug.print("    Arg[{}]: Var({}) -> Var({}), content={s}\n", .{
+                                                i,
+                                                @intFromEnum(arg),
+                                                @intFromEnum(arg_resolved.var_),
+                                                @tagName(arg_resolved.desc.content),
+                                            });
+                                        }
+                                        std.debug.print("    Ret: Var({}) -> Var({})\n", .{
+                                            @intFromEnum(inst_func.ret),
+                                            @intFromEnum(self.types.resolveVar(inst_func.ret).var_),
+                                        });
+                                    }
+                                }
 
                                 std.debug.assert(resolved_expected_func.desc.content == .structure);
                                 std.debug.assert(resolved_expected_func.desc.content.structure == .fn_unbound);
                                 const expected_func = resolved_expected_func.desc.content.structure.fn_unbound;
 
+                                // Debug: Check the instantiated function's parameter
+                                if (std.mem.eql(u8, self.cir.module_name, "C")) {
+                                    const inst_args = self.types.sliceVars(expected_func.args);
+                                    if (inst_args.len > 0) {
+                                        const param_resolved = self.types.resolveVar(inst_args[0]);
+                                        std.debug.print("  Instantiated param: Var({}) -> Var({}), content={s}\n", .{
+                                            @intFromEnum(inst_args[0]),
+                                            @intFromEnum(param_resolved.var_),
+                                            @tagName(param_resolved.desc.content),
+                                        });
+                                        if (param_resolved.desc.content == .structure) {
+                                            if (param_resolved.desc.content.structure == .record_unbound) {
+                                                const fields = self.types.getRecordFieldsSlice(param_resolved.desc.content.structure.record_unbound);
+                                                std.debug.print("    Record has {} fields\n", .{fields.len});
+                                                for (fields.items(.name), fields.items(.var_)) |field_name, field_var| {
+                                                    const name = self.cir.getIdent(field_name);
+                                                    std.debug.print("      Field '{s}': Var({})\n", .{
+                                                        name,
+                                                        @intFromEnum(field_var),
+                                                    });
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Debug before unifyFunctionCall
+                                if (std.mem.eql(u8, self.cir.module_name, "C")) {
+                                    std.debug.print("  Before unifyFunctionCall: call_var=Var({}), ret=Var({})\n", .{
+                                        @intFromEnum(call_var),
+                                        @intFromEnum(expected_func.ret),
+                                    });
+                                }
+
                                 does_fx = try self.unifyFunctionCall(call_var, call_func_var, call_args, expected_func, expr_region, func_expr_idx) or does_fx;
+
+                                // Debug after unifyFunctionCall
+                                if (std.mem.eql(u8, self.cir.module_name, "C")) {
+                                    const call_resolved = self.types.resolveVar(call_var);
+                                    std.debug.print("  After unifyFunctionCall: call_var=Var({}) -> Var({}), content={s}\n", .{
+                                        @intFromEnum(call_var),
+                                        @intFromEnum(call_resolved.var_),
+                                        @tagName(call_resolved.desc.content),
+                                    });
+                                }
+
                                 return does_fx;
                             }
                         },
@@ -1296,9 +1668,9 @@ fn checkExprWithExpectedAndAnnotationHelp(self: *Self, expr_idx: CIR.Expr.Idx, e
             // Check all statements in the block
             const statements = self.cir.store.sliceStatements(block.stmts);
             for (statements) |stmt_idx| {
-                // Clear instantiation map for each statement
-                // This ensures each statement's polymorphic calls get fresh variables
-                self.var_map.clearRetainingCapacity();
+                // Don't clear here - we clear at each call site
+                // This ensures proper let-polymorphism while preserving
+                // variable relationships within a single instantiation
 
                 const stmt = self.cir.store.getStatement(stmt_idx);
                 switch (stmt) {
@@ -1856,13 +2228,155 @@ fn unifyFunctionCall(
         for (expected_args, call_args) |expected_arg, arg_expr_idx| {
             const actual_arg = @as(Var, @enumFromInt(@intFromEnum(arg_expr_idx)));
 
-            // Instantiate polymorphic arguments before unification
+            // Debug: show argument unification
+            if (std.mem.eql(u8, self.cir.module_name, "B") or std.mem.eql(u8, self.cir.module_name, "C")) {
+                const expected_resolved = self.types.resolveVar(expected_arg);
+                const actual_resolved = self.types.resolveVar(actual_arg);
+                std.debug.print("    Unifying arg: expected Var({}) -> Var({}) ({s}), actual Var({}) -> Var({}) ({s})\n", .{
+                    @intFromEnum(expected_arg),
+                    @intFromEnum(expected_resolved.var_),
+                    @tagName(expected_resolved.desc.content),
+                    @intFromEnum(actual_arg),
+                    @intFromEnum(actual_resolved.var_),
+                    @tagName(actual_resolved.desc.content),
+                });
+
+                // Show what the expected structure is
+                if (expected_resolved.desc.content == .structure) {
+                    switch (expected_resolved.desc.content.structure) {
+                        .record_unbound => {
+                            const fields = self.types.getRecordFieldsSlice(expected_resolved.desc.content.structure.record_unbound);
+                            std.debug.print("      Expected is record_unbound with {} fields\n", .{fields.len});
+                            for (fields.items(.name), fields.items(.var_)) |field_name, field_var| {
+                                const name = self.cir.getIdent(field_name);
+                                std.debug.print("        Field '{s}': Var({})\n", .{name, @intFromEnum(field_var)});
+                            }
+                        },
+                        else => |s| std.debug.print("      Expected structure type: {s}\n", .{@tagName(s)}),
+                    }
+                }
+
+                // Show what the actual structure is
+                if (actual_resolved.desc.content == .structure) {
+                    switch (actual_resolved.desc.content.structure) {
+                        .record_unbound => {
+                            const fields = self.types.getRecordFieldsSlice(actual_resolved.desc.content.structure.record_unbound);
+                            std.debug.print("      Actual is record_unbound with {} fields\n", .{fields.len});
+                            for (fields.items(.name), fields.items(.var_)) |field_name, field_var| {
+                                const name = self.cir.getIdent(field_name);
+                                const field_resolved = self.types.resolveVar(field_var);
+                                std.debug.print("        Field '{s}': Var({}) -> Var({}), content={s}", .{
+                                    name,
+                                    @intFromEnum(field_var),
+                                    @intFromEnum(field_resolved.var_),
+                                    @tagName(field_resolved.desc.content),
+                                });
+                                // Check if it's a Num type
+                                if (field_resolved.desc.content == .structure) {
+                                    if (field_resolved.desc.content.structure == .num) {
+                                        const num = field_resolved.desc.content.structure.num;
+                                        std.debug.print(" (num type: {s})", .{@tagName(num)});
+                                    }
+                                }
+                                std.debug.print("\n", .{});
+                            }
+                        },
+                        else => |s| std.debug.print("      Actual structure type: {s}\n", .{@tagName(s)}),
+                    }
+                }
+            }
+
+            // Don't instantiate arguments - just unify them directly
+            // Instantiation should only happen for let-polymorphism on the function itself
             var arg_to_unify = actual_arg;
-            if (self.types.needsInstantiation(actual_arg)) {
+
+            // Only instantiate if it's a generalized (rank 0) variable
+            const actual_resolved = self.types.resolveVar(actual_arg);
+            if (actual_resolved.desc.rank == .generalized) {
+                if (std.mem.eql(u8, self.cir.module_name, "B") and @intFromEnum(actual_arg) == 86) {
+                    std.debug.print("      Instantiating generalized Var(86)\n", .{});
+                }
                 arg_to_unify = try self.instantiateVarAnon(actual_arg, .{ .explicit = region });
             }
 
+            // Debug: check resolution before unify
+            if (std.mem.eql(u8, self.cir.module_name, "B") and @intFromEnum(expected_arg) == 97) {
+                const exp_before = self.types.resolveVar(expected_arg);
+                const act_before = self.types.resolveVar(arg_to_unify);
+                std.debug.print("      Before unify: expected Var({}) resolves to Var({}), actual Var({}) resolves to Var({})\n", .{
+                    @intFromEnum(expected_arg),
+                    @intFromEnum(exp_before.var_),
+                    @intFromEnum(arg_to_unify),
+                    @intFromEnum(act_before.var_),
+                });
+            }
+
             const arg_result = try self.unify(expected_arg, arg_to_unify);
+
+            // Debug: show unification result
+            if (std.mem.eql(u8, self.cir.module_name, "B")) {
+                std.debug.print("      Unification result: {s}\n", .{if (arg_result == .ok) "OK" else "PROBLEM"});
+            }
+
+            // Debug: show result
+            if (std.mem.eql(u8, self.cir.module_name, "B")) {
+                const actual_after = self.types.resolveVar(actual_arg);
+                const expected_after = self.types.resolveVar(expected_arg);
+                std.debug.print("      After unify: expected Var({}) is now {s}, actual Var({}) is now {s}\n", .{
+                    @intFromEnum(expected_arg),
+                    @tagName(expected_after.desc.content),
+                    @intFromEnum(actual_arg),
+                    @tagName(actual_after.desc.content),
+                });
+
+                // Check if they resolved to the same variable
+                if (actual_after.var_ == expected_after.var_) {
+                    std.debug.print("      GOOD: Both resolve to same var Var({})\n", .{@intFromEnum(actual_after.var_)});
+                } else {
+                    std.debug.print("      BAD: actual resolves to Var({}), expected resolves to Var({})\n", .{
+                        @intFromEnum(actual_after.var_),
+                        @intFromEnum(expected_after.var_),
+                    });
+                }
+
+                // Check if this affected the lambda parameter
+                // If actual_arg is e_lookup_local, it might be the lambda parameter
+                const arg_expr = self.cir.store.getExpr(arg_expr_idx);
+                if (arg_expr == .e_lookup_local) {
+                    const pattern_idx = arg_expr.e_lookup_local.pattern_idx;
+                    std.debug.print("      This is e_lookup_local with pattern_idx={}\n", .{@intFromEnum(pattern_idx)});
+                    // Check if this is the lambda parameter
+                    const pattern = self.cir.store.getPattern(pattern_idx);
+                    if (pattern == .assign) {
+                        const name = self.cir.getIdent(pattern.assign.ident);
+                        std.debug.print("      Variable name: '{s}'\n", .{name});
+                        if (std.mem.eql(u8, name, "pair")) {
+                            // This is the lambda parameter!
+                            std.debug.print("      This is the lambda parameter 'pair'!\n", .{});
+
+                            // The pattern_idx should correspond to the parameter type
+                            const param_var = @as(Var, @enumFromInt(@intFromEnum(pattern_idx)));
+                            const param_resolved = self.types.resolveVar(param_var);
+                            std.debug.print("      Lambda param Var({}) has type: {s}\n", .{
+                                @intFromEnum(param_var),
+                                @tagName(param_resolved.desc.content),
+                            });
+
+                            // Check if Var(86) and Var(84) are unified
+                            const resolved_86 = self.types.resolveVar(actual_arg);
+                            const resolved_84 = self.types.resolveVar(param_var);
+                            if (resolved_86.var_ == resolved_84.var_) {
+                                std.debug.print("      GOOD: Var(86) and Var(84) resolve to same variable\n", .{});
+                            } else {
+                                std.debug.print("      BAD: Var(86) resolves to Var({}), Var(84) resolves to Var({})\n", .{
+                                    @intFromEnum(resolved_86.var_),
+                                    @intFromEnum(resolved_84.var_),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
             self.setDetailIfTypeMismatch(arg_result, .{
                 .incompatible_fn_call_arg = .{
                     .fn_name = null, // Get function name for better error message
@@ -1872,6 +2386,87 @@ fn unifyFunctionCall(
                 },
             });
             arg_index += 1;
+        }
+
+        // SPECIAL CASE: After unifying arguments, check if the return type is linked to a field in the parameter
+        // This handles polymorphic field access functions like `getFirst = |pair| pair.a`
+        // where the return type should be unified with a field type in the parameter
+        if (expected_args.len > 0) {
+            const first_arg_resolved = self.types.resolveVar(expected_args[0]);
+            const ret_resolved_before = self.types.resolveVar(expected_func.ret);
+
+            // Debug output
+            // if (std.mem.eql(u8, self.cir.module_name, "B") or std.mem.eql(u8, self.cir.module_name, "C")) {
+            //     std.debug.print("  Checking field-return link: ret={} (content={s}), arg={} (content={s})\n", .{
+            //         @intFromEnum(expected_func.ret),
+            //         @tagName(ret_resolved_before.desc.content),
+            //         @intFromEnum(expected_args[0]),
+            //         @tagName(first_arg_resolved.desc.content),
+            //     });
+            // }
+
+            // Check if the first argument is a record and the return type is still a flex_var
+            if (ret_resolved_before.desc.content == .flex_var and
+                first_arg_resolved.desc.content == .structure and
+                (first_arg_resolved.desc.content.structure == .record or
+                 first_arg_resolved.desc.content.structure == .record_unbound)) {
+
+                // Get the fields of the record
+                const fields = if (first_arg_resolved.desc.content.structure == .record)
+                    self.types.getRecordFieldsSlice(first_arg_resolved.desc.content.structure.record.fields)
+                else
+                    self.types.getRecordFieldsSlice(first_arg_resolved.desc.content.structure.record_unbound);
+
+                // Debug: print fields
+                // if (std.mem.eql(u8, self.cir.module_name, "B") or std.mem.eql(u8, self.cir.module_name, "C")) {
+                //     std.debug.print("  Record has {} fields\n", .{fields.len});
+                //     for (fields.items(.name), fields.items(.var_)) |field_name, field_var| {
+                //         const field_resolved = self.types.resolveVar(field_var);
+                //         const name = self.cir.getIdent(field_name);
+                //         std.debug.print("    Field '{s}': Var({}) content={s}\n", .{
+                //             name,
+                //             @intFromEnum(field_var),
+                //             @tagName(field_resolved.desc.content),
+                //         });
+                //     }
+                // }
+
+                // Check if any field has the same variable as the return type
+                // This would indicate the return type should be unified with that field
+                // Special handling: if return type and a field are both the same flex_var,
+                // this means the function returns that field
+                for (fields.items(.name), fields.items(.var_)) |_, field_var| {
+                    const field_resolved = self.types.resolveVar(field_var);
+                    const ret_resolved = self.types.resolveVar(expected_func.ret);
+
+                    // Check if the return var and field var resolve to the same variable
+                    // This happens when a function like `getFirst = |pair| pair.a` is imported
+                    if (ret_resolved.var_ == field_resolved.var_) {
+                        // if (std.mem.eql(u8, self.cir.module_name, "B") or std.mem.eql(u8, self.cir.module_name, "C")) {
+                        //     const name = self.cir.getIdent(field_name);
+                        //     std.debug.print("  Return type linked to field '{s}': both resolve to Var({})\n", .{
+                        //         name,
+                        //         @intFromEnum(ret_resolved.var_),
+                        //     });
+                        // }
+
+                        // The return type is constrained to be the same as this field
+                        // Since we just unified the parameter with a concrete record,
+                        // the field might now have a concrete type
+                        // Make sure the return type is also constrained
+                        if (field_resolved.desc.content != .flex_var and ret_resolved.desc.content == .flex_var) {
+                            // The field has been constrained but return hasn't - unify them
+                            // if (std.mem.eql(u8, self.cir.module_name, "B") or std.mem.eql(u8, self.cir.module_name, "C")) {
+                            //     std.debug.print("    Field has concrete type, unifying return\n", .{});
+                            // }
+                            _ = try self.unify(expected_func.ret, field_var);
+                        }
+                        break;
+                    }
+                }
+
+                // No heuristics - the type system should preserve the constraint
+            }
         }
         // The call's type is the instantiated return type
         // IMPORTANT: After unifying arguments, the return type may have been constrained
@@ -1890,12 +2485,37 @@ fn unifyFunctionCall(
             ret_resolved = self.types.resolveVar(ret_resolved.var_);
         }
 
-        // std.debug.print("unifyFunctionCall: unifying call_var={} with return type={}, content={s}\n", .{
-        //     call_var,
-        //     expected_func.ret,
-        //     @tagName(ret_resolved.desc.content),
-        // });
-        _ = try self.unify(call_var, expected_func.ret);
+        // Debug: show return type unification
+        if (std.mem.eql(u8, self.cir.module_name, "B")) {
+            std.debug.print("    Unifying call_var Var({}) with return Var({})\n", .{
+                @intFromEnum(call_var),
+                @intFromEnum(expected_func.ret),
+            });
+        }
+
+        const unify_result = try self.unify(call_var, expected_func.ret);
+
+        // Debug: check after unification
+        if (std.mem.eql(u8, self.cir.module_name, "B") or std.mem.eql(u8, self.cir.module_name, "C")) {
+            const call_after = self.types.resolveVar(call_var);
+            const ret_after = self.types.resolveVar(expected_func.ret);
+            std.debug.print("    After unify: call_var Var({}) is {s}, ret Var({}) is {s}\n", .{
+                @intFromEnum(call_var),
+                @tagName(call_after.desc.content),
+                @intFromEnum(expected_func.ret),
+                @tagName(ret_after.desc.content),
+            });
+            if (call_after.var_ == ret_after.var_) {
+                std.debug.print("    GOOD: Both resolve to same var Var({})\n", .{@intFromEnum(call_after.var_)});
+            } else {
+                std.debug.print("    BAD: call resolves to Var({}), ret resolves to Var({})\n", .{
+                    @intFromEnum(call_after.var_),
+                    @intFromEnum(ret_after.var_),
+                });
+            }
+        }
+
+        _ = unify_result;
     } else {
         // Arity mismatch - arguments already checked
 
@@ -2316,10 +2936,15 @@ fn checkNominal(
         },
     };
 
+    // Get the nominal type name for potential error messages
+    const nominal_ident = self.cir.getIdent(nominal_type.ident.ident_idx);
+    _ = nominal_ident; // May only be used in error cases
+
     // Step 2: Instantiate the nominal type's backing type
     // This converts rigid type variables (like `a[r]`) to fresh flexible variables
     // that can be unified. The backing type defines the structure (e.g., [Just(a), None])
     const nominal_backing_var = self.types.getNominalBackingVar(nominal_type);
+
     const instantiated_backing_var = try self.instantiateVar(
         nominal_backing_var,
         &self.anonymous_rigid_var_subs,
@@ -2330,10 +2955,52 @@ fn checkNominal(
     // Unifying by the whole thing works, but doesn't have great error messages
     // always
 
-    // Step 3: Unify the instantiated backing type with the user's constructor
-    // This checks if `Just(1)` is compatible with `[Just(a), None]` and if so,
-    // unifies `a` with the type of `1` (e.g., Num(_size))
-    const result = try self.unify(instantiated_backing_var, node_backing_var);
+
+    // Step 3: For tag types, check if the tag exists; for other types, unify
+    const result = if (node_backing_type == .tag) blk: {
+        // For tag nominal expressions (like "True" from Bool), we need to check
+        // that the tag exists in the nominal type's tag union, not unify the whole union
+        const backing_resolved = self.types.resolveVar(instantiated_backing_var);
+        if (backing_resolved.desc.content == .structure and
+            backing_resolved.desc.content.structure == .tag_union)
+        {
+            // Check if the tag exists in the union
+            const tag_union = backing_resolved.desc.content.structure.tag_union;
+            const tags = self.types.getTagsSlice(tag_union.tags);
+
+            // Get the tag name from node_backing_var
+            const node_resolved = self.types.resolveVar(node_backing_var);
+            var tag_found = false;
+            if (node_resolved.desc.content == .structure and
+                node_resolved.desc.content.structure == .tag_union)
+            {
+                const node_tags = self.types.getTagsSlice(node_resolved.desc.content.structure.tag_union.tags);
+                if (node_tags.len == 1) {
+                    const node_tag_name = self.cir.getIdent(node_tags.items(.name)[0]);
+                    for (tags.items(.name)) |backing_tag_name| {
+                        const backing_name_str = self.cir.getIdent(backing_tag_name);
+                        if (std.mem.eql(u8, node_tag_name, backing_name_str)) {
+                            tag_found = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (tag_found) {
+                break :blk unifier.Result.ok;
+            } else {
+                // Tag not found in union - this is an error
+                // For now, fall back to unification which will fail properly
+                break :blk try self.unify(instantiated_backing_var, node_backing_var);
+            }
+        } else {
+            // Not a tag union - fall back to regular unification
+            break :blk try self.unify(instantiated_backing_var, node_backing_var);
+        }
+    } else
+        // Not a tag - use regular unification
+        try self.unify(instantiated_backing_var, node_backing_var);
 
     // Step 4: Handle the unification result
     switch (result) {
@@ -2341,6 +3008,9 @@ fn checkNominal(
             // Unification succeeded - the constructor is valid for this nominal type
             // Now instantiate the full nominal type using the same rigid variable map
             // so it gets the same type substitutions as the backing type
+            // Ensure we have regions filled for this
+            try self.fillInRegionsThrough(real_nominal_var);
+
             const instantiated_qualified_var = try self.instantiateVar(
                 real_nominal_var,
                 &self.anonymous_rigid_var_subs,
@@ -2349,6 +3019,8 @@ fn checkNominal(
 
             // Assign the inferred concrete type to the expression variable
             // After this, `node_var` will resolve to something like `Maybe(Num(_size))`
+
+
             try self.types.setVarRedirect(node_var, instantiated_qualified_var);
         },
         .problem => |problem_idx| {

@@ -37,6 +37,29 @@ fn typeCheck(allocator: std.mem.Allocator, source: []const u8) !bool {
 
     _ = try checker.checkExpr(canon_expr.get_idx());
 
+    // Debug: print any problems
+    if (checker.problems.problems.items.len > 0) {
+        std.debug.print("\nType check problems found:\n", .{});
+        for (checker.problems.problems.items) |problem| {
+            switch (problem) {
+                .type_mismatch => |mismatch| {
+                    std.debug.print("  Type mismatch: expected Var({}), actual Var({})\n", .{
+                        @intFromEnum(mismatch.types.expected_var),
+                        @intFromEnum(mismatch.types.actual_var),
+                    });
+
+                    const expected_resolved = module_env.types.resolveVar(mismatch.types.expected_var);
+                    const actual_resolved = module_env.types.resolveVar(mismatch.types.actual_var);
+                    std.debug.print("    Expected type: {s}\n", .{@tagName(expected_resolved.desc.content)});
+                    std.debug.print("    Actual type: {s}\n", .{@tagName(actual_resolved.desc.content)});
+                },
+                else => {
+                    std.debug.print("  Problem: {}\n", .{problem});
+                }
+            }
+        }
+    }
+
     return checker.problems.problems.items.len == 0;
 }
 
