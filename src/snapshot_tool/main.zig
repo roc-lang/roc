@@ -2292,7 +2292,7 @@ fn writeHtmlFile(gpa: Allocator, snapshot_path: []const u8, html_buffer: *std.ar
         return;
     };
     defer html_file.close();
-    try html_file.writer().writeAll(html_buffer.items);
+    try html_file.deprecatedWriter().writeAll(html_buffer.items);
 
     log("generated HTML version: {s}", .{html_path});
 }
@@ -2384,7 +2384,11 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, config:
         };
         defer corpus_file.close();
 
-        try corpus_file.writer().writeAll(content.source);
+        var write_buffer: [4096]u8 = undefined;
+        var corpus_writer = corpus_file.writer(&write_buffer);
+        const writer = &corpus_writer.interface;
+        try writer.writeAll(content.source);
+        try writer.flush();
     }
 
     return success;

@@ -95,14 +95,14 @@ comptime {
 
 // Windows MinGW/MSVCRT compatibility stub
 // The C runtime on Windows calls __main from main for constructor initialization
-fn __main() callconv(.C) void {}
+fn __main() callconv(.c) void {}
 
 // C compatible main for runtime
-fn main(argc: c_int, argv: [*][*:0]u8) callconv(.C) c_int {
+fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     _ = argc;
     _ = argv;
     platform_main() catch |err| {
-        std.io.getStdErr().writer().print("HOST ERROR: {?}", .{err}) catch unreachable;
+        std.fs.File.stderr().deprecatedWriter().print("HOST ERROR: {s}", .{@errorName(err)}) catch unreachable;
         return 1;
     };
     return 0;

@@ -951,7 +951,7 @@ const ResponseWriter = struct {
 
     const Self = @This();
     pub const Error = ResponseWriteError;
-    pub const Writer = std.io.Writer(*Self, Error, write);
+    pub const Writer = std.io.GenericWriter(*Self, Error, write);
 
     fn write(self: *Self, bytes: []const u8) Error!usize {
         if (self.pos + bytes.len > self.buffer.len) {
@@ -1372,7 +1372,7 @@ fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) Re
         return;
     };
 
-    var html_buffer = std.ArrayList(u8).init(local_arena.allocator());
+    var html_buffer = std.array_list.Managed(u8).init(local_arena.allocator());
     const html_writer = html_buffer.writer().any();
 
     test_runner.write_html_report(html_writer) catch {
