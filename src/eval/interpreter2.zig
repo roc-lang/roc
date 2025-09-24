@@ -274,6 +274,20 @@ pub const Interpreter2 = struct {
                     out.setInt(diff);
                     out.is_initialized = true;
                     return out;
+                } else if (binop.op == .mul) {
+                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops);
+                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops);
+                    if (!(lhs.layout.tag == .scalar and lhs.layout.data.scalar.tag == .int)) return error.TypeMismatch;
+                    if (!(rhs.layout.tag == .scalar and rhs.layout.data.scalar.tag == .int)) return error.TypeMismatch;
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    const rt_var = try self.translateTypeVar(self.env, ct_var);
+                    const result_layout = try self.getRuntimeLayout(rt_var);
+                    var out = try self.pushRaw(result_layout, 0);
+                    out.is_initialized = false;
+                    const prod = lhs.asI128() * rhs.asI128();
+                    out.setInt(prod);
+                    out.is_initialized = true;
+                    return out;
                 } else if (binop.op == .eq) {
                     const lhs = try self.evalExprMinimal(binop.lhs, roc_ops);
                     const rhs = try self.evalExprMinimal(binop.rhs, roc_ops);

@@ -430,5 +430,41 @@ test "interpreter2 logical and is short-circuiting" {
     try std.testing.expectEqualStrings(expected, rendered);
 }
 
+test "interpreter2 recursion: factorial 5 -> 120" {
+    const roc_src =
+        \\{ fact = (|n| if n == 0 { 1 } else { n * fact(n - 1) }) fact(5) }
+    ;
+
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var ops = makeOps(std.testing.allocator);
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("120", rendered);
+}
+
+test "interpreter2 recursion: fibonacci 5 -> 5" {
+    const roc_src =
+        \\{ fib = (|n| if n == 0 { 0 } else if n == 1 { 1 } else { fib(n - 1) + fib(n - 2) }) fib(5) }
+    ;
+
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var ops = makeOps(std.testing.allocator);
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("5", rendered);
+}
+
 // Recursion via Z-combinator using if, ==, and subtraction
 // Recursion tests will follow after we add minimal tail recursion support
