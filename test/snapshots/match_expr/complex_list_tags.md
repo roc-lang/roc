@@ -327,10 +327,12 @@ match events {
 					(e-string @3.22-3.74
 						(e-literal @3.23-3.40 (string "single click at ("))
 						(e-call @3.42-3.54
+							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local @3.52-3.53
 								(p-assign @3.12-3.13 (ident "x"))))
 						(e-literal @3.55-3.57 (string ", "))
 						(e-call @3.59-3.71
+							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local @3.69-3.70
 								(p-assign @3.15-3.16 (ident "y"))))
 						(e-literal @3.72-3.73 (string ")")))))
@@ -349,7 +351,9 @@ match events {
 							(p-assign @4.15-4.18 (ident "key")))
 						(e-literal @4.47-4.57 (string " pressed, "))
 						(e-call @4.59-4.84
+							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-call @4.69-4.83
+								(e-runtime-error (tag "ident_not_in_scope"))
 								(e-lookup-local @4.78-4.82
 									(p-assign @1.1-1.1 (ident "rest")))))
 						(e-literal @4.85-4.97 (string " more events")))))
@@ -366,18 +370,22 @@ match events {
 					(e-string @5.53-5.135
 						(e-literal @5.54-5.60 (string "moved "))
 						(e-call @5.62-5.75
+							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local @5.72-5.74
 								(p-assign @5.11-5.13 (ident "dx"))))
 						(e-literal @5.76-5.77 (string ","))
 						(e-call @5.79-5.92
+							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local @5.89-5.91
 								(p-assign @5.15-5.17 (ident "dy"))))
 						(e-literal @5.93-5.99 (string " then "))
 						(e-call @5.101-5.115
+							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local @5.111-5.114
 								(p-assign @5.25-5.28 (ident "dx2"))))
 						(e-literal @5.116-5.117 (string ","))
 						(e-call @5.119-5.133
+							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local @5.129-5.132
 								(p-assign @5.30-5.33 (ident "dy2"))))
 						(e-literal @5.134-5.134 (string "")))))
@@ -394,14 +402,17 @@ match events {
 					(e-string @6.55-6.130
 						(e-literal @6.56-6.63 (string "scroll "))
 						(e-call @6.65-6.82
+							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local @6.75-6.81
 								(p-assign @6.13-6.19 (ident "amount"))))
 						(e-literal @6.83-6.98 (string " then click at "))
 						(e-call @6.100-6.112
+							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local @6.110-6.111
 								(p-assign @6.28-6.29 (ident "x"))))
 						(e-literal @6.113-6.114 (string ","))
 						(e-call @6.116-6.128
+							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local @6.126-6.127
 								(p-assign @6.31-6.32 (ident "y"))))
 						(e-literal @6.129-6.129 (string "")))))

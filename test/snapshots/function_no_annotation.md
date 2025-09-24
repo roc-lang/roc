@@ -118,6 +118,9 @@ NO CHANGE
 			(args
 				(p-assign @9.18-9.19 (ident "n")))
 			(e-call @9.21-9.36
+				(e-lookup-external @9.21-9.33
+					(module-idx "0")
+					(target-node-idx "0"))
 				(e-lookup-local @9.34-9.35
 					(p-assign @9.18-9.19 (ident "n"))))))
 	(d-let
@@ -130,13 +133,19 @@ NO CHANGE
 				(args
 					(p-assign @12.13-12.14 (ident "x")))
 				(e-call @12.16-12.45
+					(e-lookup-local @12.16-12.29
+						(p-assign @9.1-9.14 (ident "print_number!")))
 					(e-call @12.30-12.44
+						(e-lookup-local @12.30-12.38
+							(p-assign @6.1-6.9 (ident "multiply")))
 						(e-lookup-local @12.39-12.40
 							(p-assign @12.13-12.14 (ident "x")))
 						(e-num @12.42-12.43 (value "2")))))))
 	(d-let
 		(p-assign @14.1-14.6 (ident "main!"))
 		(e-call @14.9-14.21
+			(e-lookup-local @14.9-14.17
+				(p-assign @12.1-12.9 (ident "process!")))
 			(e-num @14.18-14.20 (value "42"))))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
 		(exposes)))

@@ -140,6 +140,7 @@ EndOfFile(11:1-11:1),
 					(e-num @6.21-6.22 (value "1")))))
 		(field (name "result")
 			(e-call @7.13-7.22
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-num @7.20-7.21 (value "5"))))
 		(field (name "nested")
 			(e-tag @8.13-8.31 (name "Some")

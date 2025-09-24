@@ -104,6 +104,8 @@ NO CHANGE
 	(d-let
 		(p-assign @11.1-11.7 (ident "result"))
 		(e-call @11.10-11.27
+			(e-lookup-local @11.10-11.23
+				(p-assign @4.1-4.14 (ident "redeclareTest")))
 			(e-empty_record @11.24-11.26))))
 ~~~
 # TYPES

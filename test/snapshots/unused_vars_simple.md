@@ -217,18 +217,26 @@ main! = |_| {
 					(s-let @16.5-16.26
 						(p-assign @16.5-16.6 (ident "a"))
 						(e-call @16.9-16.26
+							(e-lookup-local @16.9-16.23
+								(p-assign @4.1-4.15 (ident "unused_regular")))
 							(e-num @16.24-16.25 (value "5"))))
 					(s-let @17.5-17.28
 						(p-assign @17.5-17.6 (ident "b"))
 						(e-call @17.9-17.28
+							(e-lookup-local @17.9-17.24
+								(p-assign @7.1-7.16 (ident "used_underscore")))
 							(e-num @17.25-17.27 (value "10"))))
 					(s-let @18.5-18.30
 						(p-assign @18.5-18.6 (ident "c"))
 						(e-call @18.9-18.30
+							(e-lookup-local @18.9-18.26
+								(p-assign @10.1-10.18 (ident "unused_underscore")))
 							(e-num @18.27-18.29 (value "15"))))
 					(s-let @19.5-19.25
 						(p-assign @19.5-19.6 (ident "d"))
 						(e-call @19.9-19.25
+							(e-lookup-local @19.9-19.21
+								(p-assign @13.1-13.13 (ident "used_regular")))
 							(e-num @19.22-19.24 (value "20"))))
 					(e-binop @20.5-20.18 (op "add")
 						(e-binop @20.5-20.14 (op "add")

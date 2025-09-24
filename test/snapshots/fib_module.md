@@ -76,11 +76,15 @@ NO CHANGE
 					(if-else
 						(e-binop @3.28-3.51 (op "add")
 							(e-call @3.28-3.38
+								(e-lookup-local @3.28-3.31
+									(p-assign @3.1-3.4 (ident "fib")))
 								(e-binop @3.32-3.37 (op "sub")
 									(e-lookup-local @3.32-3.33
 										(p-assign @3.8-3.9 (ident "n")))
 									(e-num @3.36-3.37 (value "1"))))
 							(e-call @3.41-3.51
+								(e-lookup-local @3.41-3.44
+									(p-assign @3.1-3.4 (ident "fib")))
 								(e-binop @3.45-3.50 (op "sub")
 									(e-lookup-local @3.45-3.46
 										(p-assign @3.8-3.9 (ident "n")))

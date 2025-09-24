@@ -231,6 +231,8 @@ result = multi_arg_fn(
 	(d-let
 		(p-assign @10.1-10.7 (ident "result"))
 		(e-call @10.10-19.2
+			(e-lookup-local @10.10-10.22
+				(p-assign @5.1-5.13 (ident "multi_arg_fn")))
 			(e-num @11.5-11.7 (value "42"))
 			(e-string @12.5-12.12
 				(e-literal @12.6-12.11 (string "hello")))

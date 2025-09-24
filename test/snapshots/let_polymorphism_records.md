@@ -311,16 +311,22 @@ main = |_| {
 	(d-let
 		(p-assign @14.1-14.14 (ident "int_container"))
 		(e-call @14.17-14.36
+			(e-lookup-local @14.17-14.31
+				(p-assign @11.1-11.15 (ident "make_container")))
 			(e-lookup-local @14.32-14.35
 				(p-assign @4.1-4.4 (ident "num")))))
 	(d-let
 		(p-assign @15.1-15.14 (ident "str_container"))
 		(e-call @15.17-15.36
+			(e-lookup-local @15.17-15.31
+				(p-assign @11.1-11.15 (ident "make_container")))
 			(e-lookup-local @15.32-15.35
 				(p-assign @6.1-6.4 (ident "str")))))
 	(d-let
 		(p-assign @16.1-16.15 (ident "list_container"))
 		(e-call @16.18-16.47
+			(e-lookup-local @16.18-16.32
+				(p-assign @11.1-11.15 (ident "make_container")))
 			(e-lookup-local @16.33-16.46
 				(p-assign @7.1-7.14 (ident "my_empty_list")))))
 	(d-let
@@ -339,12 +345,16 @@ main = |_| {
 	(d-let
 		(p-assign @22.1-22.12 (ident "updated_int"))
 		(e-call @22.15-22.46
+			(e-lookup-local @22.15-22.26
+				(p-assign @19.1-19.12 (ident "update_data")))
 			(e-lookup-local @22.27-22.40
 				(p-assign @14.1-14.14 (ident "int_container")))
 			(e-num @22.42-22.45 (value "100"))))
 	(d-let
 		(p-assign @23.1-23.12 (ident "updated_str"))
 		(e-call @23.15-23.50
+			(e-lookup-local @23.15-23.26
+				(p-assign @19.1-19.12 (ident "update_data")))
 			(e-lookup-local @23.27-23.40
 				(p-assign @15.1-15.14 (ident "str_container")))
 			(e-string @23.42-23.49
@@ -362,15 +372,21 @@ main = |_| {
 	(d-let
 		(p-assign @29.1-29.11 (ident "int_record"))
 		(e-call @29.14-29.33
+			(e-lookup-local @29.14-29.29
+				(p-assign @26.1-26.16 (ident "identity_record")))
 			(e-num @29.30-29.32 (value "42"))))
 	(d-let
 		(p-assign @30.1-30.11 (ident "str_record"))
 		(e-call @30.14-30.37
+			(e-lookup-local @30.14-30.29
+				(p-assign @26.1-26.16 (ident "identity_record")))
 			(e-string @30.30-30.36
 				(e-literal @30.31-30.35 (string "test")))))
 	(d-let
 		(p-assign @31.1-31.12 (ident "list_record"))
 		(e-call @31.15-31.41
+			(e-lookup-local @31.15-31.30
+				(p-assign @26.1-26.16 (ident "identity_record")))
 			(e-list @31.31-31.40
 				(elems
 					(e-num @31.32-31.33 (value "1"))

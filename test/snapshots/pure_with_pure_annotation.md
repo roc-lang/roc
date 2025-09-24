@@ -122,6 +122,8 @@ NO CHANGE
 				(args
 					(p-assign @9.11-9.12 (ident "x")))
 				(e-call @9.14-9.23
+					(e-lookup-local @9.14-9.17
+						(p-assign @5.1-5.4 (ident "add")))
 					(e-lookup-local @9.18-9.19
 						(p-assign @9.11-9.12 (ident "x")))
 					(e-lookup-local @9.21-9.22
@@ -134,6 +136,8 @@ NO CHANGE
 	(d-let
 		(p-assign @11.1-11.6 (ident "main!"))
 		(e-call @11.9-11.18
+			(e-lookup-local @11.9-11.12
+				(p-assign @5.1-5.4 (ident "add")))
 			(e-num @11.13-11.14 (value "1"))
 			(e-num @11.16-11.17 (value "2")))))
 ~~~

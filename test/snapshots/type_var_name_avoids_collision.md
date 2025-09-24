@@ -545,15 +545,21 @@ main! = |_| {
 					(s-let @57.5-57.28
 						(p-assign @57.5-57.12 (ident "result1"))
 						(e-call @57.15-57.28
+							(e-lookup-local @57.15-57.23
+								(p-assign @7.1-7.9 (ident "identity")))
 							(e-num @57.24-57.27 (value "123"))))
 					(s-let @58.5-58.38
 						(p-assign @58.5-58.12 (ident "result2"))
 						(e-call @58.15-58.38
+							(e-lookup-local @58.15-58.30
+								(p-assign @16.1-16.16 (ident "anotherIdentity")))
 							(e-string @58.31-58.37
 								(e-literal @58.32-58.36 (string "test")))))
 					(s-let @59.5-59.40
 						(p-assign @59.5-59.12 (ident "result3"))
 						(e-call @59.15-59.40
+							(e-lookup-local @59.15-59.22
+								(p-assign @20.1-20.8 (ident "combine")))
 							(e-lookup-local @59.23-59.30
 								(p-assign @57.5-57.12 (ident "result1")))
 							(e-lookup-local @59.32-59.39
@@ -561,11 +567,15 @@ main! = |_| {
 					(s-let @60.5-60.39
 						(p-assign @60.5-60.12 (ident "result4"))
 						(e-call @60.15-60.39
+							(e-lookup-local @60.15-60.33
+								(p-assign @46.1-46.19 (ident "yetAnotherIdentity")))
 							(e-nominal @60.34-60.38 (nominal "Bool")
 								(e-tag @60.34-60.38 (name "True")))))
 					(s-let @61.5-61.34
 						(p-assign @61.5-61.12 (ident "result5"))
 						(e-call @61.15-61.34
+							(e-lookup-local @61.15-61.28
+								(p-assign @53.1-53.14 (ident "finalIdentity")))
 							(e-dec-small @61.29-61.33 (numerator "314") (denominator-power-of-ten "2") (value "3.14"))))
 					(e-binop @64.5-64.10 (op "add")
 						(e-lookup-local @64.5-64.6

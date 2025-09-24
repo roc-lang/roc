@@ -759,12 +759,10 @@ pub const Expr = union(enum) {
 
                 const all_exprs = ir.store.exprSlice(c.args);
 
-                if (all_exprs.len > 0) {
-                    try ir.store.getExpr(all_exprs[0]).pushToSExprTree(ir, tree, all_exprs[0]);
-                }
+                try ir.store.getExpr(c.func).pushToSExprTree(ir, tree, c.func);
 
-                if (all_exprs.len > 1) {
-                    for (all_exprs[1..]) |arg_idx| {
+                if (all_exprs.len > 0) {
+                    for (all_exprs[0..]) |arg_idx| {
                         try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
                     }
                 }

@@ -104,11 +104,17 @@ NO CHANGE
 			(s-let @7.2-7.24
 				(p-assign @7.2-7.9 (ident "encoded"))
 				(e-call @7.12-7.24
+					(e-lookup-external @7.12-7.18
+						(module-idx "0")
+						(target-node-idx "0"))
 					(e-lookup-local @7.19-7.23
 						(p-assign @6.2-6.6 (ident "data")))))
 			(s-let @8.2-8.29
 				(p-assign @8.2-8.9 (ident "decoded"))
 				(e-call @8.12-8.29
+					(e-lookup-external @8.12-8.20
+						(module-idx "0")
+						(target-node-idx "0"))
 					(e-lookup-local @8.21-8.28
 						(p-assign @7.2-7.9 (ident "encoded")))))
 			(e-lookup-local @9.2-9.9

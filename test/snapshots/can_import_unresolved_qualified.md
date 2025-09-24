@@ -205,6 +205,9 @@ NO CHANGE
 			(args
 				(p-assign @11.14-11.18 (ident "data")))
 			(e-call @11.20-11.40
+				(e-lookup-external @11.20-11.34
+					(module-idx "0")
+					(target-node-idx "0"))
 				(e-lookup-local @11.35-11.39
 					(p-assign @11.14-11.18 (ident "data")))))
 		(annotation @11.1-11.10
@@ -228,6 +231,9 @@ NO CHANGE
 	(d-let
 		(p-assign @18.1-18.7 (ident "result"))
 		(e-call @18.10-18.28
+			(e-lookup-external @18.10-18.20
+				(module-idx "0")
+				(target-node-idx "0"))
 			(e-string @18.21-18.27
 				(e-literal @18.22-18.26 (string "test")))))
 	(d-let

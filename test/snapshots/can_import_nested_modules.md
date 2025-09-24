@@ -540,6 +540,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(args
 				(p-assign @9.16-9.24 (ident "settings")))
 			(e-call @9.26-9.51
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local @9.42-9.50
 					(p-assign @9.16-9.24 (ident "settings")))))
 		(annotation @9.1-9.12
@@ -554,6 +555,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(p-assign @13.17-13.21 (ident "user"))
 				(p-assign @13.23-13.27 (ident "pass")))
 			(e-call @13.29-13.55
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local @13.44-13.48
 					(p-assign @13.17-13.21 (ident "user")))
 				(e-lookup-local @13.50-13.54
@@ -571,6 +573,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(p-assign @17.16-17.30 (ident "advancedConfig"))
 				(p-assign @17.32-17.37 (ident "input")))
 			(e-call @18.5-18.60
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local @18.38-18.52
 					(p-assign @17.16-17.30 (ident "advancedConfig")))
 				(e-lookup-local @18.54-18.59
@@ -589,6 +592,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(args
 				(p-assign @22.17-22.21 (ident "text")))
 			(e-call @22.23-22.59
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local @22.31-22.35
 					(p-assign @22.17-22.21 (ident "text")))
 				(e-runtime-error (tag "ident_not_in_scope"))))
@@ -603,6 +607,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(args
 				(p-assign @26.17-26.22 (ident "creds")))
 			(e-call @26.24-26.48
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local @26.42-26.47
 					(p-assign @26.17-26.22 (ident "creds")))))
 		(annotation @26.1-26.13

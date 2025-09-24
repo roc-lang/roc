@@ -112,6 +112,9 @@ main! = |_| {}
 			(e-block @6.22-9.2
 				(s-expr @7.5-7.30
 					(e-call @7.5-7.30
+						(e-lookup-external @7.5-7.17
+							(module-idx "0")
+							(target-node-idx "0"))
 						(e-dot-access @7.18-7.29 (field "name")
 							(receiver
 								(e-lookup-local @7.18-7.24

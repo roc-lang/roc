@@ -41,6 +41,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-call @1.1-1.17
+	(e-runtime-error (tag "ident_not_in_scope"))
 	(e-num @1.5-1.7 (value "42"))
 	(e-string @1.9-1.16
 		(e-literal @1.10-1.15 (string "hello"))))

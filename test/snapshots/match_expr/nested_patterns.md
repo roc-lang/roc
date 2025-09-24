@@ -112,6 +112,7 @@ match data {
 						(e-lookup-local @2.53-2.54
 							(p-assign @2.31-2.32 (ident "x")))
 						(e-call @2.57-2.71
+							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local @2.66-2.70
 								(p-assign @1.1-1.1 (ident "rest")))))))
 			(branch

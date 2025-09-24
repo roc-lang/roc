@@ -111,11 +111,17 @@ main = {
 			(s-let @7.5-7.27
 				(p-assign @7.5-7.12 (ident "encoded"))
 				(e-call @7.15-7.27
+					(e-lookup-external @7.15-7.21
+						(module-idx "0")
+						(target-node-idx "0"))
 					(e-lookup-local @7.22-7.26
 						(p-assign @6.5-6.9 (ident "data")))))
 			(s-let @8.5-8.30
 				(p-assign @8.5-8.12 (ident "decoded"))
 				(e-call @8.15-8.30
+					(e-lookup-external @8.15-8.21
+						(module-idx "0")
+						(target-node-idx "0"))
 					(e-lookup-local @8.22-8.29
 						(p-assign @7.5-7.12 (ident "encoded")))))
 			(e-lookup-local @9.5-9.12

@@ -190,7 +190,11 @@ answer = composed([42])
 				(args
 					(p-assign @12.13-12.14 (ident "n")))
 				(e-call @12.16-12.41
+					(e-lookup-local @12.16-12.25
+						(p-assign @9.1-9.10 (ident "get_value")))
 					(e-call @12.26-12.40
+						(e-lookup-local @12.26-12.37
+							(p-assign @6.1-6.12 (ident "make_record")))
 						(e-lookup-local @12.38-12.39
 							(p-assign @12.13-12.14 (ident "n")))))))
 		(annotation @12.1-12.9
@@ -202,6 +206,8 @@ answer = composed([42])
 	(d-let
 		(p-assign @14.1-14.7 (ident "answer"))
 		(e-call @14.10-14.24
+			(e-lookup-local @14.10-14.18
+				(p-assign @12.1-12.9 (ident "composed")))
 			(e-list @14.19-14.23
 				(elems
 					(e-num @14.20-14.22 (value "42")))))))

@@ -80,6 +80,8 @@ NO CHANGE
 	(d-let
 		(p-assign @7.1-7.10 (ident "my_number"))
 		(e-call @7.13-7.24
+			(e-lookup-local @7.13-7.20
+				(p-assign @4.1-4.8 (ident "add_one")))
 			(e-num @7.21-7.23 (value "42")))
 		(annotation @7.1-7.10
 			(declared-type

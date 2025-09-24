@@ -149,6 +149,8 @@ NO CHANGE
 	(d-let
 		(p-assign @9.1-9.11 (ident "curriedAdd"))
 		(e-call @9.14-9.26
+			(e-lookup-local @9.14-9.23
+				(p-assign @5.1-5.10 (ident "makeAdder")))
 			(e-num @9.24-9.25 (value "5")))
 		(annotation @9.1-9.11
 			(declared-type
@@ -162,7 +164,11 @@ NO CHANGE
 				(p-assign @13.15-13.16 (ident "f"))
 				(p-assign @13.18-13.19 (ident "x")))
 			(e-call @13.21-13.28
+				(e-lookup-local @13.21-13.22
+					(p-assign @13.15-13.16 (ident "f")))
 				(e-call @13.23-13.27
+					(e-lookup-local @13.23-13.24
+						(p-assign @13.15-13.16 (ident "f")))
 					(e-lookup-local @13.25-13.26
 						(p-assign @13.18-13.19 (ident "x"))))))
 		(annotation @13.1-13.11
@@ -183,6 +189,8 @@ NO CHANGE
 				(args
 					(p-assign @17.18-17.19 (ident "n")))
 				(e-call @17.21-17.45
+					(e-lookup-local @17.21-17.31
+						(p-assign @13.1-13.11 (ident "applyTwice")))
 					(e-lambda @17.32-17.41
 						(args
 							(p-assign @17.33-17.34 (ident "x")))

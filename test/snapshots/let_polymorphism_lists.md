@@ -383,10 +383,14 @@ main = |_| {
 	(d-let
 		(p-assign @20.1-20.15 (ident "empty_int_list"))
 		(e-call @20.18-20.31
+			(e-lookup-local @20.18-20.27
+				(p-assign @17.1-17.10 (ident "get_empty")))
 			(e-num @20.28-20.30 (value "42"))))
 	(d-let
 		(p-assign @21.1-21.15 (ident "empty_str_list"))
 		(e-call @21.18-21.35
+			(e-lookup-local @21.18-21.27
+				(p-assign @17.1-17.10 (ident "get_empty")))
 			(e-string @21.28-21.34
 				(e-literal @21.29-21.33 (string "test")))))
 	(d-let
@@ -403,16 +407,19 @@ main = |_| {
 					(s-let @25.5-25.34
 						(p-assign @25.5-25.9 (ident "len1"))
 						(e-call @25.12-25.34
+							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local @25.21-25.33
 								(p-assign @12.1-12.13 (ident "all_int_list")))))
 					(s-let @26.5-26.34
 						(p-assign @26.5-26.9 (ident "len2"))
 						(e-call @26.12-26.34
+							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local @26.21-26.33
 								(p-assign @13.1-13.13 (ident "all_str_list")))))
 					(s-let @27.5-27.36
 						(p-assign @27.5-27.9 (ident "len3"))
 						(e-call @27.12-27.36
+							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local @27.21-27.35
 								(p-assign @14.1-14.15 (ident "all_float_list")))))
 					(e-binop @28.5-28.23 (op "add")

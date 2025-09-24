@@ -219,10 +219,14 @@ main = |_| {
 	(d-let
 		(p-assign @23.1-23.12 (ident "int_doubled"))
 		(e-call @23.15-23.24
+			(e-lookup-local @23.15-23.21
+				(p-assign @20.1-20.7 (ident "double")))
 			(e-num @23.22-23.23 (value "5"))))
 	(d-let
 		(p-assign @24.1-24.14 (ident "float_doubled"))
 		(e-call @24.17-24.28
+			(e-lookup-local @24.17-24.23
+				(p-assign @20.1-20.7 (ident "double")))
 			(e-dec-small @24.24-24.27 (numerator "25") (denominator-power-of-ten "1") (value "2.5"))))
 	(d-let
 		(p-assign @26.1-26.5 (ident "main"))

@@ -243,6 +243,8 @@ main = |_| "done"
 											(e-tag @7.22-7.42 (name "Ok")
 												(args
 													(e-call @7.25-7.41
+														(e-lookup-local @7.25-7.34
+															(p-assign @5.23-5.32 (ident "transform")))
 														(e-lookup-local @7.35-7.40
 															(p-assign @7.12-7.17 (ident "value")))))))))
 								(branch

@@ -90,12 +90,16 @@ NO CHANGE
 	(s-expect @6.1-6.24
 		(e-binop @6.8-6.24 (op "eq")
 			(e-call @6.8-6.19
+				(e-lookup-local @6.8-6.13
+					(p-assign @4.1-4.6 (ident "addU8")))
 				(e-num @6.14-6.15 (value "1"))
 				(e-num @6.17-6.18 (value "2")))
 			(e-num @6.23-6.24 (value "3"))))
 	(s-expect @7.1-7.26
 		(e-binop @7.8-7.26 (op "eq")
 			(e-call @7.8-7.20
+				(e-lookup-local @7.8-7.13
+					(p-assign @4.1-4.6 (ident "addU8")))
 				(e-num @7.14-7.15 (value "0"))
 				(e-num @7.17-7.19 (value "10")))
 			(e-num @7.24-7.26 (value "10")))))

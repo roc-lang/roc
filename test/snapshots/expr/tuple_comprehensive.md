@@ -303,6 +303,8 @@ EndOfFile(20:1-20:1),
 		(e-tuple @14.10-14.42
 			(elems
 				(e-call @14.11-14.21
+					(e-lookup-local @14.11-14.18
+						(p-assign @3.5-3.12 (ident "add_one")))
 					(e-num @14.19-14.20 (value "5")))
 				(e-string @14.23-14.30
 					(e-literal @14.24-14.29 (string "world")))

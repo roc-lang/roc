@@ -188,11 +188,15 @@ NO CHANGE
 					(s-let @15.2-15.38
 						(p-assign @15.2-15.6 (ident "user"))
 						(e-call @15.9-15.38
+							(e-lookup-local @15.9-15.20
+								(p-assign @9.1-9.12 (ident "create_user")))
 							(e-num @15.21-15.24 (value "123"))
 							(e-string @15.26-15.33
 								(e-literal @15.27-15.32 (string "Alice")))
 							(e-num @15.35-15.37 (value "25"))))
 					(e-call @16.2-16.21
+						(e-lookup-local @16.2-16.15
+							(p-assign @12.1-12.14 (ident "get_user_name")))
 						(e-lookup-local @16.16-16.20
 							(p-assign @15.2-15.6 (ident "user"))))))))
 	(s-alias-decl @3.1-3.13

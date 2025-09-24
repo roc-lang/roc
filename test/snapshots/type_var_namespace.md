@@ -170,12 +170,14 @@ main! = |_| {}
 				(s-let @11.5-11.30
 					(p-assign @11.5-11.11 (ident "result"))
 					(e-call @11.14-11.30
+						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-lookup-local @11.25-11.29
 							(p-assign @5.12-5.16 (ident "list")))))
 				(s-expr @11.31-11.33
 					(e-runtime-error (tag "expr_not_canonicalized")))
 				(s-expr @11.34-11.58
 					(e-call @11.34-11.58
+						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-lookup-local @11.53-11.57
 							(p-assign @7.5-7.9 (ident "elem")))))
 				(e-lookup-local @13.5-13.11

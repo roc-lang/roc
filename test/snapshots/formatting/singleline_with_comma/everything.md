@@ -545,6 +545,8 @@ h = |
 					(s-let @20.2-20.15
 						(p-assign @20.2-20.4 (ident "h2"))
 						(e-call @20.7-20.15
+							(e-lookup-local @20.7-20.8
+								(p-assign @18.1-18.2 (ident "h")))
 							(e-lookup-local @20.9-20.10
 								(p-assign @18.6-18.7 (ident "x")))
 							(e-lookup-local @20.12-20.13

@@ -175,6 +175,8 @@ NO CHANGE
 				(s-let @19.2-19.25
 					(p-assign @19.2-19.8 (ident "result"))
 					(e-call @19.11-19.25
+						(e-lookup-local @19.11-19.21
+							(p-assign @13.2-13.12 (ident "nestedFunc")))
 						(e-empty_record @19.22-19.24)))
 				(e-binop @20.2-20.17 (op "add")
 					(e-lookup-local @20.2-20.8

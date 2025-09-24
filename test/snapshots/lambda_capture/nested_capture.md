@@ -79,8 +79,12 @@ EndOfFile(6:1-6:1),
 	(s-let @3.5-3.14
 		(p-assign @3.5-3.6 (ident "g"))
 		(e-call @3.9-3.14
+			(e-lookup-local @3.9-3.10
+				(p-assign @2.5-2.6 (ident "f")))
 			(e-num @3.11-3.13 (value "10"))))
 	(e-call @4.5-4.9
+		(e-lookup-local @4.5-4.6
+			(p-assign @3.5-3.6 (ident "g")))
 		(e-num @4.7-4.8 (value "5"))))
 ~~~
 # TYPES

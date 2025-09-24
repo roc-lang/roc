@@ -99,6 +99,8 @@ NO CHANGE
 					(p-underscore @7.9-7.10)
 					(p-underscore @7.12-7.13))
 				(e-call @7.15-7.24
+					(e-lookup-local @7.15-7.21
+						(p-assign @4.1-4.7 (ident "helper")))
 					(e-num @7.22-7.23 (value "5")))))
 		(annotation @7.1-7.5
 			(declared-type

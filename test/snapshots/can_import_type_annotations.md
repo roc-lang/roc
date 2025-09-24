@@ -442,6 +442,9 @@ combineResults = |result1, result2|
 			(args
 				(p-assign @11.14-11.19 (ident "input")))
 			(e-call @11.21-11.38
+				(e-lookup-external @11.21-11.31
+					(module-idx "1")
+					(target-node-idx "0"))
 				(e-lookup-local @11.32-11.37
 					(p-assign @11.14-11.19 (ident "input")))))
 		(annotation @11.1-11.10
@@ -462,6 +465,9 @@ combineResults = |result1, result2|
 					(s-let @15.5-15.39
 						(p-assign @15.5-15.11 (ident "result"))
 						(e-call @15.14-15.39
+							(e-lookup-external @15.14-15.25
+								(module-idx "1")
+								(target-node-idx "0"))
 							(e-dot-access @15.26-15.38 (field "body")
 								(receiver
 									(e-lookup-local @15.26-15.33
@@ -482,6 +488,9 @@ combineResults = |result1, result2|
 											(e-tag @17.21-17.43 (name "Ok")
 												(args
 													(e-call @17.24-17.42
+														(e-lookup-external @17.24-17.36
+															(module-idx "0")
+															(target-node-idx "0"))
 														(e-lookup-local @17.37-17.41
 															(p-assign @17.12-17.16 (ident "data")))))))))
 								(branch
@@ -517,6 +526,9 @@ combineResults = |result1, result2|
 				(p-assign @27.19-27.31 (ident "parserConfig"))
 				(p-assign @27.33-27.38 (ident "input")))
 			(e-call @27.40-27.82
+				(e-lookup-external @27.40-27.61
+					(module-idx "1")
+					(target-node-idx "0"))
 				(e-lookup-local @27.62-27.74
 					(p-assign @27.19-27.31 (ident "parserConfig")))
 				(e-lookup-local @27.76-27.81

@@ -118,6 +118,8 @@ main! = |_| getName({ namee: "luke", age: 21 })
 				(args
 					(p-underscore @6.10-6.11))
 				(e-call @6.13-6.45
+					(e-lookup-local @6.13-6.20
+						(p-assign @4.1-4.8 (ident "getName")))
 					(e-record @6.21-6.44
 						(fields
 							(field (name "namee")

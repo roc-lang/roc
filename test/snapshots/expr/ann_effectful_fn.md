@@ -71,6 +71,8 @@ EndOfFile(7:1-7:1),
 					(destructs)))
 			(e-not-implemented @1.1-1.1)))
 	(e-call @5.5-5.23
+		(e-lookup-local @5.5-5.19
+			(p-assign @3.5-3.19 (ident "launchTheNukes")))
 		(e-empty_record @5.20-5.22)))
 ~~~
 # TYPES

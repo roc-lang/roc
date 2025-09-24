@@ -221,6 +221,8 @@ ain! = |_| getUser(900)
 				(args
 					(p-underscore @8.10-8.11))
 				(e-call @8.13-8.25
+					(e-lookup-local @8.13-8.20
+						(p-assign @6.1-6.8 (ident "getUser")))
 					(e-num @8.21-8.24 (value "900"))))))
 	(s-alias-decl @3.1-3.13
 		(ty-header @3.1-3.7 (name "UserId"))

@@ -71,6 +71,8 @@ EndOfFile(6:1-6:1),
 					(e-lookup-local @3.17-3.18
 						(p-assign @3.10-3.11 (ident "y")))))))
 	(e-call @4.5-4.10
+		(e-lookup-local @4.5-4.6
+			(p-assign @3.5-3.6 (ident "f")))
 		(e-num @4.7-4.9 (value "10"))))
 ~~~
 # TYPES

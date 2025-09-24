@@ -869,14 +869,20 @@ is_named_color = |str| {
 									(e-string @50.27-50.86
 										(e-literal @50.28-50.32 (string "rgb("))
 										(e-call @50.34-50.47
+											(e-lookup-local @50.34-50.44
+												(p-assign @49.1-49.7 (ident "to_str")))
 											(e-lookup-local @50.45-50.46
 												(p-assign @50.15-50.16 (ident "r"))))
 										(e-literal @50.48-50.50 (string ", "))
 										(e-call @50.52-50.65
+											(e-lookup-local @50.52-50.62
+												(p-assign @49.1-49.7 (ident "to_str")))
 											(e-lookup-local @50.63-50.64
 												(p-assign @50.18-50.19 (ident "g"))))
 										(e-literal @50.66-50.68 (string ", "))
 										(e-call @50.70-50.83
+											(e-lookup-local @50.70-50.80
+												(p-assign @49.1-49.7 (ident "to_str")))
 											(e-lookup-local @50.81-50.82
 												(p-assign @50.21-50.22 (ident "b"))))
 										(e-literal @50.84-50.85 (string ")")))))
@@ -889,18 +895,26 @@ is_named_color = |str| {
 									(e-string @51.31-51.109
 										(e-literal @51.32-51.37 (string "rgba("))
 										(e-call @51.39-51.52
+											(e-lookup-local @51.39-51.49
+												(p-assign @49.1-49.7 (ident "to_str")))
 											(e-lookup-local @51.50-51.51
 												(p-assign @51.16-51.17 (ident "r"))))
 										(e-literal @51.53-51.55 (string ", "))
 										(e-call @51.57-51.70
+											(e-lookup-local @51.57-51.67
+												(p-assign @49.1-49.7 (ident "to_str")))
 											(e-lookup-local @51.68-51.69
 												(p-assign @51.19-51.20 (ident "g"))))
 										(e-literal @51.71-51.73 (string ", "))
 										(e-call @51.75-51.88
+											(e-lookup-local @51.75-51.85
+												(p-assign @49.1-49.7 (ident "to_str")))
 											(e-lookup-local @51.86-51.87
 												(p-assign @51.22-51.23 (ident "b"))))
 										(e-literal @51.89-51.91 (string ", "))
 										(e-call @51.93-51.106
+											(e-lookup-local @51.93-51.103
+												(p-assign @49.1-49.7 (ident "to_str")))
 											(e-lookup-local @51.104-51.105
 												(p-assign @51.25-51.26 (ident "a"))))
 										(e-literal @51.107-51.108 (string ")")))))
@@ -974,6 +988,7 @@ is_named_color = |str| {
 				(s-let @68.5-68.66
 					(p-assign @68.5-68.11 (ident "colors"))
 					(e-call @68.14-68.66
+						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-list @68.28-68.65
 							(elems
 								(e-string @68.29-68.40
@@ -1001,6 +1016,8 @@ is_named_color = |str| {
 			(e-dot-access @56.8-56.34 (field "to_str")
 				(receiver
 					(e-call @56.8-56.25
+						(e-lookup-local @56.8-56.11
+							(p-assign @18.1-18.4 (ident "rgb")))
 						(e-num @56.12-56.15 (value "124"))
 						(e-num @56.17-56.19 (value "56"))
 						(e-num @56.21-56.24 (value "245"))))
@@ -1012,6 +1029,8 @@ is_named_color = |str| {
 			(e-dot-access @57.8-57.40 (field "to_str")
 				(receiver
 					(e-call @57.8-57.31
+						(e-lookup-local @57.8-57.12
+							(p-assign @21.1-21.5 (ident "rgba")))
 						(e-num @57.13-57.16 (value "124"))
 						(e-num @57.18-57.20 (value "56"))
 						(e-num @57.22-57.25 (value "245"))
@@ -1024,6 +1043,8 @@ is_named_color = |str| {
 			(e-dot-access @58.8-58.37 (field "map_ok")
 				(receiver
 					(e-call @58.8-58.22
+						(e-lookup-local @58.8-58.11
+							(p-assign @27.1-27.4 (ident "hex")))
 						(e-string @58.12-58.21
 							(e-literal @58.13-58.20 (string "#ff00ff")))))
 				(args

@@ -103,6 +103,8 @@ NO CHANGE
 							(e-lookup-local @10.3-10.4
 								(p-assign @8.3-8.4 (ident "d"))))))
 				(e-call @13.2-13.6
+					(e-lookup-local @13.2-13.3
+						(p-assign @6.2-6.3 (ident "b")))
 					(e-lookup-local @13.4-13.5
 						(p-assign @4.26-4.27 (ident "a"))))))
 		(annotation @4.1-4.22

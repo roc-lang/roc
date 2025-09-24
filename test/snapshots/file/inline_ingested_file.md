@@ -130,6 +130,9 @@ foo = Json.parse(data)
 	(d-let
 		(p-assign @6.1-6.4 (ident "foo"))
 		(e-call @6.7-6.23
+			(e-lookup-external @6.7-6.17
+				(module-idx "0")
+				(target-node-idx "0"))
 			(e-runtime-error (tag "ident_not_in_scope"))))
 	(s-import @4.1-4.12 (module "Json")
 		(exposes)))

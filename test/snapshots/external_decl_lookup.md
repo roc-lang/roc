@@ -112,9 +112,15 @@ main! = |_| {
 				(s-let @8.5-8.54
 					(p-assign @8.5-8.11 (ident "result"))
 					(e-call @8.14-8.54
+						(e-lookup-external @8.14-8.23
+							(module-idx "1")
+							(target-node-idx "0"))
 						(e-string @8.24-8.53
 							(e-literal @8.25-8.52 (string "Hello from external module!")))))
 				(e-call @9.5-9.25
+					(e-lookup-external @9.5-9.17
+						(module-idx "0")
+						(target-node-idx "0"))
 					(e-lookup-local @9.18-9.24
 						(p-assign @8.5-8.11 (ident "result")))))))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")

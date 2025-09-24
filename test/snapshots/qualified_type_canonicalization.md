@@ -631,6 +631,7 @@ transform = |result|
 											(p-applied-tag @42.9-42.23))))
 								(value
 									(e-call @42.27-42.47
+										(e-runtime-error (tag "ident_not_in_scope"))
 										(e-lookup-local @42.43-42.46
 											(p-assign @42.19-42.22 (ident "rgb"))))))
 							(branch

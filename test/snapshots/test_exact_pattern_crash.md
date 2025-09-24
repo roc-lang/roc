@@ -253,9 +253,13 @@ main = {
 			(e-tuple @12.27-12.39
 				(elems
 					(e-call @12.28-12.32
+						(e-lookup-local @12.28-12.29
+							(p-assign @12.21-12.22 (ident "f")))
 						(e-lookup-local @12.30-12.31
 							(p-assign @12.14-12.15 (ident "x"))))
 					(e-call @12.34-12.38
+						(e-lookup-local @12.34-12.35
+							(p-assign @12.24-12.25 (ident "g")))
 						(e-lookup-local @12.36-12.37
 							(p-assign @12.17-12.18 (ident "y")))))))
 		(annotation @12.1-12.9
@@ -281,6 +285,8 @@ main = {
 			(s-let @19.5-19.27
 				(p-assign @19.5-19.7 (ident "p1"))
 				(e-call @19.10-19.27
+					(e-lookup-local @19.10-19.19
+						(p-assign @8.1-8.10 (ident "swap_pair")))
 					(e-tuple @19.20-19.26
 						(elems
 							(e-num @19.21-19.22 (value "1"))
@@ -288,6 +294,8 @@ main = {
 			(s-let @23.5-23.50
 				(p-assign @23.5-23.7 (ident "p2"))
 				(e-call @23.10-23.50
+					(e-lookup-local @23.10-23.18
+						(p-assign @12.1-12.9 (ident "map_pair")))
 					(e-num @23.19-23.20 (value "3"))
 					(e-num @23.22-23.23 (value "4"))
 					(e-lambda @23.26-23.35

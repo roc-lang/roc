@@ -181,15 +181,21 @@ main! = |_| {
 					(s-let @10.5-10.23
 						(p-assign @10.5-10.8 (ident "num"))
 						(e-call @10.11-10.23
+							(e-lookup-local @10.11-10.19
+								(p-assign @5.1-5.9 (ident "identity")))
 							(e-num @10.20-10.22 (value "42"))))
 					(s-let @13.5-13.28
 						(p-assign @13.5-13.8 (ident "str"))
 						(e-call @13.11-13.28
+							(e-lookup-local @13.11-13.19
+								(p-assign @5.1-5.9 (ident "identity")))
 							(e-string @13.20-13.27
 								(e-literal @13.21-13.26 (string "hello")))))
 					(s-let @16.5-16.30
 						(p-assign @16.5-16.8 (ident "lst"))
 						(e-call @16.11-16.30
+							(e-lookup-local @16.11-16.19
+								(p-assign @5.1-5.9 (ident "identity")))
 							(e-list @16.20-16.29
 								(elems
 									(e-num @16.21-16.22 (value "1"))

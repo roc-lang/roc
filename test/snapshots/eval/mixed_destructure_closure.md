@@ -62,6 +62,43 @@ EndOfFile(2:1-2:1),
 # CANONICALIZE
 ~~~clojure
 (e-call @1.1-1.89
+	(e-lambda @1.2-1.50
+		(args
+			(p-record-destructure @1.3-1.31
+				(destructs
+					(record-destruct @1.5-1.6 (label "a") (ident "a")
+						(required
+							(p-assign @1.5-1.6 (ident "a"))))
+					(record-destruct @1.8-1.17 (label "x") (ident "x")
+						(sub-pattern
+							(p-tuple @1.11-1.17
+								(patterns
+									(p-assign @1.12-1.13 (ident "b"))
+									(p-assign @1.15-1.16 (ident "c"))))))
+					(record-destruct @1.19-1.30 (label "y") (ident "y")
+						(sub-pattern
+							(p-record-destructure @1.22-1.30
+								(destructs
+									(record-destruct @1.24-1.25 (label "d") (ident "d")
+										(required
+											(p-assign @1.24-1.25 (ident "d"))))
+									(record-destruct @1.27-1.28 (label "e") (ident "e")
+										(required
+											(p-assign @1.27-1.28 (ident "e")))))))))))
+		(e-binop @1.33-1.50 (op "add")
+			(e-binop @1.33-1.46 (op "add")
+				(e-binop @1.33-1.42 (op "add")
+					(e-binop @1.33-1.38 (op "add")
+						(e-lookup-local @1.33-1.34
+							(p-assign @1.5-1.6 (ident "a")))
+						(e-lookup-local @1.37-1.38
+							(p-assign @1.12-1.13 (ident "b"))))
+					(e-lookup-local @1.41-1.42
+						(p-assign @1.15-1.16 (ident "c"))))
+				(e-lookup-local @1.45-1.46
+					(p-assign @1.24-1.25 (ident "d"))))
+			(e-lookup-local @1.49-1.50
+				(p-assign @1.27-1.28 (ident "e")))))
 	(e-record @1.53-1.88
 		(fields
 			(field (name "a")

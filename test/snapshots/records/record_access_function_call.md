@@ -42,6 +42,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-call @1.1-1.23
+	(e-dot-access @1.2-1.18 (field "transform")
+		(receiver
+			(e-runtime-error (tag "ident_not_in_scope"))))
 	(e-num @1.20-1.22 (value "42")))
 ~~~
 # TYPES

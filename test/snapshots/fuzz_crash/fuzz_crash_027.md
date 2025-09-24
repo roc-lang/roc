@@ -1930,9 +1930,12 @@ expect {
 						(e-not-implemented @1.1-1.1))
 					(s-expr @111.2-113.3
 						(e-call @111.2-113.3
+							(e-lookup-local @111.2-111.12
+								(p-assign @60.1-60.11 (ident "match_time")))
 							(e-not-implemented @1.1-1.1)))
 					(s-expr @114.2-117.3
 						(e-call @114.2-117.3
+							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-dbg @115.3-116.6
 								(e-num @116.4-116.6 (value "42")))))
 					(s-crash @118.2-118.22 (msg "Unreachtement"))
@@ -2067,6 +2070,7 @@ expect {
 							(e-string @144.3-146.10
 								(e-literal @144.4-144.14 (string "How about "))
 								(e-call @145.4-145.21
+									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @145.14-145.20
 										(p-assign @102.2-102.18 (ident "number"))))
 								(e-literal @146.4-146.9 (string " as a"))))))))

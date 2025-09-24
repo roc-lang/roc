@@ -113,6 +113,8 @@ NO CHANGE
 	(d-let
 		(p-assign @9.1-9.5 (ident "main"))
 		(e-call @9.8-9.18
+			(e-lookup-local @9.8-9.12
+				(p-assign @5.1-5.5 (ident "swap")))
 			(e-num @9.13-9.14 (value "1"))
 			(e-num @9.16-9.17 (value "2")))))
 ~~~

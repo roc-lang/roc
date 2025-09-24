@@ -132,6 +132,8 @@ NO CHANGE
 				(args
 					(p-underscore @8.10-8.11))
 				(e-call @8.13-8.27
+					(e-lookup-local @8.13-8.21
+						(p-assign @6.1-6.9 (ident "swapPair")))
 					(e-num @8.22-8.23 (value "1"))
 					(e-num @8.25-8.26 (value "2"))))))
 	(s-alias-decl @3.1-3.20

@@ -840,16 +840,22 @@ main = |_| {
 	(d-let
 		(p-assign @60.1-60.11 (ident "container1"))
 		(e-call @60.14-60.33
+			(e-lookup-local @60.14-60.28
+				(p-assign @59.1-59.15 (ident "make_container")))
 			(e-lookup-local @60.29-60.32
 				(p-assign @4.1-4.4 (ident "num")))))
 	(d-let
 		(p-assign @61.1-61.11 (ident "container2"))
 		(e-call @61.14-61.33
+			(e-lookup-local @61.14-61.28
+				(p-assign @59.1-59.15 (ident "make_container")))
 			(e-lookup-local @61.29-61.32
 				(p-assign @6.1-6.4 (ident "str")))))
 	(d-let
 		(p-assign @62.1-62.11 (ident "container3"))
 		(e-call @62.14-62.34
+			(e-lookup-local @62.14-62.28
+				(p-assign @59.1-59.15 (ident "make_container")))
 			(e-lookup-local @62.29-62.33
 				(p-assign @5.1-5.5 (ident "frac")))))
 	(d-let

@@ -82,6 +82,8 @@ EndOfFile(7:1-7:1),
 			(e-lookup-local @3.13-3.14
 				(p-assign @3.10-3.11 (ident "x")))))
 	(e-call @5.5-5.14
+		(e-lookup-local @5.5-5.6
+			(p-assign @3.5-3.6 (ident "f")))
 		(e-tuple @5.7-5.13
 			(elems
 				(e-num @5.8-5.9 (value "1"))

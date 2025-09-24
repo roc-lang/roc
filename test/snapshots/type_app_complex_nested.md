@@ -363,6 +363,8 @@ main! = |_| processComplex(Ok([Some(42), None]))
 				(args
 					(p-underscore @20.10-20.11))
 				(e-call @20.13-20.49
+					(e-lookup-local @20.13-20.27
+						(p-assign @5.1-5.15 (ident "processComplex")))
 					(e-nominal @20.28-20.48 (nominal "Result")
 						(e-tag @20.28-20.48 (name "Ok")
 							(args

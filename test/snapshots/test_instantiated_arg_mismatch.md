@@ -91,6 +91,8 @@ EndOfFile(7:1-7:1),
 					(e-lookup-local @3.23-3.24
 						(p-assign @3.16-3.17 (ident "y")))))))
 	(e-call @5.5-5.22
+		(e-lookup-local @5.5-5.9
+			(p-assign @3.5-3.9 (ident "pair")))
 		(e-num @5.10-5.12 (value "42"))
 		(e-string @5.14-5.21
 			(e-literal @5.15-5.20 (string "hello")))))

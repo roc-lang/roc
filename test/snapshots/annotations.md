@@ -258,6 +258,8 @@ NO CHANGE
 	(d-let
 		(p-assign @15.1-15.20 (ident "succeedPairSameType"))
 		(e-call @15.23-15.35
+			(e-lookup-local @15.23-15.29
+				(p-assign @12.1-12.7 (ident "mkPair")))
 			(e-num @15.30-15.31 (value "1"))
 			(e-num @15.33-15.34 (value "2")))
 		(annotation @15.1-15.20
@@ -267,6 +269,8 @@ NO CHANGE
 	(d-let
 		(p-assign @18.1-18.18 (ident "failPairDiffTypes"))
 		(e-call @18.21-18.35
+			(e-lookup-local @18.21-18.27
+				(p-assign @12.1-12.7 (ident "mkPair")))
 			(e-string @18.28-18.31
 				(e-literal @18.29-18.30 (string "1")))
 			(e-num @18.33-18.34 (value "2")))

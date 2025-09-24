@@ -611,6 +611,8 @@ NO CHANGE
 					(s-let @69.2-72.3
 						(p-assign @69.2-69.4 (ident "h2"))
 						(e-call @69.7-72.3
+							(e-lookup-local @69.7-69.8
+								(p-assign @60.1-60.2 (ident "h")))
 							(e-lookup-local @70.3-70.4
 								(p-assign @60.6-60.7 (ident "x")))
 							(e-lookup-local @71.3-71.4

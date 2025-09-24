@@ -1955,7 +1955,8 @@ expect {
 								(p-assign @68.12-68.15 (ident "num")))
 							(e-block @70.9-74.3
 								(s-dbg @71.3-72.15
-									(e-call @72.4-72.15))
+									(e-call @72.4-72.15
+										(e-runtime-error (tag "ident_not_in_scope"))))
 								(e-num @73.3-73.4 (value "0")))))
 					(if-else
 						(e-block @74.9-77.3
@@ -2215,9 +2216,12 @@ expect {
 						(e-not-implemented @1.1-1.1))
 					(s-expr @155.2-157.3
 						(e-call @155.2-157.3
+							(e-lookup-local @155.2-155.12
+								(p-assign @80.1-80.11 (ident "match_time")))
 							(e-not-implemented @1.1-1.1)))
 					(s-expr @158.2-161.3
 						(e-call @158.2-161.3
+							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-dbg @159.3-160.6
 								(e-num @160.4-160.6 (value "42")))))
 					(s-crash @162.2-163.17 (msg "Unreachable!"))
@@ -2240,6 +2244,8 @@ expect {
 						(e-list @166.9-173.3
 							(elems
 								(e-call @167.3-170.4
+									(e-lookup-local @167.3-167.10
+										(p-assign @68.1-68.8 (ident "add_one")))
 									(e-dbg @168.4-169.11
 										(e-lookup-local @169.5-169.11
 											(p-assign @146.2-146.18 (ident "number")))))
@@ -2345,9 +2351,13 @@ expect {
 					(s-expr @190.2-190.29
 						(e-runtime-error (tag "not_implemented")))
 					(e-call @191.2-195.3
+						(e-lookup-external @191.2-191.14
+							(module-idx "0")
+							(target-node-idx "0"))
 						(e-string @192.3-194.18
 							(e-literal @192.4-192.14 (string "How about "))
 							(e-call @193.4-193.21
+								(e-runtime-error (tag "ident_not_in_scope"))
 								(e-lookup-local @193.14-193.20
 									(p-assign @146.2-146.18 (ident "number"))))
 							(e-literal @194.4-194.17 (string " as a string?")))))))

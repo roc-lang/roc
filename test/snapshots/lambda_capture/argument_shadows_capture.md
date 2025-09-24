@@ -81,6 +81,11 @@ EndOfFile(5:1-5:1),
 		(p-assign @2.5-2.6 (ident "x"))
 		(e-num @2.9-2.10 (value "5")))
 	(e-call @3.5-3.16
+		(e-lambda @3.6-3.11
+			(args
+				(p-assign @3.7-3.8 (ident "x")))
+			(e-lookup-local @3.10-3.11
+				(p-assign @3.7-3.8 (ident "x"))))
 		(e-num @3.13-3.15 (value "10"))))
 ~~~
 # TYPES

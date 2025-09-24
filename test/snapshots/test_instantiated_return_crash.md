@@ -105,11 +105,15 @@ EndOfFile(10:1-10:1),
 			(args
 				(p-assign @6.21-6.22 (ident "f")))
 			(e-call @6.24-6.36
+				(e-lookup-local @6.24-6.25
+					(p-assign @6.21-6.22 (ident "f")))
 				(e-list @6.26-6.35
 					(elems
 						(e-string @6.27-6.34
 							(e-literal @6.28-6.33 (string "hello"))))))))
 	(e-call @8.5-8.27
+		(e-lookup-local @8.5-8.17
+			(p-assign @6.5-6.17 (ident "needs_string")))
 		(e-lookup-local @8.18-8.26
 			(p-assign @3.5-3.13 (ident "identity")))))
 ~~~

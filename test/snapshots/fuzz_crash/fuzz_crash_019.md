@@ -1664,6 +1664,8 @@ expect {
 						(e-not-implemented @1.1-1.1))
 					(s-expr @84.2-86.3
 						(e-call @84.2-86.3
+							(e-lookup-local @84.2-84.4
+								(p-assign @49.1-49.3 (ident "me")))
 							(e-not-implemented @1.1-1.1)))
 					(s-runtime-error (tag "crash_expects_string"))
 					(s-expr @86.11-86.17
@@ -1680,6 +1682,7 @@ expect {
 						(e-list @88.5-91.3
 							(elems
 								(e-call @89.3-89.14
+									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @89.7-89.9
 										(p-assign @77.2-77.14 (ident "er"))))
 								(e-num @89.16-89.19 (value "456"))
@@ -1776,6 +1779,7 @@ expect {
 							(e-string @107.3-109.6
 								(e-literal @107.4-107.6 (string "Ho"))
 								(e-call @108.4-108.9
+									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-runtime-error (tag "ident_not_in_scope")))
 								(e-literal @109.4-109.5 (string " ")))))))))
 	(d-let

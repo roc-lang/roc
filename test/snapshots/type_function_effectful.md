@@ -108,6 +108,8 @@ main! = |_| {}
 				(p-assign @4.15-4.18 (ident "fn!"))
 				(p-assign @4.20-4.21 (ident "x")))
 			(e-call @4.23-4.29
+				(e-lookup-local @4.23-4.26
+					(p-assign @4.15-4.18 (ident "fn!")))
 				(e-lookup-local @4.27-4.28
 					(p-assign @4.20-4.21 (ident "x"))))))
 	(d-let

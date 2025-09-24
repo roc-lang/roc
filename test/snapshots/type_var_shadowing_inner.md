@@ -110,6 +110,8 @@ main! = |_| {}
 						(e-lookup-local @6.17-6.18
 							(p-assign @6.14-6.15 (ident "y")))))
 				(e-call @8.5-8.13
+					(e-lookup-local @8.5-8.10
+						(p-assign @6.5-6.10 (ident "inner")))
 					(e-lookup-local @8.11-8.12
 						(p-assign @4.10-4.11 (ident "x"))))))
 		(annotation @4.1-4.6

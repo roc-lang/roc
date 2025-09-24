@@ -123,6 +123,8 @@ main =
 	(d-let
 		(p-assign @8.1-8.5 (ident "main"))
 		(e-call @10.5-10.34
+			(e-lookup-local @10.5-10.18
+				(p-assign @6.1-6.14 (ident "expectsPerson")))
 			(e-string @10.19-10.33
 				(e-literal @10.20-10.32 (string "not a person")))))
 	(s-import @3.1-3.30 (module "Data")

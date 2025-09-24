@@ -106,6 +106,8 @@ main! = |_| processList(["one", "two", "three"])
 				(args
 					(p-underscore @6.10-6.11))
 				(e-call @6.13-6.47
+					(e-lookup-local @6.13-6.24
+						(p-assign @4.1-4.12 (ident "processList")))
 					(e-list @6.25-6.46
 						(elems
 							(e-string @6.26-6.31

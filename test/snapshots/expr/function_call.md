@@ -40,6 +40,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-call @1.1-1.10
+	(e-runtime-error (tag "ident_not_in_scope"))
 	(e-num @1.5-1.6 (value "5"))
 	(e-num @1.8-1.9 (value "3")))
 ~~~

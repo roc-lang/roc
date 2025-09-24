@@ -269,18 +269,26 @@ main! = |_| {
 					(s-let @20.5-20.21
 						(p-assign @20.5-20.12 (ident "result1"))
 						(e-call @20.15-20.21
+							(e-lookup-local @20.15-20.18
+								(p-assign @5.1-5.4 (ident "add")))
 							(e-num @20.19-20.20 (value "5"))))
 					(s-let @21.5-21.26
 						(p-assign @21.5-21.12 (ident "result2"))
 						(e-call @21.15-21.26
+							(e-lookup-local @21.15-21.23
+								(p-assign @9.1-9.9 (ident "multiply")))
 							(e-num @21.24-21.25 (value "3"))))
 					(s-let @22.5-22.25
 						(p-assign @22.5-22.12 (ident "result3"))
 						(e-call @22.15-22.25
+							(e-lookup-local @22.15-22.22
+								(p-assign @13.1-13.8 (ident "process")))
 							(e-num @22.23-22.24 (value "7"))))
 					(s-let @23.5-23.24
 						(p-assign @23.5-23.12 (ident "result4"))
 						(e-call @23.15-23.24
+							(e-lookup-local @23.15-23.21
+								(p-assign @17.1-17.7 (ident "double")))
 							(e-num @23.22-23.23 (value "4"))))
 					(e-binop @24.5-24.42 (op "add")
 						(e-binop @24.5-24.32 (op "add")

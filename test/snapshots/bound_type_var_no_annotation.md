@@ -229,15 +229,21 @@ main! = |_| {
 					(s-let @15.5-15.23
 						(p-assign @15.5-15.8 (ident "num"))
 						(e-call @15.11-15.23
+							(e-lookup-local @15.11-15.19
+								(p-assign @3.1-3.9 (ident "identity")))
 							(e-num @15.20-15.22 (value "42"))))
 					(s-let @16.5-16.29
 						(p-assign @16.5-16.9 (ident "text"))
 						(e-call @16.12-16.29
+							(e-lookup-local @16.12-16.20
+								(p-assign @3.1-3.9 (ident "identity")))
 							(e-string @16.21-16.28
 								(e-literal @16.22-16.27 (string "hello")))))
 					(s-let @19.5-19.30
 						(p-assign @19.5-19.9 (ident "pair"))
 						(e-call @19.12-19.30
+							(e-lookup-local @19.12-19.19
+								(p-assign @7.1-7.8 (ident "combine")))
 							(e-lookup-local @19.20-19.23
 								(p-assign @15.5-15.8 (ident "num")))
 							(e-lookup-local @19.25-19.29
@@ -245,6 +251,8 @@ main! = |_| {
 					(s-let @22.5-22.23
 						(p-assign @22.5-22.11 (ident "result"))
 						(e-call @22.14-22.23
+							(e-lookup-local @22.14-22.20
+								(p-assign @11.1-11.7 (ident "addOne")))
 							(e-num @22.21-22.22 (value "5"))))
 					(e-lookup-local @24.5-24.11
 						(p-assign @22.5-22.11 (ident "result"))))))))
