@@ -7,8 +7,42 @@ const layout = @import("layout");
 const can = @import("can");
 const TypeScope = types.TypeScope;
 const Content = types.Content;
+const HashMap = std.hash_map.HashMap;
 
 pub const Interpreter2 = struct {
+    const MAX_ARITY: usize = 8;
+    const PolyKey = struct {
+        func_id: u32,
+        arity: u8,
+        args: [MAX_ARITY]types.Var, // roots of runtime vars
+    };
+
+    const PolyEntry = struct {
+        return_var: types.Var,
+        return_layout_slot: u32, // biased: layout_idx + 1, or 0 if unset
+    };
+
+    const PolyKeyCtx = struct {
+        pub fn hash(_: PolyKeyCtx, k: PolyKey) u64 {
+            var h = std.hash.Wyhash.init(0);
+            h.update(std.mem.asBytes(&k.func_id));
+            h.update(std.mem.asBytes(&k.arity));
+            var i: usize = 0;
+            while (i < k.arity) : (i += 1) {
+                const v_int: u32 = @intFromEnum(k.args[i]);
+                h.update(std.mem.asBytes(&v_int));
+            }
+            return h.final();
+        }
+        pub fn eql(_: PolyKeyCtx, a: PolyKey, b: PolyKey) bool {
+            if (a.func_id != b.func_id or a.arity != b.arity) return false;
+            var i: usize = 0;
+            while (i < a.arity) : (i += 1) {
+                if (a.args[i] != b.args[i]) return false;
+            }
+            return true;
+        }
+    };
     allocator: std.mem.Allocator,
     runtime_types: *types.store.Store,
     runtime_layout_store: layout.Store,
@@ -18,6 +52,10 @@ pub const Interpreter2 = struct {
     empty_scope: TypeScope,
     // Translation cache: (env_ptr, compile_var) -> runtime_var
     translate_cache: std.AutoHashMap(u64, types.Var),
+    
+    // Polymorphic instantiation cache
+
+    poly_cache: HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80),
 
     pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv) !Interpreter2 {
         const rt_types_ptr = try allocator.create(types.store.Store);
@@ -32,6 +70,7 @@ pub const Interpreter2 = struct {
             .var_to_layout_slot = slots,
             .empty_scope = scope,
             .translate_cache = std.AutoHashMap(u64, types.Var).init(allocator),
+            .poly_cache = HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80).init(allocator),
         };
         result.runtime_layout_store = try layout.Store.init(env, result.runtime_types);
         return result;
@@ -40,6 +79,7 @@ pub const Interpreter2 = struct {
     pub fn deinit(self: *Interpreter2) void {
         self.empty_scope.deinit();
         self.translate_cache.deinit();
+        self.poly_cache.deinit();
         self.var_to_layout_slot.deinit();
         self.runtime_layout_store.deinit();
         self.runtime_types.deinit();
@@ -155,6 +195,28 @@ pub const Interpreter2 = struct {
 
         try self.translate_cache.put(key, out_var);
         return out_var;
+    }
+    
+    pub fn makePolyKey(self: *Interpreter2, func_id: u32, args: []const types.Var) PolyKey {
+        var key = PolyKey{
+            .func_id = func_id,
+            .arity = @intCast(@min(args.len, MAX_ARITY)),
+            .args = std.mem.zeroes([MAX_ARITY]types.Var),
+        };
+        var i: usize = 0;
+        while (i < key.arity) : (i += 1) {
+            const root = self.runtime_types.resolveVar(args[i]).var_;
+            key.args[i] = root;
+        }
+        return key;
+    }
+
+    pub fn polyLookup(self: *Interpreter2, key: PolyKey) ?PolyEntry {
+        return self.poly_cache.get(key);
+    }
+
+    pub fn polyInsert(self: *Interpreter2, key: PolyKey, entry: PolyEntry) !void {
+        try self.poly_cache.put(key, entry);
     }
 };
 
@@ -445,4 +507,37 @@ test "interpreter2: translateTypeVar for rigid var" {
     const resolved = interp.runtime_types.resolveVar(rt_var);
     try std.testing.expect(resolved.desc.content == .rigid_var);
     try std.testing.expectEqual(name_a, resolved.desc.content.rigid_var);
+}
+
+// RED: poly cache miss then hit
+test "interpreter2: poly cache insert and lookup" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    var interp = try Interpreter2.init(gpa, &env);
+    defer interp.deinit();
+
+    const f_id: u32 = 12345;
+    // Create runtime args: (Str, I64)
+    const rt_str = try interp.runtime_types.freshFromContent(.{ .structure = .str });
+    const rt_i64 = try interp.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
+    const args = [_]types.Var{ rt_str, rt_i64 };
+
+    const key = interp.makePolyKey(f_id, &args);
+    try std.testing.expect(interp.polyLookup(key) == null);
+
+    // For testing, say return type is Str
+    const ret_var = rt_str;
+    // Precompute layout slot for return type
+    _ = try interp.getRuntimeLayout(ret_var);
+    const root_idx: usize = @intFromEnum(interp.runtime_types.resolveVar(ret_var).var_);
+    try interp.ensureVarLayoutCapacity(root_idx + 1);
+    const slot = interp.var_to_layout_slot.items[root_idx];
+    try std.testing.expect(slot != 0);
+
+    try interp.polyInsert(key, .{ .return_var = ret_var, .return_layout_slot = slot });
+    const found = interp.polyLookup(key) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(ret_var, found.return_var);
+    try std.testing.expectEqual(slot, found.return_layout_slot);
 }
