@@ -113,6 +113,72 @@ pub const Interpreter2 = struct {
     fn evalExprMinimal(self: *Interpreter2, expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) !StackValue {
         const expr = self.env.store.getExpr(expr_idx);
         switch (expr) {
+            .e_block => |blk| {
+                // New scope for bindings
+                const original_len = self.bindings.items.len;
+                defer self.bindings.items.len = original_len;
+
+                const stmts = self.env.store.sliceStatements(blk.stmts);
+                for (stmts) |stmt_idx| {
+                    const stmt = self.env.store.getStatement(stmt_idx);
+                    switch (stmt) {
+                        .s_decl => |d| {
+                            // Only simple assign patterns supported
+                            const patt = self.env.store.getPattern(d.pattern);
+                            if (patt != .assign) return error.NotImplemented;
+
+                            const rhs_expr = d.expr;
+                            const rhs = self.env.store.getExpr(rhs_expr);
+                            var placeholder_added = false;
+                            // If RHS is a lambda or closure, create a placeholder closure so recursive calls during its body evaluation can resolve
+                            if (rhs == .e_lambda or rhs == .e_closure) {
+                                const lam = if (rhs == .e_lambda) rhs.e_lambda else blk: {
+                                    const cl = rhs.e_closure;
+                                    const lam_expr = self.env.store.getExpr(cl.lambda_idx);
+                                    if (lam_expr != .e_lambda) break :blk rhs.e_lambda; // fallback
+                                    break :blk lam_expr.e_lambda;
+                                };
+                                // Build closure layout from pattern's type var
+                                const patt_ct_var = can.ModuleEnv.varFrom(d.pattern);
+                                const patt_rt_var = try self.translateTypeVar(self.env, patt_ct_var);
+                                const closure_layout = try self.getRuntimeLayout(patt_rt_var);
+                                if (closure_layout.tag == .closure) {
+                                    const ph = try self.pushRaw(closure_layout, 0);
+                                    if (ph.ptr) |ptr| {
+                                        const header: *layout.Closure = @ptrCast(@alignCast(ptr));
+                                        header.* = .{
+                                            .body_idx = lam.body,
+                                            .params = lam.args,
+                                            .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
+                                            .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
+                                            .lambda_expr_idx = rhs_expr,
+                                        };
+                                    }
+                                    try self.bindings.append(.{ .pattern_idx = d.pattern, .value = ph });
+                                    placeholder_added = true;
+                                }
+                            }
+
+                            // Evaluate RHS
+                            const val = try self.evalExprMinimal(rhs_expr, roc_ops);
+
+                            if (placeholder_added) {
+                                // Update last binding with actual value
+                                const last = &self.bindings.items[self.bindings.items.len - 1];
+                                last.value = val;
+                            } else {
+                                try self.bindings.append(.{ .pattern_idx = d.pattern, .value = val });
+                            }
+                        },
+                        .s_expr => |sx| {
+                            _ = try self.evalExprMinimal(sx.expr, roc_ops); // evaluate for side-effects
+                        },
+                        else => return error.NotImplemented,
+                    }
+                }
+                // Evaluate final expression in the block
+                return try self.evalExprMinimal(blk.final_expr, roc_ops);
+            },
             .e_int => |int_lit| {
                 // Use runtime type to choose layout
                 const ct_var = can.ModuleEnv.varFrom(expr_idx);

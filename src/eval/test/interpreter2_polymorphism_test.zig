@@ -330,5 +330,24 @@ test "interpreter2 higher-order: return poly fn using captured +n" {
     try std.testing.expectEqualStrings("42", rendered);
 }
 
+// Recursion via block let-binding using a named recursive closure
+test "interpreter2 recursion: simple countdown" {
+    const roc_src =
+        \\{ rec = (|n| if n == 0 { 0 } else { rec(n - 1) + 1 }) rec(2) }
+    ;
+
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var ops = makeOps(std.testing.allocator);
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("2", rendered);
+}
+
 // Recursion via Z-combinator using if, ==, and subtraction
 // Recursion tests will follow after we add minimal tail recursion support
