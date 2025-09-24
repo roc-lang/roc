@@ -498,7 +498,9 @@ test "interpreter2 tag union: one-arg tag Ok(42)" {
 
     var ops = makeOps(std.testing.allocator);
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
-    const rendered = try interp2.renderValueRoc(result);
+    const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
     defer std.testing.allocator.free(rendered);
     const expected =
         \\Ok(42)
@@ -519,7 +521,9 @@ test "interpreter2 tag union: multi-arg tag Point(1, 2)" {
 
     var ops = makeOps(std.testing.allocator);
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
-    const rendered = try interp2.renderValueRoc(result);
+    const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
     defer std.testing.allocator.free(rendered);
     const expected =
         \\Point(1, 2)

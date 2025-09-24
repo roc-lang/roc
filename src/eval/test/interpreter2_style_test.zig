@@ -105,7 +105,7 @@ test "interpreter2: (|x| x)(\"Hello\") yields \"Hello\"" {
 
     // Prepare call using runtime function type; should constrain return to Str
     // Prepare call using a hint (until full eval is fully wired) and minimally evaluate
-    const entry = (try interp2.prepareCall(1234, &.{ arg_rt_var }, arg_rt_var)) orelse return error.TestUnexpectedResult;
+    const entry = (try interp2.prepareCall(1234, &.{arg_rt_var}, arg_rt_var)) orelse return error.TestUnexpectedResult;
     try std.testing.expect(entry.return_layout_slot != 0);
 
     // Minimal eval: evaluate the call directly via Interpreter2
@@ -156,6 +156,34 @@ test "interpreter2: (|n| n + 1)(41) yields 42" {
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("42", rendered);
+}
+
+test "interpreter2: literal True renders True" {
+    const roc_src = "True";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("True", rendered);
 }
 
 test "interpreter2: tuples and records" {

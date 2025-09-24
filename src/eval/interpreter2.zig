@@ -63,7 +63,7 @@ pub const Interpreter2 = struct {
     empty_scope: TypeScope,
     // Translation cache: (env_ptr, compile_var) -> runtime_var
     translate_cache: std.AutoHashMap(u64, types.Var),
-    
+
     // Polymorphic instantiation cache
 
     poly_cache: HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80),
@@ -727,7 +727,7 @@ pub const Interpreter2 = struct {
                 const func_rt_var = try self.translateTypeVar(self.env, func_ct_var);
                 const arg_ct_var = can.ModuleEnv.varFrom(arg_idx);
                 const arg_rt_var = try self.translateTypeVar(self.env, arg_ct_var);
-                const poly_entry = try self.prepareCallWithFuncVar(@intCast(@intFromEnum(func_idx)), func_rt_var, &.{ arg_rt_var });
+                const poly_entry = try self.prepareCallWithFuncVar(@intCast(@intFromEnum(func_idx)), func_rt_var, &.{arg_rt_var});
                 // Unify this call expression's return var with the function's constrained return var
                 const call_ret_ct_var = can.ModuleEnv.varFrom(expr_idx);
                 const call_ret_rt_var = try self.translateTypeVar(self.env, call_ret_ct_var);
@@ -861,8 +861,12 @@ pub const Interpreter2 = struct {
                     try buf.append('"');
                     for (s) |ch| {
                         switch (ch) {
-                            '\\' => { try buf.appendSlice("\\\\"); },
-                            '"' => { try buf.appendSlice("\\\""); },
+                            '\\' => {
+                                try buf.appendSlice("\\\\");
+                            },
+                            '"' => {
+                                try buf.appendSlice("\\\"");
+                            },
                             else => try buf.append(ch),
                         }
                     }
@@ -952,60 +956,77 @@ pub const Interpreter2 = struct {
                     const tags = self.runtime_types.getTagsSlice(tu.tags);
                     var tag_index: usize = 0;
                     var have_tag = false;
-                    if (value.layout.tag == .scalar) {
-                        if (value.layout.data.scalar.tag == .bool) {
-                            const b: *const u8 = @ptrCast(@alignCast(value.ptr.?));
-                            tag_index = if (b.* != 0) 1 else 0;
-                            have_tag = true;
-                        } else if (value.layout.data.scalar.tag == .int) {
-                            tag_index = @intCast(value.asI128());
-                            have_tag = true;
-                        }
-                    } else if (value.layout.tag == .record) {
-                        var acc = try value.asRecord(&self.runtime_layout_store);
-                        if (acc.findFieldIndex(self.env, "tag")) |idx| {
-                            const tag_field = try acc.getFieldByIndex(idx);
-                            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
-                                const tmp_sv = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
-                                tag_index = @intCast(tmp_sv.asI128());
-                                have_tag = true;
-                            } else if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .bool) {
-                                const b: *const u8 = @ptrCast(@alignCast(tag_field.ptr.?));
+                    var payload_value: ?StackValue = null;
+                    switch (value.layout.tag) {
+                        .scalar => switch (value.layout.data.scalar.tag) {
+                            .bool => {
+                                const b: *const u8 = @ptrCast(@alignCast(value.ptr.?));
                                 tag_index = if (b.* != 0) 1 else 0;
                                 have_tag = true;
-                            }
-                        }
-                        if (have_tag and tag_index < tags.len) {
-                            const tag_name = self.env.getIdent(tags.items(.name)[tag_index]);
-                            var out = std.ArrayList(u8).init(gpa);
-                            errdefer out.deinit();
-                            try out.appendSlice(tag_name);
-                            if (acc.findFieldIndex(self.env, "payload")) |pidx| {
-                                const payload = try acc.getFieldByIndex(pidx);
-                                const psize = self.runtime_layout_store.layoutSize(payload.layout);
-                                if (psize > 0) {
-                                    try out.append('(');
-                                    if (payload.layout.tag == .tuple) {
-                                        var tup = try payload.asTuple(&self.runtime_layout_store);
-                                        const count = tup.getElementCount();
-                                        var k: usize = 0;
-                                        while (k < count) : (k += 1) {
-                                            const elem = try tup.getElement(k);
-                                            const r = try self.renderValueRoc(elem);
-                                            defer gpa.free(r);
-                                            try out.appendSlice(r);
-                                            if (k + 1 < count) try out.appendSlice(", ");
-                                        }
-                                    } else {
-                                        const rendered = try self.renderValueRoc(payload);
-                                        defer gpa.free(rendered);
-                                        try out.appendSlice(rendered);
+                            },
+                            .int => {
+                                tag_index = @intCast(value.asI128());
+                                have_tag = true;
+                            },
+                            else => {},
+                        },
+                        .record => {
+                            var acc = try value.asRecord(&self.runtime_layout_store);
+                            if (acc.findFieldIndex(self.env, "tag")) |idx| {
+                                const tag_field = try acc.getFieldByIndex(idx);
+                                if (tag_field.layout.tag == .scalar) {
+                                    switch (tag_field.layout.data.scalar.tag) {
+                                        .int => {
+                                            const tmp_sv = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
+                                            tag_index = @intCast(tmp_sv.asI128());
+                                            have_tag = true;
+                                        },
+                                        .bool => {
+                                            const b: *const u8 = @ptrCast(@alignCast(tag_field.ptr.?));
+                                            tag_index = if (b.* != 0) 1 else 0;
+                                            have_tag = true;
+                                        },
+                                        else => {},
                                     }
-                                    try out.append(')');
                                 }
                             }
-                            return out.toOwnedSlice();
+                            if (have_tag) {
+                                if (acc.findFieldIndex(self.env, "payload")) |pidx| {
+                                    payload_value = try acc.getFieldByIndex(pidx);
+                                }
+                            }
+                        },
+                        else => {},
+                    }
+                    if (have_tag and tag_index < tags.len) {
+                        const tag_name = self.env.getIdent(tags.items(.name)[tag_index]);
+                        var out = std.ArrayList(u8).init(gpa);
+                        errdefer out.deinit();
+                        try out.appendSlice(tag_name);
+                        if (payload_value) |payload| {
+                            const psize = self.runtime_layout_store.layoutSize(payload.layout);
+                            if (psize > 0) {
+                                try out.append('(');
+                                if (payload.layout.tag == .tuple) {
+                                    var tup = try payload.asTuple(&self.runtime_layout_store);
+                                    const count = tup.getElementCount();
+                                    var k: usize = 0;
+                                    while (k < count) : (k += 1) {
+                                        const elem = try tup.getElement(k);
+                                        const r = try self.renderValueRoc(elem);
+                                        defer gpa.free(r);
+                                        try out.appendSlice(r);
+                                        if (k + 1 < count) try out.appendSlice(", ");
+                                    }
+                                } else {
+                                    const rendered = try self.renderValueRoc(payload);
+                                    defer gpa.free(rendered);
+                                    try out.appendSlice(rendered);
+                                }
+                                try out.append(')');
+                            }
                         }
+                        return out.toOwnedSlice();
                     }
                 },
                 .record => |rec| {
@@ -1111,7 +1132,7 @@ pub const Interpreter2 = struct {
         slot_ptr.* = @intFromEnum(layout_idx) + 1;
         return self.runtime_layout_store.getLayout(layout_idx);
     }
-    
+
     /// Minimal translate implementation (scaffolding): handles .str only for now
     pub fn translateTypeVar(self: *Interpreter2, module: *can.ModuleEnv, compile_var: types.Var) !types.Var {
         const key: u64 = (@as(u64, @intFromPtr(module)) << 32) | @as(u64, @intFromEnum(compile_var));
@@ -1283,7 +1304,7 @@ pub const Interpreter2 = struct {
         try self.translate_cache.put(key, out_var);
         return out_var;
     }
-    
+
     pub fn makePolyKey(self: *Interpreter2, func_id: u32, args: []const types.Var) PolyKey {
         var key = PolyKey{
             .func_id = func_id,
