@@ -6040,17 +6040,6 @@ fn currentScopeIdx(self: *Self) usize {
 
 /// This will be used later for builtins like Num.nan, Num.infinity, etc.
 pub fn addNonFiniteFloat(self: *Self, value: f64, region: base.Region) !Expr.Idx {
-    // Dec doesn't have infinity, -infinity, or NaN
-    const requirements = types.Num.Frac.Requirements{
-        .fits_in_f32 = true,
-        .fits_in_dec = false,
-    };
-
-    const frac_requirements = types.Num.FracRequirements{
-        .fits_in_f32 = requirements.fits_in_f32,
-        .fits_in_dec = requirements.fits_in_dec,
-    };
-
     // then in the final slot the actual expr is inserted
     const expr_idx = try self.env.addExprAndTypeVar(
         CIR.Expr{
@@ -6059,7 +6048,7 @@ pub fn addNonFiniteFloat(self: *Self, value: f64, region: base.Region) !Expr.Idx
                 .has_suffix = false,
             },
         },
-        Content{ .structure = .{ .num = .{ .frac_unbound = frac_requirements } } },
+        .err,
         region,
     );
 

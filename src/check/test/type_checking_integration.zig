@@ -743,7 +743,7 @@ test "check type - binops math sub" {
         \\
         \\x = 1 - 0.2
     ;
-    try assertFileTypeCheckPass(source, "Num(Int(Unsigned32))");
+    try assertFileTypeCheckPass(source, "Num(Frac(_size))");
 }
 
 test "check type - binops ord" {

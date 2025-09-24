@@ -1185,12 +1185,18 @@ fn Unifier(comptime StoreTypeB: type) type {
                     .int_requirements = b_reqs.int_requirements.unify(a_reqs.int_requirements),
                     .frac_requirements = b_reqs.frac_requirements.unify(a_reqs.frac_requirements),
                 } } } }),
-                .int_unbound => |a_reqs| self.merge(vars, .{ .structure = .{ .num = .{
-                    .int_unbound = b_reqs.int_requirements.unify(a_reqs),
-                } } }),
-                .frac_unbound => |a_reqs| self.merge(vars, .{ .structure = .{ .num = .{
-                    .frac_unbound = b_reqs.frac_requirements.unify(a_reqs),
-                } } }),
+                .int_unbound => |a_reqs| {
+                    const poly_unbound = self.fresh(vars, .{ .structure = .{
+                        .num = .{ .int_unbound = b_reqs.int_requirements.unify(a_reqs) },
+                    } }) catch return Error.AllocatorError;
+                    self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = poly_unbound } } });
+                },
+                .frac_unbound => |a_reqs| {
+                    const poly_unbound = self.fresh(vars, .{ .structure = .{
+                        .num = .{ .frac_unbound = b_reqs.frac_requirements.unify(a_reqs) },
+                    } }) catch return Error.AllocatorError;
+                    self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = poly_unbound } } });
+                },
 
                 // If the variable inside an int with a precision
                 .int_resolved => |a_int| {
@@ -1256,12 +1262,18 @@ fn Unifier(comptime StoreTypeB: type) type {
                     .int_requirements = a_reqs.int_requirements.unify(b_reqs.int_requirements),
                     .frac_requirements = a_reqs.frac_requirements.unify(b_reqs.frac_requirements),
                 } } } }),
-                .int_unbound => |b_reqs| self.merge(vars, .{ .structure = .{ .num = .{
-                    .int_unbound = a_reqs.int_requirements.unify(b_reqs),
-                } } }),
-                .frac_unbound => |b_reqs| self.merge(vars, .{ .structure = .{ .num = .{
-                    .frac_unbound = a_reqs.frac_requirements.unify(b_reqs),
-                } } }),
+                .int_unbound => |b_reqs| {
+                    const poly_unbound = self.fresh(vars, .{ .structure = .{
+                        .num = .{ .int_unbound = a_reqs.int_requirements.unify(b_reqs) },
+                    } }) catch return Error.AllocatorError;
+                    self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = poly_unbound } } });
+                },
+                .frac_unbound => |b_reqs| {
+                    const poly_unbound = self.fresh(vars, .{ .structure = .{
+                        .num = .{ .frac_unbound = a_reqs.frac_requirements.unify(b_reqs) },
+                    } }) catch return Error.AllocatorError;
+                    self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = poly_unbound } } });
+                },
 
                 // If the variable inside an int with a precision
                 .int_resolved => |b_int| {
