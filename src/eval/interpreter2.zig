@@ -6,6 +6,7 @@ const types = @import("types");
 const layout = @import("layout");
 const can = @import("can");
 const TypeScope = types.TypeScope;
+const Content = types.Content;
 
 pub const Interpreter2 = struct {
     allocator: std.mem.Allocator,
@@ -15,6 +16,8 @@ pub const Interpreter2 = struct {
     var_to_layout_slot: std.ArrayList(u32),
     // Empty scope used when converting runtime vars to layouts
     empty_scope: TypeScope,
+    // Translation cache: (env_ptr, compile_var) -> runtime_var
+    translate_cache: std.AutoHashMap(u64, types.Var),
 
     pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv) !Interpreter2 {
         const rt_types_ptr = try allocator.create(types.store.Store);
@@ -28,6 +31,7 @@ pub const Interpreter2 = struct {
             .runtime_layout_store = undefined, // set below to point at result.runtime_types
             .var_to_layout_slot = slots,
             .empty_scope = scope,
+            .translate_cache = std.AutoHashMap(u64, types.Var).init(allocator),
         };
         result.runtime_layout_store = try layout.Store.init(env, result.runtime_types);
         return result;
@@ -35,6 +39,7 @@ pub const Interpreter2 = struct {
 
     pub fn deinit(self: *Interpreter2) void {
         self.empty_scope.deinit();
+        self.translate_cache.deinit();
         self.var_to_layout_slot.deinit();
         self.runtime_layout_store.deinit();
         self.runtime_types.deinit();
@@ -66,6 +71,31 @@ pub const Interpreter2 = struct {
         const layout_idx = try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope);
         slot_ptr.* = @intFromEnum(layout_idx) + 1;
         return self.runtime_layout_store.getLayout(layout_idx);
+    }
+    
+    /// Minimal translate implementation (scaffolding): handles .str only for now
+    pub fn translateTypeVar(self: *Interpreter2, module: *can.ModuleEnv, compile_var: types.Var) !types.Var {
+        const key: u64 = (@as(u64, @intFromPtr(module)) << 32) | @as(u64, @intFromEnum(compile_var));
+        if (self.translate_cache.get(key)) |found| return found;
+
+        const resolved = module.types.resolveVar(compile_var);
+        const out_var = switch (resolved.desc.content) {
+            .structure => |flat| switch (flat) {
+                .str => try self.runtime_types.freshFromContent(.{ .structure = .str }),
+                .num => |n| switch (n) {
+                    .num_compact => |c| switch (c) {
+                        .int => |p| try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = p } } } }),
+                        .frac => |p| try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = p } } } }),
+                    },
+                    else => return error.NotImplemented,
+                },
+                else => return error.NotImplemented,
+            },
+            else => return error.NotImplemented,
+        };
+
+        try self.translate_cache.put(key, out_var);
+        return out_var;
     }
 };
 
@@ -100,4 +130,71 @@ test "interpreter2: Var->Layout slot caches computed layout" {
     try std.testing.expect(layout_value.tag == .scalar);
     try std.testing.expect(layout_value.data.scalar.tag == .str);
     try std.testing.expect(interp.var_to_layout_slot.items[root_idx] != 0);
+}
+
+// RED: translating a compile-time str var should produce a runtime str var
+test "interpreter2: translateTypeVar for str" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    var interp = try Interpreter2.init(gpa, &env);
+    defer interp.deinit();
+
+    const ct_str = try env.types.freshFromContent(.{ .structure = .str });
+    const rt_var = try interp.translateTypeVar(&env, ct_str);
+
+    const resolved = interp.runtime_types.resolveVar(rt_var);
+    try std.testing.expect(resolved.desc.content == .structure);
+    try std.testing.expect(resolved.desc.content.structure == .str);
+}
+
+// RED: translating a compile-time concrete int64 should produce a runtime int64
+test "interpreter2: translateTypeVar for int64" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    var interp = try Interpreter2.init(gpa, &env);
+    defer interp.deinit();
+
+    const ct_int = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
+    const rt_var = try interp.translateTypeVar(&env, ct_int);
+    const resolved = interp.runtime_types.resolveVar(rt_var);
+    try std.testing.expect(resolved.desc.content == .structure);
+    switch (resolved.desc.content.structure) {
+        .num => |n| switch (n) {
+            .num_compact => |c| switch (c) {
+                .int => |p| try std.testing.expectEqual(types.Num.Int.Precision.i64, p),
+                else => return error.TestUnexpectedResult,
+            },
+            else => return error.TestUnexpectedResult,
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+// RED: translating a compile-time concrete f64 should produce a runtime f64
+test "interpreter2: translateTypeVar for f64" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    var interp = try Interpreter2.init(gpa, &env);
+    defer interp.deinit();
+
+    const ct_frac = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } });
+    const rt_var = try interp.translateTypeVar(&env, ct_frac);
+    const resolved = interp.runtime_types.resolveVar(rt_var);
+    try std.testing.expect(resolved.desc.content == .structure);
+    switch (resolved.desc.content.structure) {
+        .num => |n| switch (n) {
+            .num_compact => |c| switch (c) {
+                .frac => |p| try std.testing.expectEqual(types.Num.Frac.Precision.f64, p),
+                else => return error.TestUnexpectedResult,
+            },
+            else => return error.TestUnexpectedResult,
+        },
+        else => return error.TestUnexpectedResult,
+    }
 }
