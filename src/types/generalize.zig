@@ -78,7 +78,7 @@ pub const Generalizer = struct {
 
         // Iterate over all the variables at the rank we're trying to generalize
         for (vars_to_generalize) |rank_var| {
-            // Only process non-redunant vars
+            // Only process non-redundant vars
             if (!self.store.isRedirect(rank_var)) {
                 const resolved = self.store.resolveVar(rank_var);
                 if (@intFromEnum(resolved.desc.rank) < @intFromEnum(rank_to_generalize)) {

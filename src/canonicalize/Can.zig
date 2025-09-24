@@ -5577,7 +5577,7 @@ const StatementResult = struct {
 /// Canonicalize a single statement within a block
 ///
 /// This function generally processes 1 stmt, but in the case of type
-/// annotations, it may ties the following delcaration. In this case, the first
+/// annotations, it may ties the following declaration. In this case, the first
 /// stmt is the anno & the second is the following decl
 ///
 /// The stmt may be null if:

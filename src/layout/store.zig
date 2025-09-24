@@ -901,15 +901,15 @@ pub const Store = struct {
                                 .frac_precision => |precision| break :flat_type Layout.frac(precision),
                                 // For polymorphic types, use default precision
                                 .num_unbound => |_| {
-                                    // TODO: Should we consider requiremnts here?
+                                    // TODO: Should we consider requirements here?
                                     break :flat_type Layout.int(types.Num.Int.Precision.default);
                                 },
                                 .int_unbound => {
-                                    // TODO: Should we consider requiremnts here?
+                                    // TODO: Should we consider requirements here?
                                     break :flat_type Layout.int(types.Num.Int.Precision.default);
                                 },
                                 .frac_unbound => {
-                                    // TODO: Should we consider requiremnts here?
+                                    // TODO: Should we consider requirements here?
                                     break :flat_type Layout.frac(types.Num.Frac.Precision.default);
                                 },
                                 .num_poly => |var_| {
@@ -1019,7 +1019,7 @@ pub const Store = struct {
                         const pending_tags_top = self.work.pending_tags.len;
                         defer self.work.pending_tags.shrinkRetainingCapacity(pending_tags_top);
 
-                        // Recursivly get all tags by checking the tag extension
+                        // Recursively get all tags by checking the tag extension
                         const num_tags = try self.gatherTags(tag_union);
                         const tags_slice = self.work.pending_tags.slice();
 

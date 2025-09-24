@@ -710,7 +710,7 @@ fn writeFracType(self: *TypeWriter, prec: Num.Frac.Precision, num_type: NumPrecT
     }
 }
 
-/// Generate a name for a flex var that may appear mulitple times in the type
+/// Generate a name for a flex var that may appear multiple times in the type
 pub fn writeFlexVarName(self: *TypeWriter, var_: Var, context: TypeContext, root_var: Var) std.mem.Allocator.Error!void {
     const resolved_var = self.types.resolveVar(var_).var_;
 

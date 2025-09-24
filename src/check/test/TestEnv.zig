@@ -24,7 +24,7 @@ type_writer: types.TypeWriter,
 /// Test environment for canonicalization testing, providing a convenient wrapper around ModuleEnv, AST, and Can.
 const TestEnv = @This();
 
-/// Initiailize where the provided source is an entire file
+/// Initialize where the provided source is an entire file
 pub fn init(source: []const u8) !TestEnv {
     const gpa = std.testing.allocator;
 
@@ -40,12 +40,18 @@ pub fn init(source: []const u8) !TestEnv {
     const can = try gpa.create(Can);
     errdefer gpa.destroy(can);
 
+    const module_name = "test";
+
     // Initialize the ModuleEnv with the CommonEnv
     module_env.* = try ModuleEnv.init(gpa, source);
     errdefer module_env.deinit();
 
+    module_env.common.source = source;
+    module_env.module_name = module_name;
+    try module_env.common.calcLineStarts(gpa);
+
     const module_common_idents: Check.CommonIdents = .{
-        .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
+        .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
         .list = try module_env.insertIdent(base.Ident.for_text("List")),
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
     };
@@ -81,7 +87,7 @@ pub fn init(source: []const u8) !TestEnv {
     };
 }
 
-/// Initiailize where the provided source a single expression
+/// Initialize where the provided source a single expression
 pub fn initExpr(comptime source_expr: []const u8) !TestEnv {
     const source_wrapper =
         \\module []
@@ -144,7 +150,7 @@ pub fn getLastExprType(self: *TestEnv) !types.Descriptor {
 }
 
 /// Assert that there was a single type error when checking the input. Assert
-/// that the title of the type error matches the expcted title.
+/// that the title of the type error matches the expected title.
 pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) !void {
     try self.assertNoParseProblems();
     // try self.assertNoCanProblems();

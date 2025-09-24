@@ -581,12 +581,12 @@ fn Unifier(comptime StoreTypeB: type) type {
                     // types are compatible.
 
                     // First, we unify the concrete var with the alias backing var
-                    // IMPORANT: The arg order here is important! Unifying
+                    // IMPORTANT: The arg order here is important! Unifying
                     // updates the second var to hold the type, and the first
                     // var to redirect to the second
                     try self.unifyGuarded(vars.b.var_, backing_var);
 
-                    // Next, we create a fresh alias (which interally points to `backing_var`),
+                    // Next, we create a fresh alias (which internally points to `backing_var`),
                     // then we redirect both a & b to the new alias.
                     const fresh_alias_var = self.fresh(vars, .{ .alias = a_alias }) catch return Error.AllocatorError;
                     self.types_store.setVarRedirect(vars.a.var_, fresh_alias_var) catch return Error.AllocatorError;
@@ -656,12 +656,12 @@ fn Unifier(comptime StoreTypeB: type) type {
                     const backing_var = self.types_store.getAliasBackingVar(b_alias);
 
                     // First, we unify the concrete var with the alias backing var
-                    // IMPORANT: The arg order here is important! Unifying
+                    // IMPORTANT: The arg order here is important! Unifying
                     // updates the second var to hold the type, and the first
                     // var to redirect to the second
                     try self.unifyGuarded(vars.a.var_, backing_var);
 
-                    // Next, we create a fresh alias (which interally points to `backing_var`),
+                    // Next, we create a fresh alias (which internally points to `backing_var`),
                     // then we redirect both a & b to the new alias.
                     const fresh_alias_var = self.fresh(vars, .{ .alias = b_alias }) catch return Error.AllocatorError;
                     self.types_store.setVarRedirect(vars.a.var_, fresh_alias_var) catch return Error.AllocatorError;

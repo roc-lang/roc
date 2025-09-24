@@ -106,7 +106,7 @@ pub const Expr = union(enum) {
         denominator_power_of_ten: u8,
         has_suffix: bool, // If the value had a `dec` suffix
 
-        /// Convert a small dec to f64 (use for size comparisions)
+        /// Convert a small dec to f64 (use for size comparisons)
         pub fn toF64(self: @This()) f64 {
             const numerator_f64 = @as(f64, @floatFromInt(self.numerator));
             var divisor: f64 = 1.0;

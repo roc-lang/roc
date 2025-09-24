@@ -64,7 +64,7 @@ var_pool: VarPool,
 generalizer: Generalizer,
 /// A map from one var to another. Used in instantiation and var copying
 var_map: std.AutoHashMap(Var, Var),
-/// A map from one var to another. Used to apply type arguments in instantation
+/// A map from one var to another. Used to apply type arguments in instantiation
 rigid_var_substitutions: std.AutoHashMapUnmanaged(Ident.Idx, Var),
 /// scratch vars used to build up intermediate lists, used for various things
 scratch_vars: base.Scratch(Var),
@@ -546,7 +546,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
         try self.generateStmtTypeDeclType(stmt_idx);
     }
 
-    // Push the rank for this definitoin
+    // Push the rank for this definition
     try self.var_pool.pushRank();
     defer self.var_pool.popRank();
 
@@ -567,7 +567,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // Push the rank for this definitoin
+    // Push the rank for this definition
     try self.var_pool.pushRank();
     defer self.var_pool.popRank();
 
@@ -751,7 +751,7 @@ const GenTypeAnnoCtx = union(enum) {
     },
 };
 
-/// Given an annotation, generate the corrosponding type based on the CIR
+/// Given an annotation, generate the corresponding type based on the CIR
 ///
 /// This function will write the type into the type var node at `anno_idx`
 fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenTypeAnnoCtx) std.mem.Allocator.Error!void {
@@ -1076,7 +1076,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenType
                 const tag_type_anno = self.cir.store.getTypeAnno(tag_anno_idx);
 
                 // If the child of the tag union is not a tag, then set as error
-                // Canonicalization should have reported this eror
+                // Canonicalization should have reported this error
                 if (tag_type_anno != .tag) {
                     try self.updateVar(anno_var, .err, Rank.generalized);
                     return;
@@ -1116,7 +1116,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenType
         },
         .tag => {
             // This indicates a malformed type annotation. Tags should only
-            // exist as direct childen of tag_unions
+            // exist as direct children of tag_unions
             std.debug.assert(false);
             try self.updateVar(anno_var, .err, Rank.generalized);
         },
@@ -1722,7 +1722,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             does_fx = try self.checkExpr(nominal.backing_expr, rank, .no_expectation) or does_fx;
             const actual_backing_var = ModuleEnv.varFrom(nominal.backing_expr);
 
-            // Then, we need an instance of the nominal type being refereneced
+            // Then, we need an instance of the nominal type being referenced
             // E.g. ConList.Cons(...)
             //      ^^^^^^^
             const nominal_var = try self.instantiateVar(ModuleEnv.varFrom(nominal.nominal_type_decl), rank, .{ .explicit = expr_region });
@@ -1734,7 +1734,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                 //                    ^^^^^^^^^^^^^^^^^^^^^^^^^
                 const nominal_backing_var = self.types.getNominalBackingVar(nominal_resolved.structure.nominal_type);
 
-                // Now we unify what the user wrote with the backing type of the nominal vas
+                // Now we unify what the user wrote with the backing type of the nominal was
                 // E.g. ConList.Cons(...) <-> [Cons(a, ConsList(a)), Nil]
                 //              ^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^^^
                 const result = try self.unify(nominal_backing_var, actual_backing_var, rank);
@@ -1859,7 +1859,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
         },
         // function //
         .e_lambda => |lambda| {
-            // Annotation-aware lambda tpye checking produces much better error
+            // Annotation-aware lambda type checking produces much better error
             // messages, so first we have to determine if we have an expected
             // type to validate against
             const mb_expected_var: ?Var, const is_expected_from_anno: bool = blk: {
@@ -1922,7 +1922,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                     // If so, check each argument, passing in the expected type
 
                     // First, find all the rigid variables in a the function's type
-                    // and unify the matching corrosponding lambda arguments together.
+                    // and unify the matching corresponding lambda arguments together.
                     for (expected_func_args, 0..) |expected_arg_1, i| {
                         const expected_resolved_1 = self.types.resolveVar(expected_arg_1);
 
@@ -1942,7 +1942,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                             if (expected_resolved_1.var_ == expected_resolved_2.var_) {
                                 // These two argument indexes in the called *function's*
                                 // type have the same rigid variable! So, we unify
-                                // the corrosponding *lambda args*
+                                // the corresponding *lambda args*
 
                                 const arg_1 = @as(Var, ModuleEnv.varFrom(arg_pattern_idxs[i]));
                                 const arg_2 = @as(Var, ModuleEnv.varFrom(arg_pattern_idxs[j]));
@@ -1979,7 +1979,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                         }
                     }
                 } else {
-                    // This means the expected type and teh actual lambda have
+                    // This means the expected type and the actual lambda have
                     // an arity mismatch. This will be caught by the regular
                     // expectation checking code at the bottom of this function
                 }
@@ -2080,7 +2080,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
 
                         if (func_args.len == call_arg_expr_idxs.len) {
                             // First, find all the "rigid" variables in a the function's type
-                            // and unify the matching corrosponding call arguments together.
+                            // and unify the matching corresponding call arguments together.
                             //
                             // Here, "rigid" is in quotes because at this point, the expected function
                             // has been instantiated such that the rigid variables should all resolve
@@ -2105,7 +2105,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                                     if (expected_resolved_1.var_ == expected_resolved_2.var_) {
                                         // These two argument indexes in the called *function's*
                                         // type have the same rigid variable! So, we unify
-                                        // the corrosponding *call args*
+                                        // the corresponding *call args*
 
                                         const arg_1 = @as(Var, ModuleEnv.varFrom(call_arg_expr_idxs[i]));
                                         const arg_2 = @as(Var, ModuleEnv.varFrom(call_arg_expr_idxs[j]));
@@ -2160,7 +2160,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
 
                             // If the expected function's arity doesn't match
                             // the actual arguments provoided, unify the
-                            // inferred function tpye with the expected function
+                            // inferred function type with the expected function
                             // type to get  the regulare error message
                             const call_arg_vars: []Var = @ptrCast(call_arg_expr_idxs);
                             const call_func_ret = try self.fresh(rank, expr_region);
@@ -2236,7 +2236,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                 const resolved_receiver = self.types.resolveVar(receiver_var);
                 switch (resolved_receiver.desc.content) {
                     .err => {
-                        // If the reciever type is an error, then propgate it and  break
+                        // If the receiver type is an error, then propgate it and  break
                         try self.updateVar(expr_var, .err, rank);
                     },
                     .structure => |structure| switch (structure) {
@@ -2332,12 +2332,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                         },
                         else => {
                             // Receiver is not a nominal var, this is a type error
-                            // TODO: Add a proper error when reciever is not a nominal var
+                            // TODO: Add a proper error when receiver is not a nominal var
                         },
                     },
                     else => {
                         // Receiver is not a nominal var, this is a type error
-                        // TODO: Add a proper error when reciever is not a nominal var
+                        // TODO: Add a proper error when receiver is not a nominal var
 
                     },
                 }
@@ -2355,7 +2355,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                     .record_unbound = record_field_range,
                 } }, rank, expr_region);
 
-                // Then, unify the actual reciever type with the expected record
+                // Then, unify the actual receiver type with the expected record
                 _ = try self.unify(record_being_accessed, receiver_var, rank);
                 try self.types.setVarRedirect(expr_var, record_field_var);
             }
@@ -2723,8 +2723,8 @@ fn checkBinopExpr(
             // Unify left and right together
             _ = try self.unify(lhs_var, rhs_var, rank);
 
-            // Set root expr. If unifications suceeded this will the the
-            // num, otherwise the propgated error
+            // Set root expr. If unifications succeeded this will the the
+            // num, otherwise the propgate error
             try self.types.setVarRedirect(expr_var, lhs_var);
         },
         .lt, .gt, .le, .ge, .eq, .ne => {
@@ -2758,8 +2758,8 @@ fn checkBinopExpr(
             // Unify left and right together
             _ = try self.unify(lhs_var, rhs_var, rank);
 
-            // Set root expr. If unifications suceeded this will the the
-            // num, otherwise the propgated error
+            // Set root expr. If unifications succeeded this will the the
+            // num, otherwise the propgate error
             try self.types.setVarRedirect(expr_var, lhs_var);
         },
         .@"or" => {
@@ -2782,8 +2782,8 @@ fn checkBinopExpr(
             // Unify left and right together
             _ = try self.unify(lhs_var, rhs_var, rank);
 
-            // Set root expr. If unifications suceeded this will the the
-            // num, otherwise the propgated error
+            // Set root expr. If unifications succeeded this will the the
+            // num, otherwise the propagate error
             try self.types.setVarRedirect(expr_var, lhs_var);
         },
         .pipe_forward => {

@@ -145,7 +145,7 @@ pub const IncompatibleIfBranches = struct {
     problem_branch_index: u32,
 };
 
-/// Problem data for when match expression type is incompatibl from the patterns
+/// Problem data for when match expression type is incompatible from the patterns
 pub const IncompatibleMatchCondPattern = struct {
     match_expr: CIR.Expr.Idx,
 };

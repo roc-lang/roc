@@ -1090,7 +1090,7 @@ pub const SnapshotWriter = struct {
         }
     }
 
-    /// Generate a name for a flex var that may appear mulitple times in the type
+    /// Generate a name for a flex var that may appear multiple times in the type
     pub fn writeFlexVarName(self: *Self, flex_var: Var, _: SnapshotContentIdx, context: TypeContext, root_idx: SnapshotContentIdx) std.mem.Allocator.Error!void {
         // Check if we've seen this flex var before.
         if (self.flex_var_names_map.get(flex_var)) |range| {
