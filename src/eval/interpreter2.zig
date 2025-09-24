@@ -182,7 +182,8 @@ pub const Interpreter2 = struct {
                 var i: usize = 0;
                 while (i < elems.len) : (i += 1) {
                     const ev = try self.evalExprMinimal(elems[i], roc_ops);
-                    try accessor.setElement(i, ev, roc_ops);
+                    const sorted_idx = accessor.findElementIndexByOriginal(i) orelse return error.TypeMismatch;
+                    try accessor.setElement(sorted_idx, ev, roc_ops);
                 }
                 return dest;
             },
@@ -282,14 +283,35 @@ pub const Interpreter2 = struct {
                 var field_names = try self.allocator.alloc(@import("base").Ident.Idx, caps.len);
                 defer self.allocator.free(field_names);
 
-                // Helper: find current bound value for a pattern_idx
-                const findBinding = struct {
-                    fn go(self_interp: *Interpreter2, patt: can.CIR.Pattern.Idx) ?StackValue {
+                // Helper: resolve a capture value (from local bindings or active closure captures)
+                const resolveCapture = struct {
+                    fn go(self_interp: *Interpreter2, cap: can.CIR.Expr.Capture) ?StackValue {
+                        // First try local bindings by pattern idx
                         var i: usize = self_interp.bindings.items.len;
                         while (i > 0) {
                             i -= 1;
                             const b = self_interp.bindings.items[i];
-                            if (b.pattern_idx == patt) return b.value;
+                            if (b.pattern_idx == cap.pattern_idx) return b.value;
+                        }
+                        // Next try active closure captures (top-most only) by name
+                        if (self_interp.active_closures.items.len > 0) {
+                            const top = self_interp.active_closures.items[self_interp.active_closures.items.len - 1];
+                            if (top.layout.tag == .closure and top.ptr != null) {
+                                const captures_layout = self_interp.runtime_layout_store.getLayout(top.layout.data.closure.captures_layout_idx);
+                                const header_sz = @sizeOf(layout.Closure);
+                                const cap_align = captures_layout.alignment(self_interp.runtime_layout_store.targetUsize());
+                                const aligned_off = std.mem.alignForward(usize, header_sz, @intCast(cap_align.toByteUnits()));
+                                const base: [*]u8 = @ptrCast(@alignCast(top.ptr.?));
+                                const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
+                                const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
+                                var accessor = self_interp.runtime_layout_store; // just for type
+                                _ = &accessor;
+                                var rec_acc = (try rec_val.asRecord(&self_interp.runtime_layout_store));
+                                const name_text = self_interp.env.getIdent(cap.name);
+                                if (rec_acc.findFieldIndex(self_interp.env, name_text)) |fidx| {
+                                    return rec_acc.getFieldByIndex(fidx) catch null;
+                                }
+                            }
                         }
                         return null;
                     }
@@ -298,8 +320,8 @@ pub const Interpreter2 = struct {
                 for (caps, 0..) |cap_idx, i| {
                     const cap = self.env.store.getCapture(cap_idx);
                     field_names[i] = cap.name;
-                    const bound = findBinding(self, cap.pattern_idx) orelse return error.NotImplemented;
-                    field_layouts[i] = bound.layout;
+                    const captured_val = resolveCapture(self, cap) orelse return error.NotImplemented;
+                    field_layouts[i] = captured_val.layout;
                 }
 
                 const captures_layout_idx = try self.runtime_layout_store.putRecord(field_layouts, field_names);
@@ -327,9 +349,9 @@ pub const Interpreter2 = struct {
                     var accessor = try rec_val.asRecord(&self.runtime_layout_store);
                     for (caps) |cap_idx2| {
                         const cap2 = self.env.store.getCapture(cap_idx2);
-                        const bound2 = findBinding(self, cap2.pattern_idx) orelse return error.NotImplemented;
+                        const cap_val2 = resolveCapture(self, cap2) orelse return error.NotImplemented;
                         const idx_opt = accessor.findFieldIndex(self.env, self.env.getIdent(cap2.name)) orelse return error.NotImplemented;
-                        try accessor.setFieldByIndex(idx_opt, bound2, roc_ops);
+                        try accessor.setFieldByIndex(idx_opt, cap_val2, roc_ops);
                     }
                 }
                 return value;

@@ -121,6 +121,36 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
     @memcpy(dst, src);
 }
 
+/// Copy this value into a destination pointer, using the destination layout to choose representation when needed
+pub fn copyToPtrAs(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopaque, dest_layout: Layout, ops: *RocOps) !void {
+    std.debug.assert(self.is_initialized);
+    if (self.ptr == null) return error.NullStackPointer;
+
+    // Strings: clone regardless of dest
+    if (dest_layout.tag == .scalar and dest_layout.data.scalar.tag == .str) {
+        const src_str: *const RocStr = @ptrCast(@alignCast(self.ptr.?));
+        const dest_str: *RocStr = @ptrCast(@alignCast(dest_ptr));
+        dest_str.* = src_str.clone(ops);
+        return;
+    }
+
+    // Integers: byte copy using destination size to avoid strict alignment issues
+    if (dest_layout.tag == .scalar and dest_layout.data.scalar.tag == .int) {
+        const size: u32 = layout_cache.layoutSize(dest_layout);
+        const src = @as([*]u8, @ptrCast(self.ptr.?))[0..size];
+        const dst = @as([*]u8, @ptrCast(dest_ptr))[0..size];
+        @memcpy(dst, src);
+        return;
+    }
+
+    // Fallback: memcpy by destination size
+    const size: u32 = if (dest_layout.tag == .closure) self.getTotalSize(layout_cache) else layout_cache.layoutSize(dest_layout);
+    if (size == 0) return;
+    const src = @as([*]u8, @ptrCast(self.ptr.?))[0..size];
+    const dst = @as([*]u8, @ptrCast(dest_ptr))[0..size];
+    @memcpy(dst, src);
+}
+
 /// Read this StackValue's integer value, ensuring it's initialized
 pub fn asI128(self: StackValue) i128 {
     std.debug.assert(self.is_initialized); // Ensure initialized before reading
@@ -315,7 +345,16 @@ pub const TupleAccessor = struct {
     /// Set an element by copying from a source StackValue
     pub fn setElement(self: TupleAccessor, index: usize, source: StackValue, ops: *RocOps) !void {
         const dest_element = try self.getElement(index);
-        try source.copyToPtr(self.layout_cache, dest_element.ptr.?, ops);
+        try source.copyToPtrAs(self.layout_cache, dest_element.ptr.?, dest_element.layout, ops);
+    }
+
+    /// Find the sorted element index corresponding to an original tuple position
+    pub fn findElementIndexByOriginal(self: TupleAccessor, original_index: usize) ?usize {
+        for (0..self.element_layouts.len) |i| {
+            const elem = self.element_layouts.get(i);
+            if (elem.index == original_index) return i;
+        }
+        return null;
     }
 
     /// Get the number of elements in this tuple
@@ -420,7 +459,7 @@ pub const RecordAccessor = struct {
     /// Set a field by copying from a source StackValue
     pub fn setFieldByIndex(self: RecordAccessor, index: usize, source: StackValue, ops: *RocOps) !void {
         const dest_field = try self.getFieldByIndex(index);
-        try source.copyToPtr(self.layout_cache, dest_field.ptr.?, ops);
+        try source.copyToPtrAs(self.layout_cache, dest_field.ptr.?, dest_field.layout, ops);
     }
 
     /// Get the number of fields in this record

@@ -155,3 +155,45 @@ test "interpreter2 captures (monomorphic): constant function" {
     ;
     try std.testing.expectEqualStrings(expected, rendered);
 }
+
+test "interpreter2 captures (polymorphic): capture id and apply to int" {
+    const roc_src =
+        \\((|id| (|x| id(x)))(|y| y))(41)
+    ;
+
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var ops = makeOps(std.testing.allocator);
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("41", rendered);
+}
+
+test "interpreter2 captures (polymorphic): capture id and apply to string" {
+    const roc_src =
+        \\((|id| (|x| id(x)))(|y| y))("ok")
+    ;
+
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var ops = makeOps(std.testing.allocator);
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    const expected =
+        \\"ok"
+    ;
+    try std.testing.expectEqualStrings(expected, rendered);
+}
+
+// A cross-type reuse of the same captured id within a single tuple is deferred
+// until runtime unification is fully wired through e_call and layout selection.
