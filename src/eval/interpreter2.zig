@@ -99,6 +99,23 @@ pub const Interpreter2 = struct {
                     const range = try self.runtime_types.appendVars(buf);
                     return try self.runtime_types.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = range } } });
                 },
+                .record => |rec| {
+                    // Translate fields
+                    const ct_fields = module.types.getRecordFieldsSlice(rec.fields);
+                    var tmp = try self.allocator.alloc(types.RecordField, ct_fields.len);
+                    defer self.allocator.free(tmp);
+                    var i: usize = 0;
+                    while (i < ct_fields.len) : (i += 1) {
+                        const f = ct_fields.get(i);
+                        const rt_field_var = try self.translateTypeVar(module, f.var_);
+                        tmp[i] = .{ .name = f.name, .var_ = rt_field_var };
+                    }
+                    const rt_fields = try self.runtime_types.appendRecordFields(tmp);
+                    // Translate ext var too
+                    const rt_ext = try self.translateTypeVar(module, rec.ext);
+                    return try self.runtime_types.freshFromContent(.{ .structure = .{ .record = .{ .fields = rt_fields, .ext = rt_ext } } });
+                },
+                .empty_record => try self.runtime_types.freshFromContent(.{ .structure = .empty_record }),
                 else => return error.NotImplemented,
             },
             else => return error.NotImplemented,
@@ -236,6 +253,63 @@ test "interpreter2: translateTypeVar for tuple(Str, I64)" {
             try std.testing.expect(e0.desc.content.structure == .str);
             // elem 1: i64
             const e1 = interp.runtime_types.resolveVar(rt_elems[1]);
+            try std.testing.expect(e1.desc.content == .structure);
+            switch (e1.desc.content.structure) {
+                .num => |n| switch (n) {
+                    .num_compact => |c| switch (c) {
+                        .int => |p| try std.testing.expectEqual(types.Num.Int.Precision.i64, p),
+                        else => return error.TestUnexpectedResult,
+                    },
+                    else => return error.TestUnexpectedResult,
+                },
+                else => return error.TestUnexpectedResult,
+            }
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+// RED: translating a compile-time record { first: Str, second: I64 } should produce equivalent runtime record
+test "interpreter2: translateTypeVar for record {first: Str, second: I64}" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    var interp = try Interpreter2.init(gpa, &env);
+    defer interp.deinit();
+
+    // Build compile-time record content
+    const name_first = try env.common.idents.insert(gpa, @import("base").Ident.for_text("first"));
+    const name_second = try env.common.idents.insert(gpa, @import("base").Ident.for_text("second"));
+    const ct_str = try env.types.freshFromContent(.{ .structure = .str });
+    const ct_i64 = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
+    var ct_fields = [_]types.RecordField{
+        .{ .name = name_first, .var_ = ct_str },
+        .{ .name = name_second, .var_ = ct_i64 },
+    };
+    const ct_fields_range = try env.types.appendRecordFields(&ct_fields);
+    const ct_ext_empty = try env.types.freshFromContent(.{ .structure = .empty_record });
+    const ct_record = try env.types.freshFromContent(.{ .structure = .{ .record = .{ .fields = ct_fields_range, .ext = ct_ext_empty } } });
+
+    // Translate
+    const rt_var = try interp.translateTypeVar(&env, ct_record);
+    const resolved = interp.runtime_types.resolveVar(rt_var);
+    try std.testing.expect(resolved.desc.content == .structure);
+    switch (resolved.desc.content.structure) {
+        .record => |rec| {
+            const rt_fields = interp.runtime_types.getRecordFieldsSlice(rec.fields);
+            try std.testing.expectEqual(@as(u32, 2), rt_fields.len);
+            const f0 = rt_fields.get(0);
+            const f1 = rt_fields.get(1);
+            // Field names are preserved
+            try std.testing.expectEqual(name_first, f0.name);
+            try std.testing.expectEqual(name_second, f1.name);
+            // Field 0 type is Str
+            const e0 = interp.runtime_types.resolveVar(f0.var_);
+            try std.testing.expect(e0.desc.content == .structure);
+            try std.testing.expect(e0.desc.content.structure == .str);
+            // Field 1 type is I64
+            const e1 = interp.runtime_types.resolveVar(f1.var_);
             try std.testing.expect(e1.desc.content == .structure);
             switch (e1.desc.content.structure) {
                 .num => |n| switch (n) {
