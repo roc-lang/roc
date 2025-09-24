@@ -173,6 +173,60 @@ pub const Interpreter2 = struct {
                         .s_expr => |sx| {
                             _ = try self.evalExprMinimal(sx.expr, roc_ops); // evaluate for side-effects
                         },
+                        .s_var => |v| {
+                            const patt = self.env.store.getPattern(v.pattern_idx);
+                            if (patt != .assign) return error.NotImplemented;
+                            const rhs_expr = v.expr;
+                            var placeholder_added = false;
+                            const rhs = self.env.store.getExpr(rhs_expr);
+                            if (rhs == .e_lambda or rhs == .e_closure) {
+                                const lam = if (rhs == .e_lambda) rhs.e_lambda else blk: {
+                                    const cl = rhs.e_closure;
+                                    const lam_expr = self.env.store.getExpr(cl.lambda_idx);
+                                    if (lam_expr != .e_lambda) break :blk rhs.e_lambda;
+                                    break :blk lam_expr.e_lambda;
+                                };
+                                const patt_ct_var = can.ModuleEnv.varFrom(v.pattern_idx);
+                                const patt_rt_var = try self.translateTypeVar(self.env, patt_ct_var);
+                                const closure_layout = try self.getRuntimeLayout(patt_rt_var);
+                                if (closure_layout.tag == .closure) {
+                                    const ph = try self.pushRaw(closure_layout, 0);
+                                    if (ph.ptr) |ptr| {
+                                        const header: *layout.Closure = @ptrCast(@alignCast(ptr));
+                                        header.* = .{
+                                            .body_idx = lam.body,
+                                            .params = lam.args,
+                                            .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
+                                            .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
+                                            .lambda_expr_idx = rhs_expr,
+                                        };
+                                    }
+                                    try self.bindings.append(.{ .pattern_idx = v.pattern_idx, .value = ph });
+                                    placeholder_added = true;
+                                }
+                            }
+                            const val = try self.evalExprMinimal(rhs_expr, roc_ops);
+                            if (placeholder_added) {
+                                const last = &self.bindings.items[self.bindings.items.len - 1];
+                                last.value = val;
+                            } else {
+                                try self.bindings.append(.{ .pattern_idx = v.pattern_idx, .value = val });
+                            }
+                        },
+                        .s_reassign => |r| {
+                            const patt = self.env.store.getPattern(r.pattern_idx);
+                            if (patt != .assign) return error.NotImplemented;
+                            const new_val = try self.evalExprMinimal(r.expr, roc_ops);
+                            // Find existing binding and update
+                            var j: usize = self.bindings.items.len;
+                            while (j > 0) {
+                                j -= 1;
+                                if (self.bindings.items[j].pattern_idx == r.pattern_idx) {
+                                    self.bindings.items[j].value = new_val;
+                                    break;
+                                }
+                            }
+                        },
                         else => return error.NotImplemented,
                     }
                 }
@@ -240,20 +294,19 @@ pub const Interpreter2 = struct {
             },
             .e_if => |if_expr| {
                 const branches = self.env.store.sliceIfBranches(if_expr.branches);
-                if (branches.len == 0) {
-                    // no branches; evaluate final_else
-                    return try self.evalExprMinimal(if_expr.final_else, roc_ops);
+                // Evaluate branches in order; pick first true condition
+                var i: usize = 0;
+                while (i < branches.len) : (i += 1) {
+                    const br = self.env.store.getIfBranch(branches[i]);
+                    const cond_val = try self.evalExprMinimal(br.cond, roc_ops);
+                    if (!(cond_val.layout.tag == .scalar and cond_val.layout.data.scalar.tag == .bool)) return error.TypeMismatch;
+                    const cond_byte: *const u8 = @ptrCast(@alignCast(cond_val.ptr.?));
+                    if (cond_byte.* != 0) {
+                        return try self.evalExprMinimal(br.body, roc_ops);
+                    }
                 }
-                const first = self.env.store.getIfBranch(branches[0]);
-                const cond_val = try self.evalExprMinimal(first.cond, roc_ops);
-                if (!(cond_val.layout.tag == .scalar and cond_val.layout.data.scalar.tag == .bool)) return error.TypeMismatch;
-                const cond_byte: *const u8 = @ptrCast(@alignCast(cond_val.ptr.?));
-                if (cond_byte.* != 0) {
-                    return try self.evalExprMinimal(first.body, roc_ops);
-                } else {
-                    // If there are more branches, we could iterate; minimal path uses final_else when first is false
-                    return try self.evalExprMinimal(if_expr.final_else, roc_ops);
-                }
+                // No condition matched; evaluate final else
+                return try self.evalExprMinimal(if_expr.final_else, roc_ops);
             },
             .e_str => |str_expr| {
                 const segments = self.env.store.sliceExpr(str_expr.span);

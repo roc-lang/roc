@@ -349,5 +349,44 @@ test "interpreter2 recursion: simple countdown" {
     try std.testing.expectEqualStrings("2", rendered);
 }
 
+test "interpreter2 if: else-if chain selects middle branch" {
+    const roc_src =
+        \\{ n = 1 if n == 0 { "zero" } else if n == 1 { "one" } else { "other" } }
+    ;
+
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var ops = makeOps(std.testing.allocator);
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    const expected =
+        \\"one"
+    ;
+    try std.testing.expectEqualStrings(expected, rendered);
+}
+
+test "interpreter2 var and reassign" {
+    const roc_src =
+        \\{ var x = 1 x = x + 1 x }
+    ;
+
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var ops = makeOps(std.testing.allocator);
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("2", rendered);
+}
+
 // Recursion via Z-combinator using if, ==, and subtraction
 // Recursion tests will follow after we add minimal tail recursion support
