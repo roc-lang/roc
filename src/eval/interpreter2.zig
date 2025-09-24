@@ -11,6 +11,12 @@ const HashMap = std.hash_map.HashMap;
 const unify = @import("check").unifier;
 const problem_mod = @import("check").problem;
 const snapshot_mod = @import("check").snapshot;
+const stack = @import("stack.zig");
+const StackValue = @import("StackValue.zig");
+const builtins = @import("builtins");
+const RocOps = builtins.host_abi.RocOps;
+const RocStr = builtins.str.RocStr;
+const Layout = layout.Layout;
 
 pub const Interpreter2 = struct {
     const MAX_ARITY: usize = 8;
@@ -66,6 +72,9 @@ pub const Interpreter2 = struct {
     snapshots: snapshot_mod.Store,
     unify_scratch: unify.Scratch,
 
+    // Minimal eval support
+    stack_memory: stack.Stack,
+
     pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv) !Interpreter2 {
         const rt_types_ptr = try allocator.create(types.store.Store);
         rt_types_ptr.* = try types.store.Store.initCapacity(allocator, 1024, 512);
@@ -84,11 +93,109 @@ pub const Interpreter2 = struct {
             .problems = try problem_mod.Store.initCapacity(allocator, 64),
             .snapshots = try snapshot_mod.Store.initCapacity(allocator, 256),
             .unify_scratch = try unify.Scratch.init(allocator),
+            .stack_memory = try stack.Stack.initCapacity(allocator, 4096),
         };
         result.runtime_layout_store = try layout.Store.init(env, result.runtime_types);
         return result;
     }
 
+    // Minimal evaluator for subset: string literals, lambdas without captures, and lambda calls
+    pub fn evalMinimal(self: *Interpreter2, expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) !StackValue {
+        return try self.evalExprMinimal(expr_idx, roc_ops);
+    }
+
+    fn evalExprMinimal(self: *Interpreter2, expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) !StackValue {
+        const expr = self.env.store.getExpr(expr_idx);
+        switch (expr) {
+            .e_str => |str_expr| {
+                const segments = self.env.store.sliceExpr(str_expr.span);
+                if (segments.len == 0) {
+                    // empty string
+                    const value = try self.pushStr("");
+                    return value;
+                } else if (segments.len == 1) {
+                    const seg_expr = self.env.store.getExpr(segments[0]);
+                    if (seg_expr == .e_str_segment) {
+                        const content = self.env.getString(seg_expr.e_str_segment.literal);
+                        const value = try self.pushStr(content);
+                        // Initialize RocStr in place
+                        const roc_str: *RocStr = @ptrCast(@alignCast(value.ptr.?));
+                        roc_str.* = RocStr.fromSlice(content, roc_ops);
+                        return value;
+                    }
+                }
+                return error.NotImplemented;
+            },
+            .e_str_segment => |seg| {
+                const content = self.env.getString(seg.literal);
+                const value = try self.pushStr(content);
+                const roc_str: *RocStr = @ptrCast(@alignCast(value.ptr.?));
+                roc_str.* = RocStr.fromSlice(content, roc_ops);
+                return value;
+            },
+            .e_lambda => |_| {
+                // minimal: return a placeholder value that indicates lambda; actual call handled in e_call special-case
+                // We don't construct a full closure; just return a zero-sized placeholder (empty record) for now
+                // Instead, signal by returning a bool true as marker (not used). Better: return a zero-sized layout
+                const layout_val = Layout.opaquePtr();
+                return try self.pushRaw(layout_val, 0);
+            },
+            .e_call => |call| {
+                const all = self.env.store.sliceExpr(call.args);
+                if (all.len < 2) return error.TypeMismatch;
+                const func_idx = all[0];
+                const arg_idx = all[1];
+                // Special-case: function is a lambda with one arg, body returns the arg; handle as identity
+                const func_expr = self.env.store.getExpr(func_idx);
+                if (func_expr != .e_lambda) return error.NotImplemented;
+                const lambda = func_expr.e_lambda;
+                // Evaluate argument
+                const arg_val = try self.evalExprMinimal(arg_idx, roc_ops);
+                // For identity-like lambda: if body is e_lookup_local of first param, just return arg
+                const body_expr = self.env.store.getExpr(lambda.body);
+                if (body_expr == .e_lookup_local) {
+                    // Return a copy of arg onto the stack
+                    const copied = try self.pushCopy(arg_val);
+                    return copied;
+                }
+                return error.NotImplemented;
+            },
+            else => return error.NotImplemented,
+        }
+    }
+
+    fn pushStr(self: *Interpreter2, content: []const u8) !StackValue {
+        _ = content; // size computed below but content copied via RocStr
+        const layout_val = Layout.str();
+        const size: u32 = self.runtime_layout_store.layoutSize(layout_val);
+        if (size == 0) {
+            return StackValue{ .layout = layout_val, .ptr = null, .is_initialized = false };
+        }
+        const alignment = layout_val.alignment(self.runtime_layout_store.targetUsize());
+        const ptr = try self.stack_memory.alloca(size, alignment);
+        return StackValue{ .layout = layout_val, .ptr = ptr, .is_initialized = true };
+    }
+
+    fn pushRaw(self: *Interpreter2, layout_val: Layout, initial_size: usize) !StackValue {
+        const size: u32 = if (initial_size == 0) self.runtime_layout_store.layoutSize(layout_val) else @intCast(initial_size);
+        if (size == 0) {
+            return StackValue{ .layout = layout_val, .ptr = null, .is_initialized = true };
+        }
+        const alignment = layout_val.alignment(self.runtime_layout_store.targetUsize());
+        const ptr = try self.stack_memory.alloca(size, alignment);
+        return StackValue{ .layout = layout_val, .ptr = ptr, .is_initialized = true };
+    }
+
+    fn pushCopy(self: *Interpreter2, src: StackValue) !StackValue {
+        const size: u32 = if (src.layout.tag == .closure) src.getTotalSize(&self.runtime_layout_store) else self.runtime_layout_store.layoutSize(src.layout);
+        const alignment = src.layout.alignment(self.runtime_layout_store.targetUsize());
+        const ptr = if (size > 0) try self.stack_memory.alloca(size, alignment) else null;
+        const dest = StackValue{ .layout = src.layout, .ptr = ptr, .is_initialized = true };
+        if (size > 0 and src.ptr != null and ptr != null) {
+            @memcpy(@as([*]u8, @ptrCast(ptr))[0..size], @as([*]const u8, @ptrCast(src.ptr.?))[0..size]);
+        }
+        return dest;
+    }
     pub fn deinit(self: *Interpreter2) void {
         self.empty_scope.deinit();
         self.translate_cache.deinit();
@@ -100,6 +207,7 @@ pub const Interpreter2 = struct {
         self.snapshots.deinit();
         self.problems.deinit(self.allocator);
         self.unify_scratch.deinit();
+        self.stack_memory.deinit();
     }
 
     /// Ensure the slot array can index at least `min_len` entries; zero-fill new entries.
