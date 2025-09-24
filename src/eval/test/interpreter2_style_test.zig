@@ -122,10 +122,10 @@ test "interpreter2: (|x| x)(\"Hello\") yields \"Hello\"" {
         .host_fns = undefined,
     };
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
-    // Validate Roc string value
-    try std.testing.expect(result.layout.tag == .scalar and result.layout.data.scalar.tag == .str);
-    const roc_str: *const builtins.str.RocStr = @ptrCast(@alignCast(result.ptr.?));
-    try std.testing.expectEqualStrings("Hello", roc_str.asSlice());
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    // End with Roc-output literal for readability
+    try std.testing.expectEqualStrings("\"Hello\"", rendered);
 
     // For clarity, re-assert the expected Roc output literal
     const got_out_roc = expected_out_roc; // In a future step, render REPL-style from result
@@ -153,6 +153,48 @@ test "interpreter2: (|n| n + 1)(41) yields 42" {
     };
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
-    try std.testing.expect(result.layout.tag == .scalar and result.layout.data.scalar.tag == .int);
-    try std.testing.expectEqual(@as(i128, 42), result.asI128());
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("42", rendered);
+}
+
+test "interpreter2: booleans and if" {
+    // !Bool.True -> False
+    const src_not = "!Bool.True";
+    const res1 = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, src_not);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, res1);
+    var interp2a = try Interpreter2.init(std.testing.allocator, res1.module_env);
+    defer interp2a.deinit();
+    var hosta = TestHost{ .allocator = std.testing.allocator };
+    var opsa = RocOps{ .env = @ptrCast(&hosta), .roc_alloc = testRocAlloc, .roc_dealloc = testRocDealloc, .roc_realloc = testRocRealloc, .roc_dbg = testRocDbg, .roc_expect_failed = testRocExpectFailed, .roc_crashed = testRocCrashed, .host_fns = undefined };
+    const val1 = try interp2a.evalMinimal(res1.expr_idx, &opsa);
+    const text1 = try interp2a.renderValueRoc(val1);
+    defer std.testing.allocator.free(text1);
+    try std.testing.expectEqualStrings("False", text1);
+
+    // Bool.True and Bool.False -> False
+    const src_and = "Bool.True and Bool.False";
+    const res2 = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, src_and);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, res2);
+    var interp2b = try Interpreter2.init(std.testing.allocator, res2.module_env);
+    defer interp2b.deinit();
+    var hostb = TestHost{ .allocator = std.testing.allocator };
+    var opsb = RocOps{ .env = @ptrCast(&hostb), .roc_alloc = testRocAlloc, .roc_dealloc = testRocDealloc, .roc_realloc = testRocRealloc, .roc_dbg = testRocDbg, .roc_expect_failed = testRocExpectFailed, .roc_crashed = testRocCrashed, .host_fns = undefined };
+    const val2 = try interp2b.evalMinimal(res2.expr_idx, &opsb);
+    const text2 = try interp2b.renderValueRoc(val2);
+    defer std.testing.allocator.free(text2);
+    try std.testing.expectEqualStrings("False", text2);
+
+    // if Bool.True "yes" else "no" -> "yes"
+    const src_if = "if Bool.True \"yes\" else \"no\"";
+    const res3 = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, src_if);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, res3);
+    var interp2c = try Interpreter2.init(std.testing.allocator, res3.module_env);
+    defer interp2c.deinit();
+    var hostc = TestHost{ .allocator = std.testing.allocator };
+    var opsc = RocOps{ .env = @ptrCast(&hostc), .roc_alloc = testRocAlloc, .roc_dealloc = testRocDealloc, .roc_realloc = testRocRealloc, .roc_dbg = testRocDbg, .roc_expect_failed = testRocExpectFailed, .roc_crashed = testRocCrashed, .host_fns = undefined };
+    const val3 = try interp2c.evalMinimal(res3.expr_idx, &opsc);
+    const text3 = try interp2c.renderValueRoc(val3);
+    defer std.testing.allocator.free(text3);
+    try std.testing.expectEqualStrings("\"yes\"", text3);
 }

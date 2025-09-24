@@ -123,22 +123,35 @@ pub const Interpreter2 = struct {
                 return value;
             },
             .e_binop => |binop| {
-                // Only support add for now
-                if (binop.op != .add) return error.NotImplemented;
-                const lhs = try self.evalExprMinimal(binop.lhs, roc_ops);
-                const rhs = try self.evalExprMinimal(binop.rhs, roc_ops);
-                // Expect ints
-                if (!(lhs.layout.tag == .scalar and lhs.layout.data.scalar.tag == .int)) return error.TypeMismatch;
-                if (!(rhs.layout.tag == .scalar and rhs.layout.data.scalar.tag == .int)) return error.TypeMismatch;
-                const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                const rt_var = try self.translateTypeVar(self.env, ct_var);
-                const result_layout = try self.getRuntimeLayout(rt_var);
-                var out = try self.pushRaw(result_layout, 0);
-                out.is_initialized = false;
-                const sum = lhs.asI128() + rhs.asI128();
-                out.setInt(sum);
-                out.is_initialized = true;
-                return out;
+                if (binop.op == .add) {
+                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops);
+                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops);
+                    if (!(lhs.layout.tag == .scalar and lhs.layout.data.scalar.tag == .int)) return error.TypeMismatch;
+                    if (!(rhs.layout.tag == .scalar and rhs.layout.data.scalar.tag == .int)) return error.TypeMismatch;
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    const rt_var = try self.translateTypeVar(self.env, ct_var);
+                    const result_layout = try self.getRuntimeLayout(rt_var);
+                    var out = try self.pushRaw(result_layout, 0);
+                    out.is_initialized = false;
+                    const sum = lhs.asI128() + rhs.asI128();
+                    out.setInt(sum);
+                    out.is_initialized = true;
+                    return out;
+                } else if (binop.op == .@"and" or binop.op == .@"or") {
+                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops);
+                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops);
+                    if (!(lhs.layout.tag == .scalar and lhs.layout.data.scalar.tag == .bool)) return error.TypeMismatch;
+                    if (!(rhs.layout.tag == .scalar and rhs.layout.data.scalar.tag == .bool)) return error.TypeMismatch;
+                    const lptr: *const u8 = @ptrCast(@alignCast(lhs.ptr.?));
+                    const rptr: *const u8 = @ptrCast(@alignCast(rhs.ptr.?));
+                    const res: u8 = if (binop.op == .@"and") (if (lptr.* != 0 and rptr.* != 0) 1 else 0) else (if (lptr.* != 0 or rptr.* != 0) 1 else 0);
+                    const layout_val = Layout.boolType();
+                    const out = try self.pushRaw(layout_val, 0);
+                    const optr: *u8 = @ptrCast(@alignCast(out.ptr.?));
+                    optr.* = res;
+                    return out;
+                }
+                return error.NotImplemented;
             },
             .e_str => |str_expr| {
                 const segments = self.env.store.sliceExpr(str_expr.span);
@@ -165,6 +178,39 @@ pub const Interpreter2 = struct {
                 const roc_str: *RocStr = @ptrCast(@alignCast(value.ptr.?));
                 roc_str.* = RocStr.fromSlice(content, roc_ops);
                 return value;
+            },
+            .e_zero_argument_tag => |tag| {
+                const name = self.env.getIdent(tag.name);
+                // Handle Bool.True/Bool.False to scalar bool
+                if (std.mem.eql(u8, name, "True") or std.mem.eql(u8, name, "False")) {
+                    const layout_val = Layout.boolType();
+                    const out = try self.pushRaw(layout_val, 0);
+                    // write 1 for True, 0 for False
+                    const bptr: *u8 = @ptrCast(@alignCast(out.ptr.?));
+                    bptr.* = if (std.mem.eql(u8, name, "True")) 1 else 0;
+                    return out;
+                }
+                return error.NotImplemented;
+            },
+            .e_nominal => |nom| {
+                // Evaluate backing expression using minimal evaluator
+                return try self.evalExprMinimal(nom.backing_expr, roc_ops);
+            },
+            .e_nominal_external => |nom| {
+                return try self.evalExprMinimal(nom.backing_expr, roc_ops);
+            },
+            .e_tag => |tag| {
+                // Treat True/False with zero args as booleans
+                const name = self.env.getIdent(tag.name);
+                const args = self.env.store.sliceExpr(tag.args);
+                if (args.len == 0 and (std.mem.eql(u8, name, "True") or std.mem.eql(u8, name, "False"))) {
+                    const layout_val = Layout.boolType();
+                    const out = try self.pushRaw(layout_val, 0);
+                    const b: *u8 = @ptrCast(@alignCast(out.ptr.?));
+                    b.* = if (std.mem.eql(u8, name, "True")) 1 else 0;
+                    return out;
+                }
+                return error.NotImplemented;
             },
             .e_lambda => |_| {
                 // minimal: return a placeholder value that indicates lambda; actual call handled in e_call special-case
@@ -204,6 +250,32 @@ pub const Interpreter2 = struct {
                 }
                 return error.NotImplemented;
             },
+            .e_unary_not => |un| {
+                const v = try self.evalExprMinimal(un.expr, roc_ops);
+                if (!(v.layout.tag == .scalar and v.layout.data.scalar.tag == .bool)) return error.TypeMismatch;
+                const bptr: *u8 = @ptrCast(@alignCast(v.ptr.?));
+                const val: u8 = if (bptr.* == 0) 1 else 0;
+                const layout_val = Layout.boolType();
+                const out = try self.pushRaw(layout_val, 0);
+                const outptr: *u8 = @ptrCast(@alignCast(out.ptr.?));
+                outptr.* = val;
+                return out;
+            },
+            .e_if => |ifi| {
+                // minimal: handle single branch if-then-else
+                const branches = self.env.store.sliceIfBranches(ifi.branches);
+                if (branches.len == 0) return try self.evalExprMinimal(ifi.final_else, roc_ops);
+                const branch = self.env.store.getIfBranch(branches[0]);
+                const cond_val = try self.evalExprMinimal(branch.cond, roc_ops);
+                if (!(cond_val.layout.tag == .scalar and cond_val.layout.data.scalar.tag == .bool)) return error.TypeMismatch;
+                const cptr: *const u8 = @ptrCast(@alignCast(cond_val.ptr.?));
+                if (cptr.* != 0) {
+                    return try self.evalExprMinimal(branch.body, roc_ops);
+                } else {
+                    return try self.evalExprMinimal(ifi.final_else, roc_ops);
+                }
+            },
+            // no second e_binop case; handled above
             else => return error.NotImplemented,
         }
     }
@@ -239,6 +311,41 @@ pub const Interpreter2 = struct {
             @memcpy(@as([*]u8, @ptrCast(ptr))[0..size], @as([*]const u8, @ptrCast(src.ptr.?))[0..size]);
         }
         return dest;
+    }
+
+    pub fn renderValueRoc(self: *Interpreter2, value: StackValue) ![]u8 {
+        const gpa = self.allocator;
+        if (value.layout.tag == .scalar) {
+            switch (value.layout.data.scalar.tag) {
+                .bool => {
+                    const bptr: *const u8 = @ptrCast(@alignCast(value.ptr.?));
+                    return if (bptr.* != 0) try std.fmt.allocPrint(gpa, "True", .{}) else try std.fmt.allocPrint(gpa, "False", .{});
+                },
+                .str => {
+                    const rs: *const RocStr = @ptrCast(@alignCast(value.ptr.?));
+                    const s = rs.asSlice();
+                    var buf = std.ArrayList(u8).init(gpa);
+                    errdefer buf.deinit();
+                    try buf.append('"');
+                    for (s) |ch| {
+                        switch (ch) {
+                            '\\' => { try buf.appendSlice("\\\\"); },
+                            '"' => { try buf.appendSlice("\\\""); },
+                            else => try buf.append(ch),
+                        }
+                    }
+                    try buf.append('"');
+                    return buf.toOwnedSlice();
+                },
+                .int => {
+                    const i = value.asI128();
+                    return try std.fmt.allocPrint(gpa, "{d}", .{i});
+                },
+                else => {},
+            }
+        }
+        // Fallback
+        return try std.fmt.allocPrint(gpa, "<unsupported>", .{});
     }
     pub fn deinit(self: *Interpreter2) void {
         self.empty_scope.deinit();
