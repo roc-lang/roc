@@ -131,3 +131,28 @@ test "interpreter2: (|x| x)(\"Hello\") yields \"Hello\"" {
     const got_out_roc = expected_out_roc; // In a future step, render REPL-style from result
     try std.testing.expectEqualStrings(expected_out_roc, got_out_roc);
 }
+
+test "interpreter2: (|n| n + 1)(41) yields 42" {
+    const roc_src = "(|n| n + 1)(41)";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    try std.testing.expect(result.layout.tag == .scalar and result.layout.data.scalar.tag == .int);
+    try std.testing.expectEqual(@as(i128, 42), result.asI128());
+}

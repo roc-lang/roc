@@ -52,6 +52,7 @@ pub const Interpreter2 = struct {
             return true;
         }
     };
+    const Binding = struct { pattern_idx: can.CIR.Pattern.Idx, value: StackValue };
     allocator: std.mem.Allocator,
     runtime_types: *types.store.Store,
     runtime_layout_store: layout.Store,
@@ -74,6 +75,7 @@ pub const Interpreter2 = struct {
 
     // Minimal eval support
     stack_memory: stack.Stack,
+    bindings: std.ArrayList(Binding),
 
     pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv) !Interpreter2 {
         const rt_types_ptr = try allocator.create(types.store.Store);
@@ -94,6 +96,7 @@ pub const Interpreter2 = struct {
             .snapshots = try snapshot_mod.Store.initCapacity(allocator, 256),
             .unify_scratch = try unify.Scratch.init(allocator),
             .stack_memory = try stack.Stack.initCapacity(allocator, 4096),
+            .bindings = try std.ArrayList(Binding).initCapacity(allocator, 8),
         };
         result.runtime_layout_store = try layout.Store.init(env, result.runtime_types);
         return result;
@@ -107,6 +110,36 @@ pub const Interpreter2 = struct {
     fn evalExprMinimal(self: *Interpreter2, expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) !StackValue {
         const expr = self.env.store.getExpr(expr_idx);
         switch (expr) {
+            .e_int => |int_lit| {
+                // Use runtime type to choose layout
+                const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const rt_var = try self.translateTypeVar(self.env, ct_var);
+                const layout_val = try self.getRuntimeLayout(rt_var);
+                var value = try self.pushRaw(layout_val, 0);
+                // Write integer as i128 respecting precision via StackValue
+                value.is_initialized = false;
+                value.setInt(int_lit.value.toI128());
+                value.is_initialized = true;
+                return value;
+            },
+            .e_binop => |binop| {
+                // Only support add for now
+                if (binop.op != .add) return error.NotImplemented;
+                const lhs = try self.evalExprMinimal(binop.lhs, roc_ops);
+                const rhs = try self.evalExprMinimal(binop.rhs, roc_ops);
+                // Expect ints
+                if (!(lhs.layout.tag == .scalar and lhs.layout.data.scalar.tag == .int)) return error.TypeMismatch;
+                if (!(rhs.layout.tag == .scalar and rhs.layout.data.scalar.tag == .int)) return error.TypeMismatch;
+                const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const rt_var = try self.translateTypeVar(self.env, ct_var);
+                const result_layout = try self.getRuntimeLayout(rt_var);
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+                const sum = lhs.asI128() + rhs.asI128();
+                out.setInt(sum);
+                out.is_initialized = true;
+                return out;
+            },
             .e_str => |str_expr| {
                 const segments = self.env.store.sliceExpr(str_expr.span);
                 if (segments.len == 0) {
@@ -151,12 +184,23 @@ pub const Interpreter2 = struct {
                 const lambda = func_expr.e_lambda;
                 // Evaluate argument
                 const arg_val = try self.evalExprMinimal(arg_idx, roc_ops);
-                // For identity-like lambda: if body is e_lookup_local of first param, just return arg
-                const body_expr = self.env.store.getExpr(lambda.body);
-                if (body_expr == .e_lookup_local) {
-                    // Return a copy of arg onto the stack
-                    const copied = try self.pushCopy(arg_val);
-                    return copied;
+                // Bind the first param to the evaluated argument
+                const params = self.env.store.slicePatterns(lambda.args);
+                if (params.len != 1) return error.NotImplemented;
+                try self.bindings.append(.{ .pattern_idx = params[0], .value = arg_val });
+                defer _ = self.bindings.pop();
+                // Evaluate body with binding
+                return try self.evalExprMinimal(lambda.body, roc_ops);
+            },
+            .e_lookup_local => |lookup| {
+                // Search bindings in reverse
+                var i: usize = self.bindings.items.len;
+                while (i > 0) {
+                    i -= 1;
+                    const b = self.bindings.items[i];
+                    if (b.pattern_idx == lookup.pattern_idx) {
+                        return try self.pushCopy(b.value);
+                    }
                 }
                 return error.NotImplemented;
             },
@@ -208,6 +252,7 @@ pub const Interpreter2 = struct {
         self.problems.deinit(self.allocator);
         self.unify_scratch.deinit();
         self.stack_memory.deinit();
+        self.bindings.deinit();
     }
 
     /// Ensure the slot array can index at least `min_len` entries; zero-fill new entries.
@@ -251,7 +296,12 @@ pub const Interpreter2 = struct {
                         .int => |p| try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = p } } } }),
                         .frac => |p| try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = p } } } }),
                     },
-                    else => return error.NotImplemented,
+                    .int_precision => |p| try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = p } } } }),
+                    .frac_precision => |p| try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = p } } } }),
+                    .num_unbound, .int_unbound => try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = types.Num.Int.Precision.default } } } }),
+                    .frac_unbound => try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = types.Num.Frac.Precision.default } } } }),
+                    .num_poly, .int_poly => try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = types.Num.Int.Precision.default } } } }),
+                    .frac_poly => try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = types.Num.Frac.Precision.default } } } }),
                 },
                 .tuple => |t| {
                     const ct_elems = module.types.sliceVars(t.elems);
