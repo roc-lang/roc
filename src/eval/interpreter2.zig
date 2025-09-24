@@ -140,8 +140,54 @@ pub const Interpreter2 = struct {
                     out.setInt(sum);
                     out.is_initialized = true;
                     return out;
+                } else if (binop.op == .sub) {
+                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops);
+                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops);
+                    if (!(lhs.layout.tag == .scalar and lhs.layout.data.scalar.tag == .int)) return error.TypeMismatch;
+                    if (!(rhs.layout.tag == .scalar and rhs.layout.data.scalar.tag == .int)) return error.TypeMismatch;
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    const rt_var = try self.translateTypeVar(self.env, ct_var);
+                    const result_layout = try self.getRuntimeLayout(rt_var);
+                    var out = try self.pushRaw(result_layout, 0);
+                    out.is_initialized = false;
+                    const diff = lhs.asI128() - rhs.asI128();
+                    out.setInt(diff);
+                    out.is_initialized = true;
+                    return out;
+                } else if (binop.op == .eq) {
+                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops);
+                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops);
+                    // Only int==int supported in minimal path
+                    if (!(lhs.layout.tag == .scalar and lhs.layout.data.scalar.tag == .int)) return error.TypeMismatch;
+                    if (!(rhs.layout.tag == .scalar and rhs.layout.data.scalar.tag == .int)) return error.TypeMismatch;
+                    const result_layout = Layout.boolType();
+                    var out = try self.pushRaw(result_layout, 0);
+                    out.is_initialized = false;
+                    const is_eq: u8 = if (lhs.asI128() == rhs.asI128()) 1 else 0;
+                    // write byte bool
+                    const p: *u8 = @ptrCast(@alignCast(out.ptr.?));
+                    p.* = is_eq;
+                    out.is_initialized = true;
+                    return out;
                 }
                 return error.NotImplemented;
+            },
+            .e_if => |if_expr| {
+                const branches = self.env.store.sliceIfBranches(if_expr.branches);
+                if (branches.len == 0) {
+                    // no branches; evaluate final_else
+                    return try self.evalExprMinimal(if_expr.final_else, roc_ops);
+                }
+                const first = self.env.store.getIfBranch(branches[0]);
+                const cond_val = try self.evalExprMinimal(first.cond, roc_ops);
+                if (!(cond_val.layout.tag == .scalar and cond_val.layout.data.scalar.tag == .bool)) return error.TypeMismatch;
+                const cond_byte: *const u8 = @ptrCast(@alignCast(cond_val.ptr.?));
+                if (cond_byte.* != 0) {
+                    return try self.evalExprMinimal(first.body, roc_ops);
+                } else {
+                    // If there are more branches, we could iterate; minimal path uses final_else when first is false
+                    return try self.evalExprMinimal(if_expr.final_else, roc_ops);
+                }
             },
             .e_str => |str_expr| {
                 const segments = self.env.store.sliceExpr(str_expr.span);

@@ -329,3 +329,6 @@ test "interpreter2 higher-order: return poly fn using captured +n" {
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("42", rendered);
 }
+
+// Recursion via Z-combinator using if, ==, and subtraction
+// Recursion tests will follow after we add minimal tail recursion support
