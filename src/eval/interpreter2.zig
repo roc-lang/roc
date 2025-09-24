@@ -289,6 +289,32 @@ pub const Interpreter2 = struct {
                     p.* = is_eq;
                     out.is_initialized = true;
                     return out;
+                } else if (binop.op == .@"or") {
+                    // Short-circuit OR: if lhs is true, return lhs; else return rhs
+                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops);
+                    if (!(lhs.layout.tag == .scalar and lhs.layout.data.scalar.tag == .bool)) return error.TypeMismatch;
+                    const lhs_b: *const u8 = @ptrCast(@alignCast(lhs.ptr.?));
+                    if (lhs_b.* != 0) {
+                        // Return lhs (already true) without evaluating rhs
+                        return lhs;
+                    }
+                    // Evaluate rhs and return it
+                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops);
+                    if (!(rhs.layout.tag == .scalar and rhs.layout.data.scalar.tag == .bool)) return error.TypeMismatch;
+                    return rhs;
+                } else if (binop.op == .@"and") {
+                    // Short-circuit AND: if lhs is false, return lhs; else return rhs
+                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops);
+                    if (!(lhs.layout.tag == .scalar and lhs.layout.data.scalar.tag == .bool)) return error.TypeMismatch;
+                    const lhs_b: *const u8 = @ptrCast(@alignCast(lhs.ptr.?));
+                    if (lhs_b.* == 0) {
+                        // Return lhs (already false) without evaluating rhs
+                        return lhs;
+                    }
+                    // Evaluate rhs and return it
+                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops);
+                    if (!(rhs.layout.tag == .scalar and rhs.layout.data.scalar.tag == .bool)) return error.TypeMismatch;
+                    return rhs;
                 }
                 return error.NotImplemented;
             },
