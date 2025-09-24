@@ -619,7 +619,7 @@ test "std.tar.writer creates valid tar" {
     // Read content
     const reader = tar_iter.reader;
     var buf: [1024]u8 = undefined;
-    const bytes_read = try reader.read(buf[0..content.len]);
+    const bytes_read = try reader.readSliceShort(buf[0..content.len]);
     try testing.expectEqualStrings(content, buf[0..bytes_read]);
 }
 
