@@ -195,5 +195,23 @@ test "interpreter2 captures (polymorphic): capture id and apply to string" {
     try std.testing.expectEqualStrings(expected, rendered);
 }
 
-// A cross-type reuse of the same captured id within a single tuple is deferred
-// until runtime unification is fully wired through e_call and layout selection.
+test "interpreter2 captures (polymorphic): same captured id used at two types" {
+    const roc_src =
+        \\(((|f| (|a| (|b| (f(a), f(b)))))(|x| x))(1))("hi")
+    ;
+
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var ops = makeOps(std.testing.allocator);
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    const expected =
+        \\(1, "hi")
+    ;
+    try std.testing.expectEqualStrings(expected, rendered);
+}

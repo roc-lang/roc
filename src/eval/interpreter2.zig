@@ -170,20 +170,29 @@ pub const Interpreter2 = struct {
                 return value;
             },
             .e_tuple => |tup| {
-                // Allocate tuple and fill elements
-                const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                const rt_var = try self.translateTypeVar(self.env, ct_var);
-                const tuple_layout = try self.getRuntimeLayout(rt_var);
+                // Evaluate all elements first to drive runtime unification
+                const elems = self.env.store.sliceExpr(tup.elems);
+                var values = try std.ArrayList(StackValue).initCapacity(self.allocator, elems.len);
+                defer values.deinit();
+                for (elems) |e_idx| {
+                    const v = try self.evalExprMinimal(e_idx, roc_ops);
+                    try values.append(v);
+                }
+
+                // Compute tuple layout from concrete element value layouts
+                var elem_layouts = try self.allocator.alloc(Layout, values.items.len);
+                defer self.allocator.free(elem_layouts);
+                for (values.items, 0..) |v, ii| elem_layouts[ii] = v.layout;
+                const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
+                const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
                 var dest = try self.pushRaw(tuple_layout, 0);
                 var accessor = try dest.asTuple(&self.runtime_layout_store);
-                const elems = self.env.store.sliceExpr(tup.elems);
-                // sanity
-                if (elems.len != accessor.getElementCount()) return error.TypeMismatch;
+
+                if (values.items.len != accessor.getElementCount()) return error.TypeMismatch;
                 var i: usize = 0;
-                while (i < elems.len) : (i += 1) {
-                    const ev = try self.evalExprMinimal(elems[i], roc_ops);
+                while (i < values.items.len) : (i += 1) {
                     const sorted_idx = accessor.findElementIndexByOriginal(i) orelse return error.TypeMismatch;
-                    try accessor.setElement(sorted_idx, ev, roc_ops);
+                    try accessor.setElement(sorted_idx, values.items[i], roc_ops);
                 }
                 return dest;
             },
@@ -361,6 +370,27 @@ pub const Interpreter2 = struct {
                 if (all.len < 2) return error.TypeMismatch;
                 const func_idx = all[0];
                 const arg_idx = all[1];
+                // Runtime unification for call: constrain return type from arg types
+                const func_ct_var = can.ModuleEnv.varFrom(func_idx);
+                const func_rt_var = try self.translateTypeVar(self.env, func_ct_var);
+                const arg_ct_var = can.ModuleEnv.varFrom(arg_idx);
+                const arg_rt_var = try self.translateTypeVar(self.env, arg_ct_var);
+                const poly_entry = try self.prepareCallWithFuncVar(@intCast(@intFromEnum(func_idx)), func_rt_var, &.{ arg_rt_var });
+                // Unify this call expression's return var with the function's constrained return var
+                const call_ret_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const call_ret_rt_var = try self.translateTypeVar(self.env, call_ret_ct_var);
+                _ = try unify.unifyWithContext(
+                    self.env,
+                    self.runtime_types,
+                    &self.problems,
+                    &self.snapshots,
+                    &self.unify_scratch,
+                    &self.unify_scratch.occurs_scratch,
+                    call_ret_rt_var,
+                    poly_entry.return_var,
+                    false,
+                );
+
                 const func_val = try self.evalExprMinimal(func_idx, roc_ops);
                 // Support calling closures produced by evaluating expressions (including nested calls)
                 if (func_val.layout.tag == .closure) {

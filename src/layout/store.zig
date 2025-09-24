@@ -259,6 +259,66 @@ pub const Store = struct {
         return try self.insertLayout(layout);
     }
 
+    /// Insert a tuple layout from concrete element layouts
+    pub fn putTuple(self: *Self, element_layouts: []const Layout) std.mem.Allocator.Error!Idx {
+        // Collect fields
+        var temp_fields = std.ArrayList(TupleField).init(self.env.gpa);
+        defer temp_fields.deinit();
+
+        for (element_layouts, 0..) |elem_layout, i| {
+            const elem_idx = try self.insertLayout(elem_layout);
+            try temp_fields.append(.{ .index = @intCast(i), .layout = elem_idx });
+        }
+
+        // Sort by alignment desc, then by original index asc
+        const AlignmentSortCtx = struct {
+            store: *Self,
+            target_usize: target.TargetUsize,
+            pub fn lessThan(ctx: @This(), lhs: TupleField, rhs: TupleField) bool {
+                const lhs_layout = ctx.store.getLayout(lhs.layout);
+                const rhs_layout = ctx.store.getLayout(rhs.layout);
+                const lhs_alignment = lhs_layout.alignment(ctx.target_usize);
+                const rhs_alignment = rhs_layout.alignment(ctx.target_usize);
+                if (lhs_alignment.toByteUnits() != rhs_alignment.toByteUnits()) {
+                    return lhs_alignment.toByteUnits() > rhs_alignment.toByteUnits();
+                }
+                return lhs.index < rhs.index;
+            }
+        };
+
+        std.mem.sort(
+            TupleField,
+            temp_fields.items,
+            AlignmentSortCtx{ .store = self, .target_usize = self.targetUsize() },
+            AlignmentSortCtx.lessThan,
+        );
+
+        // Append fields
+        const fields_start = self.tuple_fields.items.len;
+        for (temp_fields.items) |sorted_field| {
+            _ = try self.tuple_fields.append(self.env.gpa, sorted_field);
+        }
+
+        // Compute size and alignment
+        var max_alignment = std.mem.Alignment.@"1";
+        var current_offset: u32 = 0;
+        for (temp_fields.items) |tf| {
+            const field_layout = self.getLayout(tf.layout);
+            const field_alignment = field_layout.alignment(self.targetUsize());
+            const field_size = self.layoutSize(field_layout);
+            max_alignment = max_alignment.max(field_alignment);
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
+            current_offset += field_size;
+        }
+
+        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment.toByteUnits())))));
+        const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(temp_fields.items.len) };
+        const tuple_idx = TupleIdx{ .int_idx = @intCast(self.tuple_data.len()) };
+        _ = try self.tuple_data.append(self.env.gpa, TupleData{ .size = total_size, .fields = fields_range });
+        const tuple_layout = Layout.tuple(max_alignment, tuple_idx);
+        return try self.insertLayout(tuple_layout);
+    }
+
     pub fn getLayout(self: *const Self, idx: Idx) Layout {
         return self.layouts.get(@enumFromInt(@intFromEnum(idx)));
     }
