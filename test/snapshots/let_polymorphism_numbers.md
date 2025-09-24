@@ -36,37 +36,9 @@ main = |_| {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - let_polymorphism_numbers.md:16:19:16:23
-TYPE MISMATCH - let_polymorphism_numbers.md:17:24:17:27
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**let_polymorphism_numbers.md:16:19:16:23:**
-```roc
-float_add = num + 3.14
-```
-                  ^^^^
-
-It has the type:
-    _Frac(_size)_
-
-But I expected it to be:
-    _Num(_size)_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**let_polymorphism_numbers.md:17:24:17:27:**
-```roc
-float_multiply = num * 2.5
-```
-                       ^^^
-
-It has the type:
-    _Frac(_size)_
-
-But I expected it to be:
-    _Num(_size)_
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:10),CloseSquare(1:10-1:11),OpenCurly(1:12-1:13),LowerIdent(1:14-1:16),OpColon(1:16-1:17),KwPlatform(1:18-1:26),StringStart(1:27-1:28),StringPart(1:28-1:53),StringEnd(1:53-1:54),CloseCurly(1:55-1:56),
@@ -272,29 +244,29 @@ main = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.4 (type "Num(_size)"))
+		(patt @4.1-4.4 (type "Num(Frac(_size))"))
 		(patt @5.1-5.5 (type "Num(Frac(_size))"))
-		(patt @8.1-8.8 (type "Num(_size)"))
+		(patt @8.1-8.8 (type "Num(Frac(_size))"))
 		(patt @9.1-9.10 (type "Num(Frac(_size))"))
-		(patt @12.1-12.8 (type "Num(_size)"))
-		(patt @13.1-13.13 (type "Num(_size)"))
-		(patt @16.1-16.10 (type "Error"))
-		(patt @17.1-17.15 (type "Error"))
+		(patt @12.1-12.8 (type "Num(Frac(_size))"))
+		(patt @13.1-13.13 (type "Num(Frac(_size))"))
+		(patt @16.1-16.10 (type "Num(Frac(_size))"))
+		(patt @17.1-17.15 (type "Num(Frac(_size))"))
 		(patt @20.1-20.7 (type "Num(_size) -> Num(_size2)"))
 		(patt @23.1-23.12 (type "Num(_size)"))
-		(patt @24.1-24.14 (type "Frac(_size)"))
-		(patt @26.1-26.5 (type "_arg -> Num(_size)")))
+		(patt @24.1-24.14 (type "Num(Frac(_size))"))
+		(patt @26.1-26.5 (type "_arg -> Num(Frac(_size))")))
 	(expressions
-		(expr @4.7-4.9 (type "Num(_size)"))
+		(expr @4.7-4.9 (type "Num(Frac(_size))"))
 		(expr @5.8-5.11 (type "Num(Frac(_size))"))
-		(expr @8.11-8.14 (type "Num(_size)"))
+		(expr @8.11-8.14 (type "Num(Frac(_size))"))
 		(expr @9.13-9.17 (type "Num(Frac(_size))"))
-		(expr @12.11-12.19 (type "Num(_size)"))
-		(expr @13.16-13.23 (type "Num(_size)"))
-		(expr @16.13-16.23 (type "Error"))
-		(expr @17.18-17.27 (type "Error"))
+		(expr @12.11-12.19 (type "Num(Frac(_size))"))
+		(expr @13.16-13.23 (type "Num(Frac(_size))"))
+		(expr @16.13-16.23 (type "Num(Frac(_size))"))
+		(expr @17.18-17.27 (type "Num(Frac(_size))"))
 		(expr @20.10-20.19 (type "Num(_size) -> Num(_size2)"))
 		(expr @23.15-23.24 (type "Num(_size)"))
-		(expr @24.17-24.28 (type "Frac(_size)"))
-		(expr @26.8-29.2 (type "_arg -> Num(_size)"))))
+		(expr @24.17-24.28 (type "Num(Frac(_size))"))
+		(expr @26.8-29.2 (type "_arg -> Num(Frac(_size))"))))
 ~~~

@@ -80,7 +80,6 @@ is_named_color = |str|{
 # EXPECTED
 UNUSED VARIABLE - Color.md:30:5:30:25
 UNDEFINED VARIABLE - Color.md:68:14:68:27
-TYPE MISMATCH - Color.md:22:29:22:34
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `is_char_in_hex_range` is not used anywhere in your code.
@@ -104,20 +103,6 @@ Is there an `import` or `exposing` missing up-top?
 ```
              ^^^^^^^^^^^^^
 
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**Color.md:22:29:22:34:**
-```roc
-    rounded = a.to_frac() / 255.0
-```
-                            ^^^^^
-
-It has the type:
-    _Frac(_size)_
-
-But I expected it to be:
-    _Num(_size)_
 
 # TOKENS
 ~~~zig

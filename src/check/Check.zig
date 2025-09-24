@@ -1074,7 +1074,13 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenType
             for (tag_anno_slices) |tag_anno_idx| {
                 // Get the tag anno
                 const tag_type_anno = self.cir.store.getTypeAnno(tag_anno_idx);
-                std.debug.assert(tag_type_anno == .tag);
+
+                // If the child of the tag union is not a tag, then set as error
+                // Canonicalization should have reported this eror
+                if (tag_type_anno != .tag) {
+                    try self.updateVar(anno_var, .err, Rank.generalized);
+                    return;
+                }
                 const tag = tag_type_anno.tag;
 
                 // Generate the types for each tag arg
@@ -1678,9 +1684,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             }
         },
         .e_empty_record => {
-            try self.updateVar(expr_var, .{ .structure = .{
-                .record_unbound = types_mod.RecordField.SafeMultiList.Range.empty(),
-            } }, rank);
+            try self.updateVar(expr_var, .{ .structure = .empty_record }, rank);
         },
         // tags //
         .e_zero_argument_tag => |e| {

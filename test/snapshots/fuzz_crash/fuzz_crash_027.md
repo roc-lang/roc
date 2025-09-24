@@ -2187,7 +2187,7 @@ expect {
 		(patt @48.1-48.8 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(patt @60.1-60.11 (type "[Red, Blue]_others, _arg -> Error"))
 		(patt @100.1-100.6 (type "List(Error) -> Error"))
-		(patt @151.1-151.6 (type "{  }")))
+		(patt @151.1-151.6 (type "{}")))
 	(type_decls
 		(alias @15.1-15.41 (type "Map(a, b)")
 			(ty-header @15.1-15.10 (name "Map")
@@ -2222,5 +2222,5 @@ expect {
 		(expr @48.11-58.2 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(expr @60.14-94.3 (type "[Red, Blue]_others, _arg -> Error"))
 		(expr @100.9-148.2 (type "List(Error) -> Error"))
-		(expr @151.9-151.11 (type "{  }"))))
+		(expr @151.9-151.11 (type "{}"))))
 ~~~

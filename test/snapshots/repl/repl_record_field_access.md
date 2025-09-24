@@ -10,7 +10,7 @@ type=repl
 » {foo: "Hello", bar: "World"}.bar
 ~~~
 # OUTPUT
-Evaluation error: error.ZeroSizedType
+Evaluation error: error.TypeContainedMismatch
 ---
 "Hello"
 ---
