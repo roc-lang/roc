@@ -131,7 +131,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.12 (type "_arg -> Str")))
+		(patt @3.1-3.12 (type "Num(_size) -> Str")))
 	(expressions
-		(expr @3.15-13.2 (type "_arg -> Str"))))
+		(expr @3.15-13.2 (type "Num(_size) -> Str"))))
 ~~~

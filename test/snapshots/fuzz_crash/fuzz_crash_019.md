@@ -836,6 +836,16 @@ app [main!] { pf: platform "c" }
      ^^^^^
 You can fix this by either defining `main!` in this module, or by removing it from the list of exposed values.
 
+**TOO FEW ARGS**
+The type _List_ expects  argument, but got  instead.
+**fuzz_crash_019.md:17:3:18:4:**
+```roc
+		List( #rg
+		),
+```
+
+
+
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:
 **fuzz_crash_019.md:52:2:**

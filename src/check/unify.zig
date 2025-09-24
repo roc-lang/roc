@@ -1125,21 +1125,6 @@ fn Unifier(comptime StoreTypeB: type) type {
                                 b_reqs,
                             );
                         },
-                        .num_unbound => |b_num_unbound| {
-                            // Check if the compact type satisfies the requirements
-                            switch (a_num_compact) {
-                                .int => |int_prec| {
-                                    const result = self.checkIntPrecisionRequirements(int_prec, b_num_unbound);
-                                    switch (result) {
-                                        .ok => {},
-                                        .negative_unsigned => return error.NegativeUnsignedInt,
-                                        .too_large => return error.NumberDoesNotFit,
-                                    }
-                                },
-                                .frac => return error.TypeMismatch,
-                            }
-                            self.merge(vars, vars.a.desc.content);
-                        },
                         else => return error.TypeMismatch,
                     }
                 },
