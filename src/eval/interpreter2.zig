@@ -89,6 +89,16 @@ pub const Interpreter2 = struct {
                     },
                     else => return error.NotImplemented,
                 },
+                .tuple => |t| {
+                    const ct_elems = module.types.sliceVars(t.elems);
+                    var buf = try self.allocator.alloc(types.Var, ct_elems.len);
+                    defer self.allocator.free(buf);
+                    for (ct_elems, 0..) |ct_elem, i| {
+                        buf[i] = try self.translateTypeVar(module, ct_elem);
+                    }
+                    const range = try self.runtime_types.appendVars(buf);
+                    return try self.runtime_types.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = range } } });
+                },
                 else => return error.NotImplemented,
             },
             else => return error.NotImplemented,
@@ -194,6 +204,49 @@ test "interpreter2: translateTypeVar for f64" {
                 else => return error.TestUnexpectedResult,
             },
             else => return error.TestUnexpectedResult,
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+// RED: translating a compile-time tuple (Str, I64) should produce a runtime tuple with same element shapes
+test "interpreter2: translateTypeVar for tuple(Str, I64)" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    var interp = try Interpreter2.init(gpa, &env);
+    defer interp.deinit();
+
+    const ct_str = try env.types.freshFromContent(.{ .structure = .str });
+    const ct_i64 = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
+    const elems = [_]types.Var{ ct_str, ct_i64 };
+    const ct_tuple = try env.types.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try env.types.appendVars(&elems) } } });
+
+    const rt_var = try interp.translateTypeVar(&env, ct_tuple);
+    const resolved = interp.runtime_types.resolveVar(rt_var);
+    try std.testing.expect(resolved.desc.content == .structure);
+    switch (resolved.desc.content.structure) {
+        .tuple => |t| {
+            const rt_elems = interp.runtime_types.sliceVars(t.elems);
+            try std.testing.expectEqual(@as(usize, 2), rt_elems.len);
+            // elem 0: str
+            const e0 = interp.runtime_types.resolveVar(rt_elems[0]);
+            try std.testing.expect(e0.desc.content == .structure);
+            try std.testing.expect(e0.desc.content.structure == .str);
+            // elem 1: i64
+            const e1 = interp.runtime_types.resolveVar(rt_elems[1]);
+            try std.testing.expect(e1.desc.content == .structure);
+            switch (e1.desc.content.structure) {
+                .num => |n| switch (n) {
+                    .num_compact => |c| switch (c) {
+                        .int => |p| try std.testing.expectEqual(types.Num.Int.Precision.i64, p),
+                        else => return error.TestUnexpectedResult,
+                    },
+                    else => return error.TestUnexpectedResult,
+                },
+                else => return error.TestUnexpectedResult,
+            }
         },
         else => return error.TestUnexpectedResult,
     }
