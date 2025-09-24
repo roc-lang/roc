@@ -172,6 +172,39 @@ pub const Interpreter2 = struct {
                     return try self.runtime_types.freshFromContent(.{ .structure = .{ .record = .{ .fields = rt_fields, .ext = rt_ext } } });
                 },
                 .empty_record => try self.runtime_types.freshFromContent(.{ .structure = .empty_record }),
+                .fn_pure => |f| {
+                    const ct_args = module.types.sliceVars(f.args);
+                    var buf = try self.allocator.alloc(types.Var, ct_args.len);
+                    defer self.allocator.free(buf);
+                    for (ct_args, 0..) |ct_arg, i| {
+                        buf[i] = try self.translateTypeVar(module, ct_arg);
+                    }
+                    const rt_ret = try self.translateTypeVar(module, f.ret);
+                    const content = try self.runtime_types.mkFuncPure(buf, rt_ret);
+                    return try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                },
+                .fn_effectful => |f| {
+                    const ct_args = module.types.sliceVars(f.args);
+                    var buf = try self.allocator.alloc(types.Var, ct_args.len);
+                    defer self.allocator.free(buf);
+                    for (ct_args, 0..) |ct_arg, i| {
+                        buf[i] = try self.translateTypeVar(module, ct_arg);
+                    }
+                    const rt_ret = try self.translateTypeVar(module, f.ret);
+                    const content = try self.runtime_types.mkFuncEffectful(buf, rt_ret);
+                    return try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                },
+                .fn_unbound => |f| {
+                    const ct_args = module.types.sliceVars(f.args);
+                    var buf = try self.allocator.alloc(types.Var, ct_args.len);
+                    defer self.allocator.free(buf);
+                    for (ct_args, 0..) |ct_arg, i| {
+                        buf[i] = try self.translateTypeVar(module, ct_arg);
+                    }
+                    const rt_ret = try self.translateTypeVar(module, f.ret);
+                    const content = try self.runtime_types.mkFuncUnbound(buf, rt_ret);
+                    return try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                },
                 .nominal_type => |nom| {
                     const ct_backing = module.types.getNominalBackingVar(nom);
                     const rt_backing = try self.translateTypeVar(module, ct_backing);
