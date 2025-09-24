@@ -210,32 +210,93 @@ pub const Interpreter2 = struct {
             .e_nominal_external => |nom| {
                 return try self.evalExprMinimal(nom.backing_expr, roc_ops);
             },
+            .e_match => |m| {
+                // Evaluate scrutinee once
+                const scrutinee = try self.evalExprMinimal(m.cond, roc_ops);
+                // Iterate branches and find first matching pattern set
+                const branches = self.env.store.matchBranchSlice(m.branches);
+                for (branches) |br_idx| {
+                    const br = self.env.store.getMatchBranch(br_idx);
+                    // Guard not supported in minimal eval
+                    if (br.guard != null) return error.NotImplemented;
+                    const patterns = self.env.store.sliceMatchBranchPatterns(br.patterns);
+                    var temp_binds = try std.ArrayList(Binding).initCapacity(self.allocator, 4);
+                    defer temp_binds.deinit();
+
+                    var any_matched = false;
+                    // OR patterns in a branch; succeed if any match
+                    for (patterns) |bp_idx| {
+                        temp_binds.items.len = 0; // reset temporary binds for each OR alternative
+                        if (try self.patternMatchesBind(self.env.store.getMatchBranchPattern(bp_idx).pattern, scrutinee, &temp_binds)) {
+                            any_matched = true;
+                            break;
+                        }
+                    }
+
+                    if (any_matched) {
+                        // Apply temp binds
+                        const start_len = self.bindings.items.len;
+                        try self.bindings.appendSlice(temp_binds.items);
+                        defer self.bindings.items.len = start_len;
+                        return try self.evalExprMinimal(br.value, roc_ops);
+                    }
+                }
+                // Non-exhaustive or unsupported
+                return error.NotImplemented;
+            },
             // no tag handling in minimal evaluator
-            .e_lambda => |_| {
-                // minimal: return a placeholder value that indicates lambda; actual call handled in e_call special-case
-                // We don't construct a full closure; just return a zero-sized placeholder (empty record) for now
-                // Instead, signal by returning a bool true as marker (not used). Better: return a zero-sized layout
-                const layout_val = Layout.opaquePtr();
-                return try self.pushRaw(layout_val, 0);
+            .e_lambda => |lam| {
+                // Build a closure value with empty captures using the runtime layout for the lambda's type
+                const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const rt_var = try self.translateTypeVar(self.env, ct_var);
+                const closure_layout = try self.getRuntimeLayout(rt_var);
+                // Expect a closure layout from type-to-layout translation
+                if (closure_layout.tag != .closure) return error.NotImplemented;
+                const value = try self.pushRaw(closure_layout, 0);
+                // Initialize the closure header
+                if (value.ptr) |ptr| {
+                    const header: *layout.Closure = @ptrCast(@alignCast(ptr));
+                    header.* = .{
+                        .body_idx = lam.body,
+                        .params = lam.args,
+                        .captures_pattern_idx = @enumFromInt(@as(u32, 0)), // no captures in minimal path
+                        .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
+                        .lambda_expr_idx = expr_idx,
+                    };
+                }
+                return value;
             },
             .e_call => |call| {
                 const all = self.env.store.sliceExpr(call.args);
                 if (all.len < 2) return error.TypeMismatch;
                 const func_idx = all[0];
                 const arg_idx = all[1];
-                // Special-case: function is a lambda with one arg, body returns the arg; handle as identity
+                const func_val = try self.evalExprMinimal(func_idx, roc_ops);
+                // Support calling closures produced by evaluating expressions (including nested calls)
+                if (func_val.layout.tag == .closure) {
+                    const header: *const layout.Closure = @ptrCast(@alignCast(func_val.ptr.?));
+                    // Evaluate argument and bind to first parameter
+                    const arg_val = try self.evalExprMinimal(arg_idx, roc_ops);
+                    const params = self.env.store.slicePatterns(header.params);
+                    if (params.len != 1) return error.NotImplemented;
+                    try self.bindings.append(.{ .pattern_idx = params[0], .value = arg_val });
+                    defer _ = self.bindings.pop();
+                    return try self.evalExprMinimal(header.body_idx, roc_ops);
+                }
+
+                // Fallback: direct lambda expression (legacy minimal path)
                 const func_expr = self.env.store.getExpr(func_idx);
-                if (func_expr != .e_lambda) return error.NotImplemented;
-                const lambda = func_expr.e_lambda;
-                // Evaluate argument
-                const arg_val = try self.evalExprMinimal(arg_idx, roc_ops);
-                // Bind the first param to the evaluated argument
-                const params = self.env.store.slicePatterns(lambda.args);
-                if (params.len != 1) return error.NotImplemented;
-                try self.bindings.append(.{ .pattern_idx = params[0], .value = arg_val });
-                defer _ = self.bindings.pop();
-                // Evaluate body with binding
-                return try self.evalExprMinimal(lambda.body, roc_ops);
+                if (func_expr == .e_lambda) {
+                    const lambda = func_expr.e_lambda;
+                    const arg_val = try self.evalExprMinimal(arg_idx, roc_ops);
+                    const params = self.env.store.slicePatterns(lambda.args);
+                    if (params.len != 1) return error.NotImplemented;
+                    try self.bindings.append(.{ .pattern_idx = params[0], .value = arg_val });
+                    defer _ = self.bindings.pop();
+                    return try self.evalExprMinimal(lambda.body, roc_ops);
+                }
+
+                return error.NotImplemented;
             },
             .e_lookup_local => |lookup| {
                 // Search bindings in reverse
@@ -362,6 +423,37 @@ pub const Interpreter2 = struct {
         }
         // Fallback
         return try std.fmt.allocPrint(gpa, "<unsupported>", .{});
+    }
+
+    fn patternMatchesBind(self: *Interpreter2, pattern_idx: can.CIR.Pattern.Idx, value: StackValue, out_binds: *std.ArrayList(Binding)) !bool {
+        const pat = self.env.store.getPattern(pattern_idx);
+        switch (pat) {
+            .assign => |_| {
+                // Bind entire value to this pattern
+                const copied = try self.pushCopy(value);
+                try out_binds.append(.{ .pattern_idx = pattern_idx, .value = copied });
+                return true;
+            },
+            .underscore => return true,
+            .int_literal => |il| {
+                if (!(value.layout.tag == .scalar and value.layout.data.scalar.tag == .int)) return false;
+                const lit = il.value.toI128();
+                return value.asI128() == lit;
+            },
+            .str_literal => |sl| {
+                if (!(value.layout.tag == .scalar and value.layout.data.scalar.tag == .str)) return false;
+                const lit = self.env.getString(sl.literal);
+                const rs: *const RocStr = @ptrCast(@alignCast(value.ptr.?));
+                return std.mem.eql(u8, rs.asSlice(), lit);
+            },
+            .nominal => |n| {
+                return try self.patternMatchesBind(n.backing_pattern, value, out_binds);
+            },
+            .nominal_external => |n| {
+                return try self.patternMatchesBind(n.backing_pattern, value, out_binds);
+            },
+            else => return false,
+        }
     }
     pub fn deinit(self: *Interpreter2) void {
         self.empty_scope.deinit();

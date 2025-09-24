@@ -22,4 +22,5 @@ test "eval tests" {
     std.testing.refAllDecls(@import("test/eval_test.zig"));
     std.testing.refAllDecls(@import("test/helpers.zig"));
     std.testing.refAllDecls(@import("test/interpreter2_style_test.zig"));
+    std.testing.refAllDecls(@import("test/interpreter2_polymorphism_test.zig"));
 }
