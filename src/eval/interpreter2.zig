@@ -237,6 +237,33 @@ pub const Interpreter2 = struct {
 
         return null;
     }
+
+    /// Prepare a call using a known runtime function type var.
+    /// Builds and inserts a cache entry on miss using the function's declared return var.
+    pub fn prepareCallWithFuncVar(self: *Interpreter2, func_id: u32, func_type_var: types.Var, args: []const types.Var) !PolyEntry {
+        const key = self.makePolyKey(func_id, args);
+        if (self.polyLookup(key)) |found| return found;
+
+        const func_resolved = self.runtime_types.resolveVar(func_type_var);
+        const ret_var: types.Var = switch (func_resolved.desc.content) {
+            .structure => |flat| switch (flat) {
+                .fn_pure => |f| f.ret,
+                .fn_effectful => |f| f.ret,
+                .fn_unbound => |f| f.ret,
+                else => return error.TypeMismatch,
+            },
+            else => return error.TypeMismatch,
+        };
+
+        // Ensure layout slot for return var
+        _ = try self.getRuntimeLayout(ret_var);
+        const root_idx: usize = @intFromEnum(self.runtime_types.resolveVar(ret_var).var_);
+        try self.ensureVarLayoutCapacity(root_idx + 1);
+        const slot = self.var_to_layout_slot.items[root_idx];
+        const entry = PolyEntry{ .return_var = ret_var, .return_layout_slot = slot };
+        try self.polyInsert(key, entry);
+        return entry;
+    }
 };
 
 pub fn add(a: i32, b: i32) i32 {
@@ -585,6 +612,35 @@ test "interpreter2: prepareCall miss then hit" {
     try std.testing.expect(entry.return_layout_slot != 0);
 
     // subsequent call should hit without hint
+    const hit = (try interp.prepareCall(func_id, &args, null)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(rt_str, hit.return_var);
+    try std.testing.expectEqual(entry.return_layout_slot, hit.return_layout_slot);
+}
+
+// RED: prepareCallWithFuncVar populates cache based on function type
+test "interpreter2: prepareCallWithFuncVar populates cache" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    var interp = try Interpreter2.init(gpa, &env);
+    defer interp.deinit();
+
+    const func_id: u32 = 9999;
+    const rt_str = try interp.runtime_types.freshFromContent(.{ .structure = .str });
+    const rt_i64 = try interp.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
+    const args = [_]types.Var{ rt_str, rt_i64 };
+
+    // Build a runtime function type: (Str, I64) -> Str
+    const func_content = try interp.runtime_types.mkFuncPure(&args, rt_str);
+    const func_var = try interp.runtime_types.register(.{ .content = func_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+
+    // Should populate cache
+    const entry = try interp.prepareCallWithFuncVar(func_id, func_var, &args);
+    try std.testing.expectEqual(rt_str, entry.return_var);
+    try std.testing.expect(entry.return_layout_slot != 0);
+
+    // Now a plain prepareCall without hint should hit
     const hit = (try interp.prepareCall(func_id, &args, null)) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(rt_str, hit.return_var);
     try std.testing.expectEqual(entry.return_layout_slot, hit.return_layout_slot);
