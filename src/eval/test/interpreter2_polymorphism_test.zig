@@ -5,6 +5,7 @@
 const std = @import("std");
 const helpers = @import("helpers.zig");
 const Interpreter2 = @import("../interpreter2.zig").Interpreter2;
+const can = @import("can");
 const RocOps = @import("builtins").host_abi.RocOps;
 const RocAlloc = @import("builtins").host_abi.RocAlloc;
 const RocDealloc = @import("builtins").host_abi.RocDealloc;
@@ -91,7 +92,9 @@ test "interpreter2 poly: return a function then call (int)" {
 
     var ops = makeOps(std.testing.allocator);
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
-    const rendered = try interp2.renderValueRoc(result);
+    const ct_var_ok = can.ModuleEnv.varFrom(resources.expr_idx);
+    const rt_var_ok = try interp2.translateTypeVar(resources.module_env, ct_var_ok);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var_ok);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("42", rendered);
 }
@@ -109,7 +112,9 @@ test "interpreter2 poly: return a function then call (string)" {
 
     var ops = makeOps(std.testing.allocator);
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
-    const rendered = try interp2.renderValueRoc(result);
+    const ct_var_point = can.ModuleEnv.varFrom(resources.expr_idx);
+    const rt_var_point = try interp2.translateTypeVar(resources.module_env, ct_var_point);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var_point);
     defer std.testing.allocator.free(rendered);
     const expected =
         \\"hi"
@@ -130,7 +135,9 @@ test "interpreter2 captures (monomorphic): adder" {
 
     var ops = makeOps(std.testing.allocator);
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
-    const rendered = try interp2.renderValueRoc(result);
+    const ct_var_ok = can.ModuleEnv.varFrom(resources.expr_idx);
+    const rt_var_ok = try interp2.translateTypeVar(resources.module_env, ct_var_ok);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var_ok);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("42", rendered);
 }
@@ -148,7 +155,9 @@ test "interpreter2 captures (monomorphic): constant function" {
 
     var ops = makeOps(std.testing.allocator);
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
-    const rendered = try interp2.renderValueRoc(result);
+    const ct_var_point = can.ModuleEnv.varFrom(resources.expr_idx);
+    const rt_var_point = try interp2.translateTypeVar(resources.module_env, ct_var_point);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var_point);
     defer std.testing.allocator.free(rendered);
     const expected =
         \\"hi"
@@ -169,7 +178,9 @@ test "interpreter2 captures (polymorphic): capture id and apply to int" {
 
     var ops = makeOps(std.testing.allocator);
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
-    const rendered = try interp2.renderValueRoc(result);
+    const ct_var_ok = can.ModuleEnv.varFrom(resources.expr_idx);
+    const rt_var_ok = try interp2.translateTypeVar(resources.module_env, ct_var_ok);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var_ok);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("41", rendered);
 }
@@ -187,7 +198,9 @@ test "interpreter2 captures (polymorphic): capture id and apply to string" {
 
     var ops = makeOps(std.testing.allocator);
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
-    const rendered = try interp2.renderValueRoc(result);
+    const ct_var_point = can.ModuleEnv.varFrom(resources.expr_idx);
+    const rt_var_point = try interp2.translateTypeVar(resources.module_env, ct_var_point);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var_point);
     defer std.testing.allocator.free(rendered);
     const expected =
         \\"ok"
@@ -448,6 +461,10 @@ test "interpreter2 recursion: factorial 5 -> 120" {
     try std.testing.expectEqualStrings("120", rendered);
 }
 
+// Additional complex recursion tests (mutual recursion, nested tuple builders)
+// will follow after adding tag union translation and broader type translation
+// support in Interpreter2.translateTypeVar.
+
 test "interpreter2 recursion: fibonacci 5 -> 5" {
     const roc_src =
         \\{ fib = (|n| if n == 0 { 0 } else if n == 1 { 1 } else { fib(n - 1) + fib(n - 2) }) fib(5) }
@@ -464,6 +481,50 @@ test "interpreter2 recursion: fibonacci 5 -> 5" {
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("5", rendered);
+}
+
+// Tag union tests (anonymous, non-recursive) — RED first
+
+test "interpreter2 tag union: one-arg tag Ok(42)" {
+    const roc_src =
+        \\Ok(42)
+    ;
+
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var ops = makeOps(std.testing.allocator);
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    const expected =
+        \\Ok(42)
+    ;
+    try std.testing.expectEqualStrings(expected, rendered);
+}
+
+test "interpreter2 tag union: multi-arg tag Point(1, 2)" {
+    const roc_src =
+        \\Point(1, 2)
+    ;
+
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var ops = makeOps(std.testing.allocator);
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    const expected =
+        \\Point(1, 2)
+    ;
+    try std.testing.expectEqualStrings(expected, rendered);
 }
 
 // Recursion via Z-combinator using if, ==, and subtraction

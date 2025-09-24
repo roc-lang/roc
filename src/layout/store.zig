@@ -981,10 +981,67 @@ pub const Store = struct {
                             return tag_layout_idx;
                         }
 
-                        // Complex tag union with payloads - need to compute max payload size
-                        // For now, we'll implement a simple version that doesn't handle payloads
-                        // TODO: Implement full tag union layout with payloads
-                        @panic("TODO: tag_union layout with payloads");
+                        // Complex tag union with payloads
+                        // Strategy: represent as a record { tag: Discriminant, payload: MaxPayload }
+                        // where MaxPayload is the layout of the largest payload among all tags.
+                        var max_payload_layout: ?Layout = null;
+                        var max_payload_size: u32 = 0;
+                        var max_payload_alignment: std.mem.Alignment = std.mem.Alignment.@"1";
+
+                        // Helper to update max with a candidate layout
+                        const updateMax = struct {
+                            fn go(store: *Self, candidate: Layout, curr_size: *u32, curr_alignment: *std.mem.Alignment, out_layout: *?Layout) void {
+                                const size = store.layoutSize(candidate);
+                                const alignment = candidate.alignment(store.targetUsize());
+                                if (size > curr_size.* or (size == curr_size.* and alignment.toByteUnits() > curr_alignment.*.toByteUnits())) {
+                                    curr_size.* = size;
+                                    curr_alignment.* = alignment;
+                                    out_layout.* = candidate;
+                                }
+                            }
+                        }.go;
+
+                        // For each tag, compute its payload layout: () => ZST, 1 arg => layout, >1 => tuple of arg layouts
+                        var temp_scope = TypeScope.init(self.env.gpa);
+                        defer temp_scope.deinit();
+                        for (tags.items(.args)) |tag_args| {
+                            const args_slice = self.types_store.sliceVars(tag_args);
+                            if (args_slice.len == 0) {
+                                // zero-sized payload; nothing to update
+                                continue;
+                            } else if (args_slice.len == 1) {
+                                const arg_var = args_slice[0];
+                                const arg_layout_idx = try self.addTypeVar(arg_var, &temp_scope);
+                                const layout_val = self.getLayout(arg_layout_idx);
+                                updateMax(self, layout_val, &max_payload_size, &max_payload_alignment, &max_payload_layout);
+                            } else {
+                                // Build tuple layout from argument layouts
+                                var elem_layouts = try self.env.gpa.alloc(Layout, args_slice.len);
+                                defer self.env.gpa.free(elem_layouts);
+                                for (args_slice, 0..) |v, i| {
+                                    const elem_idx = try self.addTypeVar(v, &temp_scope);
+                                    elem_layouts[i] = self.getLayout(elem_idx);
+                                }
+                                const tuple_idx = try self.putTuple(elem_layouts);
+                                const tuple_layout = self.getLayout(tuple_idx);
+                                updateMax(self, tuple_layout, &max_payload_size, &max_payload_alignment, &max_payload_layout);
+                            }
+                        }
+
+                        // Build record { tag, payload }
+                        var field_layouts = [_]Layout{
+                            discriminant_layout,
+                            // If for some reason max_payload_layout is null (shouldn't happen as has_payload true), fall back to discriminant layout
+                            max_payload_layout orelse discriminant_layout,
+                        };
+
+                        const name_tag = try self.env.common.idents.insert(self.env.gpa, Ident.for_text("tag"));
+                        const name_payload = try self.env.common.idents.insert(self.env.gpa, Ident.for_text("payload"));
+                        var field_names = [_]Ident.Idx{ name_tag, name_payload };
+
+                        const rec_idx = try self.putRecord(&field_layouts, &field_names);
+                        try self.layouts_by_var.put(self.env.gpa, current.var_, rec_idx);
+                        return rec_idx;
                     },
                     .record_unbound => |fields| {
                         // For record_unbound, we need to gather fields directly since it has no Record struct

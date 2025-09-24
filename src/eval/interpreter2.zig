@@ -13,6 +13,7 @@ const problem_mod = @import("check").problem;
 const snapshot_mod = @import("check").snapshot;
 const stack = @import("stack.zig");
 const StackValue = @import("StackValue.zig");
+const render_helpers = @import("render_helpers.zig");
 const builtins = @import("builtins");
 const RocOps = builtins.host_abi.RocOps;
 const RocStr = builtins.str.RocStr;
@@ -119,107 +120,115 @@ pub const Interpreter2 = struct {
                 defer self.bindings.items.len = original_len;
 
                 const stmts = self.env.store.sliceStatements(blk.stmts);
+
+                // First pass: add placeholders for all decl/var lambdas/closures (mutual recursion support)
+                for (stmts) |stmt_idx| {
+                    const stmt = self.env.store.getStatement(stmt_idx);
+                    const Placeholder = struct {
+                        fn exists(self_interp: *Interpreter2, start: usize, pattern_idx: can.CIR.Pattern.Idx) bool {
+                            var i: usize = self_interp.bindings.items.len;
+                            while (i > start) {
+                                i -= 1;
+                                if (self_interp.bindings.items[i].pattern_idx == pattern_idx) return true;
+                            }
+                            return false;
+                        }
+                        fn add(self_interp: *Interpreter2, patt_idx: can.CIR.Pattern.Idx, rhs_expr: can.CIR.Expr.Idx) !void {
+                            const patt_ct_var = can.ModuleEnv.varFrom(patt_idx);
+                            const patt_rt_var = try self_interp.translateTypeVar(self_interp.env, patt_ct_var);
+                            const closure_layout = try self_interp.getRuntimeLayout(patt_rt_var);
+                            if (closure_layout.tag != .closure) return; // only closures get placeholders
+                            const lam_or = self_interp.env.store.getExpr(rhs_expr);
+                            var body_idx: can.CIR.Expr.Idx = rhs_expr;
+                            var params: can.CIR.Pattern.Span = .{ .span = .{ .start = 0, .len = 0 } };
+                            if (lam_or == .e_lambda) {
+                                body_idx = lam_or.e_lambda.body;
+                                params = lam_or.e_lambda.args;
+                            } else if (lam_or == .e_closure) {
+                                const lam_expr = self_interp.env.store.getExpr(lam_or.e_closure.lambda_idx);
+                                if (lam_expr == .e_lambda) {
+                                    body_idx = lam_expr.e_lambda.body;
+                                    params = lam_expr.e_lambda.args;
+                                }
+                            } else return;
+                            const ph = try self_interp.pushRaw(closure_layout, 0);
+                            if (ph.ptr) |ptr| {
+                                const header: *layout.Closure = @ptrCast(@alignCast(ptr));
+                                header.* = .{
+                                    .body_idx = body_idx,
+                                    .params = params,
+                                    .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
+                                    .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
+                                    .lambda_expr_idx = rhs_expr,
+                                };
+                            }
+                            try self_interp.bindings.append(.{ .pattern_idx = patt_idx, .value = ph });
+                        }
+                    };
+                    switch (stmt) {
+                        .s_decl => |d| {
+                            const patt = self.env.store.getPattern(d.pattern);
+                            if (patt != .assign) continue;
+                            const rhs = self.env.store.getExpr(d.expr);
+                            if ((rhs == .e_lambda or rhs == .e_closure) and !Placeholder.exists(self, original_len, d.pattern)) {
+                                try Placeholder.add(self, d.pattern, d.expr);
+                            }
+                        },
+                        .s_var => |v| {
+                            const patt = self.env.store.getPattern(v.pattern_idx);
+                            if (patt != .assign) continue;
+                            const rhs = self.env.store.getExpr(v.expr);
+                            if ((rhs == .e_lambda or rhs == .e_closure) and !Placeholder.exists(self, original_len, v.pattern_idx)) {
+                                try Placeholder.add(self, v.pattern_idx, v.expr);
+                            }
+                        },
+                        else => {},
+                    }
+                }
+
+                // Second pass: evaluate statements, updating placeholders
                 for (stmts) |stmt_idx| {
                     const stmt = self.env.store.getStatement(stmt_idx);
                     switch (stmt) {
                         .s_decl => |d| {
-                            // Only simple assign patterns supported
                             const patt = self.env.store.getPattern(d.pattern);
                             if (patt != .assign) return error.NotImplemented;
-
-                            const rhs_expr = d.expr;
-                            const rhs = self.env.store.getExpr(rhs_expr);
-                            var placeholder_added = false;
-                            // If RHS is a lambda or closure, create a placeholder closure so recursive calls during its body evaluation can resolve
-                            if (rhs == .e_lambda or rhs == .e_closure) {
-                                const lam = if (rhs == .e_lambda) rhs.e_lambda else blk: {
-                                    const cl = rhs.e_closure;
-                                    const lam_expr = self.env.store.getExpr(cl.lambda_idx);
-                                    if (lam_expr != .e_lambda) break :blk rhs.e_lambda; // fallback
-                                    break :blk lam_expr.e_lambda;
-                                };
-                                // Build closure layout from pattern's type var
-                                const patt_ct_var = can.ModuleEnv.varFrom(d.pattern);
-                                const patt_rt_var = try self.translateTypeVar(self.env, patt_ct_var);
-                                const closure_layout = try self.getRuntimeLayout(patt_rt_var);
-                                if (closure_layout.tag == .closure) {
-                                    const ph = try self.pushRaw(closure_layout, 0);
-                                    if (ph.ptr) |ptr| {
-                                        const header: *layout.Closure = @ptrCast(@alignCast(ptr));
-                                        header.* = .{
-                                            .body_idx = lam.body,
-                                            .params = lam.args,
-                                            .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
-                                            .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
-                                            .lambda_expr_idx = rhs_expr,
-                                        };
-                                    }
-                                    try self.bindings.append(.{ .pattern_idx = d.pattern, .value = ph });
-                                    placeholder_added = true;
+                            const val = try self.evalExprMinimal(d.expr, roc_ops);
+                            // Update existing binding if present
+                            var i: usize = self.bindings.items.len;
+                            var updated = false;
+                            while (i > original_len) {
+                                i -= 1;
+                                if (self.bindings.items[i].pattern_idx == d.pattern) {
+                                    self.bindings.items[i].value = val;
+                                    updated = true;
+                                    break;
                                 }
                             }
-
-                            // Evaluate RHS
-                            const val = try self.evalExprMinimal(rhs_expr, roc_ops);
-
-                            if (placeholder_added) {
-                                // Update last binding with actual value
-                                const last = &self.bindings.items[self.bindings.items.len - 1];
-                                last.value = val;
-                            } else {
-                                try self.bindings.append(.{ .pattern_idx = d.pattern, .value = val });
-                            }
-                        },
-                        .s_expr => |sx| {
-                            _ = try self.evalExprMinimal(sx.expr, roc_ops); // evaluate for side-effects
+                            if (!updated) try self.bindings.append(.{ .pattern_idx = d.pattern, .value = val });
                         },
                         .s_var => |v| {
                             const patt = self.env.store.getPattern(v.pattern_idx);
                             if (patt != .assign) return error.NotImplemented;
-                            const rhs_expr = v.expr;
-                            var placeholder_added = false;
-                            const rhs = self.env.store.getExpr(rhs_expr);
-                            if (rhs == .e_lambda or rhs == .e_closure) {
-                                const lam = if (rhs == .e_lambda) rhs.e_lambda else blk: {
-                                    const cl = rhs.e_closure;
-                                    const lam_expr = self.env.store.getExpr(cl.lambda_idx);
-                                    if (lam_expr != .e_lambda) break :blk rhs.e_lambda;
-                                    break :blk lam_expr.e_lambda;
-                                };
-                                const patt_ct_var = can.ModuleEnv.varFrom(v.pattern_idx);
-                                const patt_rt_var = try self.translateTypeVar(self.env, patt_ct_var);
-                                const closure_layout = try self.getRuntimeLayout(patt_rt_var);
-                                if (closure_layout.tag == .closure) {
-                                    const ph = try self.pushRaw(closure_layout, 0);
-                                    if (ph.ptr) |ptr| {
-                                        const header: *layout.Closure = @ptrCast(@alignCast(ptr));
-                                        header.* = .{
-                                            .body_idx = lam.body,
-                                            .params = lam.args,
-                                            .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
-                                            .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
-                                            .lambda_expr_idx = rhs_expr,
-                                        };
-                                    }
-                                    try self.bindings.append(.{ .pattern_idx = v.pattern_idx, .value = ph });
-                                    placeholder_added = true;
+                            const val = try self.evalExprMinimal(v.expr, roc_ops);
+                            var i: usize = self.bindings.items.len;
+                            var updated = false;
+                            while (i > original_len) {
+                                i -= 1;
+                                if (self.bindings.items[i].pattern_idx == v.pattern_idx) {
+                                    self.bindings.items[i].value = val;
+                                    updated = true;
+                                    break;
                                 }
                             }
-                            const val = try self.evalExprMinimal(rhs_expr, roc_ops);
-                            if (placeholder_added) {
-                                const last = &self.bindings.items[self.bindings.items.len - 1];
-                                last.value = val;
-                            } else {
-                                try self.bindings.append(.{ .pattern_idx = v.pattern_idx, .value = val });
-                            }
+                            if (!updated) try self.bindings.append(.{ .pattern_idx = v.pattern_idx, .value = val });
                         },
                         .s_reassign => |r| {
                             const patt = self.env.store.getPattern(r.pattern_idx);
                             if (patt != .assign) return error.NotImplemented;
                             const new_val = try self.evalExprMinimal(r.expr, roc_ops);
-                            // Find existing binding and update
                             var j: usize = self.bindings.items.len;
-                            while (j > 0) {
+                            while (j > original_len) {
                                 j -= 1;
                                 if (self.bindings.items[j].pattern_idx == r.pattern_idx) {
                                     self.bindings.items[j].value = new_val;
@@ -227,10 +236,13 @@ pub const Interpreter2 = struct {
                                 }
                             }
                         },
+                        .s_expr => |sx| {
+                            _ = try self.evalExprMinimal(sx.expr, roc_ops);
+                        },
                         else => return error.NotImplemented,
                     }
                 }
-                // Evaluate final expression in the block
+
                 return try self.evalExprMinimal(blk.final_expr, roc_ops);
             },
             .e_int => |int_lit| {
@@ -427,6 +439,141 @@ pub const Interpreter2 = struct {
             },
             .e_nominal_external => |nom| {
                 return try self.evalExprMinimal(nom.backing_expr, roc_ops);
+            },
+            .e_zero_argument_tag => |zero| {
+                // Construct a tag union value with no payload
+                // Determine discriminant index by consulting the runtime tag union type
+                const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const rt_var = try self.translateTypeVar(self.env, ct_var);
+                const resolved = self.runtime_types.resolveVar(rt_var);
+                if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) return error.NotImplemented;
+                const tu = resolved.desc.content.structure.tag_union;
+                const tags = self.runtime_types.getTagsSlice(tu.tags);
+                // Find index by name
+                var tag_index: usize = 0;
+                var found = false;
+                const name_text = self.env.getIdent(zero.name);
+                var i: usize = 0;
+                while (i < tags.len) : (i += 1) {
+                    if (std.mem.eql(u8, self.env.getIdent(tags.items(.name)[i]), name_text)) {
+                        tag_index = i;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) return error.NotImplemented;
+                const layout_val = try self.getRuntimeLayout(rt_var);
+                // If layout is scalar (bool/uint), write discriminant directly
+                if (layout_val.tag == .scalar) {
+                    var out = try self.pushRaw(layout_val, 0);
+                    if (layout_val.data.scalar.tag == .bool) {
+                        const p: *u8 = @ptrCast(@alignCast(out.ptr.?));
+                        p.* = if (tag_index != 0) 1 else 0;
+                        return out;
+                    } else if (layout_val.data.scalar.tag == .int) {
+                        out.is_initialized = false;
+                        out.setInt(@intCast(tag_index));
+                        out.is_initialized = true;
+                        return out;
+                    }
+                    return error.NotImplemented;
+                } else if (layout_val.tag == .record) {
+                    // Record { tag: Discriminant, payload: ZST }
+                    var dest = try self.pushRaw(layout_val, 0);
+                    var acc = try dest.asRecord(&self.runtime_layout_store);
+                    const tag_idx = acc.findFieldIndex(self.env, "tag") orelse return error.NotImplemented;
+                    const tag_field = try acc.getFieldByIndex(tag_idx);
+                    // write tag as int/byte
+                    if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                        var tmp = tag_field;
+                        tmp.is_initialized = false;
+                        tmp.setInt(@intCast(tag_index));
+                    } else if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .bool) {
+                        const p: *u8 = @ptrCast(@alignCast(tag_field.ptr.?));
+                        p.* = if (tag_index != 0) 1 else 0;
+                    } else return error.NotImplemented;
+                    return dest;
+                }
+                return error.NotImplemented;
+            },
+            .e_tag => |tag| {
+                // Construct a tag union value with payloads
+                const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const rt_var = try self.translateTypeVar(self.env, ct_var);
+                const resolved = self.runtime_types.resolveVar(rt_var);
+                if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) return error.NotImplemented;
+                const tu = resolved.desc.content.structure.tag_union;
+                const tags = self.runtime_types.getTagsSlice(tu.tags);
+                // Find index by name
+                const name_text = self.env.getIdent(tag.name);
+                var tag_index: usize = 0;
+                var found = false;
+                var i: usize = 0;
+                while (i < tags.len) : (i += 1) {
+                    if (std.mem.eql(u8, self.env.getIdent(tags.items(.name)[i]), name_text)) {
+                        tag_index = i;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) return error.NotImplemented;
+
+                const layout_val = try self.getRuntimeLayout(rt_var);
+                if (layout_val.tag == .scalar) {
+                    // No payload union
+                    var out = try self.pushRaw(layout_val, 0);
+                    if (layout_val.data.scalar.tag == .bool) {
+                        const p: *u8 = @ptrCast(@alignCast(out.ptr.?));
+                        p.* = if (tag_index != 0) 1 else 0;
+                        return out;
+                    } else if (layout_val.data.scalar.tag == .int) {
+                        out.is_initialized = false;
+                        out.setInt(@intCast(tag_index));
+                        out.is_initialized = true;
+                        return out;
+                    }
+                    return error.NotImplemented;
+                } else if (layout_val.tag == .record) {
+                    // Has payload: record { tag, payload }
+                    var dest = try self.pushRaw(layout_val, 0);
+                    var acc = try dest.asRecord(&self.runtime_layout_store);
+                    const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse return error.NotImplemented;
+                    const payload_field_idx = acc.findFieldIndex(self.env, "payload") orelse return error.NotImplemented;
+                    // write tag discriminant
+                    const tag_field = try acc.getFieldByIndex(tag_field_idx);
+                    if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                        var tmp = tag_field;
+                        tmp.is_initialized = false;
+                        tmp.setInt(@intCast(tag_index));
+                    } else if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .bool) {
+                        const p: *u8 = @ptrCast(@alignCast(tag_field.ptr.?));
+                        p.* = if (tag_index != 0) 1 else 0;
+                    } else return error.NotImplemented;
+
+                    // payload
+                    const args = self.env.store.sliceExpr(tag.args);
+                    if (args.len == 0) {
+                        // nothing to write
+                        return dest;
+                    } else if (args.len == 1) {
+                        const arg_val = try self.evalExprMinimal(args[0], roc_ops);
+                        try acc.setFieldByIndex(payload_field_idx, arg_val, roc_ops);
+                        return dest;
+                    } else {
+                        // Multiple args -> tuple payload
+                        var payload_field = try acc.getFieldByIndex(payload_field_idx);
+                        if (payload_field.layout.tag != .tuple) return error.NotImplemented;
+                        var tup_acc = try payload_field.asTuple(&self.runtime_layout_store);
+                        var j: usize = 0;
+                        while (j < args.len) : (j += 1) {
+                            const ev = try self.evalExprMinimal(args[j], roc_ops);
+                            const sorted_idx = tup_acc.findElementIndexByOriginal(j) orelse return error.TypeMismatch;
+                            try tup_acc.setElement(sorted_idx, ev, roc_ops);
+                        }
+                        return dest;
+                    }
+                }
+                return error.NotImplemented;
             },
             .e_match => |m| {
                 // Evaluate scrutinee once
@@ -702,6 +849,7 @@ pub const Interpreter2 = struct {
 
     pub fn renderValueRoc(self: *Interpreter2, value: StackValue) ![]u8 {
         const gpa = self.allocator;
+        // Tag unions pretty rendering is available via renderValueRocWithType
         if (value.layout.tag == .scalar) {
             switch (value.layout.data.scalar.tag) {
                 // no boolean rendering in minimal evaluator yet
@@ -773,6 +921,122 @@ pub const Interpreter2 = struct {
         }
         // Fallback
         return try std.fmt.allocPrint(gpa, "<unsupported>", .{});
+    }
+
+    // removed duplicate
+
+    // Helper for REPL and tests: render a value given its runtime type var
+    pub fn renderValueRocWithType(self: *Interpreter2, value: StackValue, rt_var: types.Var) ![]u8 {
+        const gpa = self.allocator;
+        var resolved = self.runtime_types.resolveVar(rt_var);
+        // Unwrap aliases and nominals to get to underlying structure
+        unwrap: while (true) {
+            switch (resolved.desc.content) {
+                .alias => |al| {
+                    const backing = self.runtime_types.getAliasBackingVar(al);
+                    resolved = self.runtime_types.resolveVar(backing);
+                },
+                .structure => |st| switch (st) {
+                    .nominal_type => |nt| {
+                        const backing = self.runtime_types.getNominalBackingVar(nt);
+                        resolved = self.runtime_types.resolveVar(backing);
+                    },
+                    else => break :unwrap,
+                },
+                else => break :unwrap,
+            }
+        }
+        if (resolved.desc.content == .structure) {
+            switch (resolved.desc.content.structure) {
+                .tag_union => |tu| {
+                    const tags = self.runtime_types.getTagsSlice(tu.tags);
+                    var tag_index: usize = 0;
+                    var have_tag = false;
+                    if (value.layout.tag == .scalar) {
+                        if (value.layout.data.scalar.tag == .bool) {
+                            const b: *const u8 = @ptrCast(@alignCast(value.ptr.?));
+                            tag_index = if (b.* != 0) 1 else 0;
+                            have_tag = true;
+                        } else if (value.layout.data.scalar.tag == .int) {
+                            tag_index = @intCast(value.asI128());
+                            have_tag = true;
+                        }
+                    } else if (value.layout.tag == .record) {
+                        var acc = try value.asRecord(&self.runtime_layout_store);
+                        if (acc.findFieldIndex(self.env, "tag")) |idx| {
+                            const tag_field = try acc.getFieldByIndex(idx);
+                            if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                                const tmp_sv = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
+                                tag_index = @intCast(tmp_sv.asI128());
+                                have_tag = true;
+                            } else if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .bool) {
+                                const b: *const u8 = @ptrCast(@alignCast(tag_field.ptr.?));
+                                tag_index = if (b.* != 0) 1 else 0;
+                                have_tag = true;
+                            }
+                        }
+                        if (have_tag and tag_index < tags.len) {
+                            const tag_name = self.env.getIdent(tags.items(.name)[tag_index]);
+                            var out = std.ArrayList(u8).init(gpa);
+                            errdefer out.deinit();
+                            try out.appendSlice(tag_name);
+                            if (acc.findFieldIndex(self.env, "payload")) |pidx| {
+                                const payload = try acc.getFieldByIndex(pidx);
+                                const psize = self.runtime_layout_store.layoutSize(payload.layout);
+                                if (psize > 0) {
+                                    try out.append('(');
+                                    if (payload.layout.tag == .tuple) {
+                                        var tup = try payload.asTuple(&self.runtime_layout_store);
+                                        const count = tup.getElementCount();
+                                        var k: usize = 0;
+                                        while (k < count) : (k += 1) {
+                                            const elem = try tup.getElement(k);
+                                            const r = try self.renderValueRoc(elem);
+                                            defer gpa.free(r);
+                                            try out.appendSlice(r);
+                                            if (k + 1 < count) try out.appendSlice(", ");
+                                        }
+                                    } else {
+                                        const rendered = try self.renderValueRoc(payload);
+                                        defer gpa.free(rendered);
+                                        try out.appendSlice(rendered);
+                                    }
+                                    try out.append(')');
+                                }
+                            }
+                            return out.toOwnedSlice();
+                        }
+                    }
+                },
+                .record => |rec| {
+                    var out = std.ArrayList(u8).init(gpa);
+                    errdefer out.deinit();
+                    try out.appendSlice("{ ");
+                    var acc = try value.asRecord(&self.runtime_layout_store);
+                    const fields = self.runtime_types.getRecordFieldsSlice(rec.fields);
+                    var i: usize = 0;
+                    while (i < fields.len) : (i += 1) {
+                        const f = fields.get(i);
+                        const name_text = self.env.getIdent(f.name);
+                        try out.appendSlice(name_text);
+                        try out.appendSlice(": ");
+                        if (acc.findFieldIndex(self.env, name_text)) |idx| {
+                            const field_val = try acc.getFieldByIndex(idx);
+                            const rendered = try self.renderValueRoc(field_val);
+                            defer gpa.free(rendered);
+                            try out.appendSlice(rendered);
+                        } else {
+                            try out.appendSlice("<missing>");
+                        }
+                        if (i + 1 < fields.len) try out.appendSlice(", ");
+                    }
+                    try out.appendSlice(" }");
+                    return out.toOwnedSlice();
+                },
+                else => {},
+            }
+        }
+        return try self.renderValueRoc(value);
     }
 
     fn patternMatchesBind(self: *Interpreter2, pattern_idx: can.CIR.Pattern.Idx, value: StackValue, out_binds: *std.ArrayList(Binding)) !bool {
@@ -868,6 +1132,27 @@ pub const Interpreter2 = struct {
                     .frac_unbound => try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = types.Num.Frac.Precision.default } } } }),
                     .num_poly, .int_poly => try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = types.Num.Int.Precision.default } } } }),
                     .frac_poly => try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = types.Num.Frac.Precision.default } } } }),
+                },
+                .tag_union => |tu| {
+                    const ct_tags = module.types.getTagsSlice(tu.tags);
+                    var rt_tags = try self.allocator.alloc(@import("types").Tag, ct_tags.len);
+                    defer self.allocator.free(rt_tags);
+                    for (ct_tags.items(.name), ct_tags.items(.args), 0..) |name, args_range, i| {
+                        const ct_args = module.types.sliceVars(args_range);
+                        var arg_buf = try self.allocator.alloc(types.Var, ct_args.len);
+                        defer self.allocator.free(arg_buf);
+                        for (ct_args, 0..) |ct_arg, j| {
+                            arg_buf[j] = try self.translateTypeVar(module, ct_arg);
+                        }
+                        const rt_args_range = try self.runtime_types.appendVars(arg_buf);
+                        rt_tags[i] = .{ .name = name, .args = rt_args_range };
+                    }
+                    const rt_ext = try self.translateTypeVar(module, tu.ext);
+                    const content = try self.runtime_types.mkTagUnion(rt_tags, rt_ext);
+                    return try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                },
+                .empty_tag_union => {
+                    return try self.runtime_types.freshFromContent(.{ .structure = .empty_tag_union });
                 },
                 .tuple => |t| {
                     const ct_elems = module.types.sliceVars(t.elems);
