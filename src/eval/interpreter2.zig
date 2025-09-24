@@ -8,6 +8,9 @@ const can = @import("can");
 const TypeScope = types.TypeScope;
 const Content = types.Content;
 const HashMap = std.hash_map.HashMap;
+const unify = @import("check").unifier;
+const problem_mod = @import("check").problem;
+const snapshot_mod = @import("check").snapshot;
 
 pub const Interpreter2 = struct {
     const MAX_ARITY: usize = 8;
@@ -57,6 +60,12 @@ pub const Interpreter2 = struct {
 
     poly_cache: HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80),
 
+    // Runtime unification context
+    env: *can.ModuleEnv,
+    problems: problem_mod.Store,
+    snapshots: snapshot_mod.Store,
+    unify_scratch: unify.Scratch,
+
     pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv) !Interpreter2 {
         const rt_types_ptr = try allocator.create(types.store.Store);
         rt_types_ptr.* = try types.store.Store.initCapacity(allocator, 1024, 512);
@@ -71,6 +80,10 @@ pub const Interpreter2 = struct {
             .empty_scope = scope,
             .translate_cache = std.AutoHashMap(u64, types.Var).init(allocator),
             .poly_cache = HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80).init(allocator),
+            .env = env,
+            .problems = try problem_mod.Store.initCapacity(allocator, 64),
+            .snapshots = try snapshot_mod.Store.initCapacity(allocator, 256),
+            .unify_scratch = try unify.Scratch.init(allocator),
         };
         result.runtime_layout_store = try layout.Store.init(env, result.runtime_types);
         return result;
@@ -84,6 +97,9 @@ pub const Interpreter2 = struct {
         self.runtime_layout_store.deinit();
         self.runtime_types.deinit();
         self.allocator.destroy(self.runtime_types);
+        self.snapshots.deinit();
+        self.problems.deinit(self.allocator);
+        self.unify_scratch.deinit();
     }
 
     /// Ensure the slot array can index at least `min_len` entries; zero-fill new entries.
@@ -254,6 +270,34 @@ pub const Interpreter2 = struct {
             },
             else => return error.TypeMismatch,
         };
+
+        // Attempt simple runtime unification of parameters with arguments.
+        const params: []types.Var = switch (func_resolved.desc.content) {
+            .structure => |flat| switch (flat) {
+                .fn_pure => |f| self.runtime_types.sliceVars(f.args),
+                .fn_effectful => |f| self.runtime_types.sliceVars(f.args),
+                .fn_unbound => |f| self.runtime_types.sliceVars(f.args),
+                else => &[_]types.Var{},
+            },
+            else => &[_]types.Var{},
+        };
+        if (params.len != args.len) return error.TypeMismatch;
+
+        var i: usize = 0;
+        while (i < params.len) : (i += 1) {
+            _ = try unify.unifyWithContext(
+                self.env,
+                self.runtime_types,
+                &self.problems,
+                &self.snapshots,
+                &self.unify_scratch,
+                &self.unify_scratch.occurs_scratch,
+                params[i],
+                args[i],
+                false,
+            );
+        }
+        // ret_var may now be constrained
 
         // Ensure layout slot for return var
         _ = try self.getRuntimeLayout(ret_var);
@@ -644,4 +688,30 @@ test "interpreter2: prepareCallWithFuncVar populates cache" {
     const hit = (try interp.prepareCall(func_id, &args, null)) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(rt_str, hit.return_var);
     try std.testing.expectEqual(entry.return_layout_slot, hit.return_layout_slot);
+}
+
+// RED: unification constrains return type for polymorphic (a -> a), when called with Str
+test "interpreter2: unification constrains (a->a) with Str" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    var interp = try Interpreter2.init(gpa, &env);
+    defer interp.deinit();
+
+    const func_id: u32 = 42;
+    // runtime flex var 'a'
+    const a = try interp.runtime_types.freshFromContent(.{ .flex_var = null });
+    const func_content = try interp.runtime_types.mkFuncPure(&.{a}, a);
+    const func_var = try interp.runtime_types.register(.{ .content = func_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+
+    // Call with Str
+    const rt_str = try interp.runtime_types.freshFromContent(.{ .structure = .str });
+    const entry = try interp.prepareCallWithFuncVar(func_id, func_var, &.{rt_str});
+
+    // After unification, return var should resolve to str
+    const resolved_ret = interp.runtime_types.resolveVar(entry.return_var);
+    try std.testing.expect(resolved_ret.desc.content == .structure);
+    try std.testing.expect(resolved_ret.desc.content.structure == .str);
+    try std.testing.expect(entry.return_layout_slot != 0);
 }
