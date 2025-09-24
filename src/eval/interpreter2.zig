@@ -116,7 +116,31 @@ pub const Interpreter2 = struct {
                     return try self.runtime_types.freshFromContent(.{ .structure = .{ .record = .{ .fields = rt_fields, .ext = rt_ext } } });
                 },
                 .empty_record => try self.runtime_types.freshFromContent(.{ .structure = .empty_record }),
+                .nominal_type => |nom| {
+                    const ct_backing = module.types.getNominalBackingVar(nom);
+                    const rt_backing = try self.translateTypeVar(module, ct_backing);
+                    const ct_args = module.types.sliceNominalArgs(nom);
+                    var buf = try self.allocator.alloc(types.Var, ct_args.len);
+                    defer self.allocator.free(buf);
+                    for (ct_args, 0..) |ct_arg, i| {
+                        buf[i] = try self.translateTypeVar(module, ct_arg);
+                    }
+                    const content = try self.runtime_types.mkNominal(nom.ident, rt_backing, buf, nom.origin_module);
+                    return try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                },
                 else => return error.NotImplemented,
+            },
+            .alias => |alias| {
+                const ct_backing = module.types.getAliasBackingVar(alias);
+                const rt_backing = try self.translateTypeVar(module, ct_backing);
+                const ct_args = module.types.sliceAliasArgs(alias);
+                var buf = try self.allocator.alloc(types.Var, ct_args.len);
+                defer self.allocator.free(buf);
+                for (ct_args, 0..) |ct_arg, i| {
+                    buf[i] = try self.translateTypeVar(module, ct_arg);
+                }
+                const content = try self.runtime_types.mkAlias(alias.ident, rt_backing, buf);
+                return try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
             },
             else => return error.NotImplemented,
         };
@@ -321,6 +345,63 @@ test "interpreter2: translateTypeVar for record {first: Str, second: I64}" {
                 },
                 else => return error.TestUnexpectedResult,
             }
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+// RED: translating a compile-time alias should produce equivalent runtime alias
+test "interpreter2: translateTypeVar for alias of Str" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    var interp = try Interpreter2.init(gpa, &env);
+    defer interp.deinit();
+
+    const alias_name = try env.common.idents.insert(gpa, @import("base").Ident.for_text("MyAlias"));
+    const type_ident = types.TypeIdent{ .ident_idx = alias_name };
+    const ct_str = try env.types.freshFromContent(.{ .structure = .str });
+    const ct_alias_content = try env.types.mkAlias(type_ident, ct_str, &.{});
+    const ct_alias_var = try env.types.register(.{ .content = ct_alias_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+
+    const rt_var = try interp.translateTypeVar(&env, ct_alias_var);
+    const resolved = interp.runtime_types.resolveVar(rt_var);
+    try std.testing.expect(resolved.desc.content == .alias);
+    const rt_alias = resolved.desc.content.alias;
+    try std.testing.expectEqual(alias_name, rt_alias.ident.ident_idx);
+    const rt_backing = interp.runtime_types.getAliasBackingVar(rt_alias);
+    const backing_resolved = interp.runtime_types.resolveVar(rt_backing);
+    try std.testing.expect(backing_resolved.desc.content == .structure);
+    try std.testing.expect(backing_resolved.desc.content.structure == .str);
+}
+
+// RED: translating a compile-time nominal type should produce equivalent runtime nominal
+test "interpreter2: translateTypeVar for nominal Point(Str)" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    var interp = try Interpreter2.init(gpa, &env);
+    defer interp.deinit();
+
+    const name_nominal = try env.common.idents.insert(gpa, @import("base").Ident.for_text("Point"));
+    const type_ident = types.TypeIdent{ .ident_idx = name_nominal };
+    const ct_str = try env.types.freshFromContent(.{ .structure = .str });
+    // backing type is Str for simplicity
+    const ct_nominal_content = try env.types.mkNominal(type_ident, ct_str, &.{}, name_nominal);
+    const ct_nominal_var = try env.types.register(.{ .content = ct_nominal_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+
+    const rt_var = try interp.translateTypeVar(&env, ct_nominal_var);
+    const resolved = interp.runtime_types.resolveVar(rt_var);
+    try std.testing.expect(resolved.desc.content == .structure);
+    switch (resolved.desc.content.structure) {
+        .nominal_type => |nom| {
+            try std.testing.expectEqual(name_nominal, nom.ident.ident_idx);
+            const backing = interp.runtime_types.getNominalBackingVar(nom);
+            const b_resolved = interp.runtime_types.resolveVar(backing);
+            try std.testing.expect(b_resolved.desc.content == .structure);
+            try std.testing.expect(b_resolved.desc.content.structure == .str);
         },
         else => return error.TestUnexpectedResult,
     }
