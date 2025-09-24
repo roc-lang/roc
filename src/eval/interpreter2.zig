@@ -142,6 +142,14 @@ pub const Interpreter2 = struct {
                 const content = try self.runtime_types.mkAlias(alias.ident, rt_backing, buf);
                 return try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
             },
+            .flex_var => |id_opt| {
+                const content: types.Content = .{ .flex_var = id_opt };
+                return try self.runtime_types.freshFromContent(content);
+            },
+            .rigid_var => |ident| {
+                const content: types.Content = .{ .rigid_var = ident };
+                return try self.runtime_types.freshFromContent(content);
+            },
             else => return error.NotImplemented,
         };
 
@@ -405,4 +413,36 @@ test "interpreter2: translateTypeVar for nominal Point(Str)" {
         },
         else => return error.TestUnexpectedResult,
     }
+}
+
+// RED: translating a compile-time flex var should produce a runtime flex var
+test "interpreter2: translateTypeVar for flex var" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    var interp = try Interpreter2.init(gpa, &env);
+    defer interp.deinit();
+
+    const ct_flex = try env.types.freshFromContent(.{ .flex_var = null });
+    const rt_var = try interp.translateTypeVar(&env, ct_flex);
+    const resolved = interp.runtime_types.resolveVar(rt_var);
+    try std.testing.expect(resolved.desc.content == .flex_var);
+}
+
+// RED: translating a compile-time rigid var should produce a runtime rigid var with same ident
+test "interpreter2: translateTypeVar for rigid var" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    var interp = try Interpreter2.init(gpa, &env);
+    defer interp.deinit();
+
+    const name_a = try env.common.idents.insert(gpa, @import("base").Ident.for_text("A"));
+    const ct_rigid = try env.types.freshFromContent(.{ .rigid_var = name_a });
+    const rt_var = try interp.translateTypeVar(&env, ct_rigid);
+    const resolved = interp.runtime_types.resolveVar(rt_var);
+    try std.testing.expect(resolved.desc.content == .rigid_var);
+    try std.testing.expectEqual(name_a, resolved.desc.content.rigid_var);
 }
