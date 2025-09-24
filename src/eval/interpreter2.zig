@@ -218,6 +218,25 @@ pub const Interpreter2 = struct {
     pub fn polyInsert(self: *Interpreter2, key: PolyKey, entry: PolyEntry) !void {
         try self.poly_cache.put(key, entry);
     }
+
+    /// Prepare a call: return cached instantiation entry if present; on miss, insert using return_var_hint if provided.
+    pub fn prepareCall(self: *Interpreter2, func_id: u32, args: []const types.Var, return_var_hint: ?types.Var) !?PolyEntry {
+        const key = self.makePolyKey(func_id, args);
+        if (self.polyLookup(key)) |found| return found;
+
+        if (return_var_hint) |ret| {
+            // Ensure layout slot for return var
+            _ = try self.getRuntimeLayout(ret);
+            const root_idx: usize = @intFromEnum(self.runtime_types.resolveVar(ret).var_);
+            try self.ensureVarLayoutCapacity(root_idx + 1);
+            const slot = self.var_to_layout_slot.items[root_idx];
+            const entry = PolyEntry{ .return_var = ret, .return_layout_slot = slot };
+            try self.polyInsert(key, entry);
+            return entry;
+        }
+
+        return null;
+    }
 };
 
 pub fn add(a: i32, b: i32) i32 {
@@ -540,4 +559,33 @@ test "interpreter2: poly cache insert and lookup" {
     const found = interp.polyLookup(key) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(ret_var, found.return_var);
     try std.testing.expectEqual(slot, found.return_layout_slot);
+}
+
+// RED: prepareCall should miss without hint, then hit after inserting with hint
+test "interpreter2: prepareCall miss then hit" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    var interp = try Interpreter2.init(gpa, &env);
+    defer interp.deinit();
+
+    const func_id: u32 = 7777;
+    const rt_str = try interp.runtime_types.freshFromContent(.{ .structure = .str });
+    const rt_i64 = try interp.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
+    const args = [_]types.Var{ rt_str, rt_i64 };
+
+    // miss without hint
+    const miss = try interp.prepareCall(func_id, &args, null);
+    try std.testing.expect(miss == null);
+
+    // insert with hint
+    const entry = (try interp.prepareCall(func_id, &args, rt_str)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(rt_str, entry.return_var);
+    try std.testing.expect(entry.return_layout_slot != 0);
+
+    // subsequent call should hit without hint
+    const hit = (try interp.prepareCall(func_id, &args, null)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(rt_str, hit.return_var);
+    try std.testing.expectEqual(entry.return_layout_slot, hit.return_layout_slot);
 }
