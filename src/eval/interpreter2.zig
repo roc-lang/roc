@@ -76,6 +76,8 @@ pub const Interpreter2 = struct {
     // Minimal eval support
     stack_memory: stack.Stack,
     bindings: std.ArrayList(Binding),
+    // Track active closures during calls (for capture lookup)
+    active_closures: std.ArrayList(StackValue),
 
     pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv) !Interpreter2 {
         const rt_types_ptr = try allocator.create(types.store.Store);
@@ -97,6 +99,7 @@ pub const Interpreter2 = struct {
             .unify_scratch = try unify.Scratch.init(allocator),
             .stack_memory = try stack.Stack.initCapacity(allocator, 4096),
             .bindings = try std.ArrayList(Binding).initCapacity(allocator, 8),
+            .active_closures = try std.ArrayList(StackValue).initCapacity(allocator, 4),
         };
         result.runtime_layout_store = try layout.Store.init(env, result.runtime_types);
         return result;
@@ -266,6 +269,71 @@ pub const Interpreter2 = struct {
                 }
                 return value;
             },
+            .e_closure => |clos| {
+                // Build a closure value with concrete captures. The closure references a lambda.
+                const lam_expr = self.env.store.getExpr(clos.lambda_idx);
+                if (lam_expr != .e_lambda) return error.NotImplemented;
+                const lam = lam_expr.e_lambda;
+
+                // Collect capture layouts and names from current bindings
+                const caps = self.env.store.sliceCaptures(clos.captures);
+                var field_layouts = try self.allocator.alloc(Layout, caps.len);
+                defer self.allocator.free(field_layouts);
+                var field_names = try self.allocator.alloc(@import("base").Ident.Idx, caps.len);
+                defer self.allocator.free(field_names);
+
+                // Helper: find current bound value for a pattern_idx
+                const findBinding = struct {
+                    fn go(self_interp: *Interpreter2, patt: can.CIR.Pattern.Idx) ?StackValue {
+                        var i: usize = self_interp.bindings.items.len;
+                        while (i > 0) {
+                            i -= 1;
+                            const b = self_interp.bindings.items[i];
+                            if (b.pattern_idx == patt) return b.value;
+                        }
+                        return null;
+                    }
+                }.go;
+
+                for (caps, 0..) |cap_idx, i| {
+                    const cap = self.env.store.getCapture(cap_idx);
+                    field_names[i] = cap.name;
+                    const bound = findBinding(self, cap.pattern_idx) orelse return error.NotImplemented;
+                    field_layouts[i] = bound.layout;
+                }
+
+                const captures_layout_idx = try self.runtime_layout_store.putRecord(field_layouts, field_names);
+                const captures_layout = self.runtime_layout_store.getLayout(captures_layout_idx);
+                const closure_layout = Layout.closure(captures_layout_idx);
+                const value = try self.pushRaw(closure_layout, 0);
+
+                // Initialize header
+                if (value.ptr) |ptr| {
+                    const header: *layout.Closure = @ptrCast(@alignCast(ptr));
+                    header.* = .{
+                        .body_idx = lam.body,
+                        .params = lam.args,
+                        .captures_pattern_idx = @enumFromInt(@as(u32, 0)), // not used in minimal path
+                        .captures_layout_idx = captures_layout_idx,
+                        .lambda_expr_idx = clos.lambda_idx,
+                    };
+                    // Copy captures into record area following header (aligned)
+                    const header_size = @sizeOf(layout.Closure);
+                    const cap_align = captures_layout.alignment(self.runtime_layout_store.targetUsize());
+                    const aligned_off = std.mem.alignForward(usize, header_size, @intCast(cap_align.toByteUnits()));
+                    const base: [*]u8 = @ptrCast(@alignCast(ptr));
+                    const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
+                    const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
+                    var accessor = try rec_val.asRecord(&self.runtime_layout_store);
+                    for (caps) |cap_idx2| {
+                        const cap2 = self.env.store.getCapture(cap_idx2);
+                        const bound2 = findBinding(self, cap2.pattern_idx) orelse return error.NotImplemented;
+                        const idx_opt = accessor.findFieldIndex(self.env, self.env.getIdent(cap2.name)) orelse return error.NotImplemented;
+                        try accessor.setFieldByIndex(idx_opt, bound2, roc_ops);
+                    }
+                }
+                return value;
+            },
             .e_call => |call| {
                 const all = self.env.store.sliceExpr(call.args);
                 if (all.len < 2) return error.TypeMismatch;
@@ -279,6 +347,9 @@ pub const Interpreter2 = struct {
                     const arg_val = try self.evalExprMinimal(arg_idx, roc_ops);
                     const params = self.env.store.slicePatterns(header.params);
                     if (params.len != 1) return error.NotImplemented;
+                    // Provide closure context for capture lookup during body eval
+                    try self.active_closures.append(func_val);
+                    defer _ = self.active_closures.pop();
                     try self.bindings.append(.{ .pattern_idx = params[0], .value = arg_val });
                     defer _ = self.bindings.pop();
                     return try self.evalExprMinimal(header.body_idx, roc_ops);
@@ -306,6 +377,28 @@ pub const Interpreter2 = struct {
                     const b = self.bindings.items[i];
                     if (b.pattern_idx == lookup.pattern_idx) {
                         return try self.pushCopy(b.value);
+                    }
+                }
+                // If not found, try active closure captures by variable name
+                if (self.active_closures.items.len > 0) {
+                    const pat = self.env.store.getPattern(lookup.pattern_idx);
+                    if (pat == .assign) {
+                        const var_name = self.env.getIdent(pat.assign.ident);
+                        const clos_val = self.active_closures.items[self.active_closures.items.len - 1];
+                        if (clos_val.layout.tag == .closure and clos_val.ptr != null) {
+                            const captures_layout = self.runtime_layout_store.getLayout(clos_val.layout.data.closure.captures_layout_idx);
+                            const header_sz = @sizeOf(layout.Closure);
+                            const cap_align = captures_layout.alignment(self.runtime_layout_store.targetUsize());
+                            const aligned_off = std.mem.alignForward(usize, header_sz, @intCast(cap_align.toByteUnits()));
+                            const base: [*]u8 = @ptrCast(@alignCast(clos_val.ptr.?));
+                            const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
+                            const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
+                            var accessor = try rec_val.asRecord(&self.runtime_layout_store);
+                            if (accessor.findFieldIndex(self.env, var_name)) |fidx| {
+                                const field_val = try accessor.getFieldByIndex(fidx);
+                                return try self.pushCopy(field_val);
+                            }
+                        }
                     }
                 }
                 return error.NotImplemented;
@@ -468,6 +561,7 @@ pub const Interpreter2 = struct {
         self.unify_scratch.deinit();
         self.stack_memory.deinit();
         self.bindings.deinit();
+        self.active_closures.deinit();
     }
 
     /// Ensure the slot array can index at least `min_len` entries; zero-fill new entries.
