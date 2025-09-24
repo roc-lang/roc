@@ -215,3 +215,79 @@ test "interpreter2 captures (polymorphic): same captured id used at two types" {
     ;
     try std.testing.expectEqualStrings(expected, rendered);
 }
+
+// Higher-order: pass a function and apply inside another function
+test "interpreter2 higher-order: apply f then call with 41" {
+    const roc_src =
+        \\((|f| (|x| f(x)))(|n| n + 1))(41)
+    ;
+
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var ops = makeOps(std.testing.allocator);
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("42", rendered);
+}
+
+// Higher-order: double apply f inside a function
+test "interpreter2 higher-order: apply f twice" {
+    const roc_src =
+        \\((|f| (|x| f(f(x))))(|n| n + 1))(40)
+    ;
+
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var ops = makeOps(std.testing.allocator);
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("42", rendered);
+}
+
+// Higher-order: pass a constructed closure as an argument, then apply with an int
+test "interpreter2 higher-order: pass constructed closure and apply" {
+    const roc_src =
+        \\(|g| g(41))((|f| (|x| f(x)))(|y| y))
+    ;
+
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var ops = makeOps(std.testing.allocator);
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("41", rendered);
+}
+
+// Higher-order: construct a function then pass it to a consumer and evaluate
+test "interpreter2 higher-order: construct then pass then call" {
+    const roc_src =
+        \\((|make| (|z| (make(|n| n + 1))(z)))(|f| (|x| f(x))))(41)
+    ;
+
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var ops = makeOps(std.testing.allocator);
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("42", rendered);
+}
