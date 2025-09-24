@@ -5373,7 +5373,7 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx) std.mem.A
 
 // expr statements //
 
-pub fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!CanonicalizedExpr {
+fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!CanonicalizedExpr {
     const block_region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
     // Blocks don't introduce function boundaries, but may contain var statements

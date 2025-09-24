@@ -1436,7 +1436,7 @@ fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx, rank: types_mod.Rank,
 
 // expr //
 
-pub const Expected = union(enum) {
+const Expected = union(enum) {
     no_expectation,
     expected: struct { var_: Var, from_annotation: bool },
 };

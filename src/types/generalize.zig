@@ -213,6 +213,8 @@ pub const Generalizer = struct {
 
 const VarArrayList = std.ArrayList(Var);
 
+/// A pool of variables grouped by rank, use to manage & generalize variables
+/// introduced during unification
 pub const VarPool = struct {
     const Self = @This();
 
