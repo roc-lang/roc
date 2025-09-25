@@ -57,8 +57,8 @@
       - Tuples: `e_tuple` (allocate and fill via layout store accessors), REPL‑style rendering `(a, b, ...)`.
       - Records: `e_record` (allocate and fill by field name via accessor), REPL-style rendering `{ x: 1, y: 2 }`.
       - Empty record literal `e_empty_record` and expect-success unit result `{}` (zero-sized values stay purely logical).
-      - Lambdas: `e_lambda` as minimal placeholder; `e_call` supports a one-arg lambda by binding the parameter to the
-        evaluated argument and evaluating the body; `e_lookup_local` finds values in a simple binding stack.
+      - Lambdas: `e_lambda` (multi-argument) binds parameters to evaluated arguments in order; `e_call` handles direct
+        lambdas and closures with multiple parameters; `e_lookup_local` finds values in a simple binding stack.
       - Nominal wrappers: `e_nominal` / `e_nominal_external` delegate evaluation to the backing expression.
       - Crash & expect: `e_crash`, `s_crash`, and `e_expect`/`s_expect` invoke `roc_crashed`/`roc_expect_failed`, stash
         crash messages, and surface deterministic Roc-style error strings.
@@ -184,9 +184,8 @@
     ## Short‑Term Next Steps (Suggested)
 
     1. Closures and captures (construct closures; test a captured variable case).
-    2. Multi‑arg lambdas; nested calls.
-    3. Type‑driven booleans + simple if; Roc‑syntax tests.
-    4. Tuple/record destructuring patterns in match; tests.
+    2. Type-driven booleans + simple if; Roc-syntax tests.
+    3. Tuple/record destructuring patterns in match; tests.
     5. Tag unions representation + evaluation + rendering; tests.
     6. Full call execution with runtime unification across call boundaries (beyond prepareCall).
 

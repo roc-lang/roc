@@ -22,37 +22,49 @@ const RocDec = builtins.dec.RocDec;
 const Layout = layout.Layout;
 
 pub const Interpreter2 = struct {
-    const MAX_ARITY: usize = 8;
     const PolyKey = struct {
         func_id: u32,
-        arity: u8,
-        args: [MAX_ARITY]types.Var, // roots of runtime vars
+        args_len: u32,
+        args_ptr: [*]const types.Var,
+
+        fn slice(self: PolyKey) []const types.Var {
+            if (self.args_len == 0) return &.{};
+            return self.args_ptr[0..self.args_len];
+        }
+
+        fn init(func_id: u32, args: []const types.Var) PolyKey {
+            return .{
+                .func_id = func_id,
+                .args_len = @intCast(args.len),
+                .args_ptr = if (args.len == 0) undefined else args.ptr,
+            };
+        }
     };
 
     const PolyEntry = struct {
         return_var: types.Var,
-        return_layout_slot: u32, // biased: layout_idx + 1, or 0 if unset
+        return_layout_slot: u32,
+        args: []const types.Var,
     };
 
     const PolyKeyCtx = struct {
         pub fn hash(_: PolyKeyCtx, k: PolyKey) u64 {
             var h = std.hash.Wyhash.init(0);
             h.update(std.mem.asBytes(&k.func_id));
-            h.update(std.mem.asBytes(&k.arity));
-            var i: usize = 0;
-            while (i < k.arity) : (i += 1) {
-                const v_int: u32 = @intFromEnum(k.args[i]);
-                h.update(std.mem.asBytes(&v_int));
+            h.update(std.mem.asBytes(&k.args_len));
+            if (k.args_len > 0) {
+                var i: usize = 0;
+                while (i < k.args_len) : (i += 1) {
+                    const v_int: u32 = @intFromEnum(k.args_ptr[i]);
+                    h.update(std.mem.asBytes(&v_int));
+                }
             }
             return h.final();
         }
         pub fn eql(_: PolyKeyCtx, a: PolyKey, b: PolyKey) bool {
-            if (a.func_id != b.func_id or a.arity != b.arity) return false;
-            var i: usize = 0;
-            while (i < a.arity) : (i += 1) {
-                if (a.args[i] != b.args[i]) return false;
-            }
-            return true;
+            if (a.func_id != b.func_id or a.args_len != b.args_len) return false;
+            if (a.args_len == 0) return true;
+            return std.mem.eql(types.Var, a.args_ptr[0..a.args_len], b.args_ptr[0..b.args_len]);
         }
     };
     const Binding = struct { pattern_idx: can.CIR.Pattern.Idx, value: StackValue };
@@ -947,15 +959,20 @@ pub const Interpreter2 = struct {
             },
             .e_call => |call| {
                 const all = self.env.store.sliceExpr(call.args);
-                if (all.len < 2) return error.TypeMismatch;
+                if (all.len == 0) return error.TypeMismatch;
                 const func_idx = all[0];
-                const arg_idx = all[1];
+                const arg_indices = all[1..];
                 // Runtime unification for call: constrain return type from arg types
                 const func_ct_var = can.ModuleEnv.varFrom(func_idx);
                 const func_rt_var = try self.translateTypeVar(self.env, func_ct_var);
-                const arg_ct_var = can.ModuleEnv.varFrom(arg_idx);
-                const arg_rt_var = try self.translateTypeVar(self.env, arg_ct_var);
-                const poly_entry = try self.prepareCallWithFuncVar(@intCast(@intFromEnum(func_idx)), func_rt_var, &.{arg_rt_var});
+                var arg_rt_buf = try self.allocator.alloc(types.Var, arg_indices.len);
+                defer self.allocator.free(arg_rt_buf);
+                var i: usize = 0;
+                while (i < arg_indices.len) : (i += 1) {
+                    const arg_ct_var = can.ModuleEnv.varFrom(arg_indices[i]);
+                    arg_rt_buf[i] = try self.translateTypeVar(self.env, arg_ct_var);
+                }
+                const poly_entry = try self.prepareCallWithFuncVar(@intCast(@intFromEnum(func_idx)), func_rt_var, arg_rt_buf);
                 // Unify this call expression's return var with the function's constrained return var
                 const call_ret_ct_var = can.ModuleEnv.varFrom(expr_idx);
                 const call_ret_rt_var = try self.translateTypeVar(self.env, call_ret_ct_var);
@@ -972,18 +989,31 @@ pub const Interpreter2 = struct {
                 );
 
                 const func_val = try self.evalExprMinimal(func_idx, roc_ops, null);
+                var arg_values = try self.allocator.alloc(StackValue, arg_indices.len);
+                defer self.allocator.free(arg_values);
+                var j: usize = 0;
+                while (j < arg_indices.len) : (j += 1) {
+                    arg_values[j] = try self.evalExprMinimal(arg_indices[j], roc_ops, if (arg_rt_buf.len == 0) null else arg_rt_buf[j]);
+                }
                 // Support calling closures produced by evaluating expressions (including nested calls)
                 if (func_val.layout.tag == .closure) {
                     const header: *const layout.Closure = @ptrCast(@alignCast(func_val.ptr.?));
-                    // Evaluate argument and bind to first parameter
-                    const arg_val = try self.evalExprMinimal(arg_idx, roc_ops, null);
                     const params = self.env.store.slicePatterns(header.params);
-                    if (params.len != 1) return error.NotImplemented;
+                    if (params.len != arg_indices.len) return error.TypeMismatch;
                     // Provide closure context for capture lookup during body eval
                     try self.active_closures.append(func_val);
                     defer _ = self.active_closures.pop();
-                    try self.bindings.append(.{ .pattern_idx = params[0], .value = arg_val });
-                    defer _ = self.bindings.pop();
+                    var bind_count: usize = 0;
+                    while (bind_count < params.len) : (bind_count += 1) {
+                        try self.bindings.append(.{ .pattern_idx = params[bind_count], .value = arg_values[bind_count] });
+                    }
+                    defer {
+                        var k = params.len;
+                        while (k > 0) {
+                            k -= 1;
+                            _ = self.bindings.pop();
+                        }
+                    }
                     return try self.evalExprMinimal(header.body_idx, roc_ops, null);
                 }
 
@@ -991,11 +1021,19 @@ pub const Interpreter2 = struct {
                 const func_expr = self.env.store.getExpr(func_idx);
                 if (func_expr == .e_lambda) {
                     const lambda = func_expr.e_lambda;
-                    const arg_val = try self.evalExprMinimal(arg_idx, roc_ops, null);
                     const params = self.env.store.slicePatterns(lambda.args);
-                    if (params.len != 1) return error.NotImplemented;
-                    try self.bindings.append(.{ .pattern_idx = params[0], .value = arg_val });
-                    defer _ = self.bindings.pop();
+                    if (params.len != arg_indices.len) return error.TypeMismatch;
+                    var bind_count: usize = 0;
+                    while (bind_count < params.len) : (bind_count += 1) {
+                        try self.bindings.append(.{ .pattern_idx = params[bind_count], .value = arg_values[bind_count] });
+                    }
+                    defer {
+                        var k = params.len;
+                        while (k > 0) {
+                            k -= 1;
+                            _ = self.bindings.pop();
+                        }
+                    }
                     return try self.evalExprMinimal(lambda.body, roc_ops, null);
                 }
 
@@ -1691,6 +1729,12 @@ pub const Interpreter2 = struct {
         }
         self.empty_scope.deinit();
         self.translate_cache.deinit();
+        var it = self.poly_cache.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.args.len > 0) {
+                self.allocator.free(@constCast(entry.value_ptr.args));
+            }
+        }
         self.poly_cache.deinit();
         self.var_to_layout_slot.deinit();
         self.runtime_layout_store.deinit();
@@ -1922,40 +1966,34 @@ pub const Interpreter2 = struct {
     }
 
     pub fn makePolyKey(self: *Interpreter2, func_id: u32, args: []const types.Var) PolyKey {
-        var key = PolyKey{
-            .func_id = func_id,
-            .arity = @intCast(@min(args.len, MAX_ARITY)),
-            .args = std.mem.zeroes([MAX_ARITY]types.Var),
-        };
-        var i: usize = 0;
-        while (i < key.arity) : (i += 1) {
-            const root = self.runtime_types.resolveVar(args[i]).var_;
-            key.args[i] = root;
-        }
-        return key;
+        _ = self;
+        return PolyKey.init(func_id, args);
     }
 
-    pub fn polyLookup(self: *Interpreter2, key: PolyKey) ?PolyEntry {
+    fn polyLookup(self: *Interpreter2, func_id: u32, args: []const types.Var) ?PolyEntry {
+        const key = self.makePolyKey(func_id, args);
         return self.poly_cache.get(key);
     }
 
-    pub fn polyInsert(self: *Interpreter2, key: PolyKey, entry: PolyEntry) !void {
+    fn polyInsert(self: *Interpreter2, func_id: u32, entry: PolyEntry) !void {
+        const key = PolyKey.init(func_id, entry.args);
         try self.poly_cache.put(key, entry);
     }
 
     /// Prepare a call: return cached instantiation entry if present; on miss, insert using return_var_hint if provided.
     pub fn prepareCall(self: *Interpreter2, func_id: u32, args: []const types.Var, return_var_hint: ?types.Var) !?PolyEntry {
-        const key = self.makePolyKey(func_id, args);
-        if (self.polyLookup(key)) |found| return found;
+        if (self.polyLookup(func_id, args)) |found| return found;
 
         if (return_var_hint) |ret| {
-            // Ensure layout slot for return var
             _ = try self.getRuntimeLayout(ret);
             const root_idx: usize = @intFromEnum(self.runtime_types.resolveVar(ret).var_);
             try self.ensureVarLayoutCapacity(root_idx + 1);
             const slot = self.var_to_layout_slot.items[root_idx];
-            const entry = PolyEntry{ .return_var = ret, .return_layout_slot = slot };
-            try self.polyInsert(key, entry);
+            const args_copy_mut = try self.allocator.alloc(types.Var, args.len);
+            errdefer self.allocator.free(args_copy_mut);
+            std.mem.copyForwards(types.Var, args_copy_mut, args);
+            const entry = PolyEntry{ .return_var = ret, .return_layout_slot = slot, .args = args_copy_mut };
+            try self.polyInsert(func_id, entry);
             return entry;
         }
 
@@ -1965,8 +2003,7 @@ pub const Interpreter2 = struct {
     /// Prepare a call using a known runtime function type var.
     /// Builds and inserts a cache entry on miss using the function's declared return var.
     pub fn prepareCallWithFuncVar(self: *Interpreter2, func_id: u32, func_type_var: types.Var, args: []const types.Var) !PolyEntry {
-        const key = self.makePolyKey(func_id, args);
-        if (self.polyLookup(key)) |found| return found;
+        if (self.polyLookup(func_id, args)) |found| return found;
 
         const func_resolved = self.runtime_types.resolveVar(func_type_var);
         const ret_var: types.Var = switch (func_resolved.desc.content) {
@@ -2012,8 +2049,12 @@ pub const Interpreter2 = struct {
         const root_idx: usize = @intFromEnum(self.runtime_types.resolveVar(ret_var).var_);
         try self.ensureVarLayoutCapacity(root_idx + 1);
         const slot = self.var_to_layout_slot.items[root_idx];
-        const entry = PolyEntry{ .return_var = ret_var, .return_layout_slot = slot };
-        try self.polyInsert(key, entry);
+        const args_copy_mut = try self.allocator.alloc(types.Var, args.len);
+        errdefer self.allocator.free(args_copy_mut);
+        std.mem.copyForwards(types.Var, args_copy_mut, args);
+
+        const entry = PolyEntry{ .return_var = ret_var, .return_layout_slot = slot, .args = args_copy_mut };
+        try self.polyInsert(func_id, entry);
         return entry;
     }
 };
@@ -2322,8 +2363,7 @@ test "interpreter2: poly cache insert and lookup" {
     const rt_i64 = try interp.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
     const args = [_]types.Var{ rt_str, rt_i64 };
 
-    const key = interp.makePolyKey(f_id, &args);
-    try std.testing.expect(interp.polyLookup(key) == null);
+    try std.testing.expect(interp.polyLookup(f_id, &args) == null);
 
     // For testing, say return type is Str
     const ret_var = rt_str;
@@ -2334,10 +2374,13 @@ test "interpreter2: poly cache insert and lookup" {
     const slot = interp.var_to_layout_slot.items[root_idx];
     try std.testing.expect(slot != 0);
 
-    try interp.polyInsert(key, .{ .return_var = ret_var, .return_layout_slot = slot });
-    const found = interp.polyLookup(key) orelse return error.TestUnexpectedResult;
+    const args_copy = try interp.allocator.alloc(types.Var, args.len);
+    std.mem.copyForwards(types.Var, args_copy, &args);
+    try interp.polyInsert(f_id, .{ .return_var = ret_var, .return_layout_slot = slot, .args = args_copy });
+    const found = interp.polyLookup(f_id, &args) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(ret_var, found.return_var);
     try std.testing.expectEqual(slot, found.return_layout_slot);
+    try std.testing.expect(std.mem.eql(types.Var, found.args, &args));
 }
 
 // RED: prepareCall should miss without hint, then hit after inserting with hint
