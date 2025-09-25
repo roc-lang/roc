@@ -296,6 +296,32 @@ test "interpreter2: match bool patterns" {
     try std.testing.expectEqualStrings("1", rendered);
 }
 
+test "interpreter2: match record destructures fields" {
+    const roc_src = "match { x: 1, y: 2 } { { x, y } => x + y, _ => 0 }";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("3", rendered);
+}
+
 test "interpreter2: tuples and records" {
     // Tuple test: (1, 2)
     const src_tuple = "(1, 2)";
