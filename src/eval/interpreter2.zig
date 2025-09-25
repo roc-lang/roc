@@ -532,13 +532,7 @@ pub const Interpreter2 = struct {
                 if (!found) return error.NotImplemented;
                 const layout_val = try self.getRuntimeLayout(rt_var);
                 if (self.isBoolLayout(layout_val) and (std.mem.eql(u8, name_text, "True") or std.mem.eql(u8, name_text, "False"))) {
-                    if (self.runtimeVarIsBool(rt_var)) {
-                        tag_index = if (std.mem.eql(u8, name_text, "True")) self.bool_true_index else self.bool_false_index;
-                    } else {
-                        tag_index = if (std.mem.eql(u8, name_text, "True")) 1 else 0;
-                        self.bool_false_index = 0;
-                        self.bool_true_index = 1;
-                    }
+                    try self.prepareBoolIndices(rt_var);
                     return try self.makeBoolValue(rt_var, std.mem.eql(u8, name_text, "True"));
                 }
                 // If layout is scalar (bool/uint), write discriminant directly
@@ -598,13 +592,7 @@ pub const Interpreter2 = struct {
 
                 const layout_val = try self.getRuntimeLayout(rt_var);
                 if (self.isBoolLayout(layout_val) and (std.mem.eql(u8, name_text, "True") or std.mem.eql(u8, name_text, "False"))) {
-                    if (self.runtimeVarIsBool(rt_var)) {
-                        tag_index = if (std.mem.eql(u8, name_text, "True")) self.bool_true_index else self.bool_false_index;
-                    } else {
-                        tag_index = if (std.mem.eql(u8, name_text, "True")) 1 else 0;
-                        self.bool_false_index = 0;
-                        self.bool_true_index = 1;
-                    }
+                    try self.prepareBoolIndices(rt_var);
                     return try self.makeBoolValue(rt_var, std.mem.eql(u8, name_text, "True"));
                 }
                 if (layout_val.tag == .scalar) {
@@ -961,8 +949,7 @@ pub const Interpreter2 = struct {
         };
 
         if (bool_var) |_var| {
-            // runtimeVarIsBool updates bool_true/false indices for this interpreter
-            if (!self.runtimeVarIsBool(_var)) return error.TypeMismatch;
+            try self.prepareBoolIndices(_var);
             if (raw_index == self.bool_false_index or raw_index == self.bool_true_index) {
                 return raw_index;
             }
@@ -974,6 +961,7 @@ pub const Interpreter2 = struct {
 
     fn boolValueIsTrue(self: *Interpreter2, value: StackValue, rt_var: types.Var) !bool {
         if (!self.isBoolLayout(value.layout)) return error.TypeMismatch;
+        try self.prepareBoolIndices(rt_var);
         if (!self.runtimeVarIsBool(rt_var)) return error.TypeMismatch;
         const idx = try self.extractBoolTagIndex(value, rt_var);
         return idx == self.bool_true_index;
@@ -1047,6 +1035,12 @@ pub const Interpreter2 = struct {
         return backing_rt_var;
     }
 
+    fn prepareBoolIndices(self: *Interpreter2, rt_var: types.Var) !void {
+        if (self.runtimeVarIsBool(rt_var)) return;
+        const canonical = try self.getCanonicalBoolRuntimeVar();
+        _ = self.runtimeVarIsBool(canonical);
+    }
+
     fn resolveBaseVar(self: *Interpreter2, runtime_var: types.Var) types.store.ResolvedVarDesc {
         var current = self.runtime_types.resolveVar(runtime_var);
         while (true) {
@@ -1112,10 +1106,7 @@ pub const Interpreter2 = struct {
     fn makeBoolValue(self: *Interpreter2, target_rt_var: types.Var, truthy: bool) !StackValue {
         const layout_val = try self.getRuntimeLayout(target_rt_var);
         if (!self.isBoolLayout(layout_val)) return error.NotImplemented;
-        if (!self.runtimeVarIsBool(target_rt_var)) {
-            const canonical = try self.getCanonicalBoolRuntimeVar();
-            if (!self.runtimeVarIsBool(canonical)) return error.NotImplemented;
-        }
+        try self.prepareBoolIndices(target_rt_var);
         const chosen_index: u8 = if (truthy) self.bool_true_index else self.bool_false_index;
         var out = try self.pushRaw(layout_val, 0);
 
@@ -1311,6 +1302,7 @@ pub const Interpreter2 = struct {
                     const actual_name = if (tag_data.index == self.bool_true_index) "True" else "False";
                     if (!std.mem.eql(u8, expected_name, actual_name)) return false;
                 } else {
+                    try self.prepareBoolIndices(value_rt_var);
                     const actual_name = self.env.getIdent(tags.items(.name)[tag_data.index]);
                     if (!std.mem.eql(u8, expected_name, actual_name)) return false;
                 }
