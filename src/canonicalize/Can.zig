@@ -79,7 +79,7 @@ var_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 /// Tracks which pattern indices have been used/referenced
 used_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 /// Map of module name strings to their ModuleEnv pointers for import validation
-module_envs: ?*const std.StringHashMap(*ModuleEnv),
+module_envs: ?*const std.StringHashMap(*const ModuleEnv),
 /// Map from module name string to Import.Idx for tracking unique imports
 import_indices: std.StringHashMapUnmanaged(Import.Idx),
 /// Scratch type variables
@@ -170,7 +170,7 @@ pub fn deinit(
     self.scratch_free_vars.deinit(gpa);
 }
 
-pub fn init(env: *ModuleEnv, parse_ir: *AST, module_envs: ?*const std.StringHashMap(*ModuleEnv)) std.mem.Allocator.Error!Self {
+pub fn init(env: *ModuleEnv, parse_ir: *AST, module_envs: ?*const std.StringHashMap(*const ModuleEnv)) std.mem.Allocator.Error!Self {
     const gpa = env.gpa;
 
     // Create the canonicalizer with scopes

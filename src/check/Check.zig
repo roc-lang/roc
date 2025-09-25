@@ -41,7 +41,7 @@ gpa: std.mem.Allocator,
 types: *types_mod.Store,
 cir: *ModuleEnv,
 regions: *Region.List,
-other_modules: []const *ModuleEnv,
+other_modules: []const *const ModuleEnv,
 common_idents: CommonIdents,
 
 /// type snapshots used in error messages
@@ -94,7 +94,7 @@ pub fn init(
     gpa: std.mem.Allocator,
     types: *types_mod.Store,
     cir: *const ModuleEnv,
-    other_modules: []const *ModuleEnv,
+    other_modules: []const *const ModuleEnv,
     regions: *Region.List,
     common_idents: CommonIdents,
 ) std.mem.Allocator.Error!Self {
@@ -1718,6 +1718,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
         },
         // nominal //
         .e_nominal => |nominal| {
+            // TODO: Merge thsi with e_nominal_external
+
             // First, check the type inside the expr
             does_fx = try self.checkExpr(nominal.backing_expr, rank, .no_expectation) or does_fx;
             const actual_backing_var = ModuleEnv.varFrom(nominal.backing_expr);
@@ -1772,9 +1774,67 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                 try self.updateVar(expr_var, .err, rank);
             }
         },
-        .e_nominal_external => {
-            // TODO
-            try self.updateVar(expr_var, .err, rank);
+        .e_nominal_external => |nominal| {
+            // TODO: Merge thsi with e_nominal
+
+            // First, check the type inside the expr
+            does_fx = try self.checkExpr(nominal.backing_expr, rank, .no_expectation) or does_fx;
+            const actual_backing_var = ModuleEnv.varFrom(nominal.backing_expr);
+
+            if (try self.resolveVarFromExternal(nominal.module_idx, nominal.target_node_idx)) |ext_ref| {
+                // Then, we need an instance of the nominal type being referenced
+                // E.g. ConList.Cons(...)
+                //      ^^^^^^^
+                const nominal_var = try self.instantiateVar(ext_ref.local_var, Rank.generalized, .{ .explicit = expr_region });
+                const nominal_resolved = self.types.resolveVar(nominal_var).desc.content;
+
+                if (nominal_resolved == .structure and nominal_resolved.structure == .nominal_type) {
+                    // Then, we extract the variable of the nominal type
+                    // E.g. ConList(a) := [Cons(a, ConstList), Nil]
+                    //                    ^^^^^^^^^^^^^^^^^^^^^^^^^
+                    const nominal_backing_var = self.types.getNominalBackingVar(nominal_resolved.structure.nominal_type);
+
+                    // Now we unify what the user wrote with the backing type of the nominal was
+                    // E.g. ConList.Cons(...) <-> [Cons(a, ConsList(a)), Nil]
+                    //              ^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^^^
+                    const result = try self.unify(nominal_backing_var, actual_backing_var, rank);
+
+                    // Then, we handle the result of unification
+                    switch (result) {
+                        .ok => {
+                            // If that unify call succeeded, then we this is a valid instance
+                            // of this nominal type. So we set the expr's type to be the
+                            // nominal type
+                            try self.types.setVarRedirect(expr_var, nominal_var);
+                        },
+                        .problem => |problem_idx| {
+                            // Unification failed - the constructor is incompatible with the nominal type
+                            // Set a specific error message based on the backing type kind
+                            switch (nominal.backing_type) {
+                                .tag => {
+                                    // Constructor doesn't exist or has wrong arity/types
+                                    self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_tag);
+                                },
+                                else => {
+                                    // TODO: Add specific error messages for records, tuples, etc.
+                                },
+                            }
+
+                            // Mark the entire expression as having a type error
+                            try self.updateVar(expr_var, .err, rank);
+                        },
+                    }
+                } else {
+                    // If the nominal type is actually something else, then set the
+                    // whole expression to be an error.
+                    //
+                    // TODO: Report a nice problem here
+                    try self.updateVar(expr_var, .err, rank);
+                }
+            } else {
+                std.debug.assert(false);
+                try self.updateVar(expr_var, .err, rank);
+            }
         },
         // lookup //
         .e_lookup_local => |lookup| {
@@ -1791,9 +1851,18 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
 
             // Unify this expression with the referenced pattern
         },
-        .e_lookup_external => {
-            // TODO
-            try self.updateVar(expr_var, .err, rank);
+        .e_lookup_external => |ext| {
+            if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
+                const ext_instantiated_var = try self.instantiateVar(
+                    ext_ref.local_var,
+                    Rank.generalized,
+                    .{ .explicit = expr_region },
+                );
+                try self.types.setVarRedirect(expr_var, ext_instantiated_var);
+            } else {
+                std.debug.assert(false);
+                try self.updateVar(expr_var, .err, rank);
+            }
         },
         // block //
         .e_block => |block| {
@@ -3433,7 +3502,7 @@ fn setProblemTypeMismatchDetail(self: *Self, problem_idx: problem.Problem.Idx, m
 const ExternalType = struct {
     local_var: Var,
     other_cir_node_idx: CIR.Node.Idx,
-    other_cir: *ModuleEnv,
+    other_cir: *const ModuleEnv,
 };
 
 /// Copy a variable from a different module into this module's types store.
@@ -3485,7 +3554,7 @@ fn resolveVarFromExternal(
 fn copyVar(
     self: *Self,
     other_module_var: Var,
-    other_module_env: *ModuleEnv,
+    other_module_env: *const ModuleEnv,
 ) std.mem.Allocator.Error!Var {
     // First, reset state
     self.var_map.clearRetainingCapacity();
@@ -3496,7 +3565,7 @@ fn copyVar(
         self.types,
         other_module_var,
         &self.var_map,
-        other_module_env.getIdentStore(),
+        other_module_env.getIdentStoreConst(),
         self.cir.getIdentStore(),
         self.gpa,
     );

@@ -21,8 +21,92 @@ can: *Can,
 checker: Check,
 type_writer: types.TypeWriter,
 
+module_envs: std.StringHashMap(*const ModuleEnv),
+other_envs: std.ArrayList(*const ModuleEnv),
+
 /// Test environment for canonicalization testing, providing a convenient wrapper around ModuleEnv, AST, and Can.
 const TestEnv = @This();
+
+/// Initialize where the provided source is an entire file
+///
+/// Accepts another module that should already be can'd and type checked, and will
+/// add that module as an import to this module
+pub fn initWithImport(source: []const u8, other_module_name: []const u8, other_module_env: *const ModuleEnv) !TestEnv {
+    const gpa = std.testing.allocator;
+
+    // Allocate our ModuleEnv, AST, and Can on the heap
+    // so we can keep them around for testing purposes...
+    // this is an unusual setup, but helps us with testing
+    const module_env: *ModuleEnv = try gpa.create(ModuleEnv);
+    errdefer gpa.destroy(module_env);
+
+    const parse_ast = try gpa.create(parse.AST);
+    errdefer gpa.destroy(parse_ast);
+
+    const can = try gpa.create(Can);
+    errdefer gpa.destroy(can);
+
+    var module_envs = std.StringHashMap(*const ModuleEnv).init(gpa);
+    var other_envs = std.ArrayList(*const ModuleEnv).init(gpa);
+
+    // Put the other module in the env map
+    try module_envs.put(other_module_name, other_module_env);
+
+    const module_name = "Test";
+    std.debug.assert(!std.mem.eql(u8, module_name, other_module_name));
+
+    // Initialize the ModuleEnv with the CommonEnv
+    module_env.* = try ModuleEnv.init(gpa, source);
+    errdefer module_env.deinit();
+
+    module_env.common.source = source;
+    module_env.module_name = module_name;
+    try module_env.common.calcLineStarts(gpa);
+
+    const module_common_idents: Check.CommonIdents = .{
+        .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
+        .list = try module_env.insertIdent(base.Ident.for_text("List")),
+        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+    };
+
+    // Parse the AST
+    parse_ast.* = try parse.parse(&module_env.common, gpa);
+    errdefer parse_ast.deinit(gpa);
+    parse_ast.store.emptyScratch();
+
+    // Canonicalize
+    try module_env.initCIRFields(gpa, "test");
+    can.* = try Can.init(module_env, parse_ast, &module_envs);
+    errdefer can.deinit();
+
+    try can.canonicalizeFile();
+
+    // Pull out the imported index
+    std.debug.assert(can.import_indices.size == 1);
+    const import_idx = can.import_indices.get(other_module_name).?;
+    std.debug.assert(@intFromEnum(import_idx) == 0);
+    try other_envs.append(other_module_env);
+
+    // Type Check
+    var checker = try Check.init(gpa, &module_env.types, module_env, other_envs.items, &module_env.store.regions, module_common_idents);
+    errdefer checker.deinit();
+
+    try checker.checkFile();
+
+    var type_writer = try module_env.initTypeWriter();
+    errdefer type_writer.deinit();
+
+    return TestEnv{
+        .gpa = gpa,
+        .module_env = module_env,
+        .parse_ast = parse_ast,
+        .can = can,
+        .checker = checker,
+        .type_writer = type_writer,
+        .module_envs = module_envs,
+        .other_envs = other_envs,
+    };
+}
 
 /// Initialize where the provided source is an entire file
 pub fn init(source: []const u8) !TestEnv {
@@ -40,7 +124,10 @@ pub fn init(source: []const u8) !TestEnv {
     const can = try gpa.create(Can);
     errdefer gpa.destroy(can);
 
-    const module_name = "test";
+    const module_envs = std.StringHashMap(*const ModuleEnv).init(gpa);
+    const other_envs = std.ArrayList(*const ModuleEnv).init(gpa);
+
+    const module_name = "Test";
 
     // Initialize the ModuleEnv with the CommonEnv
     module_env.* = try ModuleEnv.init(gpa, source);
@@ -84,6 +171,8 @@ pub fn init(source: []const u8) !TestEnv {
         .can = can,
         .checker = checker,
         .type_writer = type_writer,
+        .module_envs = module_envs,
+        .other_envs = other_envs,
     };
 }
 
@@ -116,6 +205,9 @@ pub fn deinit(self: *TestEnv) void {
     // Since common is now a value field, we don't need to free it separately
     self.module_env.deinit();
     self.gpa.destroy(self.module_env);
+
+    self.module_envs.deinit();
+    self.other_envs.deinit();
 }
 
 /// Get the inferred type of the last declaration and compare it to the provided
