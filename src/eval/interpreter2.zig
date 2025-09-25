@@ -804,28 +804,35 @@ pub const Interpreter2 = struct {
                 const branches = self.env.store.matchBranchSlice(m.branches);
                 for (branches) |br_idx| {
                     const br = self.env.store.getMatchBranch(br_idx);
-                    // Guard not supported in minimal eval
-                    if (br.guard != null) return error.NotImplemented;
                     const patterns = self.env.store.sliceMatchBranchPatterns(br.patterns);
                     var temp_binds = try std.ArrayList(Binding).initCapacity(self.allocator, 4);
                     defer temp_binds.deinit();
 
-                    var any_matched = false;
-                    // OR patterns in a branch; succeed if any match
                     for (patterns) |bp_idx| {
-                        temp_binds.items.len = 0; // reset temporary binds for each OR alternative
-                        if (try self.patternMatchesBind(self.env.store.getMatchBranchPattern(bp_idx).pattern, scrutinee, scrutinee_rt_var, &temp_binds)) {
-                            any_matched = true;
-                            break;
+                        temp_binds.items.len = 0;
+                        if (!try self.patternMatchesBind(self.env.store.getMatchBranchPattern(bp_idx).pattern, scrutinee, scrutinee_rt_var, &temp_binds)) {
+                            continue;
                         }
-                    }
 
-                    if (any_matched) {
-                        // Apply temp binds
                         const start_len = self.bindings.items.len;
                         try self.bindings.appendSlice(temp_binds.items);
-                        defer self.bindings.items.len = start_len;
-                        return try self.evalExprMinimal(br.value, roc_ops, null);
+
+                        var guard_pass = true;
+                        if (br.guard) |guard_idx| {
+                            const guard_ct_var = can.ModuleEnv.varFrom(guard_idx);
+                            const guard_rt_var = try self.translateTypeVar(self.env, guard_ct_var);
+                            const guard_val = try self.evalExprMinimal(guard_idx, roc_ops, guard_rt_var);
+                            guard_pass = try self.boolValueIsTrue(guard_val, guard_rt_var);
+                        }
+
+                        if (!guard_pass) {
+                            self.bindings.items.len = start_len;
+                            continue;
+                        }
+
+                        const result = try self.evalExprMinimal(br.value, roc_ops, null);
+                        self.bindings.items.len = start_len;
+                        return result;
                     }
                 }
                 // Non-exhaustive or unsupported
@@ -1557,6 +1564,17 @@ pub const Interpreter2 = struct {
                 // Bind entire value to this pattern
                 const copied = try self.pushCopy(value);
                 try out_binds.append(.{ .pattern_idx = pattern_idx, .value = copied });
+                return true;
+            },
+            .as => |as_pat| {
+                const before = out_binds.items.len;
+                if (!try self.patternMatchesBind(as_pat.pattern, value, value_rt_var, out_binds)) {
+                    out_binds.items.len = before;
+                    return false;
+                }
+
+                const alias_value = try self.pushCopy(value);
+                try out_binds.append(.{ .pattern_idx = pattern_idx, .value = alias_value });
                 return true;
             },
             .underscore => return true,
