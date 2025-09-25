@@ -115,6 +115,7 @@
     - Current minimal support: assign, underscore, int & string literals, nominal passthrough, OR patterns.
     - Progress:
       - Tuple destructuring patterns now match in Interpreter2 (see `match (1, 2)` test).
+      - Tag union patterns (including payloads) succeed (`match Ok(n)` style) and share canonical Bool indices.
     - TODO:
       - Record destructuring patterns (bind sub-components recursively).
       - Tag union patterns (tag name and payloads) once tag unions are represented for runtime.
