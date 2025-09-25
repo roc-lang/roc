@@ -2,7 +2,9 @@ const std = @import("std");
 const types = @import("types");
 const can = @import("can");
 const layout = @import("layout");
+const builtins = @import("builtins");
 const StackValue = @import("StackValue.zig");
+const RocDec = builtins.dec.RocDec;
 
 pub const RenderCtx = struct {
     allocator: std.mem.Allocator,
@@ -133,21 +135,18 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
 pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
     const gpa = ctx.allocator;
     if (value.layout.tag == .scalar) {
-        switch (value.layout.data.scalar.tag) {
+        const scalar = value.layout.data.scalar;
+        switch (scalar.tag) {
             .str => {
-                const rs: *const @import("builtins").str.RocStr = @ptrCast(@alignCast(value.ptr.?));
+                const rs: *const builtins.str.RocStr = @ptrCast(@alignCast(value.ptr.?));
                 const s = rs.asSlice();
                 var buf = std.ArrayList(u8).init(gpa);
                 errdefer buf.deinit();
                 try buf.append('"');
                 for (s) |ch| {
                     switch (ch) {
-                        '\\' => {
-                            try buf.appendSlice("\\\\");
-                        },
-                        '"' => {
-                            try buf.appendSlice("\\\"");
-                        },
+                        '\\' => try buf.appendSlice("\\\\"),
+                        '"' => try buf.appendSlice("\\\""),
                         else => try buf.append(ch),
                     }
                 }
@@ -157,6 +156,23 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
             .int => {
                 const i = value.asI128();
                 return try std.fmt.allocPrint(gpa, "{d}", .{i});
+            },
+            .frac => {
+                std.debug.assert(value.ptr != null);
+                return switch (scalar.data.frac) {
+                    .f32 => {
+                        const ptr = @as(*const f32, @ptrCast(@alignCast(value.ptr.?)));
+                        return try std.fmt.allocPrint(gpa, "{d}", .{@as(f64, ptr.*)});
+                    },
+                    .f64 => {
+                        const ptr = @as(*const f64, @ptrCast(@alignCast(value.ptr.?)));
+                        return try std.fmt.allocPrint(gpa, "{d}", .{ptr.*});
+                    },
+                    .dec => {
+                        const ptr = @as(*const RocDec, @ptrCast(@alignCast(value.ptr.?)));
+                        return try renderDecimal(gpa, ptr.*);
+                    },
+                };
             },
             else => {},
         }
@@ -181,8 +197,12 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
     if (value.layout.tag == .record) {
         var out = std.ArrayList(u8).init(gpa);
         errdefer out.deinit();
-        try out.appendSlice("{ ");
         const rec_data = ctx.layout_store.getRecordData(value.layout.data.record.idx);
+        if (rec_data.fields.count == 0) {
+            try out.appendSlice("{}");
+            return out.toOwnedSlice();
+        }
+        try out.appendSlice("{ ");
         const fields = ctx.layout_store.record_fields.sliceRange(rec_data.getFields());
         var i: usize = 0;
         while (i < fields.len) : (i += 1) {
@@ -204,4 +224,51 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
         return out.toOwnedSlice();
     }
     return try std.fmt.allocPrint(gpa, "<unsupported>", .{});
+}
+
+fn renderDecimal(gpa: std.mem.Allocator, dec: RocDec) ![]u8 {
+    if (dec.num == 0) {
+        return try gpa.dupe(u8, "0.0");
+    }
+
+    var out = std.ArrayList(u8).init(gpa);
+    errdefer out.deinit();
+
+    var num = dec.num;
+    if (num < 0) {
+        try out.append('-');
+        num = -num;
+    }
+
+    const one = RocDec.one_point_zero_i128;
+    const integer_part = @divTrunc(num, one);
+    const fractional_part = @rem(num, one);
+
+    try std.fmt.format(out.writer(), "{d}", .{integer_part});
+
+    if (fractional_part == 0) {
+        try out.writer().writeAll(".0");
+        return out.toOwnedSlice();
+    }
+
+    try out.writer().writeByte('.');
+
+    const decimal_places: usize = @as(usize, RocDec.decimal_places);
+    var digits: [decimal_places]u8 = undefined;
+    @memset(digits[0..], '0');
+    var remaining = fractional_part;
+    var idx: usize = decimal_places;
+    while (idx > 0) : (idx -= 1) {
+        const digit: u8 = @intCast(@mod(remaining, 10));
+        digits[idx - 1] = digit + '0';
+        remaining = @divTrunc(remaining, 10);
+    }
+
+    var end: usize = decimal_places;
+    while (end > 1 and digits[end - 1] == '0') {
+        end -= 1;
+    }
+
+    try out.writer().writeAll(digits[0..end]);
+    return out.toOwnedSlice();
 }

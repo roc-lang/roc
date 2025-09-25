@@ -438,6 +438,10 @@ pub const Store = struct {
         return try self.insertLayout(empty_record_layout);
     }
 
+    pub fn ensureEmptyRecordLayout(self: *Self) !Idx {
+        return self.getEmptyRecordLayout();
+    }
+
     /// Get the size in bytes of a layout, given the store's target usize.
     pub fn layoutSize(self: *const Self, layout: Layout) u32 {
         // TODO change this to SizeAlign (just return both since they're packed into 4B anyway)

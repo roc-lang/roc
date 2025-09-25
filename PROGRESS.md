@@ -49,14 +49,19 @@
     The goal is not full semantics yet, but enough to run end‑to‑end Roc tests and exercise the type‑carrying pieces.
 
     - Implemented expressions:
-      - Strings: `e_str`, `e_str_segment` (create `RocStr` with `RocOps`), REPL‑style string rendering.
-      - Integers: `e_int`, and `e_binop` with `+` (reads/writes using runtime‑chosen layout), REPL‑style integer
+      - Strings: `e_str`, `e_str_segment` (create `RocStr` with `RocOps`), REPL-style string rendering.
+      - Integers: `e_int`, and `e_binop` with `+` (reads/writes using runtime-chosen layout), REPL-style integer
         rendering.
+      - Floats & decimals: `e_frac_f32`, `e_frac_f64`, `e_frac_dec`, `e_dec_small` evaluate and render (`3.25f64`
+        → `3.25`, `0.125` → `0.125`).
       - Tuples: `e_tuple` (allocate and fill via layout store accessors), REPL‑style rendering `(a, b, ...)`.
-      - Records: `e_record` (allocate and fill by field name via accessor), REPL‑style rendering `{ x: 1, y: 2 }`.
-      - Lambdas: `e_lambda` as minimal placeholder; `e_call` supports a one‑arg lambda by binding the parameter to the
+      - Records: `e_record` (allocate and fill by field name via accessor), REPL-style rendering `{ x: 1, y: 2 }`.
+      - Empty record literal `e_empty_record` and expect-success unit result `{}` (zero-sized values stay purely logical).
+      - Lambdas: `e_lambda` as minimal placeholder; `e_call` supports a one-arg lambda by binding the parameter to the
         evaluated argument and evaluating the body; `e_lookup_local` finds values in a simple binding stack.
       - Nominal wrappers: `e_nominal` / `e_nominal_external` delegate evaluation to the backing expression.
+      - Crash & expect: `e_crash`, `s_crash`, and `e_expect`/`s_expect` invoke `roc_crashed`/`roc_expect_failed`, stash
+        crash messages, and surface deterministic Roc-style error strings.
 
     - Not implemented in minimal path (intentionally deferred): booleans, `if`, `match` tag destructuring, guards, tag
         unions, lists, boxes, effects, and most operators. (See Roadmap.)
@@ -72,11 +77,13 @@
     ### 7) Roc‑syntax tests (begin/end with Roc code)
     - New file: `src/eval/test/interpreter2_style_test.zig`.
     - Tests parse and canonicalize with early failure (using helpers) to surface syntax or type issues immediately.
-    - Tests then exercise Interpreter2 minimal eval and assert on REPL‑style rendered results for readability:
+    - Tests then exercise Interpreter2 minimal eval and assert on REPL-style rendered results for readability:
       - `(|x| x)("Hello")` → `"Hello"`
       - `(|n| n + 1)(41)` → `42`
       - `(1, 2)` → `(1, 2)`
       - `{ x: 1, y: 2 }` → `{ x: 1, y: 2 }`
+      - `0.125` → `0.125`, `3.25f64` → `3.25`
+      - `expect 1 == 1` → `{}` while failures crash with trimmed `Expect failed: …` messages.
 
     ## Design Summary
 
