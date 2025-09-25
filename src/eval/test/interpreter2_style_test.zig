@@ -68,7 +68,6 @@ fn testRocDbg(_: *const RocDbg, _: *anyopaque) callconv(.C) void {}
 fn testRocExpectFailed(_: *const RocExpectFailed, _: *anyopaque) callconv(.C) void {}
 fn testRocCrashed(crashed_args: *const RocCrashed, _: *anyopaque) callconv(.C) void {
     _ = crashed_args;
-    @panic("Roc crashed");
 }
 
 test "interpreter2: (|x| x)(\"Hello\") yields \"Hello\"" {
@@ -346,6 +345,579 @@ test "interpreter2: match record destructures fields" {
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("3", rendered);
+}
+
+test "interpreter2: crash statement triggers crash error and message" {
+    const roc_src = "{\n    crash \"boom\"\n    0\n}";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    try std.testing.expectError(error.Crash, interp2.evalMinimal(resources.expr_idx, &ops));
+    try std.testing.expect(interp2.hasCrashed());
+    const msg = interp2.getCrashMsg() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("boom", msg);
+}
+
+test "interpreter2: expect expression succeeds" {
+    const roc_src = "{\n    expect 1 == 1\n    {}\n}";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    try std.testing.expect(!interp2.hasCrashed());
+    const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("{}", rendered);
+}
+
+test "interpreter2: expect expression failure crashes with message" {
+    const roc_src = "{\n    expect 1 == 0\n    {}\n}";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    try std.testing.expectError(error.Crash, interp2.evalMinimal(resources.expr_idx, &ops));
+    try std.testing.expect(interp2.hasCrashed());
+    const msg = interp2.getCrashMsg() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("Expect failed: 1 == 0", msg);
+}
+
+test "interpreter2: empty record expression renders {}" {
+    const roc_src = "{}";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("{}", rendered);
+}
+
+test "interpreter2: f64 literal renders 3.25" {
+    const roc_src = "3.25f64";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("3.25", rendered);
+}
+
+test "interpreter2: decimal literal renders 0.125" {
+    const roc_src = "0.125";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("0.125", rendered);
+}
+
+test "interpreter2: f64 equality True" {
+    const roc_src = "3.25f64 == 3.25f64";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("True", rendered);
+}
+
+test "interpreter2: decimal equality True" {
+    const roc_src = "0.125 == 0.125";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("True", rendered);
+}
+
+test "interpreter2: int and f64 equality True" {
+    const roc_src = "1 == 1.0f64";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    const binop_expr = resources.module_env.store.getExpr(resources.expr_idx);
+    try std.testing.expect(binop_expr == .e_binop);
+    const binop = binop_expr.e_binop;
+    const lhs_var = can.ModuleEnv.varFrom(binop.lhs);
+    const rhs_var = can.ModuleEnv.varFrom(binop.rhs);
+    const expr_var = can.ModuleEnv.varFrom(resources.expr_idx);
+    try std.testing.expect(resources.module_env.types.resolveVar(lhs_var).desc.content != .err);
+    try std.testing.expect(resources.module_env.types.resolveVar(rhs_var).desc.content != .err);
+    try std.testing.expect(resources.module_env.types.resolveVar(expr_var).desc.content != .err);
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("True", rendered);
+}
+
+test "interpreter2: int and decimal equality True" {
+    const roc_src = "1 == 1.0";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    const binop_expr = resources.module_env.store.getExpr(resources.expr_idx);
+    try std.testing.expect(binop_expr == .e_binop);
+    const binop = binop_expr.e_binop;
+    const lhs_var = can.ModuleEnv.varFrom(binop.lhs);
+    const rhs_var = can.ModuleEnv.varFrom(binop.rhs);
+    const expr_var = can.ModuleEnv.varFrom(resources.expr_idx);
+    try std.testing.expect(resources.module_env.types.resolveVar(lhs_var).desc.content != .err);
+    try std.testing.expect(resources.module_env.types.resolveVar(rhs_var).desc.content != .err);
+    try std.testing.expect(resources.module_env.types.resolveVar(expr_var).desc.content != .err);
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("True", rendered);
+}
+
+test "interpreter2: int less-than yields True" {
+    const roc_src = "3 < 4";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("True", rendered);
+}
+
+test "interpreter2: int greater-than yields False" {
+    const roc_src = "5 > 8";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("False", rendered);
+}
+
+test "interpreter2: f64 greater-than yields True" {
+    const roc_src = "3.5f64 > 1.25f64";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("True", rendered);
+}
+
+test "interpreter2: decimal less-than-or-equal yields True" {
+    const roc_src = "0.5 <= 0.5";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("True", rendered);
+}
+
+test "interpreter2: int and f64 less-than yields True" {
+    const roc_src = "1 < 2.0f64";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("True", rendered);
+}
+
+test "interpreter2: int and decimal greater-than yields False" {
+    const roc_src = "3 > 5.5";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("False", rendered);
+}
+
+test "interpreter2: bool inequality yields True" {
+    const roc_src = "True != False";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("True", rendered);
+}
+
+test "interpreter2: decimal inequality yields False" {
+    const roc_src = "0.5 != 0.5";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("False", rendered);
+}
+
+test "interpreter2: f64 equality False" {
+    const roc_src = "3.25f64 == 4.0f64";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("False", rendered);
+}
+
+test "interpreter2: decimal equality False" {
+    const roc_src = "0.125 == 0.25";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("False", rendered);
 }
 
 test "interpreter2: tuples and records" {

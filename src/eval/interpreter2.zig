@@ -16,7 +16,9 @@ const StackValue = @import("StackValue.zig");
 const render_helpers = @import("render_helpers.zig");
 const builtins = @import("builtins");
 const RocOps = builtins.host_abi.RocOps;
+const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocStr = builtins.str.RocStr;
+const RocDec = builtins.dec.RocDec;
 const Layout = layout.Layout;
 
 pub const Interpreter2 = struct {
@@ -82,6 +84,9 @@ pub const Interpreter2 = struct {
     bool_false_index: u8,
     bool_true_index: u8,
     canonical_bool_rt_var: ?types.Var,
+    has_crashed: bool,
+    crash_message: ?[]const u8,
+    crash_message_owned: bool,
 
     pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv) !Interpreter2 {
         const rt_types_ptr = try allocator.create(types.store.Store);
@@ -107,6 +112,9 @@ pub const Interpreter2 = struct {
             .bool_false_index = 0,
             .bool_true_index = 1,
             .canonical_bool_rt_var = null,
+            .has_crashed = false,
+            .crash_message = null,
+            .crash_message_owned = false,
         };
         result.runtime_layout_store = try layout.Store.init(env, result.runtime_types);
         return result;
@@ -114,6 +122,7 @@ pub const Interpreter2 = struct {
 
     // Minimal evaluator for subset: string literals, lambdas without captures, and lambda calls
     pub fn evalMinimal(self: *Interpreter2, expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) !StackValue {
+        self.resetCrashState();
         return try self.evalExprMinimal(expr_idx, roc_ops, null);
     }
 
@@ -247,6 +256,19 @@ pub const Interpreter2 = struct {
                                 }
                             }
                         },
+                        .s_crash => |c| {
+                            const msg = self.env.getString(c.msg);
+                            self.triggerCrash(msg, false, roc_ops);
+                            return error.Crash;
+                        },
+                        .s_expect => |expect_stmt| {
+                            const bool_rt_var = try self.getCanonicalBoolRuntimeVar();
+                            const cond_val = try self.evalExprMinimal(expect_stmt.body, roc_ops, bool_rt_var);
+                            if (!(try self.boolValueIsTrue(cond_val, bool_rt_var))) {
+                                try self.handleExpectFailure(expect_stmt.body, roc_ops);
+                                return error.Crash;
+                            }
+                        },
                         .s_expr => |sx| {
                             _ = try self.evalExprMinimal(sx.expr, roc_ops, null);
                         },
@@ -266,7 +288,27 @@ pub const Interpreter2 = struct {
                 var value = try self.pushRaw(layout_val, 0);
                 // Write integer as i128 respecting precision via StackValue
                 value.is_initialized = false;
-                value.setInt(int_lit.value.toI128());
+                switch (layout_val.tag) {
+                    .scalar => switch (layout_val.data.scalar.tag) {
+                        .int => value.setInt(int_lit.value.toI128()),
+                        .frac => switch (layout_val.data.scalar.data.frac) {
+                            .f32 => {
+                                const ptr = @as(*f32, @ptrCast(@alignCast(value.ptr.?)));
+                                ptr.* = @floatFromInt(int_lit.value.toI128());
+                            },
+                            .f64 => {
+                                const ptr = @as(*f64, @ptrCast(@alignCast(value.ptr.?)));
+                                ptr.* = @floatFromInt(int_lit.value.toI128());
+                            },
+                            .dec => {
+                                const ptr = @as(*RocDec, @ptrCast(@alignCast(value.ptr.?)));
+                                ptr.* = .{ .num = int_lit.value.toI128() * RocDec.one_point_zero_i128 };
+                            },
+                        },
+                        else => return error.TypeMismatch,
+                    },
+                    else => return error.TypeMismatch,
+                }
                 value.is_initialized = true;
                 return value;
             },
@@ -313,16 +355,25 @@ pub const Interpreter2 = struct {
                     out.setInt(prod);
                     out.is_initialized = true;
                     return out;
-                } else if (binop.op == .eq) {
-                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
-                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops, null);
-                    const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    const result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
-
+                } else if (binop.op == .eq or binop.op == .ne or binop.op == .lt or binop.op == .le or binop.op == .gt or binop.op == .ge) {
                     const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
                     const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
                     const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
                     const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
+                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var);
+                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops, rhs_rt_var);
+                    const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    const result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
+
+                    const compare_op: std.math.CompareOperator = switch (binop.op) {
+                        .eq => .eq,
+                        .ne => .neq,
+                        .lt => .lt,
+                        .le => .lte,
+                        .gt => .gt,
+                        .ge => .gte,
+                        else => unreachable,
+                    };
 
                     const lhs_bool_opt = self.boolValueIsTrue(lhs, lhs_rt_var) catch |err| switch (err) {
                         error.TypeMismatch => null,
@@ -332,30 +383,49 @@ pub const Interpreter2 = struct {
                         error.TypeMismatch => null,
                         else => return err,
                     };
-                    if (lhs_bool_opt != null and rhs_bool_opt != null) {
-                        return try self.makeBoolValue(result_rt_var, lhs_bool_opt.? == rhs_bool_opt.?);
+
+                    if (lhs_bool_opt != null or rhs_bool_opt != null) {
+                        if (lhs_bool_opt == null or rhs_bool_opt == null) return error.TypeMismatch;
+                        const lhs_bool = lhs_bool_opt.?;
+                        const rhs_bool = rhs_bool_opt.?;
+                        switch (compare_op) {
+                            .eq => {
+                                return try self.makeBoolValue(result_rt_var, lhs_bool == rhs_bool);
+                            },
+                            .neq => {
+                                return try self.makeBoolValue(result_rt_var, lhs_bool != rhs_bool);
+                            },
+                            else => return error.TypeMismatch,
+                        }
                     }
 
-                    var is_equal: bool = undefined;
-                    if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
-                        switch (lhs.layout.data.scalar.tag) {
-                            .int => {
-                                if (rhs.layout.data.scalar.tag != .int) return error.TypeMismatch;
-                                is_equal = lhs.asI128() == rhs.asI128();
-                            },
-                            .str => {
-                                if (rhs.layout.data.scalar.tag != .str) return error.TypeMismatch;
+                    const lhs_numeric = self.isNumericScalar(lhs.layout);
+                    const rhs_numeric = self.isNumericScalar(rhs.layout);
+                    if (lhs_numeric or rhs_numeric) {
+                        if (!(lhs_numeric and rhs_numeric)) return error.TypeMismatch;
+                        const numeric_order = try self.compareNumericScalars(lhs, rhs);
+                        return try self.makeBoolValue(result_rt_var, numeric_order.compare(compare_op));
+                    }
+
+                    if (lhs.layout.tag == .scalar and lhs.layout.data.scalar.tag == .str) {
+                        if (rhs.layout.tag != .scalar or rhs.layout.data.scalar.tag != .str) return error.TypeMismatch;
+                        switch (compare_op) {
+                            .eq, .neq => {
                                 const lhs_str: *const RocStr = @ptrCast(@alignCast(lhs.ptr.?));
                                 const rhs_str: *const RocStr = @ptrCast(@alignCast(rhs.ptr.?));
-                                is_equal = std.mem.eql(u8, lhs_str.asSlice(), rhs_str.asSlice());
+                                const are_equal = std.mem.eql(u8, lhs_str.asSlice(), rhs_str.asSlice());
+                                const result = switch (compare_op) {
+                                    .eq => are_equal,
+                                    .neq => !are_equal,
+                                    else => unreachable,
+                                };
+                                return try self.makeBoolValue(result_rt_var, result);
                             },
                             else => return error.NotImplemented,
                         }
-                    } else {
-                        return error.NotImplemented;
                     }
 
-                    return try self.makeBoolValue(result_rt_var, is_equal);
+                    return error.NotImplemented;
                 } else if (binop.op == .@"or") {
                     const lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
                     const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
@@ -425,6 +495,60 @@ pub const Interpreter2 = struct {
                 roc_str.* = RocStr.fromSlice(content, roc_ops);
                 return value;
             },
+            .e_frac_f32 => |lit| {
+                const rt_var = expected_rt_var orelse blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    break :blk try self.translateTypeVar(self.env, ct_var);
+                };
+                const layout_val = try self.getRuntimeLayout(rt_var);
+                const value = try self.pushRaw(layout_val, 0);
+                if (value.ptr) |ptr| {
+                    const typed_ptr: *f32 = @ptrCast(@alignCast(ptr));
+                    typed_ptr.* = lit.value;
+                }
+                return value;
+            },
+            .e_frac_f64 => |lit| {
+                const rt_var = expected_rt_var orelse blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    break :blk try self.translateTypeVar(self.env, ct_var);
+                };
+                const layout_val = try self.getRuntimeLayout(rt_var);
+                const value = try self.pushRaw(layout_val, 0);
+                if (value.ptr) |ptr| {
+                    const typed_ptr: *f64 = @ptrCast(@alignCast(ptr));
+                    typed_ptr.* = lit.value;
+                }
+                return value;
+            },
+            .e_frac_dec => |dec_lit| {
+                const rt_var = expected_rt_var orelse blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    break :blk try self.translateTypeVar(self.env, ct_var);
+                };
+                const layout_val = try self.getRuntimeLayout(rt_var);
+                const value = try self.pushRaw(layout_val, 0);
+                if (value.ptr) |ptr| {
+                    const typed_ptr: *RocDec = @ptrCast(@alignCast(ptr));
+                    typed_ptr.* = dec_lit.value;
+                }
+                return value;
+            },
+            .e_dec_small => |small| {
+                const rt_var = expected_rt_var orelse blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    break :blk try self.translateTypeVar(self.env, ct_var);
+                };
+                const layout_val = try self.getRuntimeLayout(rt_var);
+                const value = try self.pushRaw(layout_val, 0);
+                if (value.ptr) |ptr| {
+                    const typed_ptr: *RocDec = @ptrCast(@alignCast(ptr));
+                    const scale_factor = std.math.pow(i128, 10, RocDec.decimal_places - small.denominator_power_of_ten);
+                    const scaled = @as(i128, small.numerator) * scale_factor;
+                    typed_ptr.* = RocDec{ .num = scaled };
+                }
+                return value;
+            },
             .e_tuple => |tup| {
                 // Evaluate all elements first to drive runtime unification
                 const elems = self.env.store.sliceExpr(tup.elems);
@@ -472,6 +596,14 @@ pub const Interpreter2 = struct {
                     } else return error.TypeMismatch;
                 }
                 return dest;
+            },
+            .e_empty_record => {
+                const rt_var = expected_rt_var orelse blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    break :blk try self.translateTypeVar(self.env, ct_var);
+                };
+                const rec_layout = try self.getRuntimeLayout(rt_var);
+                return try self.pushRaw(rec_layout, 0);
             },
             // no zero-argument tag handling in minimal evaluator
             .e_nominal => |nom| {
@@ -686,6 +818,24 @@ pub const Interpreter2 = struct {
                 }
                 // Non-exhaustive or unsupported
                 return error.NotImplemented;
+            },
+            .e_crash => |crash_expr| {
+                const msg = self.env.getString(crash_expr.msg);
+                self.triggerCrash(msg, false, roc_ops);
+                return error.Crash;
+            },
+            .e_expect => |expect_expr| {
+                const bool_rt_var = try self.getCanonicalBoolRuntimeVar();
+                const cond_val = try self.evalExprMinimal(expect_expr.body, roc_ops, bool_rt_var);
+                const succeeded = try self.boolValueIsTrue(cond_val, bool_rt_var);
+                if (succeeded) {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    const rt_var = try self.translateTypeVar(self.env, ct_var);
+                    const layout_val = try self.getRuntimeLayout(rt_var);
+                    return try self.pushRaw(layout_val, 0);
+                }
+                try self.handleExpectFailure(expect_expr.body, roc_ops);
+                return error.Crash;
             },
             // no tag handling in minimal evaluator
             .e_lambda => |lam| {
@@ -925,6 +1075,57 @@ pub const Interpreter2 = struct {
         return dest;
     }
 
+    fn resetCrashState(self: *Interpreter2) void {
+        if (self.crash_message_owned) {
+            if (self.crash_message) |msg| {
+                self.allocator.free(msg);
+            }
+        }
+        self.has_crashed = false;
+        self.crash_message = null;
+        self.crash_message_owned = false;
+    }
+
+    fn setCrashMessage(self: *Interpreter2, message: []const u8, owned: bool) void {
+        if (self.crash_message_owned) {
+            if (self.crash_message) |msg| {
+                self.allocator.free(msg);
+            }
+        }
+        self.crash_message = message;
+        self.crash_message_owned = owned;
+        self.has_crashed = true;
+    }
+
+    fn triggerCrash(self: *Interpreter2, message: []const u8, owned: bool, roc_ops: *RocOps) void {
+        self.setCrashMessage(message, owned);
+        roc_ops.crash(message);
+    }
+
+    fn handleExpectFailure(self: *Interpreter2, snippet_expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) !void {
+        const region = self.env.store.getExprRegion(snippet_expr_idx);
+        const slice = self.env.getSource(region);
+        const trimmed = std.mem.trim(u8, slice, " \t\n\r");
+        const message = try std.fmt.allocPrint(self.allocator, "Expect failed: {s}", .{trimmed});
+        self.setCrashMessage(message, true);
+
+        const expect_args = RocExpectFailed{
+            .utf8_bytes = @constCast(message.ptr),
+            .len = message.len,
+        };
+        roc_ops.roc_expect_failed(&expect_args, roc_ops.env);
+        roc_ops.crash(message);
+    }
+
+    pub fn hasCrashed(self: *const Interpreter2) bool {
+        return self.has_crashed;
+    }
+
+    pub fn getCrashMsg(self: *const Interpreter2) ?[]const u8 {
+        if (!self.has_crashed) return null;
+        return self.crash_message;
+    }
+
     fn extractBoolTagIndex(self: *Interpreter2, value: StackValue, bool_var: ?types.Var) !usize {
         const raw_index: usize = switch (value.layout.tag) {
             .scalar => switch (value.layout.data.scalar.tag) {
@@ -971,6 +1172,127 @@ pub const Interpreter2 = struct {
         _ = self;
         if (layout_val.tag != .scalar) return false;
         return layout_val.data.scalar.tag == .bool or layout_val.data.scalar.tag == .int;
+    }
+
+    const NumericValue = union(enum) {
+        int: i128,
+        f32: f32,
+        f64: f64,
+        dec: RocDec,
+    };
+
+    fn isNumericScalar(self: *Interpreter2, layout_val: Layout) bool {
+        _ = self;
+        if (layout_val.tag != .scalar) return false;
+        return switch (layout_val.data.scalar.tag) {
+            .int, .frac => true,
+            else => false,
+        };
+    }
+
+    fn extractNumericValue(self: *Interpreter2, value: StackValue) !NumericValue {
+        _ = self;
+        if (value.layout.tag != .scalar) return error.NotNumeric;
+        const scalar = value.layout.data.scalar;
+        return switch (scalar.tag) {
+            .int => NumericValue{ .int = value.asI128() },
+            .frac => switch (scalar.data.frac) {
+                .f32 => {
+                    const raw_ptr = value.ptr orelse return error.TypeMismatch;
+                    const ptr = @as(*const f32, @ptrCast(@alignCast(raw_ptr)));
+                    return NumericValue{ .f32 = ptr.* };
+                },
+                .f64 => {
+                    const raw_ptr = value.ptr orelse return error.TypeMismatch;
+                    const ptr = @as(*const f64, @ptrCast(@alignCast(raw_ptr)));
+                    return NumericValue{ .f64 = ptr.* };
+                },
+                .dec => {
+                    const raw_ptr = value.ptr orelse return error.TypeMismatch;
+                    const ptr = @as(*const RocDec, @ptrCast(@alignCast(raw_ptr)));
+                    return NumericValue{ .dec = ptr.* };
+                },
+            },
+            else => error.NotNumeric,
+        };
+    }
+
+    fn compareNumericScalars(self: *Interpreter2, lhs: StackValue, rhs: StackValue) !std.math.Order {
+        const lhs_value = try self.extractNumericValue(lhs);
+        const rhs_value = try self.extractNumericValue(rhs);
+        return self.orderNumericValues(lhs_value, rhs_value);
+    }
+
+    fn orderNumericValues(self: *Interpreter2, lhs: NumericValue, rhs: NumericValue) !std.math.Order {
+        return switch (lhs) {
+            .int => self.orderInt(lhs.int, rhs),
+            .f32 => self.orderF32(lhs.f32, rhs),
+            .f64 => self.orderF64(lhs.f64, rhs),
+            .dec => self.orderDec(lhs.dec, rhs),
+        };
+    }
+
+    fn orderInt(self: *Interpreter2, lhs: i128, rhs: NumericValue) !std.math.Order {
+        _ = self;
+        return switch (rhs) {
+            .int => std.math.order(lhs, rhs.int),
+            .f32 => {
+                const lhs_f: f32 = @floatFromInt(lhs);
+                return std.math.order(lhs_f, rhs.f32);
+            },
+            .f64 => {
+                const lhs_f: f64 = @floatFromInt(lhs);
+                return std.math.order(lhs_f, rhs.f64);
+            },
+            .dec => {
+                const lhs_dec = lhs * RocDec.one_point_zero_i128;
+                return std.math.order(lhs_dec, rhs.dec.num);
+            },
+        };
+    }
+
+    fn orderF32(self: *Interpreter2, lhs: f32, rhs: NumericValue) !std.math.Order {
+        _ = self;
+        return switch (rhs) {
+            .int => {
+                const rhs_f: f32 = @floatFromInt(rhs.int);
+                return std.math.order(lhs, rhs_f);
+            },
+            .f32 => std.math.order(lhs, rhs.f32),
+            .f64 => {
+                const lhs_f64: f64 = @as(f64, @floatCast(lhs));
+                return std.math.order(lhs_f64, rhs.f64);
+            },
+            .dec => return error.TypeMismatch,
+        };
+    }
+
+    fn orderF64(self: *Interpreter2, lhs: f64, rhs: NumericValue) !std.math.Order {
+        _ = self;
+        return switch (rhs) {
+            .int => {
+                const rhs_f: f64 = @floatFromInt(rhs.int);
+                return std.math.order(lhs, rhs_f);
+            },
+            .f32 => {
+                const rhs_f64: f64 = @as(f64, @floatCast(rhs.f32));
+                return std.math.order(lhs, rhs_f64);
+            },
+            .f64 => std.math.order(lhs, rhs.f64),
+            .dec => return error.TypeMismatch,
+        };
+    }
+
+    fn orderDec(self: *Interpreter2, lhs: RocDec, rhs: NumericValue) !std.math.Order {
+        _ = self;
+        return switch (rhs) {
+            .int => {
+                const rhs_dec = rhs.int * RocDec.one_point_zero_i128;
+                return std.math.order(lhs.num, rhs_dec);
+            },
+            .dec => std.math.order(lhs.num, rhs.dec.num),
+            else => return error.TypeMismatch,
+        };
     }
 
     fn runtimeVarIsBool(self: *Interpreter2, rt_var: types.Var) bool {
@@ -1362,6 +1684,11 @@ pub const Interpreter2 = struct {
         }
     }
     pub fn deinit(self: *Interpreter2) void {
+        if (self.crash_message_owned) {
+            if (self.crash_message) |msg| {
+                self.allocator.free(msg);
+            }
+        }
         self.empty_scope.deinit();
         self.translate_cache.deinit();
         self.poly_cache.deinit();
@@ -1399,7 +1726,13 @@ pub const Interpreter2 = struct {
             return self.runtime_layout_store.getLayout(layout_idx);
         }
 
-        const layout_idx = try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope);
+        const layout_idx = switch (resolved.desc.content) {
+            .structure => |st| switch (st) {
+                .empty_record => try self.runtime_layout_store.ensureEmptyRecordLayout(),
+                else => try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope),
+            },
+            else => try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope),
+        };
         slot_ptr.* = @intFromEnum(layout_idx) + 1;
         return self.runtime_layout_store.getLayout(layout_idx);
     }
@@ -1455,6 +1788,17 @@ pub const Interpreter2 = struct {
                     }
                     const range = try self.runtime_types.appendVars(buf);
                     return try self.runtime_types.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = range } } });
+                },
+                .box => |elem_var| {
+                    const rt_elem = try self.translateTypeVar(module, elem_var);
+                    return try self.runtime_types.freshFromContent(.{ .structure = .{ .box = rt_elem } });
+                },
+                .list => |elem_var| {
+                    const rt_elem = try self.translateTypeVar(module, elem_var);
+                    return try self.runtime_types.freshFromContent(.{ .structure = .{ .list = rt_elem } });
+                },
+                .list_unbound => {
+                    return try self.runtime_types.freshFromContent(.{ .structure = .list_unbound });
                 },
                 .record => |rec| {
                     // Translate fields
@@ -1547,7 +1891,6 @@ pub const Interpreter2 = struct {
                     const content = try self.runtime_types.mkNominal(nom.ident, rt_backing, buf, nom.origin_module);
                     return try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                 },
-                else => return error.NotImplemented,
             },
             .alias => |alias| {
                 const ct_backing = module.types.getAliasBackingVar(alias);
@@ -1569,7 +1912,9 @@ pub const Interpreter2 = struct {
                 const content: types.Content = .{ .rigid_var = ident };
                 return try self.runtime_types.freshFromContent(content);
             },
-            else => return error.NotImplemented,
+            .err => {
+                return error.TypeMismatch;
+            },
         };
 
         try self.translate_cache.put(key, out_var);
