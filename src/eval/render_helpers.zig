@@ -46,6 +46,13 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     tag_index = @intCast(value.asI128());
                     have_tag = true;
                 }
+                if (have_tag and tag_index < tags.len) {
+                    const tag_name = ctx.env.getIdent(tags.items(.name)[tag_index]);
+                    var out = std.ArrayList(u8).init(gpa);
+                    errdefer out.deinit();
+                    try out.appendSlice(tag_name);
+                    return out.toOwnedSlice();
+                }
             } else if (value.layout.tag == .record) {
                 var acc = try value.asRecord(ctx.layout_store);
                 if (acc.findFieldIndex(ctx.env, "tag")) |idx| {
@@ -135,8 +142,12 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
                 try buf.append('"');
                 for (s) |ch| {
                     switch (ch) {
-                        '\\' => { try buf.appendSlice("\\\\"); },
-                        '"' => { try buf.appendSlice("\\\""); },
+                        '\\' => {
+                            try buf.appendSlice("\\\\");
+                        },
+                        '"' => {
+                            try buf.appendSlice("\\\"");
+                        },
                         else => try buf.append(ch),
                     }
                 }
@@ -194,4 +205,3 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
     }
     return try std.fmt.allocPrint(gpa, "<unsupported>", .{});
 }
-

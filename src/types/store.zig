@@ -188,12 +188,12 @@ pub const Store = struct {
 
     pub fn mkBool(self: *Self, gpa: Allocator, idents: *base.Ident.Store, ext_var: Var) std.mem.Allocator.Error!Content {
         // TODO: Hardcode idents once in store, do no create fn anno
-        const true_ident = try idents.insert(gpa, base.Ident.for_text("True"));
         const false_ident = try idents.insert(gpa, base.Ident.for_text("False"));
+        const true_ident = try idents.insert(gpa, base.Ident.for_text("True"));
 
-        const true_tag = try self.mkTag(true_ident, &[_]Var{});
         const false_tag = try self.mkTag(false_ident, &[_]Var{});
-        return try self.mkTagUnion(&[_]Tag{ true_tag, false_tag }, ext_var);
+        const true_tag = try self.mkTag(true_ident, &[_]Var{});
+        return try self.mkTagUnion(&[_]Tag{ false_tag, true_tag }, ext_var);
     }
 
     pub fn mkResult(

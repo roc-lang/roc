@@ -79,6 +79,9 @@ pub const Interpreter2 = struct {
     bindings: std.ArrayList(Binding),
     // Track active closures during calls (for capture lookup)
     active_closures: std.ArrayList(StackValue),
+    bool_false_index: u8,
+    bool_true_index: u8,
+    canonical_bool_rt_var: ?types.Var,
 
     pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv) !Interpreter2 {
         const rt_types_ptr = try allocator.create(types.store.Store);
@@ -101,6 +104,9 @@ pub const Interpreter2 = struct {
             .stack_memory = try stack.Stack.initCapacity(allocator, 4096),
             .bindings = try std.ArrayList(Binding).initCapacity(allocator, 8),
             .active_closures = try std.ArrayList(StackValue).initCapacity(allocator, 4),
+            .bool_false_index = 0,
+            .bool_true_index = 1,
+            .canonical_bool_rt_var = null,
         };
         result.runtime_layout_store = try layout.Store.init(env, result.runtime_types);
         return result;
@@ -108,10 +114,15 @@ pub const Interpreter2 = struct {
 
     // Minimal evaluator for subset: string literals, lambdas without captures, and lambda calls
     pub fn evalMinimal(self: *Interpreter2, expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) !StackValue {
-        return try self.evalExprMinimal(expr_idx, roc_ops);
+        return try self.evalExprMinimal(expr_idx, roc_ops, null);
     }
 
-    fn evalExprMinimal(self: *Interpreter2, expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) !StackValue {
+    fn evalExprMinimal(
+        self: *Interpreter2,
+        expr_idx: can.CIR.Expr.Idx,
+        roc_ops: *RocOps,
+        expected_rt_var: ?types.Var,
+    ) !StackValue {
         const expr = self.env.store.getExpr(expr_idx);
         switch (expr) {
             .e_block => |blk| {
@@ -193,7 +204,7 @@ pub const Interpreter2 = struct {
                         .s_decl => |d| {
                             const patt = self.env.store.getPattern(d.pattern);
                             if (patt != .assign) return error.NotImplemented;
-                            const val = try self.evalExprMinimal(d.expr, roc_ops);
+                            const val = try self.evalExprMinimal(d.expr, roc_ops, null);
                             // Update existing binding if present
                             var i: usize = self.bindings.items.len;
                             var updated = false;
@@ -210,7 +221,7 @@ pub const Interpreter2 = struct {
                         .s_var => |v| {
                             const patt = self.env.store.getPattern(v.pattern_idx);
                             if (patt != .assign) return error.NotImplemented;
-                            const val = try self.evalExprMinimal(v.expr, roc_ops);
+                            const val = try self.evalExprMinimal(v.expr, roc_ops, null);
                             var i: usize = self.bindings.items.len;
                             var updated = false;
                             while (i > original_len) {
@@ -226,7 +237,7 @@ pub const Interpreter2 = struct {
                         .s_reassign => |r| {
                             const patt = self.env.store.getPattern(r.pattern_idx);
                             if (patt != .assign) return error.NotImplemented;
-                            const new_val = try self.evalExprMinimal(r.expr, roc_ops);
+                            const new_val = try self.evalExprMinimal(r.expr, roc_ops, null);
                             var j: usize = self.bindings.items.len;
                             while (j > original_len) {
                                 j -= 1;
@@ -237,18 +248,20 @@ pub const Interpreter2 = struct {
                             }
                         },
                         .s_expr => |sx| {
-                            _ = try self.evalExprMinimal(sx.expr, roc_ops);
+                            _ = try self.evalExprMinimal(sx.expr, roc_ops, null);
                         },
                         else => return error.NotImplemented,
                     }
                 }
 
-                return try self.evalExprMinimal(blk.final_expr, roc_ops);
+                return try self.evalExprMinimal(blk.final_expr, roc_ops, null);
             },
             .e_int => |int_lit| {
                 // Use runtime type to choose layout
-                const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                const rt_var = try self.translateTypeVar(self.env, ct_var);
+                const rt_var = expected_rt_var orelse blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    break :blk try self.translateTypeVar(self.env, ct_var);
+                };
                 const layout_val = try self.getRuntimeLayout(rt_var);
                 var value = try self.pushRaw(layout_val, 0);
                 // Write integer as i128 respecting precision via StackValue
@@ -259,8 +272,8 @@ pub const Interpreter2 = struct {
             },
             .e_binop => |binop| {
                 if (binop.op == .add) {
-                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops);
-                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops);
+                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
+                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops, null);
                     if (!(lhs.layout.tag == .scalar and lhs.layout.data.scalar.tag == .int)) return error.TypeMismatch;
                     if (!(rhs.layout.tag == .scalar and rhs.layout.data.scalar.tag == .int)) return error.TypeMismatch;
                     const ct_var = can.ModuleEnv.varFrom(expr_idx);
@@ -273,8 +286,8 @@ pub const Interpreter2 = struct {
                     out.is_initialized = true;
                     return out;
                 } else if (binop.op == .sub) {
-                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops);
-                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops);
+                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
+                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops, null);
                     if (!(lhs.layout.tag == .scalar and lhs.layout.data.scalar.tag == .int)) return error.TypeMismatch;
                     if (!(rhs.layout.tag == .scalar and rhs.layout.data.scalar.tag == .int)) return error.TypeMismatch;
                     const ct_var = can.ModuleEnv.varFrom(expr_idx);
@@ -287,8 +300,8 @@ pub const Interpreter2 = struct {
                     out.is_initialized = true;
                     return out;
                 } else if (binop.op == .mul) {
-                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops);
-                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops);
+                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
+                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops, null);
                     if (!(lhs.layout.tag == .scalar and lhs.layout.data.scalar.tag == .int)) return error.TypeMismatch;
                     if (!(rhs.layout.tag == .scalar and rhs.layout.data.scalar.tag == .int)) return error.TypeMismatch;
                     const ct_var = can.ModuleEnv.varFrom(expr_idx);
@@ -301,45 +314,71 @@ pub const Interpreter2 = struct {
                     out.is_initialized = true;
                     return out;
                 } else if (binop.op == .eq) {
-                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops);
-                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops);
-                    // Only int==int supported in minimal path
-                    if (!(lhs.layout.tag == .scalar and lhs.layout.data.scalar.tag == .int)) return error.TypeMismatch;
-                    if (!(rhs.layout.tag == .scalar and rhs.layout.data.scalar.tag == .int)) return error.TypeMismatch;
-                    const result_layout = Layout.boolType();
-                    var out = try self.pushRaw(result_layout, 0);
-                    out.is_initialized = false;
-                    const is_eq: u8 = if (lhs.asI128() == rhs.asI128()) 1 else 0;
-                    // write byte bool
-                    const p: *u8 = @ptrCast(@alignCast(out.ptr.?));
-                    p.* = is_eq;
-                    out.is_initialized = true;
-                    return out;
+                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
+                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops, null);
+                    const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    const result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
+
+                    const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
+                    const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
+                    const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
+                    const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
+
+                    const lhs_bool_opt = self.boolValueIsTrue(lhs, lhs_rt_var) catch |err| switch (err) {
+                        error.TypeMismatch => null,
+                        else => return err,
+                    };
+                    const rhs_bool_opt = self.boolValueIsTrue(rhs, rhs_rt_var) catch |err| switch (err) {
+                        error.TypeMismatch => null,
+                        else => return err,
+                    };
+                    if (lhs_bool_opt != null and rhs_bool_opt != null) {
+                        return try self.makeBoolValue(result_rt_var, lhs_bool_opt.? == rhs_bool_opt.?);
+                    }
+
+                    var is_equal: bool = undefined;
+                    if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
+                        switch (lhs.layout.data.scalar.tag) {
+                            .int => {
+                                if (rhs.layout.data.scalar.tag != .int) return error.TypeMismatch;
+                                is_equal = lhs.asI128() == rhs.asI128();
+                            },
+                            .str => {
+                                if (rhs.layout.data.scalar.tag != .str) return error.TypeMismatch;
+                                const lhs_str: *const RocStr = @ptrCast(@alignCast(lhs.ptr.?));
+                                const rhs_str: *const RocStr = @ptrCast(@alignCast(rhs.ptr.?));
+                                is_equal = std.mem.eql(u8, lhs_str.asSlice(), rhs_str.asSlice());
+                            },
+                            else => return error.NotImplemented,
+                        }
+                    } else {
+                        return error.NotImplemented;
+                    }
+
+                    return try self.makeBoolValue(result_rt_var, is_equal);
                 } else if (binop.op == .@"or") {
-                    // Short-circuit OR: if lhs is true, return lhs; else return rhs
-                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops);
-                    if (!(lhs.layout.tag == .scalar and lhs.layout.data.scalar.tag == .bool)) return error.TypeMismatch;
-                    const lhs_b: *const u8 = @ptrCast(@alignCast(lhs.ptr.?));
-                    if (lhs_b.* != 0) {
-                        // Return lhs (already true) without evaluating rhs
+                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
+                    const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
+                    const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
+                    if (try self.boolValueIsTrue(lhs, lhs_rt_var)) {
                         return lhs;
                     }
-                    // Evaluate rhs and return it
-                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops);
-                    if (!(rhs.layout.tag == .scalar and rhs.layout.data.scalar.tag == .bool)) return error.TypeMismatch;
+                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops, null);
+                    const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
+                    const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
+                    _ = try self.boolValueIsTrue(rhs, rhs_rt_var);
                     return rhs;
                 } else if (binop.op == .@"and") {
-                    // Short-circuit AND: if lhs is false, return lhs; else return rhs
-                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops);
-                    if (!(lhs.layout.tag == .scalar and lhs.layout.data.scalar.tag == .bool)) return error.TypeMismatch;
-                    const lhs_b: *const u8 = @ptrCast(@alignCast(lhs.ptr.?));
-                    if (lhs_b.* == 0) {
-                        // Return lhs (already false) without evaluating rhs
+                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
+                    const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
+                    const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
+                    if (!try self.boolValueIsTrue(lhs, lhs_rt_var)) {
                         return lhs;
                     }
-                    // Evaluate rhs and return it
-                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops);
-                    if (!(rhs.layout.tag == .scalar and rhs.layout.data.scalar.tag == .bool)) return error.TypeMismatch;
+                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops, null);
+                    const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
+                    const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
+                    _ = try self.boolValueIsTrue(rhs, rhs_rt_var);
                     return rhs;
                 }
                 return error.NotImplemented;
@@ -350,15 +389,15 @@ pub const Interpreter2 = struct {
                 var i: usize = 0;
                 while (i < branches.len) : (i += 1) {
                     const br = self.env.store.getIfBranch(branches[i]);
-                    const cond_val = try self.evalExprMinimal(br.cond, roc_ops);
-                    if (!(cond_val.layout.tag == .scalar and cond_val.layout.data.scalar.tag == .bool)) return error.TypeMismatch;
-                    const cond_byte: *const u8 = @ptrCast(@alignCast(cond_val.ptr.?));
-                    if (cond_byte.* != 0) {
-                        return try self.evalExprMinimal(br.body, roc_ops);
+                    const cond_val = try self.evalExprMinimal(br.cond, roc_ops, null);
+                    const cond_ct_var = can.ModuleEnv.varFrom(br.cond);
+                    const cond_rt_var = try self.translateTypeVar(self.env, cond_ct_var);
+                    if (try self.boolValueIsTrue(cond_val, cond_rt_var)) {
+                        return try self.evalExprMinimal(br.body, roc_ops, null);
                     }
                 }
                 // No condition matched; evaluate final else
-                return try self.evalExprMinimal(if_expr.final_else, roc_ops);
+                return try self.evalExprMinimal(if_expr.final_else, roc_ops, null);
             },
             .e_str => |str_expr| {
                 const segments = self.env.store.sliceExpr(str_expr.span);
@@ -392,7 +431,7 @@ pub const Interpreter2 = struct {
                 var values = try std.ArrayList(StackValue).initCapacity(self.allocator, elems.len);
                 defer values.deinit();
                 for (elems) |e_idx| {
-                    const v = try self.evalExprMinimal(e_idx, roc_ops);
+                    const v = try self.evalExprMinimal(e_idx, roc_ops, null);
                     try values.append(v);
                 }
 
@@ -415,8 +454,10 @@ pub const Interpreter2 = struct {
             },
             .e_record => |rec| {
                 // Allocate record and fill fields
-                const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                const rt_var = try self.translateTypeVar(self.env, ct_var);
+                const rt_var = expected_rt_var orelse blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    break :blk try self.translateTypeVar(self.env, ct_var);
+                };
                 const rec_layout = try self.getRuntimeLayout(rt_var);
                 var dest = try self.pushRaw(rec_layout, 0);
                 var accessor = try dest.asRecord(&self.runtime_layout_store);
@@ -426,7 +467,7 @@ pub const Interpreter2 = struct {
                     const name_text = self.env.getIdent(f.name);
                     const idx_opt = accessor.findFieldIndex(self.env, name_text);
                     if (idx_opt) |findex| {
-                        const val = try self.evalExprMinimal(f.value, roc_ops);
+                        const val = try self.evalExprMinimal(f.value, roc_ops, null);
                         try accessor.setFieldByIndex(findex, val, roc_ops);
                     } else return error.TypeMismatch;
                 }
@@ -435,16 +476,43 @@ pub const Interpreter2 = struct {
             // no zero-argument tag handling in minimal evaluator
             .e_nominal => |nom| {
                 // Evaluate backing expression using minimal evaluator
-                return try self.evalExprMinimal(nom.backing_expr, roc_ops);
+                const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
+                const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
+                const backing_rt_var = if (nom.nominal_type_decl == can.Can.BUILTIN_BOOL_TYPE)
+                    try self.getCanonicalBoolRuntimeVar()
+                else switch (nominal_resolved.desc.content) {
+                    .structure => |st| switch (st) {
+                        .nominal_type => |nt| self.runtime_types.getNominalBackingVar(nt),
+                        else => nominal_rt_var,
+                    },
+                    else => nominal_rt_var,
+                };
+                return try self.evalExprMinimal(nom.backing_expr, roc_ops, backing_rt_var);
             },
             .e_nominal_external => |nom| {
-                return try self.evalExprMinimal(nom.backing_expr, roc_ops);
+                const rt_var = expected_rt_var orelse blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
+                    const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
+                    const backing_rt_var = switch (nominal_resolved.desc.content) {
+                        .structure => |st| switch (st) {
+                            .nominal_type => |nt| self.runtime_types.getNominalBackingVar(nt),
+                            else => nominal_rt_var,
+                        },
+                        else => nominal_rt_var,
+                    };
+                    break :blk backing_rt_var;
+                };
+                return try self.evalExprMinimal(nom.backing_expr, roc_ops, rt_var);
             },
             .e_zero_argument_tag => |zero| {
                 // Construct a tag union value with no payload
                 // Determine discriminant index by consulting the runtime tag union type
-                const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                const rt_var = try self.translateTypeVar(self.env, ct_var);
+                const rt_var = expected_rt_var orelse blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    break :blk try self.translateTypeVar(self.env, ct_var);
+                };
                 const resolved = self.runtime_types.resolveVar(rt_var);
                 if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) return error.NotImplemented;
                 const tu = resolved.desc.content.structure.tag_union;
@@ -463,12 +531,22 @@ pub const Interpreter2 = struct {
                 }
                 if (!found) return error.NotImplemented;
                 const layout_val = try self.getRuntimeLayout(rt_var);
+                if (self.isBoolLayout(layout_val) and (std.mem.eql(u8, name_text, "True") or std.mem.eql(u8, name_text, "False"))) {
+                    if (self.runtimeVarIsBool(rt_var)) {
+                        tag_index = if (std.mem.eql(u8, name_text, "True")) self.bool_true_index else self.bool_false_index;
+                    } else {
+                        tag_index = if (std.mem.eql(u8, name_text, "True")) 1 else 0;
+                        self.bool_false_index = 0;
+                        self.bool_true_index = 1;
+                    }
+                    return try self.makeBoolValue(rt_var, std.mem.eql(u8, name_text, "True"));
+                }
                 // If layout is scalar (bool/uint), write discriminant directly
                 if (layout_val.tag == .scalar) {
                     var out = try self.pushRaw(layout_val, 0);
                     if (layout_val.data.scalar.tag == .bool) {
                         const p: *u8 = @ptrCast(@alignCast(out.ptr.?));
-                        p.* = if (tag_index != 0) 1 else 0;
+                        p.* = @intCast(tag_index);
                         return out;
                     } else if (layout_val.data.scalar.tag == .int) {
                         out.is_initialized = false;
@@ -490,7 +568,7 @@ pub const Interpreter2 = struct {
                         tmp.setInt(@intCast(tag_index));
                     } else if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .bool) {
                         const p: *u8 = @ptrCast(@alignCast(tag_field.ptr.?));
-                        p.* = if (tag_index != 0) 1 else 0;
+                        p.* = @intCast(tag_index);
                     } else return error.NotImplemented;
                     return dest;
                 }
@@ -519,12 +597,22 @@ pub const Interpreter2 = struct {
                 if (!found) return error.NotImplemented;
 
                 const layout_val = try self.getRuntimeLayout(rt_var);
+                if (self.isBoolLayout(layout_val) and (std.mem.eql(u8, name_text, "True") or std.mem.eql(u8, name_text, "False"))) {
+                    if (self.runtimeVarIsBool(rt_var)) {
+                        tag_index = if (std.mem.eql(u8, name_text, "True")) self.bool_true_index else self.bool_false_index;
+                    } else {
+                        tag_index = if (std.mem.eql(u8, name_text, "True")) 1 else 0;
+                        self.bool_false_index = 0;
+                        self.bool_true_index = 1;
+                    }
+                    return try self.makeBoolValue(rt_var, std.mem.eql(u8, name_text, "True"));
+                }
                 if (layout_val.tag == .scalar) {
                     // No payload union
                     var out = try self.pushRaw(layout_val, 0);
                     if (layout_val.data.scalar.tag == .bool) {
                         const p: *u8 = @ptrCast(@alignCast(out.ptr.?));
-                        p.* = if (tag_index != 0) 1 else 0;
+                        p.* = @intCast(tag_index);
                         return out;
                     } else if (layout_val.data.scalar.tag == .int) {
                         out.is_initialized = false;
@@ -547,7 +635,7 @@ pub const Interpreter2 = struct {
                         tmp.setInt(@intCast(tag_index));
                     } else if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .bool) {
                         const p: *u8 = @ptrCast(@alignCast(tag_field.ptr.?));
-                        p.* = if (tag_index != 0) 1 else 0;
+                        p.* = @intCast(tag_index);
                     } else return error.NotImplemented;
 
                     // payload
@@ -556,7 +644,7 @@ pub const Interpreter2 = struct {
                         // nothing to write
                         return dest;
                     } else if (args.len == 1) {
-                        const arg_val = try self.evalExprMinimal(args[0], roc_ops);
+                        const arg_val = try self.evalExprMinimal(args[0], roc_ops, null);
                         try acc.setFieldByIndex(payload_field_idx, arg_val, roc_ops);
                         return dest;
                     } else {
@@ -566,7 +654,7 @@ pub const Interpreter2 = struct {
                         var tup_acc = try payload_field.asTuple(&self.runtime_layout_store);
                         var j: usize = 0;
                         while (j < args.len) : (j += 1) {
-                            const ev = try self.evalExprMinimal(args[j], roc_ops);
+                            const ev = try self.evalExprMinimal(args[j], roc_ops, null);
                             const sorted_idx = tup_acc.findElementIndexByOriginal(j) orelse return error.TypeMismatch;
                             try tup_acc.setElement(sorted_idx, ev, roc_ops);
                         }
@@ -577,7 +665,9 @@ pub const Interpreter2 = struct {
             },
             .e_match => |m| {
                 // Evaluate scrutinee once
-                const scrutinee = try self.evalExprMinimal(m.cond, roc_ops);
+                const scrutinee = try self.evalExprMinimal(m.cond, roc_ops, null);
+                const scrutinee_ct_var = can.ModuleEnv.varFrom(m.cond);
+                const scrutinee_rt_var = try self.translateTypeVar(self.env, scrutinee_ct_var);
                 // Iterate branches and find first matching pattern set
                 const branches = self.env.store.matchBranchSlice(m.branches);
                 for (branches) |br_idx| {
@@ -592,7 +682,7 @@ pub const Interpreter2 = struct {
                     // OR patterns in a branch; succeed if any match
                     for (patterns) |bp_idx| {
                         temp_binds.items.len = 0; // reset temporary binds for each OR alternative
-                        if (try self.patternMatchesBind(self.env.store.getMatchBranchPattern(bp_idx).pattern, scrutinee, &temp_binds)) {
+                        if (try self.patternMatchesBind(self.env.store.getMatchBranchPattern(bp_idx).pattern, scrutinee, scrutinee_rt_var, &temp_binds)) {
                             any_matched = true;
                             break;
                         }
@@ -603,7 +693,7 @@ pub const Interpreter2 = struct {
                         const start_len = self.bindings.items.len;
                         try self.bindings.appendSlice(temp_binds.items);
                         defer self.bindings.items.len = start_len;
-                        return try self.evalExprMinimal(br.value, roc_ops);
+                        return try self.evalExprMinimal(br.value, roc_ops, null);
                     }
                 }
                 // Non-exhaustive or unsupported
@@ -743,12 +833,12 @@ pub const Interpreter2 = struct {
                     false,
                 );
 
-                const func_val = try self.evalExprMinimal(func_idx, roc_ops);
+                const func_val = try self.evalExprMinimal(func_idx, roc_ops, null);
                 // Support calling closures produced by evaluating expressions (including nested calls)
                 if (func_val.layout.tag == .closure) {
                     const header: *const layout.Closure = @ptrCast(@alignCast(func_val.ptr.?));
                     // Evaluate argument and bind to first parameter
-                    const arg_val = try self.evalExprMinimal(arg_idx, roc_ops);
+                    const arg_val = try self.evalExprMinimal(arg_idx, roc_ops, null);
                     const params = self.env.store.slicePatterns(header.params);
                     if (params.len != 1) return error.NotImplemented;
                     // Provide closure context for capture lookup during body eval
@@ -756,19 +846,19 @@ pub const Interpreter2 = struct {
                     defer _ = self.active_closures.pop();
                     try self.bindings.append(.{ .pattern_idx = params[0], .value = arg_val });
                     defer _ = self.bindings.pop();
-                    return try self.evalExprMinimal(header.body_idx, roc_ops);
+                    return try self.evalExprMinimal(header.body_idx, roc_ops, null);
                 }
 
                 // Fallback: direct lambda expression (legacy minimal path)
                 const func_expr = self.env.store.getExpr(func_idx);
                 if (func_expr == .e_lambda) {
                     const lambda = func_expr.e_lambda;
-                    const arg_val = try self.evalExprMinimal(arg_idx, roc_ops);
+                    const arg_val = try self.evalExprMinimal(arg_idx, roc_ops, null);
                     const params = self.env.store.slicePatterns(lambda.args);
                     if (params.len != 1) return error.NotImplemented;
                     try self.bindings.append(.{ .pattern_idx = params[0], .value = arg_val });
                     defer _ = self.bindings.pop();
-                    return try self.evalExprMinimal(lambda.body, roc_ops);
+                    return try self.evalExprMinimal(lambda.body, roc_ops, null);
                 }
 
                 return error.NotImplemented;
@@ -847,93 +937,56 @@ pub const Interpreter2 = struct {
         return dest;
     }
 
-    pub fn renderValueRoc(self: *Interpreter2, value: StackValue) ![]u8 {
-        const gpa = self.allocator;
-        // Tag unions pretty rendering is available via renderValueRocWithType
-        if (value.layout.tag == .scalar) {
-            switch (value.layout.data.scalar.tag) {
-                // no boolean rendering in minimal evaluator yet
-                .str => {
-                    const rs: *const RocStr = @ptrCast(@alignCast(value.ptr.?));
-                    const s = rs.asSlice();
-                    var buf = std.ArrayList(u8).init(gpa);
-                    errdefer buf.deinit();
-                    try buf.append('"');
-                    for (s) |ch| {
-                        switch (ch) {
-                            '\\' => {
-                                try buf.appendSlice("\\\\");
-                            },
-                            '"' => {
-                                try buf.appendSlice("\\\"");
-                            },
-                            else => try buf.append(ch),
-                        }
-                    }
-                    try buf.append('"');
-                    return buf.toOwnedSlice();
+    fn extractBoolTagIndex(self: *Interpreter2, value: StackValue, bool_var: ?types.Var) !usize {
+        const raw_index: usize = switch (value.layout.tag) {
+            .scalar => switch (value.layout.data.scalar.tag) {
+                .bool => {
+                    const ptr = value.ptr orelse return error.TypeMismatch;
+                    const b: *const u8 = @ptrCast(@alignCast(ptr));
+                    return @intCast(b.*);
                 },
                 .int => {
-                    const i = value.asI128();
-                    return try std.fmt.allocPrint(gpa, "{d}", .{i});
+                    return @intCast(value.asI128());
                 },
-                else => {},
+                else => return error.TypeMismatch,
+            },
+            .record => {
+                var acc = try value.asRecord(&self.runtime_layout_store);
+                const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse return error.TypeMismatch;
+                const tag_field = try acc.getFieldByIndex(tag_field_idx);
+                const tag_value = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
+                return try self.extractBoolTagIndex(tag_value, bool_var);
+            },
+            else => return error.TypeMismatch,
+        };
+
+        if (bool_var) |_var| {
+            // runtimeVarIsBool updates bool_true/false indices for this interpreter
+            if (!self.runtimeVarIsBool(_var)) return error.TypeMismatch;
+            if (raw_index == self.bool_false_index or raw_index == self.bool_true_index) {
+                return raw_index;
             }
+            return error.TypeMismatch;
         }
-        if (value.layout.tag == .tuple) {
-            var out = std.ArrayList(u8).init(gpa);
-            errdefer out.deinit();
-            try out.append('(');
-            var acc = try value.asTuple(&self.runtime_layout_store);
-            const count = acc.getElementCount();
-            var i: usize = 0;
-            while (i < count) : (i += 1) {
-                const elem = try acc.getElement(i);
-                const rendered = try self.renderValueRoc(elem);
-                defer gpa.free(rendered);
-                try out.appendSlice(rendered);
-                if (i + 1 < count) try out.appendSlice(", ");
-            }
-            try out.append(')');
-            return out.toOwnedSlice();
-        }
-        if (value.layout.tag == .record) {
-            var out = std.ArrayList(u8).init(gpa);
-            errdefer out.deinit();
-            try out.appendSlice("{ ");
-            const rec_data = self.runtime_layout_store.getRecordData(value.layout.data.record.idx);
-            const fields = self.runtime_layout_store.record_fields.sliceRange(rec_data.getFields());
-            var i: usize = 0;
-            while (i < fields.len) : (i += 1) {
-                const fld = fields.get(i);
-                const name_text = self.env.getIdent(fld.name);
-                try out.appendSlice(name_text);
-                try out.appendSlice(": ");
-                // compute field offset
-                const offset = self.runtime_layout_store.getRecordFieldOffset(value.layout.data.record.idx, @intCast(i));
-                const field_layout = self.runtime_layout_store.getLayout(fld.layout);
-                const base_ptr: [*]u8 = @ptrCast(@alignCast(value.ptr.?));
-                const field_ptr: *anyopaque = @ptrCast(base_ptr + offset);
-                const field_val = StackValue{ .layout = field_layout, .ptr = field_ptr, .is_initialized = true };
-                const rendered = try self.renderValueRoc(field_val);
-                defer gpa.free(rendered);
-                try out.appendSlice(rendered);
-                if (i + 1 < fields.len) try out.appendSlice(", ");
-            }
-            try out.appendSlice(" }");
-            return out.toOwnedSlice();
-        }
-        // Fallback
-        return try std.fmt.allocPrint(gpa, "<unsupported>", .{});
+
+        return raw_index;
     }
 
-    // removed duplicate
+    fn boolValueIsTrue(self: *Interpreter2, value: StackValue, rt_var: types.Var) !bool {
+        if (!self.isBoolLayout(value.layout)) return error.TypeMismatch;
+        if (!self.runtimeVarIsBool(rt_var)) return error.TypeMismatch;
+        const idx = try self.extractBoolTagIndex(value, rt_var);
+        return idx == self.bool_true_index;
+    }
 
-    // Helper for REPL and tests: render a value given its runtime type var
-    pub fn renderValueRocWithType(self: *Interpreter2, value: StackValue, rt_var: types.Var) ![]u8 {
-        const gpa = self.allocator;
+    fn isBoolLayout(self: *Interpreter2, layout_val: Layout) bool {
+        _ = self;
+        if (layout_val.tag != .scalar) return false;
+        return layout_val.data.scalar.tag == .bool or layout_val.data.scalar.tag == .int;
+    }
+
+    fn runtimeVarIsBool(self: *Interpreter2, rt_var: types.Var) bool {
         var resolved = self.runtime_types.resolveVar(rt_var);
-        // Unwrap aliases and nominals to get to underlying structure
         unwrap: while (true) {
             switch (resolved.desc.content) {
                 .alias => |al| {
@@ -941,8 +994,8 @@ pub const Interpreter2 = struct {
                     resolved = self.runtime_types.resolveVar(backing);
                 },
                 .structure => |st| switch (st) {
-                    .nominal_type => |nt| {
-                        const backing = self.runtime_types.getNominalBackingVar(nt);
+                    .nominal_type => |nom| {
+                        const backing = self.runtime_types.getNominalBackingVar(nom);
                         resolved = self.runtime_types.resolveVar(backing);
                     },
                     else => break :unwrap,
@@ -950,117 +1003,203 @@ pub const Interpreter2 = struct {
                 else => break :unwrap,
             }
         }
-        if (resolved.desc.content == .structure) {
-            switch (resolved.desc.content.structure) {
-                .tag_union => |tu| {
-                    const tags = self.runtime_types.getTagsSlice(tu.tags);
-                    var tag_index: usize = 0;
-                    var have_tag = false;
-                    var payload_value: ?StackValue = null;
-                    switch (value.layout.tag) {
-                        .scalar => switch (value.layout.data.scalar.tag) {
-                            .bool => {
-                                const b: *const u8 = @ptrCast(@alignCast(value.ptr.?));
-                                tag_index = if (b.* != 0) 1 else 0;
-                                have_tag = true;
-                            },
-                            .int => {
-                                tag_index = @intCast(value.asI128());
-                                have_tag = true;
-                            },
-                            else => {},
-                        },
-                        .record => {
-                            var acc = try value.asRecord(&self.runtime_layout_store);
-                            if (acc.findFieldIndex(self.env, "tag")) |idx| {
-                                const tag_field = try acc.getFieldByIndex(idx);
-                                if (tag_field.layout.tag == .scalar) {
-                                    switch (tag_field.layout.data.scalar.tag) {
-                                        .int => {
-                                            const tmp_sv = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
-                                            tag_index = @intCast(tmp_sv.asI128());
-                                            have_tag = true;
-                                        },
-                                        .bool => {
-                                            const b: *const u8 = @ptrCast(@alignCast(tag_field.ptr.?));
-                                            tag_index = if (b.* != 0) 1 else 0;
-                                            have_tag = true;
-                                        },
-                                        else => {},
-                                    }
-                                }
-                            }
-                            if (have_tag) {
-                                if (acc.findFieldIndex(self.env, "payload")) |pidx| {
-                                    payload_value = try acc.getFieldByIndex(pidx);
-                                }
-                            }
-                        },
-                        else => {},
-                    }
-                    if (have_tag and tag_index < tags.len) {
-                        const tag_name = self.env.getIdent(tags.items(.name)[tag_index]);
-                        var out = std.ArrayList(u8).init(gpa);
-                        errdefer out.deinit();
-                        try out.appendSlice(tag_name);
-                        if (payload_value) |payload| {
-                            const psize = self.runtime_layout_store.layoutSize(payload.layout);
-                            if (psize > 0) {
-                                try out.append('(');
-                                if (payload.layout.tag == .tuple) {
-                                    var tup = try payload.asTuple(&self.runtime_layout_store);
-                                    const count = tup.getElementCount();
-                                    var k: usize = 0;
-                                    while (k < count) : (k += 1) {
-                                        const elem = try tup.getElement(k);
-                                        const r = try self.renderValueRoc(elem);
-                                        defer gpa.free(r);
-                                        try out.appendSlice(r);
-                                        if (k + 1 < count) try out.appendSlice(", ");
-                                    }
-                                } else {
-                                    const rendered = try self.renderValueRoc(payload);
-                                    defer gpa.free(rendered);
-                                    try out.appendSlice(rendered);
-                                }
-                                try out.append(')');
-                            }
-                        }
-                        return out.toOwnedSlice();
-                    }
-                },
-                .record => |rec| {
-                    var out = std.ArrayList(u8).init(gpa);
-                    errdefer out.deinit();
-                    try out.appendSlice("{ ");
-                    var acc = try value.asRecord(&self.runtime_layout_store);
-                    const fields = self.runtime_types.getRecordFieldsSlice(rec.fields);
-                    var i: usize = 0;
-                    while (i < fields.len) : (i += 1) {
-                        const f = fields.get(i);
-                        const name_text = self.env.getIdent(f.name);
-                        try out.appendSlice(name_text);
-                        try out.appendSlice(": ");
-                        if (acc.findFieldIndex(self.env, name_text)) |idx| {
-                            const field_val = try acc.getFieldByIndex(idx);
-                            const rendered = try self.renderValueRoc(field_val);
-                            defer gpa.free(rendered);
-                            try out.appendSlice(rendered);
-                        } else {
-                            try out.appendSlice("<missing>");
-                        }
-                        if (i + 1 < fields.len) try out.appendSlice(", ");
-                    }
-                    try out.appendSlice(" }");
-                    return out.toOwnedSlice();
-                },
-                else => {},
+
+        if (resolved.desc.content != .structure) return false;
+        const structure = resolved.desc.content.structure;
+        if (structure != .tag_union) return false;
+        const tu = structure.tag_union;
+        const tags = self.runtime_types.getTagsSlice(tu.tags);
+        if (tags.len == 0 or tags.len > 2) return false;
+
+        var false_idx: ?usize = null;
+        var true_idx: ?usize = null;
+        for (tags.items(.name), 0..) |ident_idx, i| {
+            const name_text = self.env.getIdent(ident_idx);
+            if (std.mem.eql(u8, name_text, "False")) {
+                false_idx = i;
+            } else if (std.mem.eql(u8, name_text, "True")) {
+                true_idx = i;
+            } else {
+                return false;
             }
         }
-        return try self.renderValueRoc(value);
+
+        if (false_idx == null or true_idx == null) return false;
+        self.bool_false_index = @intCast(false_idx.?);
+        self.bool_true_index = @intCast(true_idx.?);
+        return true;
     }
 
-    fn patternMatchesBind(self: *Interpreter2, pattern_idx: can.CIR.Pattern.Idx, value: StackValue, out_binds: *std.ArrayList(Binding)) !bool {
+    fn getCanonicalBoolRuntimeVar(self: *Interpreter2) !types.Var {
+        if (self.canonical_bool_rt_var) |cached| return cached;
+        const bool_decl_idx = can.Can.BUILTIN_BOOL_TYPE;
+        const ct_var = can.ModuleEnv.varFrom(bool_decl_idx);
+        const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
+        const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
+        const backing_rt_var = switch (nominal_resolved.desc.content) {
+            .structure => |st| switch (st) {
+                .nominal_type => |nt| self.runtime_types.getNominalBackingVar(nt),
+                else => nominal_rt_var,
+            },
+            else => nominal_rt_var,
+        };
+        self.canonical_bool_rt_var = backing_rt_var;
+        return backing_rt_var;
+    }
+
+    fn resolveBaseVar(self: *Interpreter2, runtime_var: types.Var) types.store.ResolvedVarDesc {
+        var current = self.runtime_types.resolveVar(runtime_var);
+        while (true) {
+            switch (current.desc.content) {
+                .alias => |al| {
+                    const backing = self.runtime_types.getAliasBackingVar(al);
+                    current = self.runtime_types.resolveVar(backing);
+                },
+                .structure => |st| switch (st) {
+                    .nominal_type => |nom| {
+                        const backing = self.runtime_types.getNominalBackingVar(nom);
+                        current = self.runtime_types.resolveVar(backing);
+                    },
+                    else => return current,
+                },
+                else => return current,
+            }
+        }
+    }
+
+    const TagValue = struct {
+        index: usize,
+        payload: ?StackValue,
+    };
+
+    fn extractTagValue(self: *Interpreter2, value: StackValue) !TagValue {
+        switch (value.layout.tag) {
+            .scalar => switch (value.layout.data.scalar.tag) {
+                .bool => {
+                    const idx = try self.extractBoolTagIndex(value, null);
+                    return .{ .index = idx, .payload = null };
+                },
+                .int => {
+                    return .{ .index = @intCast(value.asI128()), .payload = null };
+                },
+                else => return error.TypeMismatch,
+            },
+            .record => {
+                var acc = try value.asRecord(&self.runtime_layout_store);
+                const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse return error.TypeMismatch;
+                const tag_field = try acc.getFieldByIndex(tag_field_idx);
+                var tag_index: usize = undefined;
+                if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                    var tmp = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
+                    tag_index = @intCast(tmp.asI128());
+                } else if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .bool) {
+                    const ptr = tag_field.ptr orelse return error.TypeMismatch;
+                    const b: *const u8 = @ptrCast(@alignCast(ptr));
+                    tag_index = b.*;
+                } else return error.TypeMismatch;
+
+                var payload_value: ?StackValue = null;
+                if (acc.findFieldIndex(self.env, "payload")) |payload_idx| {
+                    payload_value = try acc.getFieldByIndex(payload_idx);
+                }
+
+                return .{ .index = tag_index, .payload = payload_value };
+            },
+            else => return error.TypeMismatch,
+        }
+    }
+
+    fn makeBoolValue(self: *Interpreter2, target_rt_var: types.Var, truthy: bool) !StackValue {
+        const layout_val = try self.getRuntimeLayout(target_rt_var);
+        if (!self.isBoolLayout(layout_val)) return error.NotImplemented;
+        if (!self.runtimeVarIsBool(target_rt_var)) {
+            const canonical = try self.getCanonicalBoolRuntimeVar();
+            if (!self.runtimeVarIsBool(canonical)) return error.NotImplemented;
+        }
+        const chosen_index: u8 = if (truthy) self.bool_true_index else self.bool_false_index;
+        var out = try self.pushRaw(layout_val, 0);
+
+        switch (layout_val.tag) {
+            .scalar => switch (layout_val.data.scalar.tag) {
+                .bool => {
+                    const ptr = out.ptr orelse return error.NotImplemented;
+                    const p: *u8 = @ptrCast(@alignCast(ptr));
+                    p.* = chosen_index;
+                    return out;
+                },
+                .int => {
+                    out.is_initialized = false;
+                    out.setInt(chosen_index);
+                    out.is_initialized = true;
+                    return out;
+                },
+                else => return error.NotImplemented,
+            },
+            .record => {
+                var acc = try out.asRecord(&self.runtime_layout_store);
+                const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse return error.NotImplemented;
+                const tag_field = try acc.getFieldByIndex(tag_field_idx);
+                var tag_slot = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
+                switch (tag_slot.layout.tag) {
+                    .scalar => switch (tag_slot.layout.data.scalar.tag) {
+                        .bool => {
+                            const ptr = tag_slot.ptr orelse return error.NotImplemented;
+                            const p: *u8 = @ptrCast(@alignCast(ptr));
+                            p.* = chosen_index;
+                        },
+                        .int => {
+                            tag_slot.is_initialized = false;
+                            tag_slot.setInt(chosen_index);
+                            tag_slot.is_initialized = true;
+                        },
+                        else => return error.NotImplemented,
+                    },
+                    else => return error.NotImplemented,
+                }
+
+                if (acc.findFieldIndex(self.env, "payload")) |payload_idx| {
+                    const payload_field = try acc.getFieldByIndex(payload_idx);
+                    const payload_size = self.runtime_layout_store.layoutSize(payload_field.layout);
+                    if (payload_size > 0 and payload_field.ptr != null) {
+                        @memset(@as([*]u8, @ptrCast(payload_field.ptr.?))[0..payload_size], 0);
+                    }
+                }
+
+                return out;
+            },
+            else => return error.NotImplemented,
+        }
+    }
+
+    fn makeRenderCtx(self: *Interpreter2) render_helpers.RenderCtx {
+        return .{
+            .allocator = self.allocator,
+            .env = self.env,
+            .runtime_types = self.runtime_types,
+            .layout_store = &self.runtime_layout_store,
+        };
+    }
+
+    pub fn renderValueRoc(self: *Interpreter2, value: StackValue) ![]u8 {
+        var ctx = self.makeRenderCtx();
+        return render_helpers.renderValueRoc(&ctx, value);
+    }
+
+    // removed duplicate
+
+    // Helper for REPL and tests: render a value given its runtime type var
+    pub fn renderValueRocWithType(self: *Interpreter2, value: StackValue, rt_var: types.Var) ![]u8 {
+        var ctx = self.makeRenderCtx();
+        return render_helpers.renderValueRocWithType(&ctx, value, rt_var);
+    }
+
+    fn patternMatchesBind(
+        self: *Interpreter2,
+        pattern_idx: can.CIR.Pattern.Idx,
+        value: StackValue,
+        value_rt_var: types.Var,
+        out_binds: *std.ArrayList(Binding),
+    ) !bool {
         const pat = self.env.store.getPattern(pattern_idx);
         switch (pat) {
             .assign => |_| {
@@ -1082,10 +1221,150 @@ pub const Interpreter2 = struct {
                 return std.mem.eql(u8, rs.asSlice(), lit);
             },
             .nominal => |n| {
-                return try self.patternMatchesBind(n.backing_pattern, value, out_binds);
+                const underlying = self.resolveBaseVar(value_rt_var);
+                return try self.patternMatchesBind(n.backing_pattern, value, underlying.var_, out_binds);
             },
             .nominal_external => |n| {
-                return try self.patternMatchesBind(n.backing_pattern, value, out_binds);
+                const underlying = self.resolveBaseVar(value_rt_var);
+                return try self.patternMatchesBind(n.backing_pattern, value, underlying.var_, out_binds);
+            },
+            .tuple => |tuple_pat| {
+                if (value.layout.tag != .tuple) return false;
+                var accessor = try value.asTuple(&self.runtime_layout_store);
+                const pat_ids = self.env.store.slicePatterns(tuple_pat.patterns);
+                if (pat_ids.len != accessor.getElementCount()) return false;
+
+                const tuple_resolved = self.resolveBaseVar(value_rt_var);
+                if (tuple_resolved.desc.content != .structure or tuple_resolved.desc.content.structure != .tuple) return false;
+                const elem_vars = self.runtime_types.sliceVars(tuple_resolved.desc.content.structure.tuple.elems);
+                if (elem_vars.len != pat_ids.len) return false;
+
+                var idx: usize = 0;
+                while (idx < pat_ids.len) : (idx += 1) {
+                    const sorted_idx = accessor.findElementIndexByOriginal(idx) orelse idx;
+                    if (sorted_idx >= accessor.getElementCount()) return false;
+                    const elem_value = try accessor.getElement(sorted_idx);
+                    const before = out_binds.items.len;
+                    const matched = try self.patternMatchesBind(pat_ids[idx], elem_value, elem_vars[idx], out_binds);
+                    if (!matched) {
+                        out_binds.items.len = before;
+                        return false;
+                    }
+                }
+
+                return true;
+            },
+            .record_destructure => |rec_pat| {
+                if (value.layout.tag != .record) return false;
+                var accessor = try value.asRecord(&self.runtime_layout_store);
+
+                const record_resolved = self.resolveBaseVar(value_rt_var);
+                if (record_resolved.desc.content != .structure or record_resolved.desc.content.structure != .record) {
+                    return false;
+                }
+                const record_fields = self.runtime_types.getRecordFieldsSlice(record_resolved.desc.content.structure.record.fields);
+
+                const destructs = self.env.store.sliceRecordDestructs(rec_pat.destructs);
+                for (destructs) |destruct_idx| {
+                    const destruct = self.env.store.getRecordDestruct(destruct_idx);
+                    const field_name = self.env.getIdent(destruct.label);
+
+                    const field_index = accessor.findFieldIndex(self.env, field_name) orelse return false;
+                    const field_value = try accessor.getFieldByIndex(field_index);
+
+                    const names = record_fields.items(.name);
+                    const vars = record_fields.items(.var_);
+                    var field_var_opt: ?types.Var = null;
+                    for (names, vars) |name_idx, candidate_var| {
+                        if (std.mem.eql(u8, self.env.getIdent(name_idx), field_name)) {
+                            field_var_opt = candidate_var;
+                            break;
+                        }
+                    }
+                    const field_var = field_var_opt orelse return false;
+
+                    const inner_pattern_idx = switch (destruct.kind) {
+                        .Required => |p_idx| p_idx,
+                        .SubPattern => |p_idx| p_idx,
+                    };
+
+                    const before = out_binds.items.len;
+                    if (!try self.patternMatchesBind(inner_pattern_idx, field_value, field_var, out_binds)) {
+                        out_binds.items.len = before;
+                        return false;
+                    }
+                }
+
+                return true;
+            },
+            .applied_tag => |tag_pat| {
+                const union_resolved = self.resolveBaseVar(value_rt_var);
+                if (union_resolved.desc.content != .structure or union_resolved.desc.content.structure != .tag_union) return false;
+                const tu = union_resolved.desc.content.structure.tag_union;
+                const tags = self.runtime_types.getTagsSlice(tu.tags);
+
+                const tag_data = try self.extractTagValue(value);
+                if (tag_data.index >= tags.len) return false;
+
+                const expected_name = self.env.getIdent(tag_pat.name);
+                if (self.runtimeVarIsBool(value_rt_var)) {
+                    const actual_name = if (tag_data.index == self.bool_true_index) "True" else "False";
+                    if (!std.mem.eql(u8, expected_name, actual_name)) return false;
+                } else {
+                    const actual_name = self.env.getIdent(tags.items(.name)[tag_data.index]);
+                    if (!std.mem.eql(u8, expected_name, actual_name)) return false;
+                }
+
+                const arg_patterns = self.env.store.slicePatterns(tag_pat.args);
+                const arg_vars_range = tags.items(.args)[tag_data.index];
+                const arg_vars = self.runtime_types.sliceVars(arg_vars_range);
+                if (arg_patterns.len != arg_vars.len) return false;
+
+                if (arg_patterns.len == 0) {
+                    return true;
+                }
+
+                const start_len = out_binds.items.len;
+
+                const payload_value = tag_data.payload orelse {
+                    out_binds.items.len = start_len;
+                    return false;
+                };
+
+                if (arg_patterns.len == 1) {
+                    if (!try self.patternMatchesBind(arg_patterns[0], payload_value, arg_vars[0], out_binds)) {
+                        out_binds.items.len = start_len;
+                        return false;
+                    }
+                    return true;
+                }
+
+                if (payload_value.layout.tag != .tuple) {
+                    out_binds.items.len = start_len;
+                    return false;
+                }
+
+                var payload_tuple = try payload_value.asTuple(&self.runtime_layout_store);
+                if (payload_tuple.getElementCount() != arg_patterns.len) {
+                    out_binds.items.len = start_len;
+                    return false;
+                }
+
+                var j: usize = 0;
+                while (j < arg_patterns.len) : (j += 1) {
+                    const sorted_idx = payload_tuple.findElementIndexByOriginal(j) orelse j;
+                    if (sorted_idx >= payload_tuple.getElementCount()) {
+                        out_binds.items.len = start_len;
+                        return false;
+                    }
+                    const elem_val = try payload_tuple.getElement(sorted_idx);
+                    if (!try self.patternMatchesBind(arg_patterns[j], elem_val, arg_vars[j], out_binds)) {
+                        out_binds.items.len = start_len;
+                        return false;
+                    }
+                }
+
+                return true;
             },
             else => return false,
         }

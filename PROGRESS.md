@@ -113,8 +113,10 @@
 
     5) Match (wider coverage)
     - Current minimal support: assign, underscore, int & string literals, nominal passthrough, OR patterns.
+    - Progress:
+      - Tuple destructuring patterns now match in Interpreter2 (see `match (1, 2)` test).
     - TODO:
-      - Tuple and record destructuring patterns (bind sub‑components recursively).
+      - Record destructuring patterns (bind sub-components recursively).
       - Tag union patterns (tag name and payloads) once tag unions are represented for runtime.
       - Guards support.
     - Add tests incrementally (starting from simple patterns), always with Roc syntax and early compilation failure
