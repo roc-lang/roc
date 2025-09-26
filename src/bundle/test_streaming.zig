@@ -7,6 +7,7 @@ const std = @import("std");
 const bundle = @import("bundle.zig");
 const streaming_writer = @import("streaming_writer.zig");
 const streaming_reader = @import("streaming_reader.zig");
+const io_compat = @import("io_compat.zig");
 const c = @cImport({
     @cDefine("ZSTD_STATIC_LINKING_ONLY", "1");
     @cInclude("zstd.h");
@@ -25,7 +26,7 @@ test "simple streaming write" {
     var writer = try streaming_writer.CompressingHashWriter.init(
         &allocator_copy,
         3,
-        output.writer().any(),
+        io_compat.toAnyWriter(output.writer()),
         bundle.allocForZstd,
         bundle.freeForZstd,
     );
@@ -49,7 +50,7 @@ test "simple streaming read" {
     var writer = try streaming_writer.CompressingHashWriter.init(
         &allocator_copy,
         3,
-        compressed.writer().any(),
+        io_compat.toAnyWriter(compressed.writer()),
         bundle.allocForZstd,
         bundle.freeForZstd,
     );
@@ -66,7 +67,7 @@ test "simple streaming read" {
     var allocator_copy2 = allocator;
     var reader = try streaming_reader.DecompressingHashReader.init(
         &allocator_copy2,
-        stream.reader().any(),
+        io_compat.toAnyReader(stream.reader()),
         hash,
         bundle.allocForZstd,
         bundle.freeForZstd,
@@ -96,7 +97,7 @@ test "streaming write with exact buffer boundary" {
     var writer = try streaming_writer.CompressingHashWriter.init(
         &allocator_copy,
         3,
-        output.writer().any(),
+        io_compat.toAnyWriter(output.writer()),
         bundle.allocForZstd,
         bundle.freeForZstd,
     );
@@ -126,7 +127,7 @@ test "streaming read with hash mismatch" {
     var writer = try streaming_writer.CompressingHashWriter.init(
         &allocator_copy,
         3,
-        compressed.writer().any(),
+        io_compat.toAnyWriter(compressed.writer()),
         bundle.allocForZstd,
         bundle.freeForZstd,
     );
@@ -144,7 +145,7 @@ test "streaming read with hash mismatch" {
     var allocator_copy2 = allocator;
     var reader = try streaming_reader.DecompressingHashReader.init(
         &allocator_copy2,
-        stream.reader().any(),
+        io_compat.toAnyReader(stream.reader()),
         wrong_hash,
         bundle.allocForZstd,
         bundle.freeForZstd,
@@ -181,7 +182,7 @@ test "different compression levels" {
         var writer = try streaming_writer.CompressingHashWriter.init(
             &allocator_copy,
             level,
-            output.writer().any(),
+            io_compat.toAnyWriter(output.writer()),
             bundle.allocForZstd,
             bundle.freeForZstd,
         );
@@ -197,7 +198,7 @@ test "different compression levels" {
         var allocator_copy2 = allocator;
         var reader = try streaming_reader.DecompressingHashReader.init(
             &allocator_copy2,
-            stream.reader().any(),
+            io_compat.toAnyReader(stream.reader()),
             writer.getHash(),
             bundle.allocForZstd,
             bundle.freeForZstd,

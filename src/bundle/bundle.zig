@@ -19,6 +19,7 @@ const std = @import("std");
 const base58 = @import("base58");
 const streaming_writer = @import("streaming_writer.zig");
 const streaming_reader = @import("streaming_reader.zig");
+const io_compat = @import("io_compat.zig");
 const c = @cImport({
     @cDefine("ZSTD_STATIC_LINKING_ONLY", "1");
     @cInclude("zstd.h");
@@ -127,15 +128,11 @@ pub fn bundle(
     path_prefix: ?[]const u8,
     error_context: ?*ErrorContext,
 ) BundleError![]u8 {
-    // Create a buffered writer for the output
-    // NOTE: std.io.bufferedWriter was deleted in zig 0.15. Once this is code is upgraded to std.io.Writer, this will naturally be a buffered writer
-    var buffered = output_writer;
-
     // Create compressing hash writer that chains: tar → compress → hash → output
     var compress_writer = streaming_writer.CompressingHashWriter.init(
         allocator,
         compression_level,
-        buffered.any(),
+        io_compat.toAnyWriter(output_writer),
         allocForZstd,
         freeForZstd,
     ) catch |err| switch (err) {
@@ -474,6 +471,45 @@ pub const ExtractWriter = struct {
     }
 };
 
+const TarEntryReader = struct {
+    iterator: *std.tar.Iterator,
+    remaining: u64,
+
+    fn init(iterator: *std.tar.Iterator, remaining: u64) TarEntryReader {
+        return .{ .iterator = iterator, .remaining = remaining };
+    }
+
+    fn anyReader(self: *TarEntryReader) std.io.AnyReader {
+        return .{ .context = self, .readFn = readAny };
+    }
+
+    fn read(self: *TarEntryReader, dest: []u8) anyerror!usize {
+        if (dest.len == 0 or self.remaining == 0) {
+            return 0;
+        }
+
+        const max_bytes = std.math.cast(usize, self.remaining) orelse std.math.maxInt(usize);
+        const limit = @min(dest.len, max_bytes);
+        const slice = dest[0..limit];
+
+        const bytes_read = self.iterator.reader.readSliceShort(slice) catch |err| {
+            return err;
+        };
+
+        if (bytes_read == 0) return error.UnexpectedEndOfStream;
+
+        self.remaining -= bytes_read;
+        self.iterator.unread_file_bytes = self.remaining;
+        return bytes_read;
+    }
+
+    fn readAny(context: *const anyopaque, dest: []u8) anyerror!usize {
+        const ptr = @as(*const TarEntryReader, @ptrCast(@alignCast(context)));
+        const self: *TarEntryReader = @constCast(ptr);
+        return self.read(dest);
+    }
+};
+
 /// Directory-based extract writer
 pub const DirExtractWriter = struct {
     dir: std.fs.Dir,
@@ -545,14 +581,10 @@ pub fn unbundleStream(
     expected_hash: *const [32]u8,
     error_context: ?*ErrorContext,
 ) UnbundleError!void {
-    // Buffered reader for input
-    // NOTE: std.io.bufferedReader was deleted in zig 0.15. Once this is code is upgraded to std.io.Reader, this will naturally be buffered
-    var buffered = input_reader;
-
     // Create decompressing hash reader that chains: input → verify hash → decompress
     var decompress_reader = streaming_reader.DecompressingHashReader.init(
         allocator,
-        buffered.any(),
+        io_compat.toAnyReader(input_reader),
         expected_hash.*,
         allocForZstd,
         freeForZstd,
@@ -598,8 +630,10 @@ pub fn unbundleStream(
             .file => {
                 const tar_file_size = std.math.cast(usize, tar_file.size) orelse return error.FileTooLarge;
 
-                // Stream file directly from tar to disk
-                extract_writer.streamFile(tar_file.name, tar_file.reader().any(), tar_file_size) catch |err| {
+                var tar_file_reader = TarEntryReader.init(&tar_iter, tar_file.size);
+                const tar_reader = tar_file_reader.anyReader();
+
+                extract_writer.streamFile(tar_file.name, tar_reader, tar_file_size) catch |err| {
                     switch (err) {
                         error.UnexpectedEndOfStream => return error.UnexpectedEndOfStream,
                         else => return error.FileWriteFailed,

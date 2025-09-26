@@ -12,6 +12,7 @@ const bundle = @import("bundle.zig");
 const download = @import("download.zig");
 const streaming_writer = @import("streaming_writer.zig");
 const test_util = @import("test_util.zig");
+const io_compat = @import("io_compat.zig");
 const DirExtractWriter = bundle.DirExtractWriter;
 const FilePathIterator = test_util.FilePathIterator;
 
@@ -270,15 +271,15 @@ test "path validation prevents directory traversal" {
     var writer = try streaming_writer.CompressingHashWriter.init(
         &allocator_copy,
         3,
-        compressed.writer().any(),
+        io_compat.toAnyWriter(compressed.writer()),
         bundle.allocForZstd,
         bundle.freeForZstd,
     );
     defer writer.deinit();
 
-    const malicious_tar_data = malicious_tar.toArrayList();
+    const malicious_tar_data = try malicious_tar.toOwnedSlice();
     defer allocator.free(malicious_tar_data);
-    try writer.writer().writeAll(malicious_tar_data.items);
+    try writer.writer().writeAll(malicious_tar_data);
     try writer.finish();
 
     const hash = writer.getHash();
@@ -599,9 +600,9 @@ test "std.tar.writer creates valid tar" {
     try tar_writer.finishPedantically();
 
     // Now try to read it back
-    const tar_data = allocating_writer.toArrayList();
-    defer allocator.free(tar_data);
-    var stream = std.io.fixedBufferStream(tar_data.items);
+    const tar_bytes = try allocating_writer.toOwnedSlice();
+    defer allocator.free(tar_bytes);
+    var stream = std.io.fixedBufferStream(tar_bytes);
     var file_name_buffer: [256]u8 = undefined;
     var link_name_buffer: [256]u8 = undefined;
     var stream_reader_buffer: [1024]u8 = undefined;
