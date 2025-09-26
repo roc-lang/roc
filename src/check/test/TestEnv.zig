@@ -296,8 +296,19 @@ fn assertNoParseProblems(self: *TestEnv) !void {
 }
 
 fn assertNoCanProblems(self: *TestEnv) !void {
+    var report_buf = try std.ArrayList(u8).initCapacity(self.gpa, 256);
+    defer report_buf.deinit();
+
     const diagnostics = try self.module_env.getDiagnostics();
-    try testing.expectEqual(0, diagnostics.len);
+    for (diagnostics) |d| {
+        var report = try self.module_env.diagnosticToReport(d, self.gpa, self.module_env.module_name);
+        defer report.deinit();
+
+        report_buf.clearRetainingCapacity();
+        try report.render(report_buf.writer(), .markdown);
+
+        try testing.expectEqualStrings("EXPECTED NO ERROR", report_buf.items);
+    }
 }
 
 fn assertNoTypeProblems(self: *TestEnv) !void {

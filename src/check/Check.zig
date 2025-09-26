@@ -1718,7 +1718,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
         },
         // nominal //
         .e_nominal => |nominal| {
-            // TODO: Merge thsi with e_nominal_external
+            // TODO: Merge this with e_nominal_external
 
             // First, check the type inside the expr
             does_fx = try self.checkExpr(nominal.backing_expr, rank, .no_expectation) or does_fx;
@@ -1775,7 +1775,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             }
         },
         .e_nominal_external => |nominal| {
-            // TODO: Merge thsi with e_nominal
+            // TODO: Merge this with e_nominal
 
             // First, check the type inside the expr
             does_fx = try self.checkExpr(nominal.backing_expr, rank, .no_expectation) or does_fx;

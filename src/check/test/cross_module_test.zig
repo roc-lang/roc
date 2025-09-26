@@ -94,7 +94,7 @@ test "cross-module type checking - polymorphic function passes" {
     try test_env_b.assertLastDefType("Str");
 }
 
-test "cross-module type checking - polymorphic function with mulitple uses passes" {
+test "cross-module type checking - polymorphic function with multiple uses passes" {
     const source_a =
         \\module [id] 
         \\
