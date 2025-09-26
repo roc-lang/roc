@@ -468,7 +468,7 @@ pub const Pattern = union(enum) {
                 try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
 
                 var value_buf: [40]u8 = undefined;
-                const value_str = std.fmt.bufPrint(&value_buf, "{}", .{p.value}) catch "fmt_error";
+                const value_str = std.fmt.bufPrint(&value_buf, "{e}", .{p.value}) catch "fmt_error";
                 try tree.pushStringPair("value", value_str);
 
                 const attrs = tree.beginNode();
@@ -480,7 +480,7 @@ pub const Pattern = union(enum) {
                 try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
 
                 var value_buf: [40]u8 = undefined;
-                const value_str = std.fmt.bufPrint(&value_buf, "{}", .{p.value}) catch "fmt_error";
+                const value_str = std.fmt.bufPrint(&value_buf, "{e}", .{p.value}) catch "fmt_error";
                 try tree.pushStringPair("value", value_str);
 
                 const attrs = tree.beginNode();

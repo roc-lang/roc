@@ -1829,7 +1829,7 @@ fn generateExpectedSection(
                 std.debug.print("Mismatch in EXPECTED section for {s}\n", .{snapshot_path});
                 std.debug.print("Expected:\n{s}\n", .{expected_content.?});
                 std.debug.print("Generated:\n{s}\n", .{new_content});
-                std.debug.print("Hint: use `zig build snapshot -- --update-expected` to automatically update the expectations", .{});
+                std.debug.print("Hint: use `zig build snapshot -- --update-expected` to automatically update the expectations.\n", .{});
 
                 success = false;
             }
@@ -1845,7 +1845,7 @@ fn generateExpectedSection(
             if (!std.mem.eql(u8, new_content, expected_content.?)) {
                 // If the new content differs,
                 std.debug.print("Warning: Mismatch in EXPECTED section for {s}\n", .{snapshot_path});
-                std.debug.print("Hint: use `--check-expected` to give a more detailed report", .{});
+                std.debug.print("Hint: use `-- --check-expected` to give a more detailed report.\n", .{});
             }
         },
     }

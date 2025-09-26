@@ -518,6 +518,9 @@ fn addBuiltinTypeBool(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!void 
         Region.zero(),
     );
 
+    // Expose the bool type declaration idx for downstream consumers that rely on it.
+    BUILTIN_BOOL_TYPE = type_decl_idx;
+
     // Add to scope without any error checking (built-ins are always valid)
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
     try current_scope.put(gpa, .type_decl, type_ident, type_decl_idx);
