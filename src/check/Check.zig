@@ -1832,7 +1832,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                     try self.updateVar(expr_var, .err, rank);
                 }
             } else {
-                std.debug.assert(false);
                 try self.updateVar(expr_var, .err, rank);
             }
         },
@@ -1860,7 +1859,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                 );
                 try self.types.setVarRedirect(expr_var, ext_instantiated_var);
             } else {
-                std.debug.assert(false);
                 try self.updateVar(expr_var, .err, rank);
             }
         },

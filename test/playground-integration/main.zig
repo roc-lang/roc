@@ -902,7 +902,7 @@ pub fn main() !void {
         if (std.mem.eql(u8, arg, "--verbose")) {
             verbose_mode = true;
         } else if (std.mem.eql(u8, arg, "--help")) {
-            try stdout.writer().print("Usage: playground-test [options] [wasm-path]\n", .{});
+            try stdout.writer().print("Usage: test-playground [options] [wasm-path]\n", .{});
             try stdout.writer().print("Options:\n", .{});
             try stdout.writer().print("  --verbose           Enable verbose mode\n", .{});
             try stdout.writer().print("  --wasm-path PATH    Path to the playground WASM file\n", .{});

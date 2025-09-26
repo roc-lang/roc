@@ -1028,6 +1028,7 @@ pub const Store = struct {
 
                         // Check if this is a Bool (2 tags with no payload) as a special case
                         // This is a legitimate layout optimization for boolean tag unions
+                        // TODO: Is this necessary?
                         if (num_tags == 2) {
                             var is_bool = true;
                             for (tags_args) |tag_args| {
