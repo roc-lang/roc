@@ -179,6 +179,10 @@ pub const IncN = fn (?[*]u8, u64) callconv(.C) void;
 pub const Dec = fn (?[*]u8) callconv(.C) void;
 
 const REFCOUNT_MAX_ISIZE: isize = 0;
+// Only top bit set.
+const REFCOUNT_IS_ATOMIC_MASK: isize = std.math.minInt(isize);
+// All other bits of the refcount.
+const REFCOUNT_VALUE_MASK = ~REFCOUNT_IS_ATOMIC_MASK;
 
 pub const IntWidth = enum(u8) {
     U8 = 0,
@@ -225,7 +229,12 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
                 ptr_to_refcount.* = refcount +% amount;
             },
             .atomic => {
-                _ = @atomicRmw(isize, ptr_to_refcount, .Add, amount, .monotonic);
+                // If the first bit of the refcount is set, this variable is atomic.
+                if (refcount & REFCOUNT_IS_ATOMIC_MASK != 0) {
+                    _ = @atomicRmw(isize, ptr_to_refcount, .Add, amount, .monotonic);
+                } else {
+                    ptr_to_refcount.* = refcount +% amount;
+                }
             },
             .none => unreachable,
         }
@@ -384,9 +393,17 @@ inline fn decref_ptr_to_refcount(
                 }
             },
             .atomic => {
-                const last = @atomicRmw(isize, &refcount_ptr[0], .Sub, 1, .monotonic);
-                if (last == 1) {
-                    free_ptr_to_refcount(refcount_ptr, alignment, elements_refcounted);
+                // If the first bit of the refcount is set, this variable is atomic.
+                if (refcount_ptr[0] & REFCOUNT_IS_ATOMIC_MASK != 0) {
+                    const last = @atomicRmw(isize, &refcount_ptr[0], .Sub, 1, .monotonic);
+                    if (last & REFCOUNT_VALUE_MASK == 1) {
+                        free_ptr_to_refcount(refcount_ptr, alignment, elements_refcounted);
+                    }
+                } else {
+                    refcount_ptr[0] = refcount -% 1;
+                    if (refcount == 1) {
+                        free_ptr_to_refcount(refcount_ptr, alignment, elements_refcounted);
+                    }
                 }
             },
             .none => unreachable,
@@ -420,7 +437,7 @@ pub inline fn rcUnique(refcount: isize) bool {
             return refcount == 1;
         },
         .atomic => {
-            return refcount == 1;
+            return refcount & REFCOUNT_VALUE_MASK == 1;
         },
         .none => {
             return false;
@@ -434,7 +451,7 @@ pub inline fn rcConstant(refcount: isize) bool {
             return refcount == REFCOUNT_MAX_ISIZE;
         },
         .atomic => {
-            return refcount == REFCOUNT_MAX_ISIZE;
+            return refcount & REFCOUNT_VALUE_MASK == REFCOUNT_MAX_ISIZE & REFCOUNT_VALUE_MASK;
         },
         .none => {
             return true;
