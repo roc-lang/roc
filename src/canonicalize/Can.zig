@@ -305,7 +305,7 @@ fn addBuiltinTypeResult(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!voi
     // Create Ok(ok)
     const ok_tag_scratch_top = self.env.store.scratchTypeAnnoTop();
 
-    const ok_rigid_var_arg = try ir.addTypeAnnoAndTypeVar(.{ .rigid_var = .{ .name = ok_var_ident } }, .err, Region.zero());
+    const ok_rigid_var_arg = try ir.addTypeAnnoAndTypeVar(.{ .rigid_var_lookup = .{ .ref = ok_rigid_var } }, .err, Region.zero());
     try self.env.store.addScratchTypeAnno(ok_rigid_var_arg);
 
     const ok_tag_anno_idx = try ir.addTypeAnnoAndTypeVar(
@@ -320,7 +320,7 @@ fn addBuiltinTypeResult(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!voi
     // Create Err(err)
     const err_tag_scratch_top = self.env.store.scratchTypeAnnoTop();
 
-    const err_rigid_var_arg = try ir.addTypeAnnoAndTypeVar(.{ .rigid_var = .{ .name = err_var_ident } }, .err, Region.zero());
+    const err_rigid_var_arg = try ir.addTypeAnnoAndTypeVar(.{ .rigid_var_lookup = .{ .ref = err_rigid_var } }, .err, Region.zero());
     try self.env.store.addScratchTypeAnno(err_rigid_var_arg);
 
     const err_tag_anno_idx = try ir.addTypeAnnoAndTypeVar(
@@ -799,7 +799,7 @@ fn collectBoundVars(self: *Self, pattern_idx: Pattern.Idx, bound_vars: *std.Auto
                 }
             }
         },
-        .int_literal,
+        .num_literal,
         .small_dec_literal,
         .dec_literal,
         .frac_f32_literal,
@@ -1561,7 +1561,7 @@ fn canonicalizeSingleQuote(
             .bytes = @bitCast(@as(u128, @intCast(codepoint))),
             .kind = .u128,
         };
-        if (Idx == Expr.Idx) {
+        if (comptime Idx == Expr.Idx) {
             const expr_idx = try self.env.addExprAndTypeVar(CIR.Expr{
                 .e_num = .{
                     .value = value_content,
@@ -1569,12 +1569,11 @@ fn canonicalizeSingleQuote(
                 },
             }, .err, region);
             return expr_idx;
-        } else if (Idx == Pattern.Idx) {
-            const pat_idx = try self.env.addPatternAndTypeVar(Pattern{
-                .int_literal = .{
-                    .value = value_content,
-                },
-            }, .err, region);
+        } else if (comptime Idx == Pattern.Idx) {
+            const pat_idx = try self.env.addPatternAndTypeVar(Pattern{ .num_literal = .{
+                .value = value_content,
+                .kind = .int_unbound,
+            } }, .err, region);
             return pat_idx;
         } else {
             @compileError("Unsupported Idx type");
@@ -2052,7 +2051,7 @@ pub fn canonicalizeExpr(
                         return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
                     };
                     const expr_idx = try self.env.addExprAndTypeVar(
-                        .{ .e_frac_dec = .{
+                        .{ .e_dec = .{
                             .value = dec_val,
                             .has_suffix = true,
                         } },
@@ -2095,7 +2094,7 @@ pub fn canonicalizeExpr(
                     },
                 },
                 .dec => |dec_info| CIR.Expr{
-                    .e_frac_dec = .{
+                    .e_dec = .{
                         .value = dec_info.value,
                         .has_suffix = false,
                     },
@@ -2161,16 +2160,9 @@ pub fn canonicalizeExpr(
                 return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
             }
 
-            // Initialize the list's type variable to its first element's CIR Index
-            // (later steps will unify that type with the other elems' types)
-            const first_elem_idx = self.env.store.sliceExpr(elems_span)[0];
-            const elem_type_var = @as(TypeVar, @enumFromInt(@intFromEnum(first_elem_idx)));
             const expr_idx = try self.env.addExprAndTypeVar(CIR.Expr{
-                .e_list = .{
-                    .elem_var = elem_type_var,
-                    .elems = elems_span,
-                },
-            }, Content{ .structure = .{ .list = elem_type_var } }, region);
+                .e_list = .{ .elems = elems_span },
+            }, .err, region);
 
             const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
@@ -3231,7 +3223,7 @@ fn canonicalizePattern(
                 .underscore = {},
             };
 
-            const pattern_idx = try self.env.addPatternAndTypeVar(underscore_pattern, Content{ .flex_var = null }, region);
+            const pattern_idx = try self.env.addPatternAndTypeVar(underscore_pattern, .err, region);
 
             return pattern_idx;
         },
@@ -3305,56 +3297,6 @@ fn canonicalizePattern(
                 }
             } else @as(i128, @bitCast(u128_val));
 
-            // Calculate requirements based on the value
-            // Special handling for minimum signed values (-128, -32768, etc.)
-            // These are special because they have a power-of-2 magnitude that fits exactly
-            // in their signed type. We report them as needing one less bit to make the
-            // standard "signed types have n-1 usable bits" logic work correctly.
-            if (parsed.suffix) |suffix| {
-                const type_content = blk: {
-                    if (std.mem.eql(u8, suffix, "u8")) {
-                        if (u128_val > std.math.maxInt(u8)) break :blk null;
-                        break :blk Content{ .structure = FlatType{ .num = Num.int_u8 } };
-                    } else if (std.mem.eql(u8, suffix, "u16")) {
-                        if (u128_val > std.math.maxInt(u16)) break :blk null;
-                        break :blk Content{ .structure = FlatType{ .num = Num.int_u16 } };
-                    } else if (std.mem.eql(u8, suffix, "u32")) {
-                        if (u128_val > std.math.maxInt(u32)) break :blk null;
-                        break :blk Content{ .structure = FlatType{ .num = Num.int_u32 } };
-                    } else if (std.mem.eql(u8, suffix, "u64")) {
-                        if (u128_val > std.math.maxInt(u64)) break :blk null;
-                        break :blk Content{ .structure = FlatType{ .num = Num.int_u64 } };
-                    } else if (std.mem.eql(u8, suffix, "u128")) {
-                        break :blk Content{ .structure = FlatType{ .num = Num.int_u128 } };
-                    } else if (std.mem.eql(u8, suffix, "i8")) {
-                        if (i128_val < std.math.minInt(i8) or i128_val > std.math.maxInt(i8)) break :blk null;
-                        break :blk Content{ .structure = FlatType{ .num = Num.int_i8 } };
-                    } else if (std.mem.eql(u8, suffix, "i16")) {
-                        if (i128_val < std.math.minInt(i16) or i128_val > std.math.maxInt(i16)) break :blk null;
-                        break :blk Content{ .structure = FlatType{ .num = Num.int_i16 } };
-                    } else if (std.mem.eql(u8, suffix, "i32")) {
-                        if (i128_val < std.math.minInt(i32) or i128_val > std.math.maxInt(i32)) break :blk null;
-                        break :blk Content{ .structure = FlatType{ .num = Num.int_i32 } };
-                    } else if (std.mem.eql(u8, suffix, "i64")) {
-                        if (i128_val < std.math.minInt(i64) or i128_val > std.math.maxInt(i64)) break :blk null;
-                        break :blk Content{ .structure = FlatType{ .num = Num.int_i64 } };
-                    } else if (std.mem.eql(u8, suffix, "i128")) {
-                        break :blk Content{ .structure = FlatType{ .num = Num.int_i128 } };
-                    } else {
-                        break :blk null;
-                    }
-                };
-
-                if (type_content) |content| {
-                    const pattern_idx = try self.env.addPatternAndTypeVar(
-                        .{ .int_literal = .{ .value = .{ .bytes = @bitCast(i128_val), .kind = .i128 } } },
-                        content,
-                        region,
-                    );
-                    return pattern_idx;
-                }
-            }
-
             // const is_negative_u1 = @as(u1, @intFromBool(is_negated));
             // const is_power_of_2 = @as(u1, @intFromBool(u128_val != 0 and (u128_val & (u128_val - 1)) == 0));
             // const is_minimum_signed = is_negative_u1 & is_power_of_2;
@@ -3364,21 +3306,68 @@ fn canonicalizePattern(
             //     .sign_needed = is_negated,
             //     .bits_needed = types.Num.Int.BitsNeeded.fromValue(adjusted_val),
             // };
-
             // const int_requirements = types.Num.IntRequirements{
             //     .sign_needed = requirements.sign_needed,
             //     .bits_needed = @intCast(@intFromEnum(requirements.bits_needed)),
             // };
+
+            // Calculate requirements based on the value
+            // Special handling for minimum signed values (-128, -32768, etc.)
+            // These are special because they have a power-of-2 magnitude that fits exactly
+            // in their signed type. We report them as needing one less bit to make the
+            // standard "signed types have n-1 usable bits" logic work correctly.
+            if (parsed.suffix) |suffix| {
+                // Capture the suffix, if provided
+                const int_suffix: Pattern.NumKind = blk: {
+                    if (std.mem.eql(u8, suffix, "u8")) {
+                        break :blk .u8;
+                    } else if (std.mem.eql(u8, suffix, "u16")) {
+                        break :blk .u16;
+                    } else if (std.mem.eql(u8, suffix, "u32")) {
+                        break :blk .u32;
+                    } else if (std.mem.eql(u8, suffix, "u64")) {
+                        break :blk .u64;
+                    } else if (std.mem.eql(u8, suffix, "u128")) {
+                        break :blk .u128;
+                    } else if (std.mem.eql(u8, suffix, "i8")) {
+                        break :blk .i8;
+                    } else if (std.mem.eql(u8, suffix, "i16")) {
+                        break :blk .i16;
+                    } else if (std.mem.eql(u8, suffix, "i32")) {
+                        break :blk .i32;
+                    } else if (std.mem.eql(u8, suffix, "i64")) {
+                        break :blk .i64;
+                    } else if (std.mem.eql(u8, suffix, "f32")) {
+                        break :blk .f32;
+                    } else if (std.mem.eql(u8, suffix, "f64")) {
+                        break :blk .f64;
+                    } else if (std.mem.eql(u8, suffix, "dec")) {
+                        break :blk .dec;
+                    } else {
+                        // TODO: Create a new error type
+                        return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                    }
+                };
+                const pattern_idx = try self.env.addPatternAndTypeVar(
+                    .{ .num_literal = .{
+                        .value = .{ .bytes = @bitCast(i128_val), .kind = .i128 },
+                        .kind = int_suffix,
+                    } },
+                    .err,
+                    region,
+                );
+                return pattern_idx;
+            }
 
             // For non-decimal integers (hex, binary, octal), use int_poly directly
             // For decimal integers, use num_poly so they can be either Int or Frac
             // const is_non_decimal = int_base != DEFAULT_BASE;
 
             const pattern_idx = try self.env.addPatternAndTypeVar(
-                Pattern{ .int_literal = .{ .value = CIR.IntValue{
-                    .bytes = @bitCast(i128_val),
-                    .kind = .i128,
-                } } },
+                Pattern{ .num_literal = .{
+                    .value = CIR.IntValue{ .bytes = @bitCast(i128_val), .kind = .i128 },
+                    .kind = .num_unbound,
+                } },
                 .err,
                 region,
             );
@@ -3404,14 +3393,16 @@ fn canonicalizePattern(
                     }
                     const pattern_idx = try self.env.addPatternAndTypeVar(
                         .{ .frac_f32_literal = .{ .value = @floatCast(f64_val) } },
-                        .{ .structure = FlatType{ .num = .{ .frac_precision = .f32 } } },
+                        // .{ .structure = FlatType{ .num = .{ .frac_precision = .f32 } } },
+                        .err,
                         region,
                     );
                     return pattern_idx;
                 } else if (std.mem.eql(u8, suffix, "f64")) {
                     const pattern_idx = try self.env.addPatternAndTypeVar(
                         .{ .frac_f64_literal = .{ .value = f64_val } },
-                        .{ .structure = FlatType{ .num = .{ .frac_precision = .f64 } } },
+                        .err,
+                        // .{ .structure = FlatType{ .num = .{ .frac_precision = .f64 } } },
                         region,
                     );
                     return pattern_idx;
@@ -3425,8 +3416,9 @@ fn canonicalizePattern(
                         return malformed_idx;
                     };
                     const pattern_idx = try self.env.addPatternAndTypeVar(
-                        .{ .dec_literal = .{ .value = dec_val } },
-                        .{ .structure = FlatType{ .num = .{ .frac_precision = .dec } } },
+                        .{ .dec_literal = .{ .value = dec_val, .has_suffix = true } },
+                        .err,
+                        // .{ .structure = FlatType{ .num = .{ .frac_precision = .dec } } },
                         region,
                     );
                     return pattern_idx;
@@ -3467,11 +3459,13 @@ fn canonicalizePattern(
                     .small_dec_literal = .{
                         .numerator = small_info.numerator,
                         .denominator_power_of_ten = small_info.denominator_power_of_ten,
+                        .has_suffix = false,
                     },
                 },
                 .dec => |dec_info| Pattern{
                     .dec_literal = .{
                         .value = dec_info.value,
+                        .has_suffix = false,
                     },
                 },
                 .f64 => unreachable, // Already handled above
@@ -3496,7 +3490,7 @@ fn canonicalizePattern(
                     .literal = literal,
                 },
             };
-            const pattern_idx = try self.env.addPatternAndTypeVar(str_pattern, Content{ .structure = .str }, region);
+            const pattern_idx = try self.env.addPatternAndTypeVar(str_pattern, .err, region);
 
             return pattern_idx;
         },
@@ -3530,7 +3524,7 @@ fn canonicalizePattern(
             // We need to create a temporary pattern idx to get the type var
             const ext_var = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex_var = null }, region, TypeVar);
             const tag = try self.env.types.mkTag(tag_name, arg_vars);
-            const tag_union_type = try self.env.types.mkTagUnion(&[_]Tag{tag}, ext_var);
+            _ = try self.env.types.mkTagUnion(&[_]Tag{tag}, ext_var);
 
             // Create the pattern node with type var
             const tag_pattern_idx = try self.env.addPatternAndTypeVar(Pattern{
@@ -3538,7 +3532,7 @@ fn canonicalizePattern(
                     .name = tag_name,
                     .args = args,
                 },
-            }, tag_union_type, region);
+            }, .err, region);
 
             if (e.qualifiers.span.len == 0) {
                 // Check if this is an unqualified nominal tag (e.g. True or False are in scope unqualified by default)
@@ -3643,7 +3637,7 @@ fn canonicalizePattern(
                 };
 
                 // Look up the target node index in the module's exposed_nodes
-                const target_node_idx, const type_content = blk: {
+                const target_node_idx, _ = blk: {
                     const envs_map = self.module_envs orelse {
                         break :blk .{ 0, Content.err };
                     };
@@ -3681,7 +3675,7 @@ fn canonicalizePattern(
                         .backing_pattern = tag_pattern_idx,
                         .backing_type = .tag,
                     },
-                }, type_content, region);
+                }, .err, region);
 
                 return nominal_pattern_idx;
             }
@@ -3702,12 +3696,14 @@ fn canonicalizePattern(
                     // For simple destructuring like `{ name, age }`, both label and ident are the same
                     if (field.value) |sub_pattern_idx| {
                         // Handle patterns like `{ name: x }` or `{ address: { city } }` where there's a sub-pattern
-                        const canonicalized_sub_pattern = try self.canonicalizePattern(sub_pattern_idx) orelse {
-                            // If sub-pattern canonicalization fails, return malformed pattern
-                            const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .pattern_not_canonicalized = .{
-                                .region = field_region,
-                            } });
-                            return malformed_idx;
+                        const canonicalized_sub_pattern = blk: {
+                            break :blk try self.canonicalizePattern(sub_pattern_idx) orelse {
+                                // If sub-pattern canonicalization fails, return malformed pattern
+                                const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .pattern_not_canonicalized = .{
+                                    .region = field_region,
+                                } });
+                                break :blk malformed_idx;
+                            };
                         };
 
                         // Create the RecordDestruct with sub-pattern
@@ -3717,12 +3713,12 @@ fn canonicalizePattern(
                             .kind = .{ .SubPattern = canonicalized_sub_pattern },
                         };
 
-                        const destruct_idx = try self.env.addRecordDestructAndTypeVar(record_destruct, .{ .flex_var = null }, field_region);
+                        const destruct_idx = try self.env.addRecordDestructAndTypeVar(record_destruct, .err, field_region);
                         try self.env.store.addScratchRecordDestruct(destruct_idx);
                     } else {
                         // Simple case: Create the RecordDestruct for this field
                         const assign_pattern = Pattern{ .assign = .{ .ident = field_name_ident } };
-                        const assign_pattern_idx = try self.env.addPatternAndTypeVar(assign_pattern, .{ .flex_var = null }, field_region);
+                        const assign_pattern_idx = try self.env.addPatternAndTypeVar(assign_pattern, .err, field_region);
 
                         const record_destruct = CIR.Pattern.RecordDestruct{
                             .label = field_name_ident,
@@ -3730,7 +3726,7 @@ fn canonicalizePattern(
                             .kind = .{ .Required = assign_pattern_idx },
                         };
 
-                        const destruct_idx = try self.env.addRecordDestructAndTypeVar(record_destruct, .{ .flex_var = null }, field_region);
+                        const destruct_idx = try self.env.addRecordDestructAndTypeVar(record_destruct, .err, field_region);
                         try self.env.store.addScratchRecordDestruct(destruct_idx);
 
                         // Introduce the identifier into scope
@@ -3775,19 +3771,12 @@ fn canonicalizePattern(
             // Create span of the new scratch record destructs
             const destructs_span = try self.env.store.recordDestructSpanFrom(scratch_top);
 
-            // Create type variables for the record
-            // TODO: Remove `var`s from pattern node?
-            const whole_var = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex_var = null }, region, TypeVar);
-            const ext_var = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex_var = null }, region, TypeVar);
-
             // Create the record destructure pattern
             const pattern_idx = try self.env.addPatternAndTypeVar(Pattern{
                 .record_destructure = .{
-                    .whole_var = whole_var,
-                    .ext_var = ext_var,
                     .destructs = destructs_span,
                 },
-            }, .{ .flex_var = null }, region);
+            }, .err, region);
 
             return pattern_idx;
         },
@@ -3810,19 +3799,11 @@ fn canonicalizePattern(
             // Create span of the new scratch patterns
             const patterns_span = try self.env.store.patternSpanFrom(scratch_top);
 
-            // Since pattern idx map 1-to-1 to variables, we can get cast the
-            // slice of and cast them to vars
-            const elems_var_range = try self.env.types.appendVars(
-                @ptrCast(@alignCast(self.env.store.slicePatterns(patterns_span))),
-            );
-
             const pattern_idx = try self.env.addPatternAndTypeVar(Pattern{
                 .tuple = .{
                     .patterns = patterns_span,
                 },
-            }, Content{ .structure = FlatType{
-                .tuple = types.Tuple{ .elems = elems_var_range },
-            } }, region);
+            }, .err, region);
 
             return pattern_idx;
         },
@@ -3860,11 +3841,9 @@ fn canonicalizePattern(
                             // Create an assign pattern for the rest variable
                             // Use the region of just the identifier token, not the full rest pattern
                             const name_region = self.parse_ir.tokenizedRegionToRegion(.{ .start = name_tok, .end = name_tok });
-                            // Note: The rest variable's type will be set later when we know elem_var
-                            // For now, just give it a flex var
                             const assign_idx = try self.env.addPatternAndTypeVar(Pattern{ .assign = .{
                                 .ident = ident_idx,
-                            } }, Content{ .flex_var = null }, name_region);
+                            } }, .err, name_region);
 
                             // Introduce the identifier into scope
                             switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, assign_idx, false, true)) {
@@ -3922,50 +3901,25 @@ fn canonicalizePattern(
 
             // Handle empty list patterns specially
             if (patterns_span.span.len == 0 and rest_index == null) {
-                // Empty list pattern - create a simple pattern without elem_var
+                // Empty list pattern
                 const pattern_idx = try self.env.addPatternAndTypeVar(Pattern{
                     .list = .{
-                        .list_var = @enumFromInt(0), // Will be set by addPatternAndTypeVar
-                        .elem_var = @enumFromInt(0), // Not used for empty lists
                         .patterns = patterns_span,
                         .rest_info = null,
                     },
-                }, Content{ .structure = .list_unbound }, region);
+                }, .err, region);
 
                 return pattern_idx;
             }
 
-            // For non-empty list patterns, use the first pattern's type variable as elem_var
-            const elem_var: TypeVar = if (patterns_span.span.len > 0) blk: {
-                const first_pattern_idx = self.env.store.slicePatterns(patterns_span)[0];
-                break :blk @enumFromInt(@intFromEnum(first_pattern_idx));
-            } else blk: {
-                // Must be a rest-only pattern like [..] or [.. as rest]
-                // Create a placeholder pattern for the element type
-                const placeholder_idx = try self.env.addPatternAndTypeVar(Pattern{
-                    .underscore = {},
-                }, Content{ .flex_var = null }, region);
-                break :blk @enumFromInt(@intFromEnum(placeholder_idx));
-            };
-
-            // Update rest pattern's type if it exists
-            if (rest_pattern) |rest_pat| {
-                // Update the rest pattern's type to be a list of elem_var
-                const rest_list_type = Content{ .structure = .{ .list = elem_var } };
-                _ = try self.env.types.setVarContent(@enumFromInt(@intFromEnum(rest_pat)), rest_list_type);
-            }
-
             // Create the list pattern with rest info
             // Set type variable for the pattern - this should be the list type
-            const list_type = Content{ .structure = .{ .list = elem_var } };
             const pattern_idx = try self.env.addPatternAndTypeVar(Pattern{
                 .list = .{
-                    .list_var = @enumFromInt(0), // Will be set by addPatternAndTypeVar
-                    .elem_var = elem_var,
                     .patterns = patterns_span,
                     .rest_info = if (rest_index) |idx| .{ .index = idx, .pattern = rest_pattern } else null,
                 },
-            }, list_type, region);
+            }, .err, region);
 
             return pattern_idx;
         },
@@ -4011,7 +3965,7 @@ fn canonicalizePattern(
                     },
                 };
 
-                const pattern_idx = try self.env.addPatternAndTypeVar(as_pattern, .{ .flex_var = null }, region);
+                const pattern_idx = try self.env.addPatternAndTypeVar(as_pattern, .err, region);
 
                 // Introduce the identifier into scope
                 switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, true)) {

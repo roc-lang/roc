@@ -2084,7 +2084,7 @@ fn Unifier(comptime StoreTypeB: type) type {
             // then recursiv
             var ext = record_ext;
             while (true) {
-                switch (record_ext) {
+                switch (ext) {
                     .unbound => {
                         return .{ .ext = ext, .range = range };
                     },

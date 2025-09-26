@@ -828,6 +828,205 @@ test "check type - record access - not a record" {
     try assertFileTypeCheckFail(source, "TYPE MISMATCH");
 }
 
+// tags //
+
+test "check type - patterns - wrong type" {
+    const source =
+        \\{
+        \\  x = True
+        \\
+        \\  match(x) {
+        \\    "hello" => "world",
+        \\  }
+        \\}
+    ;
+    try assertExprTypeCheckFail(source, "INCOMPATIBLE MATCH PATTERNS");
+}
+
+test "check type - patterns tag without payload" {
+    const source =
+        \\{
+        \\  x = True
+        \\
+        \\  match(x) {
+        \\    True => "true",
+        \\    False => "false",
+        \\  }
+        \\}
+    ;
+    try assertExprTypeCheckPass(source, "Str");
+}
+
+test "check type - patterns tag with payload" {
+    const source =
+        \\{
+        \\  x = Ok("ok")
+        \\
+        \\  match(x) {
+        \\    Ok(val) => val,
+        \\    Err(_) => "err",
+        \\  }
+        \\}
+    ;
+    try assertExprTypeCheckPass(source, "Str");
+}
+
+test "check type - patterns tag with payload mismatch" {
+    const source =
+        \\{
+        \\  x = Ok("ok")
+        \\
+        \\  match(x) {
+        \\    Ok(True) => 10 * 10,
+        \\    Err(_) => 0,
+        \\  }
+        \\}
+    ;
+    try assertExprTypeCheckFail(source, "INCOMPATIBLE MATCH PATTERNS");
+}
+
+test "check type - patterns str" {
+    const source =
+        \\{
+        \\  x = "hello"
+        \\
+        \\  match(x) {
+        \\    "world" => "true",
+        \\    _ => "false",
+        \\  }
+        \\}
+    ;
+    try assertExprTypeCheckPass(source, "Str");
+}
+
+test "check type - patterns num" {
+    const source =
+        \\{
+        \\  x = 10
+        \\
+        \\  match(x) {
+        \\    10 => "true",
+        \\    _ => "false",
+        \\  }
+        \\}
+    ;
+    try assertExprTypeCheckPass(source, "Str");
+}
+
+test "check type - patterns int mismatch" {
+    const source =
+        \\{
+        \\  x = 10u8
+        \\
+        \\  match(x) {
+        \\    10u32 => "true",
+        \\    _ => "false",
+        \\  }
+        \\}
+    ;
+    try assertExprTypeCheckFail(source, "INCOMPATIBLE MATCH PATTERNS");
+}
+
+test "check type - patterns frac 1" {
+    const source =
+        \\{
+        \\  x = 10.0dec
+        \\
+        \\  match(x) {
+        \\    10 => x,
+        \\    _ => 15,
+        \\  }
+        \\}
+    ;
+    try assertExprTypeCheckPass(source, "Num(Frac(Decimal))");
+}
+
+test "check type - patterns frac 2" {
+    const source =
+        \\{
+        \\  x = 10.0
+        \\
+        \\  match(x) {
+        \\    10f32 => x,
+        \\    _ => 15,
+        \\  }
+        \\}
+    ;
+    try assertExprTypeCheckPass(source, "Num(Frac(Float32))");
+}
+
+test "check type - patterns frac 3" {
+    const source =
+        \\{
+        \\  x = 10.0
+        \\
+        \\  match(x) {
+        \\    10 => x,
+        \\    15f64 => x,
+        \\    _ => 20,
+        \\  }
+        \\}
+    ;
+    try assertExprTypeCheckPass(source, "Num(Frac(Float64))");
+}
+
+test "check type - patterns list" {
+    const source =
+        \\{
+        \\  x = ["a", "b", "c"]
+        \\
+        \\  match(x) {
+        \\    [.. as b, a]  => b,
+        \\    [a, .. as b]  => b,
+        \\    []  => [],
+        \\  }
+        \\}
+    ;
+    try assertExprTypeCheckPass(source, "List(Str)");
+}
+
+test "check type - patterns record" {
+    const source =
+        \\{
+        \\  val = { x: "hello", y: True }
+        \\
+        \\  match(val) {
+        \\    { y: False }  => "False",
+        \\    { x }  => x,
+        \\  }
+        \\}
+    ;
+    try assertExprTypeCheckPass(source, "Str");
+}
+
+test "check type - patterns record 2" {
+    const source =
+        \\{
+        \\  val = { x: "hello", y: True }
+        \\
+        \\  match(val) {
+        \\    { y: False, x: "world" }  => 10
+        \\    _  => 20,
+        \\  }
+        \\}
+    ;
+    try assertExprTypeCheckPass(source, "Num(_size)");
+}
+
+test "check type - patterns record field mismatch" {
+    const source =
+        \\{
+        \\  val = { x: "hello" }
+        \\
+        \\  match(val) {
+        \\    { x: False } => 10
+        \\    _ => 20
+        \\  }
+        \\}
+    ;
+    try assertExprTypeCheckFail(source, "INCOMPATIBLE MATCH PATTERNS");
+}
+
 // helpers  //
 
 /// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.

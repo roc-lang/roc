@@ -287,8 +287,82 @@ pub const IntValue = struct {
     pub fn toI128(self: IntValue) i128 {
         return @bitCast(self.bytes);
     }
-};
 
+    pub fn toIntRequirements(self: IntValue) types_mod.Num.Int.Requirements {
+        var sign_needed = false;
+        var bits_needed: types_mod.Num.Int.BitsNeeded = undefined;
+
+        switch (self.kind) {
+            .i64 => {
+                const val: i64 = @bitCast(self.bytes[0..8].*);
+                sign_needed = val < 0;
+                const abs_val: u128 = if (val < 0) @abs(val) else @intCast(val);
+                bits_needed = types_mod.Num.Int.BitsNeeded.fromValue(abs_val);
+            },
+            .i128 => {
+                const val: i128 = @bitCast(self.bytes);
+                sign_needed = val < 0;
+                const abs_val: u128 = if (val < 0) @abs(val) else @intCast(val);
+                bits_needed = types_mod.Num.Int.BitsNeeded.fromValue(abs_val);
+            },
+            .u64 => {
+                const val: u64 = @bitCast(self.bytes[0..8].*);
+                sign_needed = false;
+                bits_needed = types_mod.Num.Int.BitsNeeded.fromValue(val);
+            },
+            .u128 => {
+                const val: u128 = @bitCast(self.bytes);
+                sign_needed = false;
+                bits_needed = types_mod.Num.Int.BitsNeeded.fromValue(val);
+            },
+        }
+
+        return types_mod.Num.Int.Requirements{
+            .sign_needed = sign_needed,
+            .bits_needed = bits_needed,
+        };
+    }
+
+    pub fn toFracRequirements(self: IntValue) types_mod.Num.FracRequirements {
+        var fits_in_dec = false;
+        var fits_in_f32 = false;
+
+        // f32 can exactly represent integers up to 2^24
+        const f32_mantissa_bits = std.math.floatMantissaBits(f32) + 1;
+        const f32_max_exact_int: i128 = @as(i128, 1) << f32_mantissa_bits;
+
+        switch (self.kind) {
+            .i64 => {
+                const val: i64 = @bitCast(self.bytes[0..8].*);
+                fits_in_f32 = @abs(val) <= f32_max_exact_int;
+                fits_in_dec = true; // i64 always fits in Dec
+            },
+            .i128 => {
+                const val: i128 = @bitCast(self.bytes);
+                fits_in_f32 = @abs(val) <= f32_max_exact_int;
+                // Check if it fits in Dec's range
+                fits_in_dec = val >= std.math.minInt(i128) / RocDec.one_point_zero_i128 and
+                    val <= std.math.maxInt(i128) / RocDec.one_point_zero_i128;
+            },
+            .u64 => {
+                const val: u64 = @bitCast(self.bytes[0..8].*);
+                fits_in_f32 = val <= @as(u64, @intCast(f32_max_exact_int));
+                fits_in_dec = true; // u64 always fits in Dec
+            },
+            .u128 => {
+                const val: u128 = @bitCast(self.bytes);
+                fits_in_f32 = val <= @as(u128, @intCast(f32_max_exact_int));
+                fits_in_dec = val <= @as(u128, @intCast(std.math.maxInt(i128))) /
+                    @as(u128, @intCast(RocDec.one_point_zero_i128));
+            },
+        }
+
+        return types_mod.Num.FracRequirements{
+            .fits_in_f32 = fits_in_f32,
+            .fits_in_dec = fits_in_dec,
+        };
+    }
+};
 /// The size a user enters after a number literal to explicitly indicate the size
 /// eg 2u8, 50i16
 pub const IntSuffix = enum { u8, u16, u32, u64, u128, i8, i16, i32, i64, i128 };

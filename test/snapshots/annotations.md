@@ -252,9 +252,9 @@ NO CHANGE
 			(declared-type
 				(ty-fn @11.10-11.25 (effectful false)
 					(ty-rigid-var @11.10-11.11 (name "a"))
-					(ty-rigid-var @11.10-11.11 (name "a"))
+					(ty-rigid-var-lookup (ty-rigid-var @11.10-11.11 (name "a")))
 					(ty-apply @11.18-11.25 (name "Pair") (local)
-						(ty-rigid-var @11.10-11.11 (name "a")))))))
+						(ty-rigid-var-lookup (ty-rigid-var @11.10-11.11 (name "a"))))))))
 	(d-let
 		(p-assign @15.1-15.20 (ident "succeedPairSameType"))
 		(e-call @15.23-15.35
@@ -309,13 +309,15 @@ NO CHANGE
 					(ty-rigid-var @23.17-23.18 (name "a"))
 					(ty-rigid-var @23.20-23.21 (name "b"))
 					(ty-apply @23.25-23.32 (name "Pair") (local)
-						(ty-rigid-var @23.17-23.18 (name "a")))))))
+						(ty-rigid-var-lookup (ty-rigid-var @23.17-23.18 (name "a"))))))))
 	(s-nominal-decl @3.1-3.24
 		(ty-header @3.1-3.8 (name "Pair")
 			(ty-args
 				(ty-rigid-var @3.6-3.7 (name "a"))))
 		(ty-tag-union @3.12-3.24
-			(tag_name @3.13-3.23 (name "Pair")))))
+			(ty-tag-name @3.13-3.23 (name "Pair")
+				(ty-rigid-var-lookup (ty-rigid-var @3.6-3.7 (name "a")))
+				(ty-rigid-var-lookup (ty-rigid-var @3.6-3.7 (name "a")))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -108,7 +108,7 @@ pub const TypeMismatchDetail = union(enum) {
 
 /// Problem data for when list elements have incompatible types
 pub const IncompatibleListElements = struct {
-    last_elem_expr: CIR.Expr.Idx,
+    last_elem_idx: CIR.Node.Idx,
     incompatible_elem_index: u32, // 0-based index of the incompatible element
     list_length: u32, // Total number of elements in the list
 };
@@ -460,7 +460,7 @@ pub const ReportBuilder = struct {
 
         // Determine the overall region that encompasses both elements
         const actual_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
-        const expected_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.last_elem_expr)));
+        const expected_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.last_elem_idx)));
         const overall_start_offset = @min(actual_region.start.offset, expected_region.start.offset);
         const overall_end_offset = @max(actual_region.end.offset, expected_region.end.offset);
 
@@ -851,9 +851,9 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Show the type of the other branches
-        try report.document.addText("But the expression right after ");
+        try report.document.addText("But the expression between the ");
         try report.document.addAnnotated("match", .keyword);
-        try report.document.addText(" has the type:");
+        try report.document.addText(" parenthesis has the type:");
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(expected_type, .type_variable);

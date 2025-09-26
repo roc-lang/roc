@@ -88,7 +88,7 @@ pub const Expr = union(enum) {
     /// 3.14159265358979323846    # High precision decimal
     /// 0.1 + 0.2                 # Equals exactly 0.3 (not 0.30000000000000004)
     /// ```
-    e_frac_dec: struct {
+    e_dec: struct {
         value: RocDec,
         has_suffix: bool, // If the value had a `dec` suffix
     },
@@ -151,7 +151,6 @@ pub const Expr = union(enum) {
     /// ["one", "two", "three"]
     /// ```
     e_list: struct {
-        elem_var: TypeVar, // TODO: Remove
         elems: Expr.Span,
     },
     /// Empty list constant `[]`

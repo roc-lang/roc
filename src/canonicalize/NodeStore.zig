@@ -367,7 +367,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_list => {
             return CIR.Expr{
                 .e_list = .{
-                    .elem_var = @enumFromInt(node.data_3),
                     .elems = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
                 },
             };
@@ -407,14 +406,14 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .has_suffix = node.data_3 != 0,
             } };
         },
-        .expr_frac_dec => {
+        .expr_dec => {
             // Get value from extra_data
             const extra_data_idx = node.data_1;
             const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..4];
             const value_as_i128: i128 = @bitCast(value_as_u32s.*);
 
             return CIR.Expr{
-                .e_frac_dec = .{
+                .e_dec = .{
                     .value = RocDec{ .num = value_as_i128 },
                     .has_suffix = node.data_2 != 0,
                 },
@@ -854,19 +853,12 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             };
         },
         .pattern_record_destructure => {
-            const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
-
-            const destructs_start = extra_data[0];
-            const destructs_len = extra_data[1];
-            const ext_var = @as(types.Var, @enumFromInt(extra_data[2]));
-            const whole_var = @as(types.Var, @enumFromInt(extra_data[3]));
+            const destructs_start = node.data_1;
+            const destructs_len = node.data_2;
 
             return CIR.Pattern{
                 .record_destructure = .{
                     .destructs = DataSpan.init(destructs_start, destructs_len).as(CIR.Pattern.RecordDestruct.Span),
-                    .ext_var = ext_var,
-                    .whole_var = whole_var,
                 },
             };
         },
@@ -876,16 +868,14 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
 
             const patterns_start = extra_data[0];
             const patterns_len = extra_data[1];
-            const elem_var = @as(types.Var, @enumFromInt(extra_data[2]));
-            const list_var = @as(types.Var, @enumFromInt(extra_data[3]));
 
             // Load rest_info
-            const has_rest_info = extra_data[4] != 0;
+            const has_rest_info = extra_data[2] != 0;
             const rest_info = if (has_rest_info) blk: {
-                const rest_index = extra_data[5];
-                const has_pattern = extra_data[6] != 0;
+                const rest_index = extra_data[3];
+                const has_pattern = extra_data[4] != 0;
                 const rest_pattern = if (has_pattern)
-                    @as(CIR.Pattern.Idx, @enumFromInt(extra_data[7]))
+                    @as(CIR.Pattern.Idx, @enumFromInt(extra_data[5]))
                 else
                     null;
                 break :blk @as(@TypeOf(@as(CIR.Pattern, undefined).list.rest_info), .{
@@ -897,8 +887,6 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             return CIR.Pattern{
                 .list = .{
                     .patterns = DataSpan.init(patterns_start, patterns_len).as(CIR.Pattern.Span),
-                    .elem_var = elem_var,
-                    .list_var = list_var,
                     .rest_info = rest_info,
                 },
             };
@@ -909,24 +897,16 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             },
         },
         .pattern_num_literal => {
-            const extra_data_idx = node.data_1;
+            const kind: CIR.Pattern.NumKind = @enumFromInt(node.data_1);
+
+            const extra_data_idx = node.data_2;
             const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..4];
             const value_as_i128: i128 = @bitCast(value_as_u32s.*);
 
             return CIR.Pattern{
-                .int_literal = .{
+                .num_literal = .{
                     .value = .{ .bytes = @bitCast(value_as_i128), .kind = .i128 },
-                },
-            };
-        },
-        .pattern_int_literal => {
-            const extra_data_idx = node.data_1;
-            const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..4];
-            const value_as_i128: i128 = @bitCast(value_as_u32s.*);
-
-            return CIR.Pattern{
-                .int_literal = .{
-                    .value = .{ .bytes = @bitCast(value_as_i128), .kind = .i128 },
+                    .kind = kind,
                 },
             };
         },
@@ -947,9 +927,12 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..4];
             const value_as_i128: i128 = @bitCast(value_as_u32s.*);
 
+            const has_suffix = node.data_2 != 0;
+
             return CIR.Pattern{
                 .dec_literal = .{
                     .value = RocDec{ .num = value_as_i128 },
+                    .has_suffix = has_suffix,
                 },
             };
         },
@@ -958,12 +941,15 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             // data_1: numerator (i16) stored as u32
             // data_3: denominator_power_of_ten (u8) in lower 8 bits
             const numerator: i16 = @intCast(@as(i32, @bitCast(node.data_1)));
-            const denominator_power_of_ten: u8 = @intCast(node.data_3 & 0xFF);
+            const denominator_power_of_ten: u8 = @intCast(node.data_2 & 0xFF);
+
+            const has_suffix = node.data_3 != 0;
 
             return CIR.Pattern{
                 .small_dec_literal = .{
                     .numerator = numerator,
                     .denominator_power_of_ten = denominator_power_of_ten,
+                    .has_suffix = has_suffix,
                 },
             };
         },
@@ -978,7 +964,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             } };
         },
         else => {
-            @panic("unreachable, node is not an pattern tag");
+            std.debug.panic("unreachable, node is not an pattern tag {}", .{node.tag});
         },
     }
 }
@@ -1391,7 +1377,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) std.mem.A
             node.tag = .expr_list;
             node.data_1 = e.elems.span.start;
             node.data_2 = e.elems.span.len;
-            node.data_3 = @intFromEnum(e.elem_var);
         },
         .e_empty_list => |_| {
             node.tag = .expr_empty_list;
@@ -1413,8 +1398,8 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) std.mem.A
             node.data_2 = raw[1];
             node.data_3 = @intFromBool(e.has_suffix);
         },
-        .e_frac_dec => |e| {
-            node.tag = .expr_frac_dec;
+        .e_dec => |e| {
+            node.tag = .expr_dec;
 
             // Store the RocDec value in extra_data
             const extra_data_start = store.extra_data.len();
@@ -1668,11 +1653,11 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordD
             // Store pattern index
             _ = try store.extra_data.append(store.gpa, @intFromEnum(pattern_idx));
         },
-        .SubPattern => |sub_pattern| {
+        .SubPattern => |pattern_idx| {
             // Store kind tag (1 for SubPattern)
             _ = try store.extra_data.append(store.gpa, 1);
             // Store sub-pattern index
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(sub_pattern));
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(pattern_idx));
         },
     }
 
@@ -1833,13 +1818,8 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
         .record_destructure => |p| {
             node.tag = .pattern_record_destructure;
 
-            // Store record destructure data in extra_data
-            const extra_data_start = store.extra_data.len();
-            _ = try store.extra_data.append(store.gpa, p.destructs.span.start);
-            _ = try store.extra_data.append(store.gpa, p.destructs.span.len);
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(p.ext_var));
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(p.whole_var));
-            node.data_1 = @intCast(extra_data_start);
+            node.data_1 = p.destructs.span.start;
+            node.data_2 = p.destructs.span.len;
         },
         .list => |p| {
             node.tag = .pattern_list;
@@ -1848,8 +1828,6 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
             const extra_data_start = store.extra_data.len();
             _ = try store.extra_data.append(store.gpa, p.patterns.span.start);
             _ = try store.extra_data.append(store.gpa, p.patterns.span.len);
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(p.elem_var));
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(p.list_var));
 
             // Store rest_info
             if (p.rest_info) |rest| {
@@ -1872,15 +1850,16 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
             node.data_1 = p.patterns.span.start;
             node.data_2 = p.patterns.span.len;
         },
-        .int_literal => |p| {
-            node.tag = .pattern_int_literal;
-            // Store the value in extra_data
-            const extra_data_start = store.extra_data.len();
+        .num_literal => |p| {
+            node.tag = .pattern_num_literal;
+
+            node.data_1 = @intFromEnum(p.kind);
+            node.data_2 = @intCast(store.extra_data.len());
+
             const value_as_u32s: [4]u32 = @bitCast(p.value.bytes);
             for (value_as_u32s) |word| {
                 _ = try store.extra_data.append(store.gpa, word);
             }
-            node.data_1 = @intCast(extra_data_start);
         },
         .small_dec_literal => |p| {
             node.tag = .pattern_small_dec_literal;
@@ -1888,7 +1867,8 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
             // data_1: numerator (i16) - fits in lower 16 bits
             // data_3: denominator_power_of_ten (u8) in lower 8 bits
             node.data_1 = @as(u32, @bitCast(@as(i32, p.numerator)));
-            node.data_3 = @as(u32, p.denominator_power_of_ten);
+            node.data_2 = @as(u32, p.denominator_power_of_ten);
+            node.data_3 = @intFromBool(p.has_suffix);
         },
         .dec_literal => |p| {
             node.tag = .pattern_dec_literal;
@@ -1899,6 +1879,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
                 _ = try store.extra_data.append(store.gpa, word);
             }
             node.data_1 = @intCast(extra_data_start);
+            node.data_2 = @intFromBool(p.has_suffix);
         },
         .str_literal => |p| {
             node.tag = .pattern_str_literal;
@@ -3480,7 +3461,7 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
         .tag = .expr_list,
         .data_1 = 10, // elems start
         .data_2 = 3, // elems len
-        .data_3 = 2, // elem_var
+        .data_3 = 0,
     };
     _ = try original.nodes.append(gpa, list_node);
 

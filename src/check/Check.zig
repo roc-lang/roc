@@ -1317,7 +1317,7 @@ fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx, rank: types_mod.Rank,
     defer trace.end();
 
     const pattern = self.cir.store.getPattern(pattern_idx);
-    // const pattern_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(pattern_idx));
+    const pattern_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(pattern_idx));
     const pattern_var = ModuleEnv.varFrom(pattern_idx);
 
     switch (pattern) {
@@ -1329,6 +1329,14 @@ fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx, rank: types_mod.Rank,
         .underscore => |_| {
             // Underscore can be anything
             try self.updateVar(pattern_var, .{ .flex_var = null }, rank);
+        },
+        // str //
+        .str_literal => {
+            try self.updateVar(pattern_var, .{ .structure = .str }, rank);
+        },
+        // as //
+        .as => |p| {
+            try self.checkPattern(p.pattern, rank, expected);
         },
         // tuple //
         .tuple => |tuple| {
@@ -1346,8 +1354,332 @@ fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx, rank: types_mod.Rank,
                 .tuple = .{ .elems = elem_vars_slice },
             } }, rank);
         },
-        else => {
-            // TODO
+        // list //
+        .list => |list| {
+            const elems = self.cir.store.slicePatterns(list.patterns);
+            if (elems.len == 0) {
+                // If we have no elems, then set the type and move on
+                try self.updateVar(pattern_var, .{ .structure = .list_unbound }, rank);
+            } else {
+                // Here, we use the list's 1st element as the element var to
+                // constrain the rest of the list
+
+                // Check the first elem
+                try self.checkPattern(elems[0], rank, .no_expectation);
+
+                // Iterate over the remaining elements
+                const elem_var = ModuleEnv.varFrom(elems[0]);
+                var last_elem_ptrn_idx = elems[0];
+                for (elems[1..], 1..) |elem_ptrn_idx, i| {
+                    try self.checkPattern(elem_ptrn_idx, rank, .no_expectation);
+                    const cur_elem_var = ModuleEnv.varFrom(elem_ptrn_idx);
+
+                    // Unify each element's var with the list's elem var
+                    const result = try self.unify(elem_var, cur_elem_var, rank);
+                    self.setDetailIfTypeMismatch(result, problem.TypeMismatchDetail{ .incompatible_list_elements = .{
+                        .last_elem_idx = ModuleEnv.nodeIdxFrom(last_elem_ptrn_idx),
+                        .incompatible_elem_index = @intCast(i),
+                        .list_length = @intCast(elems.len),
+                    } });
+
+                    // If we errored, check the rest of the elements without comparing
+                    // to the elem_var to catch their individual errors
+                    if (!result.isOk()) {
+                        for (elems[i + 1 ..]) |remaining_elem_expr_idx| {
+                            try self.checkPattern(remaining_elem_expr_idx, rank, .no_expectation);
+                        }
+
+                        // Break to avoid cascading errors
+                        break;
+                    }
+
+                    last_elem_ptrn_idx = elem_ptrn_idx;
+                }
+
+                // Now, set the type of the root variable t
+                try self.updateVar(pattern_var, .{ .structure = .{ .list = elem_var } }, rank);
+
+                // Then, check the "rest" pattern is bound to a variable
+                // This is if the pattern is like `.. as x`
+                if (list.rest_info) |rest_info| {
+                    if (rest_info.pattern) |rest_pattern_idx| {
+                        try self.checkPattern(rest_pattern_idx, rank, .no_expectation);
+                        const rest_pattern_var = ModuleEnv.varFrom(rest_pattern_idx);
+
+                        _ = try self.unify(pattern_var, rest_pattern_var, rank);
+                    }
+                }
+            }
+        },
+        // applied tag //
+        .applied_tag => |applied_tag| {
+            // Create a tag type in the type system and assign it the expr_var
+
+            // Process each tag arg
+            const arg_ptrn_idx_slice = self.cir.store.slicePatterns(applied_tag.args);
+            for (arg_ptrn_idx_slice) |arg_expr_idx| {
+                try self.checkPattern(arg_expr_idx, rank, .no_expectation);
+            }
+
+            // Create the type
+            const ext_var = try self.fresh(rank, pattern_region);
+            try self.var_pool.addVarToRank(ext_var, rank);
+
+            const tag = try self.types.mkTag(applied_tag.name, @ptrCast(arg_ptrn_idx_slice));
+            const tag_union_content = try self.types.mkTagUnion(&[_]types_mod.Tag{tag}, ext_var);
+
+            // Update the expr to point to the new type
+            try self.updateVar(pattern_var, tag_union_content, rank);
+        },
+        // nominal //
+        .nominal => |nominal| {
+            // TODO: Merge this with e_nominal_external
+
+            // First, check the type inside the expr
+            try self.checkPattern(nominal.backing_pattern, rank, .no_expectation);
+            const actual_backing_var = ModuleEnv.varFrom(nominal.backing_pattern);
+
+            // Then, we need an instance of the nominal type being referenced
+            // E.g. ConList.Cons(...)
+            //      ^^^^^^^
+            const nominal_var = try self.instantiateVar(ModuleEnv.varFrom(nominal.nominal_type_decl), rank, .{ .explicit = pattern_region });
+            const nominal_resolved = self.types.resolveVar(nominal_var).desc.content;
+
+            if (nominal_resolved == .structure and nominal_resolved.structure == .nominal_type) {
+                // Then, we extract the variable of the nominal type
+                // E.g. ConList(a) := [Cons(a, ConstList), Nil]
+                //                    ^^^^^^^^^^^^^^^^^^^^^^^^^
+                const nominal_backing_var = self.types.getNominalBackingVar(nominal_resolved.structure.nominal_type);
+
+                // Now we unify what the user wrote with the backing type of the nominal was
+                // E.g. ConList.Cons(...) <-> [Cons(a, ConsList(a)), Nil]
+                //              ^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^^^
+                const result = try self.unify(nominal_backing_var, actual_backing_var, rank);
+
+                // Then, we handle the result of unification
+                switch (result) {
+                    .ok => {
+                        // If that unify call succeeded, then we this is a valid instance
+                        // of this nominal type. So we set the expr's type to be the
+                        // nominal type
+                        try self.types.setVarRedirect(pattern_var, nominal_var);
+                    },
+                    .problem => |problem_idx| {
+                        // Unification failed - the constructor is incompatible with the nominal type
+                        // Set a specific error message based on the backing type kind
+                        switch (nominal.backing_type) {
+                            .tag => {
+                                // Constructor doesn't exist or has wrong arity/types
+                                self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_tag);
+                            },
+                            else => {
+                                // TODO: Add specific error messages for records, tuples, etc.
+                            },
+                        }
+
+                        // Mark the entire expression as having a type error
+                        try self.updateVar(pattern_var, .err, rank);
+                    },
+                }
+            } else {
+                // If the nominal type is actually something else, then set the
+                // whole expression to be an error.
+                //
+                // TODO: Report a nice problem here
+                try self.updateVar(pattern_var, .err, rank);
+            }
+        },
+        .nominal_external => |nominal| {
+            // TODO: Merge this with e_nominal
+
+            // First, check the type inside the expr
+            try self.checkPattern(nominal.backing_pattern, rank, .no_expectation);
+            const actual_backing_var = ModuleEnv.varFrom(nominal.backing_pattern);
+
+            if (try self.resolveVarFromExternal(nominal.module_idx, nominal.target_node_idx)) |ext_ref| {
+                // Then, we need an instance of the nominal type being referenced
+                // E.g. ConList.Cons(...)
+                //      ^^^^^^^
+                const nominal_var = try self.instantiateVar(ext_ref.local_var, Rank.generalized, .{ .explicit = pattern_region });
+                const nominal_resolved = self.types.resolveVar(nominal_var).desc.content;
+
+                if (nominal_resolved == .structure and nominal_resolved.structure == .nominal_type) {
+                    // Then, we extract the variable of the nominal type
+                    // E.g. ConList(a) := [Cons(a, ConstList), Nil]
+                    //                    ^^^^^^^^^^^^^^^^^^^^^^^^^
+                    const nominal_backing_var = self.types.getNominalBackingVar(nominal_resolved.structure.nominal_type);
+
+                    // Now we unify what the user wrote with the backing type of the nominal was
+                    // E.g. ConList.Cons(...) <-> [Cons(a, ConsList(a)), Nil]
+                    //              ^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^^^
+                    const result = try self.unify(nominal_backing_var, actual_backing_var, rank);
+
+                    // Then, we handle the result of unification
+                    switch (result) {
+                        .ok => {
+                            // If that unify call succeeded, then we this is a valid instance
+                            // of this nominal type. So we set the expr's type to be the
+                            // nominal type
+                            try self.types.setVarRedirect(pattern_var, nominal_var);
+                        },
+                        .problem => |problem_idx| {
+                            // Unification failed - the constructor is incompatible with the nominal type
+                            // Set a specific error message based on the backing type kind
+                            switch (nominal.backing_type) {
+                                .tag => {
+                                    // Constructor doesn't exist or has wrong arity/types
+                                    self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_tag);
+                                },
+                                else => {
+                                    // TODO: Add specific error messages for records, tuples, etc.
+                                },
+                            }
+
+                            // Mark the entire expression as having a type error
+                            try self.updateVar(pattern_var, .err, rank);
+                        },
+                    }
+                } else {
+                    // If the nominal type is actually something else, then set the
+                    // whole expression to be an error.
+                    //
+                    // TODO: Report a nice problem here
+                    try self.updateVar(pattern_var, .err, rank);
+                }
+            } else {
+                try self.updateVar(pattern_var, .err, rank);
+            }
+        },
+        // record destructure //
+        .record_destructure => |destructure| {
+            const scratch_records_top = self.scratch_record_fields.top();
+            defer self.scratch_record_fields.clearFrom(scratch_records_top);
+
+            for (self.cir.store.sliceRecordDestructs(destructure.destructs)) |destruct_idx| {
+                const destruct = self.cir.store.getRecordDestruct(destruct_idx);
+                const destruct_var = ModuleEnv.varFrom(destruct_idx);
+
+                // Check the sub pattern
+                const field_pattern_idx = blk: {
+                    switch (destruct.kind) {
+                        .Required => |sub_pattern_idx| {
+                            try self.checkPattern(sub_pattern_idx, rank, .no_expectation);
+                            break :blk sub_pattern_idx;
+                        },
+                        .SubPattern => |sub_pattern_idx| {
+                            try self.checkPattern(sub_pattern_idx, rank, .no_expectation);
+                            break :blk sub_pattern_idx;
+                        },
+                    }
+                };
+                const field_pattern_var = ModuleEnv.varFrom(field_pattern_idx);
+
+                // Set the destruct var to redirect to the field pattern var
+                try self.types.setVarRedirect(destruct_var, field_pattern_var);
+
+                // Append it to the scratch records array
+                try self.scratch_record_fields.append(self.gpa, types_mod.RecordField{
+                    .name = destruct.label,
+                    .var_ = ModuleEnv.varFrom(destruct_var),
+                });
+            }
+
+            // Copy the scatch record fields into the types store
+            const record_fields_scratch = self.scratch_record_fields.sliceFromStart(scratch_records_top);
+            std.mem.sort(types_mod.RecordField, record_fields_scratch, self.cir.getIdentStore(), comptime types_mod.RecordField.sortByNameAsc);
+            const record_fields_range = try self.types.appendRecordFields(record_fields_scratch);
+
+            // Update the pattern var
+            try self.updateVar(pattern_var, .{ .structure = .{
+                .record_unbound = record_fields_range,
+            } }, rank);
+        },
+        // nums //
+        .num_literal => |num| {
+            const num_type = blk: {
+                switch (num.kind) {
+                    .num_unbound => {
+                        const int_reqs = num.value.toIntRequirements();
+                        const frac_reqs = num.value.toFracRequirements();
+                        break :blk Num{ .num_unbound = .{ .int_requirements = .{
+                            .sign_needed = int_reqs.sign_needed,
+                            .bits_needed = @intCast(@intFromEnum(int_reqs.bits_needed)),
+                        }, .frac_requirements = frac_reqs } };
+                    },
+                    .int_unbound => {
+                        const int_reqs = num.value.toIntRequirements();
+                        const int_var = try self.freshFromContent(.{ .structure = .{ .num = .{ .int_unbound = .{
+                            .sign_needed = int_reqs.sign_needed,
+                            .bits_needed = @intCast(@intFromEnum(int_reqs.bits_needed)),
+                        } } } }, rank, pattern_region);
+                        try self.var_pool.addVarToRank(int_var, rank);
+                        break :blk Num{ .num_poly = int_var };
+                    },
+                    .u8 => break :blk Num{ .num_compact = Num.Compact{ .int = .u8 } },
+                    .i8 => break :blk Num{ .num_compact = Num.Compact{ .int = .i8 } },
+                    .u16 => break :blk Num{ .num_compact = Num.Compact{ .int = .u16 } },
+                    .i16 => break :blk Num{ .num_compact = Num.Compact{ .int = .i16 } },
+                    .u32 => break :blk Num{ .num_compact = Num.Compact{ .int = .u32 } },
+                    .i32 => break :blk Num{ .num_compact = Num.Compact{ .int = .i32 } },
+                    .u64 => break :blk Num{ .num_compact = Num.Compact{ .int = .u64 } },
+                    .i64 => break :blk Num{ .num_compact = Num.Compact{ .int = .i64 } },
+                    .u128 => break :blk Num{ .num_compact = Num.Compact{ .int = .u128 } },
+                    .i128 => break :blk Num{ .num_compact = Num.Compact{ .int = .i128 } },
+                    .f32 => break :blk Num{ .num_compact = Num.Compact{ .frac = .f32 } },
+                    .f64 => break :blk Num{ .num_compact = Num.Compact{ .frac = .f64 } },
+                    .dec => break :blk Num{ .num_compact = Num.Compact{ .frac = .dec } },
+                }
+            };
+
+            // Update the pattern var
+            try self.updateVar(pattern_var, .{ .structure = .{ .num = num_type } }, rank);
+        },
+        .frac_f32_literal => |_| {
+            try self.updateVar(pattern_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f32 } } } }, rank);
+        },
+        .frac_f64_literal => |_| {
+            try self.updateVar(pattern_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f32 } } } }, rank);
+        },
+        .dec_literal => |dec| {
+            if (dec.has_suffix) {
+                try self.updateVar(pattern_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f32 } } } }, rank);
+            } else {
+                const f64_val = dec.value.toF64();
+                const requirements = types_mod.Num.FracRequirements{
+                    .fits_in_f32 = can.Can.fitsInF32(f64_val),
+                    .fits_in_dec = can.Can.fitsInDec(f64_val),
+                };
+                const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
+                    .frac_unbound = requirements,
+                } } }, rank, pattern_region);
+                try self.var_pool.addVarToRank(frac_var, rank);
+
+                try self.updateVar(pattern_var, .{ .structure = .{ .num = .{
+                    .num_poly = frac_var,
+                } } }, rank);
+            }
+        },
+        .small_dec_literal => |dec| {
+            if (dec.has_suffix) {
+                try self.updateVar(pattern_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f32 } } } }, rank);
+            } else {
+                const f64_val = dec.toF64();
+                const requirements = types_mod.Num.FracRequirements{
+                    .fits_in_f32 = can.Can.fitsInF32(f64_val),
+                    .fits_in_dec = can.Can.fitsInDec(f64_val),
+                };
+                const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
+                    .frac_unbound = requirements,
+                } } }, rank, pattern_region);
+                try self.var_pool.addVarToRank(frac_var, rank);
+
+                try self.updateVar(pattern_var, .{ .structure = .{ .num = .{
+                    .num_poly = frac_var,
+                } } }, rank);
+            }
+        },
+        .runtime_error => {
+            try self.updateVar(pattern_var, .err, rank);
         },
     }
 
@@ -1540,7 +1872,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                 } } }, rank);
             }
         },
-        .e_frac_dec => |frac| {
+        .e_dec => |frac| {
             if (frac.has_suffix) {
                 try self.updateVar(expr_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .dec } } } }, rank);
             } else {
@@ -1605,7 +1937,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                     // Unify each element's var with the list's elem var
                     const result = try self.unify(elem_var, cur_elem_var, rank);
                     self.setDetailIfTypeMismatch(result, problem.TypeMismatchDetail{ .incompatible_list_elements = .{
-                        .last_elem_expr = last_elem_expr_idx,
+                        .last_elem_idx = ModuleEnv.nodeIdxFrom(last_elem_expr_idx),
                         .incompatible_elem_index = @intCast(i),
                         .list_length = @intCast(elems.len),
                     } });

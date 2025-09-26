@@ -204,7 +204,7 @@ test "NodeStore round trip - Expressions" {
         .e_frac_f64 = .{ .value = rand.random().float(f64), .has_suffix = false },
     });
     try expressions.append(CIR.Expr{
-        .e_frac_dec = .{
+        .e_dec = .{
             .value = RocDec{ .num = 314 },
             .has_suffix = false,
         },
@@ -361,7 +361,7 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(CIR.Expr{
-        .e_frac_dec = .{
+        .e_dec = .{
             .value = RocDec{ .num = 123456789 },
             .has_suffix = false,
         },
@@ -932,14 +932,10 @@ test "NodeStore round trip - Pattern" {
     try patterns.append(CIR.Pattern{
         .record_destructure = .{
             .whole_var = rand_idx(TypeVar),
-            .ext_var = rand_idx(TypeVar),
-            .destructs = CIR.Pattern.RecordDestruct.Span{ .span = rand_span() },
         },
     });
     try patterns.append(CIR.Pattern{
         .list = .{
-            .list_var = rand_idx(TypeVar),
-            .elem_var = rand_idx(TypeVar),
             .patterns = CIR.Pattern.Span{ .span = rand_span() },
             .rest_info = .{ .index = rand.random().int(u32), .pattern = rand_idx(CIR.Pattern.Idx) },
         },

@@ -158,7 +158,11 @@ pub const TypeAnno = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .rigid_var_lookup => |rv_lookup| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("ty-rigid-var-lookup");
                 try ir.store.getTypeAnno(rv_lookup.ref).pushToSExprTree(ir, tree, rv_lookup.ref);
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
             },
             .underscore => |_| {
                 const begin = tree.beginNode();
@@ -230,11 +234,17 @@ pub const TypeAnno = union(enum) {
             },
             .tag => |t| {
                 const begin = tree.beginNode();
-                try tree.pushStaticAtom("tag_name");
+                try tree.pushStaticAtom("ty-tag-name");
                 const region = ir.store.getTypeAnnoRegion(type_anno_idx);
+
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 try tree.pushStringPair("name", ir.getIdentText(t.name));
+
                 const attrs = tree.beginNode();
+                const args_slice = ir.store.sliceTypeAnnos(t.args);
+                for (args_slice) |tag_idx| {
+                    try ir.store.getTypeAnno(tag_idx).pushToSExprTree(ir, tree, tag_idx);
+                }
                 try tree.endNode(begin, attrs);
             },
             .tuple => |t| {
