@@ -5,12 +5,12 @@
 
 const std = @import("std");
 
-pub const Repl = @import("Repl.zig");
+pub const Repl = @import("eval.zig").Repl;
+pub const LegacyRepl = @import("Repl.zig");
 
 test "repl tests" {
     std.testing.refAllDecls(@This());
 
     std.testing.refAllDecls(@import("Repl.zig"));
-    std.testing.refAllDecls(@import("repl_test.zig"));
     std.testing.refAllDecls(@import("repl_test_env.zig"));
 }

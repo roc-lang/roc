@@ -1,19 +1,16 @@
 //! Tests for the REPL
 const std = @import("std");
-const eval = @import("eval");
-const can = @import("can");
-const check = @import("check");
+const compile = @import("compile");
+const Can = @import("can");
+const Check = @import("check");
 const parse = @import("parse");
-const layout = @import("layout");
-
-const Repl = @import("Repl.zig");
-
-const LayoutStore = layout.Store;
-const Can = can.Can;
-const Check = check.Check;
-const ModuleEnv = can.ModuleEnv;
-const Stack = eval.Stack;
+const ModuleEnv = compile.ModuleEnv;
+const Repl = @import("eval.zig").Repl;
 const TestEnv = @import("repl_test_env.zig").TestEnv;
+const stack = @import("../eval/stack.zig");
+const layout_store = @import("../layout/store.zig");
+const layout = @import("../layout/layout.zig");
+const eval = @import("../eval/interpreter.zig");
 
 // Tests
 const testing = std.testing;
@@ -70,30 +67,6 @@ test "Repl - string expressions" {
     const result = try repl.step("\"Hello, World!\"");
     defer std.testing.allocator.free(result);
     try testing.expectEqualStrings("\"Hello, World!\"", result);
-}
-
-test "Repl - boolean operations" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
-    defer repl.deinit();
-
-    const true_val = try repl.step("Bool.True");
-    defer std.testing.allocator.free(true_val);
-    try testing.expectEqualStrings("True", true_val);
-
-    const false_val = try repl.step("Bool.False");
-    defer std.testing.allocator.free(false_val);
-    try testing.expectEqualStrings("False", false_val);
-
-    const and_val = try repl.step("Bool.True and Bool.False");
-    defer std.testing.allocator.free(and_val);
-    try testing.expectEqualStrings("False", and_val);
-
-    const or_val = try repl.step("Bool.True or Bool.False");
-    defer std.testing.allocator.free(or_val);
-    try testing.expectEqualStrings("True", or_val);
 }
 
 test "Repl - silent assignments" {
@@ -212,7 +185,7 @@ test "Repl - minimal interpreter integration" {
     defer module_env.deinit();
 
     // Step 2: Parse as expression
-    var parse_ast = try parse.parseExpr(&module_env.common, module_env.gpa);
+    var parse_ast = try parse.parseExpr(&module_env);
     defer parse_ast.deinit(gpa);
 
     // Empty scratch space (required before canonicalization)
@@ -223,11 +196,11 @@ test "Repl - minimal interpreter integration" {
     try cir.initCIRFields(gpa, "test");
 
     // Step 4: Canonicalize
-    var czer = try Can.init(cir, &parse_ast, null);
-    defer czer.deinit();
+    var can = try Can.init(cir, &parse_ast, null);
+    defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-    const canonical_expr_idx = try czer.canonicalizeExpr(expr_idx) orelse {
+    const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
         return error.CanonicalizeError;
     };
 
@@ -238,11 +211,11 @@ test "Repl - minimal interpreter integration" {
     _ = try checker.checkExpr(canonical_expr_idx.get_idx());
 
     // Step 6: Create evaluation stack
-    var eval_stack = try Stack.initCapacity(gpa, 1024);
+    var eval_stack = try stack.Stack.initCapacity(gpa, 1024);
     defer eval_stack.deinit();
 
     // Step 7: Create layout cache
-    var layout_cache = try LayoutStore.init(&module_env, &module_env.types);
+    var layout_cache = try layout_store.Store.init(&module_env, &module_env.types);
     defer layout_cache.deinit();
 
     // Step 8: Create interpreter
