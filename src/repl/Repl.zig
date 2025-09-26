@@ -8,7 +8,6 @@ const types = @import("types");
 const can = @import("can");
 const check = @import("check");
 const builtins = @import("builtins");
-const layout_mod = @import("layout");
 const eval_mod = @import("eval");
 
 const Can = can.Can;
@@ -16,11 +15,7 @@ const Check = check.Check;
 const AST = parse.AST;
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
-const RocDec = builtins.dec.RocDec;
 const RocOps = builtins.host_abi.RocOps;
-const types_store = types.store;
-const writers = types.writers;
-const target = base.target;
 
 /// REPL state that tracks past definitions and evaluates expressions
 const Repl = @This();
@@ -28,8 +23,6 @@ const Repl = @This();
 allocator: Allocator,
 /// Map from variable name to source string for definitions
 definitions: std.StringHashMap([]const u8),
-/// Stack for evaluation
-eval_stack: eval_mod.Stack,
 /// Operations for the Roc runtime
 roc_ops: *RocOps,
 /// Optional trace writer for debugging evaluation
@@ -44,12 +37,9 @@ debug_can_html: std.ArrayList([]const u8),
 debug_types_html: std.ArrayList([]const u8),
 
 pub fn init(allocator: Allocator, roc_ops: *RocOps) !Repl {
-    const eval_stack = try eval_mod.Stack.initCapacity(allocator, 8192);
-
     return Repl{
         .allocator = allocator,
         .definitions = std.StringHashMap([]const u8).init(allocator),
-        .eval_stack = eval_stack,
         .roc_ops = roc_ops,
         .trace_writer = null,
         .last_module_env = null,
@@ -172,8 +162,6 @@ pub fn deinit(self: *Repl) void {
         module_env.deinit();
         self.allocator.destroy(module_env);
     }
-
-    self.eval_stack.deinit();
 }
 
 /// Process a line of input and return the result
@@ -398,92 +386,35 @@ fn evaluatePureExpression(self: *Repl, module_env: *ModuleEnv) ![]const u8 {
         return try std.fmt.allocPrint(self.allocator, "Type check expr error: {}", .{err});
     };
 
-    // Create layout cache
-    var layout_cache = layout_mod.Store.init(module_env, &module_env.types) catch |err| {
-        return try std.fmt.allocPrint(self.allocator, "Layout cache error: {}", .{err});
-    };
-    defer layout_cache.deinit();
+    // Create interpreter2
+    var interpreter = try eval_mod.Interpreter2.init(self.allocator, module_env);
+    defer interpreter.deinit();
 
-    // Clear eval stack to prevent memory corruption from previous evaluations
-    self.eval_stack.used = 0;
-
-    // Create interpreter
-    var interpreter = eval_mod.Interpreter.init(self.allocator, cir, &self.eval_stack, &layout_cache, &module_env.types) catch |err| {
-        return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
-    };
-    defer interpreter.deinit(self.roc_ops);
-
-    // Evaluate the expression
-    if (self.trace_writer) |trace_writer| {
-        interpreter.startTrace(trace_writer);
-    }
-
-    const result = interpreter.eval(final_expr_idx, self.roc_ops) catch |err| {
-        if (self.trace_writer) |_| {
-            interpreter.endTrace();
+    const result = interpreter.evalMinimal(final_expr_idx, self.roc_ops) catch |err| {
+        switch (err) {
+            error.Crash => {
+                const msg = interpreter.getCrashMsg() orelse "crash";
+                return try self.allocator.dupe(u8, msg);
+            },
+            else => return try std.fmt.allocPrint(self.allocator, "Evaluation error: {}", .{err}),
         }
-        return try std.fmt.allocPrint(self.allocator, "Evaluation error: {}", .{err});
     };
-
-    if (self.trace_writer) |_| {
-        interpreter.endTrace();
-    }
+    defer result.decref(&interpreter.runtime_layout_store, self.roc_ops);
 
     // Generate debug HTML if enabled
     if (self.debug_store_snapshots) {
         try self.generateAndStoreDebugHtml(module_env, final_expr_idx);
     }
 
-    // Format the result immediately while memory is still valid
-    if (result.layout.tag == .scalar) {
-        switch (result.layout.data.scalar.tag) {
-            .bool => {
-                // Boolean values are stored as u8 (1 for True, 0 for False)
-                const bool_value: *u8 = @ptrCast(result.ptr.?);
-                return try self.allocator.dupe(u8, if (bool_value.* == 1) "True" else "False");
-            },
-            .int => {
-                const value = result.asI128();
-                return try std.fmt.allocPrint(self.allocator, "{d}", .{value});
-            },
-            .frac => {
-                const precision = result.layout.data.scalar.data.frac;
-                switch (precision) {
-                    .f32 => {
-                        const float_ptr: *f32 = @ptrCast(@alignCast(result.ptr.?));
-                        return try std.fmt.allocPrint(self.allocator, "{d}", .{float_ptr.*});
-                    },
-                    .f64 => {
-                        const float_ptr: *f64 = @ptrCast(@alignCast(result.ptr.?));
-                        return try std.fmt.allocPrint(self.allocator, "{d}", .{float_ptr.*});
-                    },
-                    .dec => {
-                        const dec_ptr: *RocDec = @ptrCast(@alignCast(result.ptr.?));
-                        // Simple conversion to f64 for now to avoid allocator issues
-                        const raw_value = dec_ptr.num;
-                        const scale_factor = std.math.pow(f64, 10, RocDec.decimal_places);
-                        const decimal_value = @as(f64, @floatFromInt(raw_value)) / scale_factor;
-                        return try std.fmt.allocPrint(self.allocator, "{d}", .{decimal_value});
-                    },
-                }
-            },
-            .str => {
-                // Handle RocStr values
-                const roc_str: *builtins.str.RocStr = @ptrCast(@alignCast(result.ptr.?));
-                const str_slice = roc_str.asSlice();
-                const formatted = try std.fmt.allocPrint(self.allocator, "\"{s}\"", .{str_slice});
-                // Clean up the RocStr to prevent memory leak
-                roc_str.decref(self.roc_ops);
-                return formatted;
-            },
-            else => {},
-        }
-    }
-
-    // Handle empty list specially
-    if (result.layout.tag == .list_of_zst) {
-        return try self.allocator.dupe(u8, "<list_of_zst>");
-    }
-
-    return try std.fmt.allocPrint(self.allocator, "<{s}>", .{@tagName(result.layout.tag)});
+    const result_ct_var = can.ModuleEnv.varFrom(final_expr_idx);
+    const rendered = blk: {
+        const rt_var = interpreter.translateTypeVar(module_env, result_ct_var) catch {
+            break :blk try interpreter.renderValueRoc(result);
+        };
+        break :blk interpreter.renderValueRocWithType(result, rt_var) catch {
+            break :blk try interpreter.renderValueRoc(result);
+        };
+    };
+    defer self.allocator.free(rendered);
+    return try self.allocator.dupe(u8, rendered);
 }

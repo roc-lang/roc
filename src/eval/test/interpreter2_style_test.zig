@@ -132,7 +132,6 @@ test "interpreter2: (|x| x)(\"Hello\") yields \"Hello\"" {
     try std.testing.expectEqualStrings(expected_out_roc, got_out_roc);
 }
 
-
 test "interpreter2: (|n| n + 1)(41) yields 42" {
     const roc_src = "(|n| n + 1)(41)";
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
@@ -588,6 +587,162 @@ test "interpreter2: { x: 1, y: 2 } == { x: 1, y: 3 } yields False" {
     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("False", rendered);
+}
+
+test "interpreter2: record update copies base fields" {
+    const roc_src = "{\n    point = { x: 1, y: 2 }\n    updated = { ..point, y: point.y }\n    (updated.x, updated.y)\n}";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("(1, 2)", rendered);
+}
+
+test "interpreter2: record update overrides field" {
+    const roc_src = "{\n    point = { x: 1, y: 2 }\n    updated = { ..point, y: 3 }\n    (updated.x, updated.y)\n}";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("(1, 3)", rendered);
+}
+
+test "interpreter2: record update expression can reference base" {
+    const roc_src = "{\n    point = { x: 1, y: 2 }\n    updated = { ..point, y: point.y + 5 }\n    updated.y\n}";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("7", rendered);
+}
+
+test "interpreter2: record update can add field" {
+    const roc_src = "{\n    point = { x: 1, y: 2 }\n    updated = { ..point, z: 3 }\n    (updated.x, updated.y, updated.z)\n}";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("(1, 2, 3)", rendered);
+}
+
+test "interpreter2: record update inside tuple" {
+    const roc_src = "{\n    point = { x: 4, y: 5 }\n    duo = { updated: { ..point, y: point.y + 1 }, original: point }\n    (duo.updated.x, duo.updated.y, duo.original.y)\n}";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("(4, 6, 5)", rendered);
+}
+
+test "interpreter2: record update pattern match" {
+    const roc_src = "{\n    point = { x: 7, y: 8 }\n    updated = { ..point, y: point.y - 2, z: point.x + point.y }\n    match updated { { x: newX, y: newY, z: sum } => (newX, newY, sum), _ => (0, 0, 0) }\n}";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rendered = try interp2.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("(7, 6, 15)", rendered);
 }
 
 test "interpreter2: [1, 2, 3] == [1, 2, 3] yields True" {
@@ -1381,6 +1536,33 @@ test "interpreter2: int greater-than yields False" {
     try std.testing.expectEqualStrings("False", rendered);
 }
 
+test "interpreter2: 0.1 + 0.2 yields 0.3" {
+    const roc_src = "0.1 + 0.2";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("0.3", rendered);
+}
+
 test "interpreter2: f64 greater-than yields True" {
     const roc_src = "3.5f64 > 1.25f64";
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
@@ -1627,3 +1809,80 @@ test "interpreter2: tuples and records" {
 }
 
 // Boolean/if support intentionally omitted for now
+
+test "interpreter2: Bool.True and Bool.False yields False" {
+    const roc_src = "Bool.True and Bool.False";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("False", rendered);
+}
+
+test "interpreter2: Bool.True or Bool.False yields True" {
+    const roc_src = "Bool.True or Bool.False";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("True", rendered);
+}
+
+test "interpreter2: invalid Bool tag crashes" {
+    const roc_src = "Bool.true";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter2.init(std.testing.allocator, resources.module_env);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = RocOps{
+        .env = @ptrCast(&host),
+        .roc_alloc = testRocAlloc,
+        .roc_dealloc = testRocDealloc,
+        .roc_realloc = testRocRealloc,
+        .roc_dbg = testRocDbg,
+        .roc_expect_failed = testRocExpectFailed,
+        .roc_crashed = testRocCrashed,
+        .host_fns = undefined,
+    };
+
+    try std.testing.expectError(error.Crash, interp2.evalMinimal(resources.expr_idx, &ops));
+}

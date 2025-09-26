@@ -11,8 +11,8 @@ type=repl
 » Bool.False
 » !Bool.True
 » !Bool.False
-» Bool.True && Bool.False
-» !Bool.True || !Bool.True
+» Bool.True and Bool.False
+» !Bool.True or !Bool.True
 ~~~
 # OUTPUT
 Evaluation error: error.Crash

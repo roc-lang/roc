@@ -2,6 +2,7 @@
 //! This file will evolve behind its own tests until it replaces interpreter.zig.
 
 const std = @import("std");
+const base_pkg = @import("base");
 const types = @import("types");
 const layout = @import("layout");
 const can = @import("can");
@@ -225,39 +226,46 @@ pub const Interpreter2 = struct {
                     const stmt = self.env.store.getStatement(stmt_idx);
                     switch (stmt) {
                         .s_decl => |d| {
-                            const patt = self.env.store.getPattern(d.pattern);
-                            if (patt != .assign) return error.NotImplemented;
-                            const val = try self.evalExprMinimal(d.expr, roc_ops, null);
-                            // Update existing binding if present
-                            var i: usize = self.bindings.items.len;
-                            var updated = false;
-                            while (i > original_len) {
-                                i -= 1;
-                                if (self.bindings.items[i].pattern_idx == d.pattern) {
-                                    self.bindings.items[i].value.decref(&self.runtime_layout_store, roc_ops);
-                                    self.bindings.items[i].value = val;
-                                    updated = true;
-                                    break;
-                                }
+                            const expr_ct_var = can.ModuleEnv.varFrom(d.expr);
+                            const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+                            var temp_binds = try std.ArrayList(Binding).initCapacity(self.allocator, 4);
+                            defer {
+                                self.trimBindingList(&temp_binds, 0, roc_ops);
+                                temp_binds.deinit();
                             }
-                            if (!updated) try self.bindings.append(.{ .pattern_idx = d.pattern, .value = val });
+
+                            const val = try self.evalExprMinimal(d.expr, roc_ops, expr_rt_var);
+                            defer val.decref(&self.runtime_layout_store, roc_ops);
+
+                            if (!try self.patternMatchesBind(d.pattern, val, expr_rt_var, roc_ops, &temp_binds)) {
+                                return error.TypeMismatch;
+                            }
+
+                            for (temp_binds.items) |binding| {
+                                try self.upsertBinding(binding, original_len, roc_ops);
+                            }
+                            temp_binds.items.len = 0;
                         },
                         .s_var => |v| {
-                            const patt = self.env.store.getPattern(v.pattern_idx);
-                            if (patt != .assign) return error.NotImplemented;
-                            const val = try self.evalExprMinimal(v.expr, roc_ops, null);
-                            var i: usize = self.bindings.items.len;
-                            var updated = false;
-                            while (i > original_len) {
-                                i -= 1;
-                                if (self.bindings.items[i].pattern_idx == v.pattern_idx) {
-                                    self.bindings.items[i].value.decref(&self.runtime_layout_store, roc_ops);
-                                    self.bindings.items[i].value = val;
-                                    updated = true;
-                                    break;
-                                }
+                            const expr_ct_var = can.ModuleEnv.varFrom(v.expr);
+                            const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+                            var temp_binds = try std.ArrayList(Binding).initCapacity(self.allocator, 4);
+                            defer {
+                                self.trimBindingList(&temp_binds, 0, roc_ops);
+                                temp_binds.deinit();
                             }
-                            if (!updated) try self.bindings.append(.{ .pattern_idx = v.pattern_idx, .value = val });
+
+                            const val = try self.evalExprMinimal(v.expr, roc_ops, expr_rt_var);
+                            defer val.decref(&self.runtime_layout_store, roc_ops);
+
+                            if (!try self.patternMatchesBind(v.pattern_idx, val, expr_rt_var, roc_ops, &temp_binds)) {
+                                return error.TypeMismatch;
+                            }
+
+                            for (temp_binds.items) |binding| {
+                                try self.upsertBinding(binding, original_len, roc_ops);
+                            }
+                            temp_binds.items.len = 0;
                         },
                         .s_reassign => |r| {
                             const patt = self.env.store.getPattern(r.pattern_idx);
@@ -339,7 +347,7 @@ pub const Interpreter2 = struct {
                     const lhs = try self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var);
                     const rhs = try self.evalExprMinimal(binop.rhs, roc_ops, rhs_rt_var);
 
-                    return try self.evalArithmeticBinop(binop.op, expr_idx, lhs, rhs);
+                    return try self.evalArithmeticBinop(binop.op, expr_idx, lhs, rhs, lhs_rt_var, rhs_rt_var);
                 } else if (binop.op == .eq or binop.op == .ne or binop.op == .lt or binop.op == .le or binop.op == .gt or binop.op == .ge) {
                     const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
                     const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
@@ -408,7 +416,7 @@ pub const Interpreter2 = struct {
                                 };
                                 return try self.makeBoolValue(result_rt_var, result);
                             },
-                            else => return error.NotImplemented,
+                            else => return error.StringOrderingNotSupported,
                         }
                     }
 
@@ -419,29 +427,41 @@ pub const Interpreter2 = struct {
 
                     return error.NotImplemented;
                 } else if (binop.op == .@"or") {
-                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
+                    const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    const result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
+
+                    var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
+                    defer lhs.decref(&self.runtime_layout_store, roc_ops);
                     const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
                     const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
                     if (try self.boolValueIsTrue(lhs, lhs_rt_var)) {
-                        return lhs;
+                        return try self.makeBoolValue(result_rt_var, true);
                     }
-                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops, null);
+
+                    var rhs = try self.evalExprMinimal(binop.rhs, roc_ops, null);
+                    defer rhs.decref(&self.runtime_layout_store, roc_ops);
                     const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
                     const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
-                    _ = try self.boolValueIsTrue(rhs, rhs_rt_var);
-                    return rhs;
+                    const rhs_truthy = try self.boolValueIsTrue(rhs, rhs_rt_var);
+                    return try self.makeBoolValue(result_rt_var, rhs_truthy);
                 } else if (binop.op == .@"and") {
-                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
+                    const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    const result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
+
+                    var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
+                    defer lhs.decref(&self.runtime_layout_store, roc_ops);
                     const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
                     const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
                     if (!try self.boolValueIsTrue(lhs, lhs_rt_var)) {
-                        return lhs;
+                        return try self.makeBoolValue(result_rt_var, false);
                     }
-                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops, null);
+
+                    var rhs = try self.evalExprMinimal(binop.rhs, roc_ops, null);
+                    defer rhs.decref(&self.runtime_layout_store, roc_ops);
                     const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
                     const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
-                    _ = try self.boolValueIsTrue(rhs, rhs_rt_var);
-                    return rhs;
+                    const rhs_truthy = try self.boolValueIsTrue(rhs, rhs_rt_var);
+                    return try self.makeBoolValue(result_rt_var, rhs_truthy);
                 }
                 return error.NotImplemented;
             },
@@ -625,23 +645,117 @@ pub const Interpreter2 = struct {
             },
             .e_record => |rec| {
                 // Allocate record and fill fields
-                const rt_var = expected_rt_var orelse blk: {
-                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    break :blk try self.translateTypeVar(self.env, ct_var);
-                };
-                const rec_layout = try self.getRuntimeLayout(rt_var);
+                const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const rt_var = try self.translateTypeVar(self.env, ct_var);
+
+                var union_names = std.ArrayList(base_pkg.Ident.Idx).init(self.allocator);
+                defer union_names.deinit();
+                var union_layouts = std.ArrayList(layout.Layout).init(self.allocator);
+                defer union_layouts.deinit();
+                var union_indices = std.AutoHashMap(u32, usize).init(self.allocator);
+                defer union_indices.deinit();
+
+                var field_values = std.ArrayList(StackValue).init(self.allocator);
+                defer {
+                    for (field_values.items) |val| {
+                        val.decref(&self.runtime_layout_store, roc_ops);
+                    }
+                    field_values.deinit();
+                }
+
+                const upsert = struct {
+                    fn go(
+                        names: *std.ArrayList(base_pkg.Ident.Idx),
+                        layouts: *std.ArrayList(layout.Layout),
+                        indices: *std.AutoHashMap(u32, usize),
+                        name: base_pkg.Ident.Idx,
+                        layout_value: layout.Layout,
+                    ) !void {
+                        const key: u32 = @bitCast(name);
+                        if (indices.get(key)) |idx_ptr| {
+                            layouts.items[idx_ptr] = layout_value;
+                            names.items[idx_ptr] = name;
+                        } else {
+                            try layouts.append(layout_value);
+                            try names.append(name);
+                            try indices.put(key, layouts.items.len - 1);
+                        }
+                    }
+                }.go;
+
+                var base_accessor_opt: ?StackValue.RecordAccessor = null;
+
+                if (rec.ext) |ext_idx| {
+                    const ext_ct_var = can.ModuleEnv.varFrom(ext_idx);
+                    const ext_rt_var = try self.translateTypeVar(self.env, ext_ct_var);
+                    var base_value = try self.evalExprMinimal(ext_idx, roc_ops, ext_rt_var);
+                    if (base_value.layout.tag != .record) {
+                        base_value.decref(&self.runtime_layout_store, roc_ops);
+                        return error.TypeMismatch;
+                    }
+                    defer base_value.decref(&self.runtime_layout_store, roc_ops);
+                    var base_accessor = try base_value.asRecord(&self.runtime_layout_store);
+                    base_accessor_opt = base_accessor;
+
+                    var idx: usize = 0;
+                    while (idx < base_accessor.getFieldCount()) : (idx += 1) {
+                        const info = base_accessor.field_layouts.get(idx);
+                        const field_layout = self.runtime_layout_store.getLayout(info.layout);
+                        try upsert(&union_names, &union_layouts, &union_indices, info.name, field_layout);
+                    }
+                }
+
+                const fields = self.env.store.sliceRecordFields(rec.fields);
+                try field_values.ensureTotalCapacity(fields.len);
+                var field_list_index: usize = 0;
+                while (field_list_index < fields.len) : (field_list_index += 1) {
+                    const field_idx_val = fields[field_list_index];
+                    const f = self.env.store.getRecordField(field_idx_val);
+                    const field_ct_var = can.ModuleEnv.varFrom(f.value);
+                    const field_rt_var = try self.translateTypeVar(self.env, field_ct_var);
+                    const val = try self.evalExprMinimal(f.value, roc_ops, field_rt_var);
+                    try field_values.append(val);
+                    const field_layout = val.layout;
+                    try upsert(&union_names, &union_layouts, &union_indices, f.name, field_layout);
+                }
+                const record_layout_idx = try self.runtime_layout_store.putRecord(union_layouts.items, union_names.items);
+                const rec_layout = self.runtime_layout_store.getLayout(record_layout_idx);
+
+                const resolved_rt = self.runtime_types.resolveVar(rt_var);
+                const root_idx: usize = @intFromEnum(resolved_rt.var_);
+                try self.ensureVarLayoutCapacity(root_idx + 1);
+                self.var_to_layout_slot.items[root_idx] = @intFromEnum(record_layout_idx) + 1;
+
                 var dest = try self.pushRaw(rec_layout, 0);
                 var accessor = try dest.asRecord(&self.runtime_layout_store);
-                const fields = self.env.store.sliceRecordFields(rec.fields);
-                for (fields) |f_idx| {
-                    const f = self.env.store.getRecordField(f_idx);
-                    const name_text = self.env.getIdent(f.name);
-                    const idx_opt = accessor.findFieldIndex(self.env, name_text);
-                    if (idx_opt) |findex| {
-                        const val = try self.evalExprMinimal(f.value, roc_ops, null);
-                        try accessor.setFieldByIndex(findex, val, roc_ops);
-                    } else return error.TypeMismatch;
+
+                if (base_accessor_opt) |base_accessor| {
+                    var idx: usize = 0;
+                    while (idx < base_accessor.getFieldCount()) : (idx += 1) {
+                        const info = base_accessor.field_layouts.get(idx);
+                        const field_name = self.env.getIdent(info.name);
+                        const dest_field_idx = accessor.findFieldIndex(self.env, field_name) orelse return error.TypeMismatch;
+                        const base_field_value = try base_accessor.getFieldByIndex(idx);
+                        try accessor.setFieldByIndex(dest_field_idx, base_field_value, roc_ops);
+                    }
                 }
+
+                for (fields, 0..) |field_idx_enum, explicit_index| {
+                    const f = self.env.store.getRecordField(field_idx_enum);
+                    const name_text = self.env.getIdent(f.name);
+                    const dest_field_idx = accessor.findFieldIndex(self.env, name_text) orelse return error.TypeMismatch;
+                    const val = field_values.items[explicit_index];
+
+                    if (base_accessor_opt) |base_accessor| {
+                        if (base_accessor.findFieldIndex(self.env, name_text) != null) {
+                            const existing = try accessor.getFieldByIndex(dest_field_idx);
+                            existing.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                    }
+
+                    try accessor.setFieldByIndex(dest_field_idx, val, roc_ops);
+                }
+
                 return dest;
             },
             .e_empty_record => {
@@ -721,7 +835,11 @@ pub const Interpreter2 = struct {
                         break;
                     }
                 }
-                if (!found) return error.NotImplemented;
+                if (!found) {
+                    const msg = try std.fmt.allocPrint(self.allocator, "Invalid tag `{s}`", .{name_text});
+                    self.triggerCrash(msg, true, roc_ops);
+                    return error.Crash;
+                }
                 const layout_val = try self.getRuntimeLayout(rt_var);
                 if (self.isBoolLayout(layout_val) and (std.mem.eql(u8, name_text, "True") or std.mem.eql(u8, name_text, "False"))) {
                     try self.prepareBoolIndices(rt_var);
@@ -781,7 +899,11 @@ pub const Interpreter2 = struct {
                         break;
                     }
                 }
-                if (!found) return error.NotImplemented;
+                if (!found) {
+                    const msg = try std.fmt.allocPrint(self.allocator, "Invalid tag `{s}`", .{name_text});
+                    self.triggerCrash(msg, true, roc_ops);
+                    return error.Crash;
+                }
 
                 const layout_val = try self.getRuntimeLayout(rt_var);
                 if (self.isBoolLayout(layout_val) and (std.mem.eql(u8, name_text, "True") or std.mem.eql(u8, name_text, "False"))) {
@@ -1143,11 +1265,6 @@ pub const Interpreter2 = struct {
                     return try self.evalExprMinimal(lambda.body, roc_ops, null);
                 }
 
-                const func_expr_tag = self.env.store.getExpr(func_idx);
-                std.debug.print("Interpreter2 e_call unsupported func layout {s} expr {s}\n", .{
-                    @tagName(func_val.layout.tag),
-                    @tagName(func_expr_tag),
-                });
                 return error.NotImplemented;
             },
             .e_dot_access => |dot_access| {
@@ -1168,6 +1285,9 @@ pub const Interpreter2 = struct {
 
                 if (!treat_as_method) {
                     if (receiver_value.layout.tag != .record) return error.TypeMismatch;
+                    if (receiver_value.ptr == null) return error.TypeMismatch;
+                    const rec_data = self.runtime_layout_store.getRecordData(receiver_value.layout.data.record.idx);
+                    if (rec_data.fields.count == 0) return error.ZeroSizedType;
                     var accessor = try receiver_value.asRecord(&self.runtime_layout_store);
                     const field_idx = accessor.findFieldIndex(self.env, field_name) orelse return error.TypeMismatch;
                     const field_value = try accessor.getFieldByIndex(field_idx);
@@ -1314,7 +1434,76 @@ pub const Interpreter2 = struct {
                 }
                 return error.NotImplemented;
             },
-            // no boolean unary not in minimal evaluator
+            .e_unary_minus => |unary| {
+                const operand_ct_var = can.ModuleEnv.varFrom(unary.expr);
+                const operand_rt_var = try self.translateTypeVar(self.env, operand_ct_var);
+                const operand = try self.evalExprMinimal(unary.expr, roc_ops, operand_rt_var);
+                defer operand.decref(&self.runtime_layout_store, roc_ops);
+
+                const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
+                const result_layout = try self.getRuntimeLayout(result_rt_var);
+                if (result_layout.tag != .scalar) return error.TypeMismatch;
+
+                return switch (result_layout.data.scalar.tag) {
+                    .int => {
+                        if (!(operand.layout.tag == .scalar and operand.layout.data.scalar.tag == .int)) {
+                            return error.TypeMismatch;
+                        }
+                        const value = operand.asI128();
+                        var out = try self.pushRaw(result_layout, 0);
+                        out.is_initialized = false;
+                        out.setInt(-value);
+                        out.is_initialized = true;
+                        return out;
+                    },
+                    .frac => switch (result_layout.data.scalar.data.frac) {
+                        .dec => {
+                            const operand_dec = try self.stackValueToDecimal(operand);
+                            const out = try self.pushRaw(result_layout, 0);
+                            if (out.ptr) |ptr| {
+                                const dest: *RocDec = @ptrCast(@alignCast(ptr));
+                                dest.* = RocDec{ .num = -operand_dec.num };
+                            }
+                            return out;
+                        },
+                        .f32 => {
+                            const operand_float = try self.stackValueToFloat(f32, operand);
+                            const out = try self.pushRaw(result_layout, 0);
+                            if (out.ptr) |ptr| {
+                                const dest: *f32 = @ptrCast(@alignCast(ptr));
+                                dest.* = -operand_float;
+                            }
+                            return out;
+                        },
+                        .f64 => {
+                            const operand_float = try self.stackValueToFloat(f64, operand);
+                            const out = try self.pushRaw(result_layout, 0);
+                            if (out.ptr) |ptr| {
+                                const dest: *f64 = @ptrCast(@alignCast(ptr));
+                                dest.* = -operand_float;
+                            }
+                            return out;
+                        },
+                    },
+                    else => error.TypeMismatch,
+                };
+            },
+            .e_unary_not => |unary| {
+                const operand_ct_var = can.ModuleEnv.varFrom(unary.expr);
+                const operand_rt_var = try self.translateTypeVar(self.env, operand_ct_var);
+                const operand = try self.evalExprMinimal(unary.expr, roc_ops, operand_rt_var);
+                defer operand.decref(&self.runtime_layout_store, roc_ops);
+
+                const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
+                const truthy = try self.boolValueIsTrue(operand, operand_rt_var);
+                return try self.makeBoolValue(result_rt_var, !truthy);
+            },
+            .e_runtime_error => |_| {
+                self.triggerCrash("runtime error", false, roc_ops);
+                return error.Crash;
+            },
             // no if handling in minimal evaluator
             // no second e_binop case; handled above
             else => return error.NotImplemented,
@@ -1447,16 +1636,99 @@ pub const Interpreter2 = struct {
         return idx == self.bool_true_index;
     }
 
+    const NumericKind = enum { int, dec, f32, f64 };
+
+    fn numericKindFromLayout(self: *Interpreter2, layout_val: Layout) ?NumericKind {
+        _ = self;
+        if (layout_val.tag != .scalar) return null;
+        return switch (layout_val.data.scalar.tag) {
+            .int => .int,
+            .frac => switch (layout_val.data.scalar.data.frac) {
+                .dec => .dec,
+                .f32 => .f32,
+                .f64 => .f64,
+            },
+            else => null,
+        };
+    }
+
+    fn unifyNumericKinds(lhs: NumericKind, rhs: NumericKind) ?NumericKind {
+        if (lhs == rhs) return lhs;
+        if (lhs == .int) return rhs;
+        if (rhs == .int) return lhs;
+        return null;
+    }
+
+    fn layoutMatchesKind(self: *Interpreter2, layout_val: Layout, kind: NumericKind) bool {
+        _ = self;
+        if (layout_val.tag != .scalar) return false;
+        return switch (kind) {
+            .int => layout_val.data.scalar.tag == .int,
+            .dec => layout_val.data.scalar.tag == .frac and layout_val.data.scalar.data.frac == .dec,
+            .f32 => layout_val.data.scalar.tag == .frac and layout_val.data.scalar.data.frac == .f32,
+            .f64 => layout_val.data.scalar.tag == .frac and layout_val.data.scalar.data.frac == .f64,
+        };
+    }
+
+    fn invalidateRuntimeLayoutCache(self: *Interpreter2, type_var: types.Var) void {
+        const slot_idx = @intFromEnum(type_var);
+        if (slot_idx < self.var_to_layout_slot.items.len) {
+            self.var_to_layout_slot.items[slot_idx] = 0;
+        }
+
+        const resolved = self.runtime_types.resolveVar(type_var);
+        const map_idx = @intFromEnum(resolved.var_);
+        if (map_idx < self.runtime_layout_store.layouts_by_var.entries.len) {
+            self.runtime_layout_store.layouts_by_var.entries[map_idx] = std.mem.zeroes(layout.Idx);
+        }
+    }
+
+    fn adjustNumericResultLayout(
+        self: *Interpreter2,
+        result_rt_var: types.Var,
+        current_layout: Layout,
+        lhs: StackValue,
+        lhs_rt_var: types.Var,
+        rhs: StackValue,
+        rhs_rt_var: types.Var,
+    ) !Layout {
+        const lhs_kind_opt = self.numericKindFromLayout(lhs.layout);
+        const rhs_kind_opt = self.numericKindFromLayout(rhs.layout);
+        if (lhs_kind_opt == null or rhs_kind_opt == null) return current_layout;
+
+        const desired_kind = unifyNumericKinds(lhs_kind_opt.?, rhs_kind_opt.?) orelse return error.TypeMismatch;
+
+        if (self.layoutMatchesKind(current_layout, desired_kind)) return current_layout;
+
+        const source = blk: {
+            if (self.layoutMatchesKind(lhs.layout, desired_kind)) break :blk lhs_rt_var;
+            if (self.layoutMatchesKind(rhs.layout, desired_kind)) break :blk rhs_rt_var;
+            return error.TypeMismatch;
+        };
+
+        const source_resolved = self.runtime_types.resolveVar(source);
+        try self.runtime_types.setVarContent(result_rt_var, source_resolved.desc.content);
+        self.invalidateRuntimeLayoutCache(result_rt_var);
+
+        const updated_layout = try self.getRuntimeLayout(result_rt_var);
+        if (!self.layoutMatchesKind(updated_layout, desired_kind)) return error.TypeMismatch;
+        return updated_layout;
+    }
+
     fn evalArithmeticBinop(
         self: *Interpreter2,
         op: can.CIR.Expr.Binop.Op,
         expr_idx: can.CIR.Expr.Idx,
         lhs: StackValue,
         rhs: StackValue,
+        lhs_rt_var: types.Var,
+        rhs_rt_var: types.Var,
     ) !StackValue {
         const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
         const result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
-        const result_layout = try self.getRuntimeLayout(result_rt_var);
+        var result_layout = try self.getRuntimeLayout(result_rt_var);
+
+        result_layout = try self.adjustNumericResultLayout(result_rt_var, result_layout, lhs, lhs_rt_var, rhs, rhs_rt_var);
 
         if (result_layout.tag != .scalar) return error.TypeMismatch;
         return switch (result_layout.data.scalar.tag) {
@@ -1811,8 +2083,7 @@ pub const Interpreter2 = struct {
                 return try self.structuralEqualList(lhs, rhs, elem_var);
             },
             .empty_record => true,
-            .list_unbound, .record_unbound, .record_poly, .fn_pure, .fn_effectful, .fn_unbound, .nominal_type,
-            .empty_tag_union, .box => error.NotImplemented,
+            .list_unbound, .record_unbound, .record_poly, .fn_pure, .fn_effectful, .fn_unbound, .nominal_type, .empty_tag_union, .box => error.NotImplemented,
             .str => error.NotImplemented,
             .num => error.NotImplemented,
         };
@@ -2378,6 +2649,25 @@ pub const Interpreter2 = struct {
         }
     }
 
+    fn upsertBinding(
+        self: *Interpreter2,
+        binding: Binding,
+        search_start: usize,
+        roc_ops: *RocOps,
+    ) !void {
+        var idx = self.bindings.items.len;
+        while (idx > search_start) {
+            idx -= 1;
+            if (self.bindings.items[idx].pattern_idx == binding.pattern_idx) {
+                self.bindings.items[idx].value.decref(&self.runtime_layout_store, roc_ops);
+                self.bindings.items[idx] = binding;
+                return;
+            }
+        }
+
+        try self.bindings.append(binding);
+    }
+
     fn trimBindingList(
         self: *Interpreter2,
         list: *std.ArrayList(Binding),
@@ -2537,12 +2827,6 @@ pub const Interpreter2 = struct {
                 if (value.layout.tag != .record) return false;
                 var accessor = try value.asRecord(&self.runtime_layout_store);
 
-                const record_resolved = self.resolveBaseVar(value_rt_var);
-                if (record_resolved.desc.content != .structure or record_resolved.desc.content.structure != .record) {
-                    return false;
-                }
-                const record_fields = self.runtime_types.getRecordFieldsSlice(record_resolved.desc.content.structure.record.fields);
-
                 const destructs = self.env.store.sliceRecordDestructs(rec_pat.destructs);
                 for (destructs) |destruct_idx| {
                     const destruct = self.env.store.getRecordDestruct(destruct_idx);
@@ -2550,17 +2834,8 @@ pub const Interpreter2 = struct {
 
                     const field_index = accessor.findFieldIndex(self.env, field_name) orelse return false;
                     const field_value = try accessor.getFieldByIndex(field_index);
-
-                    const names = record_fields.items(.name);
-                    const vars = record_fields.items(.var_);
-                    var field_var_opt: ?types.Var = null;
-                    for (names, vars) |name_idx, candidate_var| {
-                        if (std.mem.eql(u8, self.env.getIdent(name_idx), field_name)) {
-                            field_var_opt = candidate_var;
-                            break;
-                        }
-                    }
-                    const field_var = field_var_opt orelse return false;
+                    const field_ct_var = can.ModuleEnv.varFrom(destruct_idx);
+                    const field_var = try self.translateTypeVar(self.env, field_ct_var);
 
                     const inner_pattern_idx = switch (destruct.kind) {
                         .Required => |p_idx| p_idx,
@@ -2711,6 +2986,87 @@ pub const Interpreter2 = struct {
         return self.runtime_layout_store.getLayout(layout_idx);
     }
 
+    const FieldAccumulator = struct {
+        fields: std.ArrayList(types.RecordField),
+        name_to_index: std.AutoHashMap(u32, usize),
+
+        fn init(allocator: std.mem.Allocator) !FieldAccumulator {
+            return FieldAccumulator{
+                .fields = std.ArrayList(types.RecordField).init(allocator),
+                .name_to_index = std.AutoHashMap(u32, usize).init(allocator),
+            };
+        }
+
+        fn deinit(self: *FieldAccumulator) void {
+            self.fields.deinit();
+            self.name_to_index.deinit();
+        }
+
+        fn put(self: *FieldAccumulator, name: base_pkg.Ident.Idx, var_: types.Var) !void {
+            const key: u32 = @bitCast(name);
+            if (self.name_to_index.get(key)) |idx_ptr| {
+                self.fields.items[idx_ptr] = .{ .name = name, .var_ = var_ };
+            } else {
+                try self.fields.append(.{ .name = name, .var_ = var_ });
+                try self.name_to_index.put(key, self.fields.items.len - 1);
+            }
+        }
+    };
+
+    fn collectRecordFieldsFromVar(
+        self: *Interpreter2,
+        module: *can.ModuleEnv,
+        ct_var: types.Var,
+        acc: *FieldAccumulator,
+        visited: *std.AutoHashMap(types.Var, void),
+    ) !void {
+        if (visited.contains(ct_var)) return;
+        try visited.put(ct_var, {});
+
+        const resolved = module.types.resolveVar(ct_var);
+        switch (resolved.desc.content) {
+            .structure => |flat| switch (flat) {
+                .record => |rec| {
+                    const ct_fields = module.types.getRecordFieldsSlice(rec.fields);
+                    var i: usize = 0;
+                    while (i < ct_fields.len) : (i += 1) {
+                        const f = ct_fields.get(i);
+                        try acc.put(f.name, f.var_);
+                    }
+                    try self.collectRecordFieldsFromVar(module, rec.ext, acc, visited);
+                },
+                .record_unbound => |fields_range| {
+                    const ct_fields = module.types.getRecordFieldsSlice(fields_range);
+                    var i: usize = 0;
+                    while (i < ct_fields.len) : (i += 1) {
+                        const f = ct_fields.get(i);
+                        try acc.put(f.name, f.var_);
+                    }
+                },
+                .record_poly => |poly| {
+                    const ct_fields = module.types.getRecordFieldsSlice(poly.record.fields);
+                    var i: usize = 0;
+                    while (i < ct_fields.len) : (i += 1) {
+                        const f = ct_fields.get(i);
+                        try acc.put(f.name, f.var_);
+                    }
+                    try self.collectRecordFieldsFromVar(module, poly.var_, acc, visited);
+                },
+                .nominal_type => |nom| {
+                    const backing = module.types.getNominalBackingVar(nom);
+                    try self.collectRecordFieldsFromVar(module, backing, acc, visited);
+                },
+                .empty_record => {},
+                else => {},
+            },
+            .alias => |alias| {
+                const backing = module.types.getAliasBackingVar(alias);
+                try self.collectRecordFieldsFromVar(module, backing, acc, visited);
+            },
+            else => {},
+        }
+    }
+
     /// Minimal translate implementation (scaffolding): handles .str only for now
     pub fn translateTypeVar(self: *Interpreter2, module: *can.ModuleEnv, compile_var: types.Var) !types.Var {
         const key: u64 = (@as(u64, @intFromPtr(module)) << 32) | @as(u64, @intFromEnum(compile_var));
@@ -2775,48 +3131,77 @@ pub const Interpreter2 = struct {
                     return try self.runtime_types.freshFromContent(.{ .structure = .list_unbound });
                 },
                 .record => |rec| {
-                    // Translate fields
+                    var acc = try FieldAccumulator.init(self.allocator);
+                    defer acc.deinit();
+                    var visited = std.AutoHashMap(types.Var, void).init(self.allocator);
+                    defer visited.deinit();
+
+                    try self.collectRecordFieldsFromVar(module, rec.ext, &acc, &visited);
+
                     const ct_fields = module.types.getRecordFieldsSlice(rec.fields);
-                    var tmp = try self.allocator.alloc(types.RecordField, ct_fields.len);
-                    defer self.allocator.free(tmp);
                     var i: usize = 0;
                     while (i < ct_fields.len) : (i += 1) {
                         const f = ct_fields.get(i);
-                        const rt_field_var = try self.translateTypeVar(module, f.var_);
-                        tmp[i] = .{ .name = f.name, .var_ = rt_field_var };
+                        try acc.put(f.name, f.var_);
                     }
-                    const rt_fields = try self.runtime_types.appendRecordFields(tmp);
-                    // Translate ext var too
+
                     const rt_ext = try self.translateTypeVar(module, rec.ext);
+                    var runtime_fields = try self.allocator.alloc(types.RecordField, acc.fields.items.len);
+                    defer self.allocator.free(runtime_fields);
+                    var j: usize = 0;
+                    while (j < acc.fields.items.len) : (j += 1) {
+                        const ct_field = acc.fields.items[j];
+                        runtime_fields[j] = .{
+                            .name = ct_field.name,
+                            .var_ = try self.translateTypeVar(module, ct_field.var_),
+                        };
+                    }
+                    const rt_fields = try self.runtime_types.appendRecordFields(runtime_fields);
                     return try self.runtime_types.freshFromContent(.{ .structure = .{ .record = .{ .fields = rt_fields, .ext = rt_ext } } });
                 },
                 .record_unbound => |fields_range| {
                     const ct_fields = module.types.getRecordFieldsSlice(fields_range);
-                    var tmp = try self.allocator.alloc(types.RecordField, ct_fields.len);
-                    defer self.allocator.free(tmp);
+                    var runtime_fields = try self.allocator.alloc(types.RecordField, ct_fields.len);
+                    defer self.allocator.free(runtime_fields);
                     var i: usize = 0;
                     while (i < ct_fields.len) : (i += 1) {
                         const f = ct_fields.get(i);
-                        const rt_field_var = try self.translateTypeVar(module, f.var_);
-                        tmp[i] = .{ .name = f.name, .var_ = rt_field_var };
+                        runtime_fields[i] = .{
+                            .name = f.name,
+                            .var_ = try self.translateTypeVar(module, f.var_),
+                        };
                     }
-                    const rt_fields = try self.runtime_types.appendRecordFields(tmp);
+                    const rt_fields = try self.runtime_types.appendRecordFields(runtime_fields);
                     const ext_empty = try self.runtime_types.freshFromContent(.{ .structure = .empty_record });
                     return try self.runtime_types.freshFromContent(.{ .structure = .{ .record = .{ .fields = rt_fields, .ext = ext_empty } } });
                 },
                 .record_poly => |poly| {
-                    // Translate inner record and var_, then collapse to concrete record for runtime
+                    var acc = try FieldAccumulator.init(self.allocator);
+                    defer acc.deinit();
+                    var visited = std.AutoHashMap(types.Var, void).init(self.allocator);
+                    defer visited.deinit();
+
+                    try self.collectRecordFieldsFromVar(module, poly.record.ext, &acc, &visited);
+
                     const ct_fields = module.types.getRecordFieldsSlice(poly.record.fields);
-                    var tmp = try self.allocator.alloc(types.RecordField, ct_fields.len);
-                    defer self.allocator.free(tmp);
                     var i: usize = 0;
                     while (i < ct_fields.len) : (i += 1) {
                         const f = ct_fields.get(i);
-                        const rt_field_var = try self.translateTypeVar(module, f.var_);
-                        tmp[i] = .{ .name = f.name, .var_ = rt_field_var };
+                        try acc.put(f.name, f.var_);
                     }
-                    const rt_fields = try self.runtime_types.appendRecordFields(tmp);
+
                     const rt_ext = try self.translateTypeVar(module, poly.var_);
+                    var runtime_fields = try self.allocator.alloc(types.RecordField, acc.fields.items.len);
+                    defer self.allocator.free(runtime_fields);
+                    var j: usize = 0;
+                    while (j < acc.fields.items.len) : (j += 1) {
+                        const ct_field = acc.fields.items[j];
+                        runtime_fields[j] = .{
+                            .name = ct_field.name,
+                            .var_ = try self.translateTypeVar(module, ct_field.var_),
+                        };
+                    }
+                    const rt_fields = try self.runtime_types.appendRecordFields(runtime_fields);
                     return try self.runtime_types.freshFromContent(.{ .structure = .{ .record = .{ .fields = rt_fields, .ext = rt_ext } } });
                 },
                 .empty_record => try self.runtime_types.freshFromContent(.{ .structure = .empty_record }),
@@ -2887,23 +3272,6 @@ pub const Interpreter2 = struct {
                 return try self.runtime_types.freshFromContent(content);
             },
             .err => {
-                var writer = module.initTypeWriter() catch null;
-                defer if (writer) |*w| w.deinit();
-                if (writer) |*w| {
-                    if (w.write(compile_var)) |_| {
-                        std.debug.print(
-                            "translateTypeVar encountered .err for compile var {} type {s}\n",
-                            .{ @intFromEnum(compile_var), w.get() },
-                        );
-                    } else |write_err| {
-                        std.debug.print(
-                            "translateTypeVar .err var {} (failed to render: {s})\n",
-                            .{ @intFromEnum(compile_var), @errorName(write_err) },
-                        );
-                    }
-                } else {
-                    std.debug.print("translateTypeVar encountered .err for compile var {}\n", .{@intFromEnum(compile_var)});
-                }
                 return error.TypeMismatch;
             },
         };

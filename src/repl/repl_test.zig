@@ -72,6 +72,30 @@ test "Repl - string expressions" {
     try testing.expectEqualStrings("\"Hello, World!\"", result);
 }
 
+test "Repl - boolean operations" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
+    defer repl.deinit();
+
+    const true_val = try repl.step("Bool.True");
+    defer std.testing.allocator.free(true_val);
+    try testing.expectEqualStrings("True", true_val);
+
+    const false_val = try repl.step("Bool.False");
+    defer std.testing.allocator.free(false_val);
+    try testing.expectEqualStrings("False", false_val);
+
+    const and_val = try repl.step("Bool.True and Bool.False");
+    defer std.testing.allocator.free(and_val);
+    try testing.expectEqualStrings("False", and_val);
+
+    const or_val = try repl.step("Bool.True or Bool.False");
+    defer std.testing.allocator.free(or_val);
+    try testing.expectEqualStrings("True", or_val);
+}
+
 test "Repl - silent assignments" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();

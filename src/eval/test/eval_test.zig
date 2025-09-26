@@ -263,7 +263,7 @@ test "operator associativity - documentation" {
 
     // RIGHT ASSOCIATIVE (logical operators)
     // a op b op c = a op (b op c)
-    // Note: && and || are right associative in Roc
+    // Note: the boolean keywords `and` and `or` are right associative in Roc
     // This is mostly relevant for short-circuiting behavior
 }
 

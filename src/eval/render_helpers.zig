@@ -204,6 +204,14 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
             }
         },
         .record => |rec| {
+            const ext_resolved = ctx.runtime_types.resolveVar(rec.ext);
+            const use_placeholder = switch (ext_resolved.desc.content) {
+                .structure => |st| st != .empty_record,
+                else => true,
+            };
+            if (use_placeholder) {
+                return try gpa.dupe(u8, "<record>");
+            }
             var out = std.ArrayList(u8).init(gpa);
             errdefer out.deinit();
             try out.appendSlice("{ ");
@@ -295,6 +303,9 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
         try out.append(')');
         return out.toOwnedSlice();
     }
+    if (value.layout.tag == .list_of_zst) {
+        return try gpa.dupe(u8, "<list_of_zst>");
+    }
     if (value.layout.tag == .record) {
         var out = std.ArrayList(u8).init(gpa);
         errdefer out.deinit();
@@ -329,7 +340,7 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
 
 fn renderDecimal(gpa: std.mem.Allocator, dec: RocDec) ![]u8 {
     if (dec.num == 0) {
-        return try gpa.dupe(u8, "0.0");
+        return try gpa.dupe(u8, "0");
     }
 
     var out = std.ArrayList(u8).init(gpa);
@@ -348,7 +359,6 @@ fn renderDecimal(gpa: std.mem.Allocator, dec: RocDec) ![]u8 {
     try std.fmt.format(out.writer(), "{d}", .{integer_part});
 
     if (fractional_part == 0) {
-        try out.writer().writeAll(".0");
         return out.toOwnedSlice();
     }
 
