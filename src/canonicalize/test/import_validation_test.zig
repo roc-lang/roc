@@ -18,7 +18,11 @@ const testing = std.testing;
 const expectEqual = testing.expectEqual;
 
 // Helper function to parse and canonicalize source code
-fn parseAndCanonicalizeSource(allocator: std.mem.Allocator, source: []const u8, module_envs: ?*std.StringHashMap(*ModuleEnv)) !struct {
+fn parseAndCanonicalizeSource(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    module_envs: ?*std.StringHashMap(*const ModuleEnv),
+) !struct {
     parse_env: *ModuleEnv,
     ast: *parse.AST,
     can: *Can,
@@ -47,7 +51,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
     // First, create some module environments with exposed items
-    var module_envs = std.StringHashMap(*ModuleEnv).init(allocator);
+    var module_envs = std.StringHashMap(*const ModuleEnv).init(allocator);
     defer module_envs.deinit();
     // Create module environment for "Json" module
     const json_env = try allocator.create(ModuleEnv);
@@ -458,7 +462,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
     // Create module environments with exposed items
-    var module_envs = std.StringHashMap(*ModuleEnv).init(allocator);
+    var module_envs = std.StringHashMap(*const ModuleEnv).init(allocator);
     defer module_envs.deinit();
     // Create a "MathUtils" module with some exposed definitions
     const math_env = try allocator.create(ModuleEnv);
