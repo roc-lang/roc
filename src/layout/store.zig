@@ -986,17 +986,27 @@ pub const Store = struct {
                         }
 
                         // Complex tag union with payloads
-                        // Strategy: represent as a record { tag: Discriminant, payload: MaxPayload }
-                        // where MaxPayload is the layout of the largest payload among all tags.
+                        // Strategy: represent as a record { payload: MaxPayload, tag: Discriminant }
+                        // to ensure the payload receives its required alignment and the discriminant
+                        // can live in any trailing padding that remains.
                         var max_payload_layout: ?Layout = null;
                         var max_payload_size: u32 = 0;
                         var max_payload_alignment: std.mem.Alignment = std.mem.Alignment.@"1";
+                        var max_payload_alignment_any: std.mem.Alignment = std.mem.Alignment.@"1";
 
                         // Helper to update max with a candidate layout
                         const updateMax = struct {
-                            fn go(store: *Self, candidate: Layout, curr_size: *u32, curr_alignment: *std.mem.Alignment, out_layout: *?Layout) void {
+                            fn go(
+                                store: *Self,
+                                candidate: Layout,
+                                curr_size: *u32,
+                                curr_alignment: *std.mem.Alignment,
+                                out_layout: *?Layout,
+                                max_alignment_any: *std.mem.Alignment,
+                            ) void {
                                 const size = store.layoutSize(candidate);
                                 const alignment = candidate.alignment(store.targetUsize());
+                                max_alignment_any.* = max_alignment_any.*.max(alignment);
                                 if (size > curr_size.* or (size == curr_size.* and alignment.toByteUnits() > curr_alignment.*.toByteUnits())) {
                                     curr_size.* = size;
                                     curr_alignment.* = alignment;
@@ -1017,7 +1027,7 @@ pub const Store = struct {
                                 const arg_var = args_slice[0];
                                 const arg_layout_idx = try self.addTypeVar(arg_var, &temp_scope);
                                 const layout_val = self.getLayout(arg_layout_idx);
-                                updateMax(self, layout_val, &max_payload_size, &max_payload_alignment, &max_payload_layout);
+                                updateMax(self, layout_val, &max_payload_size, &max_payload_alignment, &max_payload_layout, &max_payload_alignment_any);
                             } else {
                                 // Build tuple layout from argument layouts
                                 var elem_layouts = try self.env.gpa.alloc(Layout, args_slice.len);
@@ -1028,22 +1038,37 @@ pub const Store = struct {
                                 }
                                 const tuple_idx = try self.putTuple(elem_layouts);
                                 const tuple_layout = self.getLayout(tuple_idx);
-                                updateMax(self, tuple_layout, &max_payload_size, &max_payload_alignment, &max_payload_layout);
+                                updateMax(self, tuple_layout, &max_payload_size, &max_payload_alignment, &max_payload_layout, &max_payload_alignment_any);
                             }
                         }
 
-                        // Build record { tag, payload }
-                        var field_layouts = [_]Layout{
-                            discriminant_layout,
-                            // If for some reason max_payload_layout is null (shouldn't happen as has_payload true), fall back to discriminant layout
-                            max_payload_layout orelse discriminant_layout,
+                        const name_payload = try self.env.common.idents.insert(self.env.gpa, Ident.for_text("payload"));
+                        const name_tag = try self.env.common.idents.insert(self.env.gpa, Ident.for_text("tag"));
+
+                        const payload_layout = max_payload_layout orelse blk: {
+                            const empty_idx = try self.ensureEmptyRecordLayout();
+                            break :blk self.getLayout(empty_idx);
                         };
 
-                        const name_tag = try self.env.common.idents.insert(self.env.gpa, Ident.for_text("tag"));
-                        const name_payload = try self.env.common.idents.insert(self.env.gpa, Ident.for_text("payload"));
-                        var field_names = [_]Ident.Idx{ name_tag, name_payload };
+                        var field_layouts = [_]Layout{
+                            payload_layout,
+                            discriminant_layout,
+                        };
+
+                        var field_names = [_]Ident.Idx{ name_payload, name_tag };
 
                         const rec_idx = try self.putRecord(&field_layouts, &field_names);
+                        if (max_payload_alignment_any.toByteUnits() > 1) {
+                            const desired_alignment = max_payload_alignment_any;
+                            var rec_layout = self.getLayout(rec_idx);
+                            const current_alignment = rec_layout.alignment(self.targetUsize());
+                            if (desired_alignment.toByteUnits() > current_alignment.toByteUnits()) {
+                                std.debug.assert(rec_layout.tag == .record);
+                                const record_idx = rec_layout.data.record.idx;
+                                const new_layout = Layout.record(desired_alignment, record_idx);
+                                self.layouts.set(@enumFromInt(@intFromEnum(rec_idx)), new_layout);
+                            }
+                        }
                         try self.layouts_by_var.put(self.env.gpa, current.var_, rec_idx);
                         return rec_idx;
                     },
