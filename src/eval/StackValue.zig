@@ -862,6 +862,33 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             slot.* = 0;
             return;
         },
+        .record => {
+            if (self.ptr == null) return;
+            const record_data = layout_cache.getRecordData(self.layout.data.record.idx);
+            if (record_data.fields.count == 0) return;
+
+            const field_layouts = layout_cache.record_fields.sliceRange(record_data.getFields());
+            const base_ptr = @as([*]u8, @ptrCast(self.ptr.?));
+
+            var field_index: usize = 0;
+            while (field_index < field_layouts.len) : (field_index += 1) {
+                const field_info = field_layouts.get(field_index);
+                const field_layout = layout_cache.getLayout(field_info.layout);
+
+                const field_offset = layout_cache.getRecordFieldOffset(self.layout.data.record.idx, @intCast(field_index));
+                const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
+
+                const field_value = StackValue{
+                    .layout = field_layout,
+                    .ptr = field_ptr,
+                    .is_initialized = true,
+                };
+
+                field_value.decref(layout_cache, ops);
+            }
+
+            return;
+        },
         .box_of_zst => {
             if (self.ptr == null) return;
             const slot: *usize = @ptrCast(@alignCast(self.ptr.?));

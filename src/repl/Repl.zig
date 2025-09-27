@@ -9,22 +9,15 @@ const can = @import("can");
 const eval = @import("eval");
 const check = @import("check");
 const builtins = @import("builtins");
-const layout_mod = @import("layout");
 
 const TestEnv = @import("repl_test_env.zig").TestEnv;
 
 const AST = parse.AST;
 const Can = can.Can;
 const Check = check.Check;
-const Stack = eval.Stack;
-const LayoutStore = layout_mod.Store;
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
-const RocDec = builtins.dec.RocDec;
 const RocOps = builtins.host_abi.RocOps;
-const types_store = types.store;
-const writers = types.writers;
-const target = base.target;
 
 const Repl = @This();
 
@@ -55,20 +48,15 @@ const PastDef = struct {
 allocator: Allocator,
 /// All past definitions in order (allows redefinition/shadowing)
 past_defs: std.ArrayList(PastDef),
-/// Stack for evaluation
-eval_stack: Stack,
 /// Operations for the Roc runtime
 roc_ops: *RocOps,
 /// Optional trace writer for debugging evaluation
 trace_writer: ?std.io.AnyWriter,
 
 pub fn init(allocator: Allocator, roc_ops: *RocOps) !Repl {
-    const eval_stack = try Stack.initCapacity(allocator, 8192);
-
     return Repl{
         .allocator = allocator,
         .past_defs = std.ArrayList(PastDef).init(allocator),
-        .eval_stack = eval_stack,
         .roc_ops = roc_ops,
         .trace_writer = null,
     };
@@ -84,7 +72,6 @@ pub fn deinit(self: *Repl) void {
         def.deinit(self.allocator);
     }
     self.past_defs.deinit();
-    self.eval_stack.deinit();
 }
 
 /// Process a line of input and return the result
@@ -312,89 +299,48 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8) ![]const u8 {
         return try std.fmt.allocPrint(self.allocator, "Type check error: {}", .{err});
     };
 
-    // Create layout cache
-    var layout_cache = LayoutStore.init(&module_env, &module_env.types) catch |err| {
-        return try std.fmt.allocPrint(self.allocator, "Layout cache error: {}", .{err});
-    };
-    defer layout_cache.deinit();
-
-    // Clear eval stack to prevent memory corruption from previous evaluations
-    self.eval_stack.used = 0;
-
     // Create interpreter
-    var interpreter = eval.Interpreter.init(self.allocator, cir, &self.eval_stack, &layout_cache, &module_env.types) catch |err| {
+    var interpreter = eval.Interpreter.init(self.allocator, cir) catch |err| {
         return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
     };
-    defer interpreter.deinit(self.roc_ops);
+    defer interpreter.deinit();
 
     // Evaluate the expression
     if (self.trace_writer) |trace_writer| {
         interpreter.startTrace(trace_writer);
     }
 
-    const result = interpreter.eval(canonical_expr_idx.get_idx(), self.roc_ops) catch |err| {
+    const result = interpreter.evalMinimal(canonical_expr_idx.get_idx(), self.roc_ops) catch |err| {
         if (self.trace_writer) |_| {
             interpreter.endTrace();
         }
+        if (err == error.Crash) {
+            _ = interpreter.getCrashMsg();
+            return try self.allocator.dupe(u8, "Evaluation error: error.Crash");
+        }
         return try std.fmt.allocPrint(self.allocator, "Evaluation error: {}", .{err});
     };
+
+    defer result.decref(&interpreter.runtime_layout_store, self.roc_ops);
 
     if (self.trace_writer) |_| {
         interpreter.endTrace();
     }
 
-    // Format the result immediately while memory is still valid
-    if (result.layout.tag == .scalar) {
-        switch (result.layout.data.scalar.tag) {
-            .bool => {
-                // Boolean values are stored as u8 (1 for True, 0 for False)
-                const bool_value: *u8 = @ptrCast(result.ptr.?);
-                return try self.allocator.dupe(u8, if (bool_value.* == 1) "True" else "False");
-            },
-            .int => {
-                const value = result.asI128();
-                return try std.fmt.allocPrint(self.allocator, "{d}", .{value});
-            },
-            .frac => {
-                const precision = result.layout.data.scalar.data.frac;
-                switch (precision) {
-                    .f32 => {
-                        const float_ptr: *f32 = @ptrCast(@alignCast(result.ptr.?));
-                        return try std.fmt.allocPrint(self.allocator, "{}", .{float_ptr.*});
-                    },
-                    .f64 => {
-                        const float_ptr: *f64 = @ptrCast(@alignCast(result.ptr.?));
-                        return try std.fmt.allocPrint(self.allocator, "{}", .{float_ptr.*});
-                    },
-                    .dec => {
-                        const dec_ptr: *RocDec = @ptrCast(@alignCast(result.ptr.?));
-                        // Simple conversion to f64 for now to avoid allocator issues
-                        const raw_value = dec_ptr.num;
-                        const scale_factor = std.math.pow(f64, 10, RocDec.decimal_places);
-                        const decimal_value = @as(f64, @floatFromInt(raw_value)) / scale_factor;
-                        return try std.fmt.allocPrint(self.allocator, "{}", .{decimal_value});
-                    },
-                }
-            },
-            .str => {
-                // Handle RocStr values
-                const roc_str: *builtins.str.RocStr = @ptrCast(@alignCast(result.ptr.?));
-                const str_slice = roc_str.asSlice();
-                const formatted = try std.fmt.allocPrint(self.allocator, "\"{s}\"", .{str_slice});
-                // Clean up the RocStr to prevent memory leak
-                roc_str.decref(self.roc_ops);
-                return formatted;
-            },
-            else => {},
-        }
+    const expr_ct_var = can.ModuleEnv.varFrom(canonical_expr_idx.get_idx());
+    const output = blk: {
+        const expr_rt_var = interpreter.translateTypeVar(cir, expr_ct_var) catch {
+            break :blk try interpreter.renderValueRoc(result);
+        };
+        break :blk try interpreter.renderValueRocWithType(result, expr_rt_var);
+    };
+
+    if (result.layout.tag == .record) {
+        self.allocator.free(output);
+        return try self.allocator.dupe(u8, "<record>");
     }
 
-    // Handle empty list specially
-    if (result.layout.tag == .list_of_zst) {
-        return try self.allocator.dupe(u8, "<list_of_zst>");
-    }
-
-    return try std.fmt.allocPrint(self.allocator, "<{s}>", .{@tagName(result.layout.tag)});
+    return output;
 }
 
 // Tests
@@ -602,22 +548,16 @@ test "Repl - minimal interpreter integration" {
 
     _ = try checker.checkExpr(canonical_expr_idx.get_idx());
 
-    // Step 6: Create evaluation stack
-    var eval_stack = try Stack.initCapacity(gpa, 1024);
-    defer eval_stack.deinit();
+    // Step 6: Create interpreter
+    var interpreter = try eval.Interpreter.init(gpa, cir);
+    defer interpreter.deinit();
 
-    // Step 7: Create layout cache
-    var layout_cache = try LayoutStore.init(&module_env, &module_env.types);
-    defer layout_cache.deinit();
+    // Step 7: Evaluate
+    const ops = test_env.get_ops();
+    const result = try interpreter.evalMinimal(canonical_expr_idx.get_idx(), ops);
+    defer result.decref(&interpreter.runtime_layout_store, ops);
 
-    // Step 8: Create interpreter
-    var interpreter = try eval.Interpreter.init(gpa, cir, &eval_stack, &layout_cache, &module_env.types);
-    defer interpreter.deinit(test_env.get_ops());
-
-    // Step 9: Evaluate
-    const result = try interpreter.eval(canonical_expr_idx.get_idx(), test_env.get_ops());
-
-    // Step 10: Verify result
+    // Step 8: Verify result
     try testing.expect(result.layout.tag == .scalar);
     try testing.expect(result.layout.data.scalar.tag == .int);
 

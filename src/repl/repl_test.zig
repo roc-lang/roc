@@ -7,10 +7,8 @@ const parse = @import("parse");
 const ModuleEnv = compile.ModuleEnv;
 const Repl = @import("eval.zig").Repl;
 const TestEnv = @import("repl_test_env.zig").TestEnv;
-const stack = @import("../eval/stack.zig");
-const layout_store = @import("../layout/store.zig");
-const layout = @import("../layout/layout.zig");
-const eval = @import("../eval/interpreter.zig");
+const eval_mod = @import("../eval/mod.zig");
+const Interpreter = eval_mod.Interpreter;
 
 // Tests
 const testing = std.testing;
@@ -210,27 +208,18 @@ test "Repl - minimal interpreter integration" {
 
     _ = try checker.checkExpr(canonical_expr_idx.get_idx());
 
-    // Step 6: Create evaluation stack
-    var eval_stack = try stack.Stack.initCapacity(gpa, 1024);
-    defer eval_stack.deinit();
+    // Step 6: Create interpreter
+    var interpreter = try Interpreter.init(gpa, &module_env);
+    defer interpreter.deinit();
 
-    // Step 7: Create layout cache
-    var layout_cache = try layout_store.Store.init(&module_env, &module_env.types);
-    defer layout_cache.deinit();
+    // Step 7: Evaluate
+    const result = try interpreter.evalMinimal(canonical_expr_idx.get_idx(), test_env.get_ops());
+    defer result.decref(&interpreter.runtime_layout_store, test_env.get_ops());
 
-    // Step 8: Create interpreter
-    var interpreter = try eval.Interpreter.init(gpa, cir, &eval_stack, &layout_cache, &module_env.types);
-    defer interpreter.deinit(test_env.get_ops());
-
-    // Step 9: Evaluate
-    const result = try interpreter.eval(canonical_expr_idx.get_idx(), test_env.get_ops());
-
-    // Step 10: Verify result
-    try testing.expect(result.layout.tag == .scalar);
-    try testing.expect(result.layout.data.scalar.tag == .int);
-
-    // Read the value back
-    const value = result.asI128();
-
-    try testing.expectEqual(@as(i128, 42), value);
+    // Step 8: Verify result using renderer
+    const ct_var = ModuleEnv.varFrom(canonical_expr_idx.get_idx());
+    const rt_var = try interpreter.translateTypeVar(&module_env, ct_var);
+    const rendered = try interpreter.renderValueRocWithType(result, rt_var);
+    defer gpa.free(rendered);
+    try testing.expectEqualStrings("42", rendered);
 }

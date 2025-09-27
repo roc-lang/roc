@@ -6,12 +6,7 @@ const std = @import("std");
 const base = @import("base");
 const builtins = @import("builtins");
 const can = @import("can");
-const stack = @import("stack.zig");
-const layout = @import("layout");
-const types = @import("types");
-
 const Interpreter = @import("interpreter.zig").Interpreter;
-const EvalError = @import("interpreter.zig").EvalError;
 
 const RocOps = builtins.host_abi.RocOps;
 const RocAlloc = builtins.host_abi.RocAlloc;
@@ -22,9 +17,9 @@ const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocCrashed = builtins.host_abi.RocCrashed;
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
-const LayoutStore = layout.Store;
-const TypeStore = types.store.Store;
 const CIR = can.CIR;
+
+const EvalError = anyerror;
 
 fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
     const test_env: *TestRunner = @ptrCast(@alignCast(env));
@@ -84,12 +79,22 @@ fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C)
     const test_env: *TestRunner = @ptrCast(@alignCast(env));
     const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
 
-    test_env.interpreter.has_crashed = true;
+    if (test_env.interpreter.crash_message_owned) {
+        if (test_env.interpreter.crash_message) |existing| {
+            test_env.allocator.free(existing);
+        }
+    }
+
     const owned_msg = test_env.allocator.dupe(u8, msg_slice) catch {
         test_env.interpreter.crash_message = "Failed to store crash message";
+        test_env.interpreter.crash_message_owned = false;
+        test_env.interpreter.has_crashed = true;
         return;
     };
+
     test_env.interpreter.crash_message = owned_msg;
+    test_env.interpreter.crash_message_owned = true;
+    test_env.interpreter.has_crashed = true;
 }
 
 const Evaluation = enum {
@@ -121,23 +126,18 @@ pub const TestRunner = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         cir: *const ModuleEnv,
-        stack_memory: *stack.Stack,
-        layout_cache: *LayoutStore,
-        type_store: *TypeStore,
     ) !TestRunner {
-        const runner = TestRunner{
+        return TestRunner{
             .allocator = allocator,
             .env = cir,
-            .interpreter = try Interpreter.init(allocator, cir, stack_memory, layout_cache, type_store),
+            .interpreter = try Interpreter.init(allocator, cir),
             .roc_ops = null,
             .test_results = std.ArrayList(TestResult).init(allocator),
         };
-
-        return runner;
     }
 
     pub fn deinit(self: *TestRunner) void {
-        self.interpreter.deinit(self.get_ops());
+        self.interpreter.deinit();
         self.test_results.deinit();
     }
 
@@ -159,17 +159,17 @@ pub const TestRunner = struct {
 
     /// Evaluates a single expect expression, returning whether it passed, failed or did not evaluate to a boolean.
     pub fn eval(self: *TestRunner, expr_idx: CIR.Expr.Idx) EvalError!Evaluation {
-        const result = try self.interpreter.eval(expr_idx, self.get_ops());
+        const ops = self.get_ops();
+        const result = try self.interpreter.evalMinimal(expr_idx, ops);
+        const layout_cache = &self.interpreter.runtime_layout_store;
+        defer result.decref(layout_cache, ops);
+
         if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .bool) {
             const is_true = result.asBool();
-            if (is_true) {
-                return Evaluation.passed;
-            } else {
-                return Evaluation.failed;
-            }
-        } else {
-            return Evaluation.not_a_bool;
+            return if (is_true) Evaluation.passed else Evaluation.failed;
         }
+
+        return Evaluation.not_a_bool;
     }
 
     /// Evaluates all expect statements in the module, returning a summary of the results.

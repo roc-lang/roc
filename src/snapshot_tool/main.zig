@@ -2811,6 +2811,5 @@ fn snapshotRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque)
 
 fn snapshotRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {
     _ = env;
-    const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
-    std.log.err("Test program crashed: {s}", .{msg_slice});
+    _ = crashed_args;
 }

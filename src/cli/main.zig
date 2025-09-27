@@ -19,7 +19,6 @@ const unbundle = @import("unbundle");
 const ipc = @import("ipc");
 const fmt = @import("fmt");
 const eval = @import("eval");
-const layout = @import("layout");
 const builtins = @import("builtins");
 
 const cli_args = @import("cli_args.zig");
@@ -42,7 +41,6 @@ const CacheManager = compile.CacheManager;
 const CacheConfig = compile.CacheConfig;
 const tokenize = parse.tokenize;
 const TestRunner = eval.TestRunner;
-const LayoutStore = layout.Store;
 const RocOps = builtins.host_abi.RocOps;
 const RocAlloc = builtins.host_abi.RocAlloc;
 const RocDealloc = builtins.host_abi.RocDealloc;
@@ -2409,19 +2407,7 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
     };
 
     // Create test runner infrastructure for test evaluation
-    var stack_memory = eval.Stack.initCapacity(gpa, 1024) catch |err| {
-        try stderr.print("Failed to create stack memory: {}", .{err});
-        std.process.exit(1);
-    };
-    defer stack_memory.deinit();
-
-    var layout_cache = LayoutStore.init(&env, &env.types) catch |err| {
-        try stderr.print("Failed to create layout cache: {}", .{err});
-        std.process.exit(1);
-    };
-    defer layout_cache.deinit();
-
-    var test_runner = TestRunner.init(gpa, &env, &stack_memory, &layout_cache, &env.types) catch |err| {
+    var test_runner = TestRunner.init(gpa, &env) catch |err| {
         try stderr.print("Failed to create test runner: {}\n", .{err});
         std.process.exit(1);
     };

@@ -1,6 +1,6 @@
-    +# Interpreter2 Progress, Design, and Roadmap
+# Interpreter Progress, Design, and Roadmap
 
-    This document summarizes the new Interpreter2 work: what’s been built, how it works, and what remains. It’s meant as a
+    This document summarizes the new Interpreter work: what’s been built, how it works, and what remains. It’s meant as a
         single place to get oriented and plan next steps.
 
     ## High‑Level Goals
@@ -14,10 +14,10 @@
 
     ## What’s Implemented
 
-    ### 1) Interpreter2 scaffolding
-    - New module: `src/eval/interpreter2.zig` exported as `Interpreter2` from `src/eval/mod.zig`.
-    - Interpreter2 owns its own runtime type store and layout store, separate from compile‑time stores.
-    - Interpreter2 provides:
+    ### 1) Interpreter scaffolding
+    - New module: `src/eval/interpreter.zig` exported as `Interpreter` from `src/eval/mod.zig`.
+    - The interpreter owns its own runtime type store and layout store, separate from compile‑time stores.
+    - The interpreter provides:
       - A translation cache from compile‑time `types.Var` to runtime `types.Var` (memoized deep copy).
       - A per‑var slot array for O(1) Var→Layout lookup (zero = unset, otherwise `layout_idx + 1`).
       - A polymorphic instantiation cache (poly cache) keyed by function id + root arg types.
@@ -75,9 +75,9 @@
       - Unknown types render `<unsupported>` as a placeholder during bring‑up.
 
     ### 7) Roc‑syntax tests (begin/end with Roc code)
-    - New file: `src/eval/test/interpreter2_style_test.zig`.
+    - New file: `src/eval/test/interpreter_style_test.zig`.
     - Tests parse and canonicalize with early failure (using helpers) to surface syntax or type issues immediately.
-    - Tests then exercise Interpreter2 minimal eval and assert on REPL-style rendered results for readability:
+    - Tests then exercise Interpreter minimal eval and assert on REPL-style rendered results for readability:
       - `(|x| x)("Hello")` → `"Hello"`
       - `(|n| n + 1)(41)` → `42`
       - `(1, 2)` → `(1, 2)`
@@ -121,7 +121,7 @@
     5) Match (wider coverage)
     - Current minimal support: assign, underscore, int & string literals, nominal passthrough, OR patterns.
     - Progress:
-      - Tuple destructuring patterns now match in Interpreter2 (see `match (1, 2)` test).
+      - Tuple destructuring patterns now match in Interpreter (see `match (1, 2)` test).
       - Tag union patterns (including payloads) succeed (`match Ok(n)` style) and share canonical Bool indices.
     - TODO:
       - Record destructuring patterns (bind sub-components recursively).
@@ -146,7 +146,7 @@
     - Tests for polymorphic functions (e.g., identity) across module boundaries.
 
     9) Error handling & diagnostics integration
-    - Expose fast‑fail diagnostic printing in Interpreter2 tests similar to helpers.
+    - Expose fast‑fail diagnostic printing in Interpreter tests similar to helpers.
     - Good error messages when evaluation fails due to NotImplemented vs TypeMismatch.
 
     10) Performance passes (once feature‑complete subset exists)
@@ -155,19 +155,19 @@
 
     ## Key Files and Entry Points
 
-    - `src/eval/interpreter2.zig` — Interpreter2 implementation and minimal evaluator.
-    - `src/eval/mod.zig` — exports Interpreter2 and wires tests.
-    - `src/eval/test/interpreter2_style_test.zig` — Roc‑syntax end‑to‑end tests for Interpreter2.
-    - `src/layout/store.zig` — layout store used by Interpreter2 at runtime.
+    - `src/eval/interpreter.zig` — Interpreter implementation and minimal evaluator.
+    - `src/eval/mod.zig` — exports Interpreter and wires tests.
+    - `src/eval/test/interpreter_style_test.zig` — Roc‑syntax end‑to‑end tests for Interpreter.
+    - `src/layout/store.zig` — layout store used by Interpreter at runtime.
     - `src/types/*` — stores, descriptors, and unifier used both compile‑time and runtime.
     - `src/eval/StackValue.zig` — helpers for reading/writing typed values while respecting layouts.
 
     ## How to Run
 
-    - Run all tests (including Interpreter2):
+    - Run all tests (including Interpreter):
       - `zig build test`
     - Tests will fail fast on parsing/canonicalization problems with proper diagnostics, and then run minimal evaluation
-        on Interpreter2 for covered shapes.
+        on Interpreter for covered shapes.
 
     ## Notes and Rationale (Highlights)
 
@@ -189,5 +189,5 @@
     5. Tag unions representation + evaluation + rendering; tests.
     6. Full call execution with runtime unification across call boundaries (beyond prepareCall).
 
-    This roadmap should get Interpreter2 to a robust, demonstrable subset that exercises the type‑carrying architecture in
+    This roadmap should get Interpreter to a robust, demonstrable subset that exercises the type‑carrying architecture in
         realistic end‑to‑end scenarios, with readable, REPL‑style tests.

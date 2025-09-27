@@ -10,25 +10,18 @@ const Can = can.Can;
 const check = @import("check");
 const Check = check.Check;
 const builtins = @import("builtins");
-const layout_mod = @import("layout");
 const eval_mod = @import("eval");
 
 const AST = parse.AST;
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
-const RocDec = builtins.dec.RocDec;
 const RocOps = builtins.host_abi.RocOps;
-const types_store = types.store;
-const writers = types.writers;
-const target = base.target;
 
 /// REPL state that tracks past definitions and evaluates expressions
 pub const Repl = struct {
     allocator: Allocator,
     /// Map from variable name to source string for definitions
     definitions: std.StringHashMap([]const u8),
-    /// Stack for evaluation
-    eval_stack: eval_mod.Stack,
     /// Operations for the Roc runtime
     roc_ops: *RocOps,
     /// Optional trace writer for debugging evaluation
@@ -43,12 +36,9 @@ pub const Repl = struct {
     debug_types_html: std.ArrayList([]const u8),
 
     pub fn init(allocator: Allocator, roc_ops: *RocOps) !Repl {
-        const eval_stack = try eval_mod.Stack.initCapacity(allocator, 8192);
-
         return Repl{
             .allocator = allocator,
             .definitions = std.StringHashMap([]const u8).init(allocator),
-            .eval_stack = eval_stack,
             .roc_ops = roc_ops,
             .trace_writer = null,
             .last_module_env = null,
@@ -170,8 +160,6 @@ pub const Repl = struct {
             module_env.deinit();
             self.allocator.destroy(module_env);
         }
-
-        self.eval_stack.deinit();
     }
 
     /// Process a line of input and return the result
@@ -396,158 +384,38 @@ pub const Repl = struct {
             return try std.fmt.allocPrint(self.allocator, "Type check expr error: {}", .{err});
         };
 
-        // Create layout cache
-        var layout_cache = layout_mod.Store.init(module_env, &module_env.types) catch |err| {
-            return try std.fmt.allocPrint(self.allocator, "Layout cache error: {}", .{err});
-        };
-        defer layout_cache.deinit();
-
-        // Clear eval stack to prevent memory corruption from previous evaluations
-        self.eval_stack.used = 0;
-
-        // Create interpreter
-        var interpreter = eval_mod.Interpreter.init(self.allocator, cir, &self.eval_stack, &layout_cache, &module_env.types) catch |err| {
+        // Create interpreter instance
+        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
         };
-        defer interpreter.deinit(self.roc_ops);
+        defer interpreter.deinit();
 
-        // Evaluate the expression
-        if (self.trace_writer) |trace_writer| {
-            interpreter.startTrace(trace_writer);
-        }
-
-        const result = interpreter.eval(final_expr_idx, self.roc_ops) catch |err| {
-            if (self.trace_writer) |_| {
-                interpreter.endTrace();
-            }
-            return try std.fmt.allocPrint(self.allocator, "Evaluation error: {}", .{err});
+        const result = interpreter.evalMinimal(final_expr_idx, self.roc_ops) catch |err| switch (err) {
+            error.Crash => {
+                _ = interpreter.getCrashMsg();
+                return try self.allocator.dupe(u8, "Evaluation error: error.Crash");
+            },
+            else => return try std.fmt.allocPrint(self.allocator, "Evaluation error: {}", .{err}),
         };
-
-        if (self.trace_writer) |_| {
-            interpreter.endTrace();
-        }
 
         // Generate debug HTML if enabled
         if (self.debug_store_snapshots) {
             try self.generateAndStoreDebugHtml(module_env, final_expr_idx);
         }
 
-        // Format the result immediately while memory is still valid
-        if (result.layout.tag == .scalar) {
-            switch (result.layout.data.scalar.tag) {
-                .bool => {
-                    // Boolean values are stored as u8 (1 for True, 0 for False)
-                    const bool_value: *u8 = @ptrCast(result.ptr.?);
-                    return try self.allocator.dupe(u8, if (bool_value.* == 1) "True" else "False");
-                },
-                .int => {
-                    const value = result.asI128();
-                    return try std.fmt.allocPrint(self.allocator, "{d}", .{value});
-                },
-                .frac => {
-                    const precision = result.layout.data.scalar.data.frac;
-                    switch (precision) {
-                        .f32 => {
-                            const float_ptr: *f32 = @ptrCast(@alignCast(result.ptr.?));
-                            return try self.renderFloat(@as(f64, float_ptr.*));
-                        },
-                        .f64 => {
-                            const float_ptr: *f64 = @ptrCast(@alignCast(result.ptr.?));
-                            return try self.renderFloat(float_ptr.*);
-                        },
-                       .dec => {
-                           const dec_ptr: *RocDec = @ptrCast(@alignCast(result.ptr.?));
-                            return try self.renderDecimal(dec_ptr.*);
-                        },
-                    }
-                },
-                .str => {
-                    // Handle RocStr values
-                    const roc_str: *builtins.str.RocStr = @ptrCast(@alignCast(result.ptr.?));
-                    const str_slice = roc_str.asSlice();
-                    const formatted = try std.fmt.allocPrint(self.allocator, "\"{s}\"", .{str_slice});
-                    // Clean up the RocStr to prevent memory leak
-                    roc_str.decref(self.roc_ops);
-                    return formatted;
-                },
-                else => {},
-            }
+        const expr_ct_var = can.ModuleEnv.varFrom(final_expr_idx);
+        const output = blk: {
+            const expr_rt_var = interpreter.translateTypeVar(module_env, expr_ct_var) catch {
+                break :blk try interpreter.renderValueRoc(result);
+            };
+            break :blk try interpreter.renderValueRocWithType(result, expr_rt_var);
+        };
+
+        result.decref(&interpreter.runtime_layout_store, self.roc_ops);
+        if (result.layout.tag == .record) {
+            self.allocator.free(output);
+            return try self.allocator.dupe(u8, "<record>");
         }
-
-        // Handle empty list specially
-        if (result.layout.tag == .list_of_zst) {
-            return try self.allocator.dupe(u8, "<list_of_zst>");
-        }
-
-        return try std.fmt.allocPrint(self.allocator, "<{s}>", .{@tagName(result.layout.tag)});
-    }
-
-    fn renderDecimal(self: *Repl, dec: RocDec) ![]u8 {
-        if (dec.num == 0) {
-            return try self.allocator.dupe(u8, "0");
-        }
-
-        var out = std.ArrayList(u8).init(self.allocator);
-        errdefer out.deinit();
-
-        var num = dec.num;
-        if (num < 0) {
-            try out.append('-');
-            num = -num;
-        }
-
-        const one = RocDec.one_point_zero_i128;
-        const integer_part = @divTrunc(num, one);
-        const fractional_part = @rem(num, one);
-
-        try std.fmt.format(out.writer(), "{d}", .{integer_part});
-
-        if (fractional_part == 0) {
-            return out.toOwnedSlice();
-        }
-
-        try out.append('.');
-
-        const decimal_places: usize = @as(usize, RocDec.decimal_places);
-        var digits: [decimal_places]u8 = undefined;
-        @memset(digits[0..], '0');
-
-        var remaining = fractional_part;
-        var idx: usize = decimal_places;
-        while (idx > 0) : (idx -= 1) {
-            const digit: u8 = @intCast(@mod(remaining, 10));
-            digits[idx - 1] = digit + '0';
-            remaining = @divTrunc(remaining, 10);
-        }
-
-        var end: usize = decimal_places;
-        while (end > 1 and digits[end - 1] == '0') {
-            end -= 1;
-        }
-
-        try out.writer().writeAll(digits[0..end]);
-        return out.toOwnedSlice();
-    }
-
-    fn renderFloat(self: *Repl, value: f64) ![]u8 {
-        if (value == 0.0) {
-            return try self.allocator.dupe(u8, "0");
-        }
-
-        var buf: [128]u8 = undefined;
-        const slice = try std.fmt.formatFloat(&buf, value, .{ .mode = .decimal, .precision = 12 });
-
-        var end = slice.len;
-        while (end > 0 and slice[end - 1] == '0') {
-            end -= 1;
-        }
-        if (end > 0 and slice[end - 1] == '.') {
-            end -= 1;
-        }
-        if (end == 0) {
-            end = 1;
-        }
-
-        return try self.allocator.dupe(u8, slice[0..end]);
+        return output;
     }
 };

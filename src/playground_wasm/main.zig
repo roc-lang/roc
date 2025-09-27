@@ -1349,17 +1349,7 @@ fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) Re
     defer local_arena.deinit();
 
     // Create interpreter infrastructure for test evaluation
-    var stack_memory = eval.Stack.initCapacity(local_arena.allocator(), 1024) catch {
-        try writeErrorResponse(response_buffer, .ERROR, "Failed to create stack memory.");
-        return;
-    };
-
-    var layout_cache = layout.Store.init(env, &env.types) catch {
-        try writeErrorResponse(response_buffer, .ERROR, "FFailed to create layout cache.");
-        return;
-    };
-
-    var test_runner = TestRunner.init(local_arena.allocator(), env, &stack_memory, &layout_cache, &env.types) catch {
+    var test_runner = TestRunner.init(local_arena.allocator(), env) catch {
         try writeErrorResponse(response_buffer, .ERROR, "Failed to initialize test runner.");
         return;
     };

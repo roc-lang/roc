@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const builtins = @import("builtins");
-const eval = @import("../interpreter.zig");
+const Interpreter = @import("../interpreter.zig").Interpreter;
 
 const RocOps = builtins.host_abi.RocOps;
 const RocAlloc = builtins.host_abi.RocAlloc;
@@ -15,7 +15,7 @@ const RocCrashed = builtins.host_abi.RocCrashed;
 const TestEnv = @This();
 
 allocator: std.mem.Allocator,
-interpreter: ?*eval.Interpreter,
+interpreter: ?*Interpreter,
 roc_ops: ?RocOps,
 
 pub fn init(allocator: std.mem.Allocator) TestEnv {
@@ -27,22 +27,12 @@ pub fn init(allocator: std.mem.Allocator) TestEnv {
 }
 
 /// Set the interpreter instance for this test environment
-pub fn setInterpreter(self: *TestEnv, interp: *eval.Interpreter) void {
+pub fn setInterpreter(self: *TestEnv, interp: *Interpreter) void {
     self.interpreter = interp;
 }
 
 pub fn deinit(self: *TestEnv) void {
-    // Clean up crash message if we allocated it
-    if (self.interpreter) |interp| {
-        if (interp.crash_message) |msg| {
-            // Only free if we allocated it (not a string literal)
-            if (std.mem.eql(u8, msg, "Failed to store crash message")) {
-                // Don't free string literals
-            } else {
-                self.allocator.free(msg);
-            }
-        }
-    }
+    self.interpreter = null;
 }
 
 /// Get the RocOps instance for this test environment, initializing it if needed
@@ -156,13 +146,22 @@ fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C)
 
     // Set crash state on the interpreter if it's available
     if (test_env.interpreter) |interp| {
-        interp.has_crashed = true;
-        // Store the crash message - we need to allocate and copy it since the original may be temporary
+        if (interp.crash_message_owned) {
+            if (interp.crash_message) |existing| {
+                test_env.allocator.free(existing);
+            }
+        }
+
         const owned_msg = test_env.allocator.dupe(u8, msg_slice) catch |err| {
             std.log.err("Failed to allocate crash message: {}", .{err});
             interp.crash_message = "Failed to store crash message";
+            interp.crash_message_owned = false;
+            interp.has_crashed = true;
             return;
         };
+
         interp.crash_message = owned_msg;
+        interp.crash_message_owned = true;
+        interp.has_crashed = true;
     }
 }
