@@ -421,16 +421,19 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
     defer interpreter.deinit();
     test_env_instance.setInterpreter(&interpreter);
 
-    if (should_trace == .trace) {
-        // TODO: add tracing support for Interpreter when available
+    const enable_trace = should_trace == .trace;
+    if (enable_trace) {
+        interpreter.startTrace(std.io.getStdErr().writer().any());
     }
+    defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
     const result = try interpreter.evalMinimal(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
 
-    // Just verify that evaluation succeeded by reaching this point
+    // Minimal smoke check: the helper only succeeds if evaluation produced a value without crashing.
+    try std.testing.expect(!interpreter.has_crashed);
 }
 
 test "integer type evaluation" {

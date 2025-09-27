@@ -31,9 +31,11 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: e
     defer interpreter.deinit();
     test_env_instance.setInterpreter(&interpreter);
 
-    if (should_trace == .trace) {
-        // TODO: add tracing support for Interpreter when available
+    const enable_trace = should_trace == .trace;
+    if (enable_trace) {
+        interpreter.startTrace(std.io.getStdErr().writer().any());
     }
+    defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
     _ = interpreter.evalMinimal(resources.expr_idx, ops) catch |err| {
@@ -57,9 +59,11 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     defer interpreter.deinit();
     test_env_instance.setInterpreter(&interpreter);
 
-    if (should_trace == .trace) {
-        // TODO: add tracing support for Interpreter when available
+    const enable_trace = should_trace == .trace;
+    if (enable_trace) {
+        interpreter.startTrace(std.io.getStdErr().writer().any());
     }
+    defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
     const result = try interpreter.evalMinimal(resources.expr_idx, ops);
@@ -81,9 +85,11 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     defer interpreter.deinit();
     test_env_instance.setInterpreter(&interpreter);
 
-    if (should_trace == .trace) {
-        // TODO: add tracing support for Interpreter when available
+    const enable_trace = should_trace == .trace;
+    if (enable_trace) {
+        interpreter.startTrace(std.io.getStdErr().writer().any());
     }
+    defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
     const result = try interpreter.evalMinimal(resources.expr_idx, ops);
@@ -114,9 +120,11 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     defer interpreter.deinit();
     test_env_instance.setInterpreter(&interpreter);
 
-    if (should_trace == .trace) {
-        // TODO: add tracing support for Interpreter when available
+    const enable_trace = should_trace == .trace;
+    if (enable_trace) {
+        interpreter.startTrace(std.io.getStdErr().writer().any());
     }
+    defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
     const result = try interpreter.evalMinimal(resources.expr_idx, ops);
@@ -161,9 +169,11 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     defer interpreter.deinit();
     test_env_instance.setInterpreter(&interpreter);
 
-    if (should_trace == .trace) {
-        // TODO: add tracing support for Interpreter when available
+    const enable_trace = should_trace == .trace;
+    if (enable_trace) {
+        interpreter.startTrace(std.io.getStdErr().writer().any());
     }
+    defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
     const result = try interpreter.evalMinimal(resources.expr_idx, ops);
@@ -199,13 +209,15 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env);
-    defer interpreter.deinit();
-    test_env_instance.setInterpreter(&interpreter);
+        var interpreter = try Interpreter.init(test_allocator, resources.module_env);
+        defer interpreter.deinit();
+        test_env_instance.setInterpreter(&interpreter);
 
-    if (should_trace == .trace) {
-        // TODO: add tracing support for Interpreter when available
-    }
+        const enable_trace = should_trace == .trace;
+        if (enable_trace) {
+            interpreter.startTrace(std.io.getStdErr().writer().any());
+        }
+        defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
     const result = try interpreter.evalMinimal(resources.expr_idx, ops);

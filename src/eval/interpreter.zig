@@ -24,6 +24,20 @@ const utils = builtins.utils;
 const Layout = layout.Layout;
 
 pub const Interpreter = struct {
+    pub const Error = error{
+        Crash,
+        DivisionByZero,
+        ListIndexOutOfBounds,
+        NotImplemented,
+        NotNumeric,
+        NullStackPointer,
+        RecordIndexOutOfBounds,
+        StringOrderingNotSupported,
+        StackOverflow,
+        TupleIndexOutOfBounds,
+        TypeMismatch,
+        ZeroSizedType,
+    } || std.mem.Allocator.Error || layout.LayoutError;
     const PolyKey = struct {
         func_id: u32,
         args_len: u32,
@@ -135,7 +149,7 @@ pub const Interpreter = struct {
     }
 
     // Minimal evaluator for subset: string literals, lambdas without captures, and lambda calls
-    pub fn evalMinimal(self: *Interpreter, expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) !StackValue {
+    pub fn evalMinimal(self: *Interpreter, expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) Error!StackValue {
         self.resetCrashState();
         return try self.evalExprMinimal(expr_idx, roc_ops, null);
     }
@@ -155,7 +169,7 @@ pub const Interpreter = struct {
         ret_ptr: *anyopaque,
         roc_ops: *RocOps,
         arg_ptr: ?*anyopaque,
-    ) !void {
+    ) Error!void {
         if (arg_ptr != null) {
             return error.NotImplemented;
         }
@@ -171,7 +185,7 @@ pub const Interpreter = struct {
         expr_idx: can.CIR.Expr.Idx,
         roc_ops: *RocOps,
         expected_rt_var: ?types.Var,
-    ) !StackValue {
+    ) Error!StackValue {
         const expr = self.env.store.getExpr(expr_idx);
         switch (expr) {
             .e_block => |blk| {
@@ -2132,7 +2146,7 @@ pub const Interpreter = struct {
         };
     }
 
-    const StructuralEqError = anyerror;
+    const StructuralEqError = Error;
 
     fn valuesStructurallyEqual(
         self: *Interpreter,
@@ -2696,7 +2710,7 @@ pub const Interpreter = struct {
         };
     }
 
-    pub fn renderValueRoc(self: *Interpreter, value: StackValue) ![]u8 {
+    pub fn renderValueRoc(self: *Interpreter, value: StackValue) Error![]u8 {
         var ctx = self.makeRenderCtx();
         return render_helpers.renderValueRoc(&ctx, value);
     }
@@ -2704,7 +2718,7 @@ pub const Interpreter = struct {
     // removed duplicate
 
     // Helper for REPL and tests: render a value given its runtime type var
-    pub fn renderValueRocWithType(self: *Interpreter, value: StackValue, rt_var: types.Var) ![]u8 {
+    pub fn renderValueRocWithType(self: *Interpreter, value: StackValue, rt_var: types.Var) Error![]u8 {
         var ctx = self.makeRenderCtx();
         return render_helpers.renderValueRocWithType(&ctx, value, rt_var);
     }
@@ -3181,7 +3195,7 @@ pub const Interpreter = struct {
     }
 
     /// Minimal translate implementation (scaffolding): handles .str only for now
-    pub fn translateTypeVar(self: *Interpreter, module: *can.ModuleEnv, compile_var: types.Var) !types.Var {
+    pub fn translateTypeVar(self: *Interpreter, module: *can.ModuleEnv, compile_var: types.Var) Error!types.Var {
         const key: u64 = (@as(u64, @intFromPtr(module)) << 32) | @as(u64, @intFromEnum(compile_var));
         if (self.translate_cache.get(key)) |found| return found;
 

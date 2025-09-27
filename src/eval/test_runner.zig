@@ -19,7 +19,7 @@ const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 const CIR = can.CIR;
 
-const EvalError = anyerror;
+const EvalError = Interpreter.Error;
 
 fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
     const test_env: *TestRunner = @ptrCast(@alignCast(env));
