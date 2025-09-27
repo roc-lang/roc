@@ -15,7 +15,6 @@ const stack = @import("stack.zig");
 const StackValue = @import("StackValue.zig");
 const render_helpers = @import("render_helpers.zig");
 const builtins = @import("builtins");
-const builtin = @import("builtin");
 const RocOps = builtins.host_abi.RocOps;
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocStr = builtins.str.RocStr;
