@@ -1,13 +1,14 @@
 //! Tests for the REPL
 const std = @import("std");
-const compile = @import("compile");
-const Can = @import("can");
-const Check = @import("check");
+const can_mod = @import("can");
+const check_mod = @import("check");
 const parse = @import("parse");
-const ModuleEnv = compile.ModuleEnv;
+const ModuleEnv = can_mod.ModuleEnv;
+const Canon = can_mod.Can;
+const Check = check_mod.Check;
 const Repl = @import("eval.zig").Repl;
 const TestEnv = @import("repl_test_env.zig").TestEnv;
-const eval_mod = @import("../eval/mod.zig");
+const eval_mod = @import("eval");
 const Interpreter = eval_mod.Interpreter;
 
 // Tests
@@ -183,7 +184,7 @@ test "Repl - minimal interpreter integration" {
     defer module_env.deinit();
 
     // Step 2: Parse as expression
-    var parse_ast = try parse.parseExpr(&module_env);
+    var parse_ast = try parse.parseExpr(&module_env.common, gpa);
     defer parse_ast.deinit(gpa);
 
     // Empty scratch space (required before canonicalization)
@@ -194,7 +195,7 @@ test "Repl - minimal interpreter integration" {
     try cir.initCIRFields(gpa, "test");
 
     // Step 4: Canonicalize
-    var can = try Can.init(cir, &parse_ast, null);
+    var can = try Canon.init(cir, &parse_ast, null);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
