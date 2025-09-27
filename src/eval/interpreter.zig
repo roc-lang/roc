@@ -1184,14 +1184,14 @@ pub const Interpreter = struct {
                 }
                 return value;
             },
-            .e_closure => |clos| {
+            .e_closure => |cls| {
                 // Build a closure value with concrete captures. The closure references a lambda.
-                const lam_expr = self.env.store.getExpr(clos.lambda_idx);
+                const lam_expr = self.env.store.getExpr(cls.lambda_idx);
                 if (lam_expr != .e_lambda) return error.NotImplemented;
                 const lam = lam_expr.e_lambda;
 
                 // Collect capture layouts and names from current bindings
-                const caps = self.env.store.sliceCaptures(clos.captures);
+                const caps = self.env.store.sliceCaptures(cls.captures);
                 var field_layouts = try self.allocator.alloc(Layout, caps.len);
                 defer self.allocator.free(field_layouts);
                 var field_names = try self.allocator.alloc(@import("base").Ident.Idx, caps.len);
@@ -1251,7 +1251,7 @@ pub const Interpreter = struct {
                         .params = lam.args,
                         .captures_pattern_idx = @enumFromInt(@as(u32, 0)), // not used in minimal path
                         .captures_layout_idx = captures_layout_idx,
-                        .lambda_expr_idx = clos.lambda_idx,
+                        .lambda_expr_idx = cls.lambda_idx,
                     };
                     // Copy captures into record area following header (aligned)
                     const header_size = @sizeOf(layout.Closure);
@@ -1504,13 +1504,13 @@ pub const Interpreter = struct {
                     const pat = self.env.store.getPattern(lookup.pattern_idx);
                     if (pat == .assign) {
                         const var_name = self.env.getIdent(pat.assign.ident);
-                        const clos_val = self.active_closures.items[self.active_closures.items.len - 1];
-                        if (clos_val.layout.tag == .closure and clos_val.ptr != null) {
-                            const captures_layout = self.runtime_layout_store.getLayout(clos_val.layout.data.closure.captures_layout_idx);
+                        const cls_val = self.active_closures.items[self.active_closures.items.len - 1];
+                        if (cls_val.layout.tag == .closure and cls_val.ptr != null) {
+                            const captures_layout = self.runtime_layout_store.getLayout(cls_val.layout.data.closure.captures_layout_idx);
                             const header_sz = @sizeOf(layout.Closure);
                             const cap_align = captures_layout.alignment(self.runtime_layout_store.targetUsize());
                             const aligned_off = std.mem.alignForward(usize, header_sz, @intCast(cap_align.toByteUnits()));
-                            const base: [*]u8 = @ptrCast(@alignCast(clos_val.ptr.?));
+                            const base: [*]u8 = @ptrCast(@alignCast(cls_val.ptr.?));
                             const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
                             const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
                             var accessor = try rec_val.asRecord(&self.runtime_layout_store);
