@@ -2,11 +2,17 @@
 
 const std = @import("std");
 
+/// Runtime interpreter used by the REPL, tests, and snapshot tooling.
 pub const Interpreter = @import("interpreter.zig").Interpreter;
+/// Stack implementation backing interpreter evaluations.
 pub const Stack = @import("stack.zig").Stack;
+/// Error raised when the interpreter stack exhausts its capacity.
 pub const StackOverflow = @import("stack.zig").StackOverflow;
+/// Value wrapper that pairs raw memory with layout metadata.
 pub const StackValue = @import("StackValue.zig");
+/// Convenience alias for the interpreter’s error type.
 pub const EvalError = Interpreter.Error;
+/// Runs `expect` expressions inside evaluation tests.
 pub const TestRunner = @import("test_runner.zig").TestRunner;
 
 test "eval tests" {

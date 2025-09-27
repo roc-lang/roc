@@ -23,6 +23,7 @@ const RocList = builtins.list.RocList;
 const utils = builtins.utils;
 const Layout = layout.Layout;
 
+/// Interpreter that evaluates canonical Roc expressions against runtime types/layouts.
 pub const Interpreter = struct {
     pub const Error = error{
         Crash,
@@ -3501,7 +3502,7 @@ pub const Interpreter = struct {
     }
 };
 
-pub fn add(a: i32, b: i32) i32 {
+fn add(a: i32, b: i32) i32 {
     return a + b;
 }
 

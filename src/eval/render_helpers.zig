@@ -1,3 +1,5 @@
+//! Helpers for rendering interpreter values back into readable Roc syntax.
+
 const std = @import("std");
 const types = @import("types");
 const can = @import("can");
@@ -15,6 +17,7 @@ fn toVarRange(range: anytype) types.Var.SafeList.Range {
     return @as(RangeType, range);
 }
 
+/// Shared rendering context that provides allocator, module environment, and runtime caches.
 pub const RenderCtx = struct {
     allocator: std.mem.Allocator,
     env: *can.ModuleEnv,
@@ -23,6 +26,7 @@ pub const RenderCtx = struct {
     type_scope: *const TypeScope,
 };
 
+/// Render `value` using the supplied runtime type variable, following alias/nominal backing.
 pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.Var) ![]u8 {
     const gpa = ctx.allocator;
     var resolved = ctx.runtime_types.resolveVar(rt_var);
@@ -241,6 +245,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
     return try renderValueRoc(ctx, value);
 }
 
+/// Render `value` using only its layout (without additional type information).
 pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
     const gpa = ctx.allocator;
     if (value.layout.tag == .scalar) {
