@@ -130,8 +130,8 @@ fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) cal
     @panic("testRocExpectFailed not implemented yet");
 }
 
-fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {
-    const test_env: *TestEnv = @ptrCast(@alignCast(env));
-    _ = test_env;
-    _ = crashed_args;
+fn testRocCrashed(_: *const RocCrashed, env: *anyopaque) callconv(.C) void {
+    // The REPL harness cares about crash state only through TestEnv; keep the callback to satisfy
+    // RocOps yet avoid allocating or logging during these tests.
+    _ = env;
 }

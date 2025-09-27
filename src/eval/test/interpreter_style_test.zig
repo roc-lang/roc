@@ -67,8 +67,9 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void 
 
 fn testRocDbg(_: *const RocDbg, _: *anyopaque) callconv(.C) void {}
 fn testRocExpectFailed(_: *const RocExpectFailed, _: *anyopaque) callconv(.C) void {}
-fn testRocCrashed(crashed_args: *const RocCrashed, _: *anyopaque) callconv(.C) void {
-    _ = crashed_args;
+fn testRocCrashed(_: *const RocCrashed, _: *anyopaque) callconv(.C) void {
+    // These style tests never exercise crash paths; we still supply a stub so the RocOps
+    // table is complete without double-logging or allocating crash messages.
 }
 
 test "interpreter: (|x| x)(\"Hello\") yields \"Hello\"" {
