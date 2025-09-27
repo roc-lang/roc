@@ -58,12 +58,23 @@ const TypeStore = types.store.Store;
 const target_usize = base.target.Target.native.target_usize;
 const target = base.target;
 
+fn anyWriterFrom(writer: *std.Io.Writer) std.io.AnyWriter {
+    return .{ .context = writer, .writeFn = writeFromIoWriter };
+}
+
+fn writeFromIoWriter(context: *const anyopaque, bytes: []const u8) anyerror!usize {
+    const writer: *std.Io.Writer = @ptrCast(@alignCast(@constCast(context)));
+    return writer.write(bytes);
+}
+
 /// Debug configuration set at build time using flag `zig build test -Dtrace-eval`
 ///
 /// Used in conjunction with tracing in a single test e.g.
 ///
 /// ```zig
-/// interpreter.startTrace("<name of my trace>", std.fs.File.stderr().deprecatedWriter().any());
+/// var stderr_buffer: [1024]u8 = undefined;
+/// var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+/// interpreter.startTrace(&stderr_writer.interface);
 /// defer interpreter.endTrace();
 /// ```
 ///
@@ -284,7 +295,7 @@ pub const Interpreter = struct {
     /// Indentation level for nested debug output
     trace_indent: u32,
     /// Writer interface for trace output (null when no trace active)
-    trace_writer: ?std.io.AnyWriter,
+    trace_writer: ?*std.Io.Writer,
 
     /// Flag indicating if the program has crashed
     has_crashed: bool,
@@ -2419,7 +2430,7 @@ pub const Interpreter = struct {
 
     /// Start a debug trace session with a given name and writer
     /// Only has effect if DEBUG_ENABLED is true
-    pub fn startTrace(self: *Interpreter, writer: std.io.AnyWriter) void {
+    pub fn startTrace(self: *Interpreter, writer: *std.Io.Writer) void {
         if (!DEBUG_ENABLED) return;
         self.trace_indent = 0;
         self.trace_writer = writer;
@@ -2433,6 +2444,7 @@ pub const Interpreter = struct {
         if (!DEBUG_ENABLED) return;
         if (self.trace_writer) |writer| {
             writer.print("== TRACE END =====================================\n", .{}) catch {};
+            writer.flush() catch {};
         }
         self.trace_indent = 0;
         self.trace_writer = null;
@@ -2510,7 +2522,8 @@ pub const Interpreter = struct {
 
             self.printTraceIndent();
 
-            tree.toStringPretty(writer) catch {};
+            const any_writer = anyWriterFrom(writer);
+            tree.toStringPretty(any_writer) catch {};
 
             writer.print("\n", .{}) catch {};
         }
@@ -2530,7 +2543,8 @@ pub const Interpreter = struct {
 
             writer.print("   ", .{}) catch {};
 
-            tree.toStringPretty(writer) catch {};
+            const any_writer = anyWriterFrom(writer);
+            tree.toStringPretty(any_writer) catch {};
 
             writer.print("\n", .{}) catch {};
         }

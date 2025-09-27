@@ -15,6 +15,20 @@ const Filesystem = fs_mod.Filesystem;
 const CacheStats = @import("cache_config.zig").CacheStats;
 const CacheConfig = @import("cache_config.zig").CacheConfig;
 const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
+const builtin = @import("builtin");
+
+const is_windows = builtin.target.os.tag == .windows;
+
+var stderr_file_writer: std.fs.File.Writer = .{
+    .interface = std.fs.File.Writer.initInterface(&.{}),
+    .file = if (is_windows) undefined else std.fs.File.stderr(),
+    .mode = .streaming,
+};
+
+fn stderrWriter() *std.Io.Writer {
+    if (is_windows) stderr_file_writer.file = std.fs.File.stderr();
+    return &stderr_file_writer.interface;
+}
 
 /// Result of a cache lookup operation
 pub const CacheResult = union(enum) {
@@ -249,7 +263,7 @@ pub const CacheManager = struct {
     pub fn printStats(self: *const Self, allocator: Allocator) void {
         if (!self.config.verbose) return;
 
-        const stderr = std.fs.File.stderr().deprecatedWriter();
+        const stderr = stderrWriter();
         CacheReporting.renderCacheStatsToTerminal(allocator, self.stats, stderr) catch {
             // If we can't print stats, just continue
         };

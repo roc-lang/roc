@@ -9,6 +9,7 @@ const can = @import("can");
 const fs_mod = @import("fs");
 const Filesystem = fs_mod.Filesystem;
 const tracy = @import("tracy");
+const builtin = @import("builtin");
 
 const ModuleEnv = can.ModuleEnv;
 const Token = tokenize.Token;
@@ -21,6 +22,32 @@ const CommonEnv = base.CommonEnv;
 
 const tokenize = parse.tokenize;
 const fatal = collections.utils.fatal;
+
+const is_windows = builtin.target.os.tag == .windows;
+
+var stderr_file_writer: std.fs.File.Writer = .{
+    .interface = std.fs.File.Writer.initInterface(&.{}),
+    .file = if (is_windows) undefined else std.fs.File.stderr(),
+    .mode = .streaming,
+};
+
+fn stderrWriter() *std.Io.Writer {
+    if (is_windows) stderr_file_writer.file = std.fs.File.stderr();
+    return &stderr_file_writer.interface;
+}
+
+fn stderrAnyWriter() std.io.AnyWriter {
+    return anyWriterFrom(stderrWriter());
+}
+
+fn anyWriterFrom(writer: *std.Io.Writer) std.io.AnyWriter {
+    return .{ .context = writer, .writeFn = writeFromIoWriter };
+}
+
+fn writeFromIoWriter(context: *const anyopaque, bytes: []const u8) anyerror!usize {
+    const writer: *std.Io.Writer = @ptrCast(@alignCast(@constCast(context)));
+    return writer.write(bytes);
+}
 
 const FormatFlags = enum {
     debug_binop,
@@ -47,7 +74,7 @@ pub const FormattingResult = struct {
 pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8, check: bool) !FormattingResult {
     // TODO: update this to use the filesystem abstraction
     // When doing so, add a mock filesystem and some tests.
-    const stderr = std.fs.File.stderr().deprecatedWriter();
+    const stderr = stderrWriter();
 
     var success_count: usize = 0;
     var failed_count: usize = 0;
@@ -171,7 +198,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(gpa, &module_env.common, std.fs.File.stderr().deprecatedWriter().any()) catch @panic("Failed to print SExpr");
+        parse_ast.toSExprStr(gpa, &module_env.common, stderrAnyWriter()) catch @panic("Failed to print SExpr");
         try printParseErrors(gpa, module_env.common.source, parse_ast);
         return error.ParsingFailed;
     }
@@ -208,7 +235,7 @@ pub fn formatStdin(gpa: std.mem.Allocator) !void {
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(gpa, &module_env.common, std.fs.File.stderr().deprecatedWriter().any()) catch @panic("Failed to print SExpr");
+        parse_ast.toSExprStr(gpa, &module_env.common, stderrAnyWriter()) catch @panic("Failed to print SExpr");
         try printParseErrors(gpa, module_env.common.source, parse_ast);
         return error.ParsingFailed;
     }
@@ -229,7 +256,7 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) 
         }
     }
 
-    const stderr = std.fs.File.stderr().deprecatedWriter();
+    const stderr = stderrWriter();
     try stderr.print("Errors:\n", .{});
     for (parse_ast.parse_diagnostics.items) |err| {
         const region = parse_ast.tokens.resolve(@intCast(err.region.start));
@@ -2322,7 +2349,7 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
         parse_ast.store.emptyScratch();
 
         std.debug.print("Parsed SExpr:\n==========\n", .{});
-        parse_ast.toSExprStr(module_env, std.fs.File.stderr().deprecatedWriter().any()) catch @panic("Failed to print SExpr");
+        parse_ast.toSExprStr(module_env, stderrAnyWriter()) catch @panic("Failed to print SExpr");
         std.debug.print("\n==========\n\n", .{});
     }
 

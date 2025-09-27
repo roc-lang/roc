@@ -29,6 +29,17 @@ const runExpectBool = helpers.runExpectBool;
 const runExpectError = helpers.runExpectError;
 const runExpectStr = helpers.runExpectStr;
 
+const TraceWriterState = struct {
+    buffer: [256]u8 = undefined,
+    writer: std.fs.File.Writer = undefined,
+
+    fn init() TraceWriterState {
+        var state = TraceWriterState{};
+        state.writer = std.fs.File.stderr().writer(&state.buffer);
+        return state;
+    }
+};
+
 test "eval simple number" {
     try runExpectInt("1", 1, .no_trace);
     try runExpectInt("42", 42, .no_trace);
@@ -447,13 +458,17 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
     );
     defer interpreter.deinit(test_env_instance.get_ops());
 
+    var trace_writer_state: ?TraceWriterState = null;
     if (should_trace == .trace) {
-        interpreter.startTrace(std.fs.File.stderr().deprecatedWriter().any());
+        trace_writer_state = TraceWriterState.init();
+        if (trace_writer_state) |*trace_state| {
+            interpreter.startTrace(&trace_state.writer.interface);
+        }
     }
 
     const result = interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
 
-    if (should_trace == .trace) {
+    if (trace_writer_state != null) {
         interpreter.endTrace();
     }
 

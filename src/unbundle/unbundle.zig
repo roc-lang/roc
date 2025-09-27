@@ -19,6 +19,37 @@ const STREAM_BUFFER_SIZE: usize = 64 * 1024; // 64KB buffer for streaming operat
 /// with larger window sizes.
 const ZSTD_WINDOW_BUFFER_SIZE: usize = 1 << 23; // 8MB
 
+fn toAnyReader(reader: anytype) std.io.AnyReader {
+    const T = @TypeOf(reader);
+    if (T == std.io.AnyReader) {
+        return reader;
+    }
+
+    switch (@typeInfo(T)) {
+        .pointer => |ptr_info| {
+            if (ptr_info.child == std.io.AnyReader) {
+                return reader.*;
+            }
+            if (ptr_info.child == std.io.Reader) {
+                return reader.adaptToOldInterface();
+            }
+            if (ptr_info.child != void and ptr_info.size == .One) {
+                if (@hasDecl(ptr_info.child, "any")) {
+                    return reader.*.any();
+                }
+                return toAnyReader(reader.*);
+            }
+        },
+        else => {
+            if (@hasDecl(T, "any")) {
+                return reader.any();
+            }
+        },
+    }
+
+    @compileError("cannot convert type '" ++ @typeName(T) ++ "' to std.io.AnyReader");
+}
+
 /// Errors that can occur during the unbundle operation.
 pub const UnbundleError = error{
     DecompressionFailed,
@@ -419,11 +450,12 @@ pub fn unbundleStream(
     error_context: ?*ErrorContext,
 ) UnbundleError!void {
     var hasher = std.crypto.hash.Blake3.init(.{});
-    const ReaderType = @TypeOf(input_reader);
+    const any_reader = toAnyReader(input_reader);
+    const ReaderType = @TypeOf(any_reader);
     const HashingReaderType = HashingReader(ReaderType);
 
     var hashing_reader = HashingReaderType{
-        .child_reader = input_reader,
+        .child_reader = any_reader,
         .hasher = &hasher,
     };
 

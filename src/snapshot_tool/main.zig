@@ -46,6 +46,19 @@ var prng = std.Random.DefaultPrng.init(1234567890);
 
 const rand = prng.random();
 
+const is_windows = builtin.target.os.tag == .windows;
+
+var stderr_file_writer: std.fs.File.Writer = .{
+    .interface = std.fs.File.Writer.initInterface(&.{}),
+    .file = if (is_windows) undefined else std.fs.File.stderr(),
+    .mode = .streaming,
+};
+
+fn stderrWriter() *std.Io.Writer {
+    if (is_windows) stderr_file_writer.file = std.fs.File.stderr();
+    return &stderr_file_writer.interface;
+}
+
 /// Logs a message if verbose logging is enabled.
 fn log(comptime fmt_str: []const u8, args: anytype) void {
     if (verbose_log) {
@@ -2292,7 +2305,10 @@ fn writeHtmlFile(gpa: Allocator, snapshot_path: []const u8, html_buffer: *std.ar
         return;
     };
     defer html_file.close();
-    try html_file.deprecatedWriter().writeAll(html_buffer.items);
+    var html_writer_buffer: [4096]u8 = undefined;
+    var html_writer = html_file.writer(&html_writer_buffer);
+    try html_writer.interface.writeAll(html_buffer.items);
+    try html_writer.interface.flush();
 
     log("generated HTML version: {s}", .{html_path});
 }
@@ -2539,7 +2555,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
 
     // Enable tracing if requested
     if (config.trace_eval) {
-        repl_instance.setTraceWriter(std.fs.File.stderr().deprecatedWriter().any());
+        repl_instance.setTraceWriter(stderrWriter());
     }
 
     // Process each input and generate output

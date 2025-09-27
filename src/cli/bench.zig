@@ -8,12 +8,26 @@ const can = @import("can");
 
 const tracy = @import("tracy");
 const fmt = @import("fmt");
+const builtin = @import("builtin");
 
 const tokenize = parse.tokenize;
 const ModuleEnv = can.ModuleEnv;
 const CommonEnv = base.CommonEnv;
 
 const Allocator = std.mem.Allocator;
+
+const is_windows = builtin.target.os.tag == .windows;
+
+var stderr_file_writer: std.fs.File.Writer = .{
+    .interface = std.fs.File.Writer.initInterface(&.{}),
+    .file = if (is_windows) undefined else std.fs.File.stderr(),
+    .mode = .streaming,
+};
+
+fn stderrWriter() *std.Io.Writer {
+    if (is_windows) stderr_file_writer.file = std.fs.File.stderr();
+    return &stderr_file_writer.interface;
+}
 
 const RocFile = struct {
     path: []const u8,
@@ -281,7 +295,7 @@ fn printBenchmarkResults(benchmark_name: []const u8, results: BenchmarkResults) 
 
 /// Log a fatal error and exit the process with a non-zero code.
 pub fn fatal(comptime format: []const u8, args: anytype) noreturn {
-    std.fs.File.stderr().deprecatedWriter().print(format, args) catch unreachable;
+    stderrWriter().print(format, args) catch unreachable;
     if (tracy.enable) {
         tracy.waitForShutdown() catch unreachable;
     }

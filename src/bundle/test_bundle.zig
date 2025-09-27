@@ -485,7 +485,10 @@ test "bundle and unbundle over socket stream" {
     };
 
     var file_iter = FilePathIterator{ .paths = &file_paths };
-    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_file.deprecatedWriter(), src_dir, null, null);
+    var bundle_writer_buffer: [4096]u8 = undefined;
+    var bundle_writer = bundle_file.writer(&bundle_writer_buffer);
+    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, &bundle_writer.interface, src_dir, null, null);
+    try bundle_writer.interface.flush();
     defer allocator.free(filename);
 
     // Create socket in temp directory
@@ -847,8 +850,11 @@ test "unbundle with existing directory error" {
     const bundle_file = try tmp_dir.openFile(filename, .{});
     defer bundle_file.close();
 
+    var bundle_reader_buffer: [4096]u8 = undefined;
+    var bundle_reader = bundle_file.reader(&bundle_reader_buffer);
+
     // This should succeed but the CLI would error on existing directory
-    try bundle.unbundle(bundle_file.deprecatedReader(), tmp_dir, &allocator, filename, null);
+    try bundle.unbundle(&bundle_reader.interface, tmp_dir, &allocator, filename, null);
 }
 
 test "unbundle multiple archives" {
@@ -921,7 +927,9 @@ test "unbundle multiple archives" {
         const dir_name = fname[0 .. fname.len - 8]; // Remove .tar.zst
         const extract_dir = try tmp_dir.makeOpenPath(dir_name, .{});
 
-        try bundle.unbundle(bundle_file.deprecatedReader(), extract_dir, &allocator, fname, null);
+        var reader_buffer: [4096]u8 = undefined;
+        var bundle_reader = bundle_file.reader(&reader_buffer);
+        try bundle.unbundle(&bundle_reader.interface, extract_dir, &allocator, fname, null);
     }
 
     // Verify extraction
@@ -1056,7 +1064,9 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
 
         const extract_dir = try unbundle1_dir.makeOpenPath("extracted1", .{});
 
-        try bundle.unbundle(bundle_file.deprecatedReader(), extract_dir, &allocator, filename1, null);
+        var reader_buffer: [4096]u8 = undefined;
+        var bundle_reader = bundle_file.reader(&reader_buffer);
+        try bundle.unbundle(&bundle_reader.interface, extract_dir, &allocator, filename1, null);
     }
 
     // Second bundle (from first extraction)
@@ -1095,7 +1105,9 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
 
         const extract_dir = try unbundle2_dir.makeOpenPath("extracted2", .{});
 
-        try bundle.unbundle(bundle_file.deprecatedReader(), extract_dir, &allocator, filename2, null);
+        var reader_buffer: [4096]u8 = undefined;
+        var bundle_reader = bundle_file.reader(&reader_buffer);
+        try bundle.unbundle(&bundle_reader.interface, extract_dir, &allocator, filename2, null);
     }
 
     // Verify all files match original content
@@ -1140,7 +1152,10 @@ test "CLI unbundle with no args defaults to all .tar.zst files" {
         {
             const file = try tmp_dir.createFile(filename, .{});
             defer file.close();
-            try file.deprecatedWriter().print("Content of {s}", .{filename});
+            var writer_buffer: [256]u8 = undefined;
+            var file_writer = file.writer(&writer_buffer);
+            try file_writer.interface.print("Content of {s}", .{filename});
+            try file_writer.interface.flush();
         }
 
         const archive_name = try bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, output_buffer.writer(), tmp_dir, null, null);

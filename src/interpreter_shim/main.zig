@@ -14,6 +14,19 @@ const ipc = @import("ipc");
 
 const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
 
+const is_windows = builtin.target.os.tag == .windows;
+
+var stderr_file_writer: std.fs.File.Writer = .{
+    .interface = std.fs.File.Writer.initInterface(&.{}),
+    .file = if (is_windows) undefined else std.fs.File.stderr(),
+    .mode = .streaming,
+};
+
+fn stderrTraceWriter() *std.Io.Writer {
+    if (is_windows) stderr_file_writer.file = std.fs.File.stderr();
+    return &stderr_file_writer.interface;
+}
+
 // Global state for shared memory - initialized once per process
 var shared_memory_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var global_shm: ?SharedMemoryAllocator = null;
@@ -247,7 +260,7 @@ fn createInterpreter(env_ptr: *ModuleEnv, roc_ops: *RocOps) ShimError!Interprete
     errdefer interpreter.deinit();
 
     // Enable tracing to stderr
-    interpreter.startTrace(std.fs.File.stderr().deprecatedWriter().any());
+    interpreter.startTrace(stderrTraceWriter());
 
     return interpreter;
 }

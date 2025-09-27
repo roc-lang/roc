@@ -59,6 +59,15 @@ pub fn toAnyWriter(writer: anytype) std.io.AnyWriter {
     return toAnyWriterImpl(writer);
 }
 
+fn newWriterToAny(writer: *std.Io.Writer) std.io.AnyWriter {
+    return .{ .context = writer, .writeFn = writeFromIoWriter };
+}
+
+fn writeFromIoWriter(context: *const anyopaque, bytes: []const u8) anyerror!usize {
+    const writer: *std.Io.Writer = @ptrCast(@alignCast(@constCast(context)));
+    return writer.write(bytes);
+}
+
 fn toAnyWriterImpl(writer: anytype) std.io.AnyWriter {
     const T = @TypeOf(writer);
     if (T == std.io.AnyWriter) {
@@ -71,6 +80,9 @@ fn toAnyWriterImpl(writer: anytype) std.io.AnyWriter {
                 return writer.*;
             }
             if (ptr_info.child != void) {
+                if (ptr_info.child == std.io.Writer) {
+                    return newWriterToAny(writer);
+                }
                 if (hasAny(ptr_info.child)) {
                     return writer.*.any();
                 }

@@ -25,6 +25,21 @@ const test_allocator = std.testing.allocator;
 
 const TestParseError = parse.Parser.Error || error{ TokenizeError, SyntaxError };
 
+const TraceWriter = struct {
+    buffer: [256]u8 = undefined,
+    writer: std.fs.File.Writer = undefined,
+
+    fn init() TraceWriter {
+        var tw = TraceWriter{};
+        tw.writer = std.fs.File.stderr().writer(&tw.buffer);
+        return tw;
+    }
+
+    fn interface(self: *TraceWriter) *std.Io.Writer {
+        return &self.writer.interface;
+    }
+};
+
 /// Helper function to run an expression and expect a specific error.
 pub fn runExpectError(src: []const u8, expected_error: eval.EvalError, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
@@ -49,13 +64,17 @@ pub fn runExpectError(src: []const u8, expected_error: eval.EvalError, should_tr
     defer interpreter.deinit(test_env_instance.get_ops());
     test_env_instance.setInterpreter(&interpreter);
 
+    var trace_writer_state: ?TraceWriter = null;
     if (should_trace == .trace) {
-        interpreter.startTrace(std.fs.File.stderr().deprecatedWriter().any());
+        trace_writer_state = TraceWriter.init();
+        if (trace_writer_state) |*trace_state| {
+            interpreter.startTrace(trace_state.interface());
+        }
     }
 
     const result = interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
 
-    if (should_trace == .trace) {
+    if (trace_writer_state != null) {
         interpreter.endTrace();
     }
 
@@ -86,13 +105,17 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     defer interpreter.deinit(test_env_instance.get_ops());
     test_env_instance.setInterpreter(&interpreter);
 
+    var trace_writer_state: ?TraceWriter = null;
     if (should_trace == .trace) {
-        interpreter.startTrace(std.fs.File.stderr().deprecatedWriter().any());
+        trace_writer_state = TraceWriter.init();
+        if (trace_writer_state) |*trace_state| {
+            interpreter.startTrace(trace_state.interface());
+        }
     }
 
     const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
 
-    if (should_trace == .trace) {
+    if (trace_writer_state != null) {
         interpreter.endTrace();
     }
 
@@ -123,8 +146,12 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     const roc_ops_ptr = test_env_instance.get_ops();
     defer interpreter.deinit(roc_ops_ptr);
 
+    var trace_writer_state: ?TraceWriter = null;
     if (should_trace == .trace) {
-        interpreter.startTrace(std.fs.File.stderr().deprecatedWriter().any());
+        trace_writer_state = TraceWriter.init();
+        if (trace_writer_state) |*trace_state| {
+            interpreter.startTrace(trace_state.interface());
+        }
     }
 
     const result = interpreter.eval(resources.expr_idx, roc_ops_ptr) catch |err| {
@@ -132,7 +159,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
         return err;
     };
 
-    if (should_trace == .trace) {
+    if (trace_writer_state != null) {
         interpreter.endTrace();
     }
 
@@ -175,13 +202,17 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     defer interpreter.deinit(test_env_instance.get_ops());
     test_env_instance.setInterpreter(&interpreter);
 
+    var trace_writer_state: ?TraceWriter = null;
     if (should_trace == .trace) {
-        interpreter.startTrace(std.fs.File.stderr().deprecatedWriter().any());
+        trace_writer_state = TraceWriter.init();
+        if (trace_writer_state) |*trace_state| {
+            interpreter.startTrace(trace_state.interface());
+        }
     }
 
     const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
 
-    if (should_trace == .trace) {
+    if (trace_writer_state != null) {
         interpreter.endTrace();
     }
 
@@ -240,13 +271,17 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     defer interpreter.deinit(test_env_instance.get_ops());
     test_env_instance.setInterpreter(&interpreter);
 
+    var trace_writer_state: ?TraceWriter = null;
     if (should_trace == .trace) {
-        interpreter.startTrace(std.fs.File.stderr().deprecatedWriter().any());
+        trace_writer_state = TraceWriter.init();
+        if (trace_writer_state) |*trace_state| {
+            interpreter.startTrace(trace_state.interface());
+        }
     }
 
     const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
 
-    if (should_trace == .trace) {
+    if (trace_writer_state != null) {
         interpreter.endTrace();
     }
 
@@ -295,13 +330,17 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     defer interpreter.deinit(test_env_instance.get_ops());
     test_env_instance.setInterpreter(&interpreter);
 
+    var trace_writer_state: ?TraceWriter = null;
     if (should_trace == .trace) {
-        interpreter.startTrace(std.fs.File.stderr().deprecatedWriter().any());
+        trace_writer_state = TraceWriter.init();
+        if (trace_writer_state) |*trace_state| {
+            interpreter.startTrace(trace_state.interface());
+        }
     }
 
     const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
 
-    if (should_trace == .trace) {
+    if (trace_writer_state != null) {
         interpreter.endTrace();
     }
 
