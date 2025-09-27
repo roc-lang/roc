@@ -209,15 +209,15 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-        var interpreter = try Interpreter.init(test_allocator, resources.module_env);
-        defer interpreter.deinit();
-        test_env_instance.setInterpreter(&interpreter);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env);
+    defer interpreter.deinit();
+    test_env_instance.setInterpreter(&interpreter);
 
-        const enable_trace = should_trace == .trace;
-        if (enable_trace) {
-            interpreter.startTrace(std.io.getStdErr().writer().any());
-        }
-        defer if (enable_trace) interpreter.endTrace();
+    const enable_trace = should_trace == .trace;
+    if (enable_trace) {
+        interpreter.startTrace(std.io.getStdErr().writer().any());
+    }
+    defer if (enable_trace) interpreter.endTrace();
 
     const ops = test_env_instance.get_ops();
     const result = try interpreter.evalMinimal(resources.expr_idx, ops);
