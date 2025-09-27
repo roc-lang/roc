@@ -118,14 +118,14 @@ const TestSummary = struct {
 /// A test runner that can evaluate expect expressions in a module.
 pub const TestRunner = struct {
     allocator: Allocator,
-    env: *const ModuleEnv,
+    env: *ModuleEnv,
     interpreter: Interpreter,
     roc_ops: ?RocOps,
     test_results: std.ArrayList(TestResult),
 
     pub fn init(
         allocator: std.mem.Allocator,
-        cir: *const ModuleEnv,
+        cir: *ModuleEnv,
     ) !TestRunner {
         return TestRunner{
             .allocator = allocator,

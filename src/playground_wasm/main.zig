@@ -1344,7 +1344,7 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
 
     // use arena for test evaluation
-    var env = data.module_env;
+    const env = data.module_env;
     var local_arena = std.heap.ArenaAllocator.init(allocator);
     defer local_arena.deinit();
 
