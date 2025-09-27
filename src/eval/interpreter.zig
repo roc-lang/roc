@@ -15,6 +15,7 @@ const stack = @import("stack.zig");
 const StackValue = @import("StackValue.zig");
 const render_helpers = @import("render_helpers.zig");
 const builtins = @import("builtins");
+const builtin = @import("builtin");
 const RocOps = builtins.host_abi.RocOps;
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocStr = builtins.str.RocStr;
@@ -171,8 +172,79 @@ pub const Interpreter = struct {
         roc_ops: *RocOps,
         arg_ptr: ?*anyopaque,
     ) Error!void {
-        if (arg_ptr != null) {
-            return error.NotImplemented;
+        if (arg_ptr) |args_ptr| {
+            const func_val = try self.evalMinimal(expr_idx, roc_ops);
+            defer func_val.decref(&self.runtime_layout_store, roc_ops);
+
+            if (func_val.layout.tag != .closure) {
+                return error.NotImplemented;
+            }
+
+            const header: *const layout.Closure = @ptrCast(@alignCast(func_val.ptr.?));
+            const params = self.env.store.slicePatterns(header.params);
+
+            try self.active_closures.append(func_val);
+            defer _ = self.active_closures.pop();
+
+            const base_binding_len = self.bindings.items.len;
+
+            var temp_binds = try std.ArrayList(Binding).initCapacity(self.allocator, params.len);
+            defer {
+                self.trimBindingList(&temp_binds, 0, roc_ops);
+                temp_binds.deinit();
+            }
+
+            var param_rt_vars = try self.allocator.alloc(types.Var, params.len);
+            defer self.allocator.free(param_rt_vars);
+
+            var param_layouts: []layout.Layout = &.{};
+            if (params.len > 0) {
+                param_layouts = try self.allocator.alloc(layout.Layout, params.len);
+            }
+            defer if (param_layouts.len > 0) self.allocator.free(param_layouts);
+
+            var args_tuple_value: StackValue = undefined;
+            var args_accessor: StackValue.TupleAccessor = undefined;
+            if (params.len > 0) {
+                var i: usize = 0;
+                while (i < params.len) : (i += 1) {
+                    const param_idx = params[i];
+                    const param_var = can.ModuleEnv.varFrom(param_idx);
+                    const rt_var = try self.translateTypeVar(self.env, param_var);
+                    param_rt_vars[i] = rt_var;
+                    param_layouts[i] = try self.getRuntimeLayout(rt_var);
+                }
+
+                const tuple_idx = try self.runtime_layout_store.putTuple(param_layouts);
+                const tuple_layout = self.runtime_layout_store.getLayout(tuple_idx);
+                args_tuple_value = StackValue{ .layout = tuple_layout, .ptr = args_ptr, .is_initialized = true };
+                args_accessor = try args_tuple_value.asTuple(&self.runtime_layout_store);
+
+                var j: usize = 0;
+                while (j < params.len) : (j += 1) {
+                    const sorted_idx = args_accessor.findElementIndexByOriginal(j) orelse j;
+                    const arg_value = try args_accessor.getElement(sorted_idx);
+                    const matched = try self.patternMatchesBind(params[j], arg_value, param_rt_vars[j], roc_ops, &temp_binds);
+                    if (!matched) return error.TypeMismatch;
+                }
+            }
+
+            if (params.len == 0) {
+                // Nothing to bind for zero-argument functions
+            } else {
+                for (temp_binds.items) |binding| {
+                    try self.bindings.append(binding);
+                }
+                temp_binds.items.len = 0;
+            }
+
+            defer self.trimBindingList(&self.bindings, base_binding_len, roc_ops);
+
+            const result_value = try self.evalExprMinimal(header.body_idx, roc_ops, null);
+            defer result_value.decref(&self.runtime_layout_store, roc_ops);
+
+            try result_value.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
+            return;
         }
 
         const result = try self.evalMinimal(expr_idx, roc_ops);
