@@ -51,6 +51,7 @@ pub fn get_ops(self: *TestEnv) *RocOps {
     return &(self.roc_ops.?);
 }
 
+/// Expose the current crash state for assertions in tests.
 pub fn crashState(self: *TestEnv) CrashState {
     return self.crash.state;
 }
