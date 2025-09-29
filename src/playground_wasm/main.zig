@@ -199,9 +199,13 @@ var current_state: State = .START;
 var compiler_data: ?CompilerStageData = null;
 
 /// REPL state management
-var repl_instance: ?*Repl = null;
-var repl_crash_ctx: ?*CrashContext = null;
-var repl_roc_ops: ?*RocOps = null;
+const ReplSession = struct {
+    repl: *Repl,
+    crash_ctx: *CrashContext,
+    roc_ops: *RocOps,
+};
+
+var repl_session: ?ReplSession = null;
 
 /// REPL result types
 const ReplResultType = enum {
@@ -257,11 +261,9 @@ var debug_log_oom: bool = false;
 fn resetGlobalState() void {
     // Make sure everything is null
     compiler_data = null;
-    repl_instance = null;
+    cleanupReplState();
     host_message_buffer = null;
     host_response_buffer = null;
-    repl_instance = null;
-    repl_roc_ops = null;
 
     // Reset allocator to clear all allocations
     fba.reset();
@@ -354,19 +356,13 @@ const ResponseWriteError = error{
 /// This function safely deallocates the REPL instance and RocOps, then sets them to null.
 /// It's called during RESET operations and module initialization.
 fn cleanupReplState() void {
-    if (repl_instance) |repl_ptr| {
-        repl_ptr.deinit();
-        allocator.destroy(repl_ptr);
-        repl_instance = null;
-    }
-    if (repl_roc_ops) |roc_ops| {
-        allocator.destroy(roc_ops);
-        repl_roc_ops = null;
-    }
-    if (repl_crash_ctx) |ctx| {
-        ctx.deinit();
-        allocator.destroy(ctx);
-        repl_crash_ctx = null;
+    if (repl_session) |session| {
+        session.repl.deinit();
+        allocator.destroy(session.repl);
+        allocator.destroy(session.roc_ops);
+        session.crash_ctx.deinit();
+        allocator.destroy(session.crash_ctx);
+        repl_session = null;
     }
 }
 
@@ -374,19 +370,10 @@ fn cleanupReplState() void {
 /// This function allocates and initializes a RocOps structure with WASM-specific
 /// memory management functions. The returned pointer must be freed by the caller.
 /// Returns an error if allocation fails.
-fn createWasmRocOps() !*RocOps {
+fn createWasmRocOps(crash_ctx: *CrashContext) !*RocOps {
     const roc_ops = try allocator.create(RocOps);
-
-    if (repl_crash_ctx == null) {
-        const ctx = try allocator.create(CrashContext);
-        ctx.* = CrashContext.init(allocator);
-        repl_crash_ctx = ctx;
-    } else {
-        repl_crash_ctx.?.reset();
-    }
-
     roc_ops.* = RocOps{
-        .env = @as(*anyopaque, @ptrCast(repl_crash_ctx.?)),
+        .env = @as(*anyopaque, @ptrCast(crash_ctx)),
         .roc_alloc = wasmRocAlloc,
         .roc_dealloc = wasmRocDealloc,
         .roc_realloc = wasmRocRealloc,
@@ -608,27 +595,36 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
             // Clean up any existing REPL state
             cleanupReplState();
 
-            // Initialize new WASM-compatible RocOps and REPL instance
-            const roc_ops = createWasmRocOps() catch |err| {
+            const crash_ctx = allocator.create(CrashContext) catch |err| {
+                try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
+                return;
+            };
+            crash_ctx.* = CrashContext.init(allocator);
+
+            const roc_ops = createWasmRocOps(crash_ctx) catch |err| {
+                allocator.destroy(crash_ctx);
                 try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
                 return;
             };
 
-            repl_instance = allocator.create(Repl) catch |err| {
+            const repl_ptr = allocator.create(Repl) catch |err| {
                 allocator.destroy(roc_ops);
-                try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
-                return;
-            };
-            const crash_ctx_ptr = repl_crash_ctx orelse unreachable;
-            repl_instance.?.* = Repl.init(allocator, roc_ops, crash_ctx_ptr) catch |err| {
-                allocator.destroy(roc_ops);
-                allocator.destroy(repl_instance.?);
-                repl_instance = null;
+                crash_ctx.deinit();
+                allocator.destroy(crash_ctx);
                 try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
                 return;
             };
 
-            repl_roc_ops = roc_ops;
+            repl_ptr.* = Repl.init(allocator, roc_ops, crash_ctx) catch |err| {
+                allocator.destroy(roc_ops);
+                crash_ctx.deinit();
+                allocator.destroy(crash_ctx);
+                allocator.destroy(repl_ptr);
+                try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
+                return;
+            };
+
+            repl_session = .{ .repl = repl_ptr, .crash_ctx = crash_ctx, .roc_ops = roc_ops };
             current_state = .REPL_ACTIVE;
 
             // Return success with REPL info
@@ -697,10 +693,12 @@ fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, re
 /// The REPL instance must be initialized before calling this function.
 /// Returns an error if the response buffer is too small or if internal errors occur.
 fn handleReplState(message_type: MessageType, root: std.json.Value, response_buffer: []u8) ResponseWriteError!void {
-    const repl_ptr = repl_instance orelse {
+    const session = repl_session orelse {
         try writeErrorResponse(response_buffer, .ERROR, "REPL not initialized");
         return;
     };
+    const repl_ptr = session.repl;
+    const crash_ctx = session.crash_ctx;
 
     switch (message_type) {
         .REPL_STEP => {
@@ -724,6 +722,20 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
                 return;
             };
             defer allocator.free(result);
+
+            if (crash_ctx.state == .crashed) {
+                const crash_details = crash_ctx.crashMessage();
+                crash_ctx.reset();
+
+                const step_result = ReplStepResult{
+                    .output = result,
+                    .result_type = .@"error",
+                    .error_stage = .evaluation,
+                    .error_details = crash_details,
+                };
+                try writeReplStepResultJson(response_buffer, step_result);
+                return;
+            }
 
             // Parse the result to determine type and extract error information
             const step_result = parseReplResult(result);
