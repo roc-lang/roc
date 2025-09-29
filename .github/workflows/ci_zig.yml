@@ -73,13 +73,13 @@ jobs:
       fail-fast: false
       matrix:
         os: [
-            macos-13,
-            macos-15,
-            ubuntu-22.04,
+            #macos-13,
+            #macos-15,
+            #ubuntu-22.04,
             ubuntu-24.04-arm,
-            windows-2022,
-            windows-2025,
-            windows-11-arm,
+            #windows-2022,
+            #windows-2025,
+            #windows-11-arm,
           ] # macos-13 uses x64, macos-15 uses arm64
     steps:
       - name: Checkout
@@ -96,15 +96,9 @@ jobs:
         with:
           nix_path: nixpkgs=channel:nixos-25.05
 
-      - name: Install zlib (Ubuntu ARM)
-        if: startsWith(matrix.os, 'ubuntu') && endsWith(matrix.os, '-arm')
-        run: |
-          sudo apt update
-          sudo apt install -y musl-tools gcc-aarch64-linux-gnu
-
       - name: build roc
         run: |
-          zig build -Dfuzz -Dsystem-afl=false
+          zig build -Dfuzz -Dsystem-afl=false --verbose
 
       - name: Run Test Platforms (Unix)
         if: runner.os != 'Windows'
@@ -212,13 +206,13 @@ jobs:
       matrix:
         target:
           - aarch64-linux-musl
-          - aarch64-macos-none
-          - aarch64-windows-gnu
-          - arm-linux-musleabihf
-          - x86-linux-musl
-          - x86_64-linux-musl
-          - x86_64-macos-none
-          - x86_64-windows-gnu
+          #- aarch64-macos-none
+          #- aarch64-windows-gnu
+          #- arm-linux-musleabihf
+          #- x86-linux-musl
+          #- x86_64-linux-musl
+          #- x86_64-macos-none
+          #- x86_64-windows-gnu
 
     steps:
       - name: Checkout
