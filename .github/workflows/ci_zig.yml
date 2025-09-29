@@ -100,7 +100,7 @@ jobs:
         if: startsWith(matrix.os, 'ubuntu') && endsWith(matrix.os, '-arm')
         run: |
           sudo apt update
-          sudo apt install -y zlib1g-dev
+          sudo apt install -y musl-tools gcc-aarch64-linux-gnu
 
       - name: build roc
         run: |
