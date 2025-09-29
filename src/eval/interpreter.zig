@@ -785,7 +785,7 @@ pub const Interpreter = struct {
                         var i: usize = 0;
                         while (i < values.items.len) : (i += 1) {
                             const dest_ptr = buffer + i * elem_size;
-                            try values.items[i].copyToPtrAs(&self.runtime_layout_store, dest_ptr, elem_layout, roc_ops);
+                            try values.items[i].copyToPtr(&self.runtime_layout_store, dest_ptr, roc_ops);
                         }
                     }
                 }
@@ -1113,8 +1113,7 @@ pub const Interpreter = struct {
                         const arg_val = try self.evalExprMinimal(args_exprs[0], roc_ops, arg_rt_var);
                         defer arg_val.decref(&self.runtime_layout_store, roc_ops);
                         if (payload_field.ptr) |payload_ptr| {
-                            const arg_layout = try self.getRuntimeLayout(arg_rt_var);
-                            try arg_val.copyToPtrAs(&self.runtime_layout_store, payload_ptr, arg_layout, roc_ops);
+                            try arg_val.copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
                         }
                         return dest;
                     } else {
@@ -1545,7 +1544,7 @@ pub const Interpreter = struct {
                                     if (!std.meta.eql(elem_layout, result_layout)) {
                                         var out = try self.pushRaw(result_layout, 0);
                                         if (self.runtime_layout_store.layoutSize(result_layout) > 0 and out.ptr != null and payload_ptr_any != null) {
-                                            try payload_value.copyToPtrAs(&self.runtime_layout_store, out.ptr.?, result_layout, roc_ops);
+                                            try payload_value.copyToPtr(&self.runtime_layout_store, out.ptr.?, roc_ops);
                                         }
                                         out.is_initialized = true;
                                         return out;
@@ -1717,18 +1716,28 @@ pub const Interpreter = struct {
         if (size == 0) {
             return StackValue{ .layout = layout_val, .ptr = null, .is_initialized = true };
         }
-        const alignment = layout_val.alignment(self.runtime_layout_store.targetUsize());
+        const target_usize = self.runtime_layout_store.targetUsize();
+        var alignment = layout_val.alignment(target_usize);
+        if (layout_val.tag == .closure) {
+            const captures_layout = self.runtime_layout_store.getLayout(layout_val.data.closure.captures_layout_idx);
+            alignment = alignment.max(captures_layout.alignment(target_usize));
+        }
         const ptr = try self.stack_memory.alloca(size, alignment);
         return StackValue{ .layout = layout_val, .ptr = ptr, .is_initialized = true };
     }
 
     fn pushCopy(self: *Interpreter, src: StackValue, roc_ops: *RocOps) !StackValue {
         const size: u32 = if (src.layout.tag == .closure) src.getTotalSize(&self.runtime_layout_store) else self.runtime_layout_store.layoutSize(src.layout);
-        const alignment = src.layout.alignment(self.runtime_layout_store.targetUsize());
+        const target_usize = self.runtime_layout_store.targetUsize();
+        var alignment = src.layout.alignment(target_usize);
+        if (src.layout.tag == .closure) {
+            const captures_layout = self.runtime_layout_store.getLayout(src.layout.data.closure.captures_layout_idx);
+            alignment = alignment.max(captures_layout.alignment(target_usize));
+        }
         const ptr = if (size > 0) try self.stack_memory.alloca(size, alignment) else null;
         const dest = StackValue{ .layout = src.layout, .ptr = ptr, .is_initialized = true };
         if (size > 0 and src.ptr != null and ptr != null) {
-            try src.copyToPtrAs(&self.runtime_layout_store, ptr.?, src.layout, roc_ops);
+            try src.copyToPtr(&self.runtime_layout_store, ptr.?, roc_ops);
         }
         return dest;
     }
@@ -2759,7 +2768,7 @@ pub const Interpreter = struct {
                 const data_ptr = utils.allocateWithRefcount(elem_size, elem_alignment_u32, false, roc_ops);
 
                 if (elem_size > 0 and payload.ptr != null) {
-                    try payload.copyToPtrAs(&self.runtime_layout_store, data_ptr, elem_layout, roc_ops);
+                    try payload.copyToPtr(&self.runtime_layout_store, data_ptr, roc_ops);
                 }
 
                 if (out.ptr) |ptr| {

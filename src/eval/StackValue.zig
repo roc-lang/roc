@@ -142,67 +142,6 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
     @memcpy(dst, src);
 }
 
-/// Copy this value into a destination pointer, using the destination layout to choose representation.
-///
-/// This exists because we still have a few places (notably tag-union payloads and
-/// closure capture records) where the pointer supplied by the caller is less
-/// aligned than the source layout would like. Until we fix those layout gaps we
-/// perform byte copies here instead of going through `copyToPtr`, which would
-/// attempt an `@alignCast` and panic.
-pub fn copyToPtrAs(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopaque, dest_layout: Layout, ops: *RocOps) !void {
-    std.debug.assert(self.is_initialized);
-    if (self.ptr == null) return error.NullStackPointer;
-
-    // Strings: clone regardless of dest
-    if (dest_layout.tag == .scalar and dest_layout.data.scalar.tag == .str) {
-        const src_str: *const RocStr = @ptrCast(@alignCast(self.ptr.?));
-        const dest_str: *RocStr = @ptrCast(@alignCast(dest_ptr));
-        dest_str.* = src_str.clone(ops);
-        return;
-    }
-
-    // Integers: byte copy using destination size to avoid strict alignment issues
-    if (dest_layout.tag == .scalar and dest_layout.data.scalar.tag == .int) {
-        const size: u32 = layout_cache.layoutSize(dest_layout);
-        const src = @as([*]u8, @ptrCast(self.ptr.?))[0..size];
-        const dst = @as([*]u8, @ptrCast(dest_ptr))[0..size];
-        @memcpy(dst, src);
-        return;
-    }
-
-    if (dest_layout.tag == .box) {
-        const dest_slot: *usize = @ptrCast(@alignCast(dest_ptr));
-        switch (self.layout.tag) {
-            .box => {
-                const src_slot: *usize = @ptrCast(@alignCast(self.ptr.?));
-                dest_slot.* = src_slot.*;
-                if (dest_slot.* != 0) {
-                    const data_ptr: [*]u8 = @as([*]u8, @ptrFromInt(dest_slot.*));
-                    builtins.utils.increfDataPtrC(@as(?[*]u8, data_ptr), 1);
-                }
-            },
-            .box_of_zst => {
-                dest_slot.* = 0;
-            },
-            else => return error.TypeMismatch,
-        }
-        return;
-    }
-
-    if (dest_layout.tag == .box_of_zst) {
-        const dest_slot: *usize = @ptrCast(@alignCast(dest_ptr));
-        dest_slot.* = 0;
-        return;
-    }
-
-    // Fallback: memcpy by destination size
-    const size: u32 = if (dest_layout.tag == .closure) self.getTotalSize(layout_cache) else layout_cache.layoutSize(dest_layout);
-    if (size == 0) return;
-    const src = @as([*]u8, @ptrCast(self.ptr.?))[0..size];
-    const dst = @as([*]u8, @ptrCast(dest_ptr))[0..size];
-    @memcpy(dst, src);
-}
-
 /// Read this StackValue's integer value, ensuring it's initialized
 pub fn asI128(self: StackValue) i128 {
     std.debug.assert(self.is_initialized); // Ensure initialized before reading
@@ -386,6 +325,11 @@ pub const TupleAccessor = struct {
         // Calculate the element pointer with proper alignment
         const base_ptr = @as([*]u8, @ptrCast(self.base_value.ptr.?));
         const element_ptr = @as(*anyopaque, @ptrCast(base_ptr + element_offset));
+        const required_alignment = element_layout.alignment(self.layout_cache.targetUsize()).toByteUnits();
+        if (required_alignment > 1) {
+            const addr = @intFromPtr(element_ptr);
+            std.debug.assert(addr % required_alignment == 0);
+        }
 
         return StackValue{
             .layout = element_layout,
@@ -397,7 +341,7 @@ pub const TupleAccessor = struct {
     /// Set an element by copying from a source StackValue
     pub fn setElement(self: TupleAccessor, index: usize, source: StackValue, ops: *RocOps) !void {
         const dest_element = try self.getElement(index);
-        try source.copyToPtrAs(self.layout_cache, dest_element.ptr.?, dest_element.layout, ops);
+        try source.copyToPtr(self.layout_cache, dest_element.ptr.?, ops);
     }
 
     /// Find the sorted element index corresponding to an original tuple position
@@ -559,6 +503,11 @@ pub const RecordAccessor = struct {
         // Calculate the field pointer with proper alignment
         const base_ptr = @as([*]u8, @ptrCast(self.base_value.ptr.?));
         const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
+        const required_alignment = field_layout.alignment(self.layout_cache.targetUsize()).toByteUnits();
+        if (required_alignment > 1) {
+            const addr = @intFromPtr(field_ptr);
+            std.debug.assert(addr % required_alignment == 0);
+        }
 
         return StackValue{
             .layout = field_layout,
@@ -593,6 +542,11 @@ pub const RecordAccessor = struct {
 
         const base_ptr = @as([*]u8, @ptrCast(self.base_value.ptr.?));
         const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
+        const required_alignment = field_layout.?.alignment(self.layout_cache.targetUsize()).toByteUnits();
+        if (required_alignment > 1) {
+            const addr = @intFromPtr(field_ptr);
+            std.debug.assert(addr % required_alignment == 0);
+        }
 
         return StackValue{
             .layout = field_layout.?,
@@ -604,7 +558,7 @@ pub const RecordAccessor = struct {
     /// Set a field by copying from a source StackValue
     pub fn setFieldByIndex(self: RecordAccessor, index: usize, source: StackValue, ops: *RocOps) !void {
         const dest_field = try self.getFieldByIndex(index);
-        try source.copyToPtrAs(self.layout_cache, dest_field.ptr.?, dest_field.layout, ops);
+        try source.copyToPtr(self.layout_cache, dest_field.ptr.?, ops);
     }
 
     /// Get the number of fields in this record
