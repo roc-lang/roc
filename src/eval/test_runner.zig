@@ -7,6 +7,7 @@ const base = @import("base");
 const builtins = @import("builtins");
 const can = @import("can");
 const Interpreter = @import("interpreter.zig").Interpreter;
+const eval_mod = @import("mod.zig");
 
 const RocOps = builtins.host_abi.RocOps;
 const RocAlloc = builtins.host_abi.RocAlloc;
@@ -20,6 +21,8 @@ const Allocator = std.mem.Allocator;
 const CIR = can.CIR;
 
 const EvalError = Interpreter.Error;
+const CrashContext = eval_mod.CrashContext;
+const CrashState = eval_mod.CrashState;
 
 fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
     const test_env: *TestRunner = @ptrCast(@alignCast(env));
@@ -78,23 +81,9 @@ fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) cal
 fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {
     const test_env: *TestRunner = @ptrCast(@alignCast(env));
     const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
-
-    if (test_env.interpreter.crash_message_owned) {
-        if (test_env.interpreter.crash_message) |existing| {
-            test_env.allocator.free(existing);
-        }
-    }
-
-    const owned_msg = test_env.allocator.dupe(u8, msg_slice) catch {
-        test_env.interpreter.crash_message = "Failed to store crash message";
-        test_env.interpreter.crash_message_owned = false;
-        test_env.interpreter.has_crashed = true;
-        return;
+    test_env.crash.recordCrash(msg_slice) catch |err| {
+        std.debug.panic("failed to record crash message for test runner: {}", .{err});
     };
-
-    test_env.interpreter.crash_message = owned_msg;
-    test_env.interpreter.crash_message_owned = true;
-    test_env.interpreter.has_crashed = true;
 }
 
 const Evaluation = enum {
@@ -120,6 +109,7 @@ pub const TestRunner = struct {
     allocator: Allocator,
     env: *ModuleEnv,
     interpreter: Interpreter,
+    crash: CrashContext,
     roc_ops: ?RocOps,
     test_results: std.ArrayList(TestResult),
 
@@ -131,6 +121,7 @@ pub const TestRunner = struct {
             .allocator = allocator,
             .env = cir,
             .interpreter = try Interpreter.init(allocator, cir),
+            .crash = CrashContext.init(allocator),
             .roc_ops = null,
             .test_results = std.ArrayList(TestResult).init(allocator),
         };
@@ -138,6 +129,7 @@ pub const TestRunner = struct {
 
     pub fn deinit(self: *TestRunner) void {
         self.interpreter.deinit();
+        self.crash.deinit();
         self.test_results.deinit();
     }
 
@@ -154,7 +146,12 @@ pub const TestRunner = struct {
                 .host_fns = undefined, // Not used in tests
             };
         }
+        self.crash.reset();
         return &(self.roc_ops.?);
+    }
+
+    pub fn crashState(self: *TestRunner) CrashState {
+        return self.crash.state;
     }
 
     /// Evaluates a single expect expression, returning whether it passed, failed or did not evaluate to a boolean.

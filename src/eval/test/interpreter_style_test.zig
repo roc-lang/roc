@@ -19,9 +19,40 @@ const RocDealloc = @import("builtins").host_abi.RocDealloc;
 const RocRealloc = @import("builtins").host_abi.RocRealloc;
 const RocDbg = @import("builtins").host_abi.RocDbg;
 const RocExpectFailed = @import("builtins").host_abi.RocExpectFailed;
-const RocCrashed = @import("builtins").host_abi.RocCrashed;
+const CrashContext = eval_mod.CrashContext;
+const CrashState = eval_mod.CrashState;
 
-const TestHost = struct { allocator: std.mem.Allocator };
+const TestHost = struct {
+    allocator: std.mem.Allocator,
+    crash: CrashContext,
+
+    fn init(allocator: std.mem.Allocator) TestHost {
+        return TestHost{ .allocator = allocator, .crash = CrashContext.init(allocator) };
+    }
+
+    fn deinit(self: *TestHost) void {
+        self.crash.deinit();
+    }
+
+    fn makeOps(self: *TestHost) RocOps {
+        self.crash.reset();
+        return RocOps{
+            .env = @ptrCast(self),
+            .roc_alloc = testRocAlloc,
+            .roc_dealloc = testRocDealloc,
+            .roc_realloc = testRocRealloc,
+            .roc_dbg = testRocDbg,
+            .roc_expect_failed = testRocExpectFailed,
+            .roc_crashed = recordCrashCallback,
+            .host_fns = undefined,
+        };
+    }
+
+    fn crashState(self: *TestHost) CrashState {
+        return self.crash.state;
+    }
+
+};
 
 fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
     const host: *TestHost = @ptrCast(@alignCast(env));
@@ -67,9 +98,12 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void 
 
 fn testRocDbg(_: *const RocDbg, _: *anyopaque) callconv(.C) void {}
 fn testRocExpectFailed(_: *const RocExpectFailed, _: *anyopaque) callconv(.C) void {}
-fn testRocCrashed(_: *const RocCrashed, _: *anyopaque) callconv(.C) void {
-    // These style tests never exercise crash paths; we still supply a stub so the RocOps
-    // table is complete without double-logging or allocating crash messages.
+
+fn recordCrashCallback(args: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.C) void {
+    const host: *TestHost = @ptrCast(@alignCast(env));
+    host.crash.recordCrash(args.utf8_bytes[0..args.len]) catch |err| {
+        std.debug.panic("failed to record crash message: {}", .{err});
+    };
 }
 
 test "interpreter: (|x| x)(\"Hello\") yields \"Hello\"" {
@@ -111,17 +145,9 @@ test "interpreter: (|x| x)(\"Hello\") yields \"Hello\"" {
 
     // Minimal eval: evaluate the call directly via Interpreter
     // Minimal eval using fresh RocOps
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
@@ -141,17 +167,9 @@ test "interpreter: (|n| n + 1)(41) yields 42" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -167,17 +185,9 @@ test "interpreter: (|a, b| a + b)(40, 2) yields 42" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -195,17 +205,9 @@ test "interpreter: 6 / 3 yields 2" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -223,17 +225,9 @@ test "interpreter: 5 // 2 yields 2" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -251,17 +245,9 @@ test "interpreter: 7 % 3 yields 1" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -277,17 +263,9 @@ test "interpreter: 0.2 + 0.3 yields 0.5" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -303,17 +281,9 @@ test "interpreter: 0.5 / 2 yields 0.25" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -329,17 +299,9 @@ test "interpreter: 1.5f64 + 2.25f64 yields 3.75" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -355,17 +317,9 @@ test "interpreter: 1.5f32 * 2f32 yields 3" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -381,17 +335,9 @@ test "interpreter: 2.0f64 / 4.0f64 yields 0.5" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -407,17 +353,9 @@ test "interpreter: literal True renders True" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -434,17 +372,9 @@ test "interpreter: True == False yields False" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -463,17 +393,9 @@ test "interpreter: \"hi\" == \"hi\" yields True" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -490,17 +412,9 @@ test "interpreter: (1, 2) == (1, 2) yields True" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -517,17 +431,9 @@ test "interpreter: (1, 2) == (2, 1) yields False" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -544,17 +450,9 @@ test "interpreter: { x: 1, y: 2 } == { y: 2, x: 1 } yields True" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -571,17 +469,9 @@ test "interpreter: { x: 1, y: 2 } == { x: 1, y: 3 } yields False" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -598,17 +488,9 @@ test "interpreter: record update copies base fields" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -624,17 +506,9 @@ test "interpreter: record update overrides field" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -650,17 +524,9 @@ test "interpreter: record update expression can reference base" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -676,17 +542,9 @@ test "interpreter: record update can add field" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -702,17 +560,9 @@ test "interpreter: record update inside tuple" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -728,17 +578,9 @@ test "interpreter: record update pattern match" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -754,17 +596,9 @@ test "interpreter: [1, 2, 3] == [1, 2, 3] yields True" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -781,17 +615,9 @@ test "interpreter: [1, 2, 3] == [1, 3, 2] yields False" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -808,17 +634,9 @@ test "interpreter: Ok(1) == Ok(1) yields True" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -835,17 +653,9 @@ test "interpreter: Ok(1) == Err(1) yields False" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -862,17 +672,9 @@ test "interpreter: match tuple pattern destructures" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -888,17 +690,9 @@ test "interpreter: match bool patterns" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -914,17 +708,9 @@ test "interpreter: match result tag payload" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -940,17 +726,9 @@ test "interpreter: match record destructures fields" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -966,17 +744,9 @@ test "interpreter: render Result.Ok literal" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -993,17 +763,9 @@ test "interpreter: render Result.Err string" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -1020,17 +782,9 @@ test "interpreter: render Result.Ok tuple payload" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -1047,17 +801,9 @@ test "interpreter: match tuple payload tag" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -1073,17 +819,9 @@ test "interpreter: match record payload tag" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -1099,17 +837,9 @@ test "interpreter: match list pattern destructures" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -1133,17 +863,9 @@ test "interpreter: match list rest binds slice" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -1159,17 +881,9 @@ test "interpreter: match empty list branch" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -1185,22 +899,15 @@ test "interpreter: crash statement triggers crash error and message" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     try std.testing.expectError(error.Crash, interp2.evalMinimal(resources.expr_idx, &ops));
-    try std.testing.expect(interp2.hasCrashed());
-    const msg = interp2.getCrashMsg() orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("boom", msg);
+    switch (host.crashState()) {
+        .did_not_crash => return error.TestUnexpectedResult,
+        .crashed => |msg| try std.testing.expectEqualStrings("boom", msg),
+    }
 }
 
 test "interpreter: expect expression succeeds" {
@@ -1211,20 +918,12 @@ test "interpreter: expect expression succeeds" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
-    try std.testing.expect(!interp2.hasCrashed());
+    try std.testing.expect(host.crashState() == .did_not_crash);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     defer std.testing.allocator.free(rendered);
@@ -1239,22 +938,15 @@ test "interpreter: expect expression failure crashes with message" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     try std.testing.expectError(error.Crash, interp2.evalMinimal(resources.expr_idx, &ops));
-    try std.testing.expect(interp2.hasCrashed());
-    const msg = interp2.getCrashMsg() orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("Expect failed: 1 == 0", msg);
+    switch (host.crashState()) {
+        .did_not_crash => return error.TestUnexpectedResult,
+        .crashed => |msg| try std.testing.expectEqualStrings("Expect failed: 1 == 0", msg),
+    }
 }
 
 test "interpreter: empty record expression renders {}" {
@@ -1265,17 +957,9 @@ test "interpreter: empty record expression renders {}" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -1292,17 +976,9 @@ test "interpreter: f64 literal renders 3.25" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -1318,17 +994,9 @@ test "interpreter: decimal literal renders 0.125" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
@@ -1344,17 +1012,9 @@ test "interpreter: f64 equality True" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -1371,17 +1031,9 @@ test "interpreter: decimal equality True" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -1408,17 +1060,9 @@ test "interpreter: int and f64 equality True" {
     try std.testing.expect(resources.module_env.types.resolveVar(rhs_var).desc.content != .err);
     try std.testing.expect(resources.module_env.types.resolveVar(expr_var).desc.content != .err);
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -1445,17 +1089,9 @@ test "interpreter: int and decimal equality True" {
     try std.testing.expect(resources.module_env.types.resolveVar(rhs_var).desc.content != .err);
     try std.testing.expect(resources.module_env.types.resolveVar(expr_var).desc.content != .err);
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -1472,17 +1108,9 @@ test "interpreter: int less-than yields True" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -1499,17 +1127,9 @@ test "interpreter: int greater-than yields False" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -1526,17 +1146,9 @@ test "interpreter: 0.1 + 0.2 yields 0.3" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -1553,17 +1165,9 @@ test "interpreter: f64 greater-than yields True" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -1580,17 +1184,9 @@ test "interpreter: decimal less-than-or-equal yields True" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -1607,17 +1203,9 @@ test "interpreter: int and f64 less-than yields True" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -1634,17 +1222,9 @@ test "interpreter: int and decimal greater-than yields False" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -1661,17 +1241,9 @@ test "interpreter: bool inequality yields True" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -1688,17 +1260,9 @@ test "interpreter: decimal inequality yields False" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -1715,17 +1279,9 @@ test "interpreter: f64 equality False" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -1742,17 +1298,9 @@ test "interpreter: decimal equality False" {
     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
-    var ops = RocOps{
-        .env = @ptrCast(&host),
-        .roc_alloc = testRocAlloc,
-        .roc_dealloc = testRocDealloc,
-        .roc_realloc = testRocRealloc,
-        .roc_dbg = testRocDbg,
-        .roc_expect_failed = testRocExpectFailed,
-        .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
-    };
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
 
     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
@@ -1768,8 +1316,9 @@ test "interpreter: tuples and records" {
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, res_t);
     var it = try Interpreter.init(std.testing.allocator, res_t.module_env);
     defer it.deinit();
-    var host_t = TestHost{ .allocator = std.testing.allocator };
-    var ops_t = RocOps{ .env = @ptrCast(&host_t), .roc_alloc = testRocAlloc, .roc_dealloc = testRocDealloc, .roc_realloc = testRocRealloc, .roc_dbg = testRocDbg, .roc_expect_failed = testRocExpectFailed, .roc_crashed = testRocCrashed, .host_fns = undefined };
+    var host_t = TestHost.init(std.testing.allocator);
+    defer host_t.deinit();
+    var ops_t = host_t.makeOps();
     const val_t = try it.evalMinimal(res_t.expr_idx, &ops_t);
     const text_t = try it.renderValueRoc(val_t);
     defer std.testing.allocator.free(text_t);
@@ -1781,8 +1330,9 @@ test "interpreter: tuples and records" {
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, res_r);
     var ir = try Interpreter.init(std.testing.allocator, res_r.module_env);
     defer ir.deinit();
-    var host_r = TestHost{ .allocator = std.testing.allocator };
-    var ops_r = RocOps{ .env = @ptrCast(&host_r), .roc_alloc = testRocAlloc, .roc_dealloc = testRocDealloc, .roc_realloc = testRocRealloc, .roc_dbg = testRocDbg, .roc_expect_failed = testRocExpectFailed, .roc_crashed = testRocCrashed, .host_fns = undefined };
+    var host_r = TestHost.init(std.testing.allocator);
+    defer host_r.deinit();
+    var ops_r = host_r.makeOps();
     const val_r = try ir.evalMinimal(res_r.expr_idx, &ops_r);
     const text_r = try ir.renderValueRoc(val_r);
     defer std.testing.allocator.free(text_r);

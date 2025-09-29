@@ -11,6 +11,7 @@ const check = @import("check");
 const Check = check.Check;
 const builtins = @import("builtins");
 const eval_mod = @import("eval");
+const CrashContext = eval_mod.CrashContext;
 
 const AST = parse.AST;
 const Allocator = std.mem.Allocator;
@@ -24,6 +25,8 @@ pub const Repl = struct {
     definitions: std.StringHashMap([]const u8),
     /// Operations for the Roc runtime
     roc_ops: *RocOps,
+    /// Shared crash context managed by the host (optional)
+    crash_ctx: ?*CrashContext,
     /// Optional trace writer for debugging evaluation
     trace_writer: ?std.io.AnyWriter,
     /// ModuleEnv from last successful evaluation (for snapshot generation)
@@ -35,11 +38,12 @@ pub const Repl = struct {
     /// Storage for rendered TYPES HTML at each step (only when debug_store_snapshots is true)
     debug_types_html: std.ArrayList([]const u8),
 
-    pub fn init(allocator: Allocator, roc_ops: *RocOps) !Repl {
+    pub fn init(allocator: Allocator, roc_ops: *RocOps, crash_ctx: ?*CrashContext) !Repl {
         return Repl{
             .allocator = allocator,
             .definitions = std.StringHashMap([]const u8).init(allocator),
             .roc_ops = roc_ops,
+            .crash_ctx = crash_ctx,
             .trace_writer = null,
             .last_module_env = null,
             .debug_store_snapshots = false,
@@ -390,9 +394,17 @@ pub const Repl = struct {
         };
         defer interpreter.deinit();
 
+        if (self.crash_ctx) |ctx| {
+            ctx.reset();
+        }
+
         const result = interpreter.evalMinimal(final_expr_idx, self.roc_ops) catch |err| switch (err) {
             error.Crash => {
-                _ = interpreter.getCrashMsg();
+                if (self.crash_ctx) |ctx| {
+                    if (ctx.crashMessage()) |msg| {
+                        return try std.fmt.allocPrint(self.allocator, "Crash: {s}", .{msg});
+                    }
+                }
                 return try self.allocator.dupe(u8, "Evaluation error: error.Crash");
             },
             else => return try std.fmt.allocPrint(self.allocator, "Evaluation error: {}", .{err}),

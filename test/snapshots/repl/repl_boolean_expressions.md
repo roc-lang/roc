@@ -15,9 +15,9 @@ type=repl
 » !Bool.True or !Bool.True
 ~~~
 # OUTPUT
-Evaluation error: error.Crash
+Crash: runtime error
 ---
-Evaluation error: error.Crash
+Crash: runtime error
 ---
 True
 ---

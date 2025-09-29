@@ -48,9 +48,9 @@ contributor can navigate the code without prior context.
 6. **Polymorphic calls** – Before a function call, `prepareCall` consults the
    poly cache. The interpreter only re-runs the runtime unifier if it has not
    seen that combination of function id + argument Vars before.
-7. **Crash handling** – Crash/expect expressions stash a message in
-   `crash_message` and set `has_crashed`. Callers can query the state via
-   `hasCrashed()`/`getCrashMsg()`.
+7. **Crash handling** – Crash/expect expressions delegate to the host via
+   `RocOps.crash`. Hosts supply a `CrashContext` (see `crash_context.zig`) to
+   record messages; the interpreter keeps no internal crash state.
 
 All RocOps interactions (alloc, dealloc, crash, expect) happen through the
 `RocOps` pointer passed into `evalMinimal`. This keeps host integrations (REPL,

@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const builtins = @import("builtins");
+const eval_mod = @import("eval");
 
 const RocOps = builtins.host_abi.RocOps;
 const RocAlloc = builtins.host_abi.RocAlloc;
@@ -10,15 +11,19 @@ const RocRealloc = builtins.host_abi.RocRealloc;
 const RocDbg = builtins.host_abi.RocDbg;
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocCrashed = builtins.host_abi.RocCrashed;
+const CrashContext = eval_mod.CrashContext;
+const CrashState = eval_mod.CrashState;
 
 /// An implementation of RocOps for testing purposes.
 pub const TestEnv = struct {
     allocator: std.mem.Allocator,
+    crash: CrashContext,
     roc_ops: RocOps,
 
     pub fn init(allocator: std.mem.Allocator) TestEnv {
         return TestEnv{
             .allocator = allocator,
+            .crash = CrashContext.init(allocator),
             .roc_ops = RocOps{
                 .env = undefined, // set below
                 .roc_alloc = testRocAlloc,
@@ -33,12 +38,21 @@ pub const TestEnv = struct {
     }
 
     pub fn deinit(self: *TestEnv) void {
-        _ = self;
+        self.crash.deinit();
     }
 
     pub fn get_ops(self: *TestEnv) *RocOps {
         self.roc_ops.env = @ptrCast(self);
+        self.crash.reset();
         return &self.roc_ops;
+    }
+
+    pub fn crashState(self: *TestEnv) CrashState {
+        return self.crash.state;
+    }
+
+    pub fn crashContextPtr(self: *TestEnv) *CrashContext {
+        return &self.crash;
     }
 };
 
@@ -130,8 +144,9 @@ fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) cal
     @panic("testRocExpectFailed not implemented yet");
 }
 
-fn testRocCrashed(_: *const RocCrashed, env: *anyopaque) callconv(.C) void {
-    // The REPL harness cares about crash state only through TestEnv; keep the callback to satisfy
-    // RocOps yet avoid allocating or logging during these tests.
-    _ = env;
+fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {
+    const test_env: *TestEnv = @ptrCast(@alignCast(env));
+    test_env.crash.recordCrash(crashed_args.utf8_bytes[0..crashed_args.len]) catch |err| {
+        std.debug.panic("failed to store REPL crash message: {}", .{err});
+    };
 }

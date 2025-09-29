@@ -10,6 +10,8 @@ const eval = @import("eval");
 const check = @import("check");
 const builtins = @import("builtins");
 
+const CrashContext = eval.CrashContext;
+
 const TestEnv = @import("repl_test_env.zig").TestEnv;
 
 const AST = parse.AST;
@@ -50,14 +52,17 @@ allocator: Allocator,
 past_defs: std.ArrayList(PastDef),
 /// Operations for the Roc runtime
 roc_ops: *RocOps,
+/// Shared crash context provided by the host (optional)
+crash_ctx: ?*CrashContext,
 /// Optional trace writer for debugging evaluation
 trace_writer: ?std.io.AnyWriter,
 
-pub fn init(allocator: Allocator, roc_ops: *RocOps) !Repl {
+pub fn init(allocator: Allocator, roc_ops: *RocOps, crash_ctx: ?*CrashContext) !Repl {
     return Repl{
         .allocator = allocator,
         .past_defs = std.ArrayList(PastDef).init(allocator),
         .roc_ops = roc_ops,
+        .crash_ctx = crash_ctx,
         .trace_writer = null,
     };
 }
@@ -310,12 +315,20 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8) ![]const u8 {
         interpreter.startTrace(trace_writer);
     }
 
+    if (self.crash_ctx) |ctx| {
+        ctx.reset();
+    }
+
     const result = interpreter.evalMinimal(canonical_expr_idx.get_idx(), self.roc_ops) catch |err| {
         if (self.trace_writer) |_| {
             interpreter.endTrace();
         }
         if (err == error.Crash) {
-            _ = interpreter.getCrashMsg();
+            if (self.crash_ctx) |ctx| {
+                if (ctx.crashMessage()) |msg| {
+                    return try std.fmt.allocPrint(self.allocator, "Crash: {s}", .{msg});
+                }
+            }
             return try self.allocator.dupe(u8, "Evaluation error: error.Crash");
         }
         return try std.fmt.allocPrint(self.allocator, "Evaluation error: {}", .{err});
@@ -350,7 +363,7 @@ test "Repl - initialization and cleanup" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
     defer repl.deinit();
 
     try testing.expect(repl.past_defs.items.len == 0);
@@ -360,7 +373,7 @@ test "Repl - special commands" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
     defer repl.deinit();
 
     const help_result = try repl.step(":help");
@@ -380,7 +393,7 @@ test "Repl - simple expressions" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
     defer repl.deinit();
 
     const result = try repl.step("42");
@@ -392,7 +405,7 @@ test "Repl - string expressions" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
     defer repl.deinit();
 
     const result = try repl.step("\"Hello, World!\"");
@@ -404,7 +417,7 @@ test "Repl - redefinition with evaluation" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
     defer repl.deinit();
 
     // First definition of x
@@ -437,7 +450,7 @@ test "Repl - build full source with redefinitions" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
     defer repl.deinit();
 
     // Add definitions manually to test source building
@@ -473,7 +486,7 @@ test "Repl - past def ordering" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
     defer repl.deinit();
 
     // Manually add definitions to test ordering

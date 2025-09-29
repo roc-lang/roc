@@ -18,7 +18,7 @@ test "Repl - initialization and cleanup" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
     defer repl.deinit();
 
     try testing.expect(repl.definitions.count() == 0);
@@ -28,7 +28,7 @@ test "Repl - special commands" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
     defer repl.deinit();
 
     const help_result = try repl.step(":help");
@@ -48,7 +48,7 @@ test "Repl - simple expressions" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
     defer repl.deinit();
 
     const result = try repl.step("42");
@@ -60,7 +60,7 @@ test "Repl - string expressions" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
     defer repl.deinit();
 
     const result = try repl.step("\"Hello, World!\"");
@@ -72,7 +72,7 @@ test "Repl - silent assignments" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
     defer repl.deinit();
 
     // Assignment should return descriptive output
@@ -90,7 +90,7 @@ test "Repl - variable redefinition" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
     defer repl.deinit();
 
     // First definition
@@ -123,7 +123,7 @@ test "Repl - build full source with block syntax" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
     defer repl.deinit();
 
     // Add definitions manually to test source building
@@ -148,7 +148,7 @@ test "Repl - definition replacement" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
     defer repl.deinit();
 
     // Manually add definitions to test replacement behavior

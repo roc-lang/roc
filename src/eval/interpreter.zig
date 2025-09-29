@@ -113,9 +113,6 @@ pub const Interpreter = struct {
     bool_false_index: u8,
     bool_true_index: u8,
     canonical_bool_rt_var: ?types.Var,
-    has_crashed: bool,
-    crash_message: ?[]const u8,
-    crash_message_owned: bool,
 
     pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv) !Interpreter {
         const rt_types_ptr = try allocator.create(types.store.Store);
@@ -141,9 +138,6 @@ pub const Interpreter = struct {
             .bool_false_index = 0,
             .bool_true_index = 1,
             .canonical_bool_rt_var = null,
-            .has_crashed = false,
-            .crash_message = null,
-            .crash_message_owned = false,
         };
         result.runtime_layout_store = try layout.Store.init(env, result.runtime_types);
         return result;
@@ -151,7 +145,6 @@ pub const Interpreter = struct {
 
     // Minimal evaluator for subset: string literals, lambdas without captures, and lambda calls
     pub fn evalMinimal(self: *Interpreter, expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) Error!StackValue {
-        self.resetCrashState();
         return try self.evalExprMinimal(expr_idx, roc_ops, null);
     }
 
@@ -1742,30 +1735,8 @@ pub const Interpreter = struct {
         return dest;
     }
 
-    fn resetCrashState(self: *Interpreter) void {
-        if (self.crash_message_owned) {
-            if (self.crash_message) |msg| {
-                self.allocator.free(msg);
-            }
-        }
-        self.has_crashed = false;
-        self.crash_message = null;
-        self.crash_message_owned = false;
-    }
-
-    fn setCrashMessage(self: *Interpreter, message: []const u8, owned: bool) void {
-        if (self.crash_message_owned) {
-            if (self.crash_message) |msg| {
-                self.allocator.free(msg);
-            }
-        }
-        self.crash_message = message;
-        self.crash_message_owned = owned;
-        self.has_crashed = true;
-    }
-
     fn triggerCrash(self: *Interpreter, message: []const u8, owned: bool, roc_ops: *RocOps) void {
-        self.setCrashMessage(message, owned);
+        defer if (owned) self.allocator.free(@constCast(message));
         roc_ops.crash(message);
     }
 
@@ -1774,7 +1745,7 @@ pub const Interpreter = struct {
         const slice = self.env.getSource(region);
         const trimmed = std.mem.trim(u8, slice, " \t\n\r");
         const message = try std.fmt.allocPrint(self.allocator, "Expect failed: {s}", .{trimmed});
-        self.setCrashMessage(message, true);
+        defer self.allocator.free(message);
 
         const expect_args = RocExpectFailed{
             .utf8_bytes = @constCast(message.ptr),
@@ -1782,15 +1753,6 @@ pub const Interpreter = struct {
         };
         roc_ops.roc_expect_failed(&expect_args, roc_ops.env);
         roc_ops.crash(message);
-    }
-
-    pub fn hasCrashed(self: *const Interpreter) bool {
-        return self.has_crashed;
-    }
-
-    pub fn getCrashMsg(self: *const Interpreter) ?[]const u8 {
-        if (!self.has_crashed) return null;
-        return self.crash_message;
     }
 
     fn extractBoolTagIndex(self: *Interpreter, value: StackValue, bool_var: ?types.Var) !usize {
@@ -3135,11 +3097,6 @@ pub const Interpreter = struct {
         }
     }
     pub fn deinit(self: *Interpreter) void {
-        if (self.crash_message_owned) {
-            if (self.crash_message) |msg| {
-                self.allocator.free(msg);
-            }
-        }
         self.empty_scope.deinit();
         self.translate_cache.deinit();
         var it = self.poly_cache.iterator();

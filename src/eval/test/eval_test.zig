@@ -286,38 +286,27 @@ test "error test - crash statement" {
     , error.Crash, .no_trace);
 }
 
-test "crash message storage and retrieval - direct API test" {
-    // Test the getCrashMsg() API directly by simulating what happens during a crash
+test "crash message storage and retrieval - host-managed context" {
+    // Verify the crash callback stores the message in the host CrashContext
     const test_message = "Direct API test message";
-
-    const resources = try helpers.parseAndCanonicalizeExpr(testing.allocator, "42");
-    defer helpers.cleanupParseAndCanonical(testing.allocator, resources);
 
     var test_env_instance = TestEnv.init(testing.allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try Interpreter.init(testing.allocator, resources.module_env);
-    defer interpreter.deinit();
-    test_env_instance.setInterpreter(&interpreter);
+    try testing.expect(test_env_instance.crashState() == .did_not_crash);
 
-    // Test that crash functionality works through RocOps
-    // Before crash, getCrashMsg should return null
-    try testing.expect(interpreter.getCrashMsg() == null);
-
-    // Simulate what happens when roc_ops.crash() is called
     const crash_args = builtins.host_abi.RocCrashed{
         .utf8_bytes = @constCast(test_message.ptr),
         .len = test_message.len,
     };
 
-    // Call the crash function directly through test RocOps
     const ops = test_env_instance.get_ops();
     ops.roc_crashed(&crash_args, ops.env);
 
-    // After crash, getCrashMsg should return the crash message
-    const crash_msg = interpreter.getCrashMsg();
-    try testing.expect(crash_msg != null);
-    try testing.expectEqualStrings(test_message, crash_msg.?);
+    switch (test_env_instance.crashState()) {
+        .did_not_crash => return error.TestUnexpectedResult,
+        .crashed => |msg| try testing.expectEqualStrings(test_message, msg),
+    }
 }
 
 test "tuples" {
@@ -419,7 +408,6 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
 
     var interpreter = try Interpreter.init(testing.allocator, resources.module_env);
     defer interpreter.deinit();
-    test_env_instance.setInterpreter(&interpreter);
 
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
@@ -433,7 +421,7 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
     defer result.decref(layout_cache, ops);
 
     // Minimal smoke check: the helper only succeeds if evaluation produced a value without crashing.
-    try std.testing.expect(!interpreter.has_crashed);
+    try std.testing.expect(test_env_instance.crashState() == .did_not_crash);
 }
 
 test "integer type evaluation" {
@@ -731,7 +719,6 @@ test "ModuleEnv serialization and interpreter evaluation" {
     {
         var interpreter = try Interpreter.init(gpa, &original_env);
         defer interpreter.deinit();
-        test_env_instance.setInterpreter(&interpreter);
 
         const ops = test_env_instance.get_ops();
         const result = try interpreter.evalMinimal(canonicalized_expr_idx.get_idx(), ops);
@@ -796,7 +783,6 @@ test "ModuleEnv serialization and interpreter evaluation" {
         {
             var interpreter = try Interpreter.init(gpa, deserialized_env);
             defer interpreter.deinit();
-            test_env_instance.setInterpreter(&interpreter);
 
             const ops = test_env_instance.get_ops();
             const result = try interpreter.evalMinimal(canonicalized_expr_idx.get_idx(), ops);

@@ -14,6 +14,9 @@ pub const StackValue = @import("StackValue.zig");
 pub const EvalError = Interpreter.Error;
 /// Runs `expect` expressions inside evaluation tests.
 pub const TestRunner = @import("test_runner.zig").TestRunner;
+const crash_context = @import("crash_context.zig");
+pub const CrashContext = crash_context.CrashContext;
+pub const CrashState = crash_context.CrashState;
 
 test "eval tests" {
     std.testing.refAllDecls(@This());
@@ -21,6 +24,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("interpreter.zig"));
     std.testing.refAllDecls(@import("stack.zig"));
     std.testing.refAllDecls(@import("StackValue.zig"));
+    std.testing.refAllDecls(@import("crash_context.zig"));
 
     std.testing.refAllDecls(@import("test/TestEnv.zig"));
     std.testing.refAllDecls(@import("test/eval_test.zig"));

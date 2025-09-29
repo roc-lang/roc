@@ -31,6 +31,8 @@ const fmt = @import("fmt");
 const WasmFilesystem = @import("WasmFilesystem.zig");
 const layout = @import("layout");
 
+const CrashContext = eval.CrashContext;
+
 const Can = can.Can;
 const Check = check.Check;
 const SExprTree = base.SExprTree;
@@ -198,6 +200,7 @@ var compiler_data: ?CompilerStageData = null;
 
 /// REPL state management
 var repl_instance: ?*Repl = null;
+var repl_crash_ctx: ?*CrashContext = null;
 var repl_roc_ops: ?*RocOps = null;
 
 /// REPL result types
@@ -360,6 +363,11 @@ fn cleanupReplState() void {
         allocator.destroy(roc_ops);
         repl_roc_ops = null;
     }
+    if (repl_crash_ctx) |ctx| {
+        ctx.deinit();
+        allocator.destroy(ctx);
+        repl_crash_ctx = null;
+    }
 }
 
 /// Create WASM-compatible RocOps for REPL initialization.
@@ -368,8 +376,17 @@ fn cleanupReplState() void {
 /// Returns an error if allocation fails.
 fn createWasmRocOps() !*RocOps {
     const roc_ops = try allocator.create(RocOps);
+
+    if (repl_crash_ctx == null) {
+        const ctx = try allocator.create(CrashContext);
+        ctx.* = CrashContext.init(allocator);
+        repl_crash_ctx = ctx;
+    } else {
+        repl_crash_ctx.?.reset();
+    }
+
     roc_ops.* = RocOps{
-        .env = undefined, // Not used in playground
+        .env = @as(*anyopaque, @ptrCast(repl_crash_ctx.?)),
         .roc_alloc = wasmRocAlloc,
         .roc_dealloc = wasmRocDealloc,
         .roc_realloc = wasmRocRealloc,
@@ -425,9 +442,11 @@ fn wasmRocExpectFailed(expect_failed_args: *const builtins.host_abi.RocExpectFai
     _ = expect_failed_args;
 }
 
-fn wasmRocCrashed(crashed_args: *const builtins.host_abi.RocCrashed, _: *anyopaque) callconv(.C) void {
-    // No-op in WASM playground
-    _ = crashed_args;
+fn wasmRocCrashed(crashed_args: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.C) void {
+    const ctx: *CrashContext = @ptrCast(@alignCast(env));
+    ctx.recordCrash(crashed_args.utf8_bytes[0..crashed_args.len]) catch |err| {
+        std.debug.panic("failed to record crash in wasm playground: {}", .{err});
+    };
 }
 
 /// Initialize the WASM module in START state
@@ -600,7 +619,8 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
                 try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
                 return;
             };
-            repl_instance.?.* = Repl.init(allocator, roc_ops) catch |err| {
+            const crash_ctx_ptr = repl_crash_ctx orelse unreachable;
+            repl_instance.?.* = Repl.init(allocator, roc_ops, crash_ctx_ptr) catch |err| {
                 allocator.destroy(roc_ops);
                 allocator.destroy(repl_instance.?);
                 repl_instance = null;

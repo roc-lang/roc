@@ -29,7 +29,6 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: e
 
     var interpreter = try Interpreter.init(test_allocator, resources.module_env);
     defer interpreter.deinit();
-    test_env_instance.setInterpreter(&interpreter);
 
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
@@ -57,7 +56,6 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
 
     var interpreter = try Interpreter.init(test_allocator, resources.module_env);
     defer interpreter.deinit();
-    test_env_instance.setInterpreter(&interpreter);
 
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
@@ -83,7 +81,6 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
 
     var interpreter = try Interpreter.init(test_allocator, resources.module_env);
     defer interpreter.deinit();
-    test_env_instance.setInterpreter(&interpreter);
 
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
@@ -118,7 +115,6 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
 
     var interpreter = try Interpreter.init(test_allocator, resources.module_env);
     defer interpreter.deinit();
-    test_env_instance.setInterpreter(&interpreter);
 
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
@@ -167,7 +163,6 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
 
     var interpreter = try Interpreter.init(test_allocator, resources.module_env);
     defer interpreter.deinit();
-    test_env_instance.setInterpreter(&interpreter);
 
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
@@ -211,7 +206,6 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
 
     var interpreter = try Interpreter.init(test_allocator, resources.module_env);
     defer interpreter.deinit();
-    test_env_instance.setInterpreter(&interpreter);
 
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
@@ -389,7 +383,6 @@ test "eval tag - already primitive" {
 
     var interpreter = try Interpreter.init(test_allocator, resources.module_env);
     defer interpreter.deinit();
-    test_env_instance.setInterpreter(&interpreter);
 
     const ops = test_env_instance.get_ops();
     const result = try interpreter.evalMinimal(resources.expr_idx, ops);
@@ -419,7 +412,6 @@ test "interpreter reuse across multiple evaluations" {
 
         var interpreter = try Interpreter.init(test_allocator, resources.module_env);
         defer interpreter.deinit();
-        test_env_instance.setInterpreter(&interpreter);
 
         const ops = test_env_instance.get_ops();
 
