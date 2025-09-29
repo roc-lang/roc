@@ -51,7 +51,6 @@ const TestHost = struct {
     fn crashState(self: *TestHost) CrashState {
         return self.crash.state;
     }
-
 };
 
 fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
