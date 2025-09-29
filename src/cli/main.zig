@@ -1,6 +1,6 @@
 //! Roc command line interface for the new compiler. Entrypoint of the Roc binary.
 //! Build with `zig build -Dfuzz -Dsystem-afl=false`.
-//! Result is at `./zig-out/bin/roc`
+//! Result is at `./zig-out/bin/roc`.
 
 const std = @import("std");
 const build_options = @import("build_options");
