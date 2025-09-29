@@ -142,7 +142,13 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
     @memcpy(dst, src);
 }
 
-/// Copy this value into a destination pointer, using the destination layout to choose representation when needed
+/// Copy this value into a destination pointer, using the destination layout to choose representation.
+///
+/// This exists because we still have a few places (notably tag-union payloads and
+/// closure capture records) where the pointer supplied by the caller is less
+/// aligned than the source layout would like. Until we fix those layout gaps we
+/// perform byte copies here instead of going through `copyToPtr`, which would
+/// attempt an `@alignCast` and panic.
 pub fn copyToPtrAs(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopaque, dest_layout: Layout, ops: *RocOps) !void {
     std.debug.assert(self.is_initialized);
     if (self.ptr == null) return error.NullStackPointer;
