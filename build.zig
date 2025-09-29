@@ -30,6 +30,10 @@ pub fn build(b: *std.Build) void {
     const no_bin = b.option(bool, "no-bin", "Skip emitting binaries (important for fast incremental compilation)") orelse false;
     const trace_eval = b.option(bool, "trace-eval", "Enable detailed evaluation tracing for debugging") orelse (optimize == .Debug);
 
+    const parsed_args = parseBuildArgs(b);
+    const run_args = parsed_args.run_args;
+    const test_filters = parsed_args.test_filters;
+
     // llvm configuration
     const use_system_llvm = b.option(bool, "system-llvm", "Attempt to automatically detect and use system installed llvm") orelse false;
     const enable_llvm = !use_system_llvm; // removed build flag `-Dllvm`, we include LLVM libraries by default now
@@ -78,7 +82,7 @@ pub fn build(b: *std.Build) void {
     // add main roc exe
     const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd) orelse return;
     roc_modules.addAll(roc_exe);
-    install_and_run(b, no_bin, roc_exe, roc_step, run_step);
+    install_and_run(b, no_bin, roc_exe, roc_step, run_step, run_args);
 
     // Add snapshot tool
     const snapshot_exe = b.addExecutable(.{
@@ -90,7 +94,7 @@ pub fn build(b: *std.Build) void {
     });
     roc_modules.addAll(snapshot_exe);
     add_tracy(b, roc_modules.build_options, snapshot_exe, target, false, flag_enable_tracy);
-    install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step);
+    install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step, run_args);
 
     const playground_exe = b.addExecutable(.{
         .name = "playground",
@@ -136,8 +140,8 @@ pub fn build(b: *std.Build) void {
         playground_test_step.dependOn(&install.step);
 
         const run_playground_test = b.addRunArtifact(playground_integration_test_exe);
-        if (b.args) |args| {
-            run_playground_test.addArgs(args);
+        if (run_args.len != 0) {
+            run_playground_test.addArgs(run_args);
         }
         run_playground_test.step.dependOn(&install.step);
         playground_test_step.dependOn(&run_playground_test.step);
@@ -146,8 +150,11 @@ pub fn build(b: *std.Build) void {
     };
 
     // Create and add module tests
-    const module_tests = roc_modules.createModuleTests(b, target, optimize, zstd);
+    const module_tests = roc_modules.createModuleTests(b, target, optimize, zstd, test_filters);
     for (module_tests) |module_test| {
+        if (run_args.len != 0) {
+            module_test.run_step.addArgs(run_args);
+        }
         b.default_step.dependOn(&module_test.test_step.step);
         test_step.dependOn(&module_test.run_step.step);
     }
@@ -159,11 +166,15 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .filters = test_filters,
     });
     roc_modules.addAll(snapshot_test);
     add_tracy(b, roc_modules.build_options, snapshot_test, target, false, flag_enable_tracy);
 
     const run_snapshot_test = b.addRunArtifact(snapshot_test);
+    if (run_args.len != 0) {
+        run_snapshot_test.addArgs(run_args);
+    }
     test_step.dependOn(&run_snapshot_test.step);
 
     // Add CLI test
@@ -173,12 +184,16 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .filters = test_filters,
     });
     roc_modules.addAll(cli_test);
     cli_test.linkLibrary(zstd.artifact("zstd"));
     add_tracy(b, roc_modules.build_options, cli_test, target, false, flag_enable_tracy);
 
     const run_cli_test = b.addRunArtifact(cli_test);
+    if (run_args.len != 0) {
+        run_cli_test.addArgs(run_args);
+    }
     test_step.dependOn(&run_cli_test.step);
 
     // Add watch tests
@@ -188,6 +203,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .filters = test_filters,
     });
     roc_modules.addAll(watch_test);
     add_tracy(b, roc_modules.build_options, watch_test, target, false, flag_enable_tracy);
@@ -201,6 +217,9 @@ pub fn build(b: *std.Build) void {
     }
 
     const run_watch_test = b.addRunArtifact(watch_test);
+    if (run_args.len != 0) {
+        run_watch_test.addArgs(run_args);
+    }
     test_step.dependOn(&run_watch_test.step);
 
     b.default_step.dependOn(playground_step);
@@ -252,6 +271,7 @@ pub fn build(b: *std.Build) void {
             build_afl,
             use_system_afl,
             no_bin,
+            run_args,
             target,
             optimize,
             roc_modules,
@@ -269,6 +289,7 @@ fn add_fuzz_target(
     build_afl: bool,
     use_system_afl: bool,
     no_bin: bool,
+    run_args: []const []const u8,
     target: ResolvedTarget,
     optimize: OptimizeMode,
     roc_modules: modules.RocModules,
@@ -300,7 +321,7 @@ fn add_fuzz_target(
     });
     repro_exe.root_module.addImport("fuzz_test", fuzz_obj.root_module);
 
-    install_and_run(b, no_bin, repro_exe, repro_step, repro_step);
+    install_and_run(b, no_bin, repro_exe, repro_step, repro_step, run_args);
 
     if (fuzz and build_afl and !no_bin) {
         const fuzz_step = b.step(name_exe, b.fmt("Generate fuzz executable for {s}", .{name}));
@@ -487,6 +508,7 @@ fn install_and_run(
     exe: *Step.Compile,
     build_step: *Step,
     run_step: *Step,
+    run_args: []const []const u8,
 ) void {
     if (run_step != build_step) {
         run_step.dependOn(build_step);
@@ -502,11 +524,68 @@ fn install_and_run(
 
         const run = b.addRunArtifact(exe);
         run.step.dependOn(&install.step);
-        if (b.args) |args| {
-            run.addArgs(args);
+        if (run_args.len != 0) {
+            run.addArgs(run_args);
         }
         run_step.dependOn(&run.step);
     }
+}
+
+const ParsedBuildArgs = struct {
+    run_args: []const []const u8,
+    test_filters: []const []const u8,
+};
+
+fn appendFilter(
+    list: *std.ArrayList([]const u8),
+    b: *std.Build,
+    value: []const u8,
+) void {
+    const trimmed = std.mem.trim(u8, value, " \t\n\r");
+    if (trimmed.len == 0) return;
+    list.append(b.dupe(trimmed)) catch @panic("OOM while parsing --test-filter value");
+}
+
+fn parseBuildArgs(b: *std.Build) ParsedBuildArgs {
+    const raw_args = b.args orelse return .{
+        .run_args = &.{},
+        .test_filters = &.{},
+    };
+
+    var run_args_list = std.ArrayList([]const u8).init(b.allocator);
+    var filter_list = std.ArrayList([]const u8).init(b.allocator);
+
+    var i: usize = 0;
+    while (i < raw_args.len) {
+        const arg = raw_args[i];
+
+        if (std.mem.eql(u8, arg, "--test-filter")) {
+            i += 1;
+            if (i >= raw_args.len) {
+                std.log.warn("ignoring --test-filter with no value", .{});
+                break;
+            }
+            const value = raw_args[i];
+            appendFilter(&filter_list, b, value);
+            i += 1;
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, arg, "--test-filter=")) {
+            const value = arg["--test-filter=".len..];
+            appendFilter(&filter_list, b, value);
+            i += 1;
+            continue;
+        }
+
+        run_args_list.append(arg) catch @panic("OOM while recording build arguments");
+        i += 1;
+    }
+
+    const run_args = run_args_list.toOwnedSlice() catch @panic("OOM while finalizing build arguments");
+    const test_filters = filter_list.toOwnedSlice() catch @panic("OOM while finalizing test filters");
+
+    return .{ .run_args = run_args, .test_filters = test_filters };
 }
 
 fn add_tracy(
