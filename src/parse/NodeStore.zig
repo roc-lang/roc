@@ -1169,6 +1169,7 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                 .anno = @enumFromInt(node.data.rhs),
                 .kind = .alias,
                 .where = if (node.main_token != 0) @enumFromInt(node.main_token) else null,
+                .block = null,
             } };
         },
         .type_decl_nominal => {
@@ -1178,6 +1179,7 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                 .anno = @enumFromInt(node.data.rhs),
                 .kind = .nominal,
                 .where = if (node.main_token != 0) @enumFromInt(node.main_token) else null,
+                .block = null,
             } };
         },
         .type_anno => {

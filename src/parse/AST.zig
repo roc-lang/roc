@@ -676,6 +676,7 @@ pub const Diagnostic = struct {
         expected_expr_close_curly,
         expr_dot_suffix_not_allowed,
         incomplete_import,
+        nominal_block_cannot_have_final_expression,
     };
 };
 
@@ -836,6 +837,9 @@ pub const Statement = union(enum) {
         anno: TypeAnno.Idx,
         where: ?Collection.Idx,
         kind: TypeDeclKind,
+        /// Optional block for nominal types (e.g., `Foo := [A, B].{ x = 5 }`)
+        /// Only valid when kind is .nominal
+        block: ?Block,
         region: TokenizedRegion,
     },
     type_anno: struct {

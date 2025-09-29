@@ -1177,6 +1177,16 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 self.advance();
                 const anno = try self.parseTypeAnno(.not_looking_for_args);
                 const where_clause = try self.parseWhereConstraint();
+
+                // For nominal types, check if there's an optional .{ block }
+                var block: ?AST.Block = null;
+                if (kind == .nominal and self.peek() == .Dot and self.peekN(1) == .OpenCurly) {
+                    self.advance(); // consume .
+                    self.advance(); // consume {
+                    const block_start = self.pos - 1;
+                    block = try self.parseStatementOnlyBlock(block_start);
+                }
+
                 // Use the type annotation's end position if there's no where clause,
                 // otherwise use the current position (after parsing where clause)
                 const statement_idx = try self.store.addStatement(.{ .type_decl = .{
@@ -1184,6 +1194,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     .anno = anno,
                     .where = where_clause,
                     .kind = kind,
+                    .block = block,
                     .region = .{ .start = start, .end = self.pos },
                 } });
                 return statement_idx;
@@ -2933,6 +2944,50 @@ pub fn parseBlock(self: *Parser, start: u32) Error!AST.Expr.Idx {
         .statements = statements,
         .region = .{ .start = start, .end = self.pos },
     } });
+}
+
+/// Parse a block that contains only statements, no ending expression.
+/// This is used for nominal type blocks like `Foo := [A, B].{ x = 5 }`
+/// {
+///     <stmt1>
+///     ...
+///     <stmtN>
+/// }
+pub fn parseStatementOnlyBlock(self: *Parser, start: u32) Error!AST.Block {
+    const scratch_top = self.store.scratchStatementTop();
+
+    while (self.peek() != .EndOfFile and self.peek() != .CloseCurly) {
+        const statement_pos = self.pos;
+        const statement = try self.parseStmt();
+
+        // Check if this is an expression statement (the last statement must not be an expression)
+        const stmt = self.store.getStatement(statement);
+        if (stmt == .expr) {
+            // Check if we're at the closing brace (this would be a final expression)
+            if (self.peek() == .CloseCurly) {
+                try self.pushDiagnostic(.nominal_block_cannot_have_final_expression, .{
+                    .start = statement_pos,
+                    .end = self.pos,
+                });
+                // Still add it to maintain AST structure
+            }
+        }
+
+        try self.store.addScratchStatement(statement);
+    }
+
+    self.expect(.CloseCurly) catch {
+        try self.pushDiagnostic(.expected_expr_close_curly, .{
+            .start = self.pos,
+            .end = self.pos,
+        });
+    };
+
+    const statements = try self.store.statementSpanFrom(scratch_top);
+    return AST.Block{
+        .statements = statements,
+        .region = .{ .start = start, .end = self.pos },
+    };
 }
 
 /// Parse a record.
