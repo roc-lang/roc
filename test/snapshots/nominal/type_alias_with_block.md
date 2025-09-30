@@ -10,7 +10,7 @@ module []
 Foo : [A, B, C].{ x = 5 }
 ~~~
 # EXPECTED
-TYPE ALIAS CANNOT HAVE BLOCK - type_alias_with_block.md:3:16:3:17
+TYPE ALIAS WITH ASSOCIATED ITEMS - type_alias_with_block.md:3:16:3:17
 # PROBLEMS
 **TYPE ALIAS WITH ASSOCIATED ITEMS**
 Type aliases cannot have associated items (such as types or methods).

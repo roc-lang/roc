@@ -38,8 +38,8 @@ h = |x, y,| {
 }
 ~~~
 # EXPECTED
-WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:8:1:8:77
-WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:9:1:9:77
+WHERE CLAUSE IN TYPE DECLARATION - everything.md:8:10:8:77
+WHERE CLAUSE IN TYPE DECLARATION - everything.md:9:10:9:77
 MODULE NOT FOUND - everything.md:4:1:4:31
 MODULE NOT FOUND - everything.md:5:1:5:47
 UNUSED VARIABLE - everything.md:26:10:26:11
@@ -52,26 +52,28 @@ UNUSED VARIABLE - everything.md:21:2:21:4
 UNUSED VARIABLE - everything.md:22:2:22:4
 UNUSED VARIABLE - everything.md:23:2:23:4
 # PROBLEMS
-**WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
-You cannot define a `where` clause inside a type declaration.
+**WHERE CLAUSE IN TYPE DECLARATION**
+Type declarations cannot include `where` clauses.
 
-You're attempting do this here:
-**everything.md:8:1:8:77:**
+Only type annotations (such as annottions for a function or other value) can have them.
+
+**everything.md:8:10:8:77:**
 ```roc
 A(a) : a where module(a).a1 : (a, a,) -> Str, module(a).a2 : (a, a,) -> Str,
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
-You cannot define a `where` clause inside a type declaration.
+**WHERE CLAUSE IN TYPE DECLARATION**
+Type declarations cannot include `where` clauses.
 
-You're attempting do this here:
-**everything.md:9:1:9:77:**
+Only type annotations (such as annottions for a function or other value) can have them.
+
+**everything.md:9:10:9:77:**
 ```roc
 B(b) : b where module(b).b1 : (b, b,) -> Str, module(b).b2 : (b, b,) -> Str,
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **MODULE NOT FOUND**
@@ -249,38 +251,12 @@ EndOfFile(32:1-32:1),
 			(header @8.1-8.5 (name "A")
 				(args
 					(ty-var @8.3-8.4 (raw "a"))))
-			(ty-var @8.8-8.9 (raw "a"))
-			(where
-				(method @8.16-8.45 (module-of "a") (name "a1")
-					(args
-						(ty-tuple @8.31-8.38
-							(ty-var @8.32-8.33 (raw "a"))
-							(ty-var @8.35-8.36 (raw "a"))))
-					(ty @8.42-8.45 (name "Str")))
-				(method @8.47-8.76 (module-of "a") (name "a2")
-					(args
-						(ty-tuple @8.62-8.69
-							(ty-var @8.63-8.64 (raw "a"))
-							(ty-var @8.66-8.67 (raw "a"))))
-					(ty @8.73-8.76 (name "Str")))))
+			(ty-var @8.8-8.9 (raw "a")))
 		(s-type-decl @9.1-9.77
 			(header @9.1-9.5 (name "B")
 				(args
 					(ty-var @9.3-9.4 (raw "b"))))
-			(ty-var @9.8-9.9 (raw "b"))
-			(where
-				(method @9.16-9.45 (module-of "b") (name "b1")
-					(args
-						(ty-tuple @9.31-9.38
-							(ty-var @9.32-9.33 (raw "b"))
-							(ty-var @9.35-9.36 (raw "b"))))
-					(ty @9.42-9.45 (name "Str")))
-				(method @9.47-9.76 (module-of "b") (name "b2")
-					(args
-						(ty-tuple @9.62-9.69
-							(ty-var @9.63-9.64 (raw "b"))
-							(ty-var @9.66-9.67 (raw "b"))))
-					(ty @9.73-9.76 (name "Str")))))
+			(ty-var @9.8-9.9 (raw "b")))
 		(s-type-decl @11.1-11.19
 			(header @11.1-11.9 (name "C")
 				(args
@@ -406,25 +382,7 @@ import I2 exposing [
 
 # Where constraint
 A(a) : a
-	where
-		module(a).a1 : (
-			a,
-			a,
-		) -> Str,
-		module(a).a2 : (
-			a,
-			a,
-		) -> Str
 B(b) : b
-	where
-		module(b).b1 : (
-			b,
-			b,
-		) -> Str,
-		module(b).b2 : (
-			b,
-			b,
-		) -> Str
 
 C(
 	a,
@@ -513,10 +471,10 @@ h = |
 		(p-assign @18.1-18.2 (ident "h"))
 		(e-closure @18.5-31.2
 			(captures
-				(capture @18.1-18.2 (ident "h"))
 				(capture @26.7-26.8 (ident "a"))
-				(capture @28.8-28.9 (ident "a"))
 				(capture @27.6-27.7 (ident "a"))
+				(capture @28.8-28.9 (ident "a"))
+				(capture @18.1-18.2 (ident "h"))
 				(capture @29.7-29.8 (ident "a")))
 			(e-lambda @18.5-31.2
 				(args

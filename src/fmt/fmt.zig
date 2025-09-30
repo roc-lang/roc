@@ -486,15 +486,6 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
                 _ = try fmt.formatTypeAnno(d.anno);
-                if (d.where) |w| {
-                    if (multiline) {
-                        _ = try fmt.flushCommentsBefore(anno_region.end);
-                        try fmt.ensureNewline();
-                        fmt.curr_indent += 1;
-                        try fmt.pushIndent();
-                    }
-                    try fmt.formatWhereConstraint(w, multiline);
-                }
             },
             .type_anno => |t| {
                 try fmt.pushTokenText(t.name);

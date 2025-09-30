@@ -644,13 +644,6 @@ pub fn canonicalizeFile(
                 // The identified of the type
                 const type_ident = types.TypeIdent{ .ident_idx = type_header.name };
 
-                // Canonicalize where clauses if present
-                if (type_decl.where) |_| {
-                    try self.env.pushDiagnostic(Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
-                        .region = region,
-                    } });
-                }
-
                 // Create the real CIR type declaration statement with the canonicalized annotation
                 const real_cir_type_decl, const type_decl_content = blk: {
                     switch (type_decl.kind) {

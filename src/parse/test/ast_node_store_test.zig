@@ -227,7 +227,6 @@ test "NodeStore round trip - Statement" {
             .header = rand_idx(AST.TypeHeader.Idx),
             .kind = AST.TypeDeclKind.nominal,
             .region = rand_region(),
-            .where = rand_idx(AST.Collection.Idx),
             .block = null,
         },
     });

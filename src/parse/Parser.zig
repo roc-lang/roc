@@ -1176,7 +1176,18 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 const kind: AST.TypeDeclKind = if (self.peek() == .OpColonEqual) .nominal else .alias;
                 self.advance();
                 const anno = try self.parseTypeAnno(.not_looking_for_args);
+
+                // Parse where clause if present, but immediately error and discard it
+                const where_start = self.pos;
                 const where_clause = try self.parseWhereConstraint();
+                if (where_clause) |_| {
+                    // Find the end position after parsing the where clause
+                    const where_end = self.pos;
+                    try self.pushDiagnostic(.where_clause_not_allowed_in_type_declaration, .{
+                        .start = where_start,
+                        .end = where_end,
+                    });
+                }
 
                 // Check if there's a .{ block } after the type annotation
                 var block: ?AST.Block = null;
@@ -1212,12 +1223,9 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     }
                 }
 
-                // Use the type annotation's end position if there's no where clause,
-                // otherwise use the current position (after parsing where clause)
                 const statement_idx = try self.store.addStatement(.{ .type_decl = .{
                     .header = header,
                     .anno = anno,
-                    .where = where_clause,
                     .kind = kind,
                     .block = block,
                     .region = .{ .start = start, .end = self.pos },

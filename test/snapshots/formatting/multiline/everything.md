@@ -117,8 +117,8 @@ h = |x, y| {
 }
 ~~~
 # EXPECTED
-WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:14:1:23:11
-WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:24:1:33:11
+WHERE CLAUSE IN TYPE DECLARATION - everything.md:15:2:23:11
+WHERE CLAUSE IN TYPE DECLARATION - everything.md:25:2:33:11
 MODULE NOT FOUND - everything.md:4:1:7:2
 MODULE NOT FOUND - everything.md:8:1:11:2
 UNUSED VARIABLE - everything.md:90:5:90:6
@@ -131,13 +131,13 @@ UNUSED VARIABLE - everything.md:73:2:73:4
 UNUSED VARIABLE - everything.md:77:2:77:4
 UNUSED VARIABLE - everything.md:81:2:81:4
 # PROBLEMS
-**WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
-You cannot define a `where` clause inside a type declaration.
+**WHERE CLAUSE IN TYPE DECLARATION**
+Type declarations cannot include `where` clauses.
 
-You're attempting do this here:
-**everything.md:14:1:23:11:**
+Only type annotations (such as annottions for a function or other value) can have them.
+
+**everything.md:15:2:23:11:**
 ```roc
-A(a) : a
 	where
 		module(a).a1 : (
 			a,
@@ -150,13 +150,13 @@ A(a) : a
 ```
 
 
-**WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
-You cannot define a `where` clause inside a type declaration.
+**WHERE CLAUSE IN TYPE DECLARATION**
+Type declarations cannot include `where` clauses.
 
-You're attempting do this here:
-**everything.md:24:1:33:11:**
+Only type annotations (such as annottions for a function or other value) can have them.
+
+**everything.md:25:2:33:11:**
 ```roc
-B(b) : b
 	where
 		module(b).b1 : (
 			b,
@@ -427,38 +427,12 @@ EndOfFile(111:1-111:1),
 			(header @14.1-14.5 (name "A")
 				(args
 					(ty-var @14.3-14.4 (raw "a"))))
-			(ty-var @14.8-14.9 (raw "a"))
-			(where
-				(method @16.3-19.11 (module-of "a") (name "a1")
-					(args
-						(ty-tuple @16.18-19.4
-							(ty-var @17.4-17.5 (raw "a"))
-							(ty-var @18.4-18.5 (raw "a"))))
-					(ty @19.8-19.11 (name "Str")))
-				(method @20.3-23.11 (module-of "a") (name "a2")
-					(args
-						(ty-tuple @20.18-23.4
-							(ty-var @21.4-21.5 (raw "a"))
-							(ty-var @22.4-22.5 (raw "a"))))
-					(ty @23.8-23.11 (name "Str")))))
+			(ty-var @14.8-14.9 (raw "a")))
 		(s-type-decl @24.1-33.11
 			(header @24.1-24.5 (name "B")
 				(args
 					(ty-var @24.3-24.4 (raw "b"))))
-			(ty-var @24.8-24.9 (raw "b"))
-			(where
-				(method @26.3-29.11 (module-of "b") (name "b1")
-					(args
-						(ty-tuple @26.18-29.4
-							(ty-var @27.4-27.5 (raw "b"))
-							(ty-var @28.4-28.5 (raw "b"))))
-					(ty @29.8-29.11 (name "Str")))
-				(method @30.3-33.11 (module-of "b") (name "b2")
-					(args
-						(ty-tuple @30.18-33.4
-							(ty-var @31.4-31.5 (raw "b"))
-							(ty-var @32.4-32.5 (raw "b"))))
-					(ty @33.8-33.11 (name "Str")))))
+			(ty-var @24.8-24.9 (raw "b")))
 		(s-type-decl @35.1-41.2
 			(header @35.1-38.2 (name "C")
 				(args
@@ -570,7 +544,98 @@ EndOfFile(111:1-111:1),
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+# Import exposing
+import I1 exposing [
+	I11,
+	I12,
+]
+import I2 exposing [
+	I21 as Ias1,
+	I22 as Ias2,
+]
+
+# Where constraint
+A(a) : a
+B(b) : b
+
+C(
+	a,
+	b,
+) : (
+	a,
+	b,
+)
+D(
+	a,
+	b,
+) : C(
+	a,
+	b,
+)
+E : {
+	a : Str,
+	b : Str,
+}
+F : [
+	A,
+	B,
+]
+
+g : e -> e where module(e).A, module(e).B
+
+h = |x, y| {
+	h1 = {
+		h11: x,
+		h12: x,
+		h13: {
+			h131: x,
+			h132: y,
+		},
+	}
+	h2 = h(
+		x,
+		y,
+	)
+	h3 = A(
+		x,
+		y,
+	)
+	h4 = [
+		x,
+		y,
+	]
+	h5 = (
+		x,
+		y,
+	)
+
+	match x {
+		Z1(
+			(
+				a,
+				b,
+			),
+		) => a
+		Z2(
+			a,
+			b,
+		) => a
+		Z3(
+			{
+				a,
+				b,
+			},
+		) => a
+		Z4(
+			[
+				a,
+				b,
+			],
+		) => a
+	}
+}
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -579,10 +644,10 @@ NO CHANGE
 		(p-assign @60.1-60.2 (ident "h"))
 		(e-closure @60.5-110.2
 			(captures
-				(capture @60.1-60.2 (ident "h"))
 				(capture @89.5-89.6 (ident "a"))
-				(capture @99.5-99.6 (ident "a"))
 				(capture @94.4-94.5 (ident "a"))
+				(capture @99.5-99.6 (ident "a"))
+				(capture @60.1-60.2 (ident "h"))
 				(capture @105.5-105.6 (ident "a")))
 			(e-lambda @60.5-110.2
 				(args

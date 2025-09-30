@@ -11,7 +11,7 @@ Foo := [A, B, C].{ x = 5
 x }
 ~~~
 # EXPECTED
-NOMINAL BLOCK CANNOT HAVE FINAL EXPRESSION - nominal_type_block_with_final_expression.md:4:1:4:2
+EXPRESSION IN ASSOCIATED ITEMS - nominal_type_block_with_final_expression.md:4:1:4:2
 # PROBLEMS
 **EXPRESSION IN ASSOCIATED ITEMS**
 Associated items (such as types or methods) can only have associated types and values, not plain expressions.

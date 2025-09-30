@@ -254,6 +254,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .no_else => "IF WITHOUT ELSE",
         .type_alias_cannot_have_block => "TYPE ALIAS WITH ASSOCIATED ITEMS",
         .nominal_block_cannot_have_final_expression => "EXPRESSION IN ASSOCIATED ITEMS",
+        .where_clause_not_allowed_in_type_declaration => "WHERE CLAUSE IN TYPE DECLARATION",
         else => "PARSE ERROR",
     };
 
@@ -566,6 +567,14 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addLineBreak();
             try report.document.addText("To fix this, remove the expression at the very end.");
         },
+        .where_clause_not_allowed_in_type_declaration => {
+            try report.document.addText("Type declarations cannot include ");
+            try report.document.addKeyword("where");
+            try report.document.addText(" clauses.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Only type annotations (such as annottions for a function or other value) can have them.");
+        },
         else => {
             const tag_name = @tagName(diagnostic.tag);
             const owned_tag = try report.addOwnedString(tag_name);
@@ -696,6 +705,7 @@ pub const Diagnostic = struct {
         incomplete_import,
         nominal_block_cannot_have_final_expression,
         type_alias_cannot_have_block,
+        where_clause_not_allowed_in_type_declaration,
     };
 };
 
@@ -854,7 +864,6 @@ pub const Statement = union(enum) {
     type_decl: struct {
         header: TypeHeader.Idx,
         anno: TypeAnno.Idx,
-        where: ?Collection.Idx,
         kind: TypeDeclKind,
         /// Block for associated items in .nominal types
         /// (e.g. the curly braces in `Foo := [A, B].{ x = 5 }`)
@@ -1000,17 +1009,6 @@ pub const Statement = union(enum) {
                 }
 
                 try ast.store.getTypeAnno(a.anno).pushToSExprTree(gpa, env, ast, tree);
-
-                if (a.where) |where_coll| {
-                    const where_node = tree.beginNode();
-                    try tree.pushStaticAtom("where");
-                    const attrs2 = tree.beginNode();
-                    for (ast.store.whereClauseSlice(.{ .span = ast.store.getCollection(where_coll).span })) |clause_idx| {
-                        const clause_child = ast.store.getWhereClause(clause_idx);
-                        try clause_child.pushToSExprTree(gpa, env, ast, tree);
-                    }
-                    try tree.endNode(where_node, attrs2);
-                }
 
                 try tree.endNode(begin, attrs);
             },

@@ -391,24 +391,18 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
             node.data.lhs = @intFromEnum(d.header);
             node.data.rhs = @intFromEnum(d.anno);
 
-            // Store where clause and optional block in extra_data
-            // Format: [where_idx (0 if null), has_block (0/1), block_data if has_block]
-            const extra_start = @as(u32, @intCast(store.extra_data.items.len));
-            const where_idx = if (d.where) |w| @intFromEnum(w) else 0;
-            try store.extra_data.append(store.gpa, where_idx);
-
+            // Store optional block in extra_data if present
             if (d.block) |blk| {
-                try store.extra_data.append(store.gpa, 1); // has_block = true
-                // Store block: statements span start, span len, region start, region end
+                // Format: [statements_start, statements_len, region_start, region_end]
+                const extra_start = @as(u32, @intCast(store.extra_data.items.len));
                 try store.extra_data.append(store.gpa, blk.statements.span.start);
                 try store.extra_data.append(store.gpa, blk.statements.span.len);
                 try store.extra_data.append(store.gpa, blk.region.start);
                 try store.extra_data.append(store.gpa, blk.region.end);
+                node.main_token = extra_start;
             } else {
-                try store.extra_data.append(store.gpa, 0); // has_block = false
+                node.main_token = 0;
             }
-
-            node.main_token = extra_start;
         },
         .type_anno => |a| {
             node.tag = .type_anno;
@@ -1179,18 +1173,15 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
             } };
         },
         .type_decl => {
-            // Read where clause and block from extra_data
-            // Format: [where_idx (0 if null), has_block (0/1), block_data if has_block]
-            const extra_start = node.main_token;
-            const where_idx = store.extra_data.items[extra_start];
-            const has_block = store.extra_data.items[extra_start + 1];
-
+            // Read block from extra_data if present (main_token != 0)
             var block: ?AST.Block = null;
-            if (has_block != 0) {
-                const stmt_start = store.extra_data.items[extra_start + 2];
-                const stmt_len = store.extra_data.items[extra_start + 3];
-                const reg_start = store.extra_data.items[extra_start + 4];
-                const reg_end = store.extra_data.items[extra_start + 5];
+            if (node.main_token != 0) {
+                const extra_start = node.main_token;
+                // Format: [statements_start, statements_len, region_start, region_end]
+                const stmt_start = store.extra_data.items[extra_start];
+                const stmt_len = store.extra_data.items[extra_start + 1];
+                const reg_start = store.extra_data.items[extra_start + 2];
+                const reg_end = store.extra_data.items[extra_start + 3];
                 block = AST.Block{
                     .statements = AST.Statement.Span{ .span = .{ .start = stmt_start, .len = stmt_len } },
                     .region = .{ .start = reg_start, .end = reg_end },
@@ -1202,23 +1193,19 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                 .header = @enumFromInt(node.data.lhs),
                 .anno = @enumFromInt(node.data.rhs),
                 .kind = .alias,
-                .where = if (where_idx != 0) @enumFromInt(where_idx) else null,
                 .block = block,
             } };
         },
         .type_decl_nominal => {
-            // Read where clause and block from extra_data
-            // Format: [where_idx (0 if null), has_block (0/1), block_data if has_block]
-            const extra_start = node.main_token;
-            const where_idx = store.extra_data.items[extra_start];
-            const has_block = store.extra_data.items[extra_start + 1];
-
+            // Read block from extra_data if present (main_token != 0)
             var block: ?AST.Block = null;
-            if (has_block != 0) {
-                const stmt_start = store.extra_data.items[extra_start + 2];
-                const stmt_len = store.extra_data.items[extra_start + 3];
-                const reg_start = store.extra_data.items[extra_start + 4];
-                const reg_end = store.extra_data.items[extra_start + 5];
+            if (node.main_token != 0) {
+                const extra_start = node.main_token;
+                // Format: [statements_start, statements_len, region_start, region_end]
+                const stmt_start = store.extra_data.items[extra_start];
+                const stmt_len = store.extra_data.items[extra_start + 1];
+                const reg_start = store.extra_data.items[extra_start + 2];
+                const reg_end = store.extra_data.items[extra_start + 3];
                 block = AST.Block{
                     .statements = AST.Statement.Span{ .span = .{ .start = stmt_start, .len = stmt_len } },
                     .region = .{ .start = reg_start, .end = reg_end },
@@ -1230,7 +1217,6 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                 .header = @enumFromInt(node.data.lhs),
                 .anno = @enumFromInt(node.data.rhs),
                 .kind = .nominal,
-                .where = if (where_idx != 0) @enumFromInt(where_idx) else null,
                 .block = block,
             } };
         },
