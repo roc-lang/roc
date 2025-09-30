@@ -40,10 +40,10 @@ jobs:
         with:
           arch: x64
 
-      - name: Build roc compiler
+      - name: Build roc compiler and other necessary libs
         uses: ./.github/actions/flaky-retry
         with:
-          command: 'zig build roc'
+          command: 'zig build'
           error_string_contains: 'EndOfStream'
           retry_count: 3
 
