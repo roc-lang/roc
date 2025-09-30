@@ -11,11 +11,12 @@ Foo := [A, B, C].{ x = 5
 x }
 ~~~
 # EXPECTED
-PARSE ERROR - nominal_type_block_with_final_expression.md:4:1:4:2
+NOMINAL BLOCK CANNOT HAVE FINAL EXPRESSION - nominal_type_block_with_final_expression.md:4:1:4:2
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `nominal_block_cannot_have_final_expression`
-This is an unexpected parsing error. Please check your syntax.
+**EXPRESSION IN ASSOCIATED ITEMS**
+Associated items (such as types or methods) can only have associated types and values, not plain expressions.
+
+To fix this, remove the expression at the very end.
 
 **nominal_type_block_with_final_expression.md:4:1:4:2:**
 ```roc

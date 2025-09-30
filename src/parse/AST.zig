@@ -252,6 +252,8 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .where_expected_colon => "WHERE CLAUSE ERROR",
         .where_expected_constraints => "WHERE CLAUSE ERROR",
         .no_else => "IF WITHOUT ELSE",
+        .type_alias_cannot_have_block => "TYPE ALIAS WITH ASSOCIATED ITEMS",
+        .nominal_block_cannot_have_final_expression => "EXPRESSION IN ASSOCIATED ITEMS",
         else => "PARSE ERROR",
     };
 
@@ -547,6 +549,22 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addReflowingText(" branch to specify what value to use when the condition is ");
             try report.document.addKeyword("False");
             try report.document.addReflowingText(".");
+        },
+        .type_alias_cannot_have_block => {
+            try report.document.addText("Type aliases cannot have associated items (such as types or methods).");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Only nominal types (defined with ");
+            try report.document.addAnnotated(":=", .emphasized);
+            try report.document.addReflowingText(") can have associated items. Type aliases (defined with ");
+            try report.document.addAnnotated(":", .emphasized);
+            try report.document.addReflowingText(") only define names for other types.");
+        },
+        .nominal_block_cannot_have_final_expression => {
+            try report.document.addText("Associated items (such as types or methods) can only have associated types and values, not plain expressions.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addText("To fix this, remove the expression at the very end.");
         },
         else => {
             const tag_name = @tagName(diagnostic.tag);

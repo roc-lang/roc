@@ -10,11 +10,12 @@ module []
 Foo : [A, B, C].{ x = 5 }
 ~~~
 # EXPECTED
-PARSE ERROR - type_alias_with_block.md:3:16:3:17
+TYPE ALIAS CANNOT HAVE BLOCK - type_alias_with_block.md:3:16:3:17
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `type_alias_cannot_have_block`
-This is an unexpected parsing error. Please check your syntax.
+**TYPE ALIAS WITH ASSOCIATED ITEMS**
+Type aliases cannot have associated items (such as types or methods).
+
+Only nominal types (defined with **:=**) can have associated items. Type aliases (defined with **:**) only define names for other types.
 
 **type_alias_with_block.md:3:16:3:17:**
 ```roc
