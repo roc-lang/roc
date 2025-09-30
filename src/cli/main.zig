@@ -19,7 +19,6 @@ const unbundle = @import("unbundle");
 const ipc = @import("ipc");
 const fmt = @import("fmt");
 const eval = @import("eval");
-const layout = @import("layout");
 const builtins = @import("builtins");
 
 const cli_args = @import("cli_args.zig");
@@ -42,7 +41,6 @@ const CacheManager = compile.CacheManager;
 const CacheConfig = compile.CacheConfig;
 const tokenize = parse.tokenize;
 const TestRunner = eval.TestRunner;
-const LayoutStore = layout.Store;
 const RocOps = builtins.host_abi.RocOps;
 const RocAlloc = builtins.host_abi.RocAlloc;
 const RocDealloc = builtins.host_abi.RocDealloc;
@@ -430,7 +428,40 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
     defer parsed_args.deinit(gpa);
 
     try switch (parsed_args) {
-        .run => |run_args| rocRun(gpa, run_args),
+        .run => |run_args| {
+            if (std.mem.eql(u8, run_args.path, "main.roc")) {
+                std.fs.cwd().access(run_args.path, .{}) catch |err| switch (err) {
+                    error.FileNotFound => {
+                        const cwd_path = std.fs.cwd().realpathAlloc(gpa, ".") catch |real_err| {
+                            stderr.print(
+                                "Error: No app file specified and default 'main.roc' was not found. Additionally, the current directory could not be resolved: {}\n",
+                                .{real_err},
+                            ) catch {};
+                            std.process.exit(1);
+                        };
+                        stderr.print(
+                            "Error: No app file specified and default 'main.roc' was not found in {s}\n",
+                            .{cwd_path},
+                        ) catch {};
+                        stderr.print(
+                            "\nHint: pass an explicit path (e.g. `roc my-app.roc`) or create a 'main.roc' in that directory.\n",
+                            .{},
+                        ) catch {};
+                        gpa.free(cwd_path);
+                        std.process.exit(1);
+                    },
+                    else => {
+                        stderr.print(
+                            "Error: Unable to access default 'main.roc': {}\n",
+                            .{err},
+                        ) catch {};
+                        std.process.exit(1);
+                    },
+                };
+            }
+
+            rocRun(gpa, run_args);
+        },
         .check => |check_args| rocCheck(gpa, check_args),
         .build => |build_args| rocBuild(gpa, build_args),
         .bundle => |bundle_args| rocBundle(gpa, bundle_args),
@@ -2454,19 +2485,7 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
     };
 
     // Create test runner infrastructure for test evaluation
-    var stack_memory = eval.Stack.initCapacity(gpa, 1024) catch |err| {
-        try stderr.print("Failed to create stack memory: {}", .{err});
-        std.process.exit(1);
-    };
-    defer stack_memory.deinit();
-
-    var layout_cache = LayoutStore.init(&env, &env.types) catch |err| {
-        try stderr.print("Failed to create layout cache: {}", .{err});
-        std.process.exit(1);
-    };
-    defer layout_cache.deinit();
-
-    var test_runner = TestRunner.init(gpa, &env, &stack_memory, &layout_cache, &env.types) catch |err| {
+    var test_runner = TestRunner.init(gpa, &env) catch |err| {
         try stderr.print("Failed to create test runner: {}\n", .{err});
         std.process.exit(1);
     };

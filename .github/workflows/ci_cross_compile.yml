@@ -29,10 +29,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - uses: mlugg/setup-zig@475c97be87a204e6c57fe851f970bd02005a70f0
+      - uses: mlugg/setup-zig@8d6198c65fb0feaa111df26e6b467fea8345e46f # 2.0.5
         with:
           version: 0.14.1
-          use-cache: false
+          use-cache: true
 
       - name: Setup MSVC (Windows)
         if: runner.os == 'Windows'
@@ -40,15 +40,12 @@ jobs:
         with:
           arch: x64
 
-      - name: Build roc compiler
-        id: build1
-        run: zig build
-        continue-on-error: true
-
-      - name: Build roc compiler (retry on EndOfStream)
-        if: failure() && contains(steps.build1.outputs.stderr, 'EndOfStream')
-        id: build2
-        run: zig build
+      - name: Build roc compiler and other necessary libs
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: 'zig build'
+          error_string_contains: 'EndOfStream'
+          retry_count: 3
 
       - name: Cross-compile int platform (Unix)
         if: runner.os != 'Windows'

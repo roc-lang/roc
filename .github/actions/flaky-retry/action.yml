@@ -1,0 +1,98 @@
+name: 'Flaky Retry'
+description: 'Retry a command if it fails with a specific error string'
+inputs:
+  retry_count:
+    description: 'Number of times to retry on failure'
+    required: false
+    default: '3'
+  error_string_contains:
+    description: 'Retry only if error output contains this string'
+    required: true
+  command:
+    description: 'The command to run'
+    required: true
+runs:
+  using: 'composite'
+  steps:
+    - name: Run command with retry logic (Unix)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        attempt=1
+        max_attempts=$((${{ inputs.retry_count }} + 1))
+
+        while [ $attempt -le $max_attempts ]; do
+          echo "Attempt $attempt of $max_attempts"
+
+          # Run command and capture output and exit code
+          output_file=$(mktemp)
+          trap 'rm -f "$output_file"' EXIT
+
+          eval "${{ inputs.command }}" 2>&1 | tee "$output_file"
+          exit_code=${PIPESTATUS[0]}
+
+          # Check if command succeeded
+          if [ $exit_code -eq 0 ]; then
+            echo "Command succeeded"
+            exit 0
+          fi
+
+          # Command failed - check if we should retry
+          if [ $attempt -ge $max_attempts ]; then
+            echo "Command failed after $max_attempts attempts"
+            exit $exit_code
+          fi
+
+          # Check if error matches retry condition
+          if grep -q "${{ inputs.error_string_contains }}" "$output_file"; then
+            echo "Command failed with exit code $exit_code and error output contains '${{ inputs.error_string_contains }}'"
+            echo "Retrying..."
+            attempt=$((attempt + 1))
+            sleep 2
+          else
+            echo "Command failed with exit code $exit_code but error output does not contain '${{ inputs.error_string_contains }}'"
+            echo "Not retrying"
+            exit $exit_code
+          fi
+        done
+
+    - name: Run command with retry logic (Windows)
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        $attempt = 1
+        $maxAttempts = [int]"${{ inputs.retry_count }}" + 1
+
+        while ($attempt -le $maxAttempts) {
+          Write-Host "Attempt $attempt of $maxAttempts"
+
+          # Run command and capture output
+          $ErrorActionPreference = 'Continue'
+          $output = & cmd /c "${{ inputs.command }} 2>&1"
+          $exitCode = $LASTEXITCODE
+          Write-Host $output
+
+          # Check if command succeeded
+          if ($exitCode -eq 0) {
+            Write-Host "Command succeeded"
+            exit 0
+          }
+
+          # Command failed - check if we should retry
+          if ($attempt -ge $maxAttempts) {
+            Write-Host "Command failed after $maxAttempts attempts"
+            exit $exitCode
+          }
+
+          # Check if error matches retry condition
+          if ($output -like "*${{ inputs.error_string_contains }}*") {
+            Write-Host "Command failed with exit code $exitCode and error output contains '${{ inputs.error_string_contains }}'"
+            Write-Host "Retrying..."
+            $attempt++
+            Start-Sleep -Seconds 2
+          } else {
+            Write-Host "Command failed with exit code $exitCode but error output does not contain '${{ inputs.error_string_contains }}'"
+            Write-Host "Not retrying"
+            exit $exitCode
+          }
+        }

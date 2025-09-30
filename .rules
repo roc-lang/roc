@@ -21,10 +21,11 @@ Roc uses two different test strategies to Verify Correctness, and Validate Behav
 
 ### Usage
 
-- **Run Unit Tests** `zig build test` (note `zig test` doesn't work as we have a complicated build system, therefore we use `zig build test` also for individual tests).
-- **Generate or Update All Snapshots Files** `zig build snapshot`
-- **Generate or Update Specific Snapshot File** `zig build snapshot -- <file_path>`
-- **Update EXPECTED from PROBLEMS in Snapshot File** `zig build update-expected -- <file_path>`
+- Run all tests: `zig build test`. To run a specific test: `zig build test -- --test-filter "name of test"`. NEVER use the standard `zig test`, it does not work with our project.
+- Generate or update all snapshots files: `zig build snapshot`
+- Generate or update specific snapshot file: `zig build snapshot -- <file_path>`
+- Update EXPECTED from PROBLEMS in snapshot file: `zig build update-expected -- <file_path>`
+- To generate (or update) AND test the snapshots: `zig build snapshot && zig build test`.
 
 ### Snapshot File Structure
 

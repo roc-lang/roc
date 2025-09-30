@@ -6,6 +6,53 @@ const OptimizeMode = std.builtin.OptimizeMode;
 const ResolvedTarget = std.Build.ResolvedTarget;
 const Dependency = std.Build.Dependency;
 
+fn filtersContain(haystack: []const []const u8, needle: []const u8) bool {
+    for (haystack) |item| {
+        if (std.mem.eql(u8, item, needle)) return true;
+    }
+    return false;
+}
+
+fn aggregatorFilters(module_type: ModuleType) []const []const u8 {
+    return switch (module_type) {
+        .base => &.{"base tests"},
+        .collections => &.{"collections tests"},
+        .builtins => &.{"builtins tests"},
+        .compile => &.{"compile tests"},
+        .can => &.{"compile tests"},
+        .check => &.{"check tests"},
+        .parse => &.{"parser tests"},
+        .layout => &.{"layout tests"},
+        .eval => &.{"eval tests"},
+        .ipc => &.{"ipc tests"},
+        .repl => &.{"repl tests"},
+        .fmt => &.{"fmt tests"},
+        else => &.{},
+    };
+}
+
+fn extendWithAggregatorFilters(
+    b: *Build,
+    base: []const []const u8,
+    module_type: ModuleType,
+) []const []const u8 {
+    if (base.len == 0) return base;
+
+    const extras = aggregatorFilters(module_type);
+    if (extras.len == 0) return base;
+
+    var list = std.ArrayList([]const u8).init(b.allocator);
+    list.ensureTotalCapacity(base.len + extras.len) catch @panic("OOM while extending module test filters");
+    list.appendSlice(base) catch @panic("OOM while extending module test filters");
+
+    for (extras) |extra| {
+        if (filtersContain(base, extra)) continue;
+        list.append(b.dupe(extra)) catch @panic("OOM while extending module test filters");
+    }
+
+    return list.toOwnedSlice() catch @panic("OOM while finalizing module test filters");
+}
+
 /// Represents a test module with its compilation and execution steps.
 pub const ModuleTest = struct {
     test_step: *Step.Compile,
@@ -242,7 +289,14 @@ pub const RocModules = struct {
         }
     }
 
-    pub fn createModuleTests(self: RocModules, b: *Build, target: ResolvedTarget, optimize: OptimizeMode, zstd: ?*Dependency) [19]ModuleTest {
+    pub fn createModuleTests(
+        self: RocModules,
+        b: *Build,
+        target: ResolvedTarget,
+        optimize: OptimizeMode,
+        zstd: ?*Dependency,
+        test_filters: []const []const u8,
+    ) [19]ModuleTest {
         const test_configs = [_]ModuleType{
             .collections,
             .base,
@@ -269,12 +323,14 @@ pub const RocModules = struct {
 
         inline for (test_configs, 0..) |module_type, i| {
             const module = self.getModule(module_type);
+            const module_filters = extendWithAggregatorFilters(b, test_filters, module_type);
             const test_step = b.addTest(.{
                 .name = b.fmt("{s}_test", .{@tagName(module_type)}),
                 .root_module = b.createModule(.{
                     .root_source_file = module.root_source_file.?,
                     .target = target,
                     .optimize = optimize,
+                    .filters = module_filters,
                     // IPC module needs libc for mmap, munmap, close on POSIX systems
                     // Bundle module needs libc for zstd
                     // Unbundle module doesn't need libc (uses Zig's std zstandard)

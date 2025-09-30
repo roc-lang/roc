@@ -259,6 +259,66 @@ pub const Store = struct {
         return try self.insertLayout(layout);
     }
 
+    /// Insert a tuple layout from concrete element layouts
+    pub fn putTuple(self: *Self, element_layouts: []const Layout) std.mem.Allocator.Error!Idx {
+        // Collect fields
+        var temp_fields = std.ArrayList(TupleField).init(self.env.gpa);
+        defer temp_fields.deinit();
+
+        for (element_layouts, 0..) |elem_layout, i| {
+            const elem_idx = try self.insertLayout(elem_layout);
+            try temp_fields.append(.{ .index = @intCast(i), .layout = elem_idx });
+        }
+
+        // Sort by alignment desc, then by original index asc
+        const AlignmentSortCtx = struct {
+            store: *Self,
+            target_usize: target.TargetUsize,
+            pub fn lessThan(ctx: @This(), lhs: TupleField, rhs: TupleField) bool {
+                const lhs_layout = ctx.store.getLayout(lhs.layout);
+                const rhs_layout = ctx.store.getLayout(rhs.layout);
+                const lhs_alignment = lhs_layout.alignment(ctx.target_usize);
+                const rhs_alignment = rhs_layout.alignment(ctx.target_usize);
+                if (lhs_alignment.toByteUnits() != rhs_alignment.toByteUnits()) {
+                    return lhs_alignment.toByteUnits() > rhs_alignment.toByteUnits();
+                }
+                return lhs.index < rhs.index;
+            }
+        };
+
+        std.mem.sort(
+            TupleField,
+            temp_fields.items,
+            AlignmentSortCtx{ .store = self, .target_usize = self.targetUsize() },
+            AlignmentSortCtx.lessThan,
+        );
+
+        // Append fields
+        const fields_start = self.tuple_fields.items.len;
+        for (temp_fields.items) |sorted_field| {
+            _ = try self.tuple_fields.append(self.env.gpa, sorted_field);
+        }
+
+        // Compute size and alignment
+        var max_alignment = std.mem.Alignment.@"1";
+        var current_offset: u32 = 0;
+        for (temp_fields.items) |tf| {
+            const field_layout = self.getLayout(tf.layout);
+            const field_alignment = field_layout.alignment(self.targetUsize());
+            const field_size = self.layoutSize(field_layout);
+            max_alignment = max_alignment.max(field_alignment);
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
+            current_offset += field_size;
+        }
+
+        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment.toByteUnits())))));
+        const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(temp_fields.items.len) };
+        const tuple_idx = TupleIdx{ .int_idx = @intCast(self.tuple_data.len()) };
+        _ = try self.tuple_data.append(self.env.gpa, TupleData{ .size = total_size, .fields = fields_range });
+        const tuple_layout = Layout.tuple(max_alignment, tuple_idx);
+        return try self.insertLayout(tuple_layout);
+    }
+
     pub fn getLayout(self: *const Self, idx: Idx) Layout {
         return self.layouts.get(@enumFromInt(@intFromEnum(idx))).*;
     }
@@ -376,6 +436,10 @@ pub const Store = struct {
         });
         const empty_record_layout = Layout.record(std.mem.Alignment.@"1", record_idx);
         return try self.insertLayout(empty_record_layout);
+    }
+
+    pub fn ensureEmptyRecordLayout(self: *Self) !Idx {
+        return self.getEmptyRecordLayout();
     }
 
     /// Get the size in bytes of a layout, given the store's target usize.
@@ -921,10 +985,92 @@ pub const Store = struct {
                             return tag_layout_idx;
                         }
 
-                        // Complex tag union with payloads - need to compute max payload size
-                        // For now, we'll implement a simple version that doesn't handle payloads
-                        // TODO: Implement full tag union layout with payloads
-                        @panic("TODO: tag_union layout with payloads");
+                        // Complex tag union with payloads
+                        // Strategy: represent as a record { payload: MaxPayload, tag: Discriminant }
+                        // to ensure the payload receives its required alignment and the discriminant
+                        // can live in any trailing padding that remains.
+                        var max_payload_layout: ?Layout = null;
+                        var max_payload_size: u32 = 0;
+                        var max_payload_alignment: std.mem.Alignment = std.mem.Alignment.@"1";
+                        var max_payload_alignment_any: std.mem.Alignment = std.mem.Alignment.@"1";
+
+                        // Helper to update max with a candidate layout
+                        const updateMax = struct {
+                            fn go(
+                                store: *Self,
+                                candidate: Layout,
+                                curr_size: *u32,
+                                curr_alignment: *std.mem.Alignment,
+                                out_layout: *?Layout,
+                                max_alignment_any: *std.mem.Alignment,
+                            ) void {
+                                const size = store.layoutSize(candidate);
+                                const alignment = candidate.alignment(store.targetUsize());
+                                max_alignment_any.* = max_alignment_any.*.max(alignment);
+                                if (size > curr_size.* or (size == curr_size.* and alignment.toByteUnits() > curr_alignment.*.toByteUnits())) {
+                                    curr_size.* = size;
+                                    curr_alignment.* = alignment;
+                                    out_layout.* = candidate;
+                                }
+                            }
+                        }.go;
+
+                        // For each tag, compute its payload layout: () => ZST, 1 arg => layout, >1 => tuple of arg layouts
+                        var temp_scope = TypeScope.init(self.env.gpa);
+                        defer temp_scope.deinit();
+                        for (tags.items(.args)) |tag_args| {
+                            const args_slice = self.types_store.sliceVars(tag_args);
+                            if (args_slice.len == 0) {
+                                // zero-sized payload; nothing to update
+                                continue;
+                            } else if (args_slice.len == 1) {
+                                const arg_var = args_slice[0];
+                                const arg_layout_idx = try self.addTypeVar(arg_var, &temp_scope);
+                                const layout_val = self.getLayout(arg_layout_idx);
+                                updateMax(self, layout_val, &max_payload_size, &max_payload_alignment, &max_payload_layout, &max_payload_alignment_any);
+                            } else {
+                                // Build tuple layout from argument layouts
+                                var elem_layouts = try self.env.gpa.alloc(Layout, args_slice.len);
+                                defer self.env.gpa.free(elem_layouts);
+                                for (args_slice, 0..) |v, i| {
+                                    const elem_idx = try self.addTypeVar(v, &temp_scope);
+                                    elem_layouts[i] = self.getLayout(elem_idx);
+                                }
+                                const tuple_idx = try self.putTuple(elem_layouts);
+                                const tuple_layout = self.getLayout(tuple_idx);
+                                updateMax(self, tuple_layout, &max_payload_size, &max_payload_alignment, &max_payload_layout, &max_payload_alignment_any);
+                            }
+                        }
+
+                        const name_payload = try self.env.common.idents.insert(self.env.gpa, Ident.for_text("payload"));
+                        const name_tag = try self.env.common.idents.insert(self.env.gpa, Ident.for_text("tag"));
+
+                        const payload_layout = max_payload_layout orelse blk: {
+                            const empty_idx = try self.ensureEmptyRecordLayout();
+                            break :blk self.getLayout(empty_idx);
+                        };
+
+                        var field_layouts = [_]Layout{
+                            payload_layout,
+                            discriminant_layout,
+                        };
+
+                        var field_names = [_]Ident.Idx{ name_payload, name_tag };
+
+                        const rec_idx = try self.putRecord(&field_layouts, &field_names);
+                        if (max_payload_alignment_any.toByteUnits() > 1) {
+                            const desired_alignment = max_payload_alignment_any;
+                            var rec_layout = self.getLayout(rec_idx);
+                            const current_alignment = rec_layout.alignment(self.targetUsize());
+                            if (desired_alignment.toByteUnits() > current_alignment.toByteUnits()) {
+                                std.debug.assert(rec_layout.tag == .record);
+                                const record_idx = rec_layout.data.record.idx;
+                                const new_layout = Layout.record(desired_alignment, record_idx);
+                                self.layouts.set(@enumFromInt(@intFromEnum(rec_idx)), new_layout);
+                            }
+                        }
+                        try self.layouts_by_var.put(self.env.gpa, current.var_, rec_idx);
+                        return rec_idx;
                     },
                     .record_unbound => |fields| {
                         // For record_unbound, we need to gather fields directly since it has no Record struct

@@ -1,19 +1,15 @@
 //! Tests for the REPL
 const std = @import("std");
-const eval = @import("eval");
-const can = @import("can");
-const check = @import("check");
+const can_mod = @import("can");
+const check_mod = @import("check");
 const parse = @import("parse");
-const layout = @import("layout");
-
-const Repl = @import("Repl.zig");
-
-const LayoutStore = layout.Store;
-const Can = can.Can;
-const Check = check.Check;
-const ModuleEnv = can.ModuleEnv;
-const Stack = eval.Stack;
+const ModuleEnv = can_mod.ModuleEnv;
+const Canon = can_mod.Can;
+const Check = check_mod.Check;
+const Repl = @import("eval.zig").Repl;
 const TestEnv = @import("repl_test_env.zig").TestEnv;
+const eval_mod = @import("eval");
+const Interpreter = eval_mod.Interpreter;
 
 // Tests
 const testing = std.testing;
@@ -22,7 +18,7 @@ test "Repl - initialization and cleanup" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
     defer repl.deinit();
 
     try testing.expect(repl.definitions.count() == 0);
@@ -32,7 +28,7 @@ test "Repl - special commands" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
     defer repl.deinit();
 
     const help_result = try repl.step(":help");
@@ -52,7 +48,7 @@ test "Repl - simple expressions" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
     defer repl.deinit();
 
     const result = try repl.step("42");
@@ -64,7 +60,7 @@ test "Repl - string expressions" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
     defer repl.deinit();
 
     const result = try repl.step("\"Hello, World!\"");
@@ -76,7 +72,7 @@ test "Repl - silent assignments" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
     defer repl.deinit();
 
     // Assignment should return descriptive output
@@ -94,7 +90,7 @@ test "Repl - variable redefinition" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
     defer repl.deinit();
 
     // First definition
@@ -127,7 +123,7 @@ test "Repl - build full source with block syntax" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
     defer repl.deinit();
 
     // Add definitions manually to test source building
@@ -152,7 +148,7 @@ test "Repl - definition replacement" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(std.testing.allocator, test_env.get_ops());
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
     defer repl.deinit();
 
     // Manually add definitions to test replacement behavior
@@ -188,7 +184,7 @@ test "Repl - minimal interpreter integration" {
     defer module_env.deinit();
 
     // Step 2: Parse as expression
-    var parse_ast = try parse.parseExpr(&module_env.common, module_env.gpa);
+    var parse_ast = try parse.parseExpr(&module_env.common, gpa);
     defer parse_ast.deinit(gpa);
 
     // Empty scratch space (required before canonicalization)
@@ -199,11 +195,11 @@ test "Repl - minimal interpreter integration" {
     try cir.initCIRFields(gpa, "test");
 
     // Step 4: Canonicalize
-    var czer = try Can.init(cir, &parse_ast, null);
-    defer czer.deinit();
+    var can = try Canon.init(cir, &parse_ast, null);
+    defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-    const canonical_expr_idx = try czer.canonicalizeExpr(expr_idx) orelse {
+    const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
         return error.CanonicalizeError;
     };
 
@@ -213,27 +209,18 @@ test "Repl - minimal interpreter integration" {
 
     _ = try checker.checkExpr(canonical_expr_idx.get_idx());
 
-    // Step 6: Create evaluation stack
-    var eval_stack = try Stack.initCapacity(gpa, 1024);
-    defer eval_stack.deinit();
+    // Step 6: Create interpreter
+    var interpreter = try Interpreter.init(gpa, &module_env);
+    defer interpreter.deinit();
 
-    // Step 7: Create layout cache
-    var layout_cache = try LayoutStore.init(&module_env, &module_env.types);
-    defer layout_cache.deinit();
+    // Step 7: Evaluate
+    const result = try interpreter.evalMinimal(canonical_expr_idx.get_idx(), test_env.get_ops());
+    defer result.decref(&interpreter.runtime_layout_store, test_env.get_ops());
 
-    // Step 8: Create interpreter
-    var interpreter = try eval.Interpreter.init(gpa, cir, &eval_stack, &layout_cache, &module_env.types);
-    defer interpreter.deinit(test_env.get_ops());
-
-    // Step 9: Evaluate
-    const result = try interpreter.eval(canonical_expr_idx.get_idx(), test_env.get_ops());
-
-    // Step 10: Verify result
-    try testing.expect(result.layout.tag == .scalar);
-    try testing.expect(result.layout.data.scalar.tag == .int);
-
-    // Read the value back
-    const value = result.asI128();
-
-    try testing.expectEqual(@as(i128, 42), value);
+    // Step 8: Verify result using renderer
+    const ct_var = ModuleEnv.varFrom(canonical_expr_idx.get_idx());
+    const rt_var = try interpreter.translateTypeVar(&module_env, ct_var);
+    const rendered = try interpreter.renderValueRocWithType(result, rt_var);
+    defer gpa.free(rendered);
+    try testing.expectEqualStrings("42", rendered);
 }

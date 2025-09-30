@@ -1,63 +1,29 @@
-//! Evaluates canonicalized Roc expressions
-//!
-//! This module implements a stack-based interpreter for evaluating Roc expressions.
-//! Values are pushed directly onto a stack, and operations pop their operands and
-//! push results. No heap allocations are used for intermediate results.
-//!
-//! ## Architecture
-//!
-//! ### Work Stack System
-//! Uses a "work stack", essentially a stack of expressions that we're in the middle of evaluating,
-//! or, more properly, a stack of "work remaining" for evaluating each of those in-progress expressions.
-//!
-//! ### Memory Management
-//! - **Stack Memory**: All values stored in a single stack for automatic cleanup
-//! - **Layout Stack**: Tracks type information parallel to value stack
-//! - **Zero Heap (yet)**: We'll need this later for list/box/etc, but for now, everything is stack-allocated
-//!
-//! ### Function Calling Convention
-//! 1. **Push Function**: Evaluate the expression of the function itself (e.g. `f` in `f(x)`). This is pushed to the stack.
-//!    In the common case that this is a closure (a lambda that's captured it's env), this will be a closure layout,
-//!    which contains the index of the function body and the data for the captures (variable size, depending on the captures).
-//! 2. **Push Arguments**: Function and arguments pushed onto stack by evaluating them IN ORDER. This means
-//!    the first argument ends up push on the bottom of the stack, and the last argument on top.
-//!    The fact that we execute in-order makes it easier to debug/understand, as the evaluation matches the source code order.
-//!    This is only observable in the debugger or via `dbg` statements.
-//! 3. **Create the frame and call**: Once all the args are evaluated (pushed), we can actually work on calling the function.
-//! 4. **Function body executes**: Per normal, we evaluate the function body.
-//! 5. **Clean up / copy**: After the function is evaluated, we need to copy the result and clean up the stack.
+//! Interpreter implementing the type-carrying architecture.
 
 const std = @import("std");
-const builtin = @import("builtin");
-const base = @import("base");
+const base_pkg = @import("base");
 const types = @import("types");
-const can = @import("can");
-const builtins = @import("builtins");
-const collections = @import("collections");
-
 const layout = @import("layout");
-const build_options = @import("build_options");
+const can = @import("can");
+const TypeScope = types.TypeScope;
+const Content = types.Content;
+const HashMap = std.hash_map.HashMap;
+const unify = @import("check").unifier;
+const problem_mod = @import("check").problem;
+const snapshot_mod = @import("check").snapshot;
 const stack = @import("stack.zig");
 const StackValue = @import("StackValue.zig");
-
-const CIR = can.CIR;
-const ModuleEnv = can.ModuleEnv;
-const StringLiteral = base.StringLiteral;
+const render_helpers = @import("render_helpers.zig");
+const builtins = @import("builtins");
 const RocOps = builtins.host_abi.RocOps;
-const RocList = builtins.list.RocList;
+const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocStr = builtins.str.RocStr;
-const LayoutTag = layout.LayoutTag;
 const RocDec = builtins.dec.RocDec;
-const SExprTree = base.SExprTree;
-const Closure = layout.Closure;
+const RocList = builtins.list.RocList;
+const utils = builtins.utils;
 const Layout = layout.Layout;
-const Expr = CIR.Expr;
-const Ident = base.Ident;
-const LayoutStore = layout.Store;
-const TypeStore = types.store.Store;
-const target_usize = base.target.Target.native.target_usize;
-const target = base.target;
 
+<<<<<<< HEAD
 fn anyWriterFrom(writer: *std.Io.Writer) std.io.AnyWriter {
     return .{ .context = writer, .writeFn = writeFromIoWriter };
 }
@@ -266,9 +232,72 @@ const InternalStackValue = struct {
 // Removed custom RocOps functions - now using host's RocOps directly
 
 /// TODO
+=======
+/// Interpreter that evaluates canonical Roc expressions against runtime types/layouts.
+>>>>>>> 6bec5078f945bb5aad92c06b1699e3c16e4d0f82
 pub const Interpreter = struct {
-    /// Memory allocator for dynamic data structures
+    pub const Error = error{
+        Crash,
+        DivisionByZero,
+        ListIndexOutOfBounds,
+        NotImplemented,
+        NotNumeric,
+        NullStackPointer,
+        RecordIndexOutOfBounds,
+        StringOrderingNotSupported,
+        StackOverflow,
+        TupleIndexOutOfBounds,
+        TypeMismatch,
+        ZeroSizedType,
+    } || std.mem.Allocator.Error || layout.LayoutError;
+    const PolyKey = struct {
+        func_id: u32,
+        args_len: u32,
+        args_ptr: [*]const types.Var,
+
+        fn slice(self: PolyKey) []const types.Var {
+            if (self.args_len == 0) return &.{};
+            return self.args_ptr[0..self.args_len];
+        }
+
+        fn init(func_id: u32, args: []const types.Var) PolyKey {
+            return .{
+                .func_id = func_id,
+                .args_len = @intCast(args.len),
+                .args_ptr = if (args.len == 0) undefined else args.ptr,
+            };
+        }
+    };
+
+    const PolyEntry = struct {
+        return_var: types.Var,
+        return_layout_slot: u32,
+        args: []const types.Var,
+    };
+
+    const PolyKeyCtx = struct {
+        pub fn hash(_: PolyKeyCtx, k: PolyKey) u64 {
+            var h = std.hash.Wyhash.init(0);
+            h.update(std.mem.asBytes(&k.func_id));
+            h.update(std.mem.asBytes(&k.args_len));
+            if (k.args_len > 0) {
+                var i: usize = 0;
+                while (i < k.args_len) : (i += 1) {
+                    const v_int: u32 = @intFromEnum(k.args_ptr[i]);
+                    h.update(std.mem.asBytes(&v_int));
+                }
+            }
+            return h.final();
+        }
+        pub fn eql(_: PolyKeyCtx, a: PolyKey, b: PolyKey) bool {
+            if (a.func_id != b.func_id or a.args_len != b.args_len) return false;
+            if (a.args_len == 0) return true;
+            return std.mem.eql(types.Var, a.args_ptr[0..a.args_len], b.args_ptr[0..b.args_len]);
+        }
+    };
+    const Binding = struct { pattern_idx: can.CIR.Pattern.Idx, value: StackValue };
     allocator: std.mem.Allocator,
+<<<<<<< HEAD
     /// Canonicalized Intermediate Representation containing expressions to evaluate
     env: *const ModuleEnv,
     /// Stack memory for storing expression values during evaluation
@@ -296,21 +325,45 @@ pub const Interpreter = struct {
     trace_indent: u32,
     /// Writer interface for trace output (null when no trace active)
     trace_writer: ?*std.Io.Writer,
+=======
+    runtime_types: *types.store.Store,
+    runtime_layout_store: layout.Store,
+    // O(1) Var -> Layout slot cache (0 = unset, else layout_idx + 1)
+    var_to_layout_slot: std.ArrayList(u32),
+    // Empty scope used when converting runtime vars to layouts
+    empty_scope: TypeScope,
+    // Translation cache: (env_ptr, compile_var) -> runtime_var
+    translate_cache: std.AutoHashMap(u64, types.Var),
 
-    /// Flag indicating if the program has crashed
-    has_crashed: bool,
-    /// Crash message (if any)
-    crash_message: ?[]const u8,
+    // Polymorphic instantiation cache
+>>>>>>> 6bec5078f945bb5aad92c06b1699e3c16e4d0f82
 
-    pub fn init(
-        allocator: std.mem.Allocator,
-        cir: *const ModuleEnv,
-        stack_memory: *stack.Stack,
-        layout_cache: *LayoutStore,
-        type_store: *TypeStore,
-    ) !Interpreter {
-        const interp = Interpreter{
+    poly_cache: HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80),
+
+    // Runtime unification context
+    env: *can.ModuleEnv,
+    problems: problem_mod.Store,
+    snapshots: snapshot_mod.Store,
+    unify_scratch: unify.Scratch,
+
+    // Minimal eval support
+    stack_memory: stack.Stack,
+    bindings: std.ArrayList(Binding),
+    // Track active closures during calls (for capture lookup)
+    active_closures: std.ArrayList(StackValue),
+    bool_false_index: u8,
+    bool_true_index: u8,
+    canonical_bool_rt_var: ?types.Var,
+
+    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv) !Interpreter {
+        const rt_types_ptr = try allocator.create(types.store.Store);
+        rt_types_ptr.* = try types.store.Store.initCapacity(allocator, 1024, 512);
+        var slots = try std.ArrayList(u32).initCapacity(allocator, 1024);
+        slots.appendNTimesAssumeCapacity(0, 1024);
+        const scope = TypeScope.init(allocator);
+        var result = Interpreter{
             .allocator = allocator,
+<<<<<<< HEAD
             .env = cir,
             .stack_memory = stack_memory,
             .layout_cache = layout_cache,
@@ -324,1386 +377,3393 @@ pub const Interpreter = struct {
             .trace_writer = null,
             .has_crashed = false,
             .crash_message = null,
+=======
+            .runtime_types = rt_types_ptr,
+            .runtime_layout_store = undefined, // set below to point at result.runtime_types
+            .var_to_layout_slot = slots,
+            .empty_scope = scope,
+            .translate_cache = std.AutoHashMap(u64, types.Var).init(allocator),
+            .poly_cache = HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80).init(allocator),
+            .env = env,
+            .problems = try problem_mod.Store.initCapacity(allocator, 64),
+            .snapshots = try snapshot_mod.Store.initCapacity(allocator, 256),
+            .unify_scratch = try unify.Scratch.init(allocator),
+            .stack_memory = try stack.Stack.initCapacity(allocator, 4096),
+            .bindings = try std.ArrayList(Binding).initCapacity(allocator, 8),
+            .active_closures = try std.ArrayList(StackValue).initCapacity(allocator, 4),
+            .bool_false_index = 0,
+            .bool_true_index = 1,
+            .canonical_bool_rt_var = null,
+>>>>>>> 6bec5078f945bb5aad92c06b1699e3c16e4d0f82
         };
-
-        return interp;
+        result.runtime_layout_store = try layout.Store.init(env, result.runtime_types);
+        return result;
     }
 
-    /// Get the crash message if the interpreter has crashed
-    pub fn getCrashMsg(self: *const Interpreter) ?[]const u8 {
-        if (self.has_crashed) {
-            return self.crash_message;
-        }
-        return null;
+    // Minimal evaluator for subset: string literals, lambdas without captures, and lambda calls
+    pub fn evalMinimal(self: *Interpreter, expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) Error!StackValue {
+        return try self.evalExprMinimal(expr_idx, roc_ops, null);
     }
 
-    /// Look up a binding in the local bindings stack
-    fn lookupBinding(self: *Interpreter, pattern_idx: CIR.Pattern.Idx) ?StackValue {
-        var reversed = std.mem.reverseIterator(self.bindings_stack.items);
-        while (reversed.next()) |binding| {
-            if (binding.pattern_idx == pattern_idx) {
-                return binding.value;
-            }
-        }
-        return null;
+    pub fn startTrace(self: *Interpreter, writer: std.io.AnyWriter) void {
+        _ = self;
+        _ = writer;
     }
 
-    /// Look up a capture in the current closure
-    fn lookupCapture(self: *Interpreter, pattern_idx: CIR.Pattern.Idx) !?StackValue {
-        if (self.frame_stack.items.len == 0) return null;
-
-        const frame = self.frame_stack.items[self.frame_stack.items.len - 1];
-        const closure_val = self.value_stack.items[frame.value_base + frame.arg_count];
-        if (closure_val.layout.tag != .closure) return null;
-
-        // Get closure using StackValue helper
-        const closure_stack_val = StackValue.fromPtr(closure_val.layout, &self.stack_memory.start[closure_val.offset]);
-        const closure = closure_stack_val.asClosure();
-        const captures_layout = self.layout_cache.getLayout(closure.captures_layout_idx);
-        // Calculate properly aligned offset for captures after Closure header
-        const closure_size = @sizeOf(Closure);
-        const captures_alignment = captures_layout.alignment(target_usize);
-        const aligned_captures_offset = std.mem.alignForward(usize, closure_size, @intCast(captures_alignment.toByteUnits()));
-        const captures_ptr = @as([*]u8, @ptrCast(&self.stack_memory.start[closure_val.offset])) + aligned_captures_offset;
-
-        const pattern = self.env.store.getPattern(pattern_idx);
-        const ident_idx = switch (pattern) {
-            .assign => |a| a.ident,
-            else => return error.LayoutError,
-        };
-        const capture_name_text = self.env.getIdent(ident_idx);
-
-        if (captures_layout.tag == .record) {
-            // Use RecordAccessor for safe field access
-            const captures_value = StackValue.fromPtr(captures_layout, captures_ptr);
-            const record_accessor = try captures_value.asRecord(self.layout_cache);
-
-            // Find the field by name using the helper function
-            if (record_accessor.findFieldIndex(self.env, capture_name_text)) |field_index| {
-                self.traceInfo("Found capture '{s}' at index {}", .{ capture_name_text, field_index });
-                return try record_accessor.getFieldByIndex(field_index);
-            }
-        }
-        return null;
+    pub fn endTrace(self: *Interpreter) void {
+        _ = self;
     }
 
-    /// Look up a global definition
-    fn lookupGlobal(self: *Interpreter, pattern_idx: CIR.Pattern.Idx) ?CIR.Expr.Idx {
-        const defs = self.env.store.sliceDefs(self.env.all_defs);
-        for (defs) |def_idx| {
-            const def = self.env.store.getDef(def_idx);
-            if (@intFromEnum(def.pattern) == @intFromEnum(pattern_idx)) {
-                self.traceInfo("Found global definition for pattern_idx={}", .{@intFromEnum(pattern_idx)});
-                return def.expr;
-            }
-        }
-        return null;
-    }
+    pub fn evaluateExpression(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        ret_ptr: *anyopaque,
+        roc_ops: *RocOps,
+        arg_ptr: ?*anyopaque,
+    ) Error!void {
+        if (arg_ptr) |args_ptr| {
+            const func_val = try self.evalMinimal(expr_idx, roc_ops);
+            defer func_val.decref(&self.runtime_layout_store, roc_ops);
 
-    pub fn deinit(self: *Interpreter, roc_ops: *RocOps) void {
-        // Clean up bindings
-        for (self.bindings_stack.items) |binding| {
-            binding.cleanup(roc_ops);
-        }
-
-        // Note: crash_message is not owned by the interpreter,
-        // it points to string data that lives in the string table
-        // so we don't need to free it here
-
-        self.type_scope.deinit();
-        self.work_stack.deinit();
-        self.value_stack.deinit();
-        self.bindings_stack.deinit();
-        self.frame_stack.deinit();
-    }
-
-    /// Evaluates a CIR expression and returns the result.
-    ///
-    /// This is the main entry point for expression evaluation. Uses an iterative
-    /// work queue approach to evaluate complex expressions without recursion.
-    pub fn eval(self: *Interpreter, expr_idx: CIR.Expr.Idx, roc_ops: *RocOps) EvalError!StackValue {
-        // Ensure work_stack and value_stack are empty before we start. (stack_memory might not be, and that's fine!)
-        std.debug.assert(self.work_stack.items.len == 0);
-        std.debug.assert(self.value_stack.items.len == 0);
-        errdefer self.value_stack.clearRetainingCapacity();
-
-        // We'll calculate the result pointer at the end based on the final layout
-
-        self.traceInfo("== EXPRESSION ==", .{});
-        self.traceExpression(expr_idx);
-
-        self.schedule_work(WorkItem{
-            .kind = .w_eval_expr_structural,
-            .expr_idx = expr_idx,
-            .extra = .{ .nothing = {} },
-        });
-
-        // Main evaluation loop
-        while (self.take_work()) |work| {
-            switch (work.kind) {
-                .w_eval_expr_structural => {
-                    // For regular eval_expr calls, we don't have a predetermined layout
-                    try self.evalExpr(work.expr_idx, roc_ops, null);
-                },
-                .w_eval_expr_nominal => {
-                    // For nominal backing expressions, use the predetermined layout
-                    try self.evalExpr(work.expr_idx, roc_ops, work.extra.layout_idx);
-                },
-                .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_div_trunc, .w_binop_rem, .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le, .w_binop_and, .w_binop_or => {
-                    try self.completeBinop(work.kind, roc_ops);
-                },
-                .w_unary_minus => {
-                    try self.completeUnaryMinus();
-                },
-                .w_unary_not => {
-                    try self.completeUnaryNot();
-                },
-                .w_if_check_condition => {
-                    // The expr_idx encodes both the if expression and the branch index
-                    // Lower 16 bits: if expression index
-                    // Upper 16 bits: branch index
-                    const if_expr_idx: CIR.Expr.Idx = @enumFromInt(@intFromEnum(work.expr_idx) & 0xFFFF);
-                    const branch_index: u16 = @intCast((@intFromEnum(work.expr_idx) >> 16) & 0xFFFF);
-                    try self.checkIfCondition(if_expr_idx, branch_index);
-                },
-                .w_lambda_call => try self.handleLambdaCall(
-                    work.expr_idx,
-                    work.extra.arg_count,
-                    roc_ops,
-                ),
-                .w_lambda_return => try self.handleLambdaReturn(roc_ops),
-                .w_eval_record_fields => try self.handleRecordFields(
-                    work.expr_idx,
-                    work.extra.current_field_idx,
-                ),
-                .w_dot_access => try self.handleDotAccess(
-                    work.extra.dot_access_field_name,
-                ),
-                .w_crash => {
-                    const msg = self.env.getString(work.extra.crash_msg);
-                    roc_ops.crash(msg);
-                    // The crash function will set has_crashed = true
-                    // Clear the work stack to prevent further evaluation
-                    self.work_stack.clearRetainingCapacity();
-                    // The eval loop will check this and return EvalError.Crash
-                },
-                .w_str_interpolate_combine => try self.handleStringInterpolateCombine(work.extra.segment_count, roc_ops),
-                .w_str_interpolate_segments => {}, // Just a marker, no action needed
-                .w_eval_tuple_elements => try self.evaluateTuple(
-                    work.expr_idx,
-                    work.extra.current_element_idx,
-                    roc_ops,
-                ),
-                .w_let_bind => {
-                    const pattern_idx: CIR.Pattern.Idx = work.extra.decl_pattern_idx;
-                    const value = try self.peekStackValue(1); // Don't pop!
-
-                    try self.bindPattern(pattern_idx, value, roc_ops); // Value stays on stack for the block's lifetime
-                },
-                .w_recursive_bind_init => {
-                    const pattern_idx: CIR.Pattern.Idx = work.extra.decl_pattern_idx;
-                    const closure_expr_idx = work.expr_idx;
-                    try self.initRecursiveBinding(pattern_idx, closure_expr_idx);
-                },
-                .w_recursive_bind_update => {
-                    const pattern_idx: CIR.Pattern.Idx = work.extra.decl_pattern_idx;
-                    const value = try self.peekStackValue(1); // Don't pop!
-                    try self.updateRecursiveBinding(pattern_idx, value, roc_ops);
-                },
-                .w_block_cleanup => {
-                    const bindings_to_keep = work.extra.bindings_stack_len;
-                    const values_to_keep: u32 = @intFromEnum(work.expr_idx);
-                    self.traceInfo(
-                        "Block cleanup: resetting bindings from {} to {}, values from {} to {}",
-                        .{ self.bindings_stack.items.len, bindings_to_keep, self.value_stack.items.len, values_to_keep },
-                    );
-
-                    // The block's result is on top of the stack. We need to preserve it.
-                    const result_val = try self.popStackValue();
-
-                    const result_size = result_val.getTotalSize(self.layout_cache);
-                    const result_alignment = result_val.layout.alignment(target_usize);
-
-                    // Copy to a temp buffer
-                    const temp_buffer = try self.allocator.alloc(u8, result_size);
-                    defer self.allocator.free(temp_buffer);
-                    if (result_size > 0) {
-                        std.debug.assert(result_val.ptr != null);
-                        std.mem.copyForwards(u8, temp_buffer, @as([*]const u8, @ptrCast(result_val.ptr.?))[0..result_size]);
-                    }
-
-                    // Now, clean up the values defined within the block.
-                    if (self.value_stack.items.len > values_to_keep) {
-                        const first_val_to_pop_offset = self.value_stack.items[values_to_keep].offset;
-                        self.value_stack.items.len = values_to_keep;
-                        self.stack_memory.used = first_val_to_pop_offset;
-                    }
-
-                    // Clean up bindings, including any heap-allocated strings.
-                    var i = self.bindings_stack.items.len;
-                    while (i > bindings_to_keep) {
-                        i -= 1;
-                        const binding = self.bindings_stack.items[i];
-                        binding.cleanup(roc_ops);
-                    }
-                    self.bindings_stack.items.len = bindings_to_keep;
-
-                    // Push the result back.
-                    if (result_size > 0) {
-                        const new_ptr = try self.stack_memory.alloca(result_size, result_alignment);
-                        std.mem.copyForwards(u8, @as([*]u8, @ptrCast(new_ptr))[0..result_size], temp_buffer);
-                        const new_offset: u32 = @truncate(@intFromPtr(new_ptr) - @intFromPtr(@as(*const u8, @ptrCast(self.stack_memory.start))));
-                        try self.value_stack.append(.{ .layout = result_val.layout, .offset = new_offset });
-                    } else {
-                        try self.value_stack.append(.{ .layout = result_val.layout, .offset = self.stack_memory.used });
-                    }
-                },
+            if (func_val.layout.tag != .closure) {
+                return error.NotImplemented;
             }
 
-            // Check if we've crashed and need to exit early
-            if (self.has_crashed) {
-                return EvalError.Crash;
+            const header: *const layout.Closure = @ptrCast(@alignCast(func_val.ptr.?));
+            const params = self.env.store.slicePatterns(header.params);
+
+            try self.active_closures.append(func_val);
+            defer _ = self.active_closures.pop();
+
+            const base_binding_len = self.bindings.items.len;
+
+            var temp_binds = try std.ArrayList(Binding).initCapacity(self.allocator, params.len);
+            defer {
+                self.trimBindingList(&temp_binds, 0, roc_ops);
+                temp_binds.deinit();
             }
-        }
 
-        // Check for crashes before trying to get the final value
-        if (self.has_crashed) {
-            return EvalError.Crash;
-        }
+            var param_rt_vars = try self.allocator.alloc(types.Var, params.len);
+            defer self.allocator.free(param_rt_vars);
 
-        // Pop the final layout - should be the only thing left on the layout stack
-        const final_value = self.value_stack.pop() orelse return error.InvalidStackState;
-
-        // Debug: check what's left on the layout stack
-        if (self.value_stack.items.len > 0) {
-            self.traceWarn("Layout stack not empty! {} items remaining:", .{self.value_stack.items.len});
-            for (self.value_stack.items, 0..) |item_layout, i| {
-                self.traceInfo("[{}]: tag = {s}", .{ i, @tagName(item_layout.layout.tag) });
+            var param_layouts: []layout.Layout = &.{};
+            if (params.len > 0) {
+                param_layouts = try self.allocator.alloc(layout.Layout, params.len);
             }
-        }
+            defer if (param_layouts.len > 0) self.allocator.free(param_layouts);
 
-        // Ensure both stacks are empty at the end - if not, it's a bug!
-        std.debug.assert(self.work_stack.items.len == 0);
-        std.debug.assert(self.value_stack.items.len == 0);
+            var args_tuple_value: StackValue = undefined;
+            var args_accessor: StackValue.TupleAccessor = undefined;
+            if (params.len > 0) {
+                var i: usize = 0;
+                while (i < params.len) : (i += 1) {
+                    const param_idx = params[i];
+                    const param_var = can.ModuleEnv.varFrom(param_idx);
+                    const rt_var = try self.translateTypeVar(self.env, param_var);
+                    param_rt_vars[i] = rt_var;
+                    param_layouts[i] = try self.getRuntimeLayout(rt_var);
+                }
 
-        // Final check for crashes before returning
-        if (self.has_crashed) {
-            return EvalError.Crash;
-        }
+                const tuple_idx = try self.runtime_layout_store.putTuple(param_layouts);
+                const tuple_layout = self.runtime_layout_store.getLayout(tuple_idx);
+                args_tuple_value = StackValue{ .layout = tuple_layout, .ptr = args_ptr, .is_initialized = true };
+                args_accessor = try args_tuple_value.asTuple(&self.runtime_layout_store);
 
-        // The result is at the offset specified in final_value, not necessarily at the start
-        const result_ptr = self.stack_memory.start + final_value.offset;
+                var j: usize = 0;
+                while (j < params.len) : (j += 1) {
+                    const sorted_idx = args_accessor.findElementIndexByOriginal(j) orelse j;
+                    const arg_value = try args_accessor.getElement(sorted_idx);
+                    const matched = try self.patternMatchesBind(params[j], arg_value, param_rt_vars[j], roc_ops, &temp_binds);
+                    if (!matched) return error.TypeMismatch;
+                }
+            }
 
-        self.traceInfo("Final result at offset {} in stack memory", .{final_value.offset});
-
-        // Debug: check what's actually at the result location
-        if (final_value.layout.tag == .scalar and self.layout_cache.layoutSize(final_value.layout) > 0) {
-            const debug_byte = result_ptr[0];
-            self.traceInfo("Byte at final result location: {}", .{debug_byte});
-        }
-
-        return StackValue{
-            .layout = final_value.layout,
-            .ptr = @as(*anyopaque, @ptrCast(result_ptr)),
-            .is_initialized = true,
-        };
-    }
-
-    fn schedule_work(self: *Interpreter, work: WorkItem) void {
-        if (self.trace_writer) |writer| {
-            // For w_block_cleanup, expr_idx is not a real expression index, so we can't trace it.
-            if (work.kind == .w_block_cleanup) {
-                self.printTraceIndent();
-                writer.print(
-                    "-> scheduling {s}\n",
-                    .{@tagName(work.kind)},
-                ) catch {};
+            if (params.len == 0) {
+                // Nothing to bind for zero-argument functions
             } else {
-                const expr = self.env.store.getExpr(work.expr_idx);
-                self.printTraceIndent();
-                writer.print(
-                    "-> scheduling {s} for ({s})\n",
-                    .{ @tagName(work.kind), @tagName(expr) },
-                ) catch {};
-            }
-        }
-
-        self.work_stack.append(work) catch {};
-    }
-
-    fn take_work(self: *Interpreter) ?WorkItem {
-        const maybe_work = self.work_stack.pop();
-        if (self.trace_writer) |writer| {
-            if (maybe_work) |work| {
-                if (work.kind == .w_block_cleanup) {
-                    self.printTraceIndent();
-                    writer.print(
-                        "-> starting {s}\n",
-                        .{@tagName(work.kind)},
-                    ) catch {};
-                } else {
-                    const expr = self.env.store.getExpr(work.expr_idx);
-                    self.printTraceIndent();
-                    writer.print(
-                        "-> starting {s} for ({s})\n",
-                        .{ @tagName(work.kind), @tagName(expr) },
-                    ) catch {};
+                for (temp_binds.items) |binding| {
+                    try self.bindings.append(binding);
                 }
+                temp_binds.items.len = 0;
             }
+
+            defer self.trimBindingList(&self.bindings, base_binding_len, roc_ops);
+
+            const result_value = try self.evalExprMinimal(header.body_idx, roc_ops, null);
+            defer result_value.decref(&self.runtime_layout_store, roc_ops);
+
+            try result_value.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
+            return;
         }
-        return maybe_work;
+
+        const result = try self.evalMinimal(expr_idx, roc_ops);
+        defer result.decref(&self.runtime_layout_store, roc_ops);
+
+        try result.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
     }
 
-    /// Helper to get the layout for an expression
-    fn getLayoutIdx(self: *Interpreter, expr_idx: anytype) EvalError!layout.Idx {
-        const expr_var: types.Var = @enumFromInt(@intFromEnum(expr_idx));
-        const layout_idx = self.layout_cache.addTypeVar(expr_var, &self.type_scope) catch |err| switch (err) {
-            error.ZeroSizedType => return error.ZeroSizedType,
-            error.BugUnboxedRigidVar => return error.BugUnboxedFlexVar,
-            else => |e| return e,
-        };
-        return layout_idx;
-    }
-
-    /// Evaluates a single CIR expression, pushing the result onto the stack.
-    ///
-    /// # Stack Effects
-    /// - Pushes exactly one value onto `stack_memory`
-    /// - Pushes corresponding layout onto `value_stack`
-    /// - May push additional work items for complex expressions
-    ///
-    /// # Error Handling
-    /// Malformed expressions result in runtime error placeholders rather
-    /// than evaluation failure.
-    fn evalExpr(self: *Interpreter, expr_idx: CIR.Expr.Idx, roc_ops: *RocOps, layout_idx: ?layout.Idx) EvalError!void {
+    fn evalExprMinimal(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        roc_ops: *RocOps,
+        expected_rt_var: ?types.Var,
+    ) Error!StackValue {
         const expr = self.env.store.getExpr(expr_idx);
-
-        self.traceEnter("evalExpr {s}", .{@tagName(expr)});
-        defer self.traceExit("", .{});
-
-        // Check for runtime errors first
         switch (expr) {
-            .e_runtime_error => return error.Crash,
-            else => {},
-        }
+            .e_block => |blk| {
+                // New scope for bindings
+                const original_len = self.bindings.items.len;
+                defer self.trimBindingList(&self.bindings, original_len, roc_ops);
 
-        // Handle different expression types
-        switch (expr) {
-            // Runtime errors are handled at the beginning
-            .e_runtime_error => unreachable,
+                const stmts = self.env.store.sliceStatements(blk.stmts);
 
-            // Numeric literals - push directly to stack
-            .e_int => |int_lit| {
-                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
-                var result_value = try self.pushStackValue(expr_layout);
-
-                if (expr_layout.tag == .scalar and expr_layout.data.scalar.tag == .int) {
-                    result_value.setInt(int_lit.value.toI128());
-                    self.traceInfo("Pushed integer literal {d}", .{int_lit.value.toI128()});
-                } else if (expr_layout.tag == .scalar and expr_layout.data.scalar.tag == .frac and expr_layout.data.scalar.data.frac == .dec) {
-                    // Integer literal with decimal layout - convert to RocDec
-                    const int_val = int_lit.value.toI128();
-                    const dec_value = RocDec{ .num = int_val * RocDec.one_point_zero_i128 };
-
-                    const result_ptr = @as(*RocDec, @ptrCast(@alignCast(result_value.ptr.?)));
-                    result_ptr.* = dec_value;
-                    result_value.is_initialized = true;
-
-                    self.traceInfo("Pushed integer literal {d} as decimal", .{int_val});
-                } else {
-                    self.traceError("Integer literal: expected integer or decimal layout, got {}", .{expr_layout.tag});
-                    return error.TypeMismatch;
-                }
-            },
-
-            .e_frac_f32 => |float_lit| {
-                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
-                const result_value = try self.pushStackValue(expr_layout);
-
-                std.debug.assert(result_value.ptr != null);
-                const typed_ptr = @as(*f32, @ptrCast(@alignCast(result_value.ptr.?)));
-                typed_ptr.* = float_lit.value;
-
-                self.traceEnter("PUSH e_frac_f32 {}", .{float_lit.value});
-            },
-
-            .e_frac_f64 => |float_lit| {
-                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
-                const result_value = try self.pushStackValue(expr_layout);
-
-                std.debug.assert(result_value.ptr != null);
-                const typed_ptr = @as(*f64, @ptrCast(@alignCast(result_value.ptr.?)));
-                typed_ptr.* = float_lit.value;
-
-                self.traceEnter("PUSH e_frac_f64 {}", .{float_lit.value});
-            },
-
-            // Zero-argument tags (e.g., True, False)
-            .e_zero_argument_tag => |tag| {
-                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
-                const result_value = try self.pushStackValue(expr_layout);
-
-                std.debug.assert(result_value.ptr != null);
-                const tag_ptr = @as(*u8, @ptrCast(@alignCast(result_value.ptr.?)));
-                const tag_name = self.env.getIdent(tag.name);
-                if (std.mem.eql(u8, tag_name, "True")) {
-                    tag_ptr.* = 1;
-                } else if (std.mem.eql(u8, tag_name, "False")) {
-                    tag_ptr.* = 0;
-                } else {
-                    tag_ptr.* = 0; // TODO: get actual tag discriminant
-                }
-            },
-
-            // Empty record
-            .e_empty_record => {
-                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
-                const result_value = try self.pushStackValue(expr_layout);
-
-                // Empty record is zero-sized and has no bytes
-                std.debug.assert(result_value.ptr == null);
-            },
-
-            // Empty list
-            .e_empty_list => {
-                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
-                const result_value = try self.pushStackValue(expr_layout);
-
-                // Initialize empty list
-                std.debug.assert(result_value.ptr != null);
-                const list: *RocList = @ptrCast(@alignCast(result_value.ptr.?));
-                list.* = RocList.empty();
-            },
-
-            // Binary operations
-            .e_binop => |binop| {
-                // Push work to complete the binop after operands are evaluated
-                const binop_kind: WorkKind = switch (binop.op) {
-                    .add => .w_binop_add,
-                    .sub => .w_binop_sub,
-                    .mul => .w_binop_mul,
-                    .div => .w_binop_div,
-                    .div_trunc => .w_binop_div_trunc,
-                    .rem => .w_binop_rem,
-                    .eq => .w_binop_eq,
-                    .ne => .w_binop_ne,
-                    .gt => .w_binop_gt,
-                    .lt => .w_binop_lt,
-                    .ge => .w_binop_ge,
-                    .le => .w_binop_le,
-                    .@"and" => .w_binop_and,
-                    .@"or" => .w_binop_or,
-                    .pow, .pipe_forward, .null_coalesce => return error.Crash, // Not implemented yet
-                };
-
-                self.schedule_work(WorkItem{
-                    .kind = binop_kind,
-                    .expr_idx = expr_idx,
-                    .extra = .{ .nothing = {} },
-                });
-
-                // Push operands in order - note that this results in the results being pushed to the stack in reverse order
-                // We do this so that `dbg` statements are printed in the expected order
-                self.schedule_work(WorkItem{
-                    .kind = .w_eval_expr_structural,
-                    .expr_idx = binop.rhs,
-                    .extra = .{ .nothing = {} },
-                });
-                self.schedule_work(WorkItem{
-                    .kind = .w_eval_expr_structural,
-                    .expr_idx = binop.lhs,
-                    .extra = .{ .nothing = {} },
-                });
-            },
-
-            // If expressions
-            .e_if => |if_expr| {
-                if (if_expr.branches.span.len > 0) {
-
-                    // Check if condition is true
-                    self.schedule_work(WorkItem{
-                        .kind = .w_if_check_condition,
-                        .expr_idx = expr_idx,
-                        .extra = .{ .nothing = {} },
-                    });
-
-                    // Push work to evaluate the first condition
-                    const branches = self.env.store.sliceIfBranches(if_expr.branches);
-                    const branch = self.env.store.getIfBranch(branches[0]);
-
-                    self.schedule_work(WorkItem{
-                        .kind = .w_eval_expr_structural,
-                        .expr_idx = branch.cond,
-                        .extra = .{ .nothing = {} },
-                    });
-                } else {
-                    // No branches, evaluate final_else directly
-                    self.schedule_work(WorkItem{
-                        .kind = .w_eval_expr_structural,
-                        .expr_idx = if_expr.final_else,
-                        .extra = .{ .nothing = {} },
-                    });
-                }
-            },
-
-            // Pattern lookup
-            .e_lookup_local => |lookup| {
-                self.traceInfo("evalExpr e_lookup_local pattern_idx={}", .{@intFromEnum(lookup.pattern_idx)});
-                self.tracePattern(lookup.pattern_idx);
-
-                // 1. Search local bindings
-                if (self.lookupBinding(lookup.pattern_idx)) |binding_value| {
-                    // Push a copy of the bound value
-                    const dest_value = try self.pushStackValue(binding_value.layout);
-                    binding_value.copyTo(dest_value, self.layout_cache);
-                    return;
-                }
-
-                // 2. Check captures in current closure
-                if (try self.lookupCapture(lookup.pattern_idx)) |capture_value| {
-                    // Push a copy of the captured value
-                    const dest_value = try self.pushStackValue(capture_value.layout);
-                    capture_value.copyTo(dest_value, self.layout_cache);
-                    return;
-                }
-
-                // 3. Fall back to global definitions
-                if (self.lookupGlobal(lookup.pattern_idx)) |def_expr| {
-                    self.schedule_work(WorkItem{
-                        .kind = .w_eval_expr_structural,
-                        .expr_idx = def_expr,
-                        .extra = .{ .nothing = {} },
-                    });
-                    return;
-                }
-
-                self.traceError("Pattern not found for lookup_local: pattern_idx={}", .{@intFromEnum(lookup.pattern_idx)});
-                return error.PatternNotFound;
-            },
-
-            // Nominal expressions
-            .e_nominal => |nominal| {
-                // CRITICAL: Use the nominal type for layout, not the backing expression's type
-                // Get the nominal type's layout directly
-                const nominal_var: types.Var = @enumFromInt(@intFromEnum(expr_idx));
-                const nominal_layout_idx = self.layout_cache.addTypeVar(nominal_var, &self.type_scope) catch |err| switch (err) {
-                    error.ZeroSizedType => return error.ZeroSizedType,
-                    error.BugUnboxedRigidVar => return error.BugUnboxedFlexVar,
-                    else => |e| return e,
-                };
-
-                if (DEBUG_ENABLED) {
-                    const resolved = self.layout_cache.types_store.resolveVar(nominal_var);
-                    switch (resolved.desc.content) {
-                        .structure => |flat_type| switch (flat_type) {
-                            .nominal_type => {
-                                const nominal_ident = self.env.getIdent(flat_type.nominal_type.ident.ident_idx);
-                                if (std.mem.eql(u8, nominal_ident, "Bool")) {
-                                    // For Bool nominal types should have a boolean layout
-                                    const nominal_layout = self.layout_cache.getLayout(nominal_layout_idx);
-                                    if (!(nominal_layout.tag == .scalar and nominal_layout.data.scalar.tag == .bool)) {
-                                        self.traceError("REGRESSION: Bool nominal type should have boolean layout", .{});
-                                        std.debug.assert(false);
-                                    }
-                                }
-                            },
-                            else => {
-                                self.traceError("REGRESSION: e_nominal should have nominal_type", .{});
-                                std.debug.assert(false);
-                            },
-                        },
-                        else => {
-                            self.traceError("REGRESSION: e_nominal should have structure content", .{});
-                            std.debug.assert(false);
-                        },
-                    }
-
-                    // Trace nominal type evaluation
-                    const nominal_ident = switch (resolved.desc.content) {
-                        .structure => |flat_type| switch (flat_type) {
-                            .nominal_type => |nt| self.env.getIdent(nt.ident.ident_idx),
-                            else => "unknown",
-                        },
-                        else => "unknown",
-                    };
-                    self.traceInfo("e_nominal: type={s}, layout_idx={}", .{ nominal_ident, nominal_layout_idx });
-                }
-
-                // Evaluate backing expression but preserve nominal layout context
-                try self.work_stack.append(.{
-                    .kind = .w_eval_expr_nominal,
-                    .expr_idx = nominal.backing_expr,
-                    .extra = .{ .layout_idx = nominal_layout_idx },
-                });
-            },
-            .e_nominal_external => |_| {
-                // TODO: Is this right?
-                return error.LayoutError;
-            },
-
-            // Tags with arguments
-            .e_tag => |tag| {
-                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
-                const result_value = try self.pushStackValue(expr_layout);
-
-                // Use layout to determine handling strategy
-                switch (expr_layout.tag) {
-                    .scalar => switch (expr_layout.data.scalar.tag) {
-                        .bool => {
-                            // Handle Bool tags as scalar boolean values
-                            try self.handleBooleanScalarTag(result_value, tag.name);
-                        },
-                        else => {
-                            self.traceError("Invalid tag for scalar type: {}", .{expr_layout.data.scalar.tag});
-                            return error.InvalidTagTarget;
-                        },
-                    },
-                    // Future: handle actual tag unions when that layout type is added
-                    else => {
-                        // General tag union handling (when implemented)
-                        self.traceError("Tag union layouts not yet implemented: {}", .{expr_layout.tag});
-                        return error.InvalidTagTarget;
-                    },
-                }
-
-                self.traceInfo("PUSH e_tag", .{});
-            },
-
-            .e_call => |call| {
-                // Get function and arguments from the call
-                const all_exprs = self.env.store.sliceExpr(call.args);
-
-                if (all_exprs.len == 0) {
-                    self.traceError("Function call: no function expression found", .{});
-                    return error.TypeMismatch; // No function to call
-                }
-
-                const function_expr = all_exprs[0];
-                const arg_exprs = all_exprs[1..];
-                const arg_count: u32 = @intCast(arg_exprs.len);
-
-                // Schedule in reverse order (LIFO stack):
-                // The order is important to avoid memory corruption. Arguments must be
-                // evaluated before the function, so that the function's captures
-                // (which are on the stack) are not overwritten by argument values.
-
-                // 3. Lambda call (executed LAST after function and args are on stack)
-                self.schedule_work(WorkItem{
-                    .kind = .w_lambda_call,
-                    .expr_idx = expr_idx,
-                    .extra = .{ .arg_count = arg_count },
-                });
-
-                // 2. Function (executed second, pushes closure to stack)
-                self.schedule_work(WorkItem{
-                    .kind = .w_eval_expr_structural,
-                    .expr_idx = function_expr,
-                    .extra = .{ .nothing = {} },
-                });
-
-                // 1. Arguments (executed FIRST, pushed to stack in order)
-                var i = arg_exprs.len;
-                while (i > 0) {
-                    i -= 1;
-                    self.schedule_work(WorkItem{
-                        .kind = .w_eval_expr_structural,
-                        .expr_idx = arg_exprs[i],
-                        .extra = .{ .nothing = {} },
-                    });
-                }
-            },
-
-            // Unary minus operation
-            .e_unary_minus => |unary| {
-                // Push work to complete unary minus after operand is evaluated
-                try self.work_stack.append(WorkItem{
-                    .kind = .w_unary_minus,
-                    .expr_idx = expr_idx,
-                    .extra = .{ .nothing = {} },
-                });
-
-                // Evaluate the operand expression
-                try self.work_stack.append(WorkItem{
-                    .kind = .w_eval_expr_structural,
-                    .expr_idx = unary.expr,
-                    .extra = .{ .nothing = {} },
-                });
-            },
-
-            // Unary not operation
-            .e_unary_not => |unary| {
-                // Push work to complete unary not after operand is evaluated
-                try self.work_stack.append(WorkItem{
-                    .kind = .w_unary_not,
-                    .expr_idx = expr_idx,
-                    .extra = .{ .nothing = {} },
-                });
-
-                // Evaluate the operand expression
-                try self.work_stack.append(WorkItem{
-                    .kind = .w_eval_expr_structural,
-                    .expr_idx = unary.expr,
-                    .extra = .{ .nothing = {} },
-                });
-            },
-
-            .e_block => |block| {
-                // Schedule cleanup work to run after the block is done.
-                self.schedule_work(WorkItem{
-                    .kind = .w_block_cleanup,
-                    .expr_idx = @enumFromInt(self.value_stack.items.len), // Pass value stack length
-                    .extra = .{ .bindings_stack_len = self.bindings_stack.items.len },
-                });
-
-                // Schedule evaluation of the final expression.
-                self.schedule_work(WorkItem{
-                    .kind = .w_eval_expr_structural,
-                    .expr_idx = block.final_expr,
-                    .extra = .{ .nothing = {} },
-                });
-
-                // Schedule evaluation of statements in reverse order.
-                const stmts = self.env.store.sliceStatements(block.stmts);
-                var i = stmts.len;
-                while (i > 0) {
-                    i -= 1;
-                    const stmt_idx = stmts[i];
+                // First pass: add placeholders for all decl/var lambdas/closures (mutual recursion support)
+                for (stmts) |stmt_idx| {
                     const stmt = self.env.store.getStatement(stmt_idx);
+                    const Placeholder = struct {
+                        fn exists(self_interp: *Interpreter, start: usize, pattern_idx: can.CIR.Pattern.Idx) bool {
+                            var i: usize = self_interp.bindings.items.len;
+                            while (i > start) {
+                                i -= 1;
+                                if (self_interp.bindings.items[i].pattern_idx == pattern_idx) return true;
+                            }
+                            return false;
+                        }
+                        fn add(self_interp: *Interpreter, patt_idx: can.CIR.Pattern.Idx, rhs_expr: can.CIR.Expr.Idx) !void {
+                            const patt_ct_var = can.ModuleEnv.varFrom(patt_idx);
+                            const patt_rt_var = try self_interp.translateTypeVar(self_interp.env, patt_ct_var);
+                            const closure_layout = try self_interp.getRuntimeLayout(patt_rt_var);
+                            if (closure_layout.tag != .closure) return; // only closures get placeholders
+                            const lam_or = self_interp.env.store.getExpr(rhs_expr);
+                            var body_idx: can.CIR.Expr.Idx = rhs_expr;
+                            var params: can.CIR.Pattern.Span = .{ .span = .{ .start = 0, .len = 0 } };
+                            if (lam_or == .e_lambda) {
+                                body_idx = lam_or.e_lambda.body;
+                                params = lam_or.e_lambda.args;
+                            } else if (lam_or == .e_closure) {
+                                const lam_expr = self_interp.env.store.getExpr(lam_or.e_closure.lambda_idx);
+                                if (lam_expr == .e_lambda) {
+                                    body_idx = lam_expr.e_lambda.body;
+                                    params = lam_expr.e_lambda.args;
+                                }
+                            } else return;
+                            const ph = try self_interp.pushRaw(closure_layout, 0);
+                            if (ph.ptr) |ptr| {
+                                const header: *layout.Closure = @ptrCast(@alignCast(ptr));
+                                header.* = .{
+                                    .body_idx = body_idx,
+                                    .params = params,
+                                    .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
+                                    .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
+                                    .lambda_expr_idx = rhs_expr,
+                                };
+                            }
+                            try self_interp.bindings.append(.{ .pattern_idx = patt_idx, .value = ph });
+                        }
+                    };
                     switch (stmt) {
-                        .s_decl => |decl| {
-                            // Check if this is a recursive closure
-                            if (self.isRecursiveClosure(decl.expr, decl.pattern)) {
-                                // For recursive closures, we need special handling:
-                                // 1. Initialize with placeholder
-                                // 2. Evaluate expression (can now find the capture)
-                                // 3. Update the binding with the actual closure
-
-                                self.schedule_work(WorkItem{
-                                    .kind = .w_recursive_bind_update,
-                                    .expr_idx = expr_idx, // e_block's index for tracing
-                                    .extra = .{ .decl_pattern_idx = decl.pattern },
-                                });
-
-                                self.schedule_work(WorkItem{
-                                    .kind = .w_eval_expr_structural,
-                                    .expr_idx = decl.expr,
-                                    .extra = .{ .nothing = {} },
-                                });
-
-                                self.schedule_work(WorkItem{
-                                    .kind = .w_recursive_bind_init,
-                                    .expr_idx = decl.expr, // Pass the closure expr for layout info
-                                    .extra = .{ .decl_pattern_idx = decl.pattern },
-                                });
-                            } else {
-                                // Regular (non-recursive) declaration
-                                // Schedule binding after expression is evaluated.
-                                self.schedule_work(WorkItem{
-                                    .kind = .w_let_bind,
-                                    .expr_idx = expr_idx, // e_block's index for tracing
-                                    .extra = .{ .decl_pattern_idx = decl.pattern },
-                                });
-                                // Schedule evaluation of the expression.
-                                self.schedule_work(WorkItem{
-                                    .kind = .w_eval_expr_structural,
-                                    .expr_idx = decl.expr,
-                                    .extra = .{ .nothing = {} },
-                                });
+                        .s_decl => |d| {
+                            const patt = self.env.store.getPattern(d.pattern);
+                            if (patt != .assign) continue;
+                            const rhs = self.env.store.getExpr(d.expr);
+                            if ((rhs == .e_lambda or rhs == .e_closure) and !Placeholder.exists(self, original_len, d.pattern)) {
+                                try Placeholder.add(self, d.pattern, d.expr);
                             }
                         },
-                        .s_crash => |crash| {
-                            // Schedule crash to be executed
-                            self.schedule_work(WorkItem{
-                                .kind = .w_crash,
-                                .expr_idx = expr_idx, // e_block's index for tracing
-                                .extra = .{ .crash_msg = crash.msg },
-                            });
+                        .s_var => |v| {
+                            const patt = self.env.store.getPattern(v.pattern_idx);
+                            if (patt != .assign) continue;
+                            const rhs = self.env.store.getExpr(v.expr);
+                            if ((rhs == .e_lambda or rhs == .e_closure) and !Placeholder.exists(self, original_len, v.pattern_idx)) {
+                                try Placeholder.add(self, v.pattern_idx, v.expr);
+                            }
                         },
-                        else => {
-                            // Other statement types are not expected inside a lambda body in this context
-                            // or are not yet implemented for evaluation.
-                        },
+                        else => {},
                     }
                 }
-            },
 
-            .e_frac_dec => |dec_lit| {
-                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
-                const result_value = try self.pushStackValue(expr_layout);
-                const result_ptr = result_value.ptr.?;
+                // Second pass: evaluate statements, updating placeholders
+                for (stmts) |stmt_idx| {
+                    const stmt = self.env.store.getStatement(stmt_idx);
+                    switch (stmt) {
+                        .s_decl => |d| {
+                            const expr_ct_var = can.ModuleEnv.varFrom(d.expr);
+                            const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+                            var temp_binds = try std.ArrayList(Binding).initCapacity(self.allocator, 4);
+                            defer {
+                                self.trimBindingList(&temp_binds, 0, roc_ops);
+                                temp_binds.deinit();
+                            }
 
-                // Store RocDec value directly in memory
-                const typed_ptr = @as(*RocDec, @ptrCast(@alignCast(result_ptr)));
-                typed_ptr.* = dec_lit.value;
+                            const val = try self.evalExprMinimal(d.expr, roc_ops, expr_rt_var);
+                            defer val.decref(&self.runtime_layout_store, roc_ops);
 
-                self.traceInfo(
-                    "Pushed decimal literal {}",
-                    .{dec_lit.value.num},
-                );
-            },
+                            if (!try self.patternMatchesBind(d.pattern, val, expr_rt_var, roc_ops, &temp_binds)) {
+                                return error.TypeMismatch;
+                            }
 
-            .e_dec_small => |small_dec| {
-                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
-                const result_value = try self.pushStackValue(expr_layout);
-                const result_ptr = result_value.ptr.?;
+                            for (temp_binds.items) |binding| {
+                                try self.upsertBinding(binding, original_len, roc_ops);
+                            }
+                            temp_binds.items.len = 0;
+                        },
+                        .s_var => |v| {
+                            const expr_ct_var = can.ModuleEnv.varFrom(v.expr);
+                            const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+                            var temp_binds = try std.ArrayList(Binding).initCapacity(self.allocator, 4);
+                            defer {
+                                self.trimBindingList(&temp_binds, 0, roc_ops);
+                                temp_binds.deinit();
+                            }
 
-                // Convert small decimal to RocDec
-                // e_dec_small stores numerator/10^denominator_power_of_ten
-                // RocDec stores value * 10^18
-                // So we need: numerator * 10^(18-denominator_power_of_ten)
-                const scale_factor = std.math.pow(i128, 10, RocDec.decimal_places - small_dec.denominator_power_of_ten);
-                const dec_value = RocDec{ .num = @as(i128, small_dec.numerator) * scale_factor };
+                            const val = try self.evalExprMinimal(v.expr, roc_ops, expr_rt_var);
+                            defer val.decref(&self.runtime_layout_store, roc_ops);
 
-                const typed_ptr = @as(*RocDec, @ptrCast(@alignCast(result_ptr)));
-                typed_ptr.* = dec_value;
+                            if (!try self.patternMatchesBind(v.pattern_idx, val, expr_rt_var, roc_ops, &temp_binds)) {
+                                return error.TypeMismatch;
+                            }
 
-                self.traceInfo(
-                    "Pushed small decimal literal: numerator={}, denom_pow={}, result={}",
-                    .{ small_dec.numerator, small_dec.denominator_power_of_ten, dec_value.num },
-                );
-            },
-
-            .e_dot_access => |dot_access| {
-                // Push work to complete field access after receiver is evaluated
-                try self.work_stack.append(WorkItem{
-                    .kind = .w_dot_access,
-                    .expr_idx = expr_idx,
-                    .extra = .{ .dot_access_field_name = dot_access.field_name },
-                });
-
-                // Evaluate the receiver expression
-                try self.work_stack.append(WorkItem{
-                    .kind = .w_eval_expr_structural,
-                    .expr_idx = dot_access.receiver,
-                    .extra = .{ .nothing = {} },
-                });
-            },
-
-            .e_str_segment => |str_seg| {
-                // Get the string literal content
-                const literal_content = self.env.getString(str_seg.literal);
-                self.traceInfo("Creating string literal: \"{s}\"", .{literal_content});
-
-                // Allocate stack space for RocStr
-                const str_layout = Layout.str();
-                const result_value = try self.pushStackValue(str_layout);
-
-                if (result_value.ptr) |ptr| {
-                    self.traceInfo("e_str_segment: result_value.ptr = 0x{x}", .{@intFromPtr(ptr)});
-                } else {
-                    self.traceInfo("e_str_segment: result_value.ptr is NULL!", .{});
+                            for (temp_binds.items) |binding| {
+                                try self.upsertBinding(binding, original_len, roc_ops);
+                            }
+                            temp_binds.items.len = 0;
+                        },
+                        .s_reassign => |r| {
+                            const patt = self.env.store.getPattern(r.pattern_idx);
+                            if (patt != .assign) return error.NotImplemented;
+                            const new_val = try self.evalExprMinimal(r.expr, roc_ops, null);
+                            var j: usize = self.bindings.items.len;
+                            while (j > original_len) {
+                                j -= 1;
+                                if (self.bindings.items[j].pattern_idx == r.pattern_idx) {
+                                    self.bindings.items[j].value.decref(&self.runtime_layout_store, roc_ops);
+                                    self.bindings.items[j].value = new_val;
+                                    break;
+                                }
+                            }
+                        },
+                        .s_crash => |c| {
+                            const msg = self.env.getString(c.msg);
+                            self.triggerCrash(msg, false, roc_ops);
+                            return error.Crash;
+                        },
+                        .s_expect => |expect_stmt| {
+                            const bool_rt_var = try self.getCanonicalBoolRuntimeVar();
+                            const cond_val = try self.evalExprMinimal(expect_stmt.body, roc_ops, bool_rt_var);
+                            if (!(try self.boolValueIsTrue(cond_val, bool_rt_var))) {
+                                try self.handleExpectFailure(expect_stmt.body, roc_ops);
+                                return error.Crash;
+                            }
+                        },
+                        .s_expr => |sx| {
+                            _ = try self.evalExprMinimal(sx.expr, roc_ops, null);
+                        },
+                        else => return error.NotImplemented,
+                    }
                 }
 
-                try self.traceValue("e_str_segment", result_value);
-
-                // Initialize the RocStr
-                std.debug.assert(result_value.ptr != null);
-                const roc_str: *builtins.str.RocStr = @ptrCast(@alignCast(result_value.ptr.?));
-                self.traceInfo("e_str_segment: About to call RocStr.fromSlice with content: \"{s}\"", .{literal_content});
-                roc_str.* = builtins.str.RocStr.fromSlice(literal_content, roc_ops);
-                self.traceInfo("e_str_segment: RocStr initialized successfully", .{});
+                return try self.evalExprMinimal(blk.final_expr, roc_ops, null);
             },
+            .e_int => |int_lit| {
+                // Use runtime type to choose layout
+                const rt_var = expected_rt_var orelse blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    break :blk try self.translateTypeVar(self.env, ct_var);
+                };
+                const layout_val = try self.getRuntimeLayout(rt_var);
+                var value = try self.pushRaw(layout_val, 0);
+                // Write integer as i128 respecting precision via StackValue
+                value.is_initialized = false;
+                switch (layout_val.tag) {
+                    .scalar => switch (layout_val.data.scalar.tag) {
+                        .int => value.setInt(int_lit.value.toI128()),
+                        .frac => switch (layout_val.data.scalar.data.frac) {
+                            .f32 => {
+                                const ptr = @as(*f32, @ptrCast(@alignCast(value.ptr.?)));
+                                ptr.* = @floatFromInt(int_lit.value.toI128());
+                            },
+                            .f64 => {
+                                const ptr = @as(*f64, @ptrCast(@alignCast(value.ptr.?)));
+                                ptr.* = @floatFromInt(int_lit.value.toI128());
+                            },
+                            .dec => {
+                                const ptr = @as(*RocDec, @ptrCast(@alignCast(value.ptr.?)));
+                                ptr.* = .{ .num = int_lit.value.toI128() * RocDec.one_point_zero_i128 };
+                            },
+                        },
+                        else => return error.TypeMismatch,
+                    },
+                    else => return error.TypeMismatch,
+                }
+                value.is_initialized = true;
+                return value;
+            },
+            .e_binop => |binop| {
+                if (binop.op == .add or binop.op == .sub or binop.op == .mul or binop.op == .div or binop.op == .div_trunc or binop.op == .rem) {
+                    const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
+                    const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
+                    const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
+                    const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
 
+                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var);
+                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops, rhs_rt_var);
+
+                    return try self.evalArithmeticBinop(binop.op, expr_idx, lhs, rhs, lhs_rt_var, rhs_rt_var);
+                } else if (binop.op == .eq or binop.op == .ne or binop.op == .lt or binop.op == .le or binop.op == .gt or binop.op == .ge) {
+                    const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
+                    const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
+                    const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
+                    const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
+                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var);
+                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops, rhs_rt_var);
+                    defer lhs.decref(&self.runtime_layout_store, roc_ops);
+                    defer rhs.decref(&self.runtime_layout_store, roc_ops);
+                    const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    var result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
+                    result_rt_var = try self.ensureBoolRuntimeVar(self.env, result_ct_var, result_rt_var);
+
+                    const compare_op: std.math.CompareOperator = switch (binop.op) {
+                        .eq => .eq,
+                        .ne => .neq,
+                        .lt => .lt,
+                        .le => .lte,
+                        .gt => .gt,
+                        .ge => .gte,
+                        else => unreachable,
+                    };
+
+                    const lhs_bool_opt = self.boolValueIsTrue(lhs, lhs_rt_var) catch |err| switch (err) {
+                        error.TypeMismatch => null,
+                        else => return err,
+                    };
+                    const rhs_bool_opt = self.boolValueIsTrue(rhs, rhs_rt_var) catch |err| switch (err) {
+                        error.TypeMismatch => null,
+                        else => return err,
+                    };
+
+                    if (lhs_bool_opt != null or rhs_bool_opt != null) {
+                        if (lhs_bool_opt == null or rhs_bool_opt == null) return error.TypeMismatch;
+                        const lhs_bool = lhs_bool_opt.?;
+                        const rhs_bool = rhs_bool_opt.?;
+                        switch (compare_op) {
+                            .eq => {
+                                return try self.makeBoolValue(result_rt_var, lhs_bool == rhs_bool);
+                            },
+                            .neq => {
+                                return try self.makeBoolValue(result_rt_var, lhs_bool != rhs_bool);
+                            },
+                            else => return error.TypeMismatch,
+                        }
+                    }
+
+                    const lhs_numeric = self.isNumericScalar(lhs.layout);
+                    const rhs_numeric = self.isNumericScalar(rhs.layout);
+                    if (lhs_numeric or rhs_numeric) {
+                        if (!(lhs_numeric and rhs_numeric)) return error.TypeMismatch;
+                        const numeric_order = try self.compareNumericScalars(lhs, rhs);
+                        return try self.makeBoolValue(result_rt_var, numeric_order.compare(compare_op));
+                    }
+
+                    if (lhs.layout.tag == .scalar and lhs.layout.data.scalar.tag == .str) {
+                        if (rhs.layout.tag != .scalar or rhs.layout.data.scalar.tag != .str) return error.TypeMismatch;
+                        switch (compare_op) {
+                            .eq, .neq => {
+                                const lhs_str: *const RocStr = @ptrCast(@alignCast(lhs.ptr.?));
+                                const rhs_str: *const RocStr = @ptrCast(@alignCast(rhs.ptr.?));
+                                const are_equal = std.mem.eql(u8, lhs_str.asSlice(), rhs_str.asSlice());
+                                const result = switch (compare_op) {
+                                    .eq => are_equal,
+                                    .neq => !are_equal,
+                                    else => unreachable,
+                                };
+                                return try self.makeBoolValue(result_rt_var, result);
+                            },
+                            else => return error.StringOrderingNotSupported,
+                        }
+                    }
+
+                    if (compare_op == .eq or compare_op == .neq) {
+                        const structural_equal = try self.valuesStructurallyEqual(lhs, lhs_rt_var, rhs, rhs_rt_var);
+                        return try self.makeBoolValue(result_rt_var, if (compare_op == .eq) structural_equal else !structural_equal);
+                    }
+
+                    return error.NotImplemented;
+                } else if (binop.op == .@"or") {
+                    const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    var result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
+                    result_rt_var = try self.ensureBoolRuntimeVar(self.env, result_ct_var, result_rt_var);
+
+                    var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
+                    defer lhs.decref(&self.runtime_layout_store, roc_ops);
+                    const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
+                    const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
+                    if (try self.boolValueIsTrue(lhs, lhs_rt_var)) {
+                        return try self.makeBoolValue(result_rt_var, true);
+                    }
+
+                    var rhs = try self.evalExprMinimal(binop.rhs, roc_ops, null);
+                    defer rhs.decref(&self.runtime_layout_store, roc_ops);
+                    const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
+                    const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
+                    const rhs_truthy = try self.boolValueIsTrue(rhs, rhs_rt_var);
+                    return try self.makeBoolValue(result_rt_var, rhs_truthy);
+                } else if (binop.op == .@"and") {
+                    const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    var result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
+                    result_rt_var = try self.ensureBoolRuntimeVar(self.env, result_ct_var, result_rt_var);
+
+                    var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, null);
+                    defer lhs.decref(&self.runtime_layout_store, roc_ops);
+                    const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
+                    const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
+                    if (!try self.boolValueIsTrue(lhs, lhs_rt_var)) {
+                        return try self.makeBoolValue(result_rt_var, false);
+                    }
+
+                    var rhs = try self.evalExprMinimal(binop.rhs, roc_ops, null);
+                    defer rhs.decref(&self.runtime_layout_store, roc_ops);
+                    const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
+                    const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
+                    const rhs_truthy = try self.boolValueIsTrue(rhs, rhs_rt_var);
+                    return try self.makeBoolValue(result_rt_var, rhs_truthy);
+                }
+                return error.NotImplemented;
+            },
+            .e_if => |if_expr| {
+                const branches = self.env.store.sliceIfBranches(if_expr.branches);
+                // Evaluate branches in order; pick first true condition
+                var i: usize = 0;
+                while (i < branches.len) : (i += 1) {
+                    const br = self.env.store.getIfBranch(branches[i]);
+                    const cond_val = try self.evalExprMinimal(br.cond, roc_ops, null);
+                    const cond_ct_var = can.ModuleEnv.varFrom(br.cond);
+                    const cond_rt_var = try self.translateTypeVar(self.env, cond_ct_var);
+                    if (try self.boolValueIsTrue(cond_val, cond_rt_var)) {
+                        return try self.evalExprMinimal(br.body, roc_ops, null);
+                    }
+                }
+                // No condition matched; evaluate final else
+                return try self.evalExprMinimal(if_expr.final_else, roc_ops, null);
+            },
             .e_str => |str_expr| {
                 const segments = self.env.store.sliceExpr(str_expr.span);
-                self.traceInfo("Starting string interpolation with {} segments", .{segments.len});
-
                 if (segments.len == 0) {
-
-                    // Empty string
-                    const str_layout = Layout.str();
-                    const result_value = try self.pushStackValue(str_layout);
-                    try self.traceValue("empty_e_str", result_value);
-
-                    // Initialize the empty RocStr
-                    const empty_str: *builtins.str.RocStr = @ptrCast(@alignCast(result_value.ptr.?));
-                    empty_str.* = builtins.str.RocStr.empty();
-
-                    return;
+                    const value = try self.pushStr("");
+                    const roc_str_ptr: *RocStr = @ptrCast(@alignCast(value.ptr.?));
+                    roc_str_ptr.* = RocStr.empty();
+                    return value;
                 }
 
-                // Schedule string interpolation work items
-                // First, schedule the combine work (executed last due to LIFO)
-                self.schedule_work(WorkItem{
-                    .kind = .w_str_interpolate_combine,
-                    .expr_idx = expr_idx,
-                    .extra = .{ .segment_count = segments.len },
-                });
-
-                // Then schedule evaluation of each segment (in reverse order for LIFO)
-                var i = segments.len;
-                while (i > 0) : (i -= 1) {
-                    self.schedule_work(WorkItem{
-                        .kind = .w_eval_expr_structural,
-                        .expr_idx = segments[i - 1],
-                        .extra = .{ .none = {} },
-                    });
-                }
-            },
-
-            .e_list, .e_lookup_external, .e_match, .e_crash, .e_dbg, .e_expect, .e_ellipsis => {
-                return error.LayoutError;
-            },
-
-            .e_record => |record_expr| {
-                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
-                const fields = self.env.store.sliceRecordFields(record_expr.fields);
-                if (fields.len == 0) {
-                    // Per the test, `{}` should be a zero-sized type error.
-                    return error.ZeroSizedType;
-                }
-
-                // Allocate space for the entire record on the stack.
-                // The fields will be filled in one by one.
-                _ = try self.pushStackValue(expr_layout);
-
-                // Schedule the first work item to start evaluating the fields.
-                self.schedule_work(WorkItem{
-                    .kind = .w_eval_record_fields,
-                    .expr_idx = expr_idx,
-                    // Start with current_field_idx = 0
-                    .extra = .{ .current_field_idx = 0 },
-                });
-            },
-
-            .e_closure => |closure_expr| try self.createClosure(expr_idx, closure_expr),
-
-            .e_lambda => |lambda_expr| {
-                // This is a pure lambda with no captures. We still create a closure
-                // structure for it on the stack so that the calling convention is uniform.
-                const captures_layout_idx = try self.createClosureLayout(&.{});
-                const closure_layout = Layout.closure(captures_layout_idx);
-                const total_size = @sizeOf(Closure);
-                const closure_alignment = closure_layout.alignment(target_usize);
-                const closure_ptr = try self.stack_memory.alloca(total_size, closure_alignment);
-
-                try self.value_stack.append(InternalStackValue{
-                    .layout = closure_layout,
-                    .offset = @as(u32, @truncate(@intFromPtr(closure_ptr) - @intFromPtr(@as(*const u8, @ptrCast(self.stack_memory.start))))),
-                });
-
-                const closure: *Closure = @ptrCast(@alignCast(closure_ptr));
-
-                closure.body_idx = lambda_expr.body;
-                closure.params = lambda_expr.args;
-                // Skip setting captures_pattern_idx - leave it uninitialized
-                // Setting this field causes string corruption
-                closure.captures_layout_idx = captures_layout_idx;
-                closure.lambda_expr_idx = expr_idx;
-            },
-
-            .e_tuple => |tuple_expr| {
-                const computed_layout_idx = if (layout_idx) |idx| idx else try self.getLayoutIdx(expr_idx);
-                const expr_layout = self.layout_cache.getLayout(computed_layout_idx);
-                const elements = self.env.store.sliceExpr(tuple_expr.elems);
-                if (elements.len == 0) {
-                    // Empty tuple has no bytes, but we still need to push its layout.
-                    _ = try self.pushStackValue(expr_layout);
-                    return;
-                }
-
-                // Allocate space for the entire tuple on the stack.
-                _ = try self.pushStackValue(expr_layout);
-
-                // Schedule the first work item to start evaluating the elements.
-                self.schedule_work(WorkItem{
-                    .kind = .w_eval_tuple_elements,
-                    .expr_idx = expr_idx,
-                    // Start with current_element_idx = 0
-                    .extra = .{ .current_element_idx = 0 },
-                });
-            },
-        }
-    }
-
-    fn completeBinop(self: *Interpreter, kind: WorkKind, roc_ops: *RocOps) EvalError!void {
-        const rhs = try self.popStackValue();
-        const lhs = try self.popStackValue();
-
-        // For now, only support scalar operations
-        if (lhs.layout.tag != .scalar or rhs.layout.tag != .scalar) {
-            self.traceError("expected scalar tags to eval binop", .{});
-            return error.TypeMismatch;
-        }
-
-        // Handle different scalar types
-        const lhs_scalar = lhs.layout.data.scalar;
-        const rhs_scalar = rhs.layout.data.scalar;
-
-        // Perform the operation and write to our result_value
-        switch (kind) {
-            // Arithmetic operations - support both integer and fractional operands
-            .w_binop_add, .w_binop_sub, .w_binop_mul, .w_binop_div, .w_binop_div_trunc, .w_binop_rem => {
-                // Check if both operands are integers
-                if (lhs_scalar.tag == .int and rhs_scalar.tag == .int) {
-                    const lhs_val = lhs.asI128();
-                    const rhs_val = rhs.asI128();
-
-                    const result_layout = lhs.layout;
-                    var result_value = try self.pushStackValue(result_layout);
-
-                    const result_val: i128 = result_val: switch (kind) {
-                        .w_binop_add => {
-                            self.traceInfo("Integer addition: {} + {} = {}", .{ lhs_val, rhs_val, lhs_val + rhs_val });
-                            break :result_val lhs_val + rhs_val;
-                        },
-                        .w_binop_sub => break :result_val lhs_val - rhs_val,
-                        .w_binop_mul => break :result_val lhs_val * rhs_val,
-                        .w_binop_div => {
-                            if (rhs_val == 0) return error.DivisionByZero;
-                            break :result_val @divTrunc(lhs_val, rhs_val);
-                        },
-                        .w_binop_div_trunc => {
-                            if (rhs_val == 0) return error.DivisionByZero;
-                            break :result_val @divTrunc(lhs_val, rhs_val);
-                        },
-                        .w_binop_rem => {
-                            if (rhs_val == 0) return error.DivisionByZero;
-                            break :result_val @rem(lhs_val, rhs_val);
-                        },
-                        else => unreachable,
-                    };
-
-                    result_value.setInt(result_val);
-                }
-                // Check if both operands are decimals (frac with .dec precision)
-                else if (lhs_scalar.tag == .frac and rhs_scalar.tag == .frac) {
-                    // For now, only support .dec precision decimals
-                    const lhs_frac = lhs_scalar.data.frac;
-                    const rhs_frac = rhs_scalar.data.frac;
-
-                    if (lhs_frac == .dec and rhs_frac == .dec) {
-                        // Get RocDec values from memory
-                        const lhs_ptr = @as(*const RocDec, @ptrCast(@alignCast(lhs.ptr.?)));
-                        const rhs_ptr = @as(*const RocDec, @ptrCast(@alignCast(rhs.ptr.?)));
-                        const lhs_dec = lhs_ptr.*;
-                        const rhs_dec = rhs_ptr.*;
-
-                        const result_layout = lhs.layout;
-                        var result_value = try self.pushStackValue(result_layout);
-
-                        const result_dec: RocDec = switch (kind) {
-                            .w_binop_add => result_dec: {
-                                self.traceInfo("Decimal addition: {} + {} = {}", .{ lhs_dec.num, rhs_dec.num, lhs_dec.num + rhs_dec.num });
-                                break :result_dec RocDec{ .num = lhs_dec.num + rhs_dec.num };
-                            },
-                            .w_binop_sub => RocDec{ .num = lhs_dec.num - rhs_dec.num },
-                            .w_binop_mul => result_dec: {
-                                // For multiplication, we need to adjust for the decimal places
-                                // Both numbers are already scaled by 10^18, so multiplying gives us 10^36
-                                // We need to divide by 10^18 to get back to 10^18 scale
-                                const product = lhs_dec.num * rhs_dec.num;
-                                break :result_dec RocDec{ .num = @divTrunc(product, RocDec.one_point_zero_i128) };
-                            },
-                            .w_binop_div => result_dec: {
-                                if (rhs_dec.num == 0) return error.DivisionByZero;
-                                // For division, we need to scale the numerator by 10^18 first
-                                const scaled_lhs = lhs_dec.num * RocDec.one_point_zero_i128;
-                                break :result_dec RocDec{ .num = @divTrunc(scaled_lhs, rhs_dec.num) };
-                            },
-                            .w_binop_div_trunc => result_dec: {
-                                if (rhs_dec.num == 0) return error.DivisionByZero;
-                                const scaled_lhs = lhs_dec.num * RocDec.one_point_zero_i128;
-                                break :result_dec RocDec{ .num = @divTrunc(scaled_lhs, rhs_dec.num) };
-                            },
-                            .w_binop_rem => result_dec: {
-                                if (rhs_dec.num == 0) return error.DivisionByZero;
-                                break :result_dec RocDec{ .num = @rem(lhs_dec.num, rhs_dec.num) };
-                            },
-                            else => unreachable,
-                        };
-
-                        // Store the result in memory
-                        const result_ptr = @as(*RocDec, @ptrCast(@alignCast(result_value.ptr.?)));
-                        result_ptr.* = result_dec;
-                        result_value.is_initialized = true;
-                    } else {
-                        self.traceError("arithmetic operations on fractional types only support Dec precision", .{});
-                        return error.TypeMismatch;
+                var segment_strings = std.ArrayList(RocStr).init(self.allocator);
+                defer {
+                    for (segment_strings.items) |segment_str| {
+                        segment_str.decref(roc_ops);
                     }
+                    segment_strings.deinit();
                 }
-                // Handle mixed integer and decimal operations
-                else if ((lhs_scalar.tag == .int and rhs_scalar.tag == .frac and rhs_scalar.data.frac == .dec) or
-                    (lhs_scalar.tag == .frac and lhs_scalar.data.frac == .dec and rhs_scalar.tag == .int))
-                {
 
-                    // Convert integer operand to decimal and perform decimal arithmetic
-                    const lhs_dec: RocDec = if (lhs_scalar.tag == .int)
-                        RocDec{ .num = lhs.asI128() * RocDec.one_point_zero_i128 }
-                    else
-                        @as(*const RocDec, @ptrCast(@alignCast(lhs.ptr.?))).*;
-
-                    const rhs_dec: RocDec = if (rhs_scalar.tag == .int)
-                        RocDec{ .num = rhs.asI128() * RocDec.one_point_zero_i128 }
-                    else
-                        @as(*const RocDec, @ptrCast(@alignCast(rhs.ptr.?))).*;
-
-                    // Result is always decimal
-                    const result_layout = if (lhs_scalar.tag == .frac) lhs.layout else rhs.layout;
-                    var result_value = try self.pushStackValue(result_layout);
-
-                    const result_dec: RocDec = switch (kind) {
-                        .w_binop_add => RocDec{ .num = lhs_dec.num + rhs_dec.num },
-                        .w_binop_sub => RocDec{ .num = lhs_dec.num - rhs_dec.num },
-                        .w_binop_mul => result_dec: {
-                            const product = lhs_dec.num * rhs_dec.num;
-                            break :result_dec RocDec{ .num = @divTrunc(product, RocDec.one_point_zero_i128) };
-                        },
-                        .w_binop_div => result_dec: {
-                            if (rhs_dec.num == 0) return error.DivisionByZero;
-                            const scaled_lhs = lhs_dec.num * RocDec.one_point_zero_i128;
-                            break :result_dec RocDec{ .num = @divTrunc(scaled_lhs, rhs_dec.num) };
-                        },
-                        .w_binop_div_trunc => result_dec: {
-                            if (rhs_dec.num == 0) return error.DivisionByZero;
-                            const scaled_lhs = lhs_dec.num * RocDec.one_point_zero_i128;
-                            break :result_dec RocDec{ .num = @divTrunc(scaled_lhs, rhs_dec.num) };
-                        },
-                        .w_binop_rem => result_dec: {
-                            if (rhs_dec.num == 0) return error.DivisionByZero;
-                            break :result_dec RocDec{ .num = @rem(lhs_dec.num, rhs_dec.num) };
-                        },
-                        else => unreachable,
-                    };
-
-                    // Store the result in memory
-                    const result_ptr = @as(*RocDec, @ptrCast(@alignCast(result_value.ptr.?)));
-                    result_ptr.* = result_dec;
-                    result_value.is_initialized = true;
-                } else {
-                    self.traceError("arithmetic operations require operands of the same type (both integers or both decimals)", .{});
-                    return error.TypeMismatch;
-                }
-            },
-
-            // Comparison operations - support both integer and decimal operands
-            .w_binop_eq, .w_binop_ne, .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le => {
-                // Check if both operands are integers
-                if (lhs_scalar.tag == .int and rhs_scalar.tag == .int) {
-                    const lhs_val = lhs.asI128();
-                    const rhs_val = rhs.asI128();
-
-                    const result_layout = Layout.boolType();
-                    var result_value = try self.pushStackValue(result_layout);
-
-                    const bool_result: u8 = switch (kind) {
-                        .w_binop_eq => if (lhs_val == rhs_val) 1 else 0,
-                        .w_binop_ne => if (lhs_val != rhs_val) 1 else 0,
-                        .w_binop_gt => if (lhs_val > rhs_val) 1 else 0,
-                        .w_binop_lt => if (lhs_val < rhs_val) 1 else 0,
-                        .w_binop_ge => if (lhs_val >= rhs_val) 1 else 0,
-                        .w_binop_le => if (lhs_val <= rhs_val) 1 else 0,
-                        else => unreachable,
-                    };
-
-                    result_value.setBool(bool_result);
-                }
-                // Check if both operands are decimals
-                else if (lhs_scalar.tag == .frac and rhs_scalar.tag == .frac) {
-                    const lhs_frac = lhs_scalar.data.frac;
-                    const rhs_frac = rhs_scalar.data.frac;
-
-                    if (lhs_frac == .dec and rhs_frac == .dec) {
-                        const lhs_ptr = @as(*const RocDec, @ptrCast(@alignCast(lhs.ptr.?)));
-                        const rhs_ptr = @as(*const RocDec, @ptrCast(@alignCast(rhs.ptr.?)));
-                        const lhs_dec = lhs_ptr.*;
-                        const rhs_dec = rhs_ptr.*;
-
-                        const result_layout = Layout.boolType();
-                        var result_value = try self.pushStackValue(result_layout);
-
-                        const bool_result: u8 = switch (kind) {
-                            .w_binop_eq => if (lhs_dec.num == rhs_dec.num) 1 else 0,
-                            .w_binop_ne => if (lhs_dec.num != rhs_dec.num) 1 else 0,
-                            .w_binop_gt => if (lhs_dec.num > rhs_dec.num) 1 else 0,
-                            .w_binop_lt => if (lhs_dec.num < rhs_dec.num) 1 else 0,
-                            .w_binop_ge => if (lhs_dec.num >= rhs_dec.num) 1 else 0,
-                            .w_binop_le => if (lhs_dec.num <= rhs_dec.num) 1 else 0,
-                            else => unreachable,
-                        };
-
-                        result_value.setBool(bool_result);
-                        self.traceInfo("Decimal comparison: {} {s} {} = {}", .{ lhs_dec.num, @tagName(kind), rhs_dec.num, bool_result });
-                    } else {
-                        self.traceError("comparison operations on fractional types only support Dec precision", .{});
-                        return error.TypeMismatch;
+                var total_len: usize = 0;
+                for (segments) |seg_idx| {
+                    const seg_expr = self.env.store.getExpr(seg_idx);
+                    if (seg_expr == .e_str_segment) {
+                        const content = self.env.getString(seg_expr.e_str_segment.literal);
+                        var literal_str = RocStr.fromSlice(content, roc_ops);
+                        total_len += literal_str.asSlice().len;
+                        try segment_strings.append(literal_str);
+                        continue;
                     }
-                }
-                // Check if both operands are strings
-                else if (lhs_scalar.tag == .str and rhs_scalar.tag == .str) {
-                    const lhs_ptr = @as(*const RocStr, @ptrCast(@alignCast(lhs.ptr.?)));
-                    const rhs_ptr = @as(*const RocStr, @ptrCast(@alignCast(rhs.ptr.?)));
-                    const lhs_str = lhs_ptr.*;
-                    const rhs_str = rhs_ptr.*;
 
-                    const result_layout = Layout.boolType();
-                    var result_value = try self.pushStackValue(result_layout);
-
-                    const bool_result: u8 = switch (kind) {
-                        .w_binop_eq => if (lhs_str.eq(rhs_str)) 1 else 0,
-                        .w_binop_ne => if (!lhs_str.eq(rhs_str)) 1 else 0,
-                        // String ordering comparisons are not implemented yet
-                        .w_binop_gt, .w_binop_lt, .w_binop_ge, .w_binop_le => {
-                            self.traceError("string ordering comparisons (>, <, >=, <=) are not supported", .{});
-                            // Decref strings before returning error
-                            lhs_str.decref(roc_ops);
-                            rhs_str.decref(roc_ops);
-                            return error.StringOrderingNotSupported;
-                        },
-                        else => unreachable,
-                    };
-
-                    result_value.setBool(bool_result);
-                    self.traceInfo("String comparison: \"{s}\" {s} \"{s}\" = {}", .{ lhs_str.asSlice(), @tagName(kind), rhs_str.asSlice(), bool_result });
-
-                    // Decref both strings after we're done with them
-                    // std.debug.print("STR_TRACE: completeBinop - about to decref lhs string \"{s}\" at {*}\n", .{ lhs_str.asSlice(), &lhs_str });
-                    lhs_str.decref(roc_ops);
-                    // std.debug.print("STR_TRACE: completeBinop - about to decref rhs string \"{s}\" at {*}\n", .{ rhs_str.asSlice(), &rhs_str });
-                    rhs_str.decref(roc_ops);
-                } else {
-                    self.traceError("comparison operations require operands of the same type (both integers, both decimals, or both strings)", .{});
-                    return error.TypeMismatch;
-                }
-            },
-
-            // Logical operations - require boolean operands
-            .w_binop_and, .w_binop_or => {
-                if (lhs_scalar.tag != .bool or rhs_scalar.tag != .bool) {
-                    self.traceError("logical operations require boolean operands", .{});
-                    return error.TypeMismatch;
+                    const seg_ct_var = can.ModuleEnv.varFrom(seg_idx);
+                    const seg_rt_var = try self.translateTypeVar(self.env, seg_ct_var);
+                    const seg_value = try self.evalExprMinimal(seg_idx, roc_ops, seg_rt_var);
+                    const segment_str = try self.stackValueToRocStr(seg_value, seg_rt_var, roc_ops);
+                    seg_value.decref(&self.runtime_layout_store, roc_ops);
+                    total_len += segment_str.asSlice().len;
+                    try segment_strings.append(segment_str);
                 }
 
-                const lhs_ptr = @as(*const u8, @ptrCast(lhs.ptr.?));
-                const rhs_ptr = @as(*const u8, @ptrCast(rhs.ptr.?));
-                const lhs_val = lhs_ptr.*;
-                const rhs_val = rhs_ptr.*;
-
-                const result_layout = Layout.boolType();
-                var result_value = try self.pushStackValue(result_layout);
-
-                const bool_result: u8 = switch (kind) {
-                    .w_binop_and => if (lhs_val != 0 and rhs_val != 0) 1 else 0,
-                    .w_binop_or => if (lhs_val != 0 or rhs_val != 0) 1 else 0,
-                    else => unreachable,
+                const result_str: RocStr = if (total_len == 0)
+                    RocStr.empty()
+                else blk: {
+                    const buffer = try self.allocator.alloc(u8, total_len);
+                    defer self.allocator.free(buffer);
+                    var offset: usize = 0;
+                    for (segment_strings.items) |segment_str| {
+                        const slice = segment_str.asSlice();
+                        std.mem.copyForwards(u8, buffer[offset .. offset + slice.len], slice);
+                        offset += slice.len;
+                    }
+                    break :blk RocStr.fromSlice(buffer, roc_ops);
                 };
 
-                result_value.setBool(bool_result);
+                const value = try self.pushStr("");
+                const roc_str_ptr: *RocStr = @ptrCast(@alignCast(value.ptr.?));
+                roc_str_ptr.* = result_str;
+                return value;
             },
-
-            else => {
-                self.traceError("completeBinop called with non-binary operation: {s}", .{@tagName(kind)});
-                return error.TypeMismatch;
+            .e_str_segment => |seg| {
+                const content = self.env.getString(seg.literal);
+                const value = try self.pushStr(content);
+                const roc_str: *RocStr = @ptrCast(@alignCast(value.ptr.?));
+                roc_str.* = RocStr.fromSlice(content, roc_ops);
+                return value;
             },
+            .e_frac_f32 => |lit| {
+                const rt_var = expected_rt_var orelse blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    break :blk try self.translateTypeVar(self.env, ct_var);
+                };
+                const layout_val = try self.getRuntimeLayout(rt_var);
+                const value = try self.pushRaw(layout_val, 0);
+                if (value.ptr) |ptr| {
+                    const typed_ptr: *f32 = @ptrCast(@alignCast(ptr));
+                    typed_ptr.* = lit.value;
+                }
+                return value;
+            },
+            .e_frac_f64 => |lit| {
+                const rt_var = expected_rt_var orelse blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    break :blk try self.translateTypeVar(self.env, ct_var);
+                };
+                const layout_val = try self.getRuntimeLayout(rt_var);
+                const value = try self.pushRaw(layout_val, 0);
+                if (value.ptr) |ptr| {
+                    const typed_ptr: *f64 = @ptrCast(@alignCast(ptr));
+                    typed_ptr.* = lit.value;
+                }
+                return value;
+            },
+            .e_frac_dec => |dec_lit| {
+                const rt_var = expected_rt_var orelse blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    break :blk try self.translateTypeVar(self.env, ct_var);
+                };
+                const layout_val = try self.getRuntimeLayout(rt_var);
+                const value = try self.pushRaw(layout_val, 0);
+                if (value.ptr) |ptr| {
+                    const typed_ptr: *RocDec = @ptrCast(@alignCast(ptr));
+                    typed_ptr.* = dec_lit.value;
+                }
+                return value;
+            },
+            .e_dec_small => |small| {
+                const rt_var = expected_rt_var orelse blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    break :blk try self.translateTypeVar(self.env, ct_var);
+                };
+                const layout_val = try self.getRuntimeLayout(rt_var);
+                const value = try self.pushRaw(layout_val, 0);
+                if (value.ptr) |ptr| {
+                    const typed_ptr: *RocDec = @ptrCast(@alignCast(ptr));
+                    const scale_factor = std.math.pow(i128, 10, RocDec.decimal_places - small.denominator_power_of_ten);
+                    const scaled = @as(i128, small.numerator) * scale_factor;
+                    typed_ptr.* = RocDec{ .num = scaled };
+                }
+                return value;
+            },
+            .e_tuple => |tup| {
+                // Evaluate all elements first to drive runtime unification
+                const elems = self.env.store.sliceExpr(tup.elems);
+                var values = try std.ArrayList(StackValue).initCapacity(self.allocator, elems.len);
+                defer values.deinit();
+                for (elems) |e_idx| {
+                    const v = try self.evalExprMinimal(e_idx, roc_ops, null);
+                    try values.append(v);
+                }
+
+                // Compute tuple layout from concrete element value layouts
+                var elem_layouts = try self.allocator.alloc(Layout, values.items.len);
+                defer self.allocator.free(elem_layouts);
+                for (values.items, 0..) |v, ii| elem_layouts[ii] = v.layout;
+                const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
+                const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+                var dest = try self.pushRaw(tuple_layout, 0);
+                var accessor = try dest.asTuple(&self.runtime_layout_store);
+
+                if (values.items.len != accessor.getElementCount()) return error.TypeMismatch;
+                var i: usize = 0;
+                while (i < values.items.len) : (i += 1) {
+                    const sorted_idx = accessor.findElementIndexByOriginal(i) orelse return error.TypeMismatch;
+                    try accessor.setElement(sorted_idx, values.items[i], roc_ops);
+                }
+                return dest;
+            },
+            .e_list => |list_expr| {
+                const elem_indices = self.env.store.sliceExpr(list_expr.elems);
+                const list_rt_var = expected_rt_var orelse blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    break :blk try self.translateTypeVar(self.env, ct_var);
+                };
+
+                const elem_rt_var = try self.translateTypeVar(self.env, list_expr.elem_var);
+                const elem_layout = try self.getRuntimeLayout(elem_rt_var);
+
+                var values = try std.ArrayList(StackValue).initCapacity(self.allocator, elem_indices.len);
+                defer values.deinit();
+
+                for (elem_indices) |elem_idx| {
+                    const val = try self.evalExprMinimal(elem_idx, roc_ops, elem_rt_var);
+                    try values.append(val);
+                }
+
+                const list_layout = try self.getRuntimeLayout(list_rt_var);
+                const dest = try self.pushRaw(list_layout, 0);
+                if (dest.ptr == null) return dest;
+                const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
+
+                if (values.items.len == 0) {
+                    header.* = RocList.empty();
+                    return dest;
+                }
+
+                const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+                const elem_alignment_u32: u32 = @intCast(elem_alignment);
+                const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(elem_layout));
+                const elements_refcounted = elem_layout.isRefcounted();
+
+                var runtime_list = RocList.allocateExact(
+                    elem_alignment_u32,
+                    values.items.len,
+                    elem_size,
+                    elements_refcounted,
+                    roc_ops,
+                );
+
+                if (elem_size > 0) {
+                    if (runtime_list.bytes) |buffer| {
+                        var i: usize = 0;
+                        while (i < values.items.len) : (i += 1) {
+                            const dest_ptr = buffer + i * elem_size;
+                            try values.items[i].copyToPtr(&self.runtime_layout_store, dest_ptr, roc_ops);
+                        }
+                    }
+                }
+
+                markListElementCount(&runtime_list, elements_refcounted);
+                header.* = runtime_list;
+                return dest;
+            },
+            .e_record => |rec| {
+                // Allocate record and fill fields
+                const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const rt_var = try self.translateTypeVar(self.env, ct_var);
+
+                var union_names = std.ArrayList(base_pkg.Ident.Idx).init(self.allocator);
+                defer union_names.deinit();
+                var union_layouts = std.ArrayList(layout.Layout).init(self.allocator);
+                defer union_layouts.deinit();
+                var union_indices = std.AutoHashMap(u32, usize).init(self.allocator);
+                defer union_indices.deinit();
+
+                var field_values = std.ArrayList(StackValue).init(self.allocator);
+                defer {
+                    for (field_values.items) |val| {
+                        val.decref(&self.runtime_layout_store, roc_ops);
+                    }
+                    field_values.deinit();
+                }
+
+                const upsert = struct {
+                    fn go(
+                        names: *std.ArrayList(base_pkg.Ident.Idx),
+                        layouts: *std.ArrayList(layout.Layout),
+                        indices: *std.AutoHashMap(u32, usize),
+                        name: base_pkg.Ident.Idx,
+                        layout_value: layout.Layout,
+                    ) !void {
+                        const key: u32 = @bitCast(name);
+                        if (indices.get(key)) |idx_ptr| {
+                            layouts.items[idx_ptr] = layout_value;
+                            names.items[idx_ptr] = name;
+                        } else {
+                            try layouts.append(layout_value);
+                            try names.append(name);
+                            try indices.put(key, layouts.items.len - 1);
+                        }
+                    }
+                }.go;
+
+                var base_accessor_opt: ?StackValue.RecordAccessor = null;
+
+                if (rec.ext) |ext_idx| {
+                    const ext_ct_var = can.ModuleEnv.varFrom(ext_idx);
+                    const ext_rt_var = try self.translateTypeVar(self.env, ext_ct_var);
+                    var base_value = try self.evalExprMinimal(ext_idx, roc_ops, ext_rt_var);
+                    if (base_value.layout.tag != .record) {
+                        base_value.decref(&self.runtime_layout_store, roc_ops);
+                        return error.TypeMismatch;
+                    }
+                    defer base_value.decref(&self.runtime_layout_store, roc_ops);
+                    var base_accessor = try base_value.asRecord(&self.runtime_layout_store);
+                    base_accessor_opt = base_accessor;
+
+                    var idx: usize = 0;
+                    while (idx < base_accessor.getFieldCount()) : (idx += 1) {
+                        const info = base_accessor.field_layouts.get(idx);
+                        const field_layout = self.runtime_layout_store.getLayout(info.layout);
+                        try upsert(&union_names, &union_layouts, &union_indices, info.name, field_layout);
+                    }
+                }
+
+                const fields = self.env.store.sliceRecordFields(rec.fields);
+                try field_values.ensureTotalCapacity(fields.len);
+                var field_list_index: usize = 0;
+                while (field_list_index < fields.len) : (field_list_index += 1) {
+                    const field_idx_val = fields[field_list_index];
+                    const f = self.env.store.getRecordField(field_idx_val);
+                    const field_ct_var = can.ModuleEnv.varFrom(f.value);
+                    const field_rt_var = try self.translateTypeVar(self.env, field_ct_var);
+                    const val = try self.evalExprMinimal(f.value, roc_ops, field_rt_var);
+                    try field_values.append(val);
+                    const field_layout = val.layout;
+                    try upsert(&union_names, &union_layouts, &union_indices, f.name, field_layout);
+                }
+                const record_layout_idx = try self.runtime_layout_store.putRecord(union_layouts.items, union_names.items);
+                const rec_layout = self.runtime_layout_store.getLayout(record_layout_idx);
+
+                const resolved_rt = self.runtime_types.resolveVar(rt_var);
+                const root_idx: usize = @intFromEnum(resolved_rt.var_);
+                try self.ensureVarLayoutCapacity(root_idx + 1);
+                self.var_to_layout_slot.items[root_idx] = @intFromEnum(record_layout_idx) + 1;
+
+                var dest = try self.pushRaw(rec_layout, 0);
+                var accessor = try dest.asRecord(&self.runtime_layout_store);
+
+                if (base_accessor_opt) |base_accessor| {
+                    var idx: usize = 0;
+                    while (idx < base_accessor.getFieldCount()) : (idx += 1) {
+                        const info = base_accessor.field_layouts.get(idx);
+                        const field_name = self.env.getIdent(info.name);
+                        const dest_field_idx = accessor.findFieldIndex(self.env, field_name) orelse return error.TypeMismatch;
+                        const base_field_value = try base_accessor.getFieldByIndex(idx);
+                        try accessor.setFieldByIndex(dest_field_idx, base_field_value, roc_ops);
+                    }
+                }
+
+                for (fields, 0..) |field_idx_enum, explicit_index| {
+                    const f = self.env.store.getRecordField(field_idx_enum);
+                    const name_text = self.env.getIdent(f.name);
+                    const dest_field_idx = accessor.findFieldIndex(self.env, name_text) orelse return error.TypeMismatch;
+                    const val = field_values.items[explicit_index];
+
+                    if (base_accessor_opt) |base_accessor| {
+                        if (base_accessor.findFieldIndex(self.env, name_text) != null) {
+                            const existing = try accessor.getFieldByIndex(dest_field_idx);
+                            existing.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                    }
+
+                    try accessor.setFieldByIndex(dest_field_idx, val, roc_ops);
+                }
+
+                return dest;
+            },
+            .e_empty_record => {
+                const rt_var = expected_rt_var orelse blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    break :blk try self.translateTypeVar(self.env, ct_var);
+                };
+                const rec_layout = try self.getRuntimeLayout(rt_var);
+                return try self.pushRaw(rec_layout, 0);
+            },
+            .e_empty_list => {
+                const rt_var = expected_rt_var orelse blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    break :blk try self.translateTypeVar(self.env, ct_var);
+                };
+                const list_layout = try self.getRuntimeLayout(rt_var);
+                const dest = try self.pushRaw(list_layout, 0);
+                if (dest.ptr) |ptr| {
+                    const header: *RocList = @ptrCast(@alignCast(ptr));
+                    header.* = RocList.empty();
+                }
+                return dest;
+            },
+            // no zero-argument tag handling in minimal evaluator
+            .e_nominal => |nom| {
+                // Evaluate backing expression using minimal evaluator
+                const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
+                const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
+                const backing_rt_var = if (nom.nominal_type_decl == can.Can.BUILTIN_BOOL_TYPE)
+                    try self.getCanonicalBoolRuntimeVar()
+                else switch (nominal_resolved.desc.content) {
+                    .structure => |st| switch (st) {
+                        .nominal_type => |nt| self.runtime_types.getNominalBackingVar(nt),
+                        else => nominal_rt_var,
+                    },
+                    else => nominal_rt_var,
+                };
+                return try self.evalExprMinimal(nom.backing_expr, roc_ops, backing_rt_var);
+            },
+            .e_nominal_external => |nom| {
+                const rt_var = expected_rt_var orelse blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
+                    const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
+                    const backing_rt_var = switch (nominal_resolved.desc.content) {
+                        .structure => |st| switch (st) {
+                            .nominal_type => |nt| self.runtime_types.getNominalBackingVar(nt),
+                            else => nominal_rt_var,
+                        },
+                        else => nominal_rt_var,
+                    };
+                    break :blk backing_rt_var;
+                };
+                return try self.evalExprMinimal(nom.backing_expr, roc_ops, rt_var);
+            },
+            .e_zero_argument_tag => |zero| {
+                // Construct a tag union value with no payload
+                // Determine discriminant index by consulting the runtime tag union type
+                const rt_var = expected_rt_var orelse blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    break :blk try self.translateTypeVar(self.env, ct_var);
+                };
+                const resolved = self.runtime_types.resolveVar(rt_var);
+                if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) return error.NotImplemented;
+                const tu = resolved.desc.content.structure.tag_union;
+                const tags = self.runtime_types.getTagsSlice(tu.tags);
+                // Find index by name
+                var tag_index: usize = 0;
+                var found = false;
+                const name_text = self.env.getIdent(zero.name);
+                var i: usize = 0;
+                while (i < tags.len) : (i += 1) {
+                    if (std.mem.eql(u8, self.env.getIdent(tags.items(.name)[i]), name_text)) {
+                        tag_index = i;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    const msg = try std.fmt.allocPrint(self.allocator, "Invalid tag `{s}`", .{name_text});
+                    self.triggerCrash(msg, true, roc_ops);
+                    return error.Crash;
+                }
+                const layout_val = try self.getRuntimeLayout(rt_var);
+                if (self.isBoolLayout(layout_val) and (std.mem.eql(u8, name_text, "True") or std.mem.eql(u8, name_text, "False"))) {
+                    try self.prepareBoolIndices(rt_var);
+                    return try self.makeBoolValue(rt_var, std.mem.eql(u8, name_text, "True"));
+                }
+                // If layout is scalar (bool/uint), write discriminant directly
+                if (layout_val.tag == .scalar) {
+                    var out = try self.pushRaw(layout_val, 0);
+                    if (layout_val.data.scalar.tag == .bool) {
+                        const p: *u8 = @ptrCast(@alignCast(out.ptr.?));
+                        p.* = @intCast(tag_index);
+                        return out;
+                    } else if (layout_val.data.scalar.tag == .int) {
+                        out.is_initialized = false;
+                        out.setInt(@intCast(tag_index));
+                        out.is_initialized = true;
+                        return out;
+                    }
+                    return error.NotImplemented;
+                } else if (layout_val.tag == .record) {
+                    // Record { tag: Discriminant, payload: ZST }
+                    var dest = try self.pushRaw(layout_val, 0);
+                    var acc = try dest.asRecord(&self.runtime_layout_store);
+                    const tag_idx = acc.findFieldIndex(self.env, "tag") orelse return error.NotImplemented;
+                    const tag_field = try acc.getFieldByIndex(tag_idx);
+                    // write tag as int/byte
+                    if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                        var tmp = tag_field;
+                        tmp.is_initialized = false;
+                        tmp.setInt(@intCast(tag_index));
+                    } else if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .bool) {
+                        const p: *u8 = @ptrCast(@alignCast(tag_field.ptr.?));
+                        p.* = @intCast(tag_index);
+                    } else return error.NotImplemented;
+                    return dest;
+                }
+                return error.NotImplemented;
+            },
+            .e_tag => |tag| {
+                // Construct a tag union value with payloads
+                const rt_var = expected_rt_var orelse blk: {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    break :blk try self.translateTypeVar(self.env, ct_var);
+                };
+                const resolved = self.runtime_types.resolveVar(rt_var);
+                if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) return error.NotImplemented;
+                const name_text = self.env.getIdent(tag.name);
+                var tag_list = std.ArrayList(types.Tag).init(self.allocator);
+                defer tag_list.deinit();
+                try self.appendUnionTags(rt_var, &tag_list);
+                var tag_index: usize = 0;
+                var found = false;
+                for (tag_list.items, 0..) |tag_info, i| {
+                    if (std.mem.eql(u8, self.env.getIdent(tag_info.name), name_text)) {
+                        tag_index = i;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    const msg = try std.fmt.allocPrint(self.allocator, "Invalid tag `{s}`", .{name_text});
+                    self.triggerCrash(msg, true, roc_ops);
+                    return error.Crash;
+                }
+
+                const layout_val = try self.getRuntimeLayout(rt_var);
+                if (self.isBoolLayout(layout_val) and (std.mem.eql(u8, name_text, "True") or std.mem.eql(u8, name_text, "False"))) {
+                    try self.prepareBoolIndices(rt_var);
+                    return try self.makeBoolValue(rt_var, std.mem.eql(u8, name_text, "True"));
+                }
+                if (layout_val.tag == .scalar) {
+                    // No payload union
+                    var out = try self.pushRaw(layout_val, 0);
+                    if (layout_val.data.scalar.tag == .bool) {
+                        const p: *u8 = @ptrCast(@alignCast(out.ptr.?));
+                        p.* = @intCast(tag_index);
+                        return out;
+                    } else if (layout_val.data.scalar.tag == .int) {
+                        out.is_initialized = false;
+                        out.setInt(@intCast(tag_index));
+                        out.is_initialized = true;
+                        return out;
+                    }
+                    return error.NotImplemented;
+                } else if (layout_val.tag == .record) {
+                    // Has payload: record { tag, payload }
+                    var dest = try self.pushRaw(layout_val, 0);
+                    var acc = try dest.asRecord(&self.runtime_layout_store);
+                    const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse return error.NotImplemented;
+                    const payload_field_idx = acc.findFieldIndex(self.env, "payload") orelse return error.NotImplemented;
+                    // write tag discriminant
+                    const tag_field = try acc.getFieldByIndex(tag_field_idx);
+                    if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                        var tmp = tag_field;
+                        tmp.is_initialized = false;
+                        tmp.setInt(@intCast(tag_index));
+                    } else if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .bool) {
+                        const p: *u8 = @ptrCast(@alignCast(tag_field.ptr.?));
+                        p.* = @intCast(tag_index);
+                    } else return error.NotImplemented;
+
+                    const args_exprs = self.env.store.sliceExpr(tag.args);
+                    const arg_vars_range = tag_list.items[tag_index].args;
+                    const arg_rt_vars = self.runtime_types.sliceVars(arg_vars_range);
+                    if (args_exprs.len != arg_rt_vars.len) return error.TypeMismatch;
+                    const payload_field = try acc.getFieldByIndex(payload_field_idx);
+
+                    if (payload_field.ptr) |payload_ptr| {
+                        const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
+                        if (payload_bytes_len > 0) {
+                            const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
+                            @memset(bytes, 0);
+                        }
+                    }
+
+                    if (args_exprs.len == 0) {
+                        return dest;
+                    } else if (args_exprs.len == 1) {
+                        const arg_rt_var = arg_rt_vars[0];
+                        const arg_val = try self.evalExprMinimal(args_exprs[0], roc_ops, arg_rt_var);
+                        defer arg_val.decref(&self.runtime_layout_store, roc_ops);
+                        if (payload_field.ptr) |payload_ptr| {
+                            try arg_val.copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                        }
+                        return dest;
+                    } else {
+                        const arg_count = args_exprs.len;
+                        var elem_layouts = try self.allocator.alloc(Layout, arg_count);
+                        defer self.allocator.free(elem_layouts);
+                        var elem_values = try self.allocator.alloc(StackValue, arg_count);
+                        defer {
+                            for (elem_values[0..arg_count]) |val| {
+                                val.decref(&self.runtime_layout_store, roc_ops);
+                            }
+                            self.allocator.free(elem_values);
+                        }
+
+                        var j: usize = 0;
+                        while (j < arg_count) : (j += 1) {
+                            const arg_rt_var = arg_rt_vars[j];
+                            const val = try self.evalExprMinimal(args_exprs[j], roc_ops, arg_rt_var);
+                            elem_values[j] = val;
+                            elem_layouts[j] = try self.getRuntimeLayout(arg_rt_var);
+                        }
+
+                        const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
+                        const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+
+                        if (payload_field.ptr) |payload_ptr| {
+                            var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true };
+                            var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
+                            j = 0;
+                            while (j < elem_values.len) : (j += 1) {
+                                const sorted_idx = tup_acc.findElementIndexByOriginal(j) orelse return error.TypeMismatch;
+                                try tup_acc.setElement(sorted_idx, elem_values[j], roc_ops);
+                            }
+                        }
+
+                        return dest;
+                    }
+                }
+                return error.NotImplemented;
+            },
+            .e_match => |m| {
+                // Evaluate scrutinee once
+                const scrutinee = try self.evalExprMinimal(m.cond, roc_ops, null);
+                defer scrutinee.decref(&self.runtime_layout_store, roc_ops);
+                const scrutinee_ct_var = can.ModuleEnv.varFrom(m.cond);
+                const scrutinee_rt_var = try self.translateTypeVar(self.env, scrutinee_ct_var);
+                const match_result_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const match_result_rt_var = try self.translateTypeVar(self.env, match_result_ct_var);
+                // Iterate branches and find first matching pattern set
+                const branches = self.env.store.matchBranchSlice(m.branches);
+                for (branches) |br_idx| {
+                    const br = self.env.store.getMatchBranch(br_idx);
+                    const patterns = self.env.store.sliceMatchBranchPatterns(br.patterns);
+                    var temp_binds = try std.ArrayList(Binding).initCapacity(self.allocator, 4);
+                    defer {
+                        self.trimBindingList(&temp_binds, 0, roc_ops);
+                        temp_binds.deinit();
+                    }
+
+                    for (patterns) |bp_idx| {
+                        self.trimBindingList(&temp_binds, 0, roc_ops);
+                        if (!try self.patternMatchesBind(self.env.store.getMatchBranchPattern(bp_idx).pattern, scrutinee, scrutinee_rt_var, roc_ops, &temp_binds)) {
+                            self.trimBindingList(&temp_binds, 0, roc_ops);
+                            continue;
+                        }
+
+                        const start_len = self.bindings.items.len;
+                        try self.bindings.appendSlice(temp_binds.items);
+                        temp_binds.items.len = 0;
+
+                        var guard_pass = true;
+                        if (br.guard) |guard_idx| {
+                            const guard_ct_var = can.ModuleEnv.varFrom(guard_idx);
+                            const guard_rt_var = try self.translateTypeVar(self.env, guard_ct_var);
+                            const guard_val = try self.evalExprMinimal(guard_idx, roc_ops, guard_rt_var);
+                            defer guard_val.decref(&self.runtime_layout_store, roc_ops);
+                            guard_pass = try self.boolValueIsTrue(guard_val, guard_rt_var);
+                        }
+
+                        if (!guard_pass) {
+                            self.trimBindingList(&self.bindings, start_len, roc_ops);
+                            continue;
+                        }
+
+                        const result = try self.evalExprMinimal(br.value, roc_ops, match_result_rt_var);
+                        self.trimBindingList(&self.bindings, start_len, roc_ops);
+                        return result;
+                    }
+                }
+                self.triggerCrash("non-exhaustive match", false, roc_ops);
+                return error.Crash;
+            },
+            .e_crash => |crash_expr| {
+                const msg = self.env.getString(crash_expr.msg);
+                self.triggerCrash(msg, false, roc_ops);
+                return error.Crash;
+            },
+            .e_expect => |expect_expr| {
+                const bool_rt_var = try self.getCanonicalBoolRuntimeVar();
+                const cond_val = try self.evalExprMinimal(expect_expr.body, roc_ops, bool_rt_var);
+                const succeeded = try self.boolValueIsTrue(cond_val, bool_rt_var);
+                if (succeeded) {
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    const rt_var = try self.translateTypeVar(self.env, ct_var);
+                    const layout_val = try self.getRuntimeLayout(rt_var);
+                    return try self.pushRaw(layout_val, 0);
+                }
+                try self.handleExpectFailure(expect_expr.body, roc_ops);
+                return error.Crash;
+            },
+            .e_dbg => |dbg_expr| {
+                const inner_ct_var = can.ModuleEnv.varFrom(dbg_expr.expr);
+                const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
+                const value = try self.evalExprMinimal(dbg_expr.expr, roc_ops, inner_rt_var);
+                const rendered = try self.renderValueRocWithType(value, inner_rt_var);
+                defer self.allocator.free(rendered);
+                roc_ops.dbg(rendered);
+                return value;
+            },
+            // no tag handling in minimal evaluator
+            .e_lambda => |lam| {
+                // Build a closure value with empty captures using the runtime layout for the lambda's type
+                const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const rt_var = try self.translateTypeVar(self.env, ct_var);
+                const closure_layout = try self.getRuntimeLayout(rt_var);
+                // Expect a closure layout from type-to-layout translation
+                if (closure_layout.tag != .closure) return error.NotImplemented;
+                const value = try self.pushRaw(closure_layout, 0);
+                // Initialize the closure header
+                if (value.ptr) |ptr| {
+                    const header: *layout.Closure = @ptrCast(@alignCast(ptr));
+                    header.* = .{
+                        .body_idx = lam.body,
+                        .params = lam.args,
+                        .captures_pattern_idx = @enumFromInt(@as(u32, 0)), // no captures in minimal path
+                        .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
+                        .lambda_expr_idx = expr_idx,
+                    };
+                }
+                return value;
+            },
+            .e_closure => |cls| {
+                // Build a closure value with concrete captures. The closure references a lambda.
+                const lam_expr = self.env.store.getExpr(cls.lambda_idx);
+                if (lam_expr != .e_lambda) return error.NotImplemented;
+                const lam = lam_expr.e_lambda;
+
+                // Collect capture layouts and names from current bindings
+                const caps = self.env.store.sliceCaptures(cls.captures);
+                var field_layouts = try self.allocator.alloc(Layout, caps.len);
+                defer self.allocator.free(field_layouts);
+                var field_names = try self.allocator.alloc(@import("base").Ident.Idx, caps.len);
+                defer self.allocator.free(field_names);
+
+                // Helper: resolve a capture value (from local bindings or active closure captures)
+                const resolveCapture = struct {
+                    fn go(self_interp: *Interpreter, cap: can.CIR.Expr.Capture) ?StackValue {
+                        // First try local bindings by pattern idx
+                        var i: usize = self_interp.bindings.items.len;
+                        while (i > 0) {
+                            i -= 1;
+                            const b = self_interp.bindings.items[i];
+                            if (b.pattern_idx == cap.pattern_idx) return b.value;
+                        }
+                        // Next try active closure captures (top-most only) by name
+                        if (self_interp.active_closures.items.len > 0) {
+                            const top = self_interp.active_closures.items[self_interp.active_closures.items.len - 1];
+                            if (top.layout.tag == .closure and top.ptr != null) {
+                                const captures_layout = self_interp.runtime_layout_store.getLayout(top.layout.data.closure.captures_layout_idx);
+                                const header_sz = @sizeOf(layout.Closure);
+                                const cap_align = captures_layout.alignment(self_interp.runtime_layout_store.targetUsize());
+                                const aligned_off = std.mem.alignForward(usize, header_sz, @intCast(cap_align.toByteUnits()));
+                                const base: [*]u8 = @ptrCast(@alignCast(top.ptr.?));
+                                const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
+                                const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
+                                var accessor = self_interp.runtime_layout_store; // just for type
+                                _ = &accessor;
+                                var rec_acc = (try rec_val.asRecord(&self_interp.runtime_layout_store));
+                                const name_text = self_interp.env.getIdent(cap.name);
+                                if (rec_acc.findFieldIndex(self_interp.env, name_text)) |fidx| {
+                                    return rec_acc.getFieldByIndex(fidx) catch null;
+                                }
+                            }
+                        }
+                        return null;
+                    }
+                }.go;
+
+                for (caps, 0..) |cap_idx, i| {
+                    const cap = self.env.store.getCapture(cap_idx);
+                    field_names[i] = cap.name;
+                    const captured_val = resolveCapture(self, cap) orelse return error.NotImplemented;
+                    field_layouts[i] = captured_val.layout;
+                }
+
+                const captures_layout_idx = try self.runtime_layout_store.putRecord(field_layouts, field_names);
+                const captures_layout = self.runtime_layout_store.getLayout(captures_layout_idx);
+                const closure_layout = Layout.closure(captures_layout_idx);
+                const value = try self.pushRaw(closure_layout, 0);
+
+                // Initialize header
+                if (value.ptr) |ptr| {
+                    const header: *layout.Closure = @ptrCast(@alignCast(ptr));
+                    header.* = .{
+                        .body_idx = lam.body,
+                        .params = lam.args,
+                        .captures_pattern_idx = @enumFromInt(@as(u32, 0)), // not used in minimal path
+                        .captures_layout_idx = captures_layout_idx,
+                        .lambda_expr_idx = cls.lambda_idx,
+                    };
+                    // Copy captures into record area following header (aligned)
+                    const header_size = @sizeOf(layout.Closure);
+                    const cap_align = captures_layout.alignment(self.runtime_layout_store.targetUsize());
+                    const aligned_off = std.mem.alignForward(usize, header_size, @intCast(cap_align.toByteUnits()));
+                    const base: [*]u8 = @ptrCast(@alignCast(ptr));
+                    const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
+                    const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
+                    var accessor = try rec_val.asRecord(&self.runtime_layout_store);
+                    for (caps) |cap_idx2| {
+                        const cap2 = self.env.store.getCapture(cap_idx2);
+                        const cap_val2 = resolveCapture(self, cap2) orelse return error.NotImplemented;
+                        const idx_opt = accessor.findFieldIndex(self.env, self.env.getIdent(cap2.name)) orelse return error.NotImplemented;
+                        try accessor.setFieldByIndex(idx_opt, cap_val2, roc_ops);
+                    }
+                }
+                return value;
+            },
+            .e_call => |call| {
+                const all = self.env.store.sliceExpr(call.args);
+                if (all.len == 0) return error.TypeMismatch;
+                const func_idx = all[0];
+                const arg_indices = all[1..];
+                // Runtime unification for call: constrain return type from arg types
+                const func_ct_var = can.ModuleEnv.varFrom(func_idx);
+                const func_rt_var = try self.translateTypeVar(self.env, func_ct_var);
+                var arg_rt_buf = try self.allocator.alloc(types.Var, arg_indices.len);
+                defer self.allocator.free(arg_rt_buf);
+                var i: usize = 0;
+                while (i < arg_indices.len) : (i += 1) {
+                    const arg_ct_var = can.ModuleEnv.varFrom(arg_indices[i]);
+                    arg_rt_buf[i] = try self.translateTypeVar(self.env, arg_ct_var);
+                }
+                const poly_entry = try self.prepareCallWithFuncVar(@intCast(@intFromEnum(func_idx)), func_rt_var, arg_rt_buf);
+                // Unify this call expression's return var with the function's constrained return var
+                const call_ret_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const call_ret_rt_var = try self.translateTypeVar(self.env, call_ret_ct_var);
+                _ = try unify.unifyWithContext(
+                    self.env,
+                    self.runtime_types,
+                    &self.problems,
+                    &self.snapshots,
+                    &self.unify_scratch,
+                    &self.unify_scratch.occurs_scratch,
+                    call_ret_rt_var,
+                    poly_entry.return_var,
+                    false,
+                );
+
+                const func_val = try self.evalExprMinimal(func_idx, roc_ops, null);
+                var arg_values = try self.allocator.alloc(StackValue, arg_indices.len);
+                defer self.allocator.free(arg_values);
+                var j: usize = 0;
+                while (j < arg_indices.len) : (j += 1) {
+                    arg_values[j] = try self.evalExprMinimal(arg_indices[j], roc_ops, if (arg_rt_buf.len == 0) null else arg_rt_buf[j]);
+                }
+                // Support calling closures produced by evaluating expressions (including nested calls)
+                if (func_val.layout.tag == .closure) {
+                    const header: *const layout.Closure = @ptrCast(@alignCast(func_val.ptr.?));
+                    const params = self.env.store.slicePatterns(header.params);
+                    if (params.len != arg_indices.len) return error.TypeMismatch;
+                    // Provide closure context for capture lookup during body eval
+                    try self.active_closures.append(func_val);
+                    defer _ = self.active_closures.pop();
+                    var bind_count: usize = 0;
+                    while (bind_count < params.len) : (bind_count += 1) {
+                        try self.bindings.append(.{ .pattern_idx = params[bind_count], .value = arg_values[bind_count] });
+                    }
+                    defer {
+                        var k = params.len;
+                        while (k > 0) {
+                            k -= 1;
+                            if (self.bindings.pop()) |binding| {
+                                binding.value.decref(&self.runtime_layout_store, roc_ops);
+                            }
+                        }
+                    }
+                    return try self.evalExprMinimal(header.body_idx, roc_ops, null);
+                }
+
+                // Fallback: direct lambda expression (legacy minimal path)
+                const func_expr = self.env.store.getExpr(func_idx);
+                if (func_expr == .e_lambda) {
+                    const lambda = func_expr.e_lambda;
+                    const params = self.env.store.slicePatterns(lambda.args);
+                    if (params.len != arg_indices.len) return error.TypeMismatch;
+                    var bind_count: usize = 0;
+                    while (bind_count < params.len) : (bind_count += 1) {
+                        try self.bindings.append(.{ .pattern_idx = params[bind_count], .value = arg_values[bind_count] });
+                    }
+                    defer {
+                        var k = params.len;
+                        while (k > 0) {
+                            k -= 1;
+                            if (self.bindings.pop()) |binding| {
+                                binding.value.decref(&self.runtime_layout_store, roc_ops);
+                            }
+                        }
+                    }
+                    return try self.evalExprMinimal(lambda.body, roc_ops, null);
+                }
+
+                return error.NotImplemented;
+            },
+            .e_dot_access => |dot_access| {
+                const receiver_ct_var = can.ModuleEnv.varFrom(dot_access.receiver);
+                const receiver_rt_var = try self.translateTypeVar(self.env, receiver_ct_var);
+                var receiver_value = try self.evalExprMinimal(dot_access.receiver, roc_ops, receiver_rt_var);
+                defer receiver_value.decref(&self.runtime_layout_store, roc_ops);
+
+                const method_args = dot_access.args;
+                const field_name = self.env.getIdent(dot_access.field_name);
+                const resolved_receiver = self.resolveBaseVar(receiver_rt_var);
+                const is_list_receiver = resolved_receiver.desc.content == .structure and switch (resolved_receiver.desc.content.structure) {
+                    .list, .list_unbound => true,
+                    else => false,
+                };
+                const is_list_method = is_list_receiver and (std.mem.eql(u8, field_name, "len") or std.mem.eql(u8, field_name, "isEmpty"));
+                const treat_as_method = method_args != null or is_list_method;
+
+                if (!treat_as_method) {
+                    if (receiver_value.layout.tag != .record) return error.TypeMismatch;
+                    if (receiver_value.ptr == null) return error.ZeroSizedType;
+                    const rec_data = self.runtime_layout_store.getRecordData(receiver_value.layout.data.record.idx);
+                    if (rec_data.fields.count == 0) return error.ZeroSizedType;
+                    var accessor = try receiver_value.asRecord(&self.runtime_layout_store);
+                    const field_idx = accessor.findFieldIndex(self.env, field_name) orelse return error.TypeMismatch;
+                    const field_value = try accessor.getFieldByIndex(field_idx);
+                    return try self.pushCopy(field_value, roc_ops);
+                }
+
+                const arg_count = if (method_args) |span| span.span.len else 0;
+                var arg_values: []StackValue = &.{};
+                if (arg_count > 0) {
+                    arg_values = try self.allocator.alloc(StackValue, arg_count);
+                }
+                defer {
+                    if (arg_values.len > 0) {
+                        var idx: usize = 0;
+                        while (idx < arg_values.len) : (idx += 1) {
+                            arg_values[idx].decref(&self.runtime_layout_store, roc_ops);
+                        }
+                        self.allocator.free(arg_values);
+                    }
+                }
+                if (method_args) |span| {
+                    var i: usize = 0;
+                    while (i < arg_values.len) : (i += 1) {
+                        const arg_expr_idx: can.CIR.Expr.Idx = @enumFromInt(span.span.start + i);
+                        const arg_ct_var = can.ModuleEnv.varFrom(arg_expr_idx);
+                        const arg_rt_var = try self.translateTypeVar(self.env, arg_ct_var);
+                        arg_values[i] = try self.evalExprMinimal(arg_expr_idx, roc_ops, arg_rt_var);
+                    }
+                }
+
+                const base_content = resolved_receiver.desc.content;
+                if (base_content == .structure) {
+                    switch (base_content.structure) {
+                        .list, .list_unbound => {
+                            if (std.mem.eql(u8, field_name, "len")) {
+                                const result_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(expr_idx));
+                                const result_layout = try self.getRuntimeLayout(result_rt_var);
+                                const length: usize = if (receiver_value.ptr) |ptr| blk: {
+                                    const header: *const RocList = @ptrCast(@alignCast(ptr));
+                                    break :blk header.len();
+                                } else 0;
+                                var out = try self.pushRaw(result_layout, 0);
+                                out.is_initialized = false;
+                                out.setInt(@intCast(length));
+                                out.is_initialized = true;
+                                return out;
+                            }
+
+                            if (std.mem.eql(u8, field_name, "isEmpty")) {
+                                const result_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(expr_idx));
+                                const length: usize = if (receiver_value.ptr) |ptr| blk: {
+                                    const header: *const RocList = @ptrCast(@alignCast(ptr));
+                                    break :blk header.len();
+                                } else 0;
+                                return try self.makeBoolValue(result_rt_var, length == 0);
+                            }
+                        },
+                        .nominal_type => |nominal| {
+                            const nominal_name = self.env.getIdent(nominal.ident.ident_idx);
+                            if (std.mem.eql(u8, nominal_name, "Box")) {
+                                if (std.mem.eql(u8, field_name, "box")) {
+                                    if (arg_values.len != 1) return error.TypeMismatch;
+                                    const result_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(expr_idx));
+                                    const result_layout = try self.getRuntimeLayout(result_rt_var);
+                                    return try self.makeBoxValueFromLayout(result_layout, arg_values[0], roc_ops);
+                                } else if (std.mem.eql(u8, field_name, "unbox")) {
+                                    if (arg_values.len != 1) return error.TypeMismatch;
+                                    const box_value = arg_values[0];
+                                    const result_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(expr_idx));
+                                    const result_layout = try self.getRuntimeLayout(result_rt_var);
+
+                                    if (box_value.layout.tag == .box_of_zst) {
+                                        var out = try self.pushRaw(result_layout, 0);
+                                        out.is_initialized = true;
+                                        return out;
+                                    }
+
+                                    if (box_value.layout.tag != .box) return error.TypeMismatch;
+
+                                    const elem_layout = self.runtime_layout_store.getLayout(box_value.layout.data.box);
+                                    const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                                    const data_ptr = box_value.boxDataPointer() orelse return error.NullStackPointer;
+                                    var payload_ptr_any: ?*anyopaque = null;
+                                    if (elem_size > 0) {
+                                        payload_ptr_any = @as(*anyopaque, @ptrFromInt(@intFromPtr(data_ptr)));
+                                    }
+
+                                    const payload_value = StackValue{
+                                        .layout = elem_layout,
+                                        .ptr = payload_ptr_any,
+                                        .is_initialized = true,
+                                    };
+
+                                    if (!std.meta.eql(elem_layout, result_layout)) {
+                                        var out = try self.pushRaw(result_layout, 0);
+                                        if (self.runtime_layout_store.layoutSize(result_layout) > 0 and out.ptr != null and payload_ptr_any != null) {
+                                            try payload_value.copyToPtr(&self.runtime_layout_store, out.ptr.?, roc_ops);
+                                        }
+                                        out.is_initialized = true;
+                                        return out;
+                                    }
+
+                                    return try self.pushCopy(payload_value, roc_ops);
+                                }
+                            }
+                        },
+                        else => {},
+                    }
+                }
+
+                return error.NotImplemented;
+            },
+            .e_lookup_local => |lookup| {
+                // Search bindings in reverse
+                var i: usize = self.bindings.items.len;
+                while (i > 0) {
+                    i -= 1;
+                    const b = self.bindings.items[i];
+                    if (b.pattern_idx == lookup.pattern_idx) {
+                        return try self.pushCopy(b.value, roc_ops);
+                    }
+                }
+                // If not found, try active closure captures by variable name
+                if (self.active_closures.items.len > 0) {
+                    const pat = self.env.store.getPattern(lookup.pattern_idx);
+                    if (pat == .assign) {
+                        const var_name = self.env.getIdent(pat.assign.ident);
+                        const cls_val = self.active_closures.items[self.active_closures.items.len - 1];
+                        if (cls_val.layout.tag == .closure and cls_val.ptr != null) {
+                            const captures_layout = self.runtime_layout_store.getLayout(cls_val.layout.data.closure.captures_layout_idx);
+                            const header_sz = @sizeOf(layout.Closure);
+                            const cap_align = captures_layout.alignment(self.runtime_layout_store.targetUsize());
+                            const aligned_off = std.mem.alignForward(usize, header_sz, @intCast(cap_align.toByteUnits()));
+                            const base: [*]u8 = @ptrCast(@alignCast(cls_val.ptr.?));
+                            const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
+                            const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true };
+                            var accessor = try rec_val.asRecord(&self.runtime_layout_store);
+                            if (accessor.findFieldIndex(self.env, var_name)) |fidx| {
+                                const field_val = try accessor.getFieldByIndex(fidx);
+                                return try self.pushCopy(field_val, roc_ops);
+                            }
+                        }
+                    }
+                }
+                return error.NotImplemented;
+            },
+            .e_unary_minus => |unary| {
+                const operand_ct_var = can.ModuleEnv.varFrom(unary.expr);
+                const operand_rt_var = try self.translateTypeVar(self.env, operand_ct_var);
+                const operand = try self.evalExprMinimal(unary.expr, roc_ops, operand_rt_var);
+                defer operand.decref(&self.runtime_layout_store, roc_ops);
+
+                const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
+                const result_layout = try self.getRuntimeLayout(result_rt_var);
+                if (result_layout.tag != .scalar) return error.TypeMismatch;
+
+                return switch (result_layout.data.scalar.tag) {
+                    .int => {
+                        if (!(operand.layout.tag == .scalar and operand.layout.data.scalar.tag == .int)) {
+                            return error.TypeMismatch;
+                        }
+                        const value = operand.asI128();
+                        var out = try self.pushRaw(result_layout, 0);
+                        out.is_initialized = false;
+                        out.setInt(-value);
+                        out.is_initialized = true;
+                        return out;
+                    },
+                    .frac => switch (result_layout.data.scalar.data.frac) {
+                        .dec => {
+                            const operand_dec = try self.stackValueToDecimal(operand);
+                            const out = try self.pushRaw(result_layout, 0);
+                            if (out.ptr) |ptr| {
+                                const dest: *RocDec = @ptrCast(@alignCast(ptr));
+                                dest.* = RocDec{ .num = -operand_dec.num };
+                            }
+                            return out;
+                        },
+                        .f32 => {
+                            const operand_float = try self.stackValueToFloat(f32, operand);
+                            const out = try self.pushRaw(result_layout, 0);
+                            if (out.ptr) |ptr| {
+                                const dest: *f32 = @ptrCast(@alignCast(ptr));
+                                dest.* = -operand_float;
+                            }
+                            return out;
+                        },
+                        .f64 => {
+                            const operand_float = try self.stackValueToFloat(f64, operand);
+                            const out = try self.pushRaw(result_layout, 0);
+                            if (out.ptr) |ptr| {
+                                const dest: *f64 = @ptrCast(@alignCast(ptr));
+                                dest.* = -operand_float;
+                            }
+                            return out;
+                        },
+                    },
+                    else => error.TypeMismatch,
+                };
+            },
+            .e_unary_not => |unary| {
+                const operand_ct_var = can.ModuleEnv.varFrom(unary.expr);
+                const operand_rt_var = try self.translateTypeVar(self.env, operand_ct_var);
+                const operand = try self.evalExprMinimal(unary.expr, roc_ops, operand_rt_var);
+                defer operand.decref(&self.runtime_layout_store, roc_ops);
+
+                const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
+                const truthy = try self.boolValueIsTrue(operand, operand_rt_var);
+                return try self.makeBoolValue(result_rt_var, !truthy);
+            },
+            .e_runtime_error => |_| {
+                self.triggerCrash("runtime error", false, roc_ops);
+                return error.Crash;
+            },
+            // no if handling in minimal evaluator
+            // no second e_binop case; handled above
+            else => return error.NotImplemented,
         }
     }
 
-    fn completeUnaryMinus(self: *Interpreter) EvalError!void {
-        // Pop the operand layout
-        var operand_value = try self.peekStackValue(1);
-        const operand_layout = operand_value.layout;
-
-        // For unary minus, we expect an integer type
-        if (operand_layout.tag != .scalar) {
-            self.traceError("Unary minus: expected scalar layout, got {}", .{operand_layout.tag});
-            return error.TypeMismatch;
+    fn pushStr(self: *Interpreter, content: []const u8) !StackValue {
+        _ = content; // size computed below but content copied via RocStr
+        const layout_val = Layout.str();
+        const size: u32 = self.runtime_layout_store.layoutSize(layout_val);
+        if (size == 0) {
+            return StackValue{ .layout = layout_val, .ptr = null, .is_initialized = false };
         }
-
-        const operand_scalar = operand_layout.data.scalar;
-        if (operand_scalar.tag != .int) {
-            self.traceError("Unary minus: expected integer type, got {}", .{operand_scalar.tag});
-            return error.TypeMismatch;
-        }
-
-        // Read the value and negate it in-place
-        const operand_val = operand_value.asI128();
-        operand_value.is_initialized = false; // reset the flag to permit replacement of the value.
-        operand_value.setInt(-operand_val);
-        self.traceInfo("Unary minus operation: -{} = {}", .{ operand_val, -operand_val });
+        const alignment = layout_val.alignment(self.runtime_layout_store.targetUsize());
+        const ptr = try self.stack_memory.alloca(size, alignment);
+        return StackValue{ .layout = layout_val, .ptr = ptr, .is_initialized = true };
     }
 
-    fn completeUnaryNot(self: *Interpreter) EvalError!void {
-        // Pop the operand layout
-        const operand_value = try self.peekStackValue(1);
-        const operand_layout = operand_value.layout;
-
-        // Verify this is a boolean scalar
-        if (operand_layout.tag != .scalar or operand_layout.data.scalar.tag != .bool) {
-            self.traceError("Unary not: expected boolean scalar layout, got {}", .{operand_layout.tag});
-            return error.TypeMismatch;
+    fn stackValueToRocStr(
+        self: *Interpreter,
+        value: StackValue,
+        value_rt_var: ?types.Var,
+        roc_ops: *RocOps,
+    ) !RocStr {
+        if (value.layout.tag == .scalar and value.layout.data.scalar.tag == .str) {
+            if (value.ptr) |ptr| {
+                const existing: *const RocStr = @ptrCast(@alignCast(ptr));
+                var copy = existing.*;
+                copy.incref(1);
+                return copy;
+            } else {
+                return RocStr.empty();
+            }
         }
 
-        // Read the boolean value from memory
-        const bool_ptr: *u8 = @ptrCast(operand_value.ptr.?);
-        const bool_val = bool_ptr.*;
+        const rendered = blk: {
+            if (value_rt_var) |rt_var| {
+                break :blk try self.renderValueRocWithType(value, rt_var);
+            } else {
+                break :blk try self.renderValueRoc(value);
+            }
+        };
+        defer self.allocator.free(rendered);
 
-        self.traceInfo("Unary not operation: bool tag value = {}", .{bool_val});
-
-        // Perform boolean negation (trust the type system - no need to validate 0/1)
-        const result_val: u8 = if (bool_val == 0) 1 else 0;
-
-        self.traceInfo("Unary not operation: !{} = {}", .{ bool_val, result_val });
-
-        // Write the negated value back to the same location
-        bool_ptr.* = result_val;
+        return RocStr.fromSlice(rendered, roc_ops);
     }
 
-    /// Handle boolean scalar tag expressions (True/False) by setting the appropriate boolean value
-    fn handleBooleanScalarTag(self: *Interpreter, result_value: StackValue, tag_name: Ident.Idx) EvalError!void {
-        const tag_text = self.env.getIdent(tag_name);
-        const bool_value: u8 = if (std.mem.eql(u8, tag_text, "True")) 1 else if (std.mem.eql(u8, tag_text, "False")) 0 else {
-            self.traceError("Invalid boolean tag: {s}", .{tag_text});
-            return error.InvalidBooleanTag;
+    fn pushRaw(self: *Interpreter, layout_val: Layout, initial_size: usize) !StackValue {
+        const size: u32 = if (initial_size == 0) self.runtime_layout_store.layoutSize(layout_val) else @intCast(initial_size);
+        if (size == 0) {
+            return StackValue{ .layout = layout_val, .ptr = null, .is_initialized = true };
+        }
+        const target_usize = self.runtime_layout_store.targetUsize();
+        var alignment = layout_val.alignment(target_usize);
+        if (layout_val.tag == .closure) {
+            const captures_layout = self.runtime_layout_store.getLayout(layout_val.data.closure.captures_layout_idx);
+            alignment = alignment.max(captures_layout.alignment(target_usize));
+        }
+        const ptr = try self.stack_memory.alloca(size, alignment);
+        return StackValue{ .layout = layout_val, .ptr = ptr, .is_initialized = true };
+    }
+
+    fn pushCopy(self: *Interpreter, src: StackValue, roc_ops: *RocOps) !StackValue {
+        const size: u32 = if (src.layout.tag == .closure) src.getTotalSize(&self.runtime_layout_store) else self.runtime_layout_store.layoutSize(src.layout);
+        const target_usize = self.runtime_layout_store.targetUsize();
+        var alignment = src.layout.alignment(target_usize);
+        if (src.layout.tag == .closure) {
+            const captures_layout = self.runtime_layout_store.getLayout(src.layout.data.closure.captures_layout_idx);
+            alignment = alignment.max(captures_layout.alignment(target_usize));
+        }
+        const ptr = if (size > 0) try self.stack_memory.alloca(size, alignment) else null;
+        const dest = StackValue{ .layout = src.layout, .ptr = ptr, .is_initialized = true };
+        if (size > 0 and src.ptr != null and ptr != null) {
+            try src.copyToPtr(&self.runtime_layout_store, ptr.?, roc_ops);
+        }
+        return dest;
+    }
+
+    fn triggerCrash(self: *Interpreter, message: []const u8, owned: bool, roc_ops: *RocOps) void {
+        defer if (owned) self.allocator.free(@constCast(message));
+        roc_ops.crash(message);
+    }
+
+    fn handleExpectFailure(self: *Interpreter, snippet_expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) !void {
+        const region = self.env.store.getExprRegion(snippet_expr_idx);
+        const slice = self.env.getSource(region);
+        const trimmed = std.mem.trim(u8, slice, " \t\n\r");
+        const message = try std.fmt.allocPrint(self.allocator, "Expect failed: {s}", .{trimmed});
+        defer self.allocator.free(message);
+
+        const expect_args = RocExpectFailed{
+            .utf8_bytes = @constCast(message.ptr),
+            .len = message.len,
+        };
+        roc_ops.roc_expect_failed(&expect_args, roc_ops.env);
+        roc_ops.crash(message);
+    }
+
+    fn extractBoolTagIndex(self: *Interpreter, value: StackValue, bool_var: ?types.Var) !usize {
+        const raw_index: usize = switch (value.layout.tag) {
+            .scalar => switch (value.layout.data.scalar.tag) {
+                .bool => {
+                    const ptr = value.ptr orelse return error.TypeMismatch;
+                    const b: *const u8 = @ptrCast(@alignCast(ptr));
+                    return @intCast(b.*);
+                },
+                .int => {
+                    return @intCast(value.asI128());
+                },
+                else => return error.TypeMismatch,
+            },
+            .record => {
+                var acc = try value.asRecord(&self.runtime_layout_store);
+                const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse return error.TypeMismatch;
+                const tag_field = try acc.getFieldByIndex(tag_field_idx);
+                const tag_value = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
+                return try self.extractBoolTagIndex(tag_value, bool_var);
+            },
+            else => return error.TypeMismatch,
         };
 
-        const bool_ptr = @as(*u8, @ptrCast(@alignCast(result_value.ptr.?)));
-        bool_ptr.* = bool_value;
+        if (bool_var) |_var| {
+            try self.prepareBoolIndices(_var);
+            if (raw_index == self.bool_false_index or raw_index == self.bool_true_index) {
+                return raw_index;
+            }
+            return error.TypeMismatch;
+        }
 
-        self.traceInfo("Boolean scalar tag: {s} = {}", .{ tag_text, bool_value });
+        return raw_index;
     }
 
-    /// Get the return layout of a closure by resolving its lambda expression's type,
-    /// while building TypeScope mappings by matching function parameter types with argument types.
-    fn buildTypeScopeForCall(
+    fn boolValueIsTrue(self: *Interpreter, value: StackValue, rt_var: types.Var) !bool {
+        if (!self.isBoolLayout(value.layout)) return error.TypeMismatch;
+        try self.prepareBoolIndices(rt_var);
+        if (!self.runtimeVarIsBool(rt_var)) return error.TypeMismatch;
+        const idx = try self.extractBoolTagIndex(value, rt_var);
+        return idx == self.bool_true_index;
+    }
+
+    const NumericKind = enum { int, dec, f32, f64 };
+
+    fn numericKindFromLayout(self: *Interpreter, layout_val: Layout) ?NumericKind {
+        _ = self;
+        if (layout_val.tag != .scalar) return null;
+        return switch (layout_val.data.scalar.tag) {
+            .int => .int,
+            .frac => switch (layout_val.data.scalar.data.frac) {
+                .dec => .dec,
+                .f32 => .f32,
+                .f64 => .f64,
+            },
+            else => null,
+        };
+    }
+
+    fn unifyNumericKinds(lhs: NumericKind, rhs: NumericKind) ?NumericKind {
+        if (lhs == rhs) return lhs;
+        if (lhs == .int) return rhs;
+        if (rhs == .int) return lhs;
+        return null;
+    }
+
+    fn layoutMatchesKind(self: *Interpreter, layout_val: Layout, kind: NumericKind) bool {
+        _ = self;
+        if (layout_val.tag != .scalar) return false;
+        return switch (kind) {
+            .int => layout_val.data.scalar.tag == .int,
+            .dec => layout_val.data.scalar.tag == .frac and layout_val.data.scalar.data.frac == .dec,
+            .f32 => layout_val.data.scalar.tag == .frac and layout_val.data.scalar.data.frac == .f32,
+            .f64 => layout_val.data.scalar.tag == .frac and layout_val.data.scalar.data.frac == .f64,
+        };
+    }
+
+    fn invalidateRuntimeLayoutCache(self: *Interpreter, type_var: types.Var) void {
+        const slot_idx = @intFromEnum(type_var);
+        if (slot_idx < self.var_to_layout_slot.items.len) {
+            self.var_to_layout_slot.items[slot_idx] = 0;
+        }
+
+        const resolved = self.runtime_types.resolveVar(type_var);
+        const map_idx = @intFromEnum(resolved.var_);
+        if (map_idx < self.runtime_layout_store.layouts_by_var.entries.len) {
+            self.runtime_layout_store.layouts_by_var.entries[map_idx] = std.mem.zeroes(layout.Idx);
+        }
+    }
+
+    fn adjustNumericResultLayout(
         self: *Interpreter,
-        call_expr_idx: CIR.Expr.Idx,
-        closure: *const Closure,
-        arg_count: u32,
-        scope_map: *types.VarMap,
+        result_rt_var: types.Var,
+        current_layout: Layout,
+        lhs: StackValue,
+        lhs_rt_var: types.Var,
+        rhs: StackValue,
+        rhs_rt_var: types.Var,
+    ) !Layout {
+        const lhs_kind_opt = self.numericKindFromLayout(lhs.layout);
+        const rhs_kind_opt = self.numericKindFromLayout(rhs.layout);
+        if (lhs_kind_opt == null or rhs_kind_opt == null) return current_layout;
+
+        const desired_kind = unifyNumericKinds(lhs_kind_opt.?, rhs_kind_opt.?) orelse return error.TypeMismatch;
+
+        if (self.layoutMatchesKind(current_layout, desired_kind)) return current_layout;
+
+        const source = blk: {
+            if (self.layoutMatchesKind(lhs.layout, desired_kind)) break :blk lhs_rt_var;
+            if (self.layoutMatchesKind(rhs.layout, desired_kind)) break :blk rhs_rt_var;
+            return error.TypeMismatch;
+        };
+
+        const source_resolved = self.runtime_types.resolveVar(source);
+        try self.runtime_types.setVarContent(result_rt_var, source_resolved.desc.content);
+        self.invalidateRuntimeLayoutCache(result_rt_var);
+
+        const updated_layout = try self.getRuntimeLayout(result_rt_var);
+        if (!self.layoutMatchesKind(updated_layout, desired_kind)) return error.TypeMismatch;
+        return updated_layout;
+    }
+
+    fn evalArithmeticBinop(
+        self: *Interpreter,
+        op: can.CIR.Expr.Binop.Op,
+        expr_idx: can.CIR.Expr.Idx,
+        lhs: StackValue,
+        rhs: StackValue,
+        lhs_rt_var: types.Var,
+        rhs_rt_var: types.Var,
+    ) !StackValue {
+        const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
+        const result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
+        var result_layout = try self.getRuntimeLayout(result_rt_var);
+
+        result_layout = try self.adjustNumericResultLayout(result_rt_var, result_layout, lhs, lhs_rt_var, rhs, rhs_rt_var);
+
+        if (result_layout.tag != .scalar) return error.TypeMismatch;
+        return switch (result_layout.data.scalar.tag) {
+            .int => try self.evalIntBinop(op, result_layout, lhs, rhs),
+            .frac => switch (result_layout.data.scalar.data.frac) {
+                .dec => try self.evalDecBinop(op, result_layout, lhs, rhs),
+                .f32 => try self.evalFloatBinop(f32, op, result_layout, lhs, rhs),
+                .f64 => try self.evalFloatBinop(f64, op, result_layout, lhs, rhs),
+            },
+            else => error.TypeMismatch,
+        };
+    }
+
+    fn evalIntBinop(
+        self: *Interpreter,
+        op: can.CIR.Expr.Binop.Op,
+        result_layout: Layout,
+        lhs: StackValue,
+        rhs: StackValue,
+    ) !StackValue {
+        if (!(lhs.layout.tag == .scalar and lhs.layout.data.scalar.tag == .int)) return error.TypeMismatch;
+        if (!(rhs.layout.tag == .scalar and rhs.layout.data.scalar.tag == .int)) return error.TypeMismatch;
+
+        const lhs_val = lhs.asI128();
+        const rhs_val = rhs.asI128();
+
+        const result_val: i128 = switch (op) {
+            .add => lhs_val + rhs_val,
+            .sub => lhs_val - rhs_val,
+            .mul => lhs_val * rhs_val,
+            .div, .div_trunc => blk: {
+                if (rhs_val == 0) return error.DivisionByZero;
+                break :blk @divTrunc(lhs_val, rhs_val);
+            },
+            .rem => blk: {
+                if (rhs_val == 0) return error.DivisionByZero;
+                break :blk @rem(lhs_val, rhs_val);
+            },
+            else => return error.NotImplemented,
+        };
+
+        var out = try self.pushRaw(result_layout, 0);
+        out.is_initialized = false;
+        out.setInt(result_val);
+        out.is_initialized = true;
+        return out;
+    }
+
+    fn evalDecBinop(
+        self: *Interpreter,
+        op: can.CIR.Expr.Binop.Op,
+        result_layout: Layout,
+        lhs: StackValue,
+        rhs: StackValue,
+    ) !StackValue {
+        const lhs_dec = try self.stackValueToDecimal(lhs);
+        const rhs_dec = try self.stackValueToDecimal(rhs);
+
+        const result_dec: RocDec = switch (op) {
+            .add => RocDec{ .num = lhs_dec.num + rhs_dec.num },
+            .sub => RocDec{ .num = lhs_dec.num - rhs_dec.num },
+            .mul => RocDec{ .num = @divTrunc(lhs_dec.num * rhs_dec.num, RocDec.one_point_zero_i128) },
+            .div, .div_trunc => blk: {
+                if (rhs_dec.num == 0) return error.DivisionByZero;
+                const scaled_lhs = lhs_dec.num * RocDec.one_point_zero_i128;
+                break :blk RocDec{ .num = @divTrunc(scaled_lhs, rhs_dec.num) };
+            },
+            .rem => blk: {
+                if (rhs_dec.num == 0) return error.DivisionByZero;
+                break :blk RocDec{ .num = @rem(lhs_dec.num, rhs_dec.num) };
+            },
+            else => return error.NotImplemented,
+        };
+
+        var out = try self.pushRaw(result_layout, 0);
+        out.is_initialized = true;
+        if (out.ptr) |ptr| {
+            const dest: *RocDec = @ptrCast(@alignCast(ptr));
+            dest.* = result_dec;
+        }
+        return out;
+    }
+
+    fn evalFloatBinop(
+        self: *Interpreter,
+        comptime FloatT: type,
+        op: can.CIR.Expr.Binop.Op,
+        result_layout: Layout,
+        lhs: StackValue,
+        rhs: StackValue,
+    ) !StackValue {
+        const lhs_float = try self.stackValueToFloat(FloatT, lhs);
+        const rhs_float = try self.stackValueToFloat(FloatT, rhs);
+
+        const result_float: FloatT = switch (op) {
+            .add => lhs_float + rhs_float,
+            .sub => lhs_float - rhs_float,
+            .mul => lhs_float * rhs_float,
+            .div => blk: {
+                if (rhs_float == 0) return error.DivisionByZero;
+                break :blk lhs_float / rhs_float;
+            },
+            .div_trunc => blk: {
+                if (rhs_float == 0) return error.DivisionByZero;
+                const quotient = lhs_float / rhs_float;
+                break :blk std.math.trunc(quotient);
+            },
+            .rem => blk: {
+                if (rhs_float == 0) return error.DivisionByZero;
+                break :blk @rem(lhs_float, rhs_float);
+            },
+            else => return error.NotImplemented,
+        };
+
+        var out = try self.pushRaw(result_layout, 0);
+        out.is_initialized = true;
+        if (out.ptr) |ptr| {
+            const dest: *FloatT = @ptrCast(@alignCast(ptr));
+            dest.* = result_float;
+        }
+        return out;
+    }
+
+    fn stackValueToDecimal(self: *Interpreter, value: StackValue) !RocDec {
+        _ = self;
+        if (value.layout.tag != .scalar) return error.TypeMismatch;
+        switch (value.layout.data.scalar.tag) {
+            .frac => switch (value.layout.data.scalar.data.frac) {
+                .dec => {
+                    const ptr = value.ptr orelse return error.TypeMismatch;
+                    const dec_ptr: *const RocDec = @ptrCast(@alignCast(ptr));
+                    return dec_ptr.*;
+                },
+                else => return error.TypeMismatch,
+            },
+            .int => {
+                return RocDec{ .num = value.asI128() * RocDec.one_point_zero_i128 };
+            },
+            else => return error.TypeMismatch,
+        }
+    }
+
+    fn stackValueToFloat(self: *Interpreter, comptime FloatT: type, value: StackValue) !FloatT {
+        _ = self;
+        if (value.layout.tag != .scalar) return error.TypeMismatch;
+        switch (value.layout.data.scalar.tag) {
+            .int => {
+                return @floatFromInt(value.asI128());
+            },
+            .frac => switch (value.layout.data.scalar.data.frac) {
+                .f32 => {
+                    const ptr = value.ptr orelse return error.TypeMismatch;
+                    const val_ptr: *const f32 = @ptrCast(@alignCast(ptr));
+                    if (FloatT == f32) {
+                        return val_ptr.*;
+                    }
+                    return @floatCast(val_ptr.*);
+                },
+                .f64 => {
+                    const ptr = value.ptr orelse return error.TypeMismatch;
+                    const val_ptr: *const f64 = @ptrCast(@alignCast(ptr));
+                    if (FloatT == f64) {
+                        return val_ptr.*;
+                    }
+                    return @floatCast(val_ptr.*);
+                },
+                else => return error.TypeMismatch,
+            },
+            else => return error.TypeMismatch,
+        }
+    }
+
+    fn isBoolLayout(self: *Interpreter, layout_val: Layout) bool {
+        _ = self;
+        if (layout_val.tag != .scalar) return false;
+        return layout_val.data.scalar.tag == .bool or layout_val.data.scalar.tag == .int;
+    }
+
+    const NumericValue = union(enum) {
+        int: i128,
+        f32: f32,
+        f64: f64,
+        dec: RocDec,
+    };
+
+    fn isNumericScalar(self: *Interpreter, layout_val: Layout) bool {
+        _ = self;
+        if (layout_val.tag != .scalar) return false;
+        return switch (layout_val.data.scalar.tag) {
+            .int, .frac => true,
+            else => false,
+        };
+    }
+
+    fn extractNumericValue(self: *Interpreter, value: StackValue) !NumericValue {
+        _ = self;
+        if (value.layout.tag != .scalar) return error.NotNumeric;
+        const scalar = value.layout.data.scalar;
+        return switch (scalar.tag) {
+            .int => NumericValue{ .int = value.asI128() },
+            .frac => switch (scalar.data.frac) {
+                .f32 => {
+                    const raw_ptr = value.ptr orelse return error.TypeMismatch;
+                    const ptr = @as(*const f32, @ptrCast(@alignCast(raw_ptr)));
+                    return NumericValue{ .f32 = ptr.* };
+                },
+                .f64 => {
+                    const raw_ptr = value.ptr orelse return error.TypeMismatch;
+                    const ptr = @as(*const f64, @ptrCast(@alignCast(raw_ptr)));
+                    return NumericValue{ .f64 = ptr.* };
+                },
+                .dec => {
+                    const raw_ptr = value.ptr orelse return error.TypeMismatch;
+                    const ptr = @as(*const RocDec, @ptrCast(@alignCast(raw_ptr)));
+                    return NumericValue{ .dec = ptr.* };
+                },
+            },
+            else => error.NotNumeric,
+        };
+    }
+
+    fn compareNumericScalars(self: *Interpreter, lhs: StackValue, rhs: StackValue) !std.math.Order {
+        const lhs_value = try self.extractNumericValue(lhs);
+        const rhs_value = try self.extractNumericValue(rhs);
+        return self.orderNumericValues(lhs_value, rhs_value);
+    }
+
+    fn orderNumericValues(self: *Interpreter, lhs: NumericValue, rhs: NumericValue) !std.math.Order {
+        return switch (lhs) {
+            .int => self.orderInt(lhs.int, rhs),
+            .f32 => self.orderF32(lhs.f32, rhs),
+            .f64 => self.orderF64(lhs.f64, rhs),
+            .dec => self.orderDec(lhs.dec, rhs),
+        };
+    }
+
+    fn orderInt(self: *Interpreter, lhs: i128, rhs: NumericValue) !std.math.Order {
+        _ = self;
+        return switch (rhs) {
+            .int => std.math.order(lhs, rhs.int),
+            .f32 => {
+                const lhs_f: f32 = @floatFromInt(lhs);
+                return std.math.order(lhs_f, rhs.f32);
+            },
+            .f64 => {
+                const lhs_f: f64 = @floatFromInt(lhs);
+                return std.math.order(lhs_f, rhs.f64);
+            },
+            .dec => {
+                const lhs_dec = lhs * RocDec.one_point_zero_i128;
+                return std.math.order(lhs_dec, rhs.dec.num);
+            },
+        };
+    }
+
+    fn orderF32(self: *Interpreter, lhs: f32, rhs: NumericValue) !std.math.Order {
+        _ = self;
+        return switch (rhs) {
+            .int => {
+                const rhs_f: f32 = @floatFromInt(rhs.int);
+                return std.math.order(lhs, rhs_f);
+            },
+            .f32 => std.math.order(lhs, rhs.f32),
+            .f64 => {
+                const lhs_f64: f64 = @as(f64, @floatCast(lhs));
+                return std.math.order(lhs_f64, rhs.f64);
+            },
+            .dec => return error.TypeMismatch,
+        };
+    }
+
+    fn orderF64(self: *Interpreter, lhs: f64, rhs: NumericValue) !std.math.Order {
+        _ = self;
+        return switch (rhs) {
+            .int => {
+                const rhs_f: f64 = @floatFromInt(rhs.int);
+                return std.math.order(lhs, rhs_f);
+            },
+            .f32 => {
+                const rhs_f64: f64 = @as(f64, @floatCast(rhs.f32));
+                return std.math.order(lhs, rhs_f64);
+            },
+            .f64 => std.math.order(lhs, rhs.f64),
+            .dec => return error.TypeMismatch,
+        };
+    }
+
+    fn orderDec(self: *Interpreter, lhs: RocDec, rhs: NumericValue) !std.math.Order {
+        _ = self;
+        return switch (rhs) {
+            .int => {
+                const rhs_dec = rhs.int * RocDec.one_point_zero_i128;
+                return std.math.order(lhs.num, rhs_dec);
+            },
+            .dec => std.math.order(lhs.num, rhs.dec.num),
+            else => return error.TypeMismatch,
+        };
+    }
+
+    const StructuralEqError = Error;
+
+    fn valuesStructurallyEqual(
+        self: *Interpreter,
+        lhs: StackValue,
+        lhs_var: types.Var,
+        rhs: StackValue,
+        rhs_var: types.Var,
+    ) StructuralEqError!bool {
+        // Handle scalar comparisons (bool, numbers, strings) directly.
+        if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
+            const lhs_scalar = lhs.layout.data.scalar;
+            const rhs_scalar = rhs.layout.data.scalar;
+            if (lhs_scalar.tag != rhs_scalar.tag) return error.TypeMismatch;
+
+            switch (lhs_scalar.tag) {
+                .bool => {
+                    const lhs_bool = try self.boolValueIsTrue(lhs, lhs_var);
+                    const rhs_bool = try self.boolValueIsTrue(rhs, rhs_var);
+                    return lhs_bool == rhs_bool;
+                },
+                .int, .frac => {
+                    const order = try self.compareNumericScalars(lhs, rhs);
+                    return order == .eq;
+                },
+                .str => {
+                    if (lhs.ptr == null or rhs.ptr == null) return error.TypeMismatch;
+                    const lhs_str: *const RocStr = @ptrCast(@alignCast(lhs.ptr.?));
+                    const rhs_str: *const RocStr = @ptrCast(@alignCast(rhs.ptr.?));
+                    return std.mem.eql(u8, lhs_str.asSlice(), rhs_str.asSlice());
+                },
+                else => return error.NotImplemented,
+            }
+        }
+
+        // Ensure runtime vars resolve to the same descriptor before structural comparison.
+        const lhs_resolved = self.resolveBaseVar(lhs_var);
+        const lhs_content = lhs_resolved.desc.content;
+        if (lhs_content != .structure) return error.NotImplemented;
+
+        return switch (lhs_content.structure) {
+            .tuple => |tuple| {
+                const elem_vars = self.runtime_types.sliceVars(tuple.elems);
+                return try self.structuralEqualTuple(lhs, rhs, elem_vars);
+            },
+            .record => |record| {
+                return try self.structuralEqualRecord(lhs, rhs, record);
+            },
+            .tag_union => {
+                return try self.structuralEqualTag(lhs, rhs, lhs_var);
+            },
+            .list => |elem_var| {
+                return try self.structuralEqualList(lhs, rhs, elem_var);
+            },
+            .empty_record => true,
+            .list_unbound, .record_unbound, .record_poly, .fn_pure, .fn_effectful, .fn_unbound, .nominal_type, .empty_tag_union, .box => error.NotImplemented,
+            .str => error.NotImplemented,
+            .num => error.NotImplemented,
+        };
+    }
+
+    fn structuralEqualTuple(
+        self: *Interpreter,
+        lhs: StackValue,
+        rhs: StackValue,
+        elem_vars: []const types.Var,
+    ) StructuralEqError!bool {
+        if (lhs.layout.tag != .tuple or rhs.layout.tag != .tuple) return error.TypeMismatch;
+        if (elem_vars.len == 0) return true;
+
+        const lhs_size = self.runtime_layout_store.layoutSize(lhs.layout);
+        const rhs_size = self.runtime_layout_store.layoutSize(rhs.layout);
+        if (lhs_size == 0 and rhs_size == 0) return true;
+        if (lhs.ptr == null or rhs.ptr == null) return error.TypeMismatch;
+
+        var lhs_acc = try lhs.asTuple(&self.runtime_layout_store);
+        var rhs_acc = try rhs.asTuple(&self.runtime_layout_store);
+        if (lhs_acc.getElementCount() != elem_vars.len or rhs_acc.getElementCount() != elem_vars.len) {
+            return error.TypeMismatch;
+        }
+
+        var index: usize = 0;
+        while (index < elem_vars.len) : (index += 1) {
+            const lhs_sorted = lhs_acc.findElementIndexByOriginal(index) orelse index;
+            const rhs_sorted = rhs_acc.findElementIndexByOriginal(index) orelse index;
+            const lhs_elem = try lhs_acc.getElement(lhs_sorted);
+            const rhs_elem = try rhs_acc.getElement(rhs_sorted);
+            const elems_equal = try self.valuesStructurallyEqual(lhs_elem, elem_vars[index], rhs_elem, elem_vars[index]);
+            if (!elems_equal) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    fn structuralEqualRecord(
+        self: *Interpreter,
+        lhs: StackValue,
+        rhs: StackValue,
+        record: types.Record,
+    ) StructuralEqError!bool {
+        if (lhs.layout.tag != .record or rhs.layout.tag != .record) return error.TypeMismatch;
+
+        if (@intFromEnum(record.ext) != 0) {
+            const ext_resolved = self.resolveBaseVar(record.ext);
+            if (ext_resolved.desc.content != .structure or ext_resolved.desc.content.structure != .empty_record) {
+                return error.NotImplemented;
+            }
+        }
+
+        const field_count = record.fields.len();
+        if (field_count == 0) return true;
+
+        const field_slice = self.runtime_types.getRecordFieldsSlice(record.fields);
+
+        const lhs_size = self.runtime_layout_store.layoutSize(lhs.layout);
+        const rhs_size = self.runtime_layout_store.layoutSize(rhs.layout);
+        if ((lhs_size == 0 or lhs.ptr == null) and (rhs_size == 0 or rhs.ptr == null)) {
+            var idx: usize = 0;
+            while (idx < field_count) : (idx += 1) {
+                const field_var = field_slice.items(.var_)[idx];
+                const field_layout = try self.getRuntimeLayout(field_var);
+                if (self.runtime_layout_store.layoutSize(field_layout) != 0) return error.TypeMismatch;
+            }
+            return true;
+        }
+
+        if (lhs.ptr == null or rhs.ptr == null) return error.TypeMismatch;
+
+        var lhs_rec = try lhs.asRecord(&self.runtime_layout_store);
+        var rhs_rec = try rhs.asRecord(&self.runtime_layout_store);
+        if (lhs_rec.getFieldCount() != field_count or rhs_rec.getFieldCount() != field_count) {
+            return error.TypeMismatch;
+        }
+
+        var idx: usize = 0;
+        while (idx < field_count) : (idx += 1) {
+            const lhs_field = try lhs_rec.getFieldByIndex(idx);
+            const rhs_field = try rhs_rec.getFieldByIndex(idx);
+            const field_var = field_slice.items(.var_)[idx];
+            const fields_equal = try self.valuesStructurallyEqual(lhs_field, field_var, rhs_field, field_var);
+            if (!fields_equal) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    fn structuralEqualList(
+        self: *Interpreter,
+        lhs: StackValue,
+        rhs: StackValue,
+        elem_var: types.Var,
+    ) StructuralEqError!bool {
+        const lhs_is_list = lhs.layout.tag == .list or lhs.layout.tag == .list_of_zst;
+        const rhs_is_list = rhs.layout.tag == .list or rhs.layout.tag == .list_of_zst;
+        if (!lhs_is_list or !rhs_is_list) return error.TypeMismatch;
+        if (lhs.ptr == null or rhs.ptr == null) return error.TypeMismatch;
+
+        const lhs_header = @as(*const RocList, @ptrCast(@alignCast(lhs.ptr.?))).*;
+        const rhs_header = @as(*const RocList, @ptrCast(@alignCast(rhs.ptr.?))).*;
+        if (lhs_header.len() != rhs_header.len()) return false;
+
+        const elem_layout = try self.getRuntimeLayout(elem_var);
+        const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+        if (elem_size == 0 or lhs_header.len() == 0) {
+            return true;
+        }
+
+        var lhs_acc = try lhs.asList(&self.runtime_layout_store, elem_layout);
+        var rhs_acc = try rhs.asList(&self.runtime_layout_store, elem_layout);
+
+        var index: usize = 0;
+        while (index < lhs_header.len()) : (index += 1) {
+            const lhs_elem = try lhs_acc.getElement(index);
+            const rhs_elem = try rhs_acc.getElement(index);
+            const elems_equal = try self.valuesStructurallyEqual(lhs_elem, elem_var, rhs_elem, elem_var);
+            if (!elems_equal) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    fn structuralEqualTag(
+        self: *Interpreter,
+        lhs: StackValue,
+        rhs: StackValue,
+        union_var: types.Var,
+    ) StructuralEqError!bool {
+        var tag_list = std.ArrayList(types.Tag).init(self.allocator);
+        defer tag_list.deinit();
+        try self.appendUnionTags(union_var, &tag_list);
+
+        const lhs_data = try self.extractTagValue(lhs, union_var);
+        const rhs_data = try self.extractTagValue(rhs, union_var);
+
+        if (lhs_data.index >= tag_list.items.len or rhs_data.index >= tag_list.items.len) {
+            return error.TypeMismatch;
+        }
+
+        if (lhs_data.index != rhs_data.index) return false;
+
+        const tag_info = tag_list.items[lhs_data.index];
+        const arg_vars = self.runtime_types.sliceVars(tag_info.args);
+        if (arg_vars.len == 0) return true;
+
+        if (arg_vars.len == 1) {
+            const lhs_payload = lhs_data.payload orelse return error.TypeMismatch;
+            const rhs_payload = rhs_data.payload orelse return error.TypeMismatch;
+            return try self.valuesStructurallyEqual(lhs_payload, arg_vars[0], rhs_payload, arg_vars[0]);
+        }
+
+        const lhs_payload = lhs_data.payload orelse return error.TypeMismatch;
+        const rhs_payload = rhs_data.payload orelse return error.TypeMismatch;
+        if (lhs_payload.layout.tag != .tuple or rhs_payload.layout.tag != .tuple) return error.TypeMismatch;
+
+        var lhs_tuple = try lhs_payload.asTuple(&self.runtime_layout_store);
+        var rhs_tuple = try rhs_payload.asTuple(&self.runtime_layout_store);
+        if (lhs_tuple.getElementCount() != arg_vars.len or rhs_tuple.getElementCount() != arg_vars.len) {
+            return error.TypeMismatch;
+        }
+
+        var idx: usize = 0;
+        while (idx < arg_vars.len) : (idx += 1) {
+            const lhs_sorted = lhs_tuple.findElementIndexByOriginal(idx) orelse idx;
+            const rhs_sorted = rhs_tuple.findElementIndexByOriginal(idx) orelse idx;
+            const lhs_elem = try lhs_tuple.getElement(lhs_sorted);
+            const rhs_elem = try rhs_tuple.getElement(rhs_sorted);
+            const args_equal = try self.valuesStructurallyEqual(lhs_elem, arg_vars[idx], rhs_elem, arg_vars[idx]);
+            if (!args_equal) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    fn runtimeVarIsBool(self: *Interpreter, rt_var: types.Var) bool {
+        var resolved = self.runtime_types.resolveVar(rt_var);
+        unwrap: while (true) {
+            switch (resolved.desc.content) {
+                .alias => |al| {
+                    const backing = self.runtime_types.getAliasBackingVar(al);
+                    resolved = self.runtime_types.resolveVar(backing);
+                },
+                .structure => |st| switch (st) {
+                    .nominal_type => |nom| {
+                        const backing = self.runtime_types.getNominalBackingVar(nom);
+                        resolved = self.runtime_types.resolveVar(backing);
+                    },
+                    else => break :unwrap,
+                },
+                else => break :unwrap,
+            }
+        }
+
+        if (resolved.desc.content != .structure) return false;
+        const structure = resolved.desc.content.structure;
+        if (structure != .tag_union) return false;
+        const tu = structure.tag_union;
+        const tags = self.runtime_types.getTagsSlice(tu.tags);
+        if (tags.len == 0 or tags.len > 2) return false;
+
+        var false_idx: ?usize = null;
+        var true_idx: ?usize = null;
+        for (tags.items(.name), 0..) |ident_idx, i| {
+            const name_text = self.env.getIdent(ident_idx);
+            if (std.mem.eql(u8, name_text, "False")) {
+                false_idx = i;
+            } else if (std.mem.eql(u8, name_text, "True")) {
+                true_idx = i;
+            } else {
+                return false;
+            }
+        }
+
+        if (false_idx == null or true_idx == null) return false;
+        self.bool_false_index = @intCast(false_idx.?);
+        self.bool_true_index = @intCast(true_idx.?);
+        return true;
+    }
+
+    fn getCanonicalBoolRuntimeVar(self: *Interpreter) !types.Var {
+        if (self.canonical_bool_rt_var) |cached| return cached;
+        const bool_decl_idx = can.Can.BUILTIN_BOOL_TYPE;
+        const ct_var = can.ModuleEnv.varFrom(bool_decl_idx);
+        const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
+        const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
+        const backing_rt_var = switch (nominal_resolved.desc.content) {
+            .structure => |st| switch (st) {
+                .nominal_type => |nt| self.runtime_types.getNominalBackingVar(nt),
+                else => nominal_rt_var,
+            },
+            else => nominal_rt_var,
+        };
+        self.canonical_bool_rt_var = backing_rt_var;
+        return backing_rt_var;
+    }
+
+    fn prepareBoolIndices(self: *Interpreter, rt_var: types.Var) !void {
+        if (self.runtimeVarIsBool(rt_var)) return;
+        const canonical = try self.getCanonicalBoolRuntimeVar();
+        _ = self.runtimeVarIsBool(canonical);
+    }
+
+    fn ensureBoolRuntimeVar(self: *Interpreter, module: *can.ModuleEnv, compile_var: types.Var, runtime_var: types.Var) !types.Var {
+        if (self.runtimeVarIsBool(runtime_var)) return runtime_var;
+
+        const canonical = try self.getCanonicalBoolRuntimeVar();
+        const key: u64 = (@as(u64, @intFromPtr(module)) << 32) | @as(u64, @intFromEnum(compile_var));
+        try self.translate_cache.put(key, canonical);
+        return canonical;
+    }
+
+    fn resolveBaseVar(self: *Interpreter, runtime_var: types.Var) types.store.ResolvedVarDesc {
+        var current = self.runtime_types.resolveVar(runtime_var);
+        while (true) {
+            switch (current.desc.content) {
+                .alias => |al| {
+                    const backing = self.runtime_types.getAliasBackingVar(al);
+                    current = self.runtime_types.resolveVar(backing);
+                },
+                .structure => |st| switch (st) {
+                    .nominal_type => |nom| {
+                        const backing = self.runtime_types.getNominalBackingVar(nom);
+                        current = self.runtime_types.resolveVar(backing);
+                    },
+                    else => return current,
+                },
+                else => return current,
+            }
+        }
+    }
+
+    fn appendUnionTags(self: *Interpreter, runtime_var: types.Var, list: *std.ArrayList(types.Tag)) !void {
+        var var_stack = try std.ArrayList(types.Var).initCapacity(self.allocator, 4);
+        defer var_stack.deinit();
+        try var_stack.append(runtime_var);
+
+        while (var_stack.items.len > 0) {
+            const current_var = var_stack.pop().?;
+            var resolved = self.runtime_types.resolveVar(current_var);
+            expand: while (true) {
+                switch (resolved.desc.content) {
+                    .alias => |al| {
+                        const backing = self.runtime_types.getAliasBackingVar(al);
+                        resolved = self.runtime_types.resolveVar(backing);
+                        continue :expand;
+                    },
+                    .structure => |flat| switch (flat) {
+                        .nominal_type => |nom| {
+                            const backing = self.runtime_types.getNominalBackingVar(nom);
+                            resolved = self.runtime_types.resolveVar(backing);
+                            continue :expand;
+                        },
+                        .tag_union => |tu| {
+                            const tags_slice = self.runtime_types.getTagsSlice(tu.tags);
+                            for (tags_slice.items(.name), tags_slice.items(.args)) |name_idx, args_range| {
+                                try list.append(.{ .name = name_idx, .args = args_range });
+                            }
+                            const ext_var = tu.ext;
+                            if (@intFromEnum(ext_var) != 0) {
+                                const ext_resolved = self.runtime_types.resolveVar(ext_var);
+                                if (!(ext_resolved.desc.content == .structure and ext_resolved.desc.content.structure == .empty_tag_union)) {
+                                    try var_stack.append(ext_var);
+                                }
+                            }
+                        },
+                        .empty_tag_union => {},
+                        else => {},
+                    },
+                    else => {},
+                }
+                break :expand;
+            }
+        }
+    }
+
+    const TagValue = struct {
+        index: usize,
+        payload: ?StackValue,
+    };
+
+    fn extractTagValue(self: *Interpreter, value: StackValue, union_rt_var: types.Var) !TagValue {
+        switch (value.layout.tag) {
+            .scalar => switch (value.layout.data.scalar.tag) {
+                .bool => {
+                    const idx = try self.extractBoolTagIndex(value, null);
+                    return .{ .index = idx, .payload = null };
+                },
+                .int => {
+                    return .{ .index = @intCast(value.asI128()), .payload = null };
+                },
+                else => return error.TypeMismatch,
+            },
+            .record => {
+                var acc = try value.asRecord(&self.runtime_layout_store);
+                const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse return error.TypeMismatch;
+                const tag_field = try acc.getFieldByIndex(tag_field_idx);
+                var tag_index: usize = undefined;
+                if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                    var tmp = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
+                    tag_index = @intCast(tmp.asI128());
+                } else if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .bool) {
+                    const ptr = tag_field.ptr orelse return error.TypeMismatch;
+                    const b: *const u8 = @ptrCast(@alignCast(ptr));
+                    tag_index = b.*;
+                } else return error.TypeMismatch;
+
+                var payload_value: ?StackValue = null;
+                if (acc.findFieldIndex(self.env, "payload")) |payload_idx| {
+                    payload_value = try acc.getFieldByIndex(payload_idx);
+                    if (payload_value) |field_value| {
+                        var tag_list = std.ArrayList(types.Tag).init(self.allocator);
+                        defer tag_list.deinit();
+                        try self.appendUnionTags(union_rt_var, &tag_list);
+                        if (tag_index >= tag_list.items.len) return error.TypeMismatch;
+                        const tag_info = tag_list.items[tag_index];
+                        const arg_vars = self.runtime_types.sliceVars(tag_info.args);
+
+                        if (arg_vars.len == 0) {
+                            payload_value = null;
+                        } else if (arg_vars.len == 1) {
+                            const arg_layout = try self.getRuntimeLayout(arg_vars[0]);
+                            payload_value = StackValue{
+                                .layout = arg_layout,
+                                .ptr = field_value.ptr,
+                                .is_initialized = field_value.is_initialized,
+                            };
+                        } else {
+                            var elem_layouts = try self.allocator.alloc(Layout, arg_vars.len);
+                            defer self.allocator.free(elem_layouts);
+                            for (arg_vars, 0..) |arg_var, i| {
+                                elem_layouts[i] = try self.getRuntimeLayout(arg_var);
+                            }
+                            const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
+                            const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+                            payload_value = StackValue{
+                                .layout = tuple_layout,
+                                .ptr = field_value.ptr,
+                                .is_initialized = field_value.is_initialized,
+                            };
+                        }
+                    }
+                }
+
+                return .{ .index = tag_index, .payload = payload_value };
+            },
+            else => return error.TypeMismatch,
+        }
+    }
+
+    fn makeBoolValue(self: *Interpreter, target_rt_var: types.Var, truthy: bool) !StackValue {
+        const layout_val = try self.getRuntimeLayout(target_rt_var);
+        if (!self.isBoolLayout(layout_val)) return error.NotImplemented;
+        try self.prepareBoolIndices(target_rt_var);
+        const chosen_index: u8 = if (truthy) self.bool_true_index else self.bool_false_index;
+        var out = try self.pushRaw(layout_val, 0);
+
+        switch (layout_val.tag) {
+            .scalar => switch (layout_val.data.scalar.tag) {
+                .bool => {
+                    const ptr = out.ptr orelse return error.NotImplemented;
+                    const p: *u8 = @ptrCast(@alignCast(ptr));
+                    p.* = chosen_index;
+                    return out;
+                },
+                .int => {
+                    out.is_initialized = false;
+                    out.setInt(chosen_index);
+                    out.is_initialized = true;
+                    return out;
+                },
+                else => return error.NotImplemented,
+            },
+            .record => {
+                var acc = try out.asRecord(&self.runtime_layout_store);
+                const tag_field_idx = acc.findFieldIndex(self.env, "tag") orelse return error.NotImplemented;
+                const tag_field = try acc.getFieldByIndex(tag_field_idx);
+                var tag_slot = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
+                switch (tag_slot.layout.tag) {
+                    .scalar => switch (tag_slot.layout.data.scalar.tag) {
+                        .bool => {
+                            const ptr = tag_slot.ptr orelse return error.NotImplemented;
+                            const p: *u8 = @ptrCast(@alignCast(ptr));
+                            p.* = chosen_index;
+                        },
+                        .int => {
+                            tag_slot.is_initialized = false;
+                            tag_slot.setInt(chosen_index);
+                            tag_slot.is_initialized = true;
+                        },
+                        else => return error.NotImplemented,
+                    },
+                    else => return error.NotImplemented,
+                }
+
+                if (acc.findFieldIndex(self.env, "payload")) |payload_idx| {
+                    const payload_field = try acc.getFieldByIndex(payload_idx);
+                    const payload_size = self.runtime_layout_store.layoutSize(payload_field.layout);
+                    if (payload_size > 0 and payload_field.ptr != null) {
+                        @memset(@as([*]u8, @ptrCast(payload_field.ptr.?))[0..payload_size], 0);
+                    }
+                }
+
+                return out;
+            },
+            else => return error.NotImplemented,
+        }
+    }
+
+    fn makeBoxValueFromLayout(self: *Interpreter, result_layout: Layout, payload: StackValue, roc_ops: *RocOps) !StackValue {
+        var out = try self.pushRaw(result_layout, 0);
+        out.is_initialized = true;
+
+        switch (result_layout.tag) {
+            .box_of_zst => {
+                if (out.ptr) |ptr| {
+                    const slot: *usize = @ptrCast(@alignCast(ptr));
+                    slot.* = 0;
+                }
+                return out;
+            },
+            .box => {
+                const elem_layout = self.runtime_layout_store.getLayout(result_layout.data.box);
+
+                if (!std.meta.eql(elem_layout, payload.layout)) {
+                    return error.TypeMismatch;
+                }
+
+                const target_usize = self.runtime_layout_store.targetUsize();
+                const elem_alignment = elem_layout.alignment(target_usize).toByteUnits();
+                const elem_alignment_u32: u32 = @intCast(elem_alignment);
+                const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                const data_ptr = utils.allocateWithRefcount(elem_size, elem_alignment_u32, false, roc_ops);
+
+                if (elem_size > 0 and payload.ptr != null) {
+                    try payload.copyToPtr(&self.runtime_layout_store, data_ptr, roc_ops);
+                }
+
+                if (out.ptr) |ptr| {
+                    const slot: *usize = @ptrCast(@alignCast(ptr));
+                    slot.* = @intFromPtr(data_ptr);
+                }
+                return out;
+            },
+            else => return error.TypeMismatch,
+        }
+    }
+
+    fn makeRenderCtx(self: *Interpreter) render_helpers.RenderCtx {
+        return .{
+            .allocator = self.allocator,
+            .env = self.env,
+            .runtime_types = self.runtime_types,
+            .layout_store = &self.runtime_layout_store,
+            .type_scope = &self.empty_scope,
+        };
+    }
+
+    pub fn renderValueRoc(self: *Interpreter, value: StackValue) Error![]u8 {
+        var ctx = self.makeRenderCtx();
+        return render_helpers.renderValueRoc(&ctx, value);
+    }
+
+    // removed duplicate
+
+    // Helper for REPL and tests: render a value given its runtime type var
+    pub fn renderValueRocWithType(self: *Interpreter, value: StackValue, rt_var: types.Var) Error![]u8 {
+        var ctx = self.makeRenderCtx();
+        return render_helpers.renderValueRocWithType(&ctx, value, rt_var);
+    }
+
+    fn makeListSliceValue(
+        self: *Interpreter,
+        list_layout: Layout,
+        elem_layout: Layout,
+        source: RocList,
+        start: usize,
+        count: usize,
+    ) !StackValue {
+        const dest = try self.pushRaw(list_layout, 0);
+        if (dest.ptr == null) return dest;
+        const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
+
+        if (count == 0) {
+            header.* = RocList.empty();
+            return dest;
+        }
+
+        const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(elem_layout));
+        const elements_refcounted = elem_layout.isRefcounted();
+
+        if (elements_refcounted and source.isUnique()) {
+            var source_copy = source;
+            markListElementCount(&source_copy, true);
+        }
+
+        const src_bytes = source.bytes orelse return error.NullStackPointer;
+
+        var slice = RocList{
+            .bytes = src_bytes + start * elem_size,
+            .length = count,
+            .capacity_or_alloc_ptr = blk: {
+                const list_alloc_ptr = (@intFromPtr(src_bytes) >> 1) | builtins.list.SEAMLESS_SLICE_BIT;
+                const slice_alloc_ptr = source.capacity_or_alloc_ptr;
+                const slice_mask = source.seamlessSliceMask();
+                break :blk (list_alloc_ptr & ~slice_mask) | (slice_alloc_ptr & slice_mask);
+            },
+        };
+
+        source.incref(1, elements_refcounted);
+        markListElementCount(&slice, elements_refcounted);
+        header.* = slice;
+        return dest;
+    }
+
+    fn markListElementCount(list: *RocList, elements_refcounted: bool) void {
+        if (elements_refcounted and !list.isSeamlessSlice()) {
+            if (list.getAllocationDataPtr()) |source| {
+                const ptr = @as([*]usize, @alignCast(@ptrCast(source))) - 2;
+                ptr[0] = list.length;
+            }
+        }
+    }
+
+    fn upsertBinding(
+        self: *Interpreter,
+        binding: Binding,
+        search_start: usize,
+        roc_ops: *RocOps,
     ) !void {
-        // Get the lambda's function type
-        const lambda_var = ModuleEnv.varFrom(closure.lambda_expr_idx);
-        const lambda_resolved = self.env.types.resolveVar(lambda_var);
+        var idx = self.bindings.items.len;
+        while (idx > search_start) {
+            idx -= 1;
+            if (self.bindings.items[idx].pattern_idx == binding.pattern_idx) {
+                self.bindings.items[idx].value.decref(&self.runtime_layout_store, roc_ops);
+                self.bindings.items[idx] = binding;
+                return;
+            }
+        }
 
-        self.traceInfo("buildTypeScopeForCall: lambda_var={}, lambda_expr_idx={}", .{ lambda_var, closure.lambda_expr_idx });
-        self.traceInfo("  lambda type content: {s}", .{@tagName(lambda_resolved.desc.content)});
+        try self.bindings.append(binding);
+    }
 
-        const func_type = switch (lambda_resolved.desc.content) {
-            .structure => |structure| switch (structure) {
-                .fn_pure => |func| func,
-                .fn_effectful => |func| func,
-                .fn_unbound => |func| func,
+    fn trimBindingList(
+        self: *Interpreter,
+        list: *std.ArrayList(Binding),
+        new_len: usize,
+        roc_ops: *RocOps,
+    ) void {
+        var idx = list.items.len;
+        while (idx > new_len) {
+            idx -= 1;
+            list.items[idx].value.decref(&self.runtime_layout_store, roc_ops);
+        }
+        list.items.len = new_len;
+    }
+
+    fn patternMatchesBind(
+        self: *Interpreter,
+        pattern_idx: can.CIR.Pattern.Idx,
+        value: StackValue,
+        value_rt_var: types.Var,
+        roc_ops: *RocOps,
+        out_binds: *std.ArrayList(Binding),
+    ) !bool {
+        const pat = self.env.store.getPattern(pattern_idx);
+        switch (pat) {
+            .assign => |_| {
+                // Bind entire value to this pattern
+                const copied = try self.pushCopy(value, roc_ops);
+                try out_binds.append(.{ .pattern_idx = pattern_idx, .value = copied });
+                return true;
+            },
+            .as => |as_pat| {
+                const before = out_binds.items.len;
+                if (!try self.patternMatchesBind(as_pat.pattern, value, value_rt_var, roc_ops, out_binds)) {
+                    self.trimBindingList(out_binds, before, roc_ops);
+                    return false;
+                }
+
+                const alias_value = try self.pushCopy(value, roc_ops);
+                try out_binds.append(.{ .pattern_idx = pattern_idx, .value = alias_value });
+                return true;
+            },
+            .underscore => return true,
+            .int_literal => |il| {
+                if (!(value.layout.tag == .scalar and value.layout.data.scalar.tag == .int)) return false;
+                const lit = il.value.toI128();
+                return value.asI128() == lit;
+            },
+            .str_literal => |sl| {
+                if (!(value.layout.tag == .scalar and value.layout.data.scalar.tag == .str)) return false;
+                const lit = self.env.getString(sl.literal);
+                const rs: *const RocStr = @ptrCast(@alignCast(value.ptr.?));
+                return std.mem.eql(u8, rs.asSlice(), lit);
+            },
+            .nominal => |n| {
+                const underlying = self.resolveBaseVar(value_rt_var);
+                return try self.patternMatchesBind(n.backing_pattern, value, underlying.var_, roc_ops, out_binds);
+            },
+            .nominal_external => |n| {
+                const underlying = self.resolveBaseVar(value_rt_var);
+                return try self.patternMatchesBind(n.backing_pattern, value, underlying.var_, roc_ops, out_binds);
+            },
+            .tuple => |tuple_pat| {
+                if (value.layout.tag != .tuple) return false;
+                var accessor = try value.asTuple(&self.runtime_layout_store);
+                const pat_ids = self.env.store.slicePatterns(tuple_pat.patterns);
+                if (pat_ids.len != accessor.getElementCount()) return false;
+
+                const tuple_resolved = self.resolveBaseVar(value_rt_var);
+                if (tuple_resolved.desc.content != .structure or tuple_resolved.desc.content.structure != .tuple) return false;
+                const elem_vars = self.runtime_types.sliceVars(tuple_resolved.desc.content.structure.tuple.elems);
+                if (elem_vars.len != pat_ids.len) return false;
+
+                var idx: usize = 0;
+                while (idx < pat_ids.len) : (idx += 1) {
+                    const sorted_idx = accessor.findElementIndexByOriginal(idx) orelse idx;
+                    if (sorted_idx >= accessor.getElementCount()) return false;
+                    const elem_value = try accessor.getElement(sorted_idx);
+                    const before = out_binds.items.len;
+                    const matched = try self.patternMatchesBind(pat_ids[idx], elem_value, elem_vars[idx], roc_ops, out_binds);
+                    if (!matched) {
+                        self.trimBindingList(out_binds, before, roc_ops);
+                        return false;
+                    }
+                }
+
+                return true;
+            },
+            .list => |list_pat| {
+                if (value.layout.tag != .list and value.layout.tag != .list_of_zst) return false;
+
+                const list_layout = try self.getRuntimeLayout(value_rt_var);
+                const elem_rt_var = try self.translateTypeVar(self.env, list_pat.elem_var);
+                const elem_layout = try self.getRuntimeLayout(elem_rt_var);
+
+                var accessor = try value.asList(&self.runtime_layout_store, elem_layout);
+                const total_len = accessor.len();
+                const non_rest_patterns = self.env.store.slicePatterns(list_pat.patterns);
+
+                if (list_pat.rest_info) |rest_info| {
+                    const prefix_len: usize = @intCast(rest_info.index);
+                    if (prefix_len > non_rest_patterns.len) return false;
+                    const suffix_len: usize = non_rest_patterns.len - prefix_len;
+                    if (total_len < prefix_len + suffix_len) return false;
+
+                    var idx: usize = 0;
+                    while (idx < prefix_len) : (idx += 1) {
+                        const elem_value = try accessor.getElement(idx);
+                        const before = out_binds.items.len;
+                        const matched = try self.patternMatchesBind(non_rest_patterns[idx], elem_value, elem_rt_var, roc_ops, out_binds);
+                        if (!matched) {
+                            self.trimBindingList(out_binds, before, roc_ops);
+                            return false;
+                        }
+                    }
+
+                    var suffix_idx: usize = 0;
+                    while (suffix_idx < suffix_len) : (suffix_idx += 1) {
+                        const suffix_pattern_idx = non_rest_patterns[prefix_len + suffix_idx];
+                        const element_idx = total_len - suffix_len + suffix_idx;
+                        const elem_value = try accessor.getElement(element_idx);
+                        const before = out_binds.items.len;
+                        const matched = try self.patternMatchesBind(suffix_pattern_idx, elem_value, elem_rt_var, roc_ops, out_binds);
+                        if (!matched) {
+                            self.trimBindingList(out_binds, before, roc_ops);
+                            return false;
+                        }
+                    }
+
+                    if (rest_info.pattern) |rest_pat_idx| {
+                        const rest_len = total_len - prefix_len - suffix_len;
+                        const rest_value = try self.makeListSliceValue(list_layout, elem_layout, accessor.list, prefix_len, rest_len);
+                        defer rest_value.decref(&self.runtime_layout_store, roc_ops);
+                        const before = out_binds.items.len;
+                        if (!try self.patternMatchesBind(rest_pat_idx, rest_value, value_rt_var, roc_ops, out_binds)) {
+                            self.trimBindingList(out_binds, before, roc_ops);
+                            return false;
+                        }
+                    }
+
+                    return true;
+                } else {
+                    if (total_len != non_rest_patterns.len) return false;
+                    var idx: usize = 0;
+                    while (idx < non_rest_patterns.len) : (idx += 1) {
+                        const elem_value = try accessor.getElement(idx);
+                        const before = out_binds.items.len;
+                        const matched = try self.patternMatchesBind(non_rest_patterns[idx], elem_value, elem_rt_var, roc_ops, out_binds);
+                        if (!matched) {
+                            self.trimBindingList(out_binds, before, roc_ops);
+                            return false;
+                        }
+                    }
+                    return true;
+                }
+            },
+            .record_destructure => |rec_pat| {
+                if (value.layout.tag != .record) return false;
+                var accessor = try value.asRecord(&self.runtime_layout_store);
+
+                const destructs = self.env.store.sliceRecordDestructs(rec_pat.destructs);
+                for (destructs) |destruct_idx| {
+                    const destruct = self.env.store.getRecordDestruct(destruct_idx);
+                    const field_name = self.env.getIdent(destruct.label);
+
+                    const field_index = accessor.findFieldIndex(self.env, field_name) orelse return false;
+                    const field_value = try accessor.getFieldByIndex(field_index);
+                    const field_ct_var = can.ModuleEnv.varFrom(destruct_idx);
+                    const field_var = try self.translateTypeVar(self.env, field_ct_var);
+
+                    const inner_pattern_idx = switch (destruct.kind) {
+                        .Required => |p_idx| p_idx,
+                        .SubPattern => |p_idx| p_idx,
+                    };
+
+                    const before = out_binds.items.len;
+                    if (!try self.patternMatchesBind(inner_pattern_idx, field_value, field_var, roc_ops, out_binds)) {
+                        self.trimBindingList(out_binds, before, roc_ops);
+                        return false;
+                    }
+                }
+
+                return true;
+            },
+            .applied_tag => |tag_pat| {
+                const union_resolved = self.resolveBaseVar(value_rt_var);
+                if (union_resolved.desc.content != .structure or union_resolved.desc.content.structure != .tag_union) return false;
+
+                var tag_list = std.ArrayList(types.Tag).init(self.allocator);
+                defer tag_list.deinit();
+                try self.appendUnionTags(value_rt_var, &tag_list);
+
+                const tag_data = try self.extractTagValue(value, value_rt_var);
+                if (tag_data.index >= tag_list.items.len) return false;
+
+                const expected_name = self.env.getIdent(tag_pat.name);
+                if (self.runtimeVarIsBool(value_rt_var)) {
+                    const actual_name = if (tag_data.index == self.bool_true_index) "True" else "False";
+                    if (!std.mem.eql(u8, expected_name, actual_name)) return false;
+                } else {
+                    try self.prepareBoolIndices(value_rt_var);
+                    const actual_name = self.env.getIdent(tag_list.items[tag_data.index].name);
+                    if (!std.mem.eql(u8, expected_name, actual_name)) return false;
+                }
+
+                const arg_patterns = self.env.store.slicePatterns(tag_pat.args);
+                const arg_vars_range = tag_list.items[tag_data.index].args;
+                const arg_vars = self.runtime_types.sliceVars(arg_vars_range);
+                if (arg_patterns.len != arg_vars.len) return false;
+
+                if (arg_patterns.len == 0) {
+                    return true;
+                }
+
+                const start_len = out_binds.items.len;
+
+                const payload_value = tag_data.payload orelse {
+                    self.trimBindingList(out_binds, start_len, roc_ops);
+                    return false;
+                };
+
+                if (arg_patterns.len == 1) {
+                    if (!try self.patternMatchesBind(arg_patterns[0], payload_value, arg_vars[0], roc_ops, out_binds)) {
+                        self.trimBindingList(out_binds, start_len, roc_ops);
+                        return false;
+                    }
+                    return true;
+                }
+
+                if (payload_value.layout.tag != .tuple) {
+                    self.trimBindingList(out_binds, start_len, roc_ops);
+                    return false;
+                }
+
+                var payload_tuple = try payload_value.asTuple(&self.runtime_layout_store);
+                if (payload_tuple.getElementCount() != arg_patterns.len) {
+                    self.trimBindingList(out_binds, start_len, roc_ops);
+                    return false;
+                }
+
+                var j: usize = 0;
+                while (j < arg_patterns.len) : (j += 1) {
+                    const sorted_idx = payload_tuple.findElementIndexByOriginal(j) orelse j;
+                    if (sorted_idx >= payload_tuple.getElementCount()) {
+                        self.trimBindingList(out_binds, start_len, roc_ops);
+                        return false;
+                    }
+                    const elem_val = try payload_tuple.getElement(sorted_idx);
+                    if (!try self.patternMatchesBind(arg_patterns[j], elem_val, arg_vars[j], roc_ops, out_binds)) {
+                        self.trimBindingList(out_binds, start_len, roc_ops);
+                        return false;
+                    }
+                }
+
+                return true;
+            },
+            else => return false,
+        }
+    }
+    pub fn deinit(self: *Interpreter) void {
+        self.empty_scope.deinit();
+        self.translate_cache.deinit();
+        var it = self.poly_cache.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.args.len > 0) {
+                self.allocator.free(@constCast(entry.value_ptr.args));
+            }
+        }
+        self.poly_cache.deinit();
+        self.var_to_layout_slot.deinit();
+        self.runtime_layout_store.deinit();
+        self.runtime_types.deinit();
+        self.allocator.destroy(self.runtime_types);
+        self.snapshots.deinit();
+        self.problems.deinit(self.allocator);
+        self.unify_scratch.deinit();
+        self.stack_memory.deinit();
+        self.bindings.deinit();
+        self.active_closures.deinit();
+    }
+
+    /// Ensure the slot array can index at least `min_len` entries; zero-fill new entries.
+    pub fn ensureVarLayoutCapacity(self: *Interpreter, min_len: usize) !void {
+        if (self.var_to_layout_slot.items.len >= min_len) return;
+        const old_len = self.var_to_layout_slot.items.len;
+        try self.var_to_layout_slot.ensureTotalCapacityPrecise(min_len);
+        // Set new length and zero-fill
+        self.var_to_layout_slot.items.len = min_len;
+        @memset(self.var_to_layout_slot.items[old_len..], 0);
+    }
+
+    /// Get the layout for a runtime type var using the O(1) biased slot array.
+    pub fn getRuntimeLayout(self: *Interpreter, type_var: types.Var) !layout.Layout {
+        const resolved = self.runtime_types.resolveVar(type_var);
+        const idx: usize = @intFromEnum(resolved.var_);
+        try self.ensureVarLayoutCapacity(idx + 1);
+        const slot_ptr = &self.var_to_layout_slot.items[idx];
+        if (slot_ptr.* != 0) {
+            const layout_idx_plus_one = slot_ptr.*;
+            const layout_idx: layout.Idx = @enumFromInt(layout_idx_plus_one - 1);
+            return self.runtime_layout_store.getLayout(layout_idx);
+        }
+
+        const layout_idx = switch (resolved.desc.content) {
+            .structure => |st| switch (st) {
+                .empty_record => try self.runtime_layout_store.ensureEmptyRecordLayout(),
+                else => try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope),
+            },
+            else => try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope),
+        };
+        slot_ptr.* = @intFromEnum(layout_idx) + 1;
+        return self.runtime_layout_store.getLayout(layout_idx);
+    }
+
+    const FieldAccumulator = struct {
+        fields: std.ArrayList(types.RecordField),
+        name_to_index: std.AutoHashMap(u32, usize),
+
+        fn init(allocator: std.mem.Allocator) !FieldAccumulator {
+            return FieldAccumulator{
+                .fields = std.ArrayList(types.RecordField).init(allocator),
+                .name_to_index = std.AutoHashMap(u32, usize).init(allocator),
+            };
+        }
+
+        fn deinit(self: *FieldAccumulator) void {
+            self.fields.deinit();
+            self.name_to_index.deinit();
+        }
+
+        fn put(self: *FieldAccumulator, name: base_pkg.Ident.Idx, var_: types.Var) !void {
+            const key: u32 = @bitCast(name);
+            if (self.name_to_index.get(key)) |idx_ptr| {
+                self.fields.items[idx_ptr] = .{ .name = name, .var_ = var_ };
+            } else {
+                try self.fields.append(.{ .name = name, .var_ = var_ });
+                try self.name_to_index.put(key, self.fields.items.len - 1);
+            }
+        }
+    };
+
+    fn collectRecordFieldsFromVar(
+        self: *Interpreter,
+        module: *can.ModuleEnv,
+        ct_var: types.Var,
+        acc: *FieldAccumulator,
+        visited: *std.AutoHashMap(types.Var, void),
+    ) !void {
+        if (visited.contains(ct_var)) return;
+        try visited.put(ct_var, {});
+
+        const resolved = module.types.resolveVar(ct_var);
+        switch (resolved.desc.content) {
+            .structure => |flat| switch (flat) {
+                .record => |rec| {
+                    const ct_fields = module.types.getRecordFieldsSlice(rec.fields);
+                    var i: usize = 0;
+                    while (i < ct_fields.len) : (i += 1) {
+                        const f = ct_fields.get(i);
+                        try acc.put(f.name, f.var_);
+                    }
+                    try self.collectRecordFieldsFromVar(module, rec.ext, acc, visited);
+                },
+                .record_unbound => |fields_range| {
+                    const ct_fields = module.types.getRecordFieldsSlice(fields_range);
+                    var i: usize = 0;
+                    while (i < ct_fields.len) : (i += 1) {
+                        const f = ct_fields.get(i);
+                        try acc.put(f.name, f.var_);
+                    }
+                },
+                .record_poly => |poly| {
+                    const ct_fields = module.types.getRecordFieldsSlice(poly.record.fields);
+                    var i: usize = 0;
+                    while (i < ct_fields.len) : (i += 1) {
+                        const f = ct_fields.get(i);
+                        try acc.put(f.name, f.var_);
+                    }
+                    try self.collectRecordFieldsFromVar(module, poly.var_, acc, visited);
+                },
+                .nominal_type => |nom| {
+                    const backing = module.types.getNominalBackingVar(nom);
+                    try self.collectRecordFieldsFromVar(module, backing, acc, visited);
+                },
+                .empty_record => {},
+                else => {},
+            },
+            .alias => |alias| {
+                const backing = module.types.getAliasBackingVar(alias);
+                try self.collectRecordFieldsFromVar(module, backing, acc, visited);
+            },
+            else => {},
+        }
+    }
+
+    /// Minimal translate implementation (scaffolding): handles .str only for now
+    pub fn translateTypeVar(self: *Interpreter, module: *can.ModuleEnv, compile_var: types.Var) Error!types.Var {
+        const key: u64 = (@as(u64, @intFromPtr(module)) << 32) | @as(u64, @intFromEnum(compile_var));
+        if (self.translate_cache.get(key)) |found| return found;
+
+        const resolved = module.types.resolveVar(compile_var);
+        const out_var = switch (resolved.desc.content) {
+            .structure => |flat| switch (flat) {
+                .str => try self.runtime_types.freshFromContent(.{ .structure = .str }),
+                .num => |n| switch (n) {
+                    .num_compact => |c| switch (c) {
+                        .int => |p| try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = p } } } }),
+                        .frac => |p| try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = p } } } }),
+                    },
+                    .int_precision => |p| try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = p } } } }),
+                    .frac_precision => |p| try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = p } } } }),
+                    .num_unbound, .int_unbound => try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = types.Num.Int.Precision.default } } } }),
+                    .frac_unbound => try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = types.Num.Frac.Precision.default } } } }),
+                    .num_poly, .int_poly => try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = types.Num.Int.Precision.default } } } }),
+                    .frac_poly => try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = types.Num.Frac.Precision.default } } } }),
+                },
+                .tag_union => |tu| {
+                    const ct_tags = module.types.getTagsSlice(tu.tags);
+                    var rt_tags = try self.allocator.alloc(@import("types").Tag, ct_tags.len);
+                    defer self.allocator.free(rt_tags);
+                    for (ct_tags.items(.name), ct_tags.items(.args), 0..) |name, args_range, i| {
+                        const ct_args = module.types.sliceVars(args_range);
+                        var arg_buf = try self.allocator.alloc(types.Var, ct_args.len);
+                        defer self.allocator.free(arg_buf);
+                        for (ct_args, 0..) |ct_arg, j| {
+                            arg_buf[j] = try self.translateTypeVar(module, ct_arg);
+                        }
+                        const rt_args_range = try self.runtime_types.appendVars(arg_buf);
+                        rt_tags[i] = .{ .name = name, .args = rt_args_range };
+                    }
+                    const rt_ext = try self.translateTypeVar(module, tu.ext);
+                    const content = try self.runtime_types.mkTagUnion(rt_tags, rt_ext);
+                    return try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                },
+                .empty_tag_union => {
+                    return try self.runtime_types.freshFromContent(.{ .structure = .empty_tag_union });
+                },
+                .tuple => |t| {
+                    const ct_elems = module.types.sliceVars(t.elems);
+                    var buf = try self.allocator.alloc(types.Var, ct_elems.len);
+                    defer self.allocator.free(buf);
+                    for (ct_elems, 0..) |ct_elem, i| {
+                        buf[i] = try self.translateTypeVar(module, ct_elem);
+                    }
+                    const range = try self.runtime_types.appendVars(buf);
+                    return try self.runtime_types.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = range } } });
+                },
+                .box => |elem_var| {
+                    const rt_elem = try self.translateTypeVar(module, elem_var);
+                    return try self.runtime_types.freshFromContent(.{ .structure = .{ .box = rt_elem } });
+                },
+                .list => |elem_var| {
+                    const rt_elem = try self.translateTypeVar(module, elem_var);
+                    return try self.runtime_types.freshFromContent(.{ .structure = .{ .list = rt_elem } });
+                },
+                .list_unbound => {
+                    return try self.runtime_types.freshFromContent(.{ .structure = .list_unbound });
+                },
+                .record => |rec| {
+                    var acc = try FieldAccumulator.init(self.allocator);
+                    defer acc.deinit();
+                    var visited = std.AutoHashMap(types.Var, void).init(self.allocator);
+                    defer visited.deinit();
+
+                    try self.collectRecordFieldsFromVar(module, rec.ext, &acc, &visited);
+
+                    const ct_fields = module.types.getRecordFieldsSlice(rec.fields);
+                    var i: usize = 0;
+                    while (i < ct_fields.len) : (i += 1) {
+                        const f = ct_fields.get(i);
+                        try acc.put(f.name, f.var_);
+                    }
+
+                    const rt_ext = try self.translateTypeVar(module, rec.ext);
+                    var runtime_fields = try self.allocator.alloc(types.RecordField, acc.fields.items.len);
+                    defer self.allocator.free(runtime_fields);
+                    var j: usize = 0;
+                    while (j < acc.fields.items.len) : (j += 1) {
+                        const ct_field = acc.fields.items[j];
+                        runtime_fields[j] = .{
+                            .name = ct_field.name,
+                            .var_ = try self.translateTypeVar(module, ct_field.var_),
+                        };
+                    }
+                    const rt_fields = try self.runtime_types.appendRecordFields(runtime_fields);
+                    return try self.runtime_types.freshFromContent(.{ .structure = .{ .record = .{ .fields = rt_fields, .ext = rt_ext } } });
+                },
+                .record_unbound => |fields_range| {
+                    const ct_fields = module.types.getRecordFieldsSlice(fields_range);
+                    var runtime_fields = try self.allocator.alloc(types.RecordField, ct_fields.len);
+                    defer self.allocator.free(runtime_fields);
+                    var i: usize = 0;
+                    while (i < ct_fields.len) : (i += 1) {
+                        const f = ct_fields.get(i);
+                        runtime_fields[i] = .{
+                            .name = f.name,
+                            .var_ = try self.translateTypeVar(module, f.var_),
+                        };
+                    }
+                    const rt_fields = try self.runtime_types.appendRecordFields(runtime_fields);
+                    const ext_empty = try self.runtime_types.freshFromContent(.{ .structure = .empty_record });
+                    return try self.runtime_types.freshFromContent(.{ .structure = .{ .record = .{ .fields = rt_fields, .ext = ext_empty } } });
+                },
+                .record_poly => |poly| {
+                    var acc = try FieldAccumulator.init(self.allocator);
+                    defer acc.deinit();
+                    var visited = std.AutoHashMap(types.Var, void).init(self.allocator);
+                    defer visited.deinit();
+
+                    try self.collectRecordFieldsFromVar(module, poly.record.ext, &acc, &visited);
+
+                    const ct_fields = module.types.getRecordFieldsSlice(poly.record.fields);
+                    var i: usize = 0;
+                    while (i < ct_fields.len) : (i += 1) {
+                        const f = ct_fields.get(i);
+                        try acc.put(f.name, f.var_);
+                    }
+
+                    const rt_ext = try self.translateTypeVar(module, poly.var_);
+                    var runtime_fields = try self.allocator.alloc(types.RecordField, acc.fields.items.len);
+                    defer self.allocator.free(runtime_fields);
+                    var j: usize = 0;
+                    while (j < acc.fields.items.len) : (j += 1) {
+                        const ct_field = acc.fields.items[j];
+                        runtime_fields[j] = .{
+                            .name = ct_field.name,
+                            .var_ = try self.translateTypeVar(module, ct_field.var_),
+                        };
+                    }
+                    const rt_fields = try self.runtime_types.appendRecordFields(runtime_fields);
+                    return try self.runtime_types.freshFromContent(.{ .structure = .{ .record = .{ .fields = rt_fields, .ext = rt_ext } } });
+                },
+                .empty_record => try self.runtime_types.freshFromContent(.{ .structure = .empty_record }),
+                .fn_pure => |f| {
+                    const ct_args = module.types.sliceVars(f.args);
+                    var buf = try self.allocator.alloc(types.Var, ct_args.len);
+                    defer self.allocator.free(buf);
+                    for (ct_args, 0..) |ct_arg, i| {
+                        buf[i] = try self.translateTypeVar(module, ct_arg);
+                    }
+                    const rt_ret = try self.translateTypeVar(module, f.ret);
+                    const content = try self.runtime_types.mkFuncPure(buf, rt_ret);
+                    return try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                },
+                .fn_effectful => |f| {
+                    const ct_args = module.types.sliceVars(f.args);
+                    var buf = try self.allocator.alloc(types.Var, ct_args.len);
+                    defer self.allocator.free(buf);
+                    for (ct_args, 0..) |ct_arg, i| {
+                        buf[i] = try self.translateTypeVar(module, ct_arg);
+                    }
+                    const rt_ret = try self.translateTypeVar(module, f.ret);
+                    const content = try self.runtime_types.mkFuncEffectful(buf, rt_ret);
+                    return try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                },
+                .fn_unbound => |f| {
+                    const ct_args = module.types.sliceVars(f.args);
+                    var buf = try self.allocator.alloc(types.Var, ct_args.len);
+                    defer self.allocator.free(buf);
+                    for (ct_args, 0..) |ct_arg, i| {
+                        buf[i] = try self.translateTypeVar(module, ct_arg);
+                    }
+                    const rt_ret = try self.translateTypeVar(module, f.ret);
+                    const content = try self.runtime_types.mkFuncUnbound(buf, rt_ret);
+                    return try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                },
+                .nominal_type => |nom| {
+                    const ct_backing = module.types.getNominalBackingVar(nom);
+                    const rt_backing = try self.translateTypeVar(module, ct_backing);
+                    const ct_args = module.types.sliceNominalArgs(nom);
+                    var buf = try self.allocator.alloc(types.Var, ct_args.len);
+                    defer self.allocator.free(buf);
+                    for (ct_args, 0..) |ct_arg, i| {
+                        buf[i] = try self.translateTypeVar(module, ct_arg);
+                    }
+                    const content = try self.runtime_types.mkNominal(nom.ident, rt_backing, buf, nom.origin_module);
+                    return try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                },
+            },
+            .alias => |alias| {
+                const ct_backing = module.types.getAliasBackingVar(alias);
+                const rt_backing = try self.translateTypeVar(module, ct_backing);
+                const ct_args = module.types.sliceAliasArgs(alias);
+                var buf = try self.allocator.alloc(types.Var, ct_args.len);
+                defer self.allocator.free(buf);
+                for (ct_args, 0..) |ct_arg, i| {
+                    buf[i] = try self.translateTypeVar(module, ct_arg);
+                }
+                const content = try self.runtime_types.mkAlias(alias.ident, rt_backing, buf);
+                return try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+            },
+            .flex_var => |id_opt| {
+                const content: types.Content = .{ .flex_var = id_opt };
+                return try self.runtime_types.freshFromContent(content);
+            },
+            .rigid_var => |ident| {
+                const content: types.Content = .{ .rigid_var = ident };
+                return try self.runtime_types.freshFromContent(content);
+            },
+            .err => {
+                return error.TypeMismatch;
+            },
+        };
+
+        try self.translate_cache.put(key, out_var);
+        return out_var;
+    }
+
+    pub fn makePolyKey(self: *Interpreter, func_id: u32, args: []const types.Var) PolyKey {
+        _ = self;
+        return PolyKey.init(func_id, args);
+    }
+
+    fn polyLookup(self: *Interpreter, func_id: u32, args: []const types.Var) ?PolyEntry {
+        const key = self.makePolyKey(func_id, args);
+        return self.poly_cache.get(key);
+    }
+
+    fn polyInsert(self: *Interpreter, func_id: u32, entry: PolyEntry) !void {
+        const key = PolyKey.init(func_id, entry.args);
+        try self.poly_cache.put(key, entry);
+    }
+
+    /// Prepare a call: return cached instantiation entry if present; on miss, insert using return_var_hint if provided.
+    pub fn prepareCall(self: *Interpreter, func_id: u32, args: []const types.Var, return_var_hint: ?types.Var) !?PolyEntry {
+        if (self.polyLookup(func_id, args)) |found| return found;
+
+        if (return_var_hint) |ret| {
+            _ = try self.getRuntimeLayout(ret);
+            const root_idx: usize = @intFromEnum(self.runtime_types.resolveVar(ret).var_);
+            try self.ensureVarLayoutCapacity(root_idx + 1);
+            const slot = self.var_to_layout_slot.items[root_idx];
+            const args_copy_mut = try self.allocator.alloc(types.Var, args.len);
+            errdefer self.allocator.free(args_copy_mut);
+            std.mem.copyForwards(types.Var, args_copy_mut, args);
+            const entry = PolyEntry{ .return_var = ret, .return_layout_slot = slot, .args = args_copy_mut };
+            try self.polyInsert(func_id, entry);
+            return entry;
+        }
+
+        return null;
+    }
+
+    /// Prepare a call using a known runtime function type var.
+    /// Builds and inserts a cache entry on miss using the function's declared return var.
+    pub fn prepareCallWithFuncVar(self: *Interpreter, func_id: u32, func_type_var: types.Var, args: []const types.Var) !PolyEntry {
+        if (self.polyLookup(func_id, args)) |found| return found;
+
+        const func_resolved = self.runtime_types.resolveVar(func_type_var);
+        const ret_var: types.Var = switch (func_resolved.desc.content) {
+            .structure => |flat| switch (flat) {
+                .fn_pure => |f| f.ret,
+                .fn_effectful => |f| f.ret,
+                .fn_unbound => |f| f.ret,
                 else => return error.TypeMismatch,
             },
             else => return error.TypeMismatch,
         };
 
-        // Get the argument expressions from the call
-        const call_expr = self.env.store.getExpr(call_expr_idx);
-        const call = switch (call_expr) {
-            .e_call => |c| c,
-            else => return error.TypeMismatch,
+        // Attempt simple runtime unification of parameters with arguments.
+        const params: []types.Var = switch (func_resolved.desc.content) {
+            .structure => |flat| switch (flat) {
+                .fn_pure => |f| self.runtime_types.sliceVars(f.args),
+                .fn_effectful => |f| self.runtime_types.sliceVars(f.args),
+                .fn_unbound => |f| self.runtime_types.sliceVars(f.args),
+                else => &[_]types.Var{},
+            },
+            else => &[_]types.Var{},
         };
+<<<<<<< HEAD
 
         const all_exprs = self.env.store.sliceExpr(call.args);
         if (all_exprs.len == 0) {
@@ -3888,117 +5948,445 @@ pub const Interpreter = struct {
         } else {
             self.traceInfo("All tuple elements processed for tuple_expr_idx={}", .{tuple_expr_idx});
         }
+=======
+        if (params.len != args.len) return error.TypeMismatch;
+
+        var i: usize = 0;
+        while (i < params.len) : (i += 1) {
+            _ = try unify.unifyWithContext(
+                self.env,
+                self.runtime_types,
+                &self.problems,
+                &self.snapshots,
+                &self.unify_scratch,
+                &self.unify_scratch.occurs_scratch,
+                params[i],
+                args[i],
+                false,
+            );
+        }
+        // ret_var may now be constrained
+
+        // Ensure layout slot for return var
+        _ = try self.getRuntimeLayout(ret_var);
+        const root_idx: usize = @intFromEnum(self.runtime_types.resolveVar(ret_var).var_);
+        try self.ensureVarLayoutCapacity(root_idx + 1);
+        const slot = self.var_to_layout_slot.items[root_idx];
+        const args_copy_mut = try self.allocator.alloc(types.Var, args.len);
+        errdefer self.allocator.free(args_copy_mut);
+        std.mem.copyForwards(types.Var, args_copy_mut, args);
+
+        const entry = PolyEntry{ .return_var = ret_var, .return_layout_slot = slot, .args = args_copy_mut };
+        try self.polyInsert(func_id, entry);
+        return entry;
+>>>>>>> 6bec5078f945bb5aad92c06b1699e3c16e4d0f82
     }
 };
 
-test "stack-based binary operations" {
-    // Test that the stack-based interpreter correctly evaluates binary operations
-    const allocator = std.testing.allocator;
+fn add(a: i32, b: i32) i32 {
+    return a + b;
+}
 
-    // Create a simple stack for testing
-    var eval_stack = try stack.Stack.initCapacity(allocator, 1024);
-    defer eval_stack.deinit();
+// GREEN step: basic test to confirm the module’s tests run
+test "interpreter: wiring works" {
+    try std.testing.expectEqual(@as(i32, 3), add(1, 2));
+}
 
-    // Create test environment for RocOps
-    var test_env = builtins.utils.TestEnv.init(allocator);
-    defer test_env.deinit();
+// RED: expect Var->Layout slot to work (will fail until implemented)
+test "interpreter: Var->Layout slot caches computed layout" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
 
-    // Track layouts
-    // Create interpreter
-    var interpreter = try Interpreter.init(allocator, undefined, &eval_stack, undefined, undefined);
-    defer interpreter.deinit(test_env.getOps());
+    var interp = try Interpreter.init(gpa, &env);
+    defer interp.deinit();
 
-    // Test addition: 2 + 3 = 5
-    {
-        // Push 2
-        const int_layout = Layout{
-            .tag = .scalar,
-            .data = .{ .scalar = .{
-                .tag = .int,
-                .data = .{ .int = .i64 },
-            } },
-        };
+    // Create a concrete runtime type: Str
+    const str_var = try interp.runtime_types.freshFromContent(.{ .structure = .str });
 
-        // Push 2
-        const two_value = try interpreter.pushStackValue(int_layout);
-        @as(*i64, @ptrCast(@alignCast(two_value.ptr.?))).* = 2;
+    // Initially, slot is either absent or zero; ensure capacity then check
+    const root_idx: usize = @intFromEnum(interp.runtime_types.resolveVar(str_var).var_);
+    try interp.ensureVarLayoutCapacity(root_idx + 1);
+    try std.testing.expectEqual(@as(u32, 0), interp.var_to_layout_slot.items[root_idx]);
 
-        // Push 3
-        const three_value = try interpreter.pushStackValue(int_layout);
-        @as(*i64, @ptrCast(@alignCast(three_value.ptr.?))).* = 3;
+    // Retrieve layout and expect scalar.str; slot becomes non-zero
+    const layout_value = try interp.getRuntimeLayout(str_var);
+    try std.testing.expect(layout_value.tag == .scalar);
+    try std.testing.expect(layout_value.data.scalar.tag == .str);
+    try std.testing.expect(interp.var_to_layout_slot.items[root_idx] != 0);
+}
 
-        // Perform addition
-        try interpreter.completeBinop(.w_binop_add, test_env.getOps());
+// RED: translating a compile-time str var should produce a runtime str var
+test "interpreter: translateTypeVar for str" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
 
-        // Check result
-        try std.testing.expectEqual(@as(usize, 1), interpreter.value_stack.items.len);
-        const result_value = try interpreter.peekStackValue(1);
-        const result = @as(*i64, @ptrCast(@alignCast(result_value.ptr))).*;
-        try std.testing.expectEqual(@as(i64, 5), result);
+    var interp = try Interpreter.init(gpa, &env);
+    defer interp.deinit();
+
+    const ct_str = try env.types.freshFromContent(.{ .structure = .str });
+    const rt_var = try interp.translateTypeVar(&env, ct_str);
+
+    const resolved = interp.runtime_types.resolveVar(rt_var);
+    try std.testing.expect(resolved.desc.content == .structure);
+    try std.testing.expect(resolved.desc.content.structure == .str);
+}
+
+// RED: translating a compile-time concrete int64 should produce a runtime int64
+test "interpreter: translateTypeVar for int64" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    var interp = try Interpreter.init(gpa, &env);
+    defer interp.deinit();
+
+    const ct_int = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
+    const rt_var = try interp.translateTypeVar(&env, ct_int);
+    const resolved = interp.runtime_types.resolveVar(rt_var);
+    try std.testing.expect(resolved.desc.content == .structure);
+    switch (resolved.desc.content.structure) {
+        .num => |n| switch (n) {
+            .num_compact => |c| switch (c) {
+                .int => |p| try std.testing.expectEqual(types.Num.Int.Precision.i64, p),
+                else => return error.TestUnexpectedResult,
+            },
+            else => return error.TestUnexpectedResult,
+        },
+        else => return error.TestUnexpectedResult,
     }
 }
 
-test "stack-based comparisons" {
-    // Test that comparisons produce boolean results
-    const allocator = std.testing.allocator;
+// RED: translating a compile-time concrete f64 should produce a runtime f64
+test "interpreter: translateTypeVar for f64" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
 
-    // Create a simple stack for testing
-    var eval_stack = try stack.Stack.initCapacity(allocator, 1024);
-    defer eval_stack.deinit();
+    var interp = try Interpreter.init(gpa, &env);
+    defer interp.deinit();
 
-    // Create test environment for RocOps
-    var test_env = builtins.utils.TestEnv.init(allocator);
-    defer test_env.deinit();
-
-    // Create interpreter
-    var interpreter = try Interpreter.init(allocator, undefined, &eval_stack, undefined, undefined);
-    defer interpreter.deinit(test_env.getOps());
-
-    // Test 5 > 3 = True (1)
-    {
-        const int_layout = Layout{
-            .tag = .scalar,
-            .data = .{ .scalar = .{
-                .tag = .int,
-                .data = .{ .int = .i64 },
-            } },
-        };
-
-        // Push 5
-        const five_value = try interpreter.pushStackValue(int_layout);
-        @as(*i64, @ptrCast(@alignCast(five_value.ptr.?))).* = 5;
-
-        // Push 3
-        const three_ptr = try interpreter.pushStackValue(int_layout);
-        @as(*i64, @ptrCast(@alignCast(three_ptr.ptr.?))).* = 3;
-
-        // Perform comparison
-        try interpreter.completeBinop(.w_binop_gt, test_env.getOps());
-
-        // Check result - should be a u8 with value 1 (true)
-        try std.testing.expectEqual(@as(usize, 1), interpreter.value_stack.items.len);
-        const result_value = try interpreter.peekStackValue(1);
-        const result = @as(*u8, @ptrCast(@alignCast(result_value.ptr))).*;
-        try std.testing.expectEqual(@as(u8, 1), result);
-        const bool_layout = interpreter.value_stack.items[0].layout;
-        try std.testing.expect(bool_layout.tag == .scalar);
-        try std.testing.expect(bool_layout.data.scalar.tag == .bool);
+    const ct_frac = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } });
+    const rt_var = try interp.translateTypeVar(&env, ct_frac);
+    const resolved = interp.runtime_types.resolveVar(rt_var);
+    try std.testing.expect(resolved.desc.content == .structure);
+    switch (resolved.desc.content.structure) {
+        .num => |n| switch (n) {
+            .num_compact => |c| switch (c) {
+                .frac => |p| try std.testing.expectEqual(types.Num.Frac.Precision.f64, p),
+                else => return error.TestUnexpectedResult,
+            },
+            else => return error.TestUnexpectedResult,
+        },
+        else => return error.TestUnexpectedResult,
     }
 }
 
-/// Get parameter patterns from a closure expression
-fn getClosureParameterPatterns(env_ptr: *const ModuleEnv, expr_idx: Expr.Idx) ![]const CIR.Pattern.Idx {
-    const closure_expr = env_ptr.store.getExpr(expr_idx);
-    const lambda_expr = switch (closure_expr) {
-        .e_closure => |closure_data| env_ptr.store.getExpr(closure_data.lambda_idx),
-        .e_lambda => closure_expr,
-        else => return error.ExprNotClosureOrLambda,
-    };
+// RED: translating a compile-time tuple (Str, I64) should produce a runtime tuple with same element shapes
+test "interpreter: translateTypeVar for tuple(Str, I64)" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
 
-    const param_patterns = switch (lambda_expr) {
-        .e_lambda => |lambda_data| env_ptr.store.slicePatterns(lambda_data.args),
-        else => return error.ExpectedLambdaExpression,
-    };
+    var interp = try Interpreter.init(gpa, &env);
+    defer interp.deinit();
 
-    return param_patterns;
+    const ct_str = try env.types.freshFromContent(.{ .structure = .str });
+    const ct_i64 = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
+    const elems = [_]types.Var{ ct_str, ct_i64 };
+    const ct_tuple = try env.types.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try env.types.appendVars(&elems) } } });
+
+    const rt_var = try interp.translateTypeVar(&env, ct_tuple);
+    const resolved = interp.runtime_types.resolveVar(rt_var);
+    try std.testing.expect(resolved.desc.content == .structure);
+    switch (resolved.desc.content.structure) {
+        .tuple => |t| {
+            const rt_elems = interp.runtime_types.sliceVars(t.elems);
+            try std.testing.expectEqual(@as(usize, 2), rt_elems.len);
+            // elem 0: str
+            const e0 = interp.runtime_types.resolveVar(rt_elems[0]);
+            try std.testing.expect(e0.desc.content == .structure);
+            try std.testing.expect(e0.desc.content.structure == .str);
+            // elem 1: i64
+            const e1 = interp.runtime_types.resolveVar(rt_elems[1]);
+            try std.testing.expect(e1.desc.content == .structure);
+            switch (e1.desc.content.structure) {
+                .num => |n| switch (n) {
+                    .num_compact => |c| switch (c) {
+                        .int => |p| try std.testing.expectEqual(types.Num.Int.Precision.i64, p),
+                        else => return error.TestUnexpectedResult,
+                    },
+                    else => return error.TestUnexpectedResult,
+                },
+                else => return error.TestUnexpectedResult,
+            }
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+// RED: translating a compile-time record { first: Str, second: I64 } should produce equivalent runtime record
+test "interpreter: translateTypeVar for record {first: Str, second: I64}" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    var interp = try Interpreter.init(gpa, &env);
+    defer interp.deinit();
+
+    // Build compile-time record content
+    const name_first = try env.common.idents.insert(gpa, @import("base").Ident.for_text("first"));
+    const name_second = try env.common.idents.insert(gpa, @import("base").Ident.for_text("second"));
+    const ct_str = try env.types.freshFromContent(.{ .structure = .str });
+    const ct_i64 = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
+    var ct_fields = [_]types.RecordField{
+        .{ .name = name_first, .var_ = ct_str },
+        .{ .name = name_second, .var_ = ct_i64 },
+    };
+    const ct_fields_range = try env.types.appendRecordFields(&ct_fields);
+    const ct_ext_empty = try env.types.freshFromContent(.{ .structure = .empty_record });
+    const ct_record = try env.types.freshFromContent(.{ .structure = .{ .record = .{ .fields = ct_fields_range, .ext = ct_ext_empty } } });
+
+    // Translate
+    const rt_var = try interp.translateTypeVar(&env, ct_record);
+    const resolved = interp.runtime_types.resolveVar(rt_var);
+    try std.testing.expect(resolved.desc.content == .structure);
+    switch (resolved.desc.content.structure) {
+        .record => |rec| {
+            const rt_fields = interp.runtime_types.getRecordFieldsSlice(rec.fields);
+            try std.testing.expectEqual(@as(u32, 2), rt_fields.len);
+            const f0 = rt_fields.get(0);
+            const f1 = rt_fields.get(1);
+            // Field names are preserved
+            try std.testing.expectEqual(name_first, f0.name);
+            try std.testing.expectEqual(name_second, f1.name);
+            // Field 0 type is Str
+            const e0 = interp.runtime_types.resolveVar(f0.var_);
+            try std.testing.expect(e0.desc.content == .structure);
+            try std.testing.expect(e0.desc.content.structure == .str);
+            // Field 1 type is I64
+            const e1 = interp.runtime_types.resolveVar(f1.var_);
+            try std.testing.expect(e1.desc.content == .structure);
+            switch (e1.desc.content.structure) {
+                .num => |n| switch (n) {
+                    .num_compact => |c| switch (c) {
+                        .int => |p| try std.testing.expectEqual(types.Num.Int.Precision.i64, p),
+                        else => return error.TestUnexpectedResult,
+                    },
+                    else => return error.TestUnexpectedResult,
+                },
+                else => return error.TestUnexpectedResult,
+            }
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+// RED: translating a compile-time alias should produce equivalent runtime alias
+test "interpreter: translateTypeVar for alias of Str" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    var interp = try Interpreter.init(gpa, &env);
+    defer interp.deinit();
+
+    const alias_name = try env.common.idents.insert(gpa, @import("base").Ident.for_text("MyAlias"));
+    const type_ident = types.TypeIdent{ .ident_idx = alias_name };
+    const ct_str = try env.types.freshFromContent(.{ .structure = .str });
+    const ct_alias_content = try env.types.mkAlias(type_ident, ct_str, &.{});
+    const ct_alias_var = try env.types.register(.{ .content = ct_alias_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+
+    const rt_var = try interp.translateTypeVar(&env, ct_alias_var);
+    const resolved = interp.runtime_types.resolveVar(rt_var);
+    try std.testing.expect(resolved.desc.content == .alias);
+    const rt_alias = resolved.desc.content.alias;
+    try std.testing.expectEqual(alias_name, rt_alias.ident.ident_idx);
+    const rt_backing = interp.runtime_types.getAliasBackingVar(rt_alias);
+    const backing_resolved = interp.runtime_types.resolveVar(rt_backing);
+    try std.testing.expect(backing_resolved.desc.content == .structure);
+    try std.testing.expect(backing_resolved.desc.content.structure == .str);
+}
+
+// RED: translating a compile-time nominal type should produce equivalent runtime nominal
+test "interpreter: translateTypeVar for nominal Point(Str)" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    var interp = try Interpreter.init(gpa, &env);
+    defer interp.deinit();
+
+    const name_nominal = try env.common.idents.insert(gpa, @import("base").Ident.for_text("Point"));
+    const type_ident = types.TypeIdent{ .ident_idx = name_nominal };
+    const ct_str = try env.types.freshFromContent(.{ .structure = .str });
+    // backing type is Str for simplicity
+    const ct_nominal_content = try env.types.mkNominal(type_ident, ct_str, &.{}, name_nominal);
+    const ct_nominal_var = try env.types.register(.{ .content = ct_nominal_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+
+    const rt_var = try interp.translateTypeVar(&env, ct_nominal_var);
+    const resolved = interp.runtime_types.resolveVar(rt_var);
+    try std.testing.expect(resolved.desc.content == .structure);
+    switch (resolved.desc.content.structure) {
+        .nominal_type => |nom| {
+            try std.testing.expectEqual(name_nominal, nom.ident.ident_idx);
+            const backing = interp.runtime_types.getNominalBackingVar(nom);
+            const b_resolved = interp.runtime_types.resolveVar(backing);
+            try std.testing.expect(b_resolved.desc.content == .structure);
+            try std.testing.expect(b_resolved.desc.content.structure == .str);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+// RED: translating a compile-time flex var should produce a runtime flex var
+test "interpreter: translateTypeVar for flex var" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    var interp = try Interpreter.init(gpa, &env);
+    defer interp.deinit();
+
+    const ct_flex = try env.types.freshFromContent(.{ .flex_var = null });
+    const rt_var = try interp.translateTypeVar(&env, ct_flex);
+    const resolved = interp.runtime_types.resolveVar(rt_var);
+    try std.testing.expect(resolved.desc.content == .flex_var);
+}
+
+// RED: translating a compile-time rigid var should produce a runtime rigid var with same ident
+test "interpreter: translateTypeVar for rigid var" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    var interp = try Interpreter.init(gpa, &env);
+    defer interp.deinit();
+
+    const name_a = try env.common.idents.insert(gpa, @import("base").Ident.for_text("A"));
+    const ct_rigid = try env.types.freshFromContent(.{ .rigid_var = name_a });
+    const rt_var = try interp.translateTypeVar(&env, ct_rigid);
+    const resolved = interp.runtime_types.resolveVar(rt_var);
+    try std.testing.expect(resolved.desc.content == .rigid_var);
+    try std.testing.expectEqual(name_a, resolved.desc.content.rigid_var);
+}
+
+// RED: poly cache miss then hit
+test "interpreter: poly cache insert and lookup" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    var interp = try Interpreter.init(gpa, &env);
+    defer interp.deinit();
+
+    const f_id: u32 = 12345;
+    // Create runtime args: (Str, I64)
+    const rt_str = try interp.runtime_types.freshFromContent(.{ .structure = .str });
+    const rt_i64 = try interp.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
+    const args = [_]types.Var{ rt_str, rt_i64 };
+
+    try std.testing.expect(interp.polyLookup(f_id, &args) == null);
+
+    // For testing, say return type is Str
+    const ret_var = rt_str;
+    // Precompute layout slot for return type
+    _ = try interp.getRuntimeLayout(ret_var);
+    const root_idx: usize = @intFromEnum(interp.runtime_types.resolveVar(ret_var).var_);
+    try interp.ensureVarLayoutCapacity(root_idx + 1);
+    const slot = interp.var_to_layout_slot.items[root_idx];
+    try std.testing.expect(slot != 0);
+
+    const args_copy = try interp.allocator.alloc(types.Var, args.len);
+    std.mem.copyForwards(types.Var, args_copy, &args);
+    try interp.polyInsert(f_id, .{ .return_var = ret_var, .return_layout_slot = slot, .args = args_copy });
+    const found = interp.polyLookup(f_id, &args) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(ret_var, found.return_var);
+    try std.testing.expectEqual(slot, found.return_layout_slot);
+    try std.testing.expect(std.mem.eql(types.Var, found.args, &args));
+}
+
+// RED: prepareCall should miss without hint, then hit after inserting with hint
+test "interpreter: prepareCall miss then hit" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    var interp = try Interpreter.init(gpa, &env);
+    defer interp.deinit();
+
+    const func_id: u32 = 7777;
+    const rt_str = try interp.runtime_types.freshFromContent(.{ .structure = .str });
+    const rt_i64 = try interp.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
+    const args = [_]types.Var{ rt_str, rt_i64 };
+
+    // miss without hint
+    const miss = try interp.prepareCall(func_id, &args, null);
+    try std.testing.expect(miss == null);
+
+    // insert with hint
+    const entry = (try interp.prepareCall(func_id, &args, rt_str)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(rt_str, entry.return_var);
+    try std.testing.expect(entry.return_layout_slot != 0);
+
+    // subsequent call should hit without hint
+    const hit = (try interp.prepareCall(func_id, &args, null)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(rt_str, hit.return_var);
+    try std.testing.expectEqual(entry.return_layout_slot, hit.return_layout_slot);
+}
+
+// RED: prepareCallWithFuncVar populates cache based on function type
+test "interpreter: prepareCallWithFuncVar populates cache" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    var interp = try Interpreter.init(gpa, &env);
+    defer interp.deinit();
+
+    const func_id: u32 = 9999;
+    const rt_str = try interp.runtime_types.freshFromContent(.{ .structure = .str });
+    const rt_i64 = try interp.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
+    const args = [_]types.Var{ rt_str, rt_i64 };
+
+    // Build a runtime function type: (Str, I64) -> Str
+    const func_content = try interp.runtime_types.mkFuncPure(&args, rt_str);
+    const func_var = try interp.runtime_types.register(.{ .content = func_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+
+    // Should populate cache
+    const entry = try interp.prepareCallWithFuncVar(func_id, func_var, &args);
+    try std.testing.expectEqual(rt_str, entry.return_var);
+    try std.testing.expect(entry.return_layout_slot != 0);
+
+    // Now a plain prepareCall without hint should hit
+    const hit = (try interp.prepareCall(func_id, &args, null)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(rt_str, hit.return_var);
+    try std.testing.expectEqual(entry.return_layout_slot, hit.return_layout_slot);
+}
+
+// RED: unification constrains return type for polymorphic (a -> a), when called with Str
+test "interpreter: unification constrains (a->a) with Str" {
+    const gpa = std.testing.allocator;
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    var interp = try Interpreter.init(gpa, &env);
+    defer interp.deinit();
+
+    const func_id: u32 = 42;
+    // runtime flex var 'a'
+    const a = try interp.runtime_types.freshFromContent(.{ .flex_var = null });
+    const func_content = try interp.runtime_types.mkFuncPure(&.{a}, a);
+    const func_var = try interp.runtime_types.register(.{ .content = func_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+
+    // Call with Str
+    const rt_str = try interp.runtime_types.freshFromContent(.{ .structure = .str });
+    const entry = try interp.prepareCallWithFuncVar(func_id, func_var, &.{rt_str});
+
+    // After unification, return var should resolve to str
+    const resolved_ret = interp.runtime_types.resolveVar(entry.return_var);
+    try std.testing.expect(resolved_ret.desc.content == .structure);
+    try std.testing.expect(resolved_ret.desc.content.structure == .str);
+    try std.testing.expect(entry.return_layout_slot != 0);
 }

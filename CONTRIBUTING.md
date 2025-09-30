@@ -33,6 +33,11 @@ zig build test
 zig build fmt
 ```
 
+To run a specific test:
+```sh
+zig build test -- --test-filter "name of test"
+```
+
 ## Contribution Tips
 
 - If you've never made a pull request on github before, [this](https://www.freecodecamp.org/news/how-to-make-your-first-pull-request-on-github-3/) will be a good place to start.

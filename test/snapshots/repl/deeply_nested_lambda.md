@@ -8,6 +8,6 @@ type=repl
 » (((|a| |b| |c| a + b + c)(100))(20))(3)
 ~~~
 # OUTPUT
-Evaluation error: error.TypeMismatch
+123
 # PROBLEMS
 NIL

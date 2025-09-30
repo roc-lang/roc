@@ -18,8 +18,10 @@ const builtins = @import("builtins");
 const compile = @import("compile");
 const fmt = @import("fmt");
 const repl = @import("repl");
+const eval_mod = @import("eval");
 
 const Repl = repl.Repl;
+const CrashContext = eval_mod.CrashContext;
 const CommonEnv = base.CommonEnv;
 const Check = check.Check;
 const CIR = can.CIR;
@@ -2547,7 +2549,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     defer snapshot_ops.deinit();
 
     // Initialize REPL
-    var repl_instance = try Repl.init(output.gpa, snapshot_ops.get_ops());
+    var repl_instance = try Repl.init(output.gpa, snapshot_ops.get_ops(), snapshot_ops.crashContextPtr());
     defer repl_instance.deinit();
 
     // Enable debug snapshots for CAN/TYPES generation
@@ -2715,11 +2717,13 @@ test "snapshot validation" {
 /// An implementation of RocOps for snapshot testing.
 pub const SnapshotOps = struct {
     allocator: std.mem.Allocator,
+    crash: CrashContext,
     roc_ops: RocOps,
 
     pub fn init(allocator: std.mem.Allocator) SnapshotOps {
         return SnapshotOps{
             .allocator = allocator,
+            .crash = CrashContext.init(allocator),
             .roc_ops = RocOps{
                 .env = undefined, // will be set below
                 .roc_alloc = snapshotRocAlloc,
@@ -2734,13 +2738,17 @@ pub const SnapshotOps = struct {
     }
 
     pub fn deinit(self: *SnapshotOps) void {
-        _ = self;
-        // nothing to do here?
+        self.crash.deinit();
     }
 
     pub fn get_ops(self: *SnapshotOps) *RocOps {
         self.roc_ops.env = @ptrCast(self);
+        self.crash.reset();
         return &self.roc_ops;
+    }
+
+    pub fn crashContextPtr(self: *SnapshotOps) *CrashContext {
+        return &self.crash;
     }
 };
 
@@ -2832,8 +2840,9 @@ fn snapshotRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque)
     @panic("snapshotRocExpectFailed not implemented yet");
 }
 
-fn snapshotRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c) void {
-    _ = env;
-    const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
-    std.log.err("Test program crashed: {s}", .{msg_slice});
+fn snapshotRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {
+    const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
+    snapshot_env.crash.recordCrash(crashed_args.utf8_bytes[0..crashed_args.len]) catch |err| {
+        std.debug.panic("failed to store snapshot crash message: {}", .{err});
+    };
 }

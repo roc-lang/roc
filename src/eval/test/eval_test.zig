@@ -5,17 +5,14 @@ const types = @import("types");
 const base = @import("base");
 const can = @import("can");
 const check = @import("check");
-const layout = @import("layout");
 const builtins = @import("builtins");
 const collections = @import("collections");
 const serialization = @import("serialization");
 
 const helpers = @import("helpers.zig");
 const TestEnv = @import("TestEnv.zig");
-const eval = @import("../interpreter.zig");
-const stack = @import("../stack.zig");
+const Interpreter = @import("../interpreter.zig").Interpreter;
 
-const LayoutStore = layout.Store;
 const Can = can.Can;
 const Check = check.Check;
 const ModuleEnv = can.ModuleEnv;
@@ -23,7 +20,6 @@ const CompactWriter = collections.CompactWriter;
 const testing = std.testing;
 const test_allocator = testing.allocator;
 
-const EvalError = eval.EvalError;
 const runExpectInt = helpers.runExpectInt;
 const runExpectBool = helpers.runExpectBool;
 const runExpectError = helpers.runExpectError;
@@ -274,13 +270,13 @@ test "operator associativity - documentation" {
 
     // RIGHT ASSOCIATIVE (logical operators)
     // a op b op c = a op (b op c)
-    // Note: && and || are right associative in Roc
+    // Note: the boolean keywords `and` and `or` are right associative in Roc
     // This is mostly relevant for short-circuiting behavior
 }
 
 test "error test - divide by zero" {
-    try runExpectError("5 // 0", EvalError.DivisionByZero, .no_trace);
-    try runExpectError("10 % 0", EvalError.DivisionByZero, .no_trace);
+    try runExpectError("5 // 0", error.DivisionByZero, .no_trace);
+    try runExpectError("10 % 0", error.DivisionByZero, .no_trace);
 }
 
 test "error test - crash statement" {
@@ -290,7 +286,7 @@ test "error test - crash statement" {
         \\    crash "test"
         \\    0
         \\}
-    , EvalError.Crash, .no_trace);
+    , error.Crash, .no_trace);
 
     // Test crash in block with final expression
     try runExpectError(
@@ -298,52 +294,30 @@ test "error test - crash statement" {
         \\    crash "This is a crash statement"
         \\    42
         \\}
-    , EvalError.Crash, .no_trace);
+    , error.Crash, .no_trace);
 }
 
-test "crash message storage and retrieval - direct API test" {
-    // Test the getCrashMsg() API directly by simulating what happens during a crash
+test "crash message storage and retrieval - host-managed context" {
+    // Verify the crash callback stores the message in the host CrashContext
     const test_message = "Direct API test message";
-
-    const resources = try helpers.parseAndCanonicalizeExpr(testing.allocator, "42");
-    defer helpers.cleanupParseAndCanonical(testing.allocator, resources);
-
-    var eval_stack = try stack.Stack.initCapacity(testing.allocator, 1024);
-    defer eval_stack.deinit();
-
-    var layout_cache = try LayoutStore.init(resources.module_env, &resources.module_env.types);
-    defer layout_cache.deinit();
 
     var test_env_instance = TestEnv.init(testing.allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try eval.Interpreter.init(
-        testing.allocator,
-        resources.module_env,
-        &eval_stack,
-        &layout_cache,
-        &resources.module_env.types,
-    );
-    defer interpreter.deinit(test_env_instance.get_ops());
-    test_env_instance.setInterpreter(&interpreter);
+    try testing.expect(test_env_instance.crashState() == .did_not_crash);
 
-    // Test that crash functionality works through RocOps
-    // Before crash, getCrashMsg should return null
-    try testing.expect(interpreter.getCrashMsg() == null);
-
-    // Simulate what happens when roc_ops.crash() is called
     const crash_args = builtins.host_abi.RocCrashed{
         .utf8_bytes = @constCast(test_message.ptr),
         .len = test_message.len,
     };
 
-    // Call the crash function directly through test RocOps
-    test_env_instance.get_ops().roc_crashed(&crash_args, test_env_instance.get_ops().env);
+    const ops = test_env_instance.get_ops();
+    ops.roc_crashed(&crash_args, ops.env);
 
-    // After crash, getCrashMsg should return the crash message
-    const crash_msg = interpreter.getCrashMsg();
-    try testing.expect(crash_msg != null);
-    try testing.expectEqualStrings(test_message, crash_msg.?);
+    switch (test_env_instance.crashState()) {
+        .did_not_crash => return error.TestUnexpectedResult,
+        .crashed => |msg| try testing.expectEqualStrings(test_message, msg),
+    }
 }
 
 test "tuples" {
@@ -443,9 +417,10 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var eval_stack = try stack.Stack.initCapacity(std.testing.allocator, 1024);
-    defer eval_stack.deinit();
+    var interpreter = try Interpreter.init(testing.allocator, resources.module_env);
+    defer interpreter.deinit();
 
+<<<<<<< HEAD
     var layout_cache = try LayoutStore.init(resources.module_env, &resources.module_env.types);
     defer layout_cache.deinit();
 
@@ -464,16 +439,30 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
         if (trace_writer_state) |*trace_state| {
             interpreter.startTrace(&trace_state.writer.interface);
         }
+=======
+    const enable_trace = should_trace == .trace;
+    if (enable_trace) {
+        interpreter.startTrace(std.io.getStdErr().writer().any());
+>>>>>>> 6bec5078f945bb5aad92c06b1699e3c16e4d0f82
     }
+    defer if (enable_trace) interpreter.endTrace();
 
-    const result = interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
+    const ops = test_env_instance.get_ops();
+    const result = try interpreter.evalMinimal(resources.expr_idx, ops);
+    const layout_cache = &interpreter.runtime_layout_store;
+    defer result.decref(layout_cache, ops);
 
+<<<<<<< HEAD
     if (trace_writer_state != null) {
         interpreter.endTrace();
     }
 
     // Just verify that evaluation succeeded
     _ = try result;
+=======
+    // Minimal smoke check: the helper only succeeds if evaluation produced a value without crashing.
+    try std.testing.expect(test_env_instance.crashState() == .did_not_crash);
+>>>>>>> 6bec5078f945bb5aad92c06b1699e3c16e4d0f82
 }
 
 test "integer type evaluation" {
@@ -769,22 +758,13 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
     // Test 1: Evaluate with the original ModuleEnv
     {
-        var eval_stack = try stack.Stack.initCapacity(gpa, 1024);
-        defer eval_stack.deinit();
+        var interpreter = try Interpreter.init(gpa, &original_env);
+        defer interpreter.deinit();
 
-        var layout_cache = try LayoutStore.init(&original_env, &original_env.types);
-        defer layout_cache.deinit();
-
-        var interpreter = try eval.Interpreter.init(
-            gpa,
-            &original_env,
-            &eval_stack,
-            &layout_cache,
-            &original_env.types,
-        );
-        defer interpreter.deinit(test_env_instance.get_ops());
-
-        const result = try interpreter.eval(canonicalized_expr_idx.get_idx(), test_env_instance.get_ops());
+        const ops = test_env_instance.get_ops();
+        const result = try interpreter.evalMinimal(canonicalized_expr_idx.get_idx(), ops);
+        const layout_cache = &interpreter.runtime_layout_store;
+        defer result.decref(layout_cache, ops);
 
         try testing.expectEqual(@as(i128, 13), result.asI128());
     }
@@ -842,22 +822,13 @@ test "ModuleEnv serialization and interpreter evaluation" {
         // Test 4: Evaluate the same expression using the deserialized ModuleEnv
         // The original expression index should still be valid since the NodeStore structure is preserved
         {
-            var eval_stack = try stack.Stack.initCapacity(gpa, 1024);
-            defer eval_stack.deinit();
+            var interpreter = try Interpreter.init(gpa, deserialized_env);
+            defer interpreter.deinit();
 
-            var layout_cache = try LayoutStore.init(deserialized_env, &deserialized_env.types);
-            defer layout_cache.deinit();
-
-            var interpreter = try eval.Interpreter.init(
-                gpa,
-                deserialized_env,
-                &eval_stack,
-                &layout_cache,
-                &deserialized_env.types,
-            );
-            defer interpreter.deinit(test_env_instance.get_ops());
-
-            const result = try interpreter.eval(canonicalized_expr_idx.get_idx(), test_env_instance.get_ops());
+            const ops = test_env_instance.get_ops();
+            const result = try interpreter.evalMinimal(canonicalized_expr_idx.get_idx(), ops);
+            const layout_cache = &interpreter.runtime_layout_store;
+            defer result.decref(layout_cache, ops);
 
             // Verify we get the same result from the deserialized ModuleEnv
             try testing.expectEqual(@as(i128, 13), result.asI128());

@@ -28,6 +28,12 @@ const Closure = layout_mod.Closure;
 const Expr = CIR.Expr;
 const Ident = base.Ident;
 
+// RocList.decref always requires a callback for element teardown. When we've
+// already decref'd the elements ourselves (or they don't need refcounting), we
+// pass this no-op stub so the list header can clean up without touching the
+// payload again.
+fn noopDecref(_: ?[*]u8) callconv(.C) void {}
+
 const StackValue = @This();
 
 /// Type and memory layout information for the result value
@@ -65,8 +71,6 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                 std.debug.assert(self.ptr != null);
                 const precision = self.layout.data.scalar.data.int;
                 const value = self.asI128();
-
-                // Inline integer writing logic with proper type casting and alignment
                 switch (precision) {
                     .u8 => {
                         const typed_ptr: *u8 = @ptrCast(@alignCast(dest_ptr));
@@ -113,6 +117,23 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
             },
             else => {},
         }
+    }
+
+    if (self.layout.tag == .box) {
+        const src_slot: *usize = @ptrCast(@alignCast(self.ptr.?));
+        const dest_slot: *usize = @ptrCast(@alignCast(dest_ptr));
+        dest_slot.* = src_slot.*;
+        if (dest_slot.* != 0) {
+            const data_ptr: [*]u8 = @as([*]u8, @ptrFromInt(dest_slot.*));
+            builtins.utils.increfDataPtrC(@as(?[*]u8, data_ptr), 1);
+        }
+        return;
+    }
+
+    if (self.layout.tag == .box_of_zst) {
+        const dest_slot: *usize = @ptrCast(@alignCast(dest_ptr));
+        dest_slot.* = 0;
+        return;
     }
 
     std.debug.assert(self.ptr != null);
@@ -304,6 +325,11 @@ pub const TupleAccessor = struct {
         // Calculate the element pointer with proper alignment
         const base_ptr = @as([*]u8, @ptrCast(self.base_value.ptr.?));
         const element_ptr = @as(*anyopaque, @ptrCast(base_ptr + element_offset));
+        const required_alignment = element_layout.alignment(self.layout_cache.targetUsize()).toByteUnits();
+        if (required_alignment > 1) {
+            const addr = @intFromPtr(element_ptr);
+            std.debug.assert(addr % required_alignment == 0);
+        }
 
         return StackValue{
             .layout = element_layout,
@@ -316,6 +342,15 @@ pub const TupleAccessor = struct {
     pub fn setElement(self: TupleAccessor, index: usize, source: StackValue, ops: *RocOps) !void {
         const dest_element = try self.getElement(index);
         try source.copyToPtr(self.layout_cache, dest_element.ptr.?, ops);
+    }
+
+    /// Find the sorted element index corresponding to an original tuple position
+    pub fn findElementIndexByOriginal(self: TupleAccessor, original_index: usize) ?usize {
+        for (0..self.element_layouts.len) |i| {
+            const elem = self.element_layouts.get(i);
+            if (elem.index == original_index) return i;
+        }
+        return null;
     }
 
     /// Get the number of elements in this tuple
@@ -332,6 +367,99 @@ pub const TupleAccessor = struct {
         return self.layout_cache.getLayout(element_layout_info.layout);
     }
 };
+
+/// Create a ListAccessor for safe list element access
+pub fn asList(self: StackValue, layout_cache: *LayoutStore, element_layout: Layout) !ListAccessor {
+    std.debug.assert(self.is_initialized);
+    std.debug.assert(self.ptr != null);
+    std.debug.assert(self.layout.tag == .list or self.layout.tag == .list_of_zst);
+
+    const header: *const RocList = @ptrCast(@alignCast(self.ptr.?));
+    return ListAccessor{
+        .base_value = self,
+        .layout_cache = layout_cache,
+        .element_layout = element_layout,
+        .element_size = layout_cache.layoutSize(element_layout),
+        .list = header.*,
+    };
+}
+
+/// Safe accessor for list elements with bounds checking
+pub const ListAccessor = struct {
+    base_value: StackValue,
+    layout_cache: *LayoutStore,
+    element_layout: Layout,
+    element_size: usize,
+    list: RocList,
+
+    pub fn len(self: ListAccessor) usize {
+        return self.list.len();
+    }
+
+    pub fn getElement(self: ListAccessor, index: usize) !StackValue {
+        if (index >= self.list.len()) return error.ListIndexOutOfBounds;
+
+        if (self.element_size == 0) {
+            return StackValue{ .layout = self.element_layout, .ptr = null, .is_initialized = true };
+        }
+
+        const base_ptr = self.list.bytes orelse return error.NullStackPointer;
+        const offset = index * self.element_size;
+        return StackValue{
+            .layout = self.element_layout,
+            .ptr = @ptrCast(base_ptr + offset),
+            .is_initialized = true,
+        };
+    }
+};
+
+fn storeListElementCount(list: *RocList, elements_refcounted: bool) void {
+    if (elements_refcounted and !list.isSeamlessSlice()) {
+        if (list.getAllocationDataPtr()) |source| {
+            const ptr = @as([*]usize, @alignCast(@ptrCast(source))) - 2;
+            ptr[0] = list.length;
+        }
+    }
+}
+
+fn copyListValueToPtr(
+    src: StackValue,
+    layout_cache: *LayoutStore,
+    dest_ptr: *anyopaque,
+    dest_layout: Layout,
+) error{ TypeMismatch, NullStackPointer }!void {
+    var dest_list: *RocList = @ptrCast(@alignCast(dest_ptr));
+
+    switch (dest_layout.tag) {
+        .list_of_zst => {
+            if (src.layout.tag != .list_of_zst) return error.TypeMismatch;
+            if (src.ptr == null) {
+                dest_list.* = RocList.empty();
+                return;
+            }
+            const src_list = @as(*const RocList, @ptrCast(@alignCast(src.ptr.?))).*;
+            dest_list.* = src_list;
+            dest_list.incref(1, false);
+            return;
+        },
+        .list => {
+            if (src.ptr == null) {
+                dest_list.* = RocList.empty();
+                return;
+            }
+            if (src.layout.tag != .list) return error.TypeMismatch;
+            const src_list = @as(*const RocList, @ptrCast(@alignCast(src.ptr.?))).*;
+            dest_list.* = src_list;
+
+            const elem_layout = layout_cache.getLayout(dest_layout.data.list);
+            const elements_refcounted = elem_layout.isRefcounted();
+            dest_list.incref(1, elements_refcounted);
+            storeListElementCount(dest_list, elements_refcounted);
+            return;
+        },
+        else => return error.TypeMismatch,
+    }
+}
 
 /// Create a RecordAccessor for safe record field access
 pub fn asRecord(self: StackValue, layout_cache: *LayoutStore) !RecordAccessor {
@@ -375,6 +503,11 @@ pub const RecordAccessor = struct {
         // Calculate the field pointer with proper alignment
         const base_ptr = @as([*]u8, @ptrCast(self.base_value.ptr.?));
         const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
+        const required_alignment = field_layout.alignment(self.layout_cache.targetUsize()).toByteUnits();
+        if (required_alignment > 1) {
+            const addr = @intFromPtr(field_ptr);
+            std.debug.assert(addr % required_alignment == 0);
+        }
 
         return StackValue{
             .layout = field_layout,
@@ -409,6 +542,11 @@ pub const RecordAccessor = struct {
 
         const base_ptr = @as([*]u8, @ptrCast(self.base_value.ptr.?));
         const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
+        const required_alignment = field_layout.?.alignment(self.layout_cache.targetUsize()).toByteUnits();
+        if (required_alignment > 1) {
+            const addr = @intFromPtr(field_ptr);
+            std.debug.assert(addr % required_alignment == 0);
+        }
 
         return StackValue{
             .layout = field_layout.?,
@@ -462,6 +600,15 @@ pub fn asClosure(self: StackValue) *const Closure {
     return @ptrCast(@alignCast(self.ptr.?));
 }
 
+/// Get the payload pointer stored inside a Box value (if any)
+pub fn boxDataPointer(self: StackValue) ?[*]u8 {
+    std.debug.assert(self.layout.tag == .box or self.layout.tag == .box_of_zst);
+    if (self.ptr == null) return null;
+    const slot: *usize = @ptrCast(@alignCast(self.ptr.?));
+    if (slot.* == 0) return null;
+    return @as([*]u8, @ptrFromInt(slot.*));
+}
+
 /// Move this value to binding (transfers ownership, no refcounts change)
 pub fn moveForBinding(self: StackValue) StackValue {
     return self;
@@ -482,14 +629,53 @@ pub fn copyTo(self: StackValue, dest: StackValue, layout_cache: *LayoutStore) vo
         const dest_str: *RocStr = @ptrCast(@alignCast(dest.ptr.?));
         dest_str.* = src_str.*;
         dest_str.incref(1);
-    } else {
-        // Everything else just copy the bytes
-        std.mem.copyForwards(
-            u8,
-            @as([*]u8, @ptrCast(dest.ptr.?))[0..size],
-            @as([*]const u8, @ptrCast(self.ptr.?))[0..size],
-        );
+        return;
     }
+
+    if (self.layout.tag == .list or self.layout.tag == .list_of_zst) {
+        const dest_list: *RocList = @ptrCast(@alignCast(dest.ptr.?));
+        if (self.ptr == null) {
+            dest_list.* = RocList.empty();
+            return;
+        }
+
+        const src_list = @as(*const RocList, @ptrCast(@alignCast(self.ptr.?))).*;
+        dest_list.* = src_list;
+
+        if (self.layout.tag == .list) {
+            const elem_layout = layout_cache.getLayout(self.layout.data.list);
+            const elements_refcounted = elem_layout.isRefcounted();
+            dest_list.incref(1, elements_refcounted);
+            storeListElementCount(dest_list, elements_refcounted);
+        } else {
+            dest_list.incref(1, false);
+        }
+        return;
+    }
+
+    if (self.layout.tag == .box) {
+        const src_slot: *usize = @ptrCast(@alignCast(self.ptr.?));
+        const dest_slot: *usize = @ptrCast(@alignCast(dest.ptr.?));
+        dest_slot.* = src_slot.*;
+        if (dest_slot.* != 0) {
+            const data_ptr: [*]u8 = @as([*]u8, @ptrFromInt(dest_slot.*));
+            builtins.utils.increfDataPtrC(@as(?[*]u8, data_ptr), 1);
+        }
+        return;
+    }
+
+    if (self.layout.tag == .box_of_zst) {
+        const dest_slot: *usize = @ptrCast(@alignCast(dest.ptr.?));
+        dest_slot.* = 0;
+        return;
+    }
+
+    // Everything else just copy the bytes
+    std.mem.copyForwards(
+        u8,
+        @as([*]u8, @ptrCast(dest.ptr.?))[0..size],
+        @as([*]const u8, @ptrCast(self.ptr.?))[0..size],
+    );
 }
 
 /// Create a StackValue view of a memory region (no copy)
@@ -516,6 +702,12 @@ pub fn copyWithoutRefcount(self: StackValue, dest: StackValue, layout_cache: *La
         const dest_str: *RocStr = @ptrCast(@alignCast(dest.ptr.?));
         dest_str.* = src_str.*; // Just copy the struct, no refcount change
     } else {
+        if (self.layout.tag == .box or self.layout.tag == .box_of_zst) {
+            const src_slot: *usize = @ptrCast(@alignCast(self.ptr.?));
+            const dest_slot: *usize = @ptrCast(@alignCast(dest.ptr.?));
+            dest_slot.* = src_slot.*;
+            return;
+        }
         // Everything else just copy the bytes
         std.mem.copyForwards(
             u8,
@@ -532,23 +724,145 @@ pub fn incref(self: StackValue) void {
         roc_str.incref(1);
         return;
     }
-    // TODO: Add support for other refcounted types (lists, boxes) when implemented
-    // Called incref on a non-refcounted value
-    std.debug.assert(false);
-    unreachable;
+    if (self.layout.tag == .list) {
+        if (self.ptr == null) return;
+        const list_value = @as(*const RocList, @ptrCast(@alignCast(self.ptr.?))).*;
+        // We don't know element layout here to store counts; assume caller already handled
+        list_value.incref(1, false);
+        return;
+    }
+    if (self.layout.tag == .box) {
+        if (self.ptr == null) return;
+        const slot: *usize = @ptrCast(@alignCast(self.ptr.?));
+        if (slot.* != 0) {
+            const data_ptr: [*]u8 = @as([*]u8, @ptrFromInt(slot.*));
+            builtins.utils.increfDataPtrC(@as(?[*]u8, data_ptr), 1);
+        }
+        return;
+    }
 }
 
 /// Decrement reference count for refcounted types
-pub fn decref(self: StackValue, ops: *RocOps) void {
-    if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
-        const roc_str = self.asRocStr();
-        roc_str.decref(ops);
-        return;
+pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
+    switch (self.layout.tag) {
+        .scalar => switch (self.layout.data.scalar.tag) {
+            .str => {
+                const roc_str = self.asRocStr();
+                roc_str.decref(ops);
+                return;
+            },
+            else => {},
+        },
+        .list => {
+            if (self.ptr == null) return;
+            const list_header: *const RocList = @ptrCast(@alignCast(self.ptr.?));
+            const list_value = list_header.*;
+            const elem_layout = layout_cache.getLayout(self.layout.data.list);
+            const alignment_u32: u32 = @intCast(elem_layout.alignment(layout_cache.targetUsize()).toByteUnits());
+            const element_width: usize = @intCast(layout_cache.layoutSize(elem_layout));
+            const elements_refcounted = elem_layout.isRefcounted();
+            if (elements_refcounted) {
+                if (list_value.isUnique()) {
+                    if (list_value.getAllocationDataPtr()) |source| {
+                        const count: usize = if (list_value.isSeamlessSlice()) blk: {
+                            const ptr = @as([*]usize, @alignCast(@ptrCast(source))) - 2;
+                            break :blk ptr[0];
+                        } else list_value.len();
+
+                        var idx: usize = 0;
+                        while (idx < count) : (idx += 1) {
+                            const elem_ptr = source + idx * element_width;
+                            const elem_value = StackValue{
+                                .layout = elem_layout,
+                                .ptr = @ptrCast(elem_ptr),
+                                .is_initialized = true,
+                            };
+                            elem_value.decref(layout_cache, ops);
+                        }
+                    }
+                }
+                list_value.decref(alignment_u32, element_width, false, noopDecref, ops);
+                return;
+            }
+            list_value.decref(alignment_u32, element_width, false, noopDecref, ops);
+            return;
+        },
+        .list_of_zst => {
+            if (self.ptr == null) return;
+            const list_header: *const RocList = @ptrCast(@alignCast(self.ptr.?));
+            const list_value = list_header.*;
+            const alignment_u32: u32 = @intCast(layout_cache.targetUsize().size());
+            list_value.decref(alignment_u32, 0, false, noopDecref, ops);
+            return;
+        },
+        .box => {
+            if (self.ptr == null) return;
+            const slot: *usize = @ptrCast(@alignCast(self.ptr.?));
+            const raw_ptr = slot.*;
+            if (raw_ptr == 0) return;
+            const data_ptr = @as([*]u8, @ptrFromInt(raw_ptr));
+            const target_usize = layout_cache.targetUsize();
+            const elem_layout = layout_cache.getLayout(self.layout.data.box);
+            const elem_alignment: u32 = @intCast(elem_layout.alignment(target_usize).toByteUnits());
+
+            const ptr_int = @intFromPtr(data_ptr);
+            const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
+            const unmasked_ptr = ptr_int & ~tag_mask;
+            const payload_ptr = @as([*]u8, @ptrFromInt(unmasked_ptr));
+            const refcount_ptr: *isize = @as(*isize, @ptrFromInt(unmasked_ptr - @sizeOf(isize)));
+
+            if (builtins.utils.rcUnique(refcount_ptr.*)) {
+                if (elem_layout.isRefcounted()) {
+                    const payload_value = StackValue{
+                        .layout = elem_layout,
+                        .ptr = @ptrCast(@alignCast(payload_ptr)),
+                        .is_initialized = true,
+                    };
+                    payload_value.decref(layout_cache, ops);
+                }
+            }
+
+            builtins.utils.decrefDataPtrC(@as(?[*]u8, payload_ptr), elem_alignment, false, ops);
+            slot.* = 0;
+            return;
+        },
+        .record => {
+            if (self.ptr == null) return;
+            const record_data = layout_cache.getRecordData(self.layout.data.record.idx);
+            if (record_data.fields.count == 0) return;
+
+            const field_layouts = layout_cache.record_fields.sliceRange(record_data.getFields());
+            const base_ptr = @as([*]u8, @ptrCast(self.ptr.?));
+
+            var field_index: usize = 0;
+            while (field_index < field_layouts.len) : (field_index += 1) {
+                const field_info = field_layouts.get(field_index);
+                const field_layout = layout_cache.getLayout(field_info.layout);
+
+                const field_offset = layout_cache.getRecordFieldOffset(self.layout.data.record.idx, @intCast(field_index));
+                const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
+
+                const field_value = StackValue{
+                    .layout = field_layout,
+                    .ptr = field_ptr,
+                    .is_initialized = true,
+                };
+
+                field_value.decref(layout_cache, ops);
+            }
+
+            return;
+        },
+        .box_of_zst => {
+            if (self.ptr == null) return;
+            const slot: *usize = @ptrCast(@alignCast(self.ptr.?));
+            slot.* = 0;
+            return;
+        },
+        else => {},
     }
-    // TODO: Add support for other refcounted types (lists, boxes) when implemented
-    // Called decref on a non-refcounted value
-    std.debug.assert(false);
-    unreachable;
+
+    // Non-refcounted values require no action
 }
 
 /// Calculate total memory footprint for a value.
