@@ -8,16 +8,17 @@ type=file
 
 ~~~
 # EXPECTED
-MISSING HEADER - fuzz_crash_064.md:2:1:2:1
+TYPE MODULE MISSING MATCHING TYPE - fuzz_crash_064.md:2:1:2:1
 # PROBLEMS
-**MISSING HEADER**
-Roc files must start with a module header.
+**TYPE MODULE MISSING MATCHING TYPE**
+Type modules must have a type declaration matching the module name.
 
-For example:
-        module [main]
-or for an app:
-        app [main!] { pf: platform "../basic-cli/platform.roc" }
+This module is named `fuzz_crash_064`, but no top-level type declaration named `fuzz_crash_064` was found.
 
+Add either:
+`fuzz_crash_064 := ...` (nominal type)
+or:
+`fuzz_crash_064 : ...` (type alias)
 **fuzz_crash_064.md:2:1:2:1:**
 ```roc
 
@@ -32,7 +33,7 @@ EndOfFile(2:1-2:1),
 # PARSE
 ~~~clojure
 (file @2.1-2.1
-	(malformed-header @2.1-2.1 (tag "missing_header"))
+	(type-module @2.1-2.1)
 	(statements))
 ~~~
 # FORMATTED

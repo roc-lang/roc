@@ -282,7 +282,10 @@ pub fn parseHeader(self: *Parser) Error!AST.Header.Idx {
             return self.parsePlatformHeader();
         },
         else => {
-            return try self.pushMalformed(AST.Header.Idx, .missing_header, self.pos);
+            // No header keyword found - this is a type module
+            return try self.store.addHeader(.{ .type_module = .{
+                .region = .{ .start = 0, .end = 0 },
+            } });
         },
     }
 }

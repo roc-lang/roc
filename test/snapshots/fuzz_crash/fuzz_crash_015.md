@@ -12,25 +12,22 @@ type=file
 ~~~
 # EXPECTED
 LEADING ZERO - :0:0:0:0
-MISSING HEADER - fuzz_crash_015.md:1:1:1:4
+PARSE ERROR - fuzz_crash_015.md:1:1:1:4
 PARSE ERROR - fuzz_crash_015.md:1:4:1:6
 PARSE ERROR - fuzz_crash_015.md:2:1:2:4
 PARSE ERROR - fuzz_crash_015.md:3:1:3:4
 PARSE ERROR - fuzz_crash_015.md:3:4:3:6
 PARSE ERROR - fuzz_crash_015.md:4:1:4:3
+TYPE MODULE MISSING MATCHING TYPE - fuzz_crash_015.md:1:1:4:3
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.
 
 
 
-**MISSING HEADER**
-Roc files must start with a module header.
-
-For example:
-        module [main]
-or for an app:
-        app [main!] { pf: platform "../basic-cli/platform.roc" }
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 **fuzz_crash_015.md:1:1:1:4:**
 ```roc
@@ -94,6 +91,24 @@ This is an unexpected parsing error. Please check your syntax.
 ^^
 
 
+**TYPE MODULE MISSING MATCHING TYPE**
+Type modules must have a type declaration matching the module name.
+
+This module is named `fuzz_crash_015`, but no top-level type declaration named `fuzz_crash_015` was found.
+
+Add either:
+`fuzz_crash_015 := ...` (nominal type)
+or:
+`fuzz_crash_015 : ...` (type alias)
+**fuzz_crash_015.md:1:1:4:3:**
+```roc
+0o0.0
+0_0
+0u8.0
+0_
+```
+
+
 # TOKENS
 ~~~zig
 Int(1:1-1:4),NoSpaceDotInt(1:4-1:6),
@@ -105,8 +120,9 @@ EndOfFile(5:1-5:1),
 # PARSE
 ~~~clojure
 (file @1.1-4.3
-	(malformed-header @1.1-1.4 (tag "missing_header"))
+	(type-module @1.1-1.4)
 	(statements
+		(s-malformed @1.1-1.4 (tag "statement_unexpected_token"))
 		(s-malformed @1.4-1.6 (tag "statement_unexpected_token"))
 		(s-malformed @2.1-2.4 (tag "statement_unexpected_token"))
 		(s-malformed @3.1-3.4 (tag "statement_unexpected_token"))

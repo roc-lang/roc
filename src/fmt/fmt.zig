@@ -1642,6 +1642,9 @@ const Formatter = struct {
                     Formatter.formatRecordField,
                 );
             },
+            .type_module => {
+                // Type modules have no header to format
+            },
             .malformed => {},
         }
     }

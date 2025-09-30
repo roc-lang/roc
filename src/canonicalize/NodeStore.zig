@@ -106,7 +106,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 46;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 47;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 33;
 /// Count of the statement nodes in the ModuleEnv
@@ -2661,6 +2661,11 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) std.mem.Allocato
             node.tag = .diag_crash_expects_string;
             region = r.region;
         },
+        .type_module_missing_matching_type => |r| {
+            node.tag = .diag_type_module_missing_matching_type;
+            region = r.region;
+            node.data_1 = @bitCast(r.module_name);
+        },
         .f64_pattern_literal => |r| {
             node.tag = .diag_f64_pattern_literal;
             region = r.region;
@@ -2931,6 +2936,10 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             },
         } },
         .diag_crash_expects_string => return CIR.Diagnostic{ .crash_expects_string = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_type_module_missing_matching_type => return CIR.Diagnostic{ .type_module_missing_matching_type = .{
+            .module_name = @bitCast(node.data_1),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_f64_pattern_literal => return CIR.Diagnostic{ .f64_pattern_literal = .{

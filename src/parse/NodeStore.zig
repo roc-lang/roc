@@ -239,6 +239,10 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
 
             node.region = platform.region;
         },
+        .type_module => |tm| {
+            node.tag = .type_module_header;
+            node.region = tm.region;
+        },
         .malformed => {
             @panic("Use addMalformed instead");
         },
@@ -1035,6 +1039,11 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
                 .exposes = @enumFromInt(store.extra_data.items[ed_start + 2]),
                 .packages = @enumFromInt(store.extra_data.items[ed_start + 3]),
                 .provides = @enumFromInt(store.extra_data.items[ed_start + 4]),
+                .region = node.region,
+            } };
+        },
+        .type_module_header => {
+            return .{ .type_module = .{
                 .region = node.region,
             } };
         },

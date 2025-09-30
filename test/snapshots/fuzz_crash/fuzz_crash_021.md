@@ -11,7 +11,6 @@ Pair(a, b+ : (
 ~~~
 # EXPECTED
 UNCLOSED STRING - :0:0:0:0
-MISSING HEADER - fuzz_crash_021.md:1:1:1:4
 PARSE ERROR - fuzz_crash_021.md:1:4:1:5
 PARSE ERROR - fuzz_crash_021.md:1:5:1:9
 PARSE ERROR - fuzz_crash_021.md:1:9:1:13
@@ -21,6 +20,7 @@ PARSE ERROR - fuzz_crash_021.md:1:16:1:16
 PARSE ERROR - fuzz_crash_021.md:3:1:3:5
 PARSE ERROR - fuzz_crash_021.md:4:1:4:1
 MALFORMED TYPE - fuzz_crash_021.md:3:14:3:15
+TYPE MODULE MISSING MATCHING TYPE - fuzz_crash_021.md:1:1:3:15
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.
@@ -31,24 +31,21 @@ Fli/main.roc" }
             ^^^
 
 
-**MISSING HEADER**
-Roc files must start with a module header.
-
-For example:
-        module [main]
-or for an app:
-        app [main!] { pf: platform "../basic-cli/platform.roc" }
-
-**fuzz_crash_021.md:1:1:1:4:**
-```roc
-Fli/main.roc" }
-```
-^^^
-
-
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
+
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+Instead of:
+    **List U8**
+
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Result(a, Str)`
+    `Maybe(List(U64))`
 
 **fuzz_crash_021.md:1:4:1:5:**
 ```roc
@@ -144,6 +141,23 @@ Pair(a, b+ : (
              ^
 
 
+**TYPE MODULE MISSING MATCHING TYPE**
+Type modules must have a type declaration matching the module name.
+
+This module is named `fuzz_crash_021`, but no top-level type declaration named `fuzz_crash_021` was found.
+
+Add either:
+`fuzz_crash_021 := ...` (nominal type)
+or:
+`fuzz_crash_021 : ...` (type alias)
+**fuzz_crash_021.md:1:1:3:15:**
+```roc
+Fli/main.roc" }
+
+Pair(a, b+ : (
+```
+
+
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:4),OpSlash(1:4-1:5),LowerIdent(1:5-1:9),NoSpaceDotLowerIdent(1:9-1:13),StringStart(1:13-1:14),StringPart(1:14-1:16),StringEnd(1:16-1:16),
@@ -153,9 +167,9 @@ EndOfFile(4:1-4:1),
 # PARSE
 ~~~clojure
 (file @1.1-3.15
-	(malformed-header @1.1-1.4 (tag "missing_header"))
+	(type-module @1.1-1.4)
 	(statements
-		(s-malformed @1.4-1.5 (tag "statement_unexpected_token"))
+		(s-malformed @1.4-1.5 (tag "expected_colon_after_type_annotation"))
 		(s-malformed @1.5-1.9 (tag "statement_unexpected_token"))
 		(s-malformed @1.9-1.13 (tag "statement_unexpected_token"))
 		(s-malformed @1.13-1.14 (tag "statement_unexpected_token"))

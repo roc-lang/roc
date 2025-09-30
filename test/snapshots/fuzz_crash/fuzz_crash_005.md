@@ -8,16 +8,29 @@ type=file
 modu
 ~~~
 # EXPECTED
-MISSING HEADER - fuzz_crash_005.md:1:1:1:5
+PARSE ERROR - fuzz_crash_005.md:1:1:1:5
+TYPE MODULE MISSING MATCHING TYPE - fuzz_crash_005.md:1:1:1:5
 # PROBLEMS
-**MISSING HEADER**
-Roc files must start with a module header.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
-For example:
-        module [main]
-or for an app:
-        app [main!] { pf: platform "../basic-cli/platform.roc" }
+**fuzz_crash_005.md:1:1:1:5:**
+```roc
+modu
+```
+^^^^
 
+
+**TYPE MODULE MISSING MATCHING TYPE**
+Type modules must have a type declaration matching the module name.
+
+This module is named `fuzz_crash_005`, but no top-level type declaration named `fuzz_crash_005` was found.
+
+Add either:
+`fuzz_crash_005 := ...` (nominal type)
+or:
+`fuzz_crash_005 : ...` (type alias)
 **fuzz_crash_005.md:1:1:1:5:**
 ```roc
 modu
@@ -33,8 +46,9 @@ EndOfFile(2:1-2:1),
 # PARSE
 ~~~clojure
 (file @1.1-1.5
-	(malformed-header @1.1-1.5 (tag "missing_header"))
-	(statements))
+	(type-module @1.1-1.5)
+	(statements
+		(s-malformed @1.1-1.5 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc

@@ -137,6 +137,10 @@ pub const Diagnostic = union(enum) {
     crash_expects_string: struct {
         region: Region,
     },
+    type_module_missing_matching_type: struct {
+        module_name: Ident.Idx,
+        region: Region,
+    },
     type_alias_redeclared: struct {
         name: Ident.Idx,
         original_region: Region,
@@ -233,6 +237,7 @@ pub const Diagnostic = union(enum) {
             .undeclared_type_var => |d| d.region,
             .type_alias_but_needed_nominal => |d| d.region,
             .crash_expects_string => |d| d.region,
+            .type_module_missing_matching_type => |d| d.region,
             .type_alias_redeclared => |d| d.redeclared_region,
             .nominal_type_redeclared => |d| d.redeclared_region,
             .type_shadowed_warning => |d| d.region,

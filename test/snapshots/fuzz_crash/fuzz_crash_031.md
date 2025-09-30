@@ -11,20 +11,17 @@ mule []
 vavar t= '
 ~~~
 # EXPECTED
-MISSING HEADER - fuzz_crash_031.md:1:1:1:5
+PARSE ERROR - fuzz_crash_031.md:1:1:1:5
 PARSE ERROR - fuzz_crash_031.md:1:6:1:7
 PARSE ERROR - fuzz_crash_031.md:1:7:1:8
 PARSE ERROR - fuzz_crash_031.md:4:1:4:6
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_031.md:4:10:4:11
+TYPE MODULE MISSING MATCHING TYPE - fuzz_crash_031.md:1:1:4:11
 UNRECOGNIZED SYNTAX - fuzz_crash_031.md:4:10:4:11
 # PROBLEMS
-**MISSING HEADER**
-Roc files must start with a module header.
-
-For example:
-        module [main]
-or for an app:
-        app [main!] { pf: platform "../basic-cli/platform.roc" }
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 **fuzz_crash_031.md:1:1:1:5:**
 ```roc
@@ -77,6 +74,24 @@ vavar t= '
          ^
 
 
+**TYPE MODULE MISSING MATCHING TYPE**
+Type modules must have a type declaration matching the module name.
+
+This module is named `fuzz_crash_031`, but no top-level type declaration named `fuzz_crash_031` was found.
+
+Add either:
+`fuzz_crash_031 := ...` (nominal type)
+or:
+`fuzz_crash_031 : ...` (type alias)
+**fuzz_crash_031.md:1:1:4:11:**
+```roc
+mule []
+
+#el
+vavar t= '
+```
+
+
 **UNRECOGNIZED SYNTAX**
 I don't recognize this syntax.
 
@@ -97,8 +112,9 @@ EndOfFile(5:1-5:1),
 # PARSE
 ~~~clojure
 (file @1.1-4.11
-	(malformed-header @1.1-1.5 (tag "missing_header"))
+	(type-module @1.1-1.5)
 	(statements
+		(s-malformed @1.1-1.5 (tag "statement_unexpected_token"))
 		(s-malformed @1.6-1.7 (tag "statement_unexpected_token"))
 		(s-malformed @1.7-1.8 (tag "statement_unexpected_token"))
 		(s-malformed @4.1-4.6 (tag "statement_unexpected_token"))

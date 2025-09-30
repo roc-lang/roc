@@ -518,6 +518,46 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .type_module_missing_matching_type => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const module_name_bytes = self.getIdent(data.module_name);
+
+            var report = Report.init(allocator, "TYPE MODULE MISSING MATCHING TYPE", .fatal);
+            try report.document.addReflowingText("Type modules must have a type declaration matching the module name.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_module_name = try report.addOwnedString(module_name_bytes);
+            try report.document.addReflowingText("This module is named ");
+            try report.document.addAnnotated(owned_module_name, .inline_code);
+            try report.document.addReflowingText(", but no top-level type declaration named ");
+            try report.document.addAnnotated(owned_module_name, .inline_code);
+            try report.document.addReflowingText(" was found.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Add either:");
+            try report.document.addLineBreak();
+            var code_buffer: [256]u8 = undefined;
+            const nominal_example = try std.fmt.bufPrint(&code_buffer, "{s} := ...", .{module_name_bytes});
+            try report.document.addAnnotated(nominal_example, .inline_code);
+            try report.document.addReflowingText(" (nominal type)");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("or:");
+            try report.document.addLineBreak();
+            const alias_example = try std.fmt.bufPrint(&code_buffer, "{s} : ...", .{module_name_bytes});
+            try report.document.addAnnotated(alias_example, .inline_code);
+            try report.document.addReflowingText(" (type alias)");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .duplicate_record_field => |data| blk: {
             const field_name = self.getIdent(data.field_name);
             const duplicate_region_info = self.calcRegionInfo(data.duplicate_region);
