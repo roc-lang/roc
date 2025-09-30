@@ -116,4 +116,5 @@ test "parser tests" {
     std.testing.refAllDecls(@import("Parser.zig"));
     std.testing.refAllDecls(@import("tokenize.zig"));
     std.testing.refAllDecls(@import("test/ast_node_store_test.zig"));
+    std.testing.refAllDecls(@import("test/nominal_type_block_test.zig"));
 }

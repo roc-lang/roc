@@ -1178,13 +1178,38 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 const anno = try self.parseTypeAnno(.not_looking_for_args);
                 const where_clause = try self.parseWhereConstraint();
 
-                // For nominal types, check if there's an optional .{ block }
+                // Check if there's a .{ block } after the type annotation
                 var block: ?AST.Block = null;
-                if (kind == .nominal and self.peek() == .Dot and self.peekN(1) == .OpenCurly) {
-                    self.advance(); // consume .
-                    self.advance(); // consume {
-                    const block_start = self.pos - 1;
-                    block = try self.parseStatementOnlyBlock(block_start);
+                if (self.peek() == .Dot and self.peekN(1) == .OpenCurly) {
+                    const dot_pos = self.pos;
+                    if (kind == .alias) {
+                        // Error: blocks are only allowed on nominal types
+                        try self.pushDiagnostic(.type_alias_cannot_have_block, .{
+                            .start = dot_pos,
+                            .end = dot_pos + 1,
+                        });
+                        // Skip the block to continue parsing
+                        self.advance(); // consume .
+                        self.advance(); // consume {
+                        var depth: u32 = 1;
+                        while (self.peek() != .EndOfFile and depth > 0) {
+                            if (self.peek() == .OpenCurly) {
+                                depth += 1;
+                            } else if (self.peek() == .CloseCurly) {
+                                depth -= 1;
+                            }
+                            if (depth > 0) {
+                                self.advance();
+                            }
+                        }
+                        self.expect(.CloseCurly) catch {};
+                    } else {
+                        // For nominal types, parse the block
+                        self.advance(); // consume .
+                        self.advance(); // consume {
+                        const block_start = self.pos - 1;
+                        block = try self.parseStatementOnlyBlock(block_start);
+                    }
                 }
 
                 // Use the type annotation's end position if there's no where clause,

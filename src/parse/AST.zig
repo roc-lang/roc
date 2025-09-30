@@ -677,6 +677,7 @@ pub const Diagnostic = struct {
         expr_dot_suffix_not_allowed,
         incomplete_import,
         nominal_block_cannot_have_final_expression,
+        type_alias_cannot_have_block,
     };
 };
 
