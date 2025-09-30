@@ -67,7 +67,8 @@ runs:
           Write-Host "Attempt $attempt of $maxAttempts"
 
           # Run command and capture output
-          $output = Invoke-Expression "${{ inputs.command }}" 2>&1 | Out-String
+          $ErrorActionPreference = 'Continue'
+          $output = & cmd /c "${{ inputs.command }} 2>&1"
           $exitCode = $LASTEXITCODE
           Write-Host $output
 
