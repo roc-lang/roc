@@ -9,7 +9,6 @@ const base = @import("base");
 const can = @import("can");
 const types = @import("types");
 const eval = @import("eval");
-const layout = @import("layout");
 const ipc = @import("ipc");
 
 const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
@@ -19,8 +18,6 @@ var shared_memory_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).i
 var global_shm: ?SharedMemoryAllocator = null;
 var global_env_ptr: ?*ModuleEnv = null;
 var shm_mutex: std.Thread.Mutex = .{};
-const Stack = eval.Stack;
-const LayoutStore = layout.Store;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const RocStr = builtins.str.RocStr;
@@ -123,7 +120,7 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
 
     // Set up interpreter infrastructure (per-call, as it's lightweight)
     var interpreter = try createInterpreter(env_ptr, roc_ops);
-    defer interpreter.deinit(roc_ops);
+    defer interpreter.deinit();
 
     // Get expression info from shared memory using entry_idx
     const base_ptr = shm.getBasePtr();
@@ -206,48 +203,9 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*Modu
 /// Create and initialize interpreter with heap-allocated stable objects
 fn createInterpreter(env_ptr: *ModuleEnv, roc_ops: *RocOps) ShimError!Interpreter {
     const allocator = std.heap.page_allocator;
-
-    // Allocate stack on heap to ensure stable address
-    const eval_stack = allocator.create(Stack) catch {
-        roc_ops.crash("INTERPRETER SHIM: Stack allocation failed");
-        return error.InterpreterSetupFailed;
-    };
-    errdefer allocator.destroy(eval_stack);
-
-    eval_stack.* = Stack.initCapacity(allocator, 64 * 1024) catch {
-        roc_ops.crash("INTERPRETER SHIM: Stack initialization failed");
-        return error.InterpreterSetupFailed;
-    };
-    errdefer eval_stack.deinit();
-
-    // Allocate layout cache on heap to ensure stable address
-    const layout_cache = allocator.create(LayoutStore) catch {
-        roc_ops.crash("INTERPRETER SHIM: Layout cache allocation failed");
-        return error.InterpreterSetupFailed;
-    };
-    errdefer allocator.destroy(layout_cache);
-
-    layout_cache.* = LayoutStore.init(env_ptr, &env_ptr.types) catch {
-        roc_ops.crash("INTERPRETER SHIM: Layout cache initialization failed");
-        return error.InterpreterSetupFailed;
-    };
-    errdefer layout_cache.deinit();
-
-    // Initialize the interpreter with pointers to the heap-allocated objects
-    var interpreter = eval.Interpreter.init(
-        allocator,
-        env_ptr,
-        eval_stack,
-        layout_cache,
-        &env_ptr.types,
-    ) catch {
+    const interpreter = eval.Interpreter.init(allocator, env_ptr) catch {
         roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
         return error.InterpreterSetupFailed;
     };
-    errdefer interpreter.deinit();
-
-    // Enable tracing to stderr
-    interpreter.startTrace(std.io.getStdErr().writer().any());
-
     return interpreter;
 }

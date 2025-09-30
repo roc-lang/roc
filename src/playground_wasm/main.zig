@@ -31,6 +31,8 @@ const fmt = @import("fmt");
 const WasmFilesystem = @import("WasmFilesystem.zig");
 const layout = @import("layout");
 
+const CrashContext = eval.CrashContext;
+
 const Can = can.Can;
 const Check = check.Check;
 const SExprTree = base.SExprTree;
@@ -197,8 +199,13 @@ var current_state: State = .START;
 var compiler_data: ?CompilerStageData = null;
 
 /// REPL state management
-var repl_instance: ?*Repl = null;
-var repl_roc_ops: ?*RocOps = null;
+const ReplSession = struct {
+    repl: *Repl,
+    crash_ctx: *CrashContext,
+    roc_ops: *RocOps,
+};
+
+var repl_session: ?ReplSession = null;
 
 /// REPL result types
 const ReplResultType = enum {
@@ -254,11 +261,9 @@ var debug_log_oom: bool = false;
 fn resetGlobalState() void {
     // Make sure everything is null
     compiler_data = null;
-    repl_instance = null;
+    cleanupReplState();
     host_message_buffer = null;
     host_response_buffer = null;
-    repl_instance = null;
-    repl_roc_ops = null;
 
     // Reset allocator to clear all allocations
     fba.reset();
@@ -351,14 +356,13 @@ const ResponseWriteError = error{
 /// This function safely deallocates the REPL instance and RocOps, then sets them to null.
 /// It's called during RESET operations and module initialization.
 fn cleanupReplState() void {
-    if (repl_instance) |repl_ptr| {
-        repl_ptr.deinit();
-        allocator.destroy(repl_ptr);
-        repl_instance = null;
-    }
-    if (repl_roc_ops) |roc_ops| {
-        allocator.destroy(roc_ops);
-        repl_roc_ops = null;
+    if (repl_session) |session| {
+        session.repl.deinit();
+        allocator.destroy(session.repl);
+        allocator.destroy(session.roc_ops);
+        session.crash_ctx.deinit();
+        allocator.destroy(session.crash_ctx);
+        repl_session = null;
     }
 }
 
@@ -366,10 +370,10 @@ fn cleanupReplState() void {
 /// This function allocates and initializes a RocOps structure with WASM-specific
 /// memory management functions. The returned pointer must be freed by the caller.
 /// Returns an error if allocation fails.
-fn createWasmRocOps() !*RocOps {
+fn createWasmRocOps(crash_ctx: *CrashContext) !*RocOps {
     const roc_ops = try allocator.create(RocOps);
     roc_ops.* = RocOps{
-        .env = undefined, // Not used in playground
+        .env = @as(*anyopaque, @ptrCast(crash_ctx)),
         .roc_alloc = wasmRocAlloc,
         .roc_dealloc = wasmRocDealloc,
         .roc_realloc = wasmRocRealloc,
@@ -425,9 +429,11 @@ fn wasmRocExpectFailed(expect_failed_args: *const builtins.host_abi.RocExpectFai
     _ = expect_failed_args;
 }
 
-fn wasmRocCrashed(crashed_args: *const builtins.host_abi.RocCrashed, _: *anyopaque) callconv(.C) void {
-    // No-op in WASM playground
-    _ = crashed_args;
+fn wasmRocCrashed(crashed_args: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.C) void {
+    const ctx: *CrashContext = @ptrCast(@alignCast(env));
+    ctx.recordCrash(crashed_args.utf8_bytes[0..crashed_args.len]) catch |err| {
+        std.debug.panic("failed to record crash in wasm playground: {}", .{err});
+    };
 }
 
 /// Initialize the WASM module in START state
@@ -589,26 +595,36 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
             // Clean up any existing REPL state
             cleanupReplState();
 
-            // Initialize new WASM-compatible RocOps and REPL instance
-            const roc_ops = createWasmRocOps() catch |err| {
+            const crash_ctx = allocator.create(CrashContext) catch |err| {
+                try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
+                return;
+            };
+            crash_ctx.* = CrashContext.init(allocator);
+
+            const roc_ops = createWasmRocOps(crash_ctx) catch |err| {
+                allocator.destroy(crash_ctx);
                 try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
                 return;
             };
 
-            repl_instance = allocator.create(Repl) catch |err| {
+            const repl_ptr = allocator.create(Repl) catch |err| {
                 allocator.destroy(roc_ops);
-                try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
-                return;
-            };
-            repl_instance.?.* = Repl.init(allocator, roc_ops) catch |err| {
-                allocator.destroy(roc_ops);
-                allocator.destroy(repl_instance.?);
-                repl_instance = null;
+                crash_ctx.deinit();
+                allocator.destroy(crash_ctx);
                 try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
                 return;
             };
 
-            repl_roc_ops = roc_ops;
+            repl_ptr.* = Repl.init(allocator, roc_ops, crash_ctx) catch |err| {
+                allocator.destroy(roc_ops);
+                crash_ctx.deinit();
+                allocator.destroy(crash_ctx);
+                allocator.destroy(repl_ptr);
+                try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
+                return;
+            };
+
+            repl_session = .{ .repl = repl_ptr, .crash_ctx = crash_ctx, .roc_ops = roc_ops };
             current_state = .REPL_ACTIVE;
 
             // Return success with REPL info
@@ -677,10 +693,12 @@ fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, re
 /// The REPL instance must be initialized before calling this function.
 /// Returns an error if the response buffer is too small or if internal errors occur.
 fn handleReplState(message_type: MessageType, root: std.json.Value, response_buffer: []u8) ResponseWriteError!void {
-    const repl_ptr = repl_instance orelse {
+    const session = repl_session orelse {
         try writeErrorResponse(response_buffer, .ERROR, "REPL not initialized");
         return;
     };
+    const repl_ptr = session.repl;
+    const crash_ctx = session.crash_ctx;
 
     switch (message_type) {
         .REPL_STEP => {
@@ -704,6 +722,20 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
                 return;
             };
             defer allocator.free(result);
+
+            if (crash_ctx.state == .crashed) {
+                const crash_details = crash_ctx.crashMessage();
+                crash_ctx.reset();
+
+                const step_result = ReplStepResult{
+                    .output = result,
+                    .result_type = .@"error",
+                    .error_stage = .evaluation,
+                    .error_details = crash_details,
+                };
+                try writeReplStepResultJson(response_buffer, step_result);
+                return;
+            }
 
             // Parse the result to determine type and extract error information
             const step_result = parseReplResult(result);
@@ -1344,22 +1376,12 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
 
     // use arena for test evaluation
-    var env = data.module_env;
+    const env = data.module_env;
     var local_arena = std.heap.ArenaAllocator.init(allocator);
     defer local_arena.deinit();
 
     // Create interpreter infrastructure for test evaluation
-    var stack_memory = eval.Stack.initCapacity(local_arena.allocator(), 1024) catch {
-        try writeErrorResponse(response_buffer, .ERROR, "Failed to create stack memory.");
-        return;
-    };
-
-    var layout_cache = layout.Store.init(env, &env.types) catch {
-        try writeErrorResponse(response_buffer, .ERROR, "FFailed to create layout cache.");
-        return;
-    };
-
-    var test_runner = TestRunner.init(local_arena.allocator(), env, &stack_memory, &layout_cache, &env.types) catch {
+    var test_runner = TestRunner.init(local_arena.allocator(), env) catch {
         try writeErrorResponse(response_buffer, .ERROR, "Failed to initialize test runner.");
         return;
     };

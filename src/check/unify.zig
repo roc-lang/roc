@@ -1367,6 +1367,12 @@ fn Unifier(comptime StoreTypeB: type) type {
                             }
                             self.merge(vars, vars.b.desc.content);
                         },
+                        .frac_precision => |prec| {
+                            // Promote decimal integers to the concrete fractional precision.
+                            // Any fractional precision can represent integer literals, so no
+                            // additional requirement checks are needed here.
+                            self.merge(vars, Content{ .structure = .{ .num = .{ .frac_precision = prec } } });
+                        },
                         .frac_unbound => |b_requirements| {
                             // When unifying num_unbound with frac_unbound, frac wins
                             self.merge(vars, Content{ .structure = .{ .num = .{ .frac_unbound = b_requirements } } });
@@ -1499,6 +1505,10 @@ fn Unifier(comptime StoreTypeB: type) type {
                             } else {
                                 return error.TypeMismatch;
                             }
+                        },
+                        .num_unbound => {
+                            // Fractional precision wins when unified with decimal integer literals.
+                            self.merge(vars, vars.a.desc.content);
                         },
                         .num_compact => |b_compact| {
                             switch (b_compact) {

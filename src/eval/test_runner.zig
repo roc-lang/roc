@@ -6,12 +6,8 @@ const std = @import("std");
 const base = @import("base");
 const builtins = @import("builtins");
 const can = @import("can");
-const stack = @import("stack.zig");
-const layout = @import("layout");
-const types = @import("types");
-
 const Interpreter = @import("interpreter.zig").Interpreter;
-const EvalError = @import("interpreter.zig").EvalError;
+const eval_mod = @import("mod.zig");
 
 const RocOps = builtins.host_abi.RocOps;
 const RocAlloc = builtins.host_abi.RocAlloc;
@@ -22,9 +18,11 @@ const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocCrashed = builtins.host_abi.RocCrashed;
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
-const LayoutStore = layout.Store;
-const TypeStore = types.store.Store;
 const CIR = can.CIR;
+
+const EvalError = Interpreter.Error;
+const CrashContext = eval_mod.CrashContext;
+const CrashState = eval_mod.CrashState;
 
 fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
     const test_env: *TestRunner = @ptrCast(@alignCast(env));
@@ -83,13 +81,9 @@ fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) cal
 fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {
     const test_env: *TestRunner = @ptrCast(@alignCast(env));
     const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
-
-    test_env.interpreter.has_crashed = true;
-    const owned_msg = test_env.allocator.dupe(u8, msg_slice) catch {
-        test_env.interpreter.crash_message = "Failed to store crash message";
-        return;
+    test_env.crash.recordCrash(msg_slice) catch |err| {
+        std.debug.panic("failed to record crash message for test runner: {}", .{err});
     };
-    test_env.interpreter.crash_message = owned_msg;
 }
 
 const Evaluation = enum {
@@ -113,31 +107,29 @@ const TestSummary = struct {
 /// A test runner that can evaluate expect expressions in a module.
 pub const TestRunner = struct {
     allocator: Allocator,
-    env: *const ModuleEnv,
+    env: *ModuleEnv,
     interpreter: Interpreter,
+    crash: CrashContext,
     roc_ops: ?RocOps,
     test_results: std.ArrayList(TestResult),
 
     pub fn init(
         allocator: std.mem.Allocator,
-        cir: *const ModuleEnv,
-        stack_memory: *stack.Stack,
-        layout_cache: *LayoutStore,
-        type_store: *TypeStore,
+        cir: *ModuleEnv,
     ) !TestRunner {
-        const runner = TestRunner{
+        return TestRunner{
             .allocator = allocator,
             .env = cir,
-            .interpreter = try Interpreter.init(allocator, cir, stack_memory, layout_cache, type_store),
+            .interpreter = try Interpreter.init(allocator, cir),
+            .crash = CrashContext.init(allocator),
             .roc_ops = null,
             .test_results = std.ArrayList(TestResult).init(allocator),
         };
-
-        return runner;
     }
 
     pub fn deinit(self: *TestRunner) void {
-        self.interpreter.deinit(self.get_ops());
+        self.interpreter.deinit();
+        self.crash.deinit();
         self.test_results.deinit();
     }
 
@@ -154,22 +146,27 @@ pub const TestRunner = struct {
                 .host_fns = undefined, // Not used in tests
             };
         }
+        self.crash.reset();
         return &(self.roc_ops.?);
+    }
+
+    pub fn crashState(self: *TestRunner) CrashState {
+        return self.crash.state;
     }
 
     /// Evaluates a single expect expression, returning whether it passed, failed or did not evaluate to a boolean.
     pub fn eval(self: *TestRunner, expr_idx: CIR.Expr.Idx) EvalError!Evaluation {
-        const result = try self.interpreter.eval(expr_idx, self.get_ops());
+        const ops = self.get_ops();
+        const result = try self.interpreter.evalMinimal(expr_idx, ops);
+        const layout_cache = &self.interpreter.runtime_layout_store;
+        defer result.decref(layout_cache, ops);
+
         if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .bool) {
             const is_true = result.asBool();
-            if (is_true) {
-                return Evaluation.passed;
-            } else {
-                return Evaluation.failed;
-            }
-        } else {
-            return Evaluation.not_a_bool;
+            return if (is_true) Evaluation.passed else Evaluation.failed;
         }
+
+        return Evaluation.not_a_bool;
     }
 
     /// Evaluates all expect statements in the module, returning a summary of the results.

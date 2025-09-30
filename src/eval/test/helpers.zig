@@ -3,63 +3,47 @@ const std = @import("std");
 const parse = @import("parse");
 const types = @import("types");
 const base = @import("base");
-const compile = @import("compile");
 const can = @import("can");
 const check = @import("check");
-const layout = @import("layout");
 const builtins = @import("builtins");
 
 const TestEnv = @import("TestEnv.zig");
-const eval = @import("../interpreter.zig");
-const stack = @import("../stack.zig");
+const Interpreter = @import("../interpreter.zig").Interpreter;
 const StackValue = @import("../StackValue.zig");
 
 const Check = check.Check;
 const Can = can.Can;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
-const Layout = layout.Layout;
-const Closure = eval.Closure;
-const LayoutStore = layout.Store;
 const test_allocator = std.testing.allocator;
 
 const TestParseError = parse.Parser.Error || error{ TokenizeError, SyntaxError };
 
 /// Helper function to run an expression and expect a specific error.
-pub fn runExpectError(src: []const u8, expected_error: eval.EvalError, should_trace: enum { trace, no_trace }) !void {
+pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
-
-    var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-    defer eval_stack.deinit();
-
-    var layout_cache = try LayoutStore.init(resources.module_env, &resources.module_env.types);
-    defer layout_cache.deinit();
 
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try eval.Interpreter.init(
-        test_allocator,
-        resources.module_env,
-        &eval_stack,
-        &layout_cache,
-        &resources.module_env.types,
-    );
-    defer interpreter.deinit(test_env_instance.get_ops());
-    test_env_instance.setInterpreter(&interpreter);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env);
+    defer interpreter.deinit();
 
-    if (should_trace == .trace) {
+    const enable_trace = should_trace == .trace;
+    if (enable_trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
     }
+    defer if (enable_trace) interpreter.endTrace();
 
-    const result = interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
+    const ops = test_env_instance.get_ops();
+    _ = interpreter.evalMinimal(resources.expr_idx, ops) catch |err| {
+        try std.testing.expectEqual(expected_error, err);
+        return;
+    };
 
-    if (should_trace == .trace) {
-        interpreter.endTrace();
-    }
-
-    try std.testing.expectError(expected_error, result);
+    // If we reach here, no error was thrown.
+    try std.testing.expect(false);
 }
 
 /// Helpers to setup and run an interpreter expecting an integer result.
@@ -67,34 +51,22 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-    defer eval_stack.deinit();
-
-    var layout_cache = try LayoutStore.init(resources.module_env, &resources.module_env.types);
-    defer layout_cache.deinit();
-
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try eval.Interpreter.init(
-        test_allocator,
-        resources.module_env,
-        &eval_stack,
-        &layout_cache,
-        &resources.module_env.types,
-    );
-    defer interpreter.deinit(test_env_instance.get_ops());
-    test_env_instance.setInterpreter(&interpreter);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env);
+    defer interpreter.deinit();
 
-    if (should_trace == .trace) {
+    const enable_trace = should_trace == .trace;
+    if (enable_trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
     }
+    defer if (enable_trace) interpreter.endTrace();
 
-    const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
-
-    if (should_trace == .trace) {
-        interpreter.endTrace();
-    }
+    const ops = test_env_instance.get_ops();
+    const result = try interpreter.evalMinimal(resources.expr_idx, ops);
+    const layout_cache = &interpreter.runtime_layout_store;
+    defer result.decref(layout_cache, ops);
 
     try std.testing.expectEqual(expected_int, result.asI128());
 }
@@ -104,51 +76,33 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-    defer eval_stack.deinit();
-
-    var layout_cache = try LayoutStore.init(resources.module_env, &resources.module_env.types);
-    defer layout_cache.deinit();
-
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try eval.Interpreter.init(
-        test_allocator,
-        resources.module_env,
-        &eval_stack,
-        &layout_cache,
-        &resources.module_env.types,
-    );
-    const roc_ops_ptr = test_env_instance.get_ops();
-    defer interpreter.deinit(roc_ops_ptr);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env);
+    defer interpreter.deinit();
 
-    if (should_trace == .trace) {
+    const enable_trace = should_trace == .trace;
+    if (enable_trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
     }
+    defer if (enable_trace) interpreter.endTrace();
 
-    const result = interpreter.eval(resources.expr_idx, roc_ops_ptr) catch |err| {
-        std.debug.print("Evaluation failed: {}\n", .{err});
-        return err;
+    const ops = test_env_instance.get_ops();
+    const result = try interpreter.evalMinimal(resources.expr_idx, ops);
+    const layout_cache = &interpreter.runtime_layout_store;
+    defer result.decref(layout_cache, ops);
+
+    const actual = switch (result.layout.tag) {
+        .scalar => switch (result.layout.data.scalar.tag) {
+            .bool => result.asBool(),
+            .int => result.asI128() != 0,
+            else => return error.TestUnexpectedResult,
+        },
+        else => return error.TestUnexpectedResult,
     };
 
-    if (should_trace == .trace) {
-        interpreter.endTrace();
-    }
-
-    // For boolean results, we can read the underlying byte value
-    if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) {
-        // Boolean represented as integer
-        const int_val = result.asI128();
-        const bool_val = int_val != 0;
-        try std.testing.expectEqual(expected_bool, bool_val);
-    } else {
-        // Try reading as raw byte (for boolean tag values)
-        std.debug.assert(result.ptr != null);
-        const bool_ptr = @as(*const u8, @ptrCast(result.ptr.?));
-        const bool_val = bool_ptr.* != 0;
-        try std.testing.expectEqual(expected_bool, bool_val);
-    }
+    try std.testing.expectEqual(expected_bool, actual);
 }
 
 /// Helpers to setup and run an interpreter expecting a string result.
@@ -156,51 +110,34 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-    defer eval_stack.deinit();
-
-    var layout_cache = try LayoutStore.init(resources.module_env, &resources.module_env.types);
-    defer layout_cache.deinit();
-
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try eval.Interpreter.init(
-        test_allocator,
-        resources.module_env,
-        &eval_stack,
-        &layout_cache,
-        &resources.module_env.types,
-    );
-    defer interpreter.deinit(test_env_instance.get_ops());
-    test_env_instance.setInterpreter(&interpreter);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env);
+    defer interpreter.deinit();
 
-    if (should_trace == .trace) {
+    const enable_trace = should_trace == .trace;
+    if (enable_trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
     }
+    defer if (enable_trace) interpreter.endTrace();
 
-    const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
+    const ops = test_env_instance.get_ops();
+    const result = try interpreter.evalMinimal(resources.expr_idx, ops);
+    const layout_cache = &interpreter.runtime_layout_store;
 
-    if (should_trace == .trace) {
-        interpreter.endTrace();
-    }
-
-    // Verify we got a scalar string layout
     try std.testing.expect(result.layout.tag == .scalar);
     try std.testing.expect(result.layout.data.scalar.tag == .str);
 
-    // Read the string result
     const roc_str: *const builtins.str.RocStr = @ptrCast(@alignCast(result.ptr.?));
     const str_slice = roc_str.asSlice();
-
     try std.testing.expectEqualStrings(expected_str, str_slice);
 
-    // Clean up reference counting for big strings
     if (!roc_str.isSmallStr()) {
-        // We need to decref because the result is no longer needed
-        // Cast away const to call decref (safe since we're done with it)
         const mutable_roc_str: *builtins.str.RocStr = @constCast(roc_str);
-        mutable_roc_str.decref(test_env_instance.get_ops());
+        mutable_roc_str.decref(ops);
+    } else {
+        result.decref(layout_cache, ops);
     }
 }
 
@@ -221,46 +158,34 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-    defer eval_stack.deinit();
-
-    var layout_cache = try LayoutStore.init(resources.module_env, &resources.module_env.types);
-    defer layout_cache.deinit();
-
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try eval.Interpreter.init(
-        test_allocator,
-        resources.module_env,
-        &eval_stack,
-        &layout_cache,
-        &resources.module_env.types,
-    );
-    defer interpreter.deinit(test_env_instance.get_ops());
-    test_env_instance.setInterpreter(&interpreter);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env);
+    defer interpreter.deinit();
 
-    if (should_trace == .trace) {
+    const enable_trace = should_trace == .trace;
+    if (enable_trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
     }
+    defer if (enable_trace) interpreter.endTrace();
 
-    const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
-
-    if (should_trace == .trace) {
-        interpreter.endTrace();
-    }
+    const ops = test_env_instance.get_ops();
+    const result = try interpreter.evalMinimal(resources.expr_idx, ops);
+    const layout_cache = &interpreter.runtime_layout_store;
+    defer result.decref(layout_cache, ops);
 
     // Verify we got a tuple layout
     try std.testing.expect(result.layout.tag == .tuple);
 
     // Use the TupleAccessor to safely access tuple elements
-    const tuple_accessor = try result.asTuple(&layout_cache);
+    const tuple_accessor = try result.asTuple(layout_cache);
 
     try std.testing.expectEqual(expected_elements.len, tuple_accessor.getElementCount());
 
     for (expected_elements) |expected_element| {
         // Get the element at the specified index
-        const element = try tuple_accessor.getElement(expected_element.index);
+        const element = try tuple_accessor.getElement(@intCast(expected_element.index));
 
         // Verify it's an integer
         try std.testing.expect(element.layout.tag == .scalar and element.layout.data.scalar.tag == .int);
@@ -276,34 +201,22 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-    defer eval_stack.deinit();
-
-    var layout_cache = try LayoutStore.init(resources.module_env, &resources.module_env.types);
-    defer layout_cache.deinit();
-
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try eval.Interpreter.init(
-        test_allocator,
-        resources.module_env,
-        &eval_stack,
-        &layout_cache,
-        &resources.module_env.types,
-    );
-    defer interpreter.deinit(test_env_instance.get_ops());
-    test_env_instance.setInterpreter(&interpreter);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env);
+    defer interpreter.deinit();
 
-    if (should_trace == .trace) {
+    const enable_trace = should_trace == .trace;
+    if (enable_trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
     }
+    defer if (enable_trace) interpreter.endTrace();
 
-    const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
-
-    if (should_trace == .trace) {
-        interpreter.endTrace();
-    }
+    const ops = test_env_instance.get_ops();
+    const result = try interpreter.evalMinimal(resources.expr_idx, ops);
+    const layout_cache = &interpreter.runtime_layout_store;
+    defer result.decref(layout_cache, ops);
 
     // Verify we got a record layout
     try std.testing.expect(result.layout.tag == .record);
@@ -458,123 +371,62 @@ pub fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: anytype
 }
 
 test "eval runtime error - returns crash error" {
-    const source =
-        \\{
-        \\    crash "test feature"
-        \\    0
-        \\}
-    ;
-
-    const resources = try parseAndCanonicalizeExpr(test_allocator, source);
-    defer cleanupParseAndCanonical(test_allocator, resources);
-
-    // Create a stack for evaluation
-    var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-    defer eval_stack.deinit();
-
-    // Create layout store
-    var layout_cache = try LayoutStore.init(resources.module_env, &resources.module_env.types);
-    defer layout_cache.deinit();
-
-    var test_env_instance = TestEnv.init(test_allocator);
-    defer test_env_instance.deinit();
-
-    // Create interpreter and evaluate the crash expression
-    var interpreter = try eval.Interpreter.init(
-        test_allocator,
-        resources.module_env,
-        &eval_stack,
-        &layout_cache,
-        &resources.module_env.types,
-    );
-    defer interpreter.deinit(test_env_instance.get_ops());
-    test_env_instance.setInterpreter(&interpreter);
-
-    const result = interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
-    try std.testing.expectError(eval.EvalError.Crash, result);
+    try runExpectError("{ crash \"test feature\" 0 }", error.Crash, .no_trace);
 }
 
 test "eval tag - already primitive" {
-    const source = "True";
-
-    const resources = try parseAndCanonicalizeExpr(test_allocator, source);
+    const resources = try parseAndCanonicalizeExpr(test_allocator, "True");
     defer cleanupParseAndCanonical(test_allocator, resources);
-
-    // Create a stack for evaluation
-    var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-    defer eval_stack.deinit();
-
-    // Create layout store
-    var layout_cache = try LayoutStore.init(resources.module_env, &resources.module_env.types);
-    defer layout_cache.deinit();
 
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    // Create interpreter
-    var interpreter = try eval.Interpreter.init(
-        test_allocator,
-        resources.module_env,
-        &eval_stack,
-        &layout_cache,
-        &resources.module_env.types,
-    );
-    defer interpreter.deinit(test_env_instance.get_ops());
-    test_env_instance.setInterpreter(&interpreter);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env);
+    defer interpreter.deinit();
 
-    // Try to evaluate - if tag_union layout is not implemented, this might fail
-    const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
+    const ops = test_env_instance.get_ops();
+    const result = try interpreter.evalMinimal(resources.expr_idx, ops);
+    const layout_cache = &interpreter.runtime_layout_store;
+    defer result.decref(layout_cache, ops);
 
-    // If we get here, check if we have a valid result
-    // True/False are optimized to scalar values in the current implementation
     try std.testing.expect(result.layout.tag == .scalar);
     try std.testing.expect(result.ptr != null);
 }
 
 test "interpreter reuse across multiple evaluations" {
-    // This test demonstrates that the interpreter can be reused across multiple
-    // eval() calls, avoiding repeated allocations in scenarios like the REPL
+    const cases = [_]struct {
+        src: []const u8,
+        expected: i128,
+    }{
+        .{ .src = "42", .expected = 42 },
+        .{ .src = "100 + 200", .expected = 300 },
+        .{ .src = "if True 1 else 2", .expected = 1 },
+    };
 
-    // Test multiple evaluations with the same work stack
-    const sources = [_][]const u8{ "42", "100 + 200", "if True 1 else 2" };
-    const expected = [_]i128{ 42, 300, 1 };
-
-    for (sources, expected) |source, expected_value| {
-        const resources = try parseAndCanonicalizeExpr(test_allocator, source);
+    for (cases) |case| {
+        const resources = try parseAndCanonicalizeExpr(test_allocator, case.src);
         defer cleanupParseAndCanonical(test_allocator, resources);
-
-        var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
-        defer eval_stack.deinit();
-        var layout_cache = try LayoutStore.init(resources.module_env, &resources.module_env.types);
-        defer layout_cache.deinit();
 
         var test_env_instance = TestEnv.init(test_allocator);
         defer test_env_instance.deinit();
 
-        // Create interpreter for this evaluation
-        var interpreter = try eval.Interpreter.init(
-            test_allocator,
-            resources.module_env,
-            &eval_stack,
-            &layout_cache,
-            &resources.module_env.types,
-        );
-        defer interpreter.deinit(test_env_instance.get_ops());
-        test_env_instance.setInterpreter(&interpreter);
+        var interpreter = try Interpreter.init(test_allocator, resources.module_env);
+        defer interpreter.deinit();
 
-        // Verify work stack is empty before eval
-        try std.testing.expectEqual(@as(usize, 0), interpreter.work_stack.items.len);
+        const ops = test_env_instance.get_ops();
 
-        const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
+        var iteration: usize = 0;
+        while (iteration < 2) : (iteration += 1) {
+            const result = try interpreter.evalMinimal(resources.expr_idx, ops);
+            const layout_cache = &interpreter.runtime_layout_store;
+            defer result.decref(layout_cache, ops);
 
-        // Verify work stack is empty after eval (should be naturally empty, not cleared)
-        try std.testing.expectEqual(@as(usize, 0), interpreter.work_stack.items.len);
+            try std.testing.expect(result.layout.tag == .scalar);
+            try std.testing.expect(result.layout.data.scalar.tag == .int);
+            try std.testing.expectEqual(case.expected, result.asI128());
+        }
 
-        // Verify the result
-        try std.testing.expect(result.layout.tag == .scalar);
-        try std.testing.expect(result.layout.data.scalar.tag == .int);
-        const value: *i128 = @ptrCast(@alignCast(result.ptr.?));
-        try std.testing.expectEqual(expected_value, value.*);
+        try std.testing.expectEqual(@as(usize, 0), interpreter.bindings.items.len);
     }
 }
 

@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const builtins = @import("builtins");
-const eval = @import("../interpreter.zig");
+const eval_mod = @import("../mod.zig");
 
 const RocOps = builtins.host_abi.RocOps;
 const RocAlloc = builtins.host_abi.RocAlloc;
@@ -12,37 +12,25 @@ const RocDbg = builtins.host_abi.RocDbg;
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocCrashed = builtins.host_abi.RocCrashed;
 
+const CrashContext = eval_mod.CrashContext;
+const CrashState = eval_mod.CrashState;
+
 const TestEnv = @This();
 
 allocator: std.mem.Allocator,
-interpreter: ?*eval.Interpreter,
+crash: CrashContext,
 roc_ops: ?RocOps,
 
 pub fn init(allocator: std.mem.Allocator) TestEnv {
     return TestEnv{
         .allocator = allocator,
-        .interpreter = null,
+        .crash = CrashContext.init(allocator),
         .roc_ops = null,
     };
 }
 
-/// Set the interpreter instance for this test environment
-pub fn setInterpreter(self: *TestEnv, interp: *eval.Interpreter) void {
-    self.interpreter = interp;
-}
-
 pub fn deinit(self: *TestEnv) void {
-    // Clean up crash message if we allocated it
-    if (self.interpreter) |interp| {
-        if (interp.crash_message) |msg| {
-            // Only free if we allocated it (not a string literal)
-            if (std.mem.eql(u8, msg, "Failed to store crash message")) {
-                // Don't free string literals
-            } else {
-                self.allocator.free(msg);
-            }
-        }
-    }
+    self.crash.deinit();
 }
 
 /// Get the RocOps instance for this test environment, initializing it if needed
@@ -59,7 +47,13 @@ pub fn get_ops(self: *TestEnv) *RocOps {
             .host_fns = undefined, // Not used in tests
         };
     }
+    self.crash.reset();
     return &(self.roc_ops.?);
+}
+
+/// Expose the current crash state for assertions in tests.
+pub fn crashState(self: *TestEnv) CrashState {
+    return self.crash.state;
 }
 
 fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
@@ -153,16 +147,7 @@ fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) cal
 fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {
     const test_env: *TestEnv = @ptrCast(@alignCast(env));
     const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
-
-    // Set crash state on the interpreter if it's available
-    if (test_env.interpreter) |interp| {
-        interp.has_crashed = true;
-        // Store the crash message - we need to allocate and copy it since the original may be temporary
-        const owned_msg = test_env.allocator.dupe(u8, msg_slice) catch |err| {
-            std.log.err("Failed to allocate crash message: {}", .{err});
-            interp.crash_message = "Failed to store crash message";
-            return;
-        };
-        interp.crash_message = owned_msg;
-    }
+    test_env.crash.recordCrash(msg_slice) catch |err| {
+        std.debug.panic("failed to store crash message in test env: {}", .{err});
+    };
 }
