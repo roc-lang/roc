@@ -141,6 +141,14 @@ pub const Diagnostic = union(enum) {
         module_name: Ident.Idx,
         region: Region,
     },
+    default_app_missing_main: struct {
+        module_name: Ident.Idx,
+        region: Region,
+    },
+    default_app_wrong_arity: struct {
+        arity: u32,
+        region: Region,
+    },
     type_alias_redeclared: struct {
         name: Ident.Idx,
         original_region: Region,
@@ -238,6 +246,8 @@ pub const Diagnostic = union(enum) {
             .type_alias_but_needed_nominal => |d| d.region,
             .crash_expects_string => |d| d.region,
             .type_module_missing_matching_type => |d| d.region,
+            .default_app_missing_main => |d| d.region,
+            .default_app_wrong_arity => |d| d.region,
             .type_alias_redeclared => |d| d.redeclared_region,
             .nominal_type_redeclared => |d| d.redeclared_region,
             .type_shadowed_warning => |d| d.region,

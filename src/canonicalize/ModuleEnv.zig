@@ -558,6 +558,70 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .default_app_missing_main => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const module_name_bytes = self.getIdent(data.module_name);
+
+            var report = Report.init(allocator, "DEFAULT APP MISSING MAIN! FUNCTION", .fatal);
+            try report.document.addReflowingText("Default app modules must have a ");
+            try report.document.addAnnotated("main!", .inline_code);
+            try report.document.addReflowingText(" function.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_module_name = try report.addOwnedString(module_name_bytes);
+            try report.document.addReflowingText("This module is named ");
+            try report.document.addAnnotated(owned_module_name, .inline_code);
+            try report.document.addReflowingText(", but no ");
+            try report.document.addAnnotated("main!", .inline_code);
+            try report.document.addReflowingText(" function was found.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Add a main! function like:");
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("main! = |arg| { ... }", .inline_code);
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .default_app_wrong_arity => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "DEFAULT APP MAIN! WRONG ARITY", .fatal);
+            try report.document.addReflowingText("The ");
+            try report.document.addAnnotated("main!", .inline_code);
+            try report.document.addReflowingText(" function must take exactly 1 argument.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            var arity_buffer: [32]u8 = undefined;
+            const arity_str = try std.fmt.bufPrint(&arity_buffer, "{d}", .{data.arity});
+            try report.document.addReflowingText("Found ");
+            try report.document.addAnnotated(arity_str, .inline_code);
+            try report.document.addReflowingText(" argument(s) instead.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Change it to:");
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("main! = |arg| { ... }", .inline_code);
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .duplicate_record_field => |data| blk: {
             const field_name = self.getIdent(data.field_name);
             const duplicate_region_info = self.calcRegionInfo(data.duplicate_region);

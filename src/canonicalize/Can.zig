@@ -579,6 +579,10 @@ pub fn canonicalizeFile(
             // Type modules don't have an exposes list
             // We'll validate the type name matches the module name after processing types
         },
+        .default_app => {
+            // Default app modules don't have an exposes list
+            // They have a main! function that will be validated
+        },
         .malformed => {
             // Skip malformed headers
         },
@@ -708,9 +712,18 @@ pub fn canonicalizeFile(
         }
     }
 
-    // After processing all type declarations, validate type module name if applicable
+    // After processing all type declarations, handle type module validation
     if (header == .type_module) {
-        try self.validateTypeModuleName();
+        // First check if there's a main! function (for default_app modules)
+        if (self.findMainFunction()) |main_info| {
+            // This is a default_app module - main! was found with correct arity
+            // For now, we just mark it as valid; conversion to default_app happens conceptually
+            // The actual execution layer will check for either app or type_module with main!
+            _ = main_info; // We found it, that's enough for now
+        } else {
+            // No main! found, so validate as a regular type module
+            try self.validateTypeModuleName();
+        }
     }
 
     // Second pass: Process all other statements
@@ -7239,6 +7252,44 @@ fn createUnknownIdent(self: *Self) std.mem.Allocator.Error!Ident.Idx {
 
 /// Validate that a type module has a type declaration matching the module name.
 /// For example, if the module is named "Foo", there must be a `Foo := ...` or `Foo : ...` at the top level.
+/// Check if this module has a main! function suitable for default_app
+/// Returns the def index if found and valid, null otherwise
+fn findMainFunction(self: *Self) ?struct { def_idx: CIR.Def.Idx, region: Region } {
+    const file = self.parse_ir.store.getFile();
+
+    // Look through all statements for a definition of main!
+    for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
+        const stmt = self.parse_ir.store.getStatement(stmt_id);
+        if (stmt == .decl) {
+            const decl = stmt.decl;
+            // Check if this is a definition with name "main!"
+            const pattern = self.parse_ir.store.getPattern(decl.pattern);
+            if (pattern == .ident) {
+                const ident_token = pattern.ident.ident_tok;
+                const ident_idx = self.parse_ir.tokens.resolveIdentifier(ident_token) orelse continue;
+                const ident_text = self.env.getIdent(ident_idx);
+
+                if (std.mem.eql(u8, ident_text, "main!")) {
+                    // Found main! - now check if it's a lambda with exactly 1 parameter
+                    const expr = self.parse_ir.store.getExpr(decl.body);
+                    if (expr == .lambda) {
+                        const lambda = expr.lambda;
+                        const params = self.parse_ir.store.patternSlice(lambda.args);
+
+                        if (params.len == 1) {
+                            // Valid main! function found
+                            const region = self.parse_ir.tokenizedRegionToRegion(decl.region);
+                            return .{ .def_idx = @enumFromInt(0), .region = region }; // TODO: get actual CIR def idx
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return null;
+}
+
 fn validateTypeModuleName(self: *Self) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();

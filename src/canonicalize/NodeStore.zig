@@ -106,7 +106,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 47;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 49;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 33;
 /// Count of the statement nodes in the ModuleEnv
@@ -2666,6 +2666,16 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) std.mem.Allocato
             region = r.region;
             node.data_1 = @bitCast(r.module_name);
         },
+        .default_app_missing_main => |r| {
+            node.tag = .diag_default_app_missing_main;
+            region = r.region;
+            node.data_1 = @bitCast(r.module_name);
+        },
+        .default_app_wrong_arity => |r| {
+            node.tag = .diag_default_app_wrong_arity;
+            region = r.region;
+            node.data_1 = r.arity;
+        },
         .f64_pattern_literal => |r| {
             node.tag = .diag_f64_pattern_literal;
             region = r.region;
@@ -2940,6 +2950,14 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         } },
         .diag_type_module_missing_matching_type => return CIR.Diagnostic{ .type_module_missing_matching_type = .{
             .module_name = @bitCast(node.data_1),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_default_app_missing_main => return CIR.Diagnostic{ .default_app_missing_main = .{
+            .module_name = @bitCast(node.data_1),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_default_app_wrong_arity => return CIR.Diagnostic{ .default_app_wrong_arity = .{
+            .arity = node.data_1,
             .region = store.getRegionAt(node_idx),
         } },
         .diag_f64_pattern_literal => return CIR.Diagnostic{ .f64_pattern_literal = .{

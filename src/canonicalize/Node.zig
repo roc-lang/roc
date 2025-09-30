@@ -184,6 +184,8 @@ pub const Tag = enum {
     diag_duplicate_record_field,
     diag_crash_expects_string,
     diag_type_module_missing_matching_type,
+    diag_default_app_missing_main,
+    diag_default_app_wrong_arity,
     diag_f64_pattern_literal,
     diag_unused_type_var_name,
     diag_type_var_marked_unused,

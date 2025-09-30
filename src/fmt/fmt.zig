@@ -1645,6 +1645,9 @@ const Formatter = struct {
             .type_module => {
                 // Type modules have no header to format
             },
+            .default_app => {
+                // Default app modules have no header to format
+            },
             .malformed => {},
         }
     }

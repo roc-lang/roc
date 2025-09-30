@@ -243,6 +243,11 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
             node.tag = .type_module_header;
             node.region = tm.region;
         },
+        .default_app => |da| {
+            node.tag = .default_app_header;
+            node.region = da.region;
+            node.data.lhs = da.main_fn_idx;
+        },
         .malformed => {
             @panic("Use addMalformed instead");
         },
@@ -1044,6 +1049,12 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
         },
         .type_module_header => {
             return .{ .type_module = .{
+                .region = node.region,
+            } };
+        },
+        .default_app_header => {
+            return .{ .default_app = .{
+                .main_fn_idx = node.data.lhs,
                 .region = node.region,
             } };
         },

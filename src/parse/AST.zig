@@ -1524,6 +1524,12 @@ pub const Header = union(enum) {
     type_module: struct {
         region: TokenizedRegion,
     },
+    default_app: struct {
+        // Stores reference to the main! function
+        // This will be filled in during canonicalization when main! is found
+        main_fn_idx: u32, // Will store CIR Def.Idx
+        region: TokenizedRegion,
+    },
     malformed: struct {
         reason: Diagnostic.Tag,
         region: TokenizedRegion,
@@ -1716,6 +1722,16 @@ pub const Header = union(enum) {
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
+            .default_app => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("default-app");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const attrs = tree.beginNode();
+                var buf: [32]u8 = undefined;
+                const idx_str = std.fmt.bufPrint(&buf, "{d}", .{a.main_fn_idx}) catch "(error)";
+                try tree.pushStringPair("main-fn-idx", idx_str);
+                try tree.endNode(begin, attrs);
+            },
             .malformed => |a| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("malformed-header");
@@ -1736,6 +1752,7 @@ pub const Header = union(enum) {
             .platform => |p| p.region,
             .hosted => |h| h.region,
             .type_module => |t| t.region,
+            .default_app => |d| d.region,
             .malformed => |m| m.region,
         };
     }
