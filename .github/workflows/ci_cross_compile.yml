@@ -43,7 +43,7 @@ jobs:
       - name: Build roc compiler
         uses: ./.github/actions/flaky-retry
         with:
-          command: 'zig build'
+          command: 'zig build roc'
           error_string_contains: 'EndOfStream'
           retry_count: 3
 

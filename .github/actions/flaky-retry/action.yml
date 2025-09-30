@@ -68,8 +68,8 @@ runs:
 
           # Run command and capture output
           $output = Invoke-Expression "${{ inputs.command }}" 2>&1 | Out-String
-          Write-Host $output
           $exitCode = $LASTEXITCODE
+          Write-Host $output
 
           # Check if command succeeded
           if ($exitCode -eq 0) {
