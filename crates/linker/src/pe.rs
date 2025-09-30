@@ -1875,8 +1875,8 @@ mod test {
                 extern const roc_one: u64;
                 extern const roc_three: u64;
 
-                extern fn roc_magic1() callconv(.C) u64;
-                extern fn roc_magic2() callconv(.C) u8;
+                extern fn roc_magic1() callconv(.c) u64;
+                extern fn roc_magic2() callconv(.c) u8;
 
                 pub export fn roc_alloc() u64 {
                     return 123456;
@@ -1936,7 +1936,7 @@ mod test {
                 r#"
                 const std = @import("std");
 
-                extern fn roc_magic1(usize) callconv(.C) [*]const u8;
+                extern fn roc_magic1(usize) callconv(.c) [*]const u8;
 
                 pub fn main() !void {
                     const stdout = std.io.getStdOut().writer();

@@ -1774,7 +1774,7 @@ mod tests {
             r#"
             const std = @import("std");
 
-            extern fn roc_magic1(usize) callconv(.C) [*]const u8;
+            extern fn roc_magic1(usize) callconv(.c) [*]const u8;
 
             pub fn main() !void {
                 const stdout = std.io.getStdOut().writer();

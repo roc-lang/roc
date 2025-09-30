@@ -20,15 +20,11 @@ const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 const CIR = can.CIR;
 
-<<<<<<< HEAD
-fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
-=======
 const EvalError = Interpreter.Error;
 const CrashContext = eval_mod.CrashContext;
 const CrashState = eval_mod.CrashState;
 
-fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
->>>>>>> 6bec5078f945bb5aad92c06b1699e3c16e4d0f82
+fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const test_env: *TestRunner = @ptrCast(@alignCast(env));
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
     const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));

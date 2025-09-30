@@ -262,7 +262,7 @@ pub const Store = struct {
     /// Insert a tuple layout from concrete element layouts
     pub fn putTuple(self: *Self, element_layouts: []const Layout) std.mem.Allocator.Error!Idx {
         // Collect fields
-        var temp_fields = std.ArrayList(TupleField).init(self.env.gpa);
+        var temp_fields = std.array_list.Managed(TupleField).init(self.env.gpa);
         defer temp_fields.deinit();
 
         for (element_layouts, 0..) |elem_layout, i| {

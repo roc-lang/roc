@@ -429,7 +429,7 @@ fn wasmRocExpectFailed(expect_failed_args: *const builtins.host_abi.RocExpectFai
     _ = expect_failed_args;
 }
 
-fn wasmRocCrashed(crashed_args: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.C) void {
+fn wasmRocCrashed(crashed_args: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.c) void {
     const ctx: *CrashContext = @ptrCast(@alignCast(env));
     ctx.recordCrash(crashed_args.utf8_bytes[0..crashed_args.len]) catch |err| {
         std.debug.panic("failed to record crash in wasm playground: {}", .{err});

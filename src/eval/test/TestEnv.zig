@@ -51,16 +51,12 @@ pub fn get_ops(self: *TestEnv) *RocOps {
     return &(self.roc_ops.?);
 }
 
-<<<<<<< HEAD
-fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
-=======
 /// Expose the current crash state for assertions in tests.
 pub fn crashState(self: *TestEnv) CrashState {
     return self.crash.state;
 }
 
-fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
->>>>>>> 6bec5078f945bb5aad92c06b1699e3c16e4d0f82
+fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const test_env: *TestEnv = @ptrCast(@alignCast(env));
 
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));

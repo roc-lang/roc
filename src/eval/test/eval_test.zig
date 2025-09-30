@@ -420,30 +420,9 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
     var interpreter = try Interpreter.init(testing.allocator, resources.module_env);
     defer interpreter.deinit();
 
-<<<<<<< HEAD
-    var layout_cache = try LayoutStore.init(resources.module_env, &resources.module_env.types);
-    defer layout_cache.deinit();
-
-    var interpreter = try eval.Interpreter.init(
-        std.testing.allocator,
-        resources.module_env,
-        &eval_stack,
-        &layout_cache,
-        &resources.module_env.types,
-    );
-    defer interpreter.deinit(test_env_instance.get_ops());
-
-    var trace_writer_state: ?TraceWriterState = null;
-    if (should_trace == .trace) {
-        trace_writer_state = TraceWriterState.init();
-        if (trace_writer_state) |*trace_state| {
-            interpreter.startTrace(&trace_state.writer.interface);
-        }
-=======
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
->>>>>>> 6bec5078f945bb5aad92c06b1699e3c16e4d0f82
     }
     defer if (enable_trace) interpreter.endTrace();
 
@@ -452,17 +431,8 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
 
-<<<<<<< HEAD
-    if (trace_writer_state != null) {
-        interpreter.endTrace();
-    }
-
-    // Just verify that evaluation succeeded
-    _ = try result;
-=======
     // Minimal smoke check: the helper only succeeds if evaluation produced a value without crashing.
     try std.testing.expect(test_env_instance.crashState() == .did_not_crash);
->>>>>>> 6bec5078f945bb5aad92c06b1699e3c16e4d0f82
 }
 
 test "integer type evaluation" {

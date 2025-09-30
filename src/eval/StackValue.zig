@@ -32,7 +32,7 @@ const Ident = base.Ident;
 // already decref'd the elements ourselves (or they don't need refcounting), we
 // pass this no-op stub so the list header can clean up without touching the
 // payload again.
-fn noopDecref(_: ?[*]u8) callconv(.C) void {}
+fn noopDecref(_: ?[*]u8) callconv(.c) void {}
 
 const StackValue = @This();
 

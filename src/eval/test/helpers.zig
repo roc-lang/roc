@@ -45,18 +45,9 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: e
     var interpreter = try Interpreter.init(test_allocator, resources.module_env);
     defer interpreter.deinit();
 
-<<<<<<< HEAD
-    var trace_writer_state: ?TraceWriter = null;
-    if (should_trace == .trace) {
-        trace_writer_state = TraceWriter.init();
-        if (trace_writer_state) |*trace_state| {
-            interpreter.startTrace(trace_state.interface());
-        }
-=======
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
->>>>>>> 6bec5078f945bb5aad92c06b1699e3c16e4d0f82
     }
     defer if (enable_trace) interpreter.endTrace();
 
@@ -66,16 +57,8 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: e
         return;
     };
 
-<<<<<<< HEAD
-    if (trace_writer_state != null) {
-        interpreter.endTrace();
-    }
-
-    try std.testing.expectError(expected_error, result);
-=======
     // If we reach here, no error was thrown.
     try std.testing.expect(false);
->>>>>>> 6bec5078f945bb5aad92c06b1699e3c16e4d0f82
 }
 
 /// Helpers to setup and run an interpreter expecting an integer result.
@@ -89,33 +72,16 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     var interpreter = try Interpreter.init(test_allocator, resources.module_env);
     defer interpreter.deinit();
 
-<<<<<<< HEAD
-    var trace_writer_state: ?TraceWriter = null;
-    if (should_trace == .trace) {
-        trace_writer_state = TraceWriter.init();
-        if (trace_writer_state) |*trace_state| {
-            interpreter.startTrace(trace_state.interface());
-        }
-=======
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
->>>>>>> 6bec5078f945bb5aad92c06b1699e3c16e4d0f82
     }
     defer if (enable_trace) interpreter.endTrace();
 
-<<<<<<< HEAD
-    const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
-
-    if (trace_writer_state != null) {
-        interpreter.endTrace();
-    }
-=======
     const ops = test_env_instance.get_ops();
     const result = try interpreter.evalMinimal(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
->>>>>>> 6bec5078f945bb5aad92c06b1699e3c16e4d0f82
 
     try std.testing.expectEqual(expected_int, result.asI128());
 }
@@ -131,18 +97,9 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     var interpreter = try Interpreter.init(test_allocator, resources.module_env);
     defer interpreter.deinit();
 
-<<<<<<< HEAD
-    var trace_writer_state: ?TraceWriter = null;
-    if (should_trace == .trace) {
-        trace_writer_state = TraceWriter.init();
-        if (trace_writer_state) |*trace_state| {
-            interpreter.startTrace(trace_state.interface());
-        }
-=======
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
->>>>>>> 6bec5078f945bb5aad92c06b1699e3c16e4d0f82
     }
     defer if (enable_trace) interpreter.endTrace();
 
@@ -160,27 +117,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
         else => return error.TestUnexpectedResult,
     };
 
-<<<<<<< HEAD
-    if (trace_writer_state != null) {
-        interpreter.endTrace();
-    }
-
-    // For boolean results, we can read the underlying byte value
-    if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) {
-        // Boolean represented as integer
-        const int_val = result.asI128();
-        const bool_val = int_val != 0;
-        try std.testing.expectEqual(expected_bool, bool_val);
-    } else {
-        // Try reading as raw byte (for boolean tag values)
-        std.debug.assert(result.ptr != null);
-        const bool_ptr = @as(*const u8, @ptrCast(result.ptr.?));
-        const bool_val = bool_ptr.* != 0;
-        try std.testing.expectEqual(expected_bool, bool_val);
-    }
-=======
     try std.testing.expectEqual(expected_bool, actual);
->>>>>>> 6bec5078f945bb5aad92c06b1699e3c16e4d0f82
 }
 
 /// Helpers to setup and run an interpreter expecting a string result.
@@ -194,18 +131,9 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     var interpreter = try Interpreter.init(test_allocator, resources.module_env);
     defer interpreter.deinit();
 
-<<<<<<< HEAD
-    var trace_writer_state: ?TraceWriter = null;
-    if (should_trace == .trace) {
-        trace_writer_state = TraceWriter.init();
-        if (trace_writer_state) |*trace_state| {
-            interpreter.startTrace(trace_state.interface());
-        }
-=======
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
->>>>>>> 6bec5078f945bb5aad92c06b1699e3c16e4d0f82
     }
     defer if (enable_trace) interpreter.endTrace();
 
@@ -213,14 +141,6 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     const result = try interpreter.evalMinimal(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
 
-<<<<<<< HEAD
-    if (trace_writer_state != null) {
-        interpreter.endTrace();
-    }
-
-    // Verify we got a scalar string layout
-=======
->>>>>>> 6bec5078f945bb5aad92c06b1699e3c16e4d0f82
     try std.testing.expect(result.layout.tag == .scalar);
     try std.testing.expect(result.layout.data.scalar.tag == .str);
 
@@ -259,33 +179,16 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     var interpreter = try Interpreter.init(test_allocator, resources.module_env);
     defer interpreter.deinit();
 
-<<<<<<< HEAD
-    var trace_writer_state: ?TraceWriter = null;
-    if (should_trace == .trace) {
-        trace_writer_state = TraceWriter.init();
-        if (trace_writer_state) |*trace_state| {
-            interpreter.startTrace(trace_state.interface());
-        }
-=======
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
->>>>>>> 6bec5078f945bb5aad92c06b1699e3c16e4d0f82
     }
     defer if (enable_trace) interpreter.endTrace();
 
-<<<<<<< HEAD
-    const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
-
-    if (trace_writer_state != null) {
-        interpreter.endTrace();
-    }
-=======
     const ops = test_env_instance.get_ops();
     const result = try interpreter.evalMinimal(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
->>>>>>> 6bec5078f945bb5aad92c06b1699e3c16e4d0f82
 
     // Verify we got a tuple layout
     try std.testing.expect(result.layout.tag == .tuple);
@@ -319,33 +222,16 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     var interpreter = try Interpreter.init(test_allocator, resources.module_env);
     defer interpreter.deinit();
 
-<<<<<<< HEAD
-    var trace_writer_state: ?TraceWriter = null;
-    if (should_trace == .trace) {
-        trace_writer_state = TraceWriter.init();
-        if (trace_writer_state) |*trace_state| {
-            interpreter.startTrace(trace_state.interface());
-        }
-=======
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
         interpreter.startTrace(std.io.getStdErr().writer().any());
->>>>>>> 6bec5078f945bb5aad92c06b1699e3c16e4d0f82
     }
     defer if (enable_trace) interpreter.endTrace();
 
-<<<<<<< HEAD
-    const result = try interpreter.eval(resources.expr_idx, test_env_instance.get_ops());
-
-    if (trace_writer_state != null) {
-        interpreter.endTrace();
-    }
-=======
     const ops = test_env_instance.get_ops();
     const result = try interpreter.evalMinimal(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
->>>>>>> 6bec5078f945bb5aad92c06b1699e3c16e4d0f82
 
     // Verify we got a record layout
     try std.testing.expect(result.layout.tag == .record);

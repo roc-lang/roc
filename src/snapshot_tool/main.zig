@@ -2840,7 +2840,7 @@ fn snapshotRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque)
     @panic("snapshotRocExpectFailed not implemented yet");
 }
 
-fn snapshotRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {
+fn snapshotRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c) void {
     const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
     snapshot_env.crash.recordCrash(crashed_args.utf8_bytes[0..crashed_args.len]) catch |err| {
         std.debug.panic("failed to store snapshot crash message: {}", .{err});

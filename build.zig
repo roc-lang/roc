@@ -173,8 +173,8 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .link_libc = true,
-            .filters = test_filters,
         }),
+        .filters = test_filters,
     });
     roc_modules.addAll(snapshot_test);
     add_tracy(b, roc_modules.build_options, snapshot_test, target, false, flag_enable_tracy);
@@ -193,8 +193,8 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .link_libc = true,
-            .filters = test_filters,
         }),
+        .filters = test_filters,
     });
     roc_modules.addAll(cli_test);
     cli_test.linkLibrary(zstd.artifact("zstd"));
@@ -214,8 +214,8 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .link_libc = true,
-            .filters = test_filters,
         }),
+        .filters = test_filters,
     });
     roc_modules.addAll(watch_test);
     add_tracy(b, roc_modules.build_options, watch_test, target, false, flag_enable_tracy);
@@ -557,7 +557,7 @@ const ParsedBuildArgs = struct {
 };
 
 fn appendFilter(
-    list: *std.ArrayList([]const u8),
+    list: *std.array_list.Managed([]const u8),
     b: *std.Build,
     value: []const u8,
 ) void {
@@ -572,8 +572,8 @@ fn parseBuildArgs(b: *std.Build) ParsedBuildArgs {
         .test_filters = &.{},
     };
 
-    var run_args_list = std.ArrayList([]const u8).init(b.allocator);
-    var filter_list = std.ArrayList([]const u8).init(b.allocator);
+    var run_args_list = std.array_list.Managed([]const u8).init(b.allocator);
+    var filter_list = std.array_list.Managed([]const u8).init(b.allocator);
 
     var i: usize = 0;
     while (i < raw_args.len) {
