@@ -1071,12 +1071,12 @@ fn processSnapshotContent(
 
     parse_ast.store.emptyScratch();
 
-    // Extract module name from output path
-    const basename = std.fs.path.basename(output_path);
-    const module_name = if (std.mem.lastIndexOfScalar(u8, basename, '.')) |dot_idx|
-        basename[0..dot_idx]
+    // Extract module name from filename in meta, or fall back to output path
+    const filename_to_use = content.meta.filename orelse std.fs.path.basename(output_path);
+    const module_name = if (std.mem.lastIndexOfScalar(u8, filename_to_use, '.')) |dot_idx|
+        filename_to_use[0..dot_idx]
     else
-        basename;
+        filename_to_use;
     var can_ir = &module_env; // ModuleEnv contains the canonical IR
     try can_ir.initCIRFields(allocator, module_name);
 
@@ -1531,6 +1531,7 @@ pub const NodeType = enum {
 const Meta = struct {
     description: []const u8,
     node_type: NodeType,
+    filename: ?[]const u8 = null,
 
     const DESC_START: []const u8 = "description=";
     const TYPE_START: []const u8 = "type=";
@@ -1539,19 +1540,28 @@ const Meta = struct {
         var lines = std.mem.splitScalar(u8, text, '\n');
         var desc: []const u8 = "";
         var node_type: NodeType = .file;
+        var filename: ?[]const u8 = null;
         while (true) {
             var line = lines.next() orelse break;
             if (std.mem.startsWith(u8, line, DESC_START)) {
                 desc = line[(DESC_START.len)..];
             } else if (std.mem.startsWith(u8, line, TYPE_START)) {
                 const ty = line[(TYPE_START.len)..];
-                node_type = try NodeType.fromString(ty);
+                // Check if it's in format "file:Foo.roc"
+                if (std.mem.indexOf(u8, ty, ":")) |colon_idx| {
+                    const type_part = ty[0..colon_idx];
+                    node_type = try NodeType.fromString(type_part);
+                    filename = ty[colon_idx + 1 ..];
+                } else {
+                    node_type = try NodeType.fromString(ty);
+                }
             }
         }
 
         return .{
             .description = desc,
             .node_type = node_type,
+            .filename = filename,
         };
     }
 
@@ -1561,6 +1571,10 @@ const Meta = struct {
         try writer.writeAll("\n");
         try writer.writeAll(TYPE_START);
         try writer.writeAll(self.node_type.toString());
+        if (self.filename) |fname| {
+            try writer.writeAll(":");
+            try writer.writeAll(fname);
+        }
     }
 
     test "Meta.fromString - only description" {
@@ -1759,8 +1773,10 @@ fn generateMetaSection(output: *DualOutput, content: *const Content) !void {
 fn generateSourceSection(output: *DualOutput, content: *const Content) !void {
     try output.begin_section("SOURCE");
     try output.begin_code_block("roc");
-    try output.md_writer.writeAll(content.source);
-    if (content.source.len == 0 or content.source[content.source.len - 1] != '\n') {
+    // Trim leading whitespace from source
+    const trimmed_source = std.mem.trimLeft(u8, content.source, " \t\n\r");
+    try output.md_writer.writeAll(trimmed_source);
+    if (trimmed_source.len == 0 or trimmed_source[trimmed_source.len - 1] != '\n') {
         try output.md_writer.writeAll("\n");
     }
 
@@ -1775,7 +1791,7 @@ fn generateSourceSection(output: *DualOutput, content: *const Content) !void {
 
         // Escape the source code for JavaScript string literal
         try writer.writeAll("`");
-        for (content.source) |char| {
+        for (trimmed_source) |char| {
             switch (char) {
                 '`' => try writer.writeAll("\\`"),
                 '\\' => try writer.writeAll("\\\\"),
@@ -2077,7 +2093,9 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
     }
 
     const is_changed = !std.mem.eql(u8, formatted.items, content.source);
-    const display_content = if (is_changed) formatted.items else "NO CHANGE\n";
+    // Trim leading whitespace from formatted output
+    const trimmed_formatted = std.mem.trimLeft(u8, formatted.items, " \t\n\r");
+    const display_content = if (is_changed) trimmed_formatted else "NO CHANGE\n";
 
     try output.begin_section("FORMATTED");
     try output.begin_code_block("roc");

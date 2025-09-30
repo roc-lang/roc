@@ -5,8 +5,6 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-module []
-
 a : F32
 a = 3.14
 
@@ -17,41 +15,58 @@ c : Dec
 c = 123.456
 ~~~
 # EXPECTED
-NIL
+MISSING MAIN! FUNCTION - all_frac_types.md:1:1:8:12
 # PROBLEMS
-NIL
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
+
+No `main!` function was found.
+
+Add a main! function like:
+`main! = |arg| { ... }`
+**all_frac_types.md:1:1:8:12:**
+```roc
+a : F32
+a = 3.14
+
+b : F64
+b = 2.71828
+
+c : Dec
+c = 123.456
+```
+
+
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
-LowerIdent(3:1-3:2),OpColon(3:3-3:4),UpperIdent(3:5-3:8),
-LowerIdent(4:1-4:2),OpAssign(4:3-4:4),Float(4:5-4:9),
-LowerIdent(6:1-6:2),OpColon(6:3-6:4),UpperIdent(6:5-6:8),
-LowerIdent(7:1-7:2),OpAssign(7:3-7:4),Float(7:5-7:12),
-LowerIdent(9:1-9:2),OpColon(9:3-9:4),UpperIdent(9:5-9:8),
-LowerIdent(10:1-10:2),OpAssign(10:3-10:4),Float(10:5-10:12),
-EndOfFile(11:1-11:1),
+LowerIdent(1:1-1:2),OpColon(1:3-1:4),UpperIdent(1:5-1:8),
+LowerIdent(2:1-2:2),OpAssign(2:3-2:4),Float(2:5-2:9),
+LowerIdent(4:1-4:2),OpColon(4:3-4:4),UpperIdent(4:5-4:8),
+LowerIdent(5:1-5:2),OpAssign(5:3-5:4),Float(5:5-5:12),
+LowerIdent(7:1-7:2),OpColon(7:3-7:4),UpperIdent(7:5-7:8),
+LowerIdent(8:1-8:2),OpAssign(8:3-8:4),Float(8:5-8:12),
+EndOfFile(9:1-9:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-10.12
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+(file @1.1-8.12
+	(type-module @1.1-1.2)
 	(statements
-		(s-type-anno @3.1-3.8 (name "a")
-			(ty @3.5-3.8 (name "F32")))
-		(s-decl @4.1-4.9
-			(p-ident @4.1-4.2 (raw "a"))
-			(e-frac @4.5-4.9 (raw "3.14")))
-		(s-type-anno @6.1-6.8 (name "b")
-			(ty @6.5-6.8 (name "F64")))
-		(s-decl @7.1-7.12
-			(p-ident @7.1-7.2 (raw "b"))
-			(e-frac @7.5-7.12 (raw "2.71828")))
-		(s-type-anno @9.1-9.8 (name "c")
-			(ty @9.5-9.8 (name "Dec")))
-		(s-decl @10.1-10.12
-			(p-ident @10.1-10.2 (raw "c"))
-			(e-frac @10.5-10.12 (raw "123.456")))))
+		(s-type-anno @1.1-1.8 (name "a")
+			(ty @1.5-1.8 (name "F32")))
+		(s-decl @2.1-2.9
+			(p-ident @2.1-2.2 (raw "a"))
+			(e-frac @2.5-2.9 (raw "3.14")))
+		(s-type-anno @4.1-4.8 (name "b")
+			(ty @4.5-4.8 (name "F64")))
+		(s-decl @5.1-5.12
+			(p-ident @5.1-5.2 (raw "b"))
+			(e-frac @5.5-5.12 (raw "2.71828")))
+		(s-type-anno @7.1-7.8 (name "c")
+			(ty @7.5-7.8 (name "Dec")))
+		(s-decl @8.1-8.12
+			(p-ident @8.1-8.2 (raw "c"))
+			(e-frac @8.5-8.12 (raw "123.456")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -61,33 +76,33 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @4.1-4.2 (ident "a"))
-		(e-dec-small @4.5-4.9 (numerator "314") (denominator-power-of-ten "2") (value "3.14"))
-		(annotation @4.1-4.2
+		(p-assign @2.1-2.2 (ident "a"))
+		(e-dec-small @2.5-2.9 (numerator "314") (denominator-power-of-ten "2") (value "3.14"))
+		(annotation @2.1-2.2
 			(declared-type
-				(ty @3.5-3.8 (name "F32")))))
+				(ty @1.5-1.8 (name "F32")))))
 	(d-let
-		(p-assign @7.1-7.2 (ident "b"))
-		(e-frac-dec @7.5-7.12 (value "2.71828"))
-		(annotation @7.1-7.2
+		(p-assign @5.1-5.2 (ident "b"))
+		(e-frac-dec @5.5-5.12 (value "2.71828"))
+		(annotation @5.1-5.2
 			(declared-type
-				(ty @6.5-6.8 (name "F64")))))
+				(ty @4.5-4.8 (name "F64")))))
 	(d-let
-		(p-assign @10.1-10.2 (ident "c"))
-		(e-frac-dec @10.5-10.12 (value "123.456"))
-		(annotation @10.1-10.2
+		(p-assign @8.1-8.2 (ident "c"))
+		(e-frac-dec @8.5-8.12 (value "123.456"))
+		(annotation @8.1-8.2
 			(declared-type
-				(ty @9.5-9.8 (name "Dec"))))))
+				(ty @7.5-7.8 (name "Dec"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.2 (type "F32"))
-		(patt @7.1-7.2 (type "F64"))
-		(patt @10.1-10.2 (type "Dec")))
+		(patt @2.1-2.2 (type "F32"))
+		(patt @5.1-5.2 (type "F64"))
+		(patt @8.1-8.2 (type "Dec")))
 	(expressions
-		(expr @4.5-4.9 (type "F32"))
-		(expr @7.5-7.12 (type "F64"))
-		(expr @10.5-10.12 (type "Dec"))))
+		(expr @2.5-2.9 (type "F32"))
+		(expr @5.5-5.12 (type "F64"))
+		(expr @8.5-8.12 (type "Dec"))))
 ~~~

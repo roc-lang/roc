@@ -5,53 +5,63 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-module [ConsList, empty]
-
 ConsList(a) := [Nil, Node(ConsList(a))]
 
 empty : ConsList(_a)
 empty = ConsList.Nil
 ~~~
 # EXPECTED
-NIL
+TYPE MODULE MISSING MATCHING TYPE - nominal_tag_recursive_payload.md:1:1:4:21
 # PROBLEMS
-NIL
+**TYPE MODULE MISSING MATCHING TYPE**
+Type modules must have a type declaration matching the module name.
+
+This file is named `nominal_tag_recursive_payload.roc`, but no top-level type declaration named `nominal_tag_recursive_payload` was found.
+
+Add either:
+`nominal_tag_recursive_payload := ...` (nominal type)
+or:
+`nominal_tag_recursive_payload : ...` (type alias)
+**nominal_tag_recursive_payload.md:1:1:4:21:**
+```roc
+ConsList(a) := [Nil, Node(ConsList(a))]
+
+empty : ConsList(_a)
+empty = ConsList.Nil
+```
+
+
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),Comma(1:17-1:18),LowerIdent(1:19-1:24),CloseSquare(1:24-1:25),
-UpperIdent(3:1-3:9),NoSpaceOpenRound(3:9-3:10),LowerIdent(3:10-3:11),CloseRound(3:11-3:12),OpColonEqual(3:13-3:15),OpenSquare(3:16-3:17),UpperIdent(3:17-3:20),Comma(3:20-3:21),UpperIdent(3:22-3:26),NoSpaceOpenRound(3:26-3:27),UpperIdent(3:27-3:35),NoSpaceOpenRound(3:35-3:36),LowerIdent(3:36-3:37),CloseRound(3:37-3:38),CloseRound(3:38-3:39),CloseSquare(3:39-3:40),
-LowerIdent(5:1-5:6),OpColon(5:7-5:8),UpperIdent(5:9-5:17),NoSpaceOpenRound(5:17-5:18),NamedUnderscore(5:18-5:20),CloseRound(5:20-5:21),
-LowerIdent(6:1-6:6),OpAssign(6:7-6:8),UpperIdent(6:9-6:17),NoSpaceDotUpperIdent(6:17-6:21),
-EndOfFile(7:1-7:1),
+UpperIdent(1:1-1:9),NoSpaceOpenRound(1:9-1:10),LowerIdent(1:10-1:11),CloseRound(1:11-1:12),OpColonEqual(1:13-1:15),OpenSquare(1:16-1:17),UpperIdent(1:17-1:20),Comma(1:20-1:21),UpperIdent(1:22-1:26),NoSpaceOpenRound(1:26-1:27),UpperIdent(1:27-1:35),NoSpaceOpenRound(1:35-1:36),LowerIdent(1:36-1:37),CloseRound(1:37-1:38),CloseRound(1:38-1:39),CloseSquare(1:39-1:40),
+LowerIdent(3:1-3:6),OpColon(3:7-3:8),UpperIdent(3:9-3:17),NoSpaceOpenRound(3:17-3:18),NamedUnderscore(3:18-3:20),CloseRound(3:20-3:21),
+LowerIdent(4:1-4:6),OpAssign(4:7-4:8),UpperIdent(4:9-4:17),NoSpaceDotUpperIdent(4:17-4:21),
+EndOfFile(5:1-5:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-6.21
-	(module @1.1-1.25
-		(exposes @1.8-1.25
-			(exposed-upper-ident @1.9-1.17 (text "ConsList"))
-			(exposed-lower-ident @1.19-1.24
-				(text "empty"))))
+(file @1.1-4.21
+	(type-module @1.1-1.9)
 	(statements
-		(s-type-decl @3.1-3.40
-			(header @3.1-3.12 (name "ConsList")
+		(s-type-decl @1.1-1.40
+			(header @1.1-1.12 (name "ConsList")
 				(args
-					(ty-var @3.10-3.11 (raw "a"))))
-			(ty-tag-union @3.16-3.40
+					(ty-var @1.10-1.11 (raw "a"))))
+			(ty-tag-union @1.16-1.40
 				(tags
-					(ty @3.17-3.20 (name "Nil"))
-					(ty-apply @3.22-3.39
-						(ty @3.22-3.26 (name "Node"))
-						(ty-apply @3.27-3.38
-							(ty @3.27-3.35 (name "ConsList"))
-							(ty-var @3.36-3.37 (raw "a")))))))
-		(s-type-anno @5.1-5.21 (name "empty")
-			(ty-apply @5.9-5.21
-				(ty @5.9-5.17 (name "ConsList"))
-				(underscore-ty-var @5.18-5.20 (raw "_a"))))
-		(s-decl @6.1-6.21
-			(p-ident @6.1-6.6 (raw "empty"))
-			(e-tag @6.9-6.21 (raw "ConsList.Nil")))))
+					(ty @1.17-1.20 (name "Nil"))
+					(ty-apply @1.22-1.39
+						(ty @1.22-1.26 (name "Node"))
+						(ty-apply @1.27-1.38
+							(ty @1.27-1.35 (name "ConsList"))
+							(ty-var @1.36-1.37 (raw "a")))))))
+		(s-type-anno @3.1-3.21 (name "empty")
+			(ty-apply @3.9-3.21
+				(ty @3.9-3.17 (name "ConsList"))
+				(underscore-ty-var @3.18-3.20 (raw "_a"))))
+		(s-decl @4.1-4.21
+			(p-ident @4.1-4.6 (raw "empty"))
+			(e-tag @4.9-4.21 (raw "ConsList.Nil")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -61,33 +71,33 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @6.1-6.6 (ident "empty"))
-		(e-nominal @6.9-6.21 (nominal "ConsList")
-			(e-tag @6.9-6.21 (name "Nil")))
-		(annotation @6.1-6.6
+		(p-assign @4.1-4.6 (ident "empty"))
+		(e-nominal @4.9-4.21 (nominal "ConsList")
+			(e-tag @4.9-4.21 (name "Nil")))
+		(annotation @4.1-4.6
 			(declared-type
-				(ty-apply @5.9-5.21 (symbol "ConsList")
-					(ty-var @5.18-5.20 (name "_a"))))))
-	(s-nominal-decl @3.1-3.40
-		(ty-header @3.1-3.12 (name "ConsList")
+				(ty-apply @3.9-3.21 (symbol "ConsList")
+					(ty-var @3.18-3.20 (name "_a"))))))
+	(s-nominal-decl @1.1-1.40
+		(ty-header @1.1-1.12 (name "ConsList")
 			(ty-args
-				(ty-var @3.10-3.11 (name "a"))))
-		(ty-tag-union @3.16-3.40
-			(ty @3.17-3.20 (name "Nil"))
-			(ty-apply @3.22-3.39 (symbol "Node")
-				(ty-apply @3.27-3.38 (symbol "ConsList")
-					(ty-var @3.36-3.37 (name "a")))))))
+				(ty-var @1.10-1.11 (name "a"))))
+		(ty-tag-union @1.16-1.40
+			(ty @1.17-1.20 (name "Nil"))
+			(ty-apply @1.22-1.39 (symbol "Node")
+				(ty-apply @1.27-1.38 (symbol "ConsList")
+					(ty-var @1.36-1.37 (name "a")))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.6 (type "ConsList(a)")))
+		(patt @4.1-4.6 (type "ConsList(a)")))
 	(type_decls
-		(nominal @3.1-3.40 (type "ConsList(a)")
-			(ty-header @3.1-3.12 (name "ConsList")
+		(nominal @1.1-1.40 (type "ConsList(a)")
+			(ty-header @1.1-1.12 (name "ConsList")
 				(ty-args
-					(ty-var @3.10-3.11 (name "a"))))))
+					(ty-var @1.10-1.11 (name "a"))))))
 	(expressions
-		(expr @6.9-6.21 (type "ConsList(a)"))))
+		(expr @4.9-4.21 (type "ConsList(a)"))))
 ~~~

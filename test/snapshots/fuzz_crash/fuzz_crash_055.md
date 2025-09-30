@@ -9,9 +9,21 @@ module[]r:a	where
 module(a).h:s
 ~~~
 # EXPECTED
-NIL
+MODULE HEADER DEPRECATED - fuzz_crash_055.md:1:1:1:9
 # PROBLEMS
-NIL
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**fuzz_crash_055.md:1:1:1:9:**
+```roc
+module[]r:a	where
+```
+^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),LowerIdent(1:9-1:10),OpColon(1:10-1:11),LowerIdent(1:11-1:12),KwWhere(1:13-1:18),

@@ -7,11 +7,11 @@ type=file
 ~~~roc
 module[]_0={
 )
- 
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_050.md:2:1:2:2
-PARSE ERROR - fuzz_crash_050.md:4:1:4:1
+PARSE ERROR - fuzz_crash_050.md:3:1:3:1
+MODULE HEADER DEPRECATED - fuzz_crash_050.md:1:1:1:9
 UNRECOGNIZED SYNTAX - fuzz_crash_050.md:2:1:2:2
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -29,11 +29,24 @@ Expressions can be identifiers, literals, function calls, or operators.
 A parsing error occurred: `expected_expr_close_curly`
 This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_050.md:4:1:4:1:**
+**fuzz_crash_050.md:3:1:3:1:**
 ```roc
 
 ```
 ^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**fuzz_crash_050.md:1:1:1:9:**
+```roc
+module[]_0={
+```
+^^^^^^^^
 
 
 **UNRECOGNIZED SYNTAX**
@@ -51,7 +64,7 @@ This might be a syntax error, an unsupported language feature, or a typo.
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),NamedUnderscore(1:9-1:11),OpAssign(1:11-1:12),OpenCurly(1:12-1:13),
 CloseRound(2:1-2:2),
-EndOfFile(4:1-4:1),
+EndOfFile(3:1-3:1),
 ~~~
 # PARSE
 ~~~clojure
@@ -70,7 +83,6 @@ EndOfFile(4:1-4:1),
 module []
 _0 = {
 	
-
 }
 ~~~
 # CANONICALIZE

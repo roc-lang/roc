@@ -12,9 +12,26 @@ module # Comment after module keyword
 	]
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - module_multiline_with_comments.md:1:1:5:3
 EXPOSED BUT NOT DEFINED - module_multiline_with_comments.md:3:3:3:12
 EXPOSED BUT NOT DEFINED - module_multiline_with_comments.md:4:3:4:11
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**module_multiline_with_comments.md:1:1:5:3:**
+```roc
+module # Comment after module keyword
+	[ # Comment After exposes open
+		something, # Comment after exposed item
+		SomeType, # Comment after final exposed item
+	]
+```
+
+
 **EXPOSED BUT NOT DEFINED**
 The module header says that `something` is exposed, but it is not defined anywhere in this module.
 

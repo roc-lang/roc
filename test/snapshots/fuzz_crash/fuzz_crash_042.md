@@ -9,6 +9,7 @@ module[]import u.R}g:r->R.a.E
 ~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_042.md:1:19:1:20
+MODULE HEADER DEPRECATED - fuzz_crash_042.md:1:1:1:9
 MODULE NOT FOUND - fuzz_crash_042.md:1:9:1:19
 MODULE NOT IMPORTED - fuzz_crash_042.md:1:25:1:30
 # PROBLEMS
@@ -21,6 +22,19 @@ This is an unexpected parsing error. Please check your syntax.
 module[]import u.R}g:r->R.a.E
 ```
                   ^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**fuzz_crash_042.md:1:1:1:9:**
+```roc
+module[]import u.R}g:r->R.a.E
+```
+^^^^^^^^
 
 
 **MODULE NOT FOUND**

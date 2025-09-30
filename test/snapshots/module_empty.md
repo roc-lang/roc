@@ -5,22 +5,33 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-module []
+
 ~~~
 # EXPECTED
-NIL
+MISSING MAIN! FUNCTION - module_empty.md:2:1:2:1
 # PROBLEMS
-NIL
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
+
+No `main!` function was found.
+
+Add a main! function like:
+`main! = |arg| { ... }`
+**module_empty.md:2:1:2:1:**
+```roc
+
+```
+^
+
+
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
 EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.10
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+(file @2.1-2.1
+	(type-module @2.1-2.1)
 	(statements))
 ~~~
 # FORMATTED

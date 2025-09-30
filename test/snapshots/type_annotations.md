@@ -5,8 +5,6 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-module []
-
 foo : U64
 bar : Thing(_a, _b, _)
 baz : (_a, _b, _c)
@@ -15,15 +13,34 @@ main! : List(String) -> Result({}, _)
 tag_tuple : Value((_a, _b, _c))
 ~~~
 # EXPECTED
-UNDECLARED TYPE - type_annotations.md:4:7:4:12
-UNDECLARED TYPE - type_annotations.md:7:14:7:20
-UNDECLARED TYPE - type_annotations.md:8:13:8:18
+MISSING MAIN! FUNCTION - type_annotations.md:1:1:6:32
+UNDECLARED TYPE - type_annotations.md:2:7:2:12
+UNDECLARED TYPE - type_annotations.md:5:14:5:20
+UNDECLARED TYPE - type_annotations.md:6:13:6:18
 # PROBLEMS
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
+
+No `main!` function was found.
+
+Add a main! function like:
+`main! = |arg| { ... }`
+**type_annotations.md:1:1:6:32:**
+```roc
+foo : U64
+bar : Thing(_a, _b, _)
+baz : (_a, _b, _c)
+add_one : (U8, U16 -> U32)
+main! : List(String) -> Result({}, _)
+tag_tuple : Value((_a, _b, _c))
+```
+
+
 **UNDECLARED TYPE**
 The type _Thing_ is not declared in this scope.
 
 This type is referenced here:
-**type_annotations.md:4:7:4:12:**
+**type_annotations.md:2:7:2:12:**
 ```roc
 bar : Thing(_a, _b, _)
 ```
@@ -34,7 +51,7 @@ bar : Thing(_a, _b, _)
 The type _String_ is not declared in this scope.
 
 This type is referenced here:
-**type_annotations.md:7:14:7:20:**
+**type_annotations.md:5:14:5:20:**
 ```roc
 main! : List(String) -> Result({}, _)
 ```
@@ -45,7 +62,7 @@ main! : List(String) -> Result({}, _)
 The type _Value_ is not declared in this scope.
 
 This type is referenced here:
-**type_annotations.md:8:13:8:18:**
+**type_annotations.md:6:13:6:18:**
 ```roc
 tag_tuple : Value((_a, _b, _c))
 ```
@@ -54,55 +71,53 @@ tag_tuple : Value((_a, _b, _c))
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
-LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:10),
-LowerIdent(4:1-4:4),OpColon(4:5-4:6),UpperIdent(4:7-4:12),NoSpaceOpenRound(4:12-4:13),NamedUnderscore(4:13-4:15),Comma(4:15-4:16),NamedUnderscore(4:17-4:19),Comma(4:19-4:20),Underscore(4:21-4:22),CloseRound(4:22-4:23),
-LowerIdent(5:1-5:4),OpColon(5:5-5:6),OpenRound(5:7-5:8),NamedUnderscore(5:8-5:10),Comma(5:10-5:11),NamedUnderscore(5:12-5:14),Comma(5:14-5:15),NamedUnderscore(5:16-5:18),CloseRound(5:18-5:19),
-LowerIdent(6:1-6:8),OpColon(6:9-6:10),OpenRound(6:11-6:12),UpperIdent(6:12-6:14),Comma(6:14-6:15),UpperIdent(6:16-6:19),OpArrow(6:20-6:22),UpperIdent(6:23-6:26),CloseRound(6:26-6:27),
-LowerIdent(7:1-7:6),OpColon(7:7-7:8),UpperIdent(7:9-7:13),NoSpaceOpenRound(7:13-7:14),UpperIdent(7:14-7:20),CloseRound(7:20-7:21),OpArrow(7:22-7:24),UpperIdent(7:25-7:31),NoSpaceOpenRound(7:31-7:32),OpenCurly(7:32-7:33),CloseCurly(7:33-7:34),Comma(7:34-7:35),Underscore(7:36-7:37),CloseRound(7:37-7:38),
-LowerIdent(8:1-8:10),OpColon(8:11-8:12),UpperIdent(8:13-8:18),NoSpaceOpenRound(8:18-8:19),NoSpaceOpenRound(8:19-8:20),NamedUnderscore(8:20-8:22),Comma(8:22-8:23),NamedUnderscore(8:24-8:26),Comma(8:26-8:27),NamedUnderscore(8:28-8:30),CloseRound(8:30-8:31),CloseRound(8:31-8:32),
-EndOfFile(9:1-9:1),
+LowerIdent(1:1-1:4),OpColon(1:5-1:6),UpperIdent(1:7-1:10),
+LowerIdent(2:1-2:4),OpColon(2:5-2:6),UpperIdent(2:7-2:12),NoSpaceOpenRound(2:12-2:13),NamedUnderscore(2:13-2:15),Comma(2:15-2:16),NamedUnderscore(2:17-2:19),Comma(2:19-2:20),Underscore(2:21-2:22),CloseRound(2:22-2:23),
+LowerIdent(3:1-3:4),OpColon(3:5-3:6),OpenRound(3:7-3:8),NamedUnderscore(3:8-3:10),Comma(3:10-3:11),NamedUnderscore(3:12-3:14),Comma(3:14-3:15),NamedUnderscore(3:16-3:18),CloseRound(3:18-3:19),
+LowerIdent(4:1-4:8),OpColon(4:9-4:10),OpenRound(4:11-4:12),UpperIdent(4:12-4:14),Comma(4:14-4:15),UpperIdent(4:16-4:19),OpArrow(4:20-4:22),UpperIdent(4:23-4:26),CloseRound(4:26-4:27),
+LowerIdent(5:1-5:6),OpColon(5:7-5:8),UpperIdent(5:9-5:13),NoSpaceOpenRound(5:13-5:14),UpperIdent(5:14-5:20),CloseRound(5:20-5:21),OpArrow(5:22-5:24),UpperIdent(5:25-5:31),NoSpaceOpenRound(5:31-5:32),OpenCurly(5:32-5:33),CloseCurly(5:33-5:34),Comma(5:34-5:35),Underscore(5:36-5:37),CloseRound(5:37-5:38),
+LowerIdent(6:1-6:10),OpColon(6:11-6:12),UpperIdent(6:13-6:18),NoSpaceOpenRound(6:18-6:19),NoSpaceOpenRound(6:19-6:20),NamedUnderscore(6:20-6:22),Comma(6:22-6:23),NamedUnderscore(6:24-6:26),Comma(6:26-6:27),NamedUnderscore(6:28-6:30),CloseRound(6:30-6:31),CloseRound(6:31-6:32),
+EndOfFile(7:1-7:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-8.32
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+(file @1.1-6.32
+	(type-module @1.1-1.4)
 	(statements
-		(s-type-anno @3.1-3.10 (name "foo")
-			(ty @3.7-3.10 (name "U64")))
-		(s-type-anno @4.1-4.23 (name "bar")
-			(ty-apply @4.7-4.23
-				(ty @4.7-4.12 (name "Thing"))
-				(underscore-ty-var @4.13-4.15 (raw "_a"))
-				(underscore-ty-var @4.17-4.19 (raw "_b"))
+		(s-type-anno @1.1-1.10 (name "foo")
+			(ty @1.7-1.10 (name "U64")))
+		(s-type-anno @2.1-2.23 (name "bar")
+			(ty-apply @2.7-2.23
+				(ty @2.7-2.12 (name "Thing"))
+				(underscore-ty-var @2.13-2.15 (raw "_a"))
+				(underscore-ty-var @2.17-2.19 (raw "_b"))
 				(_)))
-		(s-type-anno @5.1-5.19 (name "baz")
-			(ty-tuple @5.7-5.19
-				(underscore-ty-var @5.8-5.10 (raw "_a"))
-				(underscore-ty-var @5.12-5.14 (raw "_b"))
-				(underscore-ty-var @5.16-5.18 (raw "_c"))))
-		(s-type-anno @6.1-6.27 (name "add_one")
-			(ty-fn @6.12-6.26
-				(ty @6.12-6.14 (name "U8"))
-				(ty @6.16-6.19 (name "U16"))
-				(ty @6.23-6.26 (name "U32"))))
-		(s-type-anno @7.1-7.38 (name "main!")
-			(ty-fn @7.9-7.38
-				(ty-apply @7.9-7.21
-					(ty @7.9-7.13 (name "List"))
-					(ty @7.14-7.20 (name "String")))
-				(ty-apply @7.25-7.38
-					(ty @7.25-7.31 (name "Result"))
-					(ty-record @7.32-7.34)
+		(s-type-anno @3.1-3.19 (name "baz")
+			(ty-tuple @3.7-3.19
+				(underscore-ty-var @3.8-3.10 (raw "_a"))
+				(underscore-ty-var @3.12-3.14 (raw "_b"))
+				(underscore-ty-var @3.16-3.18 (raw "_c"))))
+		(s-type-anno @4.1-4.27 (name "add_one")
+			(ty-fn @4.12-4.26
+				(ty @4.12-4.14 (name "U8"))
+				(ty @4.16-4.19 (name "U16"))
+				(ty @4.23-4.26 (name "U32"))))
+		(s-type-anno @5.1-5.38 (name "main!")
+			(ty-fn @5.9-5.38
+				(ty-apply @5.9-5.21
+					(ty @5.9-5.13 (name "List"))
+					(ty @5.14-5.20 (name "String")))
+				(ty-apply @5.25-5.38
+					(ty @5.25-5.31 (name "Result"))
+					(ty-record @5.32-5.34)
 					(_))))
-		(s-type-anno @8.1-8.32 (name "tag_tuple")
-			(ty-apply @8.13-8.32
-				(ty @8.13-8.18 (name "Value"))
-				(ty-tuple @8.19-8.31
-					(underscore-ty-var @8.20-8.22 (raw "_a"))
-					(underscore-ty-var @8.24-8.26 (raw "_b"))
-					(underscore-ty-var @8.28-8.30 (raw "_c")))))))
+		(s-type-anno @6.1-6.32 (name "tag_tuple")
+			(ty-apply @6.13-6.32
+				(ty @6.13-6.18 (name "Value"))
+				(ty-tuple @6.19-6.31
+					(underscore-ty-var @6.20-6.22 (raw "_a"))
+					(underscore-ty-var @6.24-6.26 (raw "_b"))
+					(underscore-ty-var @6.28-6.30 (raw "_c")))))))
 ~~~
 # FORMATTED
 ~~~roc

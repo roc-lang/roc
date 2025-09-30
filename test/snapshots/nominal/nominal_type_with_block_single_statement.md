@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Nominal type with single statement block
-type=file
+type=file:Foo.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
-
 Foo := [A, B, C].{ x = 5 }
 ~~~
 # EXPECTED
@@ -15,24 +13,22 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
-UpperIdent(3:1-3:4),OpColonEqual(3:5-3:7),OpenSquare(3:8-3:9),UpperIdent(3:9-3:10),Comma(3:10-3:11),UpperIdent(3:12-3:13),Comma(3:13-3:14),UpperIdent(3:15-3:16),CloseSquare(3:16-3:17),Dot(3:17-3:18),OpenCurly(3:18-3:19),LowerIdent(3:20-3:21),OpAssign(3:22-3:23),Int(3:24-3:25),CloseCurly(3:26-3:27),
-EndOfFile(4:1-4:1),
+UpperIdent(1:1-1:4),OpColonEqual(1:5-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:10),Comma(1:10-1:11),UpperIdent(1:12-1:13),Comma(1:13-1:14),UpperIdent(1:15-1:16),CloseSquare(1:16-1:17),Dot(1:17-1:18),OpenCurly(1:18-1:19),LowerIdent(1:20-1:21),OpAssign(1:22-1:23),Int(1:24-1:25),CloseCurly(1:26-1:27),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-3.27
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+(file @1.1-1.27
+	(type-module @1.1-1.4)
 	(statements
-		(s-type-decl @3.1-3.27
-			(header @3.1-3.4 (name "Foo")
+		(s-type-decl @1.1-1.27
+			(header @1.1-1.4 (name "Foo")
 				(args))
-			(ty-tag-union @3.8-3.17
+			(ty-tag-union @1.8-1.17
 				(tags
-					(ty @3.9-3.10 (name "A"))
-					(ty @3.12-3.13 (name "B"))
-					(ty @3.15-3.16 (name "C")))))))
+					(ty @1.9-1.10 (name "A"))
+					(ty @1.12-1.13 (name "B"))
+					(ty @1.15-1.16 (name "C")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -41,19 +37,19 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-nominal-decl @3.1-3.27
-		(ty-header @3.1-3.4 (name "Foo"))
-		(ty-tag-union @3.8-3.17
-			(ty @3.9-3.10 (name "A"))
-			(ty @3.12-3.13 (name "B"))
-			(ty @3.15-3.16 (name "C")))))
+	(s-nominal-decl @1.1-1.27
+		(ty-header @1.1-1.4 (name "Foo"))
+		(ty-tag-union @1.8-1.17
+			(ty @1.9-1.10 (name "A"))
+			(ty @1.12-1.13 (name "B"))
+			(ty @1.15-1.16 (name "C")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(type_decls
-		(nominal @3.1-3.27 (type "Foo")
-			(ty-header @3.1-3.4 (name "Foo"))))
+		(nominal @1.1-1.27 (type "Foo")
+			(ty-header @1.1-1.4 (name "Foo"))))
 	(expressions))
 ~~~

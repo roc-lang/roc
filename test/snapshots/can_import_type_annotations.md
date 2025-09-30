@@ -5,8 +5,6 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-module []
-
 import http.Client as Http exposing [Request, Response]
 import json.Json
 import utils.Result exposing [Result]
@@ -46,20 +44,70 @@ combineResults = |result1, result2|
     }
 ~~~
 # EXPECTED
-MODULE NOT FOUND - can_import_type_annotations.md:3:1:3:56
-MODULE NOT FOUND - can_import_type_annotations.md:4:1:4:17
-MODULE NOT FOUND - can_import_type_annotations.md:5:1:5:38
-UNDECLARED TYPE - can_import_type_annotations.md:7:18:7:25
-UNDECLARED TYPE - can_import_type_annotations.md:7:29:7:37
-UNUSED VARIABLE - can_import_type_annotations.md:8:19:8:22
-MODULE NOT IMPORTED - can_import_type_annotations.md:26:18:26:36
-MODULE NOT IMPORTED - can_import_type_annotations.md:26:64:26:81
+MISSING MAIN! FUNCTION - can_import_type_annotations.md:1:1:37:6
+MODULE NOT FOUND - can_import_type_annotations.md:1:1:1:56
+MODULE NOT FOUND - can_import_type_annotations.md:2:1:2:17
+MODULE NOT FOUND - can_import_type_annotations.md:3:1:3:38
+UNDECLARED TYPE - can_import_type_annotations.md:5:18:5:25
+UNDECLARED TYPE - can_import_type_annotations.md:5:29:5:37
+UNUSED VARIABLE - can_import_type_annotations.md:6:19:6:22
+MODULE NOT IMPORTED - can_import_type_annotations.md:24:18:24:36
+MODULE NOT IMPORTED - can_import_type_annotations.md:24:64:24:81
 # PROBLEMS
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
+
+No `main!` function was found.
+
+Add a main! function like:
+`main! = |arg| { ... }`
+**can_import_type_annotations.md:1:1:37:6:**
+```roc
+import http.Client as Http exposing [Request, Response]
+import json.Json
+import utils.Result exposing [Result]
+
+processRequest : Request -> Response
+processRequest = |req| Http.defaultResponse
+
+parseJson : Str -> Json.Value
+parseJson = |input| Json.parse(input)
+
+handleApi : Http.Request -> Result(Http.Response, Json.Error)
+handleApi = |request| {
+    result = Json.decode(request.body)
+    match result {
+        Ok(data) => Ok(Http.success(data))
+        Err(err) => Err(err)
+    }
+}
+
+config : Json.Config
+config = Json.defaultConfig
+
+# Test nested type qualification
+advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
+advancedParser = |parserConfig, input| Json.Parser.parseWith(parserConfig, input)
+
+# Test function with multiple type parameters
+combineResults : Result(a, err), Result(b, err) -> Result((a, b), err)
+combineResults = |result1, result2|
+    match result1 {
+        Ok(value1) =>
+            match(result2) {
+                Ok(value2) => Ok((value1, value2))
+                Err(err) => Err(err)
+            }
+        Err(err) => Err(err)
+    }
+```
+
+
 **MODULE NOT FOUND**
 The module `http.Client` was not found in this Roc project.
 
 You're attempting to use this module here:
-**can_import_type_annotations.md:3:1:3:56:**
+**can_import_type_annotations.md:1:1:1:56:**
 ```roc
 import http.Client as Http exposing [Request, Response]
 ```
@@ -70,7 +118,7 @@ import http.Client as Http exposing [Request, Response]
 The module `json.Json` was not found in this Roc project.
 
 You're attempting to use this module here:
-**can_import_type_annotations.md:4:1:4:17:**
+**can_import_type_annotations.md:2:1:2:17:**
 ```roc
 import json.Json
 ```
@@ -81,7 +129,7 @@ import json.Json
 The module `utils.Result` was not found in this Roc project.
 
 You're attempting to use this module here:
-**can_import_type_annotations.md:5:1:5:38:**
+**can_import_type_annotations.md:3:1:3:38:**
 ```roc
 import utils.Result exposing [Result]
 ```
@@ -92,7 +140,7 @@ import utils.Result exposing [Result]
 The type _Request_ is not declared in this scope.
 
 This type is referenced here:
-**can_import_type_annotations.md:7:18:7:25:**
+**can_import_type_annotations.md:5:18:5:25:**
 ```roc
 processRequest : Request -> Response
 ```
@@ -103,7 +151,7 @@ processRequest : Request -> Response
 The type _Response_ is not declared in this scope.
 
 This type is referenced here:
-**can_import_type_annotations.md:7:29:7:37:**
+**can_import_type_annotations.md:5:29:5:37:**
 ```roc
 processRequest : Request -> Response
 ```
@@ -115,7 +163,7 @@ Variable `req` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_req` to suppress this warning.
 The unused variable is declared here:
-**can_import_type_annotations.md:8:19:8:22:**
+**can_import_type_annotations.md:6:19:6:22:**
 ```roc
 processRequest = |req| Http.defaultResponse
 ```
@@ -123,9 +171,7 @@ processRequest = |req| Http.defaultResponse
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `module []
-
-import http.Client as Http exposing [Request, Response]
+There is no module with the name `import http.Client as Http exposing [Request, Response]
 import json.Json
 import utils.Result exposing [Result]
 
@@ -151,7 +197,7 @@ config = Json.defaultConfig
 advancedParser : Json.Parser` imported into this Roc file.
 
 You're attempting to use this module here:
-**can_import_type_annotations.md:26:18:26:36:**
+**can_import_type_annotations.md:24:18:24:36:**
 ```roc
 advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
 ```
@@ -159,9 +205,7 @@ advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `module []
-
-import http.Client as Http exposing [Request, Response]
+There is no module with the name `import http.Client as Http exposing [Request, Response]
 import json.Json
 import utils.Result exposing [Result]
 
@@ -187,7 +231,7 @@ config = Json.defaultConfig
 advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser` imported into this Roc file.
 
 You're attempting to use this module here:
-**can_import_type_annotations.md:26:64:26:81:**
+**can_import_type_annotations.md:24:64:24:81:**
 ```roc
 advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
 ```
@@ -196,192 +240,188 @@ advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
-KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:19),KwAs(3:20-3:22),UpperIdent(3:23-3:27),KwExposing(3:28-3:36),OpenSquare(3:37-3:38),UpperIdent(3:38-3:45),Comma(3:45-3:46),UpperIdent(3:47-3:55),CloseSquare(3:55-3:56),
-KwImport(4:1-4:7),LowerIdent(4:8-4:12),NoSpaceDotUpperIdent(4:12-4:17),
-KwImport(5:1-5:7),LowerIdent(5:8-5:13),NoSpaceDotUpperIdent(5:13-5:20),KwExposing(5:21-5:29),OpenSquare(5:30-5:31),UpperIdent(5:31-5:37),CloseSquare(5:37-5:38),
-LowerIdent(7:1-7:15),OpColon(7:16-7:17),UpperIdent(7:18-7:25),OpArrow(7:26-7:28),UpperIdent(7:29-7:37),
-LowerIdent(8:1-8:15),OpAssign(8:16-8:17),OpBar(8:18-8:19),LowerIdent(8:19-8:22),OpBar(8:22-8:23),UpperIdent(8:24-8:28),NoSpaceDotLowerIdent(8:28-8:44),
-LowerIdent(10:1-10:10),OpColon(10:11-10:12),UpperIdent(10:13-10:16),OpArrow(10:17-10:19),UpperIdent(10:20-10:24),NoSpaceDotUpperIdent(10:24-10:30),
-LowerIdent(11:1-11:10),OpAssign(11:11-11:12),OpBar(11:13-11:14),LowerIdent(11:14-11:19),OpBar(11:19-11:20),UpperIdent(11:21-11:25),NoSpaceDotLowerIdent(11:25-11:31),NoSpaceOpenRound(11:31-11:32),LowerIdent(11:32-11:37),CloseRound(11:37-11:38),
-LowerIdent(13:1-13:10),OpColon(13:11-13:12),UpperIdent(13:13-13:17),NoSpaceDotUpperIdent(13:17-13:25),OpArrow(13:26-13:28),UpperIdent(13:29-13:35),NoSpaceOpenRound(13:35-13:36),UpperIdent(13:36-13:40),NoSpaceDotUpperIdent(13:40-13:49),Comma(13:49-13:50),UpperIdent(13:51-13:55),NoSpaceDotUpperIdent(13:55-13:61),CloseRound(13:61-13:62),
-LowerIdent(14:1-14:10),OpAssign(14:11-14:12),OpBar(14:13-14:14),LowerIdent(14:14-14:21),OpBar(14:21-14:22),OpenCurly(14:23-14:24),
-LowerIdent(15:5-15:11),OpAssign(15:12-15:13),UpperIdent(15:14-15:18),NoSpaceDotLowerIdent(15:18-15:25),NoSpaceOpenRound(15:25-15:26),LowerIdent(15:26-15:33),NoSpaceDotLowerIdent(15:33-15:38),CloseRound(15:38-15:39),
-KwMatch(16:5-16:10),LowerIdent(16:11-16:17),OpenCurly(16:18-16:19),
-UpperIdent(17:9-17:11),NoSpaceOpenRound(17:11-17:12),LowerIdent(17:12-17:16),CloseRound(17:16-17:17),OpFatArrow(17:18-17:20),UpperIdent(17:21-17:23),NoSpaceOpenRound(17:23-17:24),UpperIdent(17:24-17:28),NoSpaceDotLowerIdent(17:28-17:36),NoSpaceOpenRound(17:36-17:37),LowerIdent(17:37-17:41),CloseRound(17:41-17:42),CloseRound(17:42-17:43),
-UpperIdent(18:9-18:12),NoSpaceOpenRound(18:12-18:13),LowerIdent(18:13-18:16),CloseRound(18:16-18:17),OpFatArrow(18:18-18:20),UpperIdent(18:21-18:24),NoSpaceOpenRound(18:24-18:25),LowerIdent(18:25-18:28),CloseRound(18:28-18:29),
-CloseCurly(19:5-19:6),
-CloseCurly(20:1-20:2),
-LowerIdent(22:1-22:7),OpColon(22:8-22:9),UpperIdent(22:10-22:14),NoSpaceDotUpperIdent(22:14-22:21),
-LowerIdent(23:1-23:7),OpAssign(23:8-23:9),UpperIdent(23:10-23:14),NoSpaceDotLowerIdent(23:14-23:28),
-LowerIdent(26:1-26:15),OpColon(26:16-26:17),UpperIdent(26:18-26:22),NoSpaceDotUpperIdent(26:22-26:29),NoSpaceDotUpperIdent(26:29-26:36),Comma(26:36-26:37),UpperIdent(26:38-26:41),OpArrow(26:42-26:44),UpperIdent(26:45-26:51),NoSpaceOpenRound(26:51-26:52),UpperIdent(26:52-26:56),NoSpaceDotUpperIdent(26:56-26:62),Comma(26:62-26:63),UpperIdent(26:64-26:68),NoSpaceDotUpperIdent(26:68-26:75),NoSpaceDotUpperIdent(26:75-26:81),CloseRound(26:81-26:82),
-LowerIdent(27:1-27:15),OpAssign(27:16-27:17),OpBar(27:18-27:19),LowerIdent(27:19-27:31),Comma(27:31-27:32),LowerIdent(27:33-27:38),OpBar(27:38-27:39),UpperIdent(27:40-27:44),NoSpaceDotUpperIdent(27:44-27:51),NoSpaceDotLowerIdent(27:51-27:61),NoSpaceOpenRound(27:61-27:62),LowerIdent(27:62-27:74),Comma(27:74-27:75),LowerIdent(27:76-27:81),CloseRound(27:81-27:82),
-LowerIdent(30:1-30:15),OpColon(30:16-30:17),UpperIdent(30:18-30:24),NoSpaceOpenRound(30:24-30:25),LowerIdent(30:25-30:26),Comma(30:26-30:27),LowerIdent(30:28-30:31),CloseRound(30:31-30:32),Comma(30:32-30:33),UpperIdent(30:34-30:40),NoSpaceOpenRound(30:40-30:41),LowerIdent(30:41-30:42),Comma(30:42-30:43),LowerIdent(30:44-30:47),CloseRound(30:47-30:48),OpArrow(30:49-30:51),UpperIdent(30:52-30:58),NoSpaceOpenRound(30:58-30:59),NoSpaceOpenRound(30:59-30:60),LowerIdent(30:60-30:61),Comma(30:61-30:62),LowerIdent(30:63-30:64),CloseRound(30:64-30:65),Comma(30:65-30:66),LowerIdent(30:67-30:70),CloseRound(30:70-30:71),
-LowerIdent(31:1-31:15),OpAssign(31:16-31:17),OpBar(31:18-31:19),LowerIdent(31:19-31:26),Comma(31:26-31:27),LowerIdent(31:28-31:35),OpBar(31:35-31:36),
-KwMatch(32:5-32:10),LowerIdent(32:11-32:18),OpenCurly(32:19-32:20),
-UpperIdent(33:9-33:11),NoSpaceOpenRound(33:11-33:12),LowerIdent(33:12-33:18),CloseRound(33:18-33:19),OpFatArrow(33:20-33:22),
-KwMatch(34:13-34:18),NoSpaceOpenRound(34:18-34:19),LowerIdent(34:19-34:26),CloseRound(34:26-34:27),OpenCurly(34:28-34:29),
-UpperIdent(35:17-35:19),NoSpaceOpenRound(35:19-35:20),LowerIdent(35:20-35:26),CloseRound(35:26-35:27),OpFatArrow(35:28-35:30),UpperIdent(35:31-35:33),NoSpaceOpenRound(35:33-35:34),NoSpaceOpenRound(35:34-35:35),LowerIdent(35:35-35:41),Comma(35:41-35:42),LowerIdent(35:43-35:49),CloseRound(35:49-35:50),CloseRound(35:50-35:51),
-UpperIdent(36:17-36:20),NoSpaceOpenRound(36:20-36:21),LowerIdent(36:21-36:24),CloseRound(36:24-36:25),OpFatArrow(36:26-36:28),UpperIdent(36:29-36:32),NoSpaceOpenRound(36:32-36:33),LowerIdent(36:33-36:36),CloseRound(36:36-36:37),
-CloseCurly(37:13-37:14),
-UpperIdent(38:9-38:12),NoSpaceOpenRound(38:12-38:13),LowerIdent(38:13-38:16),CloseRound(38:16-38:17),OpFatArrow(38:18-38:20),UpperIdent(38:21-38:24),NoSpaceOpenRound(38:24-38:25),LowerIdent(38:25-38:28),CloseRound(38:28-38:29),
-CloseCurly(39:5-39:6),
-EndOfFile(40:1-40:1),
+KwImport(1:1-1:7),LowerIdent(1:8-1:12),NoSpaceDotUpperIdent(1:12-1:19),KwAs(1:20-1:22),UpperIdent(1:23-1:27),KwExposing(1:28-1:36),OpenSquare(1:37-1:38),UpperIdent(1:38-1:45),Comma(1:45-1:46),UpperIdent(1:47-1:55),CloseSquare(1:55-1:56),
+KwImport(2:1-2:7),LowerIdent(2:8-2:12),NoSpaceDotUpperIdent(2:12-2:17),
+KwImport(3:1-3:7),LowerIdent(3:8-3:13),NoSpaceDotUpperIdent(3:13-3:20),KwExposing(3:21-3:29),OpenSquare(3:30-3:31),UpperIdent(3:31-3:37),CloseSquare(3:37-3:38),
+LowerIdent(5:1-5:15),OpColon(5:16-5:17),UpperIdent(5:18-5:25),OpArrow(5:26-5:28),UpperIdent(5:29-5:37),
+LowerIdent(6:1-6:15),OpAssign(6:16-6:17),OpBar(6:18-6:19),LowerIdent(6:19-6:22),OpBar(6:22-6:23),UpperIdent(6:24-6:28),NoSpaceDotLowerIdent(6:28-6:44),
+LowerIdent(8:1-8:10),OpColon(8:11-8:12),UpperIdent(8:13-8:16),OpArrow(8:17-8:19),UpperIdent(8:20-8:24),NoSpaceDotUpperIdent(8:24-8:30),
+LowerIdent(9:1-9:10),OpAssign(9:11-9:12),OpBar(9:13-9:14),LowerIdent(9:14-9:19),OpBar(9:19-9:20),UpperIdent(9:21-9:25),NoSpaceDotLowerIdent(9:25-9:31),NoSpaceOpenRound(9:31-9:32),LowerIdent(9:32-9:37),CloseRound(9:37-9:38),
+LowerIdent(11:1-11:10),OpColon(11:11-11:12),UpperIdent(11:13-11:17),NoSpaceDotUpperIdent(11:17-11:25),OpArrow(11:26-11:28),UpperIdent(11:29-11:35),NoSpaceOpenRound(11:35-11:36),UpperIdent(11:36-11:40),NoSpaceDotUpperIdent(11:40-11:49),Comma(11:49-11:50),UpperIdent(11:51-11:55),NoSpaceDotUpperIdent(11:55-11:61),CloseRound(11:61-11:62),
+LowerIdent(12:1-12:10),OpAssign(12:11-12:12),OpBar(12:13-12:14),LowerIdent(12:14-12:21),OpBar(12:21-12:22),OpenCurly(12:23-12:24),
+LowerIdent(13:5-13:11),OpAssign(13:12-13:13),UpperIdent(13:14-13:18),NoSpaceDotLowerIdent(13:18-13:25),NoSpaceOpenRound(13:25-13:26),LowerIdent(13:26-13:33),NoSpaceDotLowerIdent(13:33-13:38),CloseRound(13:38-13:39),
+KwMatch(14:5-14:10),LowerIdent(14:11-14:17),OpenCurly(14:18-14:19),
+UpperIdent(15:9-15:11),NoSpaceOpenRound(15:11-15:12),LowerIdent(15:12-15:16),CloseRound(15:16-15:17),OpFatArrow(15:18-15:20),UpperIdent(15:21-15:23),NoSpaceOpenRound(15:23-15:24),UpperIdent(15:24-15:28),NoSpaceDotLowerIdent(15:28-15:36),NoSpaceOpenRound(15:36-15:37),LowerIdent(15:37-15:41),CloseRound(15:41-15:42),CloseRound(15:42-15:43),
+UpperIdent(16:9-16:12),NoSpaceOpenRound(16:12-16:13),LowerIdent(16:13-16:16),CloseRound(16:16-16:17),OpFatArrow(16:18-16:20),UpperIdent(16:21-16:24),NoSpaceOpenRound(16:24-16:25),LowerIdent(16:25-16:28),CloseRound(16:28-16:29),
+CloseCurly(17:5-17:6),
+CloseCurly(18:1-18:2),
+LowerIdent(20:1-20:7),OpColon(20:8-20:9),UpperIdent(20:10-20:14),NoSpaceDotUpperIdent(20:14-20:21),
+LowerIdent(21:1-21:7),OpAssign(21:8-21:9),UpperIdent(21:10-21:14),NoSpaceDotLowerIdent(21:14-21:28),
+LowerIdent(24:1-24:15),OpColon(24:16-24:17),UpperIdent(24:18-24:22),NoSpaceDotUpperIdent(24:22-24:29),NoSpaceDotUpperIdent(24:29-24:36),Comma(24:36-24:37),UpperIdent(24:38-24:41),OpArrow(24:42-24:44),UpperIdent(24:45-24:51),NoSpaceOpenRound(24:51-24:52),UpperIdent(24:52-24:56),NoSpaceDotUpperIdent(24:56-24:62),Comma(24:62-24:63),UpperIdent(24:64-24:68),NoSpaceDotUpperIdent(24:68-24:75),NoSpaceDotUpperIdent(24:75-24:81),CloseRound(24:81-24:82),
+LowerIdent(25:1-25:15),OpAssign(25:16-25:17),OpBar(25:18-25:19),LowerIdent(25:19-25:31),Comma(25:31-25:32),LowerIdent(25:33-25:38),OpBar(25:38-25:39),UpperIdent(25:40-25:44),NoSpaceDotUpperIdent(25:44-25:51),NoSpaceDotLowerIdent(25:51-25:61),NoSpaceOpenRound(25:61-25:62),LowerIdent(25:62-25:74),Comma(25:74-25:75),LowerIdent(25:76-25:81),CloseRound(25:81-25:82),
+LowerIdent(28:1-28:15),OpColon(28:16-28:17),UpperIdent(28:18-28:24),NoSpaceOpenRound(28:24-28:25),LowerIdent(28:25-28:26),Comma(28:26-28:27),LowerIdent(28:28-28:31),CloseRound(28:31-28:32),Comma(28:32-28:33),UpperIdent(28:34-28:40),NoSpaceOpenRound(28:40-28:41),LowerIdent(28:41-28:42),Comma(28:42-28:43),LowerIdent(28:44-28:47),CloseRound(28:47-28:48),OpArrow(28:49-28:51),UpperIdent(28:52-28:58),NoSpaceOpenRound(28:58-28:59),NoSpaceOpenRound(28:59-28:60),LowerIdent(28:60-28:61),Comma(28:61-28:62),LowerIdent(28:63-28:64),CloseRound(28:64-28:65),Comma(28:65-28:66),LowerIdent(28:67-28:70),CloseRound(28:70-28:71),
+LowerIdent(29:1-29:15),OpAssign(29:16-29:17),OpBar(29:18-29:19),LowerIdent(29:19-29:26),Comma(29:26-29:27),LowerIdent(29:28-29:35),OpBar(29:35-29:36),
+KwMatch(30:5-30:10),LowerIdent(30:11-30:18),OpenCurly(30:19-30:20),
+UpperIdent(31:9-31:11),NoSpaceOpenRound(31:11-31:12),LowerIdent(31:12-31:18),CloseRound(31:18-31:19),OpFatArrow(31:20-31:22),
+KwMatch(32:13-32:18),NoSpaceOpenRound(32:18-32:19),LowerIdent(32:19-32:26),CloseRound(32:26-32:27),OpenCurly(32:28-32:29),
+UpperIdent(33:17-33:19),NoSpaceOpenRound(33:19-33:20),LowerIdent(33:20-33:26),CloseRound(33:26-33:27),OpFatArrow(33:28-33:30),UpperIdent(33:31-33:33),NoSpaceOpenRound(33:33-33:34),NoSpaceOpenRound(33:34-33:35),LowerIdent(33:35-33:41),Comma(33:41-33:42),LowerIdent(33:43-33:49),CloseRound(33:49-33:50),CloseRound(33:50-33:51),
+UpperIdent(34:17-34:20),NoSpaceOpenRound(34:20-34:21),LowerIdent(34:21-34:24),CloseRound(34:24-34:25),OpFatArrow(34:26-34:28),UpperIdent(34:29-34:32),NoSpaceOpenRound(34:32-34:33),LowerIdent(34:33-34:36),CloseRound(34:36-34:37),
+CloseCurly(35:13-35:14),
+UpperIdent(36:9-36:12),NoSpaceOpenRound(36:12-36:13),LowerIdent(36:13-36:16),CloseRound(36:16-36:17),OpFatArrow(36:18-36:20),UpperIdent(36:21-36:24),NoSpaceOpenRound(36:24-36:25),LowerIdent(36:25-36:28),CloseRound(36:28-36:29),
+CloseCurly(37:5-37:6),
+EndOfFile(38:1-38:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-39.6
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+(file @1.1-37.6
+	(type-module @1.1-1.7)
 	(statements
-		(s-import @3.1-3.56 (raw "http.Client") (alias "Http")
+		(s-import @1.1-1.56 (raw "http.Client") (alias "Http")
 			(exposing
-				(exposed-upper-ident @3.38-3.45 (text "Request"))
-				(exposed-upper-ident @3.47-3.55 (text "Response"))))
-		(s-import @4.1-4.17 (raw "json.Json"))
-		(s-import @5.1-5.38 (raw "utils.Result")
+				(exposed-upper-ident @1.38-1.45 (text "Request"))
+				(exposed-upper-ident @1.47-1.55 (text "Response"))))
+		(s-import @2.1-2.17 (raw "json.Json"))
+		(s-import @3.1-3.38 (raw "utils.Result")
 			(exposing
-				(exposed-upper-ident @5.31-5.37 (text "Result"))))
-		(s-type-anno @7.1-7.37 (name "processRequest")
-			(ty-fn @7.18-7.37
-				(ty @7.18-7.25 (name "Request"))
-				(ty @7.29-7.37 (name "Response"))))
-		(s-decl @8.1-8.44
-			(p-ident @8.1-8.15 (raw "processRequest"))
-			(e-lambda @8.18-8.44
+				(exposed-upper-ident @3.31-3.37 (text "Result"))))
+		(s-type-anno @5.1-5.37 (name "processRequest")
+			(ty-fn @5.18-5.37
+				(ty @5.18-5.25 (name "Request"))
+				(ty @5.29-5.37 (name "Response"))))
+		(s-decl @6.1-6.44
+			(p-ident @6.1-6.15 (raw "processRequest"))
+			(e-lambda @6.18-6.44
 				(args
-					(p-ident @8.19-8.22 (raw "req")))
-				(e-ident @8.24-8.44 (raw "Http.defaultResponse"))))
-		(s-type-anno @10.1-10.30 (name "parseJson")
-			(ty-fn @10.13-10.30
-				(ty @10.13-10.16 (name "Str"))
-				(ty @10.20-10.30 (name "Json.Value"))))
-		(s-decl @11.1-11.38
-			(p-ident @11.1-11.10 (raw "parseJson"))
-			(e-lambda @11.13-11.38
+					(p-ident @6.19-6.22 (raw "req")))
+				(e-ident @6.24-6.44 (raw "Http.defaultResponse"))))
+		(s-type-anno @8.1-8.30 (name "parseJson")
+			(ty-fn @8.13-8.30
+				(ty @8.13-8.16 (name "Str"))
+				(ty @8.20-8.30 (name "Json.Value"))))
+		(s-decl @9.1-9.38
+			(p-ident @9.1-9.10 (raw "parseJson"))
+			(e-lambda @9.13-9.38
 				(args
-					(p-ident @11.14-11.19 (raw "input")))
-				(e-apply @11.21-11.38
-					(e-ident @11.21-11.31 (raw "Json.parse"))
-					(e-ident @11.32-11.37 (raw "input")))))
-		(s-type-anno @13.1-13.62 (name "handleApi")
-			(ty-fn @13.13-13.62
-				(ty @13.13-13.25 (name "Http.Request"))
-				(ty-apply @13.29-13.62
-					(ty @13.29-13.35 (name "Result"))
-					(ty @13.36-13.49 (name "Http.Response"))
-					(ty @13.51-13.61 (name "Json.Error")))))
-		(s-decl @14.1-20.2
-			(p-ident @14.1-14.10 (raw "handleApi"))
-			(e-lambda @14.13-20.2
+					(p-ident @9.14-9.19 (raw "input")))
+				(e-apply @9.21-9.38
+					(e-ident @9.21-9.31 (raw "Json.parse"))
+					(e-ident @9.32-9.37 (raw "input")))))
+		(s-type-anno @11.1-11.62 (name "handleApi")
+			(ty-fn @11.13-11.62
+				(ty @11.13-11.25 (name "Http.Request"))
+				(ty-apply @11.29-11.62
+					(ty @11.29-11.35 (name "Result"))
+					(ty @11.36-11.49 (name "Http.Response"))
+					(ty @11.51-11.61 (name "Json.Error")))))
+		(s-decl @12.1-18.2
+			(p-ident @12.1-12.10 (raw "handleApi"))
+			(e-lambda @12.13-18.2
 				(args
-					(p-ident @14.14-14.21 (raw "request")))
-				(e-block @14.23-20.2
+					(p-ident @12.14-12.21 (raw "request")))
+				(e-block @12.23-18.2
 					(statements
-						(s-decl @15.5-15.39
-							(p-ident @15.5-15.11 (raw "result"))
-							(e-apply @15.14-15.39
-								(e-ident @15.14-15.25 (raw "Json.decode"))
-								(e-field-access @15.26-15.38
-									(e-ident @15.26-15.33 (raw "request"))
-									(e-ident @15.33-15.38 (raw "body")))))
+						(s-decl @13.5-13.39
+							(p-ident @13.5-13.11 (raw "result"))
+							(e-apply @13.14-13.39
+								(e-ident @13.14-13.25 (raw "Json.decode"))
+								(e-field-access @13.26-13.38
+									(e-ident @13.26-13.33 (raw "request"))
+									(e-ident @13.33-13.38 (raw "body")))))
 						(e-match
-							(e-ident @16.11-16.17 (raw "result"))
+							(e-ident @14.11-14.17 (raw "result"))
 							(branches
-								(branch @17.9-17.43
-									(p-tag @17.9-17.17 (raw "Ok")
-										(p-ident @17.12-17.16 (raw "data")))
-									(e-apply @17.21-17.43
-										(e-tag @17.21-17.23 (raw "Ok"))
-										(e-apply @17.24-17.42
-											(e-ident @17.24-17.36 (raw "Http.success"))
-											(e-ident @17.37-17.41 (raw "data")))))
-								(branch @18.9-18.29
-									(p-tag @18.9-18.17 (raw "Err")
-										(p-ident @18.13-18.16 (raw "err")))
-									(e-apply @18.21-18.29
-										(e-tag @18.21-18.24 (raw "Err"))
-										(e-ident @18.25-18.28 (raw "err"))))))))))
-		(s-type-anno @22.1-22.21 (name "config")
-			(ty @22.10-22.21 (name "Json.Config")))
-		(s-decl @23.1-23.28
-			(p-ident @23.1-23.7 (raw "config"))
-			(e-ident @23.10-23.28 (raw "Json.defaultConfig")))
-		(s-type-anno @26.1-26.82 (name "advancedParser")
-			(ty-fn @26.18-26.82
-				(ty @26.18-26.36 (name "Json.Parser.Config"))
-				(ty @26.38-26.41 (name "Str"))
-				(ty-apply @26.45-26.82
-					(ty @26.45-26.51 (name "Result"))
-					(ty @26.52-26.62 (name "Json.Value"))
-					(ty @26.64-26.81 (name "Json.Parser.Error")))))
-		(s-decl @27.1-27.82
-			(p-ident @27.1-27.15 (raw "advancedParser"))
-			(e-lambda @27.18-27.82
+								(branch @15.9-15.43
+									(p-tag @15.9-15.17 (raw "Ok")
+										(p-ident @15.12-15.16 (raw "data")))
+									(e-apply @15.21-15.43
+										(e-tag @15.21-15.23 (raw "Ok"))
+										(e-apply @15.24-15.42
+											(e-ident @15.24-15.36 (raw "Http.success"))
+											(e-ident @15.37-15.41 (raw "data")))))
+								(branch @16.9-16.29
+									(p-tag @16.9-16.17 (raw "Err")
+										(p-ident @16.13-16.16 (raw "err")))
+									(e-apply @16.21-16.29
+										(e-tag @16.21-16.24 (raw "Err"))
+										(e-ident @16.25-16.28 (raw "err"))))))))))
+		(s-type-anno @20.1-20.21 (name "config")
+			(ty @20.10-20.21 (name "Json.Config")))
+		(s-decl @21.1-21.28
+			(p-ident @21.1-21.7 (raw "config"))
+			(e-ident @21.10-21.28 (raw "Json.defaultConfig")))
+		(s-type-anno @24.1-24.82 (name "advancedParser")
+			(ty-fn @24.18-24.82
+				(ty @24.18-24.36 (name "Json.Parser.Config"))
+				(ty @24.38-24.41 (name "Str"))
+				(ty-apply @24.45-24.82
+					(ty @24.45-24.51 (name "Result"))
+					(ty @24.52-24.62 (name "Json.Value"))
+					(ty @24.64-24.81 (name "Json.Parser.Error")))))
+		(s-decl @25.1-25.82
+			(p-ident @25.1-25.15 (raw "advancedParser"))
+			(e-lambda @25.18-25.82
 				(args
-					(p-ident @27.19-27.31 (raw "parserConfig"))
-					(p-ident @27.33-27.38 (raw "input")))
-				(e-apply @27.40-27.82
-					(e-ident @27.40-27.61 (raw "Json.Parser.parseWith"))
-					(e-ident @27.62-27.74 (raw "parserConfig"))
-					(e-ident @27.76-27.81 (raw "input")))))
-		(s-type-anno @30.1-30.71 (name "combineResults")
-			(ty-fn @30.18-30.71
-				(ty-apply @30.18-30.32
-					(ty @30.18-30.24 (name "Result"))
-					(ty-var @30.25-30.26 (raw "a"))
-					(ty-var @30.28-30.31 (raw "err")))
-				(ty-apply @30.34-30.48
-					(ty @30.34-30.40 (name "Result"))
-					(ty-var @30.41-30.42 (raw "b"))
-					(ty-var @30.44-30.47 (raw "err")))
-				(ty-apply @30.52-30.71
-					(ty @30.52-30.58 (name "Result"))
-					(ty-tuple @30.59-30.65
-						(ty-var @30.60-30.61 (raw "a"))
-						(ty-var @30.63-30.64 (raw "b")))
-					(ty-var @30.67-30.70 (raw "err")))))
-		(s-decl @31.1-39.6
-			(p-ident @31.1-31.15 (raw "combineResults"))
-			(e-lambda @31.18-39.6
+					(p-ident @25.19-25.31 (raw "parserConfig"))
+					(p-ident @25.33-25.38 (raw "input")))
+				(e-apply @25.40-25.82
+					(e-ident @25.40-25.61 (raw "Json.Parser.parseWith"))
+					(e-ident @25.62-25.74 (raw "parserConfig"))
+					(e-ident @25.76-25.81 (raw "input")))))
+		(s-type-anno @28.1-28.71 (name "combineResults")
+			(ty-fn @28.18-28.71
+				(ty-apply @28.18-28.32
+					(ty @28.18-28.24 (name "Result"))
+					(ty-var @28.25-28.26 (raw "a"))
+					(ty-var @28.28-28.31 (raw "err")))
+				(ty-apply @28.34-28.48
+					(ty @28.34-28.40 (name "Result"))
+					(ty-var @28.41-28.42 (raw "b"))
+					(ty-var @28.44-28.47 (raw "err")))
+				(ty-apply @28.52-28.71
+					(ty @28.52-28.58 (name "Result"))
+					(ty-tuple @28.59-28.65
+						(ty-var @28.60-28.61 (raw "a"))
+						(ty-var @28.63-28.64 (raw "b")))
+					(ty-var @28.67-28.70 (raw "err")))))
+		(s-decl @29.1-37.6
+			(p-ident @29.1-29.15 (raw "combineResults"))
+			(e-lambda @29.18-37.6
 				(args
-					(p-ident @31.19-31.26 (raw "result1"))
-					(p-ident @31.28-31.35 (raw "result2")))
+					(p-ident @29.19-29.26 (raw "result1"))
+					(p-ident @29.28-29.35 (raw "result2")))
 				(e-match
-					(e-ident @32.11-32.18 (raw "result1"))
+					(e-ident @30.11-30.18 (raw "result1"))
 					(branches
-						(branch @33.9-37.14
-							(p-tag @33.9-33.19 (raw "Ok")
-								(p-ident @33.12-33.18 (raw "value1")))
+						(branch @31.9-35.14
+							(p-tag @31.9-31.19 (raw "Ok")
+								(p-ident @31.12-31.18 (raw "value1")))
 							(e-match
-								(e-tuple @34.18-34.27
-									(e-ident @34.19-34.26 (raw "result2")))
+								(e-tuple @32.18-32.27
+									(e-ident @32.19-32.26 (raw "result2")))
 								(branches
-									(branch @35.17-35.51
-										(p-tag @35.17-35.27 (raw "Ok")
-											(p-ident @35.20-35.26 (raw "value2")))
-										(e-apply @35.31-35.51
-											(e-tag @35.31-35.33 (raw "Ok"))
-											(e-tuple @35.34-35.50
-												(e-ident @35.35-35.41 (raw "value1"))
-												(e-ident @35.43-35.49 (raw "value2")))))
-									(branch @36.17-36.37
-										(p-tag @36.17-36.25 (raw "Err")
-											(p-ident @36.21-36.24 (raw "err")))
-										(e-apply @36.29-36.37
-											(e-tag @36.29-36.32 (raw "Err"))
-											(e-ident @36.33-36.36 (raw "err")))))))
-						(branch @38.9-38.29
-							(p-tag @38.9-38.17 (raw "Err")
-								(p-ident @38.13-38.16 (raw "err")))
-							(e-apply @38.21-38.29
-								(e-tag @38.21-38.24 (raw "Err"))
-								(e-ident @38.25-38.28 (raw "err"))))))))))
+									(branch @33.17-33.51
+										(p-tag @33.17-33.27 (raw "Ok")
+											(p-ident @33.20-33.26 (raw "value2")))
+										(e-apply @33.31-33.51
+											(e-tag @33.31-33.33 (raw "Ok"))
+											(e-tuple @33.34-33.50
+												(e-ident @33.35-33.41 (raw "value1"))
+												(e-ident @33.43-33.49 (raw "value2")))))
+									(branch @34.17-34.37
+										(p-tag @34.17-34.25 (raw "Err")
+											(p-ident @34.21-34.24 (raw "err")))
+										(e-apply @34.29-34.37
+											(e-tag @34.29-34.32 (raw "Err"))
+											(e-ident @34.33-34.36 (raw "err")))))))
+						(branch @36.9-36.29
+							(p-tag @36.9-36.17 (raw "Err")
+								(p-ident @36.13-36.16 (raw "err")))
+							(e-apply @36.21-36.29
+								(e-tag @36.21-36.24 (raw "Err"))
+								(e-ident @36.25-36.28 (raw "err"))))))))))
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
 import http.Client as Http exposing [Request, Response]
 import json.Json
 import utils.Result exposing [Result]
@@ -424,223 +464,223 @@ combineResults = |result1, result2|
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @8.1-8.15 (ident "processRequest"))
-		(e-lambda @8.18-8.44
+		(p-assign @6.1-6.15 (ident "processRequest"))
+		(e-lambda @6.18-6.44
 			(args
-				(p-assign @8.19-8.22 (ident "req")))
-			(e-lookup-external @8.24-8.44
+				(p-assign @6.19-6.22 (ident "req")))
+			(e-lookup-external @6.24-6.44
 				(module-idx "0")
 				(target-node-idx "0")))
-		(annotation @8.1-8.15
+		(annotation @6.1-6.15
 			(declared-type
-				(ty-fn @7.18-7.37 (effectful false)
-					(ty @7.18-7.25 (name "Request"))
-					(ty @7.29-7.37 (name "Response"))))))
+				(ty-fn @5.18-5.37 (effectful false)
+					(ty @5.18-5.25 (name "Request"))
+					(ty @5.29-5.37 (name "Response"))))))
 	(d-let
-		(p-assign @11.1-11.10 (ident "parseJson"))
-		(e-lambda @11.13-11.38
+		(p-assign @9.1-9.10 (ident "parseJson"))
+		(e-lambda @9.13-9.38
 			(args
-				(p-assign @11.14-11.19 (ident "input")))
-			(e-call @11.21-11.38
-				(e-lookup-external @11.21-11.31
+				(p-assign @9.14-9.19 (ident "input")))
+			(e-call @9.21-9.38
+				(e-lookup-external @9.21-9.31
 					(module-idx "1")
 					(target-node-idx "0"))
-				(e-lookup-local @11.32-11.37
-					(p-assign @11.14-11.19 (ident "input")))))
-		(annotation @11.1-11.10
+				(e-lookup-local @9.32-9.37
+					(p-assign @9.14-9.19 (ident "input")))))
+		(annotation @9.1-9.10
 			(declared-type
-				(ty-fn @10.13-10.30 (effectful false)
-					(ty @10.13-10.16 (name "Str"))
-					(ty-lookup-external @10.20-10.30
+				(ty-fn @8.13-8.30 (effectful false)
+					(ty @8.13-8.16 (name "Str"))
+					(ty-lookup-external @8.20-8.30
 						(module-idx "1")
 						(target-node-idx "0"))))))
 	(d-let
-		(p-assign @14.1-14.10 (ident "handleApi"))
-		(e-closure @14.13-20.2
+		(p-assign @12.1-12.10 (ident "handleApi"))
+		(e-closure @12.13-18.2
 			(captures
-				(capture @17.12-17.16 (ident "data"))
-				(capture @18.13-18.16 (ident "err")))
-			(e-lambda @14.13-20.2
+				(capture @16.13-16.16 (ident "err"))
+				(capture @15.12-15.16 (ident "data")))
+			(e-lambda @12.13-18.2
 				(args
-					(p-assign @14.14-14.21 (ident "request")))
-				(e-block @14.23-20.2
-					(s-let @15.5-15.39
-						(p-assign @15.5-15.11 (ident "result"))
-						(e-call @15.14-15.39
-							(e-lookup-external @15.14-15.25
+					(p-assign @12.14-12.21 (ident "request")))
+				(e-block @12.23-18.2
+					(s-let @13.5-13.39
+						(p-assign @13.5-13.11 (ident "result"))
+						(e-call @13.14-13.39
+							(e-lookup-external @13.14-13.25
 								(module-idx "1")
 								(target-node-idx "0"))
-							(e-dot-access @15.26-15.38 (field "body")
+							(e-dot-access @13.26-13.38 (field "body")
 								(receiver
-									(e-lookup-local @15.26-15.33
-										(p-assign @14.14-14.21 (ident "request")))))))
-					(e-match @16.5-19.6
-						(match @16.5-19.6
+									(e-lookup-local @13.26-13.33
+										(p-assign @12.14-12.21 (ident "request")))))))
+					(e-match @14.5-17.6
+						(match @14.5-17.6
 							(cond
-								(e-lookup-local @16.11-16.17
-									(p-assign @15.5-15.11 (ident "result"))))
+								(e-lookup-local @14.11-14.17
+									(p-assign @13.5-13.11 (ident "result"))))
 							(branches
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-nominal @17.9-17.17
-												(p-applied-tag @17.9-17.17))))
+											(p-nominal @15.9-15.17
+												(p-applied-tag @15.9-15.17))))
 									(value
-										(e-nominal @17.21-17.43 (nominal "Result")
-											(e-tag @17.21-17.43 (name "Ok")
+										(e-nominal @15.21-15.43 (nominal "Result")
+											(e-tag @15.21-15.43 (name "Ok")
 												(args
-													(e-call @17.24-17.42
-														(e-lookup-external @17.24-17.36
+													(e-call @15.24-15.42
+														(e-lookup-external @15.24-15.36
 															(module-idx "0")
 															(target-node-idx "0"))
-														(e-lookup-local @17.37-17.41
-															(p-assign @17.12-17.16 (ident "data")))))))))
+														(e-lookup-local @15.37-15.41
+															(p-assign @15.12-15.16 (ident "data")))))))))
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-nominal @18.9-18.17
-												(p-applied-tag @18.9-18.17))))
+											(p-nominal @16.9-16.17
+												(p-applied-tag @16.9-16.17))))
 									(value
-										(e-nominal @18.21-18.29 (nominal "Result")
-											(e-tag @18.21-18.29 (name "Err")
+										(e-nominal @16.21-16.29 (nominal "Result")
+											(e-tag @16.21-16.29 (name "Err")
 												(args
-													(e-lookup-local @18.25-18.28
-														(p-assign @18.13-18.16 (ident "err"))))))))))))))
-		(annotation @14.1-14.10
+													(e-lookup-local @16.25-16.28
+														(p-assign @16.13-16.16 (ident "err"))))))))))))))
+		(annotation @12.1-12.10
 			(declared-type
-				(ty-fn @13.13-13.62 (effectful false)
-					(ty-lookup-external @13.13-13.25
+				(ty-fn @11.13-11.62 (effectful false)
+					(ty-lookup-external @11.13-11.25
 						(module-idx "0")
 						(target-node-idx "0"))
-					(ty-apply @13.29-13.62 (symbol "Result")
-						(ty-lookup-external @13.36-13.49
+					(ty-apply @11.29-11.62 (symbol "Result")
+						(ty-lookup-external @11.36-11.49
 							(module-idx "0")
 							(target-node-idx "0"))
-						(ty-lookup-external @13.51-13.61
+						(ty-lookup-external @11.51-11.61
 							(module-idx "1")
 							(target-node-idx "0")))))))
 	(d-let
-		(p-assign @23.1-23.7 (ident "config"))
-		(e-lookup-external @23.10-23.28
+		(p-assign @21.1-21.7 (ident "config"))
+		(e-lookup-external @21.10-21.28
 			(module-idx "1")
 			(target-node-idx "0"))
-		(annotation @23.1-23.7
+		(annotation @21.1-21.7
 			(declared-type
-				(ty-lookup-external @22.10-22.21
+				(ty-lookup-external @20.10-20.21
 					(module-idx "1")
 					(target-node-idx "0")))))
 	(d-let
-		(p-assign @27.1-27.15 (ident "advancedParser"))
-		(e-lambda @27.18-27.82
+		(p-assign @25.1-25.15 (ident "advancedParser"))
+		(e-lambda @25.18-25.82
 			(args
-				(p-assign @27.19-27.31 (ident "parserConfig"))
-				(p-assign @27.33-27.38 (ident "input")))
-			(e-call @27.40-27.82
-				(e-lookup-external @27.40-27.61
+				(p-assign @25.19-25.31 (ident "parserConfig"))
+				(p-assign @25.33-25.38 (ident "input")))
+			(e-call @25.40-25.82
+				(e-lookup-external @25.40-25.61
 					(module-idx "1")
 					(target-node-idx "0"))
-				(e-lookup-local @27.62-27.74
-					(p-assign @27.19-27.31 (ident "parserConfig")))
-				(e-lookup-local @27.76-27.81
-					(p-assign @27.33-27.38 (ident "input")))))
-		(annotation @27.1-27.15
+				(e-lookup-local @25.62-25.74
+					(p-assign @25.19-25.31 (ident "parserConfig")))
+				(e-lookup-local @25.76-25.81
+					(p-assign @25.33-25.38 (ident "input")))))
+		(annotation @25.1-25.15
 			(declared-type
-				(ty-fn @26.18-26.82 (effectful false)
-					(ty-malformed @26.18-26.36)
-					(ty @26.38-26.41 (name "Str"))
-					(ty-apply @26.45-26.82 (symbol "Result")
-						(ty-lookup-external @26.52-26.62
+				(ty-fn @24.18-24.82 (effectful false)
+					(ty-malformed @24.18-24.36)
+					(ty @24.38-24.41 (name "Str"))
+					(ty-apply @24.45-24.82 (symbol "Result")
+						(ty-lookup-external @24.52-24.62
 							(module-idx "1")
 							(target-node-idx "0"))
-						(ty-malformed @26.64-26.81))))))
+						(ty-malformed @24.64-24.81))))))
 	(d-let
-		(p-assign @31.1-31.15 (ident "combineResults"))
-		(e-closure @31.18-39.6
+		(p-assign @29.1-29.15 (ident "combineResults"))
+		(e-closure @29.18-37.6
 			(captures
-				(capture @38.13-38.16 (ident "err"))
-				(capture @36.21-36.24 (ident "err"))
-				(capture @33.12-33.18 (ident "value1"))
-				(capture @35.20-35.26 (ident "value2")))
-			(e-lambda @31.18-39.6
+				(capture @33.20-33.26 (ident "value2"))
+				(capture @34.21-34.24 (ident "err"))
+				(capture @36.13-36.16 (ident "err"))
+				(capture @31.12-31.18 (ident "value1")))
+			(e-lambda @29.18-37.6
 				(args
-					(p-assign @31.19-31.26 (ident "result1"))
-					(p-assign @31.28-31.35 (ident "result2")))
-				(e-match @32.5-39.6
-					(match @32.5-39.6
+					(p-assign @29.19-29.26 (ident "result1"))
+					(p-assign @29.28-29.35 (ident "result2")))
+				(e-match @30.5-37.6
+					(match @30.5-37.6
 						(cond
-							(e-lookup-local @32.11-32.18
-								(p-assign @31.19-31.26 (ident "result1"))))
+							(e-lookup-local @30.11-30.18
+								(p-assign @29.19-29.26 (ident "result1"))))
 						(branches
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @33.9-33.19
-											(p-applied-tag @33.9-33.19))))
+										(p-nominal @31.9-31.19
+											(p-applied-tag @31.9-31.19))))
 								(value
-									(e-match @34.13-37.14
-										(match @34.13-37.14
+									(e-match @32.13-35.14
+										(match @32.13-35.14
 											(cond
-												(e-lookup-local @34.19-34.26
-													(p-assign @31.28-31.35 (ident "result2"))))
+												(e-lookup-local @32.19-32.26
+													(p-assign @29.28-29.35 (ident "result2"))))
 											(branches
 												(branch
 													(patterns
 														(pattern (degenerate false)
-															(p-nominal @35.17-35.27
-																(p-applied-tag @35.17-35.27))))
+															(p-nominal @33.17-33.27
+																(p-applied-tag @33.17-33.27))))
 													(value
-														(e-nominal @35.31-35.51 (nominal "Result")
-															(e-tag @35.31-35.51 (name "Ok")
+														(e-nominal @33.31-33.51 (nominal "Result")
+															(e-tag @33.31-33.51 (name "Ok")
 																(args
-																	(e-tuple @35.34-35.50
+																	(e-tuple @33.34-33.50
 																		(elems
-																			(e-lookup-local @35.35-35.41
-																				(p-assign @33.12-33.18 (ident "value1")))
-																			(e-lookup-local @35.43-35.49
-																				(p-assign @35.20-35.26 (ident "value2"))))))))))
+																			(e-lookup-local @33.35-33.41
+																				(p-assign @31.12-31.18 (ident "value1")))
+																			(e-lookup-local @33.43-33.49
+																				(p-assign @33.20-33.26 (ident "value2"))))))))))
 												(branch
 													(patterns
 														(pattern (degenerate false)
-															(p-nominal @36.17-36.25
-																(p-applied-tag @36.17-36.25))))
+															(p-nominal @34.17-34.25
+																(p-applied-tag @34.17-34.25))))
 													(value
-														(e-nominal @36.29-36.37 (nominal "Result")
-															(e-tag @36.29-36.37 (name "Err")
+														(e-nominal @34.29-34.37 (nominal "Result")
+															(e-tag @34.29-34.37 (name "Err")
 																(args
-																	(e-lookup-local @36.33-36.36
-																		(p-assign @36.21-36.24 (ident "err")))))))))))))
+																	(e-lookup-local @34.33-34.36
+																		(p-assign @34.21-34.24 (ident "err")))))))))))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @38.9-38.17
-											(p-applied-tag @38.9-38.17))))
+										(p-nominal @36.9-36.17
+											(p-applied-tag @36.9-36.17))))
 								(value
-									(e-nominal @38.21-38.29 (nominal "Result")
-										(e-tag @38.21-38.29 (name "Err")
+									(e-nominal @36.21-36.29 (nominal "Result")
+										(e-tag @36.21-36.29 (name "Err")
 											(args
-												(e-lookup-local @38.25-38.28
-													(p-assign @38.13-38.16 (ident "err")))))))))))))
-		(annotation @31.1-31.15
+												(e-lookup-local @36.25-36.28
+													(p-assign @36.13-36.16 (ident "err")))))))))))))
+		(annotation @29.1-29.15
 			(declared-type
-				(ty-fn @30.18-30.71 (effectful false)
-					(ty-apply @30.18-30.32 (symbol "Result")
-						(ty-var @30.25-30.26 (name "a"))
-						(ty-var @30.28-30.31 (name "err")))
-					(ty-apply @30.34-30.48 (symbol "Result")
-						(ty-var @30.41-30.42 (name "b"))
-						(ty-var @30.44-30.47 (name "err")))
-					(ty-apply @30.52-30.71 (symbol "Result")
-						(ty-tuple @30.59-30.65
-							(ty-var @30.60-30.61 (name "a"))
-							(ty-var @30.63-30.64 (name "b")))
-						(ty-var @30.67-30.70 (name "err")))))))
-	(s-import @3.1-3.56 (module "http.Client") (qualifier "http") (alias "Http")
+				(ty-fn @28.18-28.71 (effectful false)
+					(ty-apply @28.18-28.32 (symbol "Result")
+						(ty-var @28.25-28.26 (name "a"))
+						(ty-var @28.28-28.31 (name "err")))
+					(ty-apply @28.34-28.48 (symbol "Result")
+						(ty-var @28.41-28.42 (name "b"))
+						(ty-var @28.44-28.47 (name "err")))
+					(ty-apply @28.52-28.71 (symbol "Result")
+						(ty-tuple @28.59-28.65
+							(ty-var @28.60-28.61 (name "a"))
+							(ty-var @28.63-28.64 (name "b")))
+						(ty-var @28.67-28.70 (name "err")))))))
+	(s-import @1.1-1.56 (module "http.Client") (qualifier "http") (alias "Http")
 		(exposes
 			(exposed (name "Request") (wildcard false))
 			(exposed (name "Response") (wildcard false))))
-	(s-import @4.1-4.17 (module "json.Json") (qualifier "json")
+	(s-import @2.1-2.17 (module "json.Json") (qualifier "json")
 		(exposes))
-	(s-import @5.1-5.38 (module "utils.Result") (qualifier "utils")
+	(s-import @3.1-3.38 (module "utils.Result") (qualifier "utils")
 		(exposes
 			(exposed (name "Result") (wildcard false)))))
 ~~~
@@ -648,17 +688,17 @@ combineResults = |result1, result2|
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @8.1-8.15 (type "Error -> Error"))
-		(patt @11.1-11.10 (type "Str -> Error"))
-		(patt @14.1-14.10 (type "Error -> Result(Error, Error)"))
-		(patt @23.1-23.7 (type "Error"))
-		(patt @27.1-27.15 (type "Error, Str -> Result(Error, Error)"))
-		(patt @31.1-31.15 (type "Result(a, err), Result(b, err) -> Result((a, b), err)")))
+		(patt @6.1-6.15 (type "Error -> Error"))
+		(patt @9.1-9.10 (type "Str -> Error"))
+		(patt @12.1-12.10 (type "Error -> Result(Error, Error)"))
+		(patt @21.1-21.7 (type "Error"))
+		(patt @25.1-25.15 (type "Error, Str -> Result(Error, Error)"))
+		(patt @29.1-29.15 (type "Result(a, err), Result(b, err) -> Result((a, b), err)")))
 	(expressions
-		(expr @8.18-8.44 (type "Error -> Error"))
-		(expr @11.13-11.38 (type "Str -> Error"))
-		(expr @14.13-20.2 (type "Error -> Result(Error, Error)"))
-		(expr @23.10-23.28 (type "Error"))
-		(expr @27.18-27.82 (type "Error, Str -> Result(Error, Error)"))
-		(expr @31.18-39.6 (type "Result(a, err), Result(b, err) -> Result((a, b), err)"))))
+		(expr @6.18-6.44 (type "Error -> Error"))
+		(expr @9.13-9.38 (type "Str -> Error"))
+		(expr @12.13-18.2 (type "Error -> Result(Error, Error)"))
+		(expr @21.10-21.28 (type "Error"))
+		(expr @25.18-25.82 (type "Error, Str -> Result(Error, Error)"))
+		(expr @29.18-37.6 (type "Result(a, err), Result(b, err) -> Result((a, b), err)"))))
 ~~~

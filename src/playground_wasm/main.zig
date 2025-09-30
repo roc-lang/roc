@@ -886,7 +886,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     const env = result.module_env;
     try env.initCIRFields(allocator, "main");
 
-    var czer = try Can.init(env, &result.parse_ast.?, null);
+    var czer = try Can.init(env, &result.parse_ast.?, null, Can.ValidationContext.checking);
     defer czer.deinit();
 
     czer.canonicalizeFile() catch |err| {

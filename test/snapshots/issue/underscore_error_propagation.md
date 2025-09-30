@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Error types should propagate through aliases when underscores are used
-type=file
+type=file:BadBase.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
-
 BadBase := _
 
 BadDerived := BadBase
@@ -23,14 +21,14 @@ goodValue = "test"
 ~~~
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - underscore_error_propagation.md:1:1:1:1
-TYPE MISMATCH - underscore_error_propagation.md:15:13:15:19
+TYPE MISMATCH - underscore_error_propagation.md:13:13:13:19
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
 
 **underscore_error_propagation.md:1:1:1:1:**
 ```roc
-module []
+BadBase := _
 ```
 ^
 
@@ -38,7 +36,7 @@ Underscores in type annotations mean "I don't care about this type", which doesn
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**underscore_error_propagation.md:15:13:15:19:**
+**underscore_error_propagation.md:13:13:13:19:**
 ```roc
 goodValue = "test"
 ```
@@ -52,51 +50,49 @@ But here it's being used as:
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
-UpperIdent(3:1-3:8),OpColonEqual(3:9-3:11),Underscore(3:12-3:13),
-UpperIdent(5:1-5:11),OpColonEqual(5:12-5:14),UpperIdent(5:15-5:22),
-LowerIdent(7:1-7:6),OpColon(7:7-7:8),UpperIdent(7:9-7:19),
-LowerIdent(8:1-8:6),OpAssign(8:7-8:8),StringStart(8:9-8:10),StringPart(8:10-8:14),StringEnd(8:14-8:15),
-UpperIdent(10:1-10:9),OpColonEqual(10:10-10:12),UpperIdent(10:13-10:16),
-UpperIdent(12:1-12:12),OpColonEqual(12:13-12:15),UpperIdent(12:16-12:24),
-LowerIdent(14:1-14:10),OpColon(14:11-14:12),UpperIdent(14:13-14:24),
-LowerIdent(15:1-15:10),OpAssign(15:11-15:12),StringStart(15:13-15:14),StringPart(15:14-15:18),StringEnd(15:18-15:19),
-EndOfFile(16:1-16:1),
+UpperIdent(1:1-1:8),OpColonEqual(1:9-1:11),Underscore(1:12-1:13),
+UpperIdent(3:1-3:11),OpColonEqual(3:12-3:14),UpperIdent(3:15-3:22),
+LowerIdent(5:1-5:6),OpColon(5:7-5:8),UpperIdent(5:9-5:19),
+LowerIdent(6:1-6:6),OpAssign(6:7-6:8),StringStart(6:9-6:10),StringPart(6:10-6:14),StringEnd(6:14-6:15),
+UpperIdent(8:1-8:9),OpColonEqual(8:10-8:12),UpperIdent(8:13-8:16),
+UpperIdent(10:1-10:12),OpColonEqual(10:13-10:15),UpperIdent(10:16-10:24),
+LowerIdent(12:1-12:10),OpColon(12:11-12:12),UpperIdent(12:13-12:24),
+LowerIdent(13:1-13:10),OpAssign(13:11-13:12),StringStart(13:13-13:14),StringPart(13:14-13:18),StringEnd(13:18-13:19),
+EndOfFile(14:1-14:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-15.19
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+(file @1.1-13.19
+	(type-module @1.1-1.8)
 	(statements
-		(s-type-decl @3.1-3.13
-			(header @3.1-3.8 (name "BadBase")
+		(s-type-decl @1.1-1.13
+			(header @1.1-1.8 (name "BadBase")
 				(args))
 			(_))
-		(s-type-decl @5.1-5.22
-			(header @5.1-5.11 (name "BadDerived")
+		(s-type-decl @3.1-3.22
+			(header @3.1-3.11 (name "BadDerived")
 				(args))
-			(ty @5.15-5.22 (name "BadBase")))
-		(s-type-anno @7.1-7.19 (name "value")
-			(ty @7.9-7.19 (name "BadDerived")))
-		(s-decl @8.1-8.15
-			(p-ident @8.1-8.6 (raw "value"))
-			(e-string @8.9-8.15
-				(e-string-part @8.10-8.14 (raw "test"))))
-		(s-type-decl @10.1-10.16
-			(header @10.1-10.9 (name "GoodBase")
+			(ty @3.15-3.22 (name "BadBase")))
+		(s-type-anno @5.1-5.19 (name "value")
+			(ty @5.9-5.19 (name "BadDerived")))
+		(s-decl @6.1-6.15
+			(p-ident @6.1-6.6 (raw "value"))
+			(e-string @6.9-6.15
+				(e-string-part @6.10-6.14 (raw "test"))))
+		(s-type-decl @8.1-8.16
+			(header @8.1-8.9 (name "GoodBase")
 				(args))
-			(ty @10.13-10.16 (name "Str")))
-		(s-type-decl @12.1-12.24
-			(header @12.1-12.12 (name "GoodDerived")
+			(ty @8.13-8.16 (name "Str")))
+		(s-type-decl @10.1-10.24
+			(header @10.1-10.12 (name "GoodDerived")
 				(args))
-			(ty @12.16-12.24 (name "GoodBase")))
-		(s-type-anno @14.1-14.24 (name "goodValue")
-			(ty @14.13-14.24 (name "GoodDerived")))
-		(s-decl @15.1-15.19
-			(p-ident @15.1-15.10 (raw "goodValue"))
-			(e-string @15.13-15.19
-				(e-string-part @15.14-15.18 (raw "test"))))))
+			(ty @10.16-10.24 (name "GoodBase")))
+		(s-type-anno @12.1-12.24 (name "goodValue")
+			(ty @12.13-12.24 (name "GoodDerived")))
+		(s-decl @13.1-13.19
+			(p-ident @13.1-13.10 (raw "goodValue"))
+			(e-string @13.13-13.19
+				(e-string-part @13.14-13.18 (raw "test"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -106,48 +102,48 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @8.1-8.6 (ident "value"))
-		(e-string @8.9-8.15
-			(e-literal @8.10-8.14 (string "test")))
-		(annotation @8.1-8.6
+		(p-assign @6.1-6.6 (ident "value"))
+		(e-string @6.9-6.15
+			(e-literal @6.10-6.14 (string "test")))
+		(annotation @6.1-6.6
 			(declared-type
-				(ty @7.9-7.19 (name "BadDerived")))))
+				(ty @5.9-5.19 (name "BadDerived")))))
 	(d-let
-		(p-assign @15.1-15.10 (ident "goodValue"))
-		(e-string @15.13-15.19
-			(e-literal @15.14-15.18 (string "test")))
-		(annotation @15.1-15.10
+		(p-assign @13.1-13.10 (ident "goodValue"))
+		(e-string @13.13-13.19
+			(e-literal @13.14-13.18 (string "test")))
+		(annotation @13.1-13.10
 			(declared-type
-				(ty @14.13-14.24 (name "GoodDerived")))))
-	(s-nominal-decl @3.1-3.13
-		(ty-header @3.1-3.8 (name "BadBase"))
+				(ty @12.13-12.24 (name "GoodDerived")))))
+	(s-nominal-decl @1.1-1.13
+		(ty-header @1.1-1.8 (name "BadBase"))
 		(ty-underscore @1.1-1.1))
-	(s-nominal-decl @5.1-5.22
-		(ty-header @5.1-5.11 (name "BadDerived"))
-		(ty @5.15-5.22 (name "BadBase")))
-	(s-nominal-decl @10.1-10.16
-		(ty-header @10.1-10.9 (name "GoodBase"))
-		(ty @10.13-10.16 (name "Str")))
-	(s-nominal-decl @12.1-12.24
-		(ty-header @12.1-12.12 (name "GoodDerived"))
-		(ty @12.16-12.24 (name "GoodBase"))))
+	(s-nominal-decl @3.1-3.22
+		(ty-header @3.1-3.11 (name "BadDerived"))
+		(ty @3.15-3.22 (name "BadBase")))
+	(s-nominal-decl @8.1-8.16
+		(ty-header @8.1-8.9 (name "GoodBase"))
+		(ty @8.13-8.16 (name "Str")))
+	(s-nominal-decl @10.1-10.24
+		(ty-header @10.1-10.12 (name "GoodDerived"))
+		(ty @10.16-10.24 (name "GoodBase"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @8.1-8.6 (type "Error"))
-		(patt @15.1-15.10 (type "Error")))
+		(patt @6.1-6.6 (type "Error"))
+		(patt @13.1-13.10 (type "Error")))
 	(type_decls
-		(nominal @3.1-3.13 (type "Error")
-			(ty-header @3.1-3.8 (name "BadBase")))
-		(nominal @5.1-5.22 (type "Error")
-			(ty-header @5.1-5.11 (name "BadDerived")))
-		(nominal @10.1-10.16 (type "GoodBase")
-			(ty-header @10.1-10.9 (name "GoodBase")))
-		(nominal @12.1-12.24 (type "Error")
-			(ty-header @12.1-12.12 (name "GoodDerived"))))
+		(nominal @1.1-1.13 (type "Error")
+			(ty-header @1.1-1.8 (name "BadBase")))
+		(nominal @3.1-3.22 (type "Error")
+			(ty-header @3.1-3.11 (name "BadDerived")))
+		(nominal @8.1-8.16 (type "GoodBase")
+			(ty-header @8.1-8.9 (name "GoodBase")))
+		(nominal @10.1-10.24 (type "Error")
+			(ty-header @10.1-10.12 (name "GoodDerived"))))
 	(expressions
-		(expr @8.9-8.15 (type "Error"))
-		(expr @15.13-15.19 (type "Error"))))
+		(expr @6.9-6.15 (type "Error"))
+		(expr @13.13-13.19 (type "Error"))))
 ~~~

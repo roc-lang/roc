@@ -131,8 +131,6 @@ EndOfFile(6:1-6:1),
 ~~~
 # FORMATTED
 ~~~roc
-
-
 foo = 
 
 	"on        (string 'onmo %')))"

@@ -5,8 +5,6 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-module [Result, processData]
-
 Result(a, b) : [Ok(a), Err(b)]
 
 processData : Str -> Str
@@ -19,19 +17,20 @@ InnerModule : {
 }
 ~~~
 # EXPECTED
-PARSE ERROR - type_shadowing_across_scopes.md:11:5:11:11
-PARSE ERROR - type_shadowing_across_scopes.md:11:24:11:31
-PARSE ERROR - type_shadowing_across_scopes.md:11:31:11:32
-PARSE ERROR - type_shadowing_across_scopes.md:12:1:12:2
-TYPE REDECLARED - type_shadowing_across_scopes.md:3:1:3:31
-MALFORMED TYPE - type_shadowing_across_scopes.md:11:24:11:31
-UNUSED VARIABLE - type_shadowing_across_scopes.md:6:16:6:20
+PARSE ERROR - type_shadowing_across_scopes.md:9:5:9:11
+PARSE ERROR - type_shadowing_across_scopes.md:9:24:9:31
+PARSE ERROR - type_shadowing_across_scopes.md:9:31:9:32
+PARSE ERROR - type_shadowing_across_scopes.md:10:1:10:2
+TYPE REDECLARED - type_shadowing_across_scopes.md:1:1:1:31
+MALFORMED TYPE - type_shadowing_across_scopes.md:9:24:9:31
+TYPE MODULE MISSING MATCHING TYPE - type_shadowing_across_scopes.md:1:1:10:2
+UNUSED VARIABLE - type_shadowing_across_scopes.md:4:16:4:20
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_type_field_name`
 This is an unexpected parsing error. Please check your syntax.
 
-**type_shadowing_across_scopes.md:11:5:11:11:**
+**type_shadowing_across_scopes.md:9:5:9:11:**
 ```roc
     Result : [Success, Failure]
 ```
@@ -42,7 +41,7 @@ This is an unexpected parsing error. Please check your syntax.
 A parsing error occurred: `expected_ty_close_curly_or_comma`
 This is an unexpected parsing error. Please check your syntax.
 
-**type_shadowing_across_scopes.md:11:24:11:31:**
+**type_shadowing_across_scopes.md:9:24:9:31:**
 ```roc
     Result : [Success, Failure]
 ```
@@ -53,7 +52,7 @@ This is an unexpected parsing error. Please check your syntax.
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**type_shadowing_across_scopes.md:11:31:11:32:**
+**type_shadowing_across_scopes.md:9:31:9:32:**
 ```roc
     Result : [Success, Failure]
 ```
@@ -64,7 +63,7 @@ This is an unexpected parsing error. Please check your syntax.
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**type_shadowing_across_scopes.md:12:1:12:2:**
+**type_shadowing_across_scopes.md:10:1:10:2:**
 ```roc
 }
 ```
@@ -75,7 +74,7 @@ This is an unexpected parsing error. Please check your syntax.
 The type _Result_ is being redeclared.
 
 The redeclaration is here:
-**type_shadowing_across_scopes.md:3:1:3:31:**
+**type_shadowing_across_scopes.md:1:1:1:31:**
 ```roc
 Result(a, b) : [Ok(a), Err(b)]
 ```
@@ -84,7 +83,7 @@ Result(a, b) : [Ok(a), Err(b)]
 But _Result_ was already declared here:
 **type_shadowing_across_scopes.md:1:1:1:1:**
 ```roc
-module [Result, processData]
+Result(a, b) : [Ok(a), Err(b)]
 ```
 ^
 
@@ -92,11 +91,35 @@ module [Result, processData]
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
-**type_shadowing_across_scopes.md:11:24:11:31:**
+**type_shadowing_across_scopes.md:9:24:9:31:**
 ```roc
     Result : [Success, Failure]
 ```
                        ^^^^^^^
+
+
+**TYPE MODULE MISSING MATCHING TYPE**
+Type modules must have a type declaration matching the module name.
+
+This file is named `type_shadowing_across_scopes.roc`, but no top-level type declaration named `type_shadowing_across_scopes` was found.
+
+Add either:
+`type_shadowing_across_scopes := ...` (nominal type)
+or:
+`type_shadowing_across_scopes : ...` (type alias)
+**type_shadowing_across_scopes.md:1:1:10:2:**
+```roc
+Result(a, b) : [Ok(a), Err(b)]
+
+processData : Str -> Str
+processData = |data|
+    "processed"
+
+# In a nested module scope, redeclare Result
+InnerModule : {
+    Result : [Success, Failure]
+}
+```
 
 
 **UNUSED VARIABLE**
@@ -104,7 +127,7 @@ Variable `data` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_data` to suppress this warning.
 The unused variable is declared here:
-**type_shadowing_across_scopes.md:6:16:6:20:**
+**type_shadowing_across_scopes.md:4:16:4:20:**
 ```roc
 processData = |data|
 ```
@@ -113,60 +136,53 @@ processData = |data|
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:15),Comma(1:15-1:16),LowerIdent(1:17-1:28),CloseSquare(1:28-1:29),
-UpperIdent(3:1-3:7),NoSpaceOpenRound(3:7-3:8),LowerIdent(3:8-3:9),Comma(3:9-3:10),LowerIdent(3:11-3:12),CloseRound(3:12-3:13),OpColon(3:14-3:15),OpenSquare(3:16-3:17),UpperIdent(3:17-3:19),NoSpaceOpenRound(3:19-3:20),LowerIdent(3:20-3:21),CloseRound(3:21-3:22),Comma(3:22-3:23),UpperIdent(3:24-3:27),NoSpaceOpenRound(3:27-3:28),LowerIdent(3:28-3:29),CloseRound(3:29-3:30),CloseSquare(3:30-3:31),
-LowerIdent(5:1-5:12),OpColon(5:13-5:14),UpperIdent(5:15-5:18),OpArrow(5:19-5:21),UpperIdent(5:22-5:25),
-LowerIdent(6:1-6:12),OpAssign(6:13-6:14),OpBar(6:15-6:16),LowerIdent(6:16-6:20),OpBar(6:20-6:21),
-StringStart(7:5-7:6),StringPart(7:6-7:15),StringEnd(7:15-7:16),
-UpperIdent(10:1-10:12),OpColon(10:13-10:14),OpenCurly(10:15-10:16),
-UpperIdent(11:5-11:11),OpColon(11:12-11:13),OpenSquare(11:14-11:15),UpperIdent(11:15-11:22),Comma(11:22-11:23),UpperIdent(11:24-11:31),CloseSquare(11:31-11:32),
-CloseCurly(12:1-12:2),
-EndOfFile(13:1-13:1),
+UpperIdent(1:1-1:7),NoSpaceOpenRound(1:7-1:8),LowerIdent(1:8-1:9),Comma(1:9-1:10),LowerIdent(1:11-1:12),CloseRound(1:12-1:13),OpColon(1:14-1:15),OpenSquare(1:16-1:17),UpperIdent(1:17-1:19),NoSpaceOpenRound(1:19-1:20),LowerIdent(1:20-1:21),CloseRound(1:21-1:22),Comma(1:22-1:23),UpperIdent(1:24-1:27),NoSpaceOpenRound(1:27-1:28),LowerIdent(1:28-1:29),CloseRound(1:29-1:30),CloseSquare(1:30-1:31),
+LowerIdent(3:1-3:12),OpColon(3:13-3:14),UpperIdent(3:15-3:18),OpArrow(3:19-3:21),UpperIdent(3:22-3:25),
+LowerIdent(4:1-4:12),OpAssign(4:13-4:14),OpBar(4:15-4:16),LowerIdent(4:16-4:20),OpBar(4:20-4:21),
+StringStart(5:5-5:6),StringPart(5:6-5:15),StringEnd(5:15-5:16),
+UpperIdent(8:1-8:12),OpColon(8:13-8:14),OpenCurly(8:15-8:16),
+UpperIdent(9:5-9:11),OpColon(9:12-9:13),OpenSquare(9:14-9:15),UpperIdent(9:15-9:22),Comma(9:22-9:23),UpperIdent(9:24-9:31),CloseSquare(9:31-9:32),
+CloseCurly(10:1-10:2),
+EndOfFile(11:1-11:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-12.2
-	(module @1.1-1.29
-		(exposes @1.8-1.29
-			(exposed-upper-ident @1.9-1.15 (text "Result"))
-			(exposed-lower-ident @1.17-1.28
-				(text "processData"))))
+(file @1.1-10.2
+	(type-module @1.1-1.7)
 	(statements
-		(s-type-decl @3.1-3.31
-			(header @3.1-3.13 (name "Result")
+		(s-type-decl @1.1-1.31
+			(header @1.1-1.13 (name "Result")
 				(args
-					(ty-var @3.8-3.9 (raw "a"))
-					(ty-var @3.11-3.12 (raw "b"))))
-			(ty-tag-union @3.16-3.31
+					(ty-var @1.8-1.9 (raw "a"))
+					(ty-var @1.11-1.12 (raw "b"))))
+			(ty-tag-union @1.16-1.31
 				(tags
-					(ty-apply @3.17-3.22
-						(ty @3.17-3.19 (name "Ok"))
-						(ty-var @3.20-3.21 (raw "a")))
-					(ty-apply @3.24-3.30
-						(ty @3.24-3.27 (name "Err"))
-						(ty-var @3.28-3.29 (raw "b"))))))
-		(s-type-anno @5.1-5.25 (name "processData")
-			(ty-fn @5.15-5.25
-				(ty @5.15-5.18 (name "Str"))
-				(ty @5.22-5.25 (name "Str"))))
-		(s-decl @6.1-7.16
-			(p-ident @6.1-6.12 (raw "processData"))
-			(e-lambda @6.15-7.16
+					(ty-apply @1.17-1.22
+						(ty @1.17-1.19 (name "Ok"))
+						(ty-var @1.20-1.21 (raw "a")))
+					(ty-apply @1.24-1.30
+						(ty @1.24-1.27 (name "Err"))
+						(ty-var @1.28-1.29 (raw "b"))))))
+		(s-type-anno @3.1-3.25 (name "processData")
+			(ty-fn @3.15-3.25
+				(ty @3.15-3.18 (name "Str"))
+				(ty @3.22-3.25 (name "Str"))))
+		(s-decl @4.1-5.16
+			(p-ident @4.1-4.12 (raw "processData"))
+			(e-lambda @4.15-5.16
 				(args
-					(p-ident @6.16-6.20 (raw "data")))
-				(e-string @7.5-7.16
-					(e-string-part @7.6-7.15 (raw "processed")))))
-		(s-type-decl @10.1-11.31
-			(header @10.1-10.12 (name "InnerModule")
+					(p-ident @4.16-4.20 (raw "data")))
+				(e-string @5.5-5.16
+					(e-string-part @5.6-5.15 (raw "processed")))))
+		(s-type-decl @8.1-9.31
+			(header @8.1-8.12 (name "InnerModule")
 				(args))
-			(ty-malformed @11.24-11.31 (tag "expected_ty_close_curly_or_comma")))
-		(s-malformed @11.31-11.32 (tag "statement_unexpected_token"))
-		(s-malformed @12.1-12.2 (tag "statement_unexpected_token"))))
+			(ty-malformed @9.24-9.31 (tag "expected_ty_close_curly_or_comma")))
+		(s-malformed @9.31-9.32 (tag "statement_unexpected_token"))
+		(s-malformed @10.1-10.2 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-module [Result, processData]
-
 Result(a, b) : [Ok(a), Err(b)]
 
 processData : Str -> Str
@@ -181,44 +197,44 @@ InnerModule :
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @6.1-6.12 (ident "processData"))
-		(e-lambda @6.15-7.16
+		(p-assign @4.1-4.12 (ident "processData"))
+		(e-lambda @4.15-5.16
 			(args
-				(p-assign @6.16-6.20 (ident "data")))
-			(e-string @7.5-7.16
-				(e-literal @7.6-7.15 (string "processed"))))
-		(annotation @6.1-6.12
+				(p-assign @4.16-4.20 (ident "data")))
+			(e-string @5.5-5.16
+				(e-literal @5.6-5.15 (string "processed"))))
+		(annotation @4.1-4.12
 			(declared-type
-				(ty-fn @5.15-5.25 (effectful false)
-					(ty @5.15-5.18 (name "Str"))
-					(ty @5.22-5.25 (name "Str"))))))
-	(s-alias-decl @3.1-3.31
-		(ty-header @3.1-3.13 (name "Result")
+				(ty-fn @3.15-3.25 (effectful false)
+					(ty @3.15-3.18 (name "Str"))
+					(ty @3.22-3.25 (name "Str"))))))
+	(s-alias-decl @1.1-1.31
+		(ty-header @1.1-1.13 (name "Result")
 			(ty-args
-				(ty-var @3.8-3.9 (name "a"))
-				(ty-var @3.11-3.12 (name "b"))))
-		(ty-tag-union @3.16-3.31
-			(ty-apply @3.17-3.22 (symbol "Ok")
-				(ty-var @3.20-3.21 (name "a")))
-			(ty-apply @3.24-3.30 (symbol "Err")
-				(ty-var @3.28-3.29 (name "b")))))
-	(s-alias-decl @10.1-11.31
-		(ty-header @10.1-10.12 (name "InnerModule"))
-		(ty-malformed @11.24-11.31)))
+				(ty-var @1.8-1.9 (name "a"))
+				(ty-var @1.11-1.12 (name "b"))))
+		(ty-tag-union @1.16-1.31
+			(ty-apply @1.17-1.22 (symbol "Ok")
+				(ty-var @1.20-1.21 (name "a")))
+			(ty-apply @1.24-1.30 (symbol "Err")
+				(ty-var @1.28-1.29 (name "b")))))
+	(s-alias-decl @8.1-9.31
+		(ty-header @8.1-8.12 (name "InnerModule"))
+		(ty-malformed @9.24-9.31)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.12 (type "Str -> Str")))
+		(patt @4.1-4.12 (type "Str -> Str")))
 	(type_decls
-		(alias @3.1-3.31 (type "Result(a, b)")
-			(ty-header @3.1-3.13 (name "Result")
+		(alias @1.1-1.31 (type "Result(a, b)")
+			(ty-header @1.1-1.13 (name "Result")
 				(ty-args
-					(ty-var @3.8-3.9 (name "a"))
-					(ty-var @3.11-3.12 (name "b")))))
-		(alias @10.1-11.31 (type "Error")
-			(ty-header @10.1-10.12 (name "InnerModule"))))
+					(ty-var @1.8-1.9 (name "a"))
+					(ty-var @1.11-1.12 (name "b")))))
+		(alias @8.1-9.31 (type "Error")
+			(ty-header @8.1-8.12 (name "InnerModule"))))
 	(expressions
-		(expr @6.15-7.16 (type "Str -> Str"))))
+		(expr @4.15-5.16 (type "Str -> Str"))))
 ~~~

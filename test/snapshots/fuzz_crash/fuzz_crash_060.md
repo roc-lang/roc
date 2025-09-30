@@ -23,6 +23,7 @@ PARSE ERROR - fuzz_crash_060.md:2:2:2:3
 PARSE ERROR - fuzz_crash_060.md:2:3:2:3
 PARSE ERROR - fuzz_crash_060.md:2:3:2:3
 PARSE ERROR - fuzz_crash_060.md:3:1:3:2
+MODULE HEADER DEPRECATED - fuzz_crash_060.md:1:1:1:9
 UNDECLARED TYPE VARIABLE - fuzz_crash_060.md:1:11:1:12
 # PROBLEMS
 **UNCLOSED STRING**
@@ -164,6 +165,19 @@ This is an unexpected parsing error. Please check your syntax.
 }
 ```
 ^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**fuzz_crash_060.md:1:1:1:9:**
+```roc
+module[]C:k||match 0{0|#
+```
+^^^^^^^^
 
 
 **UNDECLARED TYPE VARIABLE**

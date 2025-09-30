@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
- f{o,
+f{o,
      ]
 
 foo =
@@ -14,12 +14,12 @@ foo =
 ~~~
 # EXPECTED
 UNCLOSED STRING - :0:0:0:0
+PARSE ERROR - fuzz_crash_009.md:1:1:1:2
 PARSE ERROR - fuzz_crash_009.md:1:2:1:3
 PARSE ERROR - fuzz_crash_009.md:1:3:1:4
 PARSE ERROR - fuzz_crash_009.md:1:4:1:5
-PARSE ERROR - fuzz_crash_009.md:1:5:1:6
 PARSE ERROR - fuzz_crash_009.md:2:6:2:7
-MISSING MAIN! FUNCTION - fuzz_crash_009.md:1:2:6:12
+MISSING MAIN! FUNCTION - fuzz_crash_009.md:1:1:6:12
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.
@@ -34,9 +34,20 @@ This string is missing a closing quote.
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
+**fuzz_crash_009.md:1:1:1:2:**
+```roc
+f{o,
+```
+^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
 **fuzz_crash_009.md:1:2:1:3:**
 ```roc
- f{o,
+f{o,
 ```
  ^
 
@@ -47,7 +58,7 @@ This is an unexpected parsing error. Please check your syntax.
 
 **fuzz_crash_009.md:1:3:1:4:**
 ```roc
- f{o,
+f{o,
 ```
   ^
 
@@ -58,20 +69,9 @@ This is an unexpected parsing error. Please check your syntax.
 
 **fuzz_crash_009.md:1:4:1:5:**
 ```roc
- f{o,
+f{o,
 ```
    ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_009.md:1:5:1:6:**
-```roc
- f{o,
-```
-    ^
 
 
 **PARSE ERROR**
@@ -92,9 +92,9 @@ No `main!` function was found.
 
 Add a main! function like:
 `main! = |arg| { ... }`
-**fuzz_crash_009.md:1:2:6:12:**
+**fuzz_crash_009.md:1:1:6:12:**
 ```roc
- f{o,
+f{o,
      ]
 
 foo =
@@ -105,7 +105,7 @@ foo =
 
 # TOKENS
 ~~~zig
-LowerIdent(1:2-1:3),OpenCurly(1:3-1:4),LowerIdent(1:4-1:5),Comma(1:5-1:6),
+LowerIdent(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:3-1:4),Comma(1:4-1:5),
 CloseSquare(2:6-2:7),
 LowerIdent(4:1-4:4),OpAssign(4:5-4:6),
 StringStart(6:5-6:6),StringPart(6:6-6:12),StringEnd(6:12-6:12),
@@ -113,13 +113,13 @@ EndOfFile(7:1-7:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.2-6.12
-	(type-module @1.2-1.3)
+(file @1.1-6.12
+	(type-module @1.1-1.2)
 	(statements
+		(s-malformed @1.1-1.2 (tag "statement_unexpected_token"))
 		(s-malformed @1.2-1.3 (tag "statement_unexpected_token"))
 		(s-malformed @1.3-1.4 (tag "statement_unexpected_token"))
 		(s-malformed @1.4-1.5 (tag "statement_unexpected_token"))
-		(s-malformed @1.5-1.6 (tag "statement_unexpected_token"))
 		(s-malformed @2.6-2.7 (tag "statement_unexpected_token"))
 		(s-decl @4.1-6.12
 			(p-ident @4.1-4.4 (raw "foo"))
@@ -128,9 +128,6 @@ EndOfFile(7:1-7:1),
 ~~~
 # FORMATTED
 ~~~roc
-
-
-
 foo = 
 
 	"onmo %"

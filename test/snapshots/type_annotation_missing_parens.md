@@ -5,13 +5,11 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-module [nums]
-
 nums : List U8
 ~~~
 # EXPECTED
-PARSE ERROR - type_annotation_missing_parens.md:4:1:4:1
-EXPOSED BUT NOT DEFINED - type_annotation_missing_parens.md:1:9:1:13
+PARSE ERROR - type_annotation_missing_parens.md:2:1:2:1
+MISSING MAIN! FUNCTION - type_annotation_missing_parens.md:1:1:1:15
 # PROBLEMS
 **PARSE ERROR**
 Type applications require parentheses around their type arguments.
@@ -29,45 +27,43 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-**type_annotation_missing_parens.md:4:1:4:1:**
+**type_annotation_missing_parens.md:2:1:2:1:**
 ```roc
 
 ```
 ^
 
 
-**EXPOSED BUT NOT DEFINED**
-The module header says that `nums` is exposed, but it is not defined anywhere in this module.
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
 
-**type_annotation_missing_parens.md:1:9:1:13:**
+No `main!` function was found.
+
+Add a main! function like:
+`main! = |arg| { ... }`
+**type_annotation_missing_parens.md:1:1:1:15:**
 ```roc
-module [nums]
+nums : List U8
 ```
-        ^^^^
-You can fix this by either defining `nums` in this module, or by removing it from the list of exposed values.
+^^^^^^^^^^^^^^
+
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:13),CloseSquare(1:13-1:14),
-LowerIdent(3:1-3:5),OpColon(3:6-3:7),UpperIdent(3:8-3:12),UpperIdent(3:13-3:15),
-EndOfFile(4:1-4:1),
+LowerIdent(1:1-1:5),OpColon(1:6-1:7),UpperIdent(1:8-1:12),UpperIdent(1:13-1:15),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-3.15
-	(module @1.1-1.14
-		(exposes @1.8-1.14
-			(exposed-lower-ident @1.9-1.13
-				(text "nums"))))
+(file @1.1-1.15
+	(type-module @1.1-1.5)
 	(statements
-		(s-type-anno @3.1-3.12 (name "nums")
-			(ty @3.8-3.12 (name "List")))
+		(s-type-anno @1.1-1.12 (name "nums")
+			(ty @1.8-1.12 (name "List")))
 		(s-malformed @1.1-1.1 (tag "expected_colon_after_type_annotation"))))
 ~~~
 # FORMATTED
 ~~~roc
-module [nums]
-
 nums : List
 ~~~
 # CANONICALIZE

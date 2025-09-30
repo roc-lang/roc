@@ -11,6 +11,7 @@ S
 ~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_052.md:3:1:3:2
+MODULE HEADER DEPRECATED - fuzz_crash_052.md:1:1:1:9
 MODULE NOT FOUND - fuzz_crash_052.md:1:9:2:2
 # PROBLEMS
 **PARSE ERROR**
@@ -22,6 +23,19 @@ This is an unexpected parsing error. Please check your syntax.
 0
 ```
 ^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**fuzz_crash_052.md:1:1:1:9:**
+```roc
+module[]import
+```
+^^^^^^^^
 
 
 **MODULE NOT FOUND**

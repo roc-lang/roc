@@ -2415,7 +2415,7 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
     try env.initCIRFields(gpa, module_name);
 
     // Create canonicalizer
-    var canonicalizer = Can.init(&env, &parse_ast, null) catch |err| {
+    var canonicalizer = Can.init(&env, &parse_ast, null, Can.ValidationContext.checking) catch |err| {
         try stderr.print("Failed to initialize canonicalizer: {}", .{err});
         std.process.exit(1);
     };

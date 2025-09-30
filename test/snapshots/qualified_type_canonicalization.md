@@ -5,13 +5,6 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-module [
-    Color,
-    ModuleA.ModuleB.TypeC,
-    Result,
-    ExternalModule,
-]
-
 import Basics.Result
 import Color
 import ModuleA.ModuleB exposing [TypeC]
@@ -51,55 +44,33 @@ transform = |result|
     }
 ~~~
 # EXPECTED
-PARSE ERROR - qualified_type_canonicalization.md:8:1:8:7
-PARSE ERROR - qualified_type_canonicalization.md:8:14:8:21
-PARSE ERROR - qualified_type_canonicalization.md:10:15:10:23
-PARSE ERROR - qualified_type_canonicalization.md:10:24:10:32
-PARSE ERROR - qualified_type_canonicalization.md:10:33:10:34
-PARSE ERROR - qualified_type_canonicalization.md:10:39:10:40
-MODULE NOT FOUND - qualified_type_canonicalization.md:9:1:9:13
-MODULE NOT FOUND - qualified_type_canonicalization.md:10:1:10:15
-MODULE NOT FOUND - qualified_type_canonicalization.md:11:1:11:32
-UNDECLARED TYPE - qualified_type_canonicalization.md:15:19:15:24
-MODULE NOT IMPORTED - qualified_type_canonicalization.md:22:23:22:44
-UNDEFINED VARIABLE - qualified_type_canonicalization.md:23:23:23:32
-MODULE NOT IMPORTED - qualified_type_canonicalization.md:26:14:26:27
-UNDECLARED TYPE - qualified_type_canonicalization.md:31:16:31:21
-UNUSED VARIABLE - qualified_type_canonicalization.md:35:17:35:22
-MODULE NOT IMPORTED - qualified_type_canonicalization.md:39:13:39:26
-MODULE NOT IMPORTED - qualified_type_canonicalization.md:39:55:39:76
-UNDEFINED VARIABLE - qualified_type_canonicalization.md:42:27:42:42
-UNDEFINED VARIABLE - qualified_type_canonicalization.md:43:28:43:41
-UNUSED VARIABLE - qualified_type_canonicalization.md:43:20:43:23
+PARSE ERROR - qualified_type_canonicalization.md:1:14:1:21
+PARSE ERROR - qualified_type_canonicalization.md:3:15:3:23
+PARSE ERROR - qualified_type_canonicalization.md:3:24:3:32
+PARSE ERROR - qualified_type_canonicalization.md:3:33:3:34
+PARSE ERROR - qualified_type_canonicalization.md:3:39:3:40
+MISSING MAIN! FUNCTION - qualified_type_canonicalization.md:1:1:37:6
+MODULE NOT FOUND - qualified_type_canonicalization.md:1:1:1:14
+MODULE NOT FOUND - qualified_type_canonicalization.md:2:1:2:13
+MODULE NOT FOUND - qualified_type_canonicalization.md:3:1:3:15
+MODULE NOT FOUND - qualified_type_canonicalization.md:4:1:4:32
+UNDECLARED TYPE - qualified_type_canonicalization.md:8:19:8:24
+MODULE NOT IMPORTED - qualified_type_canonicalization.md:15:23:15:44
+UNDEFINED VARIABLE - qualified_type_canonicalization.md:16:23:16:32
+MODULE NOT IMPORTED - qualified_type_canonicalization.md:19:14:19:27
+UNDECLARED TYPE - qualified_type_canonicalization.md:24:16:24:21
+UNUSED VARIABLE - qualified_type_canonicalization.md:28:17:28:22
+MODULE NOT IMPORTED - qualified_type_canonicalization.md:32:13:32:26
+MODULE NOT IMPORTED - qualified_type_canonicalization.md:32:55:32:76
+UNDEFINED VARIABLE - qualified_type_canonicalization.md:35:27:35:42
+UNDEFINED VARIABLE - qualified_type_canonicalization.md:36:28:36:41
+UNUSED VARIABLE - qualified_type_canonicalization.md:36:20:36:23
 # PROBLEMS
 **PARSE ERROR**
-A parsing error occurred: `import_exposing_no_close`
+A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**qualified_type_canonicalization.md:8:1:8:7:**
-```roc
-import Basics.Result
-```
-^^^^^^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Result(a, Str)`
-    `Maybe(List(U64))`
-
-**qualified_type_canonicalization.md:8:14:8:21:**
+**qualified_type_canonicalization.md:1:14:1:21:**
 ```roc
 import Basics.Result
 ```
@@ -110,7 +81,7 @@ import Basics.Result
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**qualified_type_canonicalization.md:10:15:10:23:**
+**qualified_type_canonicalization.md:3:15:3:23:**
 ```roc
 import ModuleA.ModuleB exposing [TypeC]
 ```
@@ -121,7 +92,7 @@ import ModuleA.ModuleB exposing [TypeC]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**qualified_type_canonicalization.md:10:24:10:32:**
+**qualified_type_canonicalization.md:3:24:3:32:**
 ```roc
 import ModuleA.ModuleB exposing [TypeC]
 ```
@@ -132,7 +103,7 @@ import ModuleA.ModuleB exposing [TypeC]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**qualified_type_canonicalization.md:10:33:10:34:**
+**qualified_type_canonicalization.md:3:33:3:34:**
 ```roc
 import ModuleA.ModuleB exposing [TypeC]
 ```
@@ -155,18 +126,78 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-**qualified_type_canonicalization.md:10:39:10:40:**
+**qualified_type_canonicalization.md:3:39:3:40:**
 ```roc
 import ModuleA.ModuleB exposing [TypeC]
 ```
                                       ^
 
 
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
+
+No `main!` function was found.
+
+Add a main! function like:
+`main! = |arg| { ... }`
+**qualified_type_canonicalization.md:1:1:37:6:**
+```roc
+import Basics.Result
+import Color
+import ModuleA.ModuleB exposing [TypeC]
+import ExternalModule as ExtMod
+
+# Simple qualified type
+simpleQualified : Color.RGB
+simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
+
+# Aliased qualified type
+aliasedQualified : ExtMod.DataType
+aliasedQualified = ExtMod.DataType.Default
+
+# Multi-level qualified type
+multiLevelQualified : ModuleA.ModuleB.TypeC
+multiLevelQualified = TypeC.new
+
+# Using qualified type with generics
+resultType : Result.Result(I32, Str)
+resultType = Result.Ok(42)
+
+# Function returning qualified type
+getColor : {} -> Color.RGB
+getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
+
+# Function accepting qualified type
+processColor : Color.RGB -> Str
+processColor = |color|
+    "Color processed"
+
+# Multiple qualified types in a function signature
+transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
+transform = |result|
+    match result {
+        Result.Ok(rgb) => TypeC.fromColor(rgb)
+        Result.Err(err) => TypeC.default
+    }
+```
+
+
+**MODULE NOT FOUND**
+The module `Basics` was not found in this Roc project.
+
+You're attempting to use this module here:
+**qualified_type_canonicalization.md:1:1:1:14:**
+```roc
+import Basics.Result
+```
+^^^^^^^^^^^^^
+
+
 **MODULE NOT FOUND**
 The module `Color` was not found in this Roc project.
 
 You're attempting to use this module here:
-**qualified_type_canonicalization.md:9:1:9:13:**
+**qualified_type_canonicalization.md:2:1:2:13:**
 ```roc
 import Color
 ```
@@ -177,7 +208,7 @@ import Color
 The module `ModuleA` was not found in this Roc project.
 
 You're attempting to use this module here:
-**qualified_type_canonicalization.md:10:1:10:15:**
+**qualified_type_canonicalization.md:3:1:3:15:**
 ```roc
 import ModuleA.ModuleB exposing [TypeC]
 ```
@@ -188,7 +219,7 @@ import ModuleA.ModuleB exposing [TypeC]
 The module `ExternalModule` was not found in this Roc project.
 
 You're attempting to use this module here:
-**qualified_type_canonicalization.md:11:1:11:32:**
+**qualified_type_canonicalization.md:4:1:4:32:**
 ```roc
 import ExternalModule as ExtMod
 ```
@@ -199,7 +230,7 @@ import ExternalModule as ExtMod
 The type _Color_ is not declared in this scope.
 
 This type is referenced here:
-**qualified_type_canonicalization.md:15:19:15:24:**
+**qualified_type_canonicalization.md:8:19:8:24:**
 ```roc
 simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
 ```
@@ -207,14 +238,7 @@ simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `module [
-    Color,
-    ModuleA.ModuleB.TypeC,
-    Result,
-    ExternalModule,
-]
-
-import Basics.Result
+There is no module with the name `import Basics.Result
 import Color
 import ModuleA.ModuleB exposing [TypeC]
 import ExternalModule as ExtMod
@@ -231,7 +255,7 @@ aliasedQualified = ExtMod.DataType.Default
 multiLevelQualified : ModuleA.ModuleB` imported into this Roc file.
 
 You're attempting to use this module here:
-**qualified_type_canonicalization.md:22:23:22:44:**
+**qualified_type_canonicalization.md:15:23:15:44:**
 ```roc
 multiLevelQualified : ModuleA.ModuleB.TypeC
 ```
@@ -242,7 +266,7 @@ multiLevelQualified : ModuleA.ModuleB.TypeC
 Nothing is named `new` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**qualified_type_canonicalization.md:23:23:23:32:**
+**qualified_type_canonicalization.md:16:23:16:32:**
 ```roc
 multiLevelQualified = TypeC.new
 ```
@@ -253,7 +277,7 @@ multiLevelQualified = TypeC.new
 There is no module with the name `Result` imported into this Roc file.
 
 You're attempting to use this module here:
-**qualified_type_canonicalization.md:26:14:26:27:**
+**qualified_type_canonicalization.md:19:14:19:27:**
 ```roc
 resultType : Result.Result(I32, Str)
 ```
@@ -264,7 +288,7 @@ resultType : Result.Result(I32, Str)
 The type _Color_ is not declared in this scope.
 
 This type is referenced here:
-**qualified_type_canonicalization.md:31:16:31:21:**
+**qualified_type_canonicalization.md:24:16:24:21:**
 ```roc
 getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
 ```
@@ -276,7 +300,7 @@ Variable `color` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_color` to suppress this warning.
 The unused variable is declared here:
-**qualified_type_canonicalization.md:35:17:35:22:**
+**qualified_type_canonicalization.md:28:17:28:22:**
 ```roc
 processColor = |color|
 ```
@@ -287,7 +311,7 @@ processColor = |color|
 There is no module with the name `Result` imported into this Roc file.
 
 You're attempting to use this module here:
-**qualified_type_canonicalization.md:39:13:39:26:**
+**qualified_type_canonicalization.md:32:13:32:26:**
 ```roc
 transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
 ```
@@ -295,14 +319,7 @@ transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `module [
-    Color,
-    ModuleA.ModuleB.TypeC,
-    Result,
-    ExternalModule,
-]
-
-import Basics.Result
+There is no module with the name `import Basics.Result
 import Color
 import ModuleA.ModuleB exposing [TypeC]
 import ExternalModule as ExtMod
@@ -336,7 +353,7 @@ processColor = |color|
 transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB` imported into this Roc file.
 
 You're attempting to use this module here:
-**qualified_type_canonicalization.md:39:55:39:76:**
+**qualified_type_canonicalization.md:32:55:32:76:**
 ```roc
 transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
 ```
@@ -347,7 +364,7 @@ transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
 Nothing is named `fromColor` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**qualified_type_canonicalization.md:42:27:42:42:**
+**qualified_type_canonicalization.md:35:27:35:42:**
 ```roc
         Result.Ok(rgb) => TypeC.fromColor(rgb)
 ```
@@ -358,7 +375,7 @@ Is there an `import` or `exposing` missing up-top?
 Nothing is named `default` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**qualified_type_canonicalization.md:43:28:43:41:**
+**qualified_type_canonicalization.md:36:28:36:41:**
 ```roc
         Result.Err(err) => TypeC.default
 ```
@@ -370,7 +387,7 @@ Variable `err` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_err` to suppress this warning.
 The unused variable is declared here:
-**qualified_type_canonicalization.md:43:20:43:23:**
+**qualified_type_canonicalization.md:36:20:36:23:**
 ```roc
         Result.Err(err) => TypeC.default
 ```
@@ -379,142 +396,136 @@ The unused variable is declared here:
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),
-UpperIdent(2:5-2:10),Comma(2:10-2:11),
-UpperIdent(3:5-3:12),NoSpaceDotUpperIdent(3:12-3:20),NoSpaceDotUpperIdent(3:20-3:26),Comma(3:26-3:27),
-UpperIdent(4:5-4:11),Comma(4:11-4:12),
-UpperIdent(5:5-5:19),Comma(5:19-5:20),
-CloseSquare(6:1-6:2),
-KwImport(8:1-8:7),UpperIdent(8:8-8:14),NoSpaceDotUpperIdent(8:14-8:21),
-KwImport(9:1-9:7),UpperIdent(9:8-9:13),
-KwImport(10:1-10:7),UpperIdent(10:8-10:15),NoSpaceDotUpperIdent(10:15-10:23),KwExposing(10:24-10:32),OpenSquare(10:33-10:34),UpperIdent(10:34-10:39),CloseSquare(10:39-10:40),
-KwImport(11:1-11:7),UpperIdent(11:8-11:22),KwAs(11:23-11:25),UpperIdent(11:26-11:32),
-LowerIdent(14:1-14:16),OpColon(14:17-14:18),UpperIdent(14:19-14:24),NoSpaceDotUpperIdent(14:24-14:28),
-LowerIdent(15:1-15:16),OpAssign(15:17-15:18),UpperIdent(15:19-15:24),NoSpaceDotUpperIdent(15:24-15:28),NoSpaceOpenRound(15:28-15:29),OpenCurly(15:29-15:30),LowerIdent(15:31-15:32),OpColon(15:32-15:33),Int(15:34-15:37),Comma(15:37-15:38),LowerIdent(15:39-15:40),OpColon(15:40-15:41),Int(15:42-15:43),Comma(15:43-15:44),LowerIdent(15:45-15:46),OpColon(15:46-15:47),Int(15:48-15:49),CloseCurly(15:50-15:51),CloseRound(15:51-15:52),
-LowerIdent(18:1-18:17),OpColon(18:18-18:19),UpperIdent(18:20-18:26),NoSpaceDotUpperIdent(18:26-18:35),
-LowerIdent(19:1-19:17),OpAssign(19:18-19:19),UpperIdent(19:20-19:26),NoSpaceDotUpperIdent(19:26-19:35),NoSpaceDotUpperIdent(19:35-19:43),
-LowerIdent(22:1-22:20),OpColon(22:21-22:22),UpperIdent(22:23-22:30),NoSpaceDotUpperIdent(22:30-22:38),NoSpaceDotUpperIdent(22:38-22:44),
-LowerIdent(23:1-23:20),OpAssign(23:21-23:22),UpperIdent(23:23-23:28),NoSpaceDotLowerIdent(23:28-23:32),
-LowerIdent(26:1-26:11),OpColon(26:12-26:13),UpperIdent(26:14-26:20),NoSpaceDotUpperIdent(26:20-26:27),NoSpaceOpenRound(26:27-26:28),UpperIdent(26:28-26:31),Comma(26:31-26:32),UpperIdent(26:33-26:36),CloseRound(26:36-26:37),
-LowerIdent(27:1-27:11),OpAssign(27:12-27:13),UpperIdent(27:14-27:20),NoSpaceDotUpperIdent(27:20-27:23),NoSpaceOpenRound(27:23-27:24),Int(27:24-27:26),CloseRound(27:26-27:27),
-LowerIdent(30:1-30:9),OpColon(30:10-30:11),OpenCurly(30:12-30:13),CloseCurly(30:13-30:14),OpArrow(30:15-30:17),UpperIdent(30:18-30:23),NoSpaceDotUpperIdent(30:23-30:27),
-LowerIdent(31:1-31:9),OpAssign(31:10-31:11),OpBar(31:12-31:13),Underscore(31:13-31:14),OpBar(31:14-31:15),UpperIdent(31:16-31:21),NoSpaceDotUpperIdent(31:21-31:25),NoSpaceOpenRound(31:25-31:26),OpenCurly(31:26-31:27),LowerIdent(31:28-31:29),OpColon(31:29-31:30),Int(31:31-31:32),Comma(31:32-31:33),LowerIdent(31:34-31:35),OpColon(31:35-31:36),Int(31:37-31:40),Comma(31:40-31:41),LowerIdent(31:42-31:43),OpColon(31:43-31:44),Int(31:45-31:46),CloseCurly(31:47-31:48),CloseRound(31:48-31:49),
-LowerIdent(34:1-34:13),OpColon(34:14-34:15),UpperIdent(34:16-34:21),NoSpaceDotUpperIdent(34:21-34:25),OpArrow(34:26-34:28),UpperIdent(34:29-34:32),
-LowerIdent(35:1-35:13),OpAssign(35:14-35:15),OpBar(35:16-35:17),LowerIdent(35:17-35:22),OpBar(35:22-35:23),
-StringStart(36:5-36:6),StringPart(36:6-36:21),StringEnd(36:21-36:22),
-LowerIdent(39:1-39:10),OpColon(39:11-39:12),UpperIdent(39:13-39:19),NoSpaceDotUpperIdent(39:19-39:26),NoSpaceOpenRound(39:26-39:27),UpperIdent(39:27-39:32),NoSpaceDotUpperIdent(39:32-39:36),Comma(39:36-39:37),UpperIdent(39:38-39:44),NoSpaceDotUpperIdent(39:44-39:50),CloseRound(39:50-39:51),OpArrow(39:52-39:54),UpperIdent(39:55-39:62),NoSpaceDotUpperIdent(39:62-39:70),NoSpaceDotUpperIdent(39:70-39:76),
-LowerIdent(40:1-40:10),OpAssign(40:11-40:12),OpBar(40:13-40:14),LowerIdent(40:14-40:20),OpBar(40:20-40:21),
-KwMatch(41:5-41:10),LowerIdent(41:11-41:17),OpenCurly(41:18-41:19),
-UpperIdent(42:9-42:15),NoSpaceDotUpperIdent(42:15-42:18),NoSpaceOpenRound(42:18-42:19),LowerIdent(42:19-42:22),CloseRound(42:22-42:23),OpFatArrow(42:24-42:26),UpperIdent(42:27-42:32),NoSpaceDotLowerIdent(42:32-42:42),NoSpaceOpenRound(42:42-42:43),LowerIdent(42:43-42:46),CloseRound(42:46-42:47),
-UpperIdent(43:9-43:15),NoSpaceDotUpperIdent(43:15-43:19),NoSpaceOpenRound(43:19-43:20),LowerIdent(43:20-43:23),CloseRound(43:23-43:24),OpFatArrow(43:25-43:27),UpperIdent(43:28-43:33),NoSpaceDotLowerIdent(43:33-43:41),
-CloseCurly(44:5-44:6),
-EndOfFile(45:1-45:1),
+KwImport(1:1-1:7),UpperIdent(1:8-1:14),NoSpaceDotUpperIdent(1:14-1:21),
+KwImport(2:1-2:7),UpperIdent(2:8-2:13),
+KwImport(3:1-3:7),UpperIdent(3:8-3:15),NoSpaceDotUpperIdent(3:15-3:23),KwExposing(3:24-3:32),OpenSquare(3:33-3:34),UpperIdent(3:34-3:39),CloseSquare(3:39-3:40),
+KwImport(4:1-4:7),UpperIdent(4:8-4:22),KwAs(4:23-4:25),UpperIdent(4:26-4:32),
+LowerIdent(7:1-7:16),OpColon(7:17-7:18),UpperIdent(7:19-7:24),NoSpaceDotUpperIdent(7:24-7:28),
+LowerIdent(8:1-8:16),OpAssign(8:17-8:18),UpperIdent(8:19-8:24),NoSpaceDotUpperIdent(8:24-8:28),NoSpaceOpenRound(8:28-8:29),OpenCurly(8:29-8:30),LowerIdent(8:31-8:32),OpColon(8:32-8:33),Int(8:34-8:37),Comma(8:37-8:38),LowerIdent(8:39-8:40),OpColon(8:40-8:41),Int(8:42-8:43),Comma(8:43-8:44),LowerIdent(8:45-8:46),OpColon(8:46-8:47),Int(8:48-8:49),CloseCurly(8:50-8:51),CloseRound(8:51-8:52),
+LowerIdent(11:1-11:17),OpColon(11:18-11:19),UpperIdent(11:20-11:26),NoSpaceDotUpperIdent(11:26-11:35),
+LowerIdent(12:1-12:17),OpAssign(12:18-12:19),UpperIdent(12:20-12:26),NoSpaceDotUpperIdent(12:26-12:35),NoSpaceDotUpperIdent(12:35-12:43),
+LowerIdent(15:1-15:20),OpColon(15:21-15:22),UpperIdent(15:23-15:30),NoSpaceDotUpperIdent(15:30-15:38),NoSpaceDotUpperIdent(15:38-15:44),
+LowerIdent(16:1-16:20),OpAssign(16:21-16:22),UpperIdent(16:23-16:28),NoSpaceDotLowerIdent(16:28-16:32),
+LowerIdent(19:1-19:11),OpColon(19:12-19:13),UpperIdent(19:14-19:20),NoSpaceDotUpperIdent(19:20-19:27),NoSpaceOpenRound(19:27-19:28),UpperIdent(19:28-19:31),Comma(19:31-19:32),UpperIdent(19:33-19:36),CloseRound(19:36-19:37),
+LowerIdent(20:1-20:11),OpAssign(20:12-20:13),UpperIdent(20:14-20:20),NoSpaceDotUpperIdent(20:20-20:23),NoSpaceOpenRound(20:23-20:24),Int(20:24-20:26),CloseRound(20:26-20:27),
+LowerIdent(23:1-23:9),OpColon(23:10-23:11),OpenCurly(23:12-23:13),CloseCurly(23:13-23:14),OpArrow(23:15-23:17),UpperIdent(23:18-23:23),NoSpaceDotUpperIdent(23:23-23:27),
+LowerIdent(24:1-24:9),OpAssign(24:10-24:11),OpBar(24:12-24:13),Underscore(24:13-24:14),OpBar(24:14-24:15),UpperIdent(24:16-24:21),NoSpaceDotUpperIdent(24:21-24:25),NoSpaceOpenRound(24:25-24:26),OpenCurly(24:26-24:27),LowerIdent(24:28-24:29),OpColon(24:29-24:30),Int(24:31-24:32),Comma(24:32-24:33),LowerIdent(24:34-24:35),OpColon(24:35-24:36),Int(24:37-24:40),Comma(24:40-24:41),LowerIdent(24:42-24:43),OpColon(24:43-24:44),Int(24:45-24:46),CloseCurly(24:47-24:48),CloseRound(24:48-24:49),
+LowerIdent(27:1-27:13),OpColon(27:14-27:15),UpperIdent(27:16-27:21),NoSpaceDotUpperIdent(27:21-27:25),OpArrow(27:26-27:28),UpperIdent(27:29-27:32),
+LowerIdent(28:1-28:13),OpAssign(28:14-28:15),OpBar(28:16-28:17),LowerIdent(28:17-28:22),OpBar(28:22-28:23),
+StringStart(29:5-29:6),StringPart(29:6-29:21),StringEnd(29:21-29:22),
+LowerIdent(32:1-32:10),OpColon(32:11-32:12),UpperIdent(32:13-32:19),NoSpaceDotUpperIdent(32:19-32:26),NoSpaceOpenRound(32:26-32:27),UpperIdent(32:27-32:32),NoSpaceDotUpperIdent(32:32-32:36),Comma(32:36-32:37),UpperIdent(32:38-32:44),NoSpaceDotUpperIdent(32:44-32:50),CloseRound(32:50-32:51),OpArrow(32:52-32:54),UpperIdent(32:55-32:62),NoSpaceDotUpperIdent(32:62-32:70),NoSpaceDotUpperIdent(32:70-32:76),
+LowerIdent(33:1-33:10),OpAssign(33:11-33:12),OpBar(33:13-33:14),LowerIdent(33:14-33:20),OpBar(33:20-33:21),
+KwMatch(34:5-34:10),LowerIdent(34:11-34:17),OpenCurly(34:18-34:19),
+UpperIdent(35:9-35:15),NoSpaceDotUpperIdent(35:15-35:18),NoSpaceOpenRound(35:18-35:19),LowerIdent(35:19-35:22),CloseRound(35:22-35:23),OpFatArrow(35:24-35:26),UpperIdent(35:27-35:32),NoSpaceDotLowerIdent(35:32-35:42),NoSpaceOpenRound(35:42-35:43),LowerIdent(35:43-35:46),CloseRound(35:46-35:47),
+UpperIdent(36:9-36:15),NoSpaceDotUpperIdent(36:15-36:19),NoSpaceOpenRound(36:19-36:20),LowerIdent(36:20-36:23),CloseRound(36:23-36:24),OpFatArrow(36:25-36:27),UpperIdent(36:28-36:33),NoSpaceDotLowerIdent(36:33-36:41),
+CloseCurly(37:5-37:6),
+EndOfFile(38:1-38:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-44.6
-	(malformed-header @8.1-8.7 (tag "import_exposing_no_close"))
+(file @1.1-37.6
+	(type-module @1.1-1.7)
 	(statements
-		(s-malformed @8.14-8.21 (tag "expected_colon_after_type_annotation"))
-		(s-import @9.1-9.13 (raw "Color"))
-		(s-import @10.1-10.15 (raw "ModuleA"))
-		(s-malformed @10.15-10.23 (tag "statement_unexpected_token"))
-		(s-malformed @10.24-10.32 (tag "statement_unexpected_token"))
-		(s-malformed @10.33-10.34 (tag "statement_unexpected_token"))
-		(s-malformed @10.39-10.40 (tag "expected_colon_after_type_annotation"))
-		(s-import @11.1-11.32 (raw "ExternalModule") (alias "ExtMod"))
-		(s-type-anno @14.1-14.28 (name "simpleQualified")
-			(ty @14.19-14.28 (name "Color.RGB")))
-		(s-decl @15.1-15.52
-			(p-ident @15.1-15.16 (raw "simpleQualified"))
-			(e-apply @15.19-15.52
-				(e-tag @15.19-15.28 (raw "Color.RGB"))
-				(e-record @15.29-15.51
+		(s-import @1.1-1.14 (raw "Basics"))
+		(s-malformed @1.14-1.21 (tag "statement_unexpected_token"))
+		(s-import @2.1-2.13 (raw "Color"))
+		(s-import @3.1-3.15 (raw "ModuleA"))
+		(s-malformed @3.15-3.23 (tag "statement_unexpected_token"))
+		(s-malformed @3.24-3.32 (tag "statement_unexpected_token"))
+		(s-malformed @3.33-3.34 (tag "statement_unexpected_token"))
+		(s-malformed @3.39-3.40 (tag "expected_colon_after_type_annotation"))
+		(s-import @4.1-4.32 (raw "ExternalModule") (alias "ExtMod"))
+		(s-type-anno @7.1-7.28 (name "simpleQualified")
+			(ty @7.19-7.28 (name "Color.RGB")))
+		(s-decl @8.1-8.52
+			(p-ident @8.1-8.16 (raw "simpleQualified"))
+			(e-apply @8.19-8.52
+				(e-tag @8.19-8.28 (raw "Color.RGB"))
+				(e-record @8.29-8.51
 					(field (field "r")
-						(e-int @15.34-15.37 (raw "255")))
+						(e-int @8.34-8.37 (raw "255")))
 					(field (field "g")
-						(e-int @15.42-15.43 (raw "0")))
+						(e-int @8.42-8.43 (raw "0")))
 					(field (field "b")
-						(e-int @15.48-15.49 (raw "0"))))))
-		(s-type-anno @18.1-18.35 (name "aliasedQualified")
-			(ty @18.20-18.35 (name "ExtMod.DataType")))
-		(s-decl @19.1-19.43
-			(p-ident @19.1-19.17 (raw "aliasedQualified"))
-			(e-tag @19.20-19.43 (raw "ExtMod.DataType.Default")))
-		(s-type-anno @22.1-22.44 (name "multiLevelQualified")
-			(ty @22.23-22.44 (name "ModuleA.ModuleB.TypeC")))
-		(s-decl @23.1-23.32
-			(p-ident @23.1-23.20 (raw "multiLevelQualified"))
-			(e-ident @23.23-23.32 (raw "TypeC.new")))
-		(s-type-anno @26.1-26.37 (name "resultType")
-			(ty-apply @26.14-26.37
-				(ty @26.14-26.27 (name "Result.Result"))
-				(ty @26.28-26.31 (name "I32"))
-				(ty @26.33-26.36 (name "Str"))))
-		(s-decl @27.1-27.27
-			(p-ident @27.1-27.11 (raw "resultType"))
-			(e-apply @27.14-27.27
-				(e-tag @27.14-27.23 (raw "Result.Ok"))
-				(e-int @27.24-27.26 (raw "42"))))
-		(s-type-anno @30.1-30.27 (name "getColor")
-			(ty-fn @30.12-30.27
-				(ty-record @30.12-30.14)
-				(ty @30.18-30.27 (name "Color.RGB"))))
-		(s-decl @31.1-31.49
-			(p-ident @31.1-31.9 (raw "getColor"))
-			(e-lambda @31.12-31.49
+						(e-int @8.48-8.49 (raw "0"))))))
+		(s-type-anno @11.1-11.35 (name "aliasedQualified")
+			(ty @11.20-11.35 (name "ExtMod.DataType")))
+		(s-decl @12.1-12.43
+			(p-ident @12.1-12.17 (raw "aliasedQualified"))
+			(e-tag @12.20-12.43 (raw "ExtMod.DataType.Default")))
+		(s-type-anno @15.1-15.44 (name "multiLevelQualified")
+			(ty @15.23-15.44 (name "ModuleA.ModuleB.TypeC")))
+		(s-decl @16.1-16.32
+			(p-ident @16.1-16.20 (raw "multiLevelQualified"))
+			(e-ident @16.23-16.32 (raw "TypeC.new")))
+		(s-type-anno @19.1-19.37 (name "resultType")
+			(ty-apply @19.14-19.37
+				(ty @19.14-19.27 (name "Result.Result"))
+				(ty @19.28-19.31 (name "I32"))
+				(ty @19.33-19.36 (name "Str"))))
+		(s-decl @20.1-20.27
+			(p-ident @20.1-20.11 (raw "resultType"))
+			(e-apply @20.14-20.27
+				(e-tag @20.14-20.23 (raw "Result.Ok"))
+				(e-int @20.24-20.26 (raw "42"))))
+		(s-type-anno @23.1-23.27 (name "getColor")
+			(ty-fn @23.12-23.27
+				(ty-record @23.12-23.14)
+				(ty @23.18-23.27 (name "Color.RGB"))))
+		(s-decl @24.1-24.49
+			(p-ident @24.1-24.9 (raw "getColor"))
+			(e-lambda @24.12-24.49
 				(args
 					(p-underscore))
-				(e-apply @31.16-31.49
-					(e-tag @31.16-31.25 (raw "Color.RGB"))
-					(e-record @31.26-31.48
+				(e-apply @24.16-24.49
+					(e-tag @24.16-24.25 (raw "Color.RGB"))
+					(e-record @24.26-24.48
 						(field (field "r")
-							(e-int @31.31-31.32 (raw "0")))
+							(e-int @24.31-24.32 (raw "0")))
 						(field (field "g")
-							(e-int @31.37-31.40 (raw "255")))
+							(e-int @24.37-24.40 (raw "255")))
 						(field (field "b")
-							(e-int @31.45-31.46 (raw "0")))))))
-		(s-type-anno @34.1-34.32 (name "processColor")
-			(ty-fn @34.16-34.32
-				(ty @34.16-34.25 (name "Color.RGB"))
-				(ty @34.29-34.32 (name "Str"))))
-		(s-decl @35.1-36.22
-			(p-ident @35.1-35.13 (raw "processColor"))
-			(e-lambda @35.16-36.22
+							(e-int @24.45-24.46 (raw "0")))))))
+		(s-type-anno @27.1-27.32 (name "processColor")
+			(ty-fn @27.16-27.32
+				(ty @27.16-27.25 (name "Color.RGB"))
+				(ty @27.29-27.32 (name "Str"))))
+		(s-decl @28.1-29.22
+			(p-ident @28.1-28.13 (raw "processColor"))
+			(e-lambda @28.16-29.22
 				(args
-					(p-ident @35.17-35.22 (raw "color")))
-				(e-string @36.5-36.22
-					(e-string-part @36.6-36.21 (raw "Color processed")))))
-		(s-type-anno @39.1-39.76 (name "transform")
-			(ty-fn @39.13-39.76
-				(ty-apply @39.13-39.51
-					(ty @39.13-39.26 (name "Result.Result"))
-					(ty @39.27-39.36 (name "Color.RGB"))
-					(ty @39.38-39.50 (name "ExtMod.Error")))
-				(ty @39.55-39.76 (name "ModuleA.ModuleB.TypeC"))))
-		(s-decl @40.1-44.6
-			(p-ident @40.1-40.10 (raw "transform"))
-			(e-lambda @40.13-44.6
+					(p-ident @28.17-28.22 (raw "color")))
+				(e-string @29.5-29.22
+					(e-string-part @29.6-29.21 (raw "Color processed")))))
+		(s-type-anno @32.1-32.76 (name "transform")
+			(ty-fn @32.13-32.76
+				(ty-apply @32.13-32.51
+					(ty @32.13-32.26 (name "Result.Result"))
+					(ty @32.27-32.36 (name "Color.RGB"))
+					(ty @32.38-32.50 (name "ExtMod.Error")))
+				(ty @32.55-32.76 (name "ModuleA.ModuleB.TypeC"))))
+		(s-decl @33.1-37.6
+			(p-ident @33.1-33.10 (raw "transform"))
+			(e-lambda @33.13-37.6
 				(args
-					(p-ident @40.14-40.20 (raw "result")))
+					(p-ident @33.14-33.20 (raw "result")))
 				(e-match
-					(e-ident @41.11-41.17 (raw "result"))
+					(e-ident @34.11-34.17 (raw "result"))
 					(branches
-						(branch @42.9-42.47
-							(p-tag @42.9-42.23 (raw ".Ok")
-								(p-ident @42.19-42.22 (raw "rgb")))
-							(e-apply @42.27-42.47
-								(e-ident @42.27-42.42 (raw "TypeC.fromColor"))
-								(e-ident @42.43-42.46 (raw "rgb"))))
-						(branch @43.9-43.41
-							(p-tag @43.9-43.24 (raw ".Err")
-								(p-ident @43.20-43.23 (raw "err")))
-							(e-ident @43.28-43.41 (raw "TypeC.default")))))))))
+						(branch @35.9-35.47
+							(p-tag @35.9-35.23 (raw ".Ok")
+								(p-ident @35.19-35.22 (raw "rgb")))
+							(e-apply @35.27-35.47
+								(e-ident @35.27-35.42 (raw "TypeC.fromColor"))
+								(e-ident @35.43-35.46 (raw "rgb"))))
+						(branch @36.9-36.41
+							(p-tag @36.9-36.24 (raw ".Err")
+								(p-ident @36.20-36.23 (raw "err")))
+							(e-ident @36.28-36.41 (raw "TypeC.default")))))))))
 ~~~
 # FORMATTED
 ~~~roc
-
-
+import Basics
 
 import Color
 import ModuleA
@@ -558,126 +569,128 @@ transform = |result|
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @15.1-15.16 (ident "simpleQualified"))
+		(p-assign @8.1-8.16 (ident "simpleQualified"))
 		(e-runtime-error (tag "undeclared_type"))
-		(annotation @15.1-15.16
+		(annotation @8.1-8.16
 			(declared-type
-				(ty-lookup-external @14.19-14.28
-					(module-idx "0")
+				(ty-lookup-external @7.19-7.28
+					(module-idx "1")
 					(target-node-idx "0")))))
 	(d-let
-		(p-assign @19.1-19.17 (ident "aliasedQualified"))
-		(e-nominal-external @19.20-19.43
-			(module-idx "2")
+		(p-assign @12.1-12.17 (ident "aliasedQualified"))
+		(e-nominal-external @12.20-12.43
+			(module-idx "3")
 			(target-node-idx "0")
-			(e-tag @19.20-19.43 (name "Default")))
-		(annotation @19.1-19.17
+			(e-tag @12.20-12.43 (name "Default")))
+		(annotation @12.1-12.17
 			(declared-type
-				(ty-lookup-external @18.20-18.35
-					(module-idx "2")
+				(ty-lookup-external @11.20-11.35
+					(module-idx "3")
 					(target-node-idx "0")))))
 	(d-let
-		(p-assign @23.1-23.20 (ident "multiLevelQualified"))
+		(p-assign @16.1-16.20 (ident "multiLevelQualified"))
 		(e-runtime-error (tag "ident_not_in_scope"))
-		(annotation @23.1-23.20
+		(annotation @16.1-16.20
 			(declared-type
-				(ty-malformed @22.23-22.44))))
+				(ty-malformed @15.23-15.44))))
 	(d-let
-		(p-assign @27.1-27.11 (ident "resultType"))
-		(e-nominal @27.14-27.27 (nominal "Result")
-			(e-tag @27.14-27.27 (name "Ok")
+		(p-assign @20.1-20.11 (ident "resultType"))
+		(e-nominal @20.14-20.27 (nominal "Result")
+			(e-tag @20.14-20.27 (name "Ok")
 				(args
-					(e-int @27.24-27.26 (value "42")))))
-		(annotation @27.1-27.11
+					(e-int @20.24-20.26 (value "42")))))
+		(annotation @20.1-20.11
 			(declared-type
-				(ty-malformed @26.14-26.27))))
+				(ty-malformed @19.14-19.27))))
 	(d-let
-		(p-assign @31.1-31.9 (ident "getColor"))
-		(e-lambda @31.12-31.49
+		(p-assign @24.1-24.9 (ident "getColor"))
+		(e-lambda @24.12-24.49
 			(args
-				(p-underscore @31.13-31.14))
+				(p-underscore @24.13-24.14))
 			(e-runtime-error (tag "undeclared_type")))
-		(annotation @31.1-31.9
+		(annotation @24.1-24.9
 			(declared-type
-				(ty-fn @30.12-30.27 (effectful false)
-					(ty-record @30.12-30.14)
-					(ty-lookup-external @30.18-30.27
-						(module-idx "0")
+				(ty-fn @23.12-23.27 (effectful false)
+					(ty-record @23.12-23.14)
+					(ty-lookup-external @23.18-23.27
+						(module-idx "1")
 						(target-node-idx "0"))))))
 	(d-let
-		(p-assign @35.1-35.13 (ident "processColor"))
-		(e-lambda @35.16-36.22
+		(p-assign @28.1-28.13 (ident "processColor"))
+		(e-lambda @28.16-29.22
 			(args
-				(p-assign @35.17-35.22 (ident "color")))
-			(e-string @36.5-36.22
-				(e-literal @36.6-36.21 (string "Color processed"))))
-		(annotation @35.1-35.13
+				(p-assign @28.17-28.22 (ident "color")))
+			(e-string @29.5-29.22
+				(e-literal @29.6-29.21 (string "Color processed"))))
+		(annotation @28.1-28.13
 			(declared-type
-				(ty-fn @34.16-34.32 (effectful false)
-					(ty-lookup-external @34.16-34.25
-						(module-idx "0")
+				(ty-fn @27.16-27.32 (effectful false)
+					(ty-lookup-external @27.16-27.25
+						(module-idx "1")
 						(target-node-idx "0"))
-					(ty @34.29-34.32 (name "Str"))))))
+					(ty @27.29-27.32 (name "Str"))))))
 	(d-let
-		(p-assign @40.1-40.10 (ident "transform"))
-		(e-closure @40.13-44.6
+		(p-assign @33.1-33.10 (ident "transform"))
+		(e-closure @33.13-37.6
 			(captures
-				(capture @42.19-42.22 (ident "rgb")))
-			(e-lambda @40.13-44.6
+				(capture @35.19-35.22 (ident "rgb")))
+			(e-lambda @33.13-37.6
 				(args
-					(p-assign @40.14-40.20 (ident "result")))
-				(e-match @41.5-44.6
-					(match @41.5-44.6
+					(p-assign @33.14-33.20 (ident "result")))
+				(e-match @34.5-37.6
+					(match @34.5-37.6
 						(cond
-							(e-lookup-local @41.11-41.17
-								(p-assign @40.14-40.20 (ident "result"))))
+							(e-lookup-local @34.11-34.17
+								(p-assign @33.14-33.20 (ident "result"))))
 						(branches
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @42.9-42.23
-											(p-applied-tag @42.9-42.23))))
+										(p-nominal @35.9-35.23
+											(p-applied-tag @35.9-35.23))))
 								(value
-									(e-call @42.27-42.47
+									(e-call @35.27-35.47
 										(e-runtime-error (tag "ident_not_in_scope"))
-										(e-lookup-local @42.43-42.46
-											(p-assign @42.19-42.22 (ident "rgb"))))))
+										(e-lookup-local @35.43-35.46
+											(p-assign @35.19-35.22 (ident "rgb"))))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @43.9-43.24
-											(p-applied-tag @43.9-43.24))))
+										(p-nominal @36.9-36.24
+											(p-applied-tag @36.9-36.24))))
 								(value
 									(e-runtime-error (tag "ident_not_in_scope")))))))))
-		(annotation @40.1-40.10
+		(annotation @33.1-33.10
 			(declared-type
-				(ty-fn @39.13-39.76 (effectful false)
-					(ty-malformed @39.13-39.26)
-					(ty-malformed @39.55-39.76)))))
-	(s-import @9.1-9.13 (module "Color")
+				(ty-fn @32.13-32.76 (effectful false)
+					(ty-malformed @32.13-32.26)
+					(ty-malformed @32.55-32.76)))))
+	(s-import @1.1-1.14 (module "Basics")
 		(exposes))
-	(s-import @10.1-10.15 (module "ModuleA")
+	(s-import @2.1-2.13 (module "Color")
 		(exposes))
-	(s-import @11.1-11.32 (module "ExternalModule") (alias "ExtMod")
+	(s-import @3.1-3.15 (module "ModuleA")
+		(exposes))
+	(s-import @4.1-4.32 (module "ExternalModule") (alias "ExtMod")
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @15.1-15.16 (type "Error"))
-		(patt @19.1-19.17 (type "Error"))
-		(patt @23.1-23.20 (type "Error"))
-		(patt @27.1-27.11 (type "Error"))
-		(patt @31.1-31.9 (type "{  } -> Error"))
-		(patt @35.1-35.13 (type "Error -> Str"))
-		(patt @40.1-40.10 (type "Error -> Error")))
+		(patt @8.1-8.16 (type "Error"))
+		(patt @12.1-12.17 (type "Error"))
+		(patt @16.1-16.20 (type "Error"))
+		(patt @20.1-20.11 (type "Error"))
+		(patt @24.1-24.9 (type "{  } -> Error"))
+		(patt @28.1-28.13 (type "Error -> Str"))
+		(patt @33.1-33.10 (type "Error -> Error")))
 	(expressions
-		(expr @15.19-15.24 (type "Error"))
-		(expr @19.20-19.43 (type "Error"))
-		(expr @23.23-23.32 (type "Error"))
-		(expr @27.14-27.27 (type "Error"))
-		(expr @31.12-31.49 (type "{  } -> Error"))
-		(expr @35.16-36.22 (type "Error -> Str"))
-		(expr @40.13-44.6 (type "Error -> Error"))))
+		(expr @8.19-8.24 (type "Error"))
+		(expr @12.20-12.43 (type "Error"))
+		(expr @16.23-16.32 (type "Error"))
+		(expr @20.14-20.27 (type "Error"))
+		(expr @24.12-24.49 (type "{  } -> Error"))
+		(expr @28.16-29.22 (type "Error -> Str"))
+		(expr @33.13-37.6 (type "Error -> Error"))))
 ~~~

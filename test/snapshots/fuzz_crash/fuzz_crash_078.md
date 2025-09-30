@@ -10,6 +10,7 @@ import#\
 ~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_078.md:3:1:3:1
+MODULE HEADER DEPRECATED - fuzz_crash_078.md:1:1:1:9
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `incomplete_import`
@@ -20,6 +21,19 @@ This is an unexpected parsing error. Please check your syntax.
 
 ```
 ^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**fuzz_crash_078.md:1:1:1:9:**
+```roc
+module[]e="""
+```
+^^^^^^^^
 
 
 # TOKENS

@@ -5,8 +5,6 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-module [MyResult, ok, is_ok]
-
 MyResult(ok, err) := [Ok(ok), Err(err)]
 
 ok : ok -> MyResult(ok, _)
@@ -19,89 +17,103 @@ is_ok = |result| match result {
 }
 ~~~
 # EXPECTED
-NIL
+TYPE MODULE MISSING MATCHING TYPE - nominal_tag_payload_two.md:1:1:10:2
 # PROBLEMS
-NIL
+**TYPE MODULE MISSING MATCHING TYPE**
+Type modules must have a type declaration matching the module name.
+
+This file is named `nominal_tag_payload_two.roc`, but no top-level type declaration named `nominal_tag_payload_two` was found.
+
+Add either:
+`nominal_tag_payload_two := ...` (nominal type)
+or:
+`nominal_tag_payload_two : ...` (type alias)
+**nominal_tag_payload_two.md:1:1:10:2:**
+```roc
+MyResult(ok, err) := [Ok(ok), Err(err)]
+
+ok : ok -> MyResult(ok, _)
+ok = |a| MyResult.Ok(a)
+
+is_ok : MyResult(_ok, _err) -> Bool
+is_ok = |result| match result {
+    MyResult.Ok(_) => Bool.True
+    MyResult.Err(_) => Bool.False
+}
+```
+
+
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),Comma(1:17-1:18),LowerIdent(1:19-1:21),Comma(1:21-1:22),LowerIdent(1:23-1:28),CloseSquare(1:28-1:29),
-UpperIdent(3:1-3:9),NoSpaceOpenRound(3:9-3:10),LowerIdent(3:10-3:12),Comma(3:12-3:13),LowerIdent(3:14-3:17),CloseRound(3:17-3:18),OpColonEqual(3:19-3:21),OpenSquare(3:22-3:23),UpperIdent(3:23-3:25),NoSpaceOpenRound(3:25-3:26),LowerIdent(3:26-3:28),CloseRound(3:28-3:29),Comma(3:29-3:30),UpperIdent(3:31-3:34),NoSpaceOpenRound(3:34-3:35),LowerIdent(3:35-3:38),CloseRound(3:38-3:39),CloseSquare(3:39-3:40),
-LowerIdent(5:1-5:3),OpColon(5:4-5:5),LowerIdent(5:6-5:8),OpArrow(5:9-5:11),UpperIdent(5:12-5:20),NoSpaceOpenRound(5:20-5:21),LowerIdent(5:21-5:23),Comma(5:23-5:24),Underscore(5:25-5:26),CloseRound(5:26-5:27),
-LowerIdent(6:1-6:3),OpAssign(6:4-6:5),OpBar(6:6-6:7),LowerIdent(6:7-6:8),OpBar(6:8-6:9),UpperIdent(6:10-6:18),NoSpaceDotUpperIdent(6:18-6:21),NoSpaceOpenRound(6:21-6:22),LowerIdent(6:22-6:23),CloseRound(6:23-6:24),
-LowerIdent(8:1-8:6),OpColon(8:7-8:8),UpperIdent(8:9-8:17),NoSpaceOpenRound(8:17-8:18),NamedUnderscore(8:18-8:21),Comma(8:21-8:22),NamedUnderscore(8:23-8:27),CloseRound(8:27-8:28),OpArrow(8:29-8:31),UpperIdent(8:32-8:36),
-LowerIdent(9:1-9:6),OpAssign(9:7-9:8),OpBar(9:9-9:10),LowerIdent(9:10-9:16),OpBar(9:16-9:17),KwMatch(9:18-9:23),LowerIdent(9:24-9:30),OpenCurly(9:31-9:32),
-UpperIdent(10:5-10:13),NoSpaceDotUpperIdent(10:13-10:16),NoSpaceOpenRound(10:16-10:17),Underscore(10:17-10:18),CloseRound(10:18-10:19),OpFatArrow(10:20-10:22),UpperIdent(10:23-10:27),NoSpaceDotUpperIdent(10:27-10:32),
-UpperIdent(11:5-11:13),NoSpaceDotUpperIdent(11:13-11:17),NoSpaceOpenRound(11:17-11:18),Underscore(11:18-11:19),CloseRound(11:19-11:20),OpFatArrow(11:21-11:23),UpperIdent(11:24-11:28),NoSpaceDotUpperIdent(11:28-11:34),
-CloseCurly(12:1-12:2),
-EndOfFile(13:1-13:1),
+UpperIdent(1:1-1:9),NoSpaceOpenRound(1:9-1:10),LowerIdent(1:10-1:12),Comma(1:12-1:13),LowerIdent(1:14-1:17),CloseRound(1:17-1:18),OpColonEqual(1:19-1:21),OpenSquare(1:22-1:23),UpperIdent(1:23-1:25),NoSpaceOpenRound(1:25-1:26),LowerIdent(1:26-1:28),CloseRound(1:28-1:29),Comma(1:29-1:30),UpperIdent(1:31-1:34),NoSpaceOpenRound(1:34-1:35),LowerIdent(1:35-1:38),CloseRound(1:38-1:39),CloseSquare(1:39-1:40),
+LowerIdent(3:1-3:3),OpColon(3:4-3:5),LowerIdent(3:6-3:8),OpArrow(3:9-3:11),UpperIdent(3:12-3:20),NoSpaceOpenRound(3:20-3:21),LowerIdent(3:21-3:23),Comma(3:23-3:24),Underscore(3:25-3:26),CloseRound(3:26-3:27),
+LowerIdent(4:1-4:3),OpAssign(4:4-4:5),OpBar(4:6-4:7),LowerIdent(4:7-4:8),OpBar(4:8-4:9),UpperIdent(4:10-4:18),NoSpaceDotUpperIdent(4:18-4:21),NoSpaceOpenRound(4:21-4:22),LowerIdent(4:22-4:23),CloseRound(4:23-4:24),
+LowerIdent(6:1-6:6),OpColon(6:7-6:8),UpperIdent(6:9-6:17),NoSpaceOpenRound(6:17-6:18),NamedUnderscore(6:18-6:21),Comma(6:21-6:22),NamedUnderscore(6:23-6:27),CloseRound(6:27-6:28),OpArrow(6:29-6:31),UpperIdent(6:32-6:36),
+LowerIdent(7:1-7:6),OpAssign(7:7-7:8),OpBar(7:9-7:10),LowerIdent(7:10-7:16),OpBar(7:16-7:17),KwMatch(7:18-7:23),LowerIdent(7:24-7:30),OpenCurly(7:31-7:32),
+UpperIdent(8:5-8:13),NoSpaceDotUpperIdent(8:13-8:16),NoSpaceOpenRound(8:16-8:17),Underscore(8:17-8:18),CloseRound(8:18-8:19),OpFatArrow(8:20-8:22),UpperIdent(8:23-8:27),NoSpaceDotUpperIdent(8:27-8:32),
+UpperIdent(9:5-9:13),NoSpaceDotUpperIdent(9:13-9:17),NoSpaceOpenRound(9:17-9:18),Underscore(9:18-9:19),CloseRound(9:19-9:20),OpFatArrow(9:21-9:23),UpperIdent(9:24-9:28),NoSpaceDotUpperIdent(9:28-9:34),
+CloseCurly(10:1-10:2),
+EndOfFile(11:1-11:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-12.2
-	(module @1.1-1.29
-		(exposes @1.8-1.29
-			(exposed-upper-ident @1.9-1.17 (text "MyResult"))
-			(exposed-lower-ident @1.19-1.21
-				(text "ok"))
-			(exposed-lower-ident @1.23-1.28
-				(text "is_ok"))))
+(file @1.1-10.2
+	(type-module @1.1-1.9)
 	(statements
-		(s-type-decl @3.1-3.40
-			(header @3.1-3.18 (name "MyResult")
+		(s-type-decl @1.1-1.40
+			(header @1.1-1.18 (name "MyResult")
 				(args
-					(ty-var @3.10-3.12 (raw "ok"))
-					(ty-var @3.14-3.17 (raw "err"))))
-			(ty-tag-union @3.22-3.40
+					(ty-var @1.10-1.12 (raw "ok"))
+					(ty-var @1.14-1.17 (raw "err"))))
+			(ty-tag-union @1.22-1.40
 				(tags
-					(ty-apply @3.23-3.29
-						(ty @3.23-3.25 (name "Ok"))
-						(ty-var @3.26-3.28 (raw "ok")))
-					(ty-apply @3.31-3.39
-						(ty @3.31-3.34 (name "Err"))
-						(ty-var @3.35-3.38 (raw "err"))))))
-		(s-type-anno @5.1-5.27 (name "ok")
-			(ty-fn @5.6-5.27
-				(ty-var @5.6-5.8 (raw "ok"))
-				(ty-apply @5.12-5.27
-					(ty @5.12-5.20 (name "MyResult"))
-					(ty-var @5.21-5.23 (raw "ok"))
+					(ty-apply @1.23-1.29
+						(ty @1.23-1.25 (name "Ok"))
+						(ty-var @1.26-1.28 (raw "ok")))
+					(ty-apply @1.31-1.39
+						(ty @1.31-1.34 (name "Err"))
+						(ty-var @1.35-1.38 (raw "err"))))))
+		(s-type-anno @3.1-3.27 (name "ok")
+			(ty-fn @3.6-3.27
+				(ty-var @3.6-3.8 (raw "ok"))
+				(ty-apply @3.12-3.27
+					(ty @3.12-3.20 (name "MyResult"))
+					(ty-var @3.21-3.23 (raw "ok"))
 					(_))))
-		(s-decl @6.1-6.24
-			(p-ident @6.1-6.3 (raw "ok"))
-			(e-lambda @6.6-6.24
+		(s-decl @4.1-4.24
+			(p-ident @4.1-4.3 (raw "ok"))
+			(e-lambda @4.6-4.24
 				(args
-					(p-ident @6.7-6.8 (raw "a")))
-				(e-apply @6.10-6.24
-					(e-tag @6.10-6.21 (raw "MyResult.Ok"))
-					(e-ident @6.22-6.23 (raw "a")))))
-		(s-type-anno @8.1-8.36 (name "is_ok")
-			(ty-fn @8.9-8.36
-				(ty-apply @8.9-8.28
-					(ty @8.9-8.17 (name "MyResult"))
-					(underscore-ty-var @8.18-8.21 (raw "_ok"))
-					(underscore-ty-var @8.23-8.27 (raw "_err")))
-				(ty @8.32-8.36 (name "Bool"))))
-		(s-decl @9.1-12.2
-			(p-ident @9.1-9.6 (raw "is_ok"))
-			(e-lambda @9.9-12.2
+					(p-ident @4.7-4.8 (raw "a")))
+				(e-apply @4.10-4.24
+					(e-tag @4.10-4.21 (raw "MyResult.Ok"))
+					(e-ident @4.22-4.23 (raw "a")))))
+		(s-type-anno @6.1-6.36 (name "is_ok")
+			(ty-fn @6.9-6.36
+				(ty-apply @6.9-6.28
+					(ty @6.9-6.17 (name "MyResult"))
+					(underscore-ty-var @6.18-6.21 (raw "_ok"))
+					(underscore-ty-var @6.23-6.27 (raw "_err")))
+				(ty @6.32-6.36 (name "Bool"))))
+		(s-decl @7.1-10.2
+			(p-ident @7.1-7.6 (raw "is_ok"))
+			(e-lambda @7.9-10.2
 				(args
-					(p-ident @9.10-9.16 (raw "result")))
+					(p-ident @7.10-7.16 (raw "result")))
 				(e-match
-					(e-ident @9.24-9.30 (raw "result"))
+					(e-ident @7.24-7.30 (raw "result"))
 					(branches
-						(branch @10.5-10.32
-							(p-tag @10.5-10.19 (raw ".Ok")
+						(branch @8.5-8.32
+							(p-tag @8.5-8.19 (raw ".Ok")
 								(p-underscore))
-							(e-tag @10.23-10.32 (raw "Bool.True")))
-						(branch @11.5-11.34
-							(p-tag @11.5-11.20 (raw ".Err")
+							(e-tag @8.23-8.32 (raw "Bool.True")))
+						(branch @9.5-9.34
+							(p-tag @9.5-9.20 (raw ".Err")
 								(p-underscore))
-							(e-tag @11.24-11.34 (raw "Bool.False")))))))))
+							(e-tag @9.24-9.34 (raw "Bool.False")))))))))
 ~~~
 # FORMATTED
 ~~~roc
-module [MyResult, ok, is_ok]
-
 MyResult(ok, err) := [Ok(ok), Err(err)]
 
 ok : ok -> MyResult(ok, _)
@@ -117,80 +129,80 @@ is_ok = |result| match result {
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @6.1-6.3 (ident "ok"))
-		(e-lambda @6.6-6.24
+		(p-assign @4.1-4.3 (ident "ok"))
+		(e-lambda @4.6-4.24
 			(args
-				(p-assign @6.7-6.8 (ident "a")))
-			(e-nominal @6.10-6.24 (nominal "MyResult")
-				(e-tag @6.10-6.24 (name "Ok")
+				(p-assign @4.7-4.8 (ident "a")))
+			(e-nominal @4.10-4.24 (nominal "MyResult")
+				(e-tag @4.10-4.24 (name "Ok")
 					(args
-						(e-lookup-local @6.22-6.23
-							(p-assign @6.7-6.8 (ident "a")))))))
-		(annotation @6.1-6.3
+						(e-lookup-local @4.22-4.23
+							(p-assign @4.7-4.8 (ident "a")))))))
+		(annotation @4.1-4.3
 			(declared-type
-				(ty-fn @5.6-5.27 (effectful false)
-					(ty-var @5.6-5.8 (name "ok"))
-					(ty-apply @5.12-5.27 (symbol "MyResult")
-						(ty-var @5.21-5.23 (name "ok"))
+				(ty-fn @3.6-3.27 (effectful false)
+					(ty-var @3.6-3.8 (name "ok"))
+					(ty-apply @3.12-3.27 (symbol "MyResult")
+						(ty-var @3.21-3.23 (name "ok"))
 						(ty-underscore @1.1-1.1))))))
 	(d-let
-		(p-assign @9.1-9.6 (ident "is_ok"))
-		(e-lambda @9.9-12.2
+		(p-assign @7.1-7.6 (ident "is_ok"))
+		(e-lambda @7.9-10.2
 			(args
-				(p-assign @9.10-9.16 (ident "result")))
-			(e-match @9.18-12.2
-				(match @9.18-12.2
+				(p-assign @7.10-7.16 (ident "result")))
+			(e-match @7.18-10.2
+				(match @7.18-10.2
 					(cond
-						(e-lookup-local @9.24-9.30
-							(p-assign @9.10-9.16 (ident "result"))))
+						(e-lookup-local @7.24-7.30
+							(p-assign @7.10-7.16 (ident "result"))))
 					(branches
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-nominal @10.5-10.19
-										(p-applied-tag @10.5-10.19))))
+									(p-nominal @8.5-8.19
+										(p-applied-tag @8.5-8.19))))
 							(value
-								(e-nominal @10.23-10.32 (nominal "Bool")
-									(e-tag @10.23-10.32 (name "True")))))
+								(e-nominal @8.23-8.32 (nominal "Bool")
+									(e-tag @8.23-8.32 (name "True")))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-nominal @11.5-11.20
-										(p-applied-tag @11.5-11.20))))
+									(p-nominal @9.5-9.20
+										(p-applied-tag @9.5-9.20))))
 							(value
-								(e-nominal @11.24-11.34 (nominal "Bool")
-									(e-tag @11.24-11.34 (name "False")))))))))
-		(annotation @9.1-9.6
+								(e-nominal @9.24-9.34 (nominal "Bool")
+									(e-tag @9.24-9.34 (name "False")))))))))
+		(annotation @7.1-7.6
 			(declared-type
-				(ty-fn @8.9-8.36 (effectful false)
-					(ty-apply @8.9-8.28 (symbol "MyResult")
-						(ty-var @8.18-8.21 (name "_ok"))
-						(ty-var @8.23-8.27 (name "_err")))
-					(ty @8.32-8.36 (name "Bool"))))))
-	(s-nominal-decl @3.1-3.40
-		(ty-header @3.1-3.18 (name "MyResult")
+				(ty-fn @6.9-6.36 (effectful false)
+					(ty-apply @6.9-6.28 (symbol "MyResult")
+						(ty-var @6.18-6.21 (name "_ok"))
+						(ty-var @6.23-6.27 (name "_err")))
+					(ty @6.32-6.36 (name "Bool"))))))
+	(s-nominal-decl @1.1-1.40
+		(ty-header @1.1-1.18 (name "MyResult")
 			(ty-args
-				(ty-var @3.10-3.12 (name "ok"))
-				(ty-var @3.14-3.17 (name "err"))))
-		(ty-tag-union @3.22-3.40
-			(ty-apply @3.23-3.29 (symbol "Ok")
-				(ty-var @3.26-3.28 (name "ok")))
-			(ty-apply @3.31-3.39 (symbol "Err")
-				(ty-var @3.35-3.38 (name "err"))))))
+				(ty-var @1.10-1.12 (name "ok"))
+				(ty-var @1.14-1.17 (name "err"))))
+		(ty-tag-union @1.22-1.40
+			(ty-apply @1.23-1.29 (symbol "Ok")
+				(ty-var @1.26-1.28 (name "ok")))
+			(ty-apply @1.31-1.39 (symbol "Err")
+				(ty-var @1.35-1.38 (name "err"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.3 (type "ok -> MyResult(ok, err)"))
-		(patt @9.1-9.6 (type "MyResult(_ok, _err) -> Bool")))
+		(patt @4.1-4.3 (type "ok -> MyResult(ok, err)"))
+		(patt @7.1-7.6 (type "MyResult(_ok, _err) -> Bool")))
 	(type_decls
-		(nominal @3.1-3.40 (type "MyResult(ok, err)")
-			(ty-header @3.1-3.18 (name "MyResult")
+		(nominal @1.1-1.40 (type "MyResult(ok, err)")
+			(ty-header @1.1-1.18 (name "MyResult")
 				(ty-args
-					(ty-var @3.10-3.12 (name "ok"))
-					(ty-var @3.14-3.17 (name "err"))))))
+					(ty-var @1.10-1.12 (name "ok"))
+					(ty-var @1.14-1.17 (name "err"))))))
 	(expressions
-		(expr @6.6-6.24 (type "ok -> MyResult(ok, err)"))
-		(expr @9.9-12.2 (type "MyResult(_ok, _err) -> Bool"))))
+		(expr @4.6-4.24 (type "ok -> MyResult(ok, err)"))
+		(expr @7.9-10.2 (type "MyResult(_ok, _err) -> Bool"))))
 ~~~

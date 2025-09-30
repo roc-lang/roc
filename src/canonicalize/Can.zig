@@ -586,7 +586,16 @@ pub fn canonicalizeFile(
     // First, process the header to create exposed_scope
     const header = self.parse_ir.store.getHeader(file.header);
     switch (header) {
-        .module => |h| try self.createExposedScope(h.exposes),
+        .module => |h| {
+            // Emit deprecation warning
+            const header_region = self.parse_ir.tokenizedRegionToRegion(h.region);
+            try self.env.pushDiagnostic(.{
+                .module_header_deprecated = .{
+                    .region = header_region,
+                },
+            });
+            try self.createExposedScope(h.exposes);
+        },
         .package => |h| try self.createExposedScope(h.exposes),
         .platform => |h| try self.createExposedScope(h.exposes),
         .hosted => |h| try self.createExposedScope(h.exposes),
@@ -1440,8 +1449,33 @@ fn canonicalizeImportStatement(
     // Process type imports from this module
     try self.processTypeImports(module_name, alias);
 
+    // 4.5. Check if this is a type module and auto-expose main type
+    // A module is a type module if it exports a type with the same name as the module
+    const main_type_name = blk: {
+        if (self.module_envs) |envs_map| {
+            if (envs_map.get(module_name_text)) |target_env| {
+                // Check if module exports a type with the same name (indicating type module)
+                // Extract the expected type name from the module name
+                const expected_type_text = if (std.mem.lastIndexOf(u8, module_name_text, ".")) |last_dot|
+                    module_name_text[last_dot + 1 ..]
+                else
+                    module_name_text;
+
+                // Look for this type name in the module's exports
+                const target_ident = target_env.common.findIdent(expected_type_text);
+                if (target_ident) |type_ident| {
+                    if (target_env.containsExposedById(type_ident)) {
+                        // This is a type module - use alias for the auto-exposed type
+                        break :blk alias;
+                    }
+                }
+            }
+        }
+        break :blk null;
+    };
+
     // 5. Convert exposed items and introduce them into scope
-    const cir_exposes = try self.convertASTExposesToCIR(import_stmt.exposes);
+    const cir_exposes = try self.convertASTExposesToCIR(import_stmt.exposes, main_type_name, module_name);
     const import_region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
     try self.introduceExposedItemsIntoScope(cir_exposes, module_name, import_region);
 
@@ -1539,11 +1573,25 @@ fn createExternalDeclaration(
 }
 
 /// Convert AST exposed items to CIR exposed items
+/// If main_type_name is provided, auto-inject it as an exposed item
 fn convertASTExposesToCIR(
     self: *Self,
     ast_exposes: AST.ExposedItem.Span,
+    main_type_name: ?Ident.Idx,
+    module_name: Ident.Idx,
 ) std.mem.Allocator.Error!CIR.ExposedItem.Span {
     const scratch_start = self.env.store.scratchExposedItemTop();
+
+    // Auto-inject main type if this is a type module import
+    if (main_type_name) |type_name| {
+        const cir_exposed = CIR.ExposedItem{
+            .name = type_name,
+            .alias = null,
+            .is_wildcard = false,
+        };
+        const cir_exposed_idx = try self.env.addExposedItemAndTypeVar(cir_exposed, .{ .flex_var = null }, Region.zero());
+        try self.env.store.addScratchExposedItem(cir_exposed_idx);
+    }
 
     const ast_exposed_slice = self.parse_ir.store.exposedItemSlice(ast_exposes);
     for (ast_exposed_slice) |ast_exposed_idx| {
@@ -1567,6 +1615,46 @@ fn convertASTExposesToCIR(
                     break :resolve_ident try self.env.insertIdent(base.Ident.for_text("unknown"));
                 }
             };
+
+            // Check for redundant expose or invalid rename of main type
+            if (main_type_name) |type_name| {
+                const type_name_text = self.env.getIdent(type_name);
+                const item_name_text = self.env.getIdent(name);
+
+                if (std.mem.eql(u8, type_name_text, item_name_text)) {
+                    const tokenized_region = switch (ast_exposed) {
+                        inline else => |payload| payload.region,
+                    };
+                    const region = self.parse_ir.tokenizedRegionToRegion(tokenized_region);
+
+                    // Check for invalid rename
+                    if (alias_token != null) {
+                        const alias = if (self.parse_ir.tokens.resolveIdentifier(alias_token.?)) |resolved|
+                            resolved
+                        else
+                            try self.env.insertIdent(base.Ident.for_text("unknown"));
+
+                        try self.env.pushDiagnostic(.{
+                            .invalid_main_type_rename_in_exposing = .{
+                                .type_name = name,
+                                .alias = alias,
+                                .region = region,
+                            },
+                        });
+                        continue; // Skip adding this to exposed items
+                    }
+
+                    // Redundant expose - warn and skip adding duplicate
+                    try self.env.pushDiagnostic(.{
+                        .redundant_expose_main_type = .{
+                            .type_name = name,
+                            .module_name = module_name,
+                            .region = region,
+                        },
+                    });
+                    continue; // Skip adding duplicate
+                }
+            }
 
             // Resolve the alias if present
             const alias = resolve_alias: {

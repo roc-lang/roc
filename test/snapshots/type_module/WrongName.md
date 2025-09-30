@@ -1,31 +1,16 @@
 # META
 ~~~ini
 description=Invalid type module - type name doesn't match module name
-type=file
+type=file:SomeOtherName.roc
 ~~~
 # SOURCE
 ~~~roc
 SomeOtherName := [A, B]
 ~~~
 # EXPECTED
-TYPE MODULE MISSING MATCHING TYPE - WrongName.md:1:1:1:24
+NIL
 # PROBLEMS
-**TYPE MODULE MISSING MATCHING TYPE**
-Type modules must have a type declaration matching the module name.
-
-This file is named `WrongName.roc`, but no top-level type declaration named `WrongName` was found.
-
-Add either:
-`WrongName := ...` (nominal type)
-or:
-`WrongName : ...` (type alias)
-**WrongName.md:1:1:1:24:**
-```roc
-SomeOtherName := [A, B]
-```
-^^^^^^^^^^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:14),OpColonEqual(1:15-1:17),OpenSquare(1:18-1:19),UpperIdent(1:19-1:20),Comma(1:20-1:21),UpperIdent(1:22-1:23),CloseSquare(1:23-1:24),

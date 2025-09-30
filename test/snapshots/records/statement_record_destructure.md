@@ -5,18 +5,31 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-module []
-
 { name, age, email } = person
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - statement_record_destructure.md:3:24:3:30
+MISSING MAIN! FUNCTION - statement_record_destructure.md:1:1:1:30
+UNDEFINED VARIABLE - statement_record_destructure.md:1:24:1:30
 # PROBLEMS
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
+
+No `main!` function was found.
+
+Add a main! function like:
+`main! = |arg| { ... }`
+**statement_record_destructure.md:1:1:1:30:**
+```roc
+{ name, age, email } = person
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `person` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**statement_record_destructure.md:3:24:3:30:**
+**statement_record_destructure.md:1:24:1:30:**
 ```roc
 { name, age, email } = person
 ```
@@ -25,22 +38,20 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
-OpenCurly(3:1-3:2),LowerIdent(3:3-3:7),Comma(3:7-3:8),LowerIdent(3:9-3:12),Comma(3:12-3:13),LowerIdent(3:14-3:19),CloseCurly(3:20-3:21),OpAssign(3:22-3:23),LowerIdent(3:24-3:30),
-EndOfFile(4:1-4:1),
+OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),Comma(1:7-1:8),LowerIdent(1:9-1:12),Comma(1:12-1:13),LowerIdent(1:14-1:19),CloseCurly(1:20-1:21),OpAssign(1:22-1:23),LowerIdent(1:24-1:30),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-3.30
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+(file @1.1-1.30
+	(type-module @1.1-1.2)
 	(statements
-		(s-decl @3.1-3.30
-			(p-record @3.1-3.21
-				(field @3.3-3.7 (name "name") (rest false))
-				(field @3.9-3.12 (name "age") (rest false))
-				(field @3.14-3.19 (name "email") (rest false)))
-			(e-ident @3.24-3.30 (raw "person")))))
+		(s-decl @1.1-1.30
+			(p-record @1.1-1.21
+				(field @1.3-1.7 (name "name") (rest false))
+				(field @1.9-1.12 (name "age") (rest false))
+				(field @1.14-1.19 (name "email") (rest false)))
+			(e-ident @1.24-1.30 (raw "person")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -50,17 +61,17 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-record-destructure @3.1-3.21
+		(p-record-destructure @1.1-1.21
 			(destructs
-				(record-destruct @3.3-3.7 (label "name") (ident "name")
+				(record-destruct @1.3-1.7 (label "name") (ident "name")
 					(required
-						(p-assign @3.3-3.7 (ident "name"))))
-				(record-destruct @3.9-3.12 (label "age") (ident "age")
+						(p-assign @1.3-1.7 (ident "name"))))
+				(record-destruct @1.9-1.12 (label "age") (ident "age")
 					(required
-						(p-assign @3.9-3.12 (ident "age"))))
-				(record-destruct @3.14-3.19 (label "email") (ident "email")
+						(p-assign @1.9-1.12 (ident "age"))))
+				(record-destruct @1.14-1.19 (label "email") (ident "email")
 					(required
-						(p-assign @3.14-3.19 (ident "email"))))))
+						(p-assign @1.14-1.19 (ident "email"))))))
 		(e-runtime-error (tag "ident_not_in_scope"))))
 ~~~
 # TYPES
@@ -68,5 +79,5 @@ NO CHANGE
 (inferred-types
 	(defs)
 	(expressions
-		(expr @3.24-3.30 (type "Error"))))
+		(expr @1.24-1.30 (type "Error"))))
 ~~~

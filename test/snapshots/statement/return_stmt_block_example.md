@@ -5,8 +5,6 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-module [foo]
-
 foo : U64 -> Result(Str, [TooBig])
 foo = |num| {
     str = if (num > 10) {
@@ -18,11 +16,33 @@ foo = |num| {
 }
 ~~~
 # EXPECTED
-INCOMPATIBLE IF BRANCHES - return_stmt_block_example.md:5:11:5:11
+MISSING MAIN! FUNCTION - return_stmt_block_example.md:1:1:9:2
+INCOMPATIBLE IF BRANCHES - return_stmt_block_example.md:3:11:3:11
 # PROBLEMS
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
+
+No `main!` function was found.
+
+Add a main! function like:
+`main! = |arg| { ... }`
+**return_stmt_block_example.md:1:1:9:2:**
+```roc
+foo : U64 -> Result(Str, [TooBig])
+foo = |num| {
+    str = if (num > 10) {
+        return Err(TooBig)
+    } else {
+        "SMALL"
+    }
+    Ok(str)
+}
+```
+
+
 **INCOMPATIBLE IF BRANCHES**
 This `if` has an `else` branch with a different type from it's `then` branch:
-**return_stmt_block_example.md:5:11:**
+**return_stmt_block_example.md:3:11:**
 ```roc
     str = if (num > 10) {
         return Err(TooBig)
@@ -45,67 +65,61 @@ To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),
-LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:10),OpArrow(3:11-3:13),UpperIdent(3:14-3:20),NoSpaceOpenRound(3:20-3:21),UpperIdent(3:21-3:24),Comma(3:24-3:25),OpenSquare(3:26-3:27),UpperIdent(3:27-3:33),CloseSquare(3:33-3:34),CloseRound(3:34-3:35),
-LowerIdent(4:1-4:4),OpAssign(4:5-4:6),OpBar(4:7-4:8),LowerIdent(4:8-4:11),OpBar(4:11-4:12),OpenCurly(4:13-4:14),
-LowerIdent(5:5-5:8),OpAssign(5:9-5:10),KwIf(5:11-5:13),OpenRound(5:14-5:15),LowerIdent(5:15-5:18),OpGreaterThan(5:19-5:20),Int(5:21-5:23),CloseRound(5:23-5:24),OpenCurly(5:25-5:26),
-KwReturn(6:9-6:15),UpperIdent(6:16-6:19),NoSpaceOpenRound(6:19-6:20),UpperIdent(6:20-6:26),CloseRound(6:26-6:27),
-CloseCurly(7:5-7:6),KwElse(7:7-7:11),OpenCurly(7:12-7:13),
-StringStart(8:9-8:10),StringPart(8:10-8:15),StringEnd(8:15-8:16),
-CloseCurly(9:5-9:6),
-UpperIdent(10:5-10:7),NoSpaceOpenRound(10:7-10:8),LowerIdent(10:8-10:11),CloseRound(10:11-10:12),
-CloseCurly(11:1-11:2),
-EndOfFile(12:1-12:1),
+LowerIdent(1:1-1:4),OpColon(1:5-1:6),UpperIdent(1:7-1:10),OpArrow(1:11-1:13),UpperIdent(1:14-1:20),NoSpaceOpenRound(1:20-1:21),UpperIdent(1:21-1:24),Comma(1:24-1:25),OpenSquare(1:26-1:27),UpperIdent(1:27-1:33),CloseSquare(1:33-1:34),CloseRound(1:34-1:35),
+LowerIdent(2:1-2:4),OpAssign(2:5-2:6),OpBar(2:7-2:8),LowerIdent(2:8-2:11),OpBar(2:11-2:12),OpenCurly(2:13-2:14),
+LowerIdent(3:5-3:8),OpAssign(3:9-3:10),KwIf(3:11-3:13),OpenRound(3:14-3:15),LowerIdent(3:15-3:18),OpGreaterThan(3:19-3:20),Int(3:21-3:23),CloseRound(3:23-3:24),OpenCurly(3:25-3:26),
+KwReturn(4:9-4:15),UpperIdent(4:16-4:19),NoSpaceOpenRound(4:19-4:20),UpperIdent(4:20-4:26),CloseRound(4:26-4:27),
+CloseCurly(5:5-5:6),KwElse(5:7-5:11),OpenCurly(5:12-5:13),
+StringStart(6:9-6:10),StringPart(6:10-6:15),StringEnd(6:15-6:16),
+CloseCurly(7:5-7:6),
+UpperIdent(8:5-8:7),NoSpaceOpenRound(8:7-8:8),LowerIdent(8:8-8:11),CloseRound(8:11-8:12),
+CloseCurly(9:1-9:2),
+EndOfFile(10:1-10:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-11.2
-	(module @1.1-1.13
-		(exposes @1.8-1.13
-			(exposed-lower-ident @1.9-1.12
-				(text "foo"))))
+(file @1.1-9.2
+	(type-module @1.1-1.4)
 	(statements
-		(s-type-anno @3.1-3.35 (name "foo")
-			(ty-fn @3.7-3.35
-				(ty @3.7-3.10 (name "U64"))
-				(ty-apply @3.14-3.35
-					(ty @3.14-3.20 (name "Result"))
-					(ty @3.21-3.24 (name "Str"))
-					(ty-tag-union @3.26-3.34
+		(s-type-anno @1.1-1.35 (name "foo")
+			(ty-fn @1.7-1.35
+				(ty @1.7-1.10 (name "U64"))
+				(ty-apply @1.14-1.35
+					(ty @1.14-1.20 (name "Result"))
+					(ty @1.21-1.24 (name "Str"))
+					(ty-tag-union @1.26-1.34
 						(tags
-							(ty @3.27-3.33 (name "TooBig")))))))
-		(s-decl @4.1-11.2
-			(p-ident @4.1-4.4 (raw "foo"))
-			(e-lambda @4.7-11.2
+							(ty @1.27-1.33 (name "TooBig")))))))
+		(s-decl @2.1-9.2
+			(p-ident @2.1-2.4 (raw "foo"))
+			(e-lambda @2.7-9.2
 				(args
-					(p-ident @4.8-4.11 (raw "num")))
-				(e-block @4.13-11.2
+					(p-ident @2.8-2.11 (raw "num")))
+				(e-block @2.13-9.2
 					(statements
-						(s-decl @5.5-9.6
-							(p-ident @5.5-5.8 (raw "str"))
-							(e-if-then-else @5.11-9.6
-								(e-tuple @5.14-5.24
-									(e-binop @5.15-5.23 (op ">")
-										(e-ident @5.15-5.18 (raw "num"))
-										(e-int @5.21-5.23 (raw "10"))))
-								(e-block @5.25-7.6
+						(s-decl @3.5-7.6
+							(p-ident @3.5-3.8 (raw "str"))
+							(e-if-then-else @3.11-7.6
+								(e-tuple @3.14-3.24
+									(e-binop @3.15-3.23 (op ">")
+										(e-ident @3.15-3.18 (raw "num"))
+										(e-int @3.21-3.23 (raw "10"))))
+								(e-block @3.25-5.6
 									(statements
-										(s-return @6.9-6.27
-											(e-apply @6.16-6.27
-												(e-tag @6.16-6.19 (raw "Err"))
-												(e-tag @6.20-6.26 (raw "TooBig"))))))
-								(e-block @7.12-9.6
+										(s-return @4.9-4.27
+											(e-apply @4.16-4.27
+												(e-tag @4.16-4.19 (raw "Err"))
+												(e-tag @4.20-4.26 (raw "TooBig"))))))
+								(e-block @5.12-7.6
 									(statements
-										(e-string @8.9-8.16
-											(e-string-part @8.10-8.15 (raw "SMALL")))))))
-						(e-apply @10.5-10.12
-							(e-tag @10.5-10.7 (raw "Ok"))
-							(e-ident @10.8-10.11 (raw "str")))))))))
+										(e-string @6.9-6.16
+											(e-string-part @6.10-6.15 (raw "SMALL")))))))
+						(e-apply @8.5-8.12
+							(e-tag @8.5-8.7 (raw "Ok"))
+							(e-ident @8.8-8.11 (raw "str")))))))))
 ~~~
 # FORMATTED
 ~~~roc
-module [foo]
-
 foo : U64 -> Result(Str, [TooBig])
 foo = |num| {
 	str = if (num > 10) {
@@ -120,48 +134,48 @@ foo = |num| {
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @4.1-4.4 (ident "foo"))
-		(e-lambda @4.7-11.2
+		(p-assign @2.1-2.4 (ident "foo"))
+		(e-lambda @2.7-9.2
 			(args
-				(p-assign @4.8-4.11 (ident "num")))
-			(e-block @4.13-11.2
-				(s-let @5.5-9.6
-					(p-assign @5.5-5.8 (ident "str"))
-					(e-if @5.11-9.6
+				(p-assign @2.8-2.11 (ident "num")))
+			(e-block @2.13-9.2
+				(s-let @3.5-7.6
+					(p-assign @3.5-3.8 (ident "str"))
+					(e-if @3.11-7.6
 						(if-branches
 							(if-branch
-								(e-binop @5.15-5.23 (op "gt")
-									(e-lookup-local @5.15-5.18
-										(p-assign @4.8-4.11 (ident "num")))
-									(e-int @5.21-5.23 (value "10")))
-								(e-block @5.25-7.6
-									(e-nominal @6.16-6.27 (nominal "Result")
-										(e-tag @6.16-6.27 (name "Err")
+								(e-binop @3.15-3.23 (op "gt")
+									(e-lookup-local @3.15-3.18
+										(p-assign @2.8-2.11 (ident "num")))
+									(e-int @3.21-3.23 (value "10")))
+								(e-block @3.25-5.6
+									(e-nominal @4.16-4.27 (nominal "Result")
+										(e-tag @4.16-4.27 (name "Err")
 											(args
-												(e-tag @6.20-6.26 (name "TooBig"))))))))
+												(e-tag @4.20-4.26 (name "TooBig"))))))))
 						(if-else
-							(e-block @7.12-9.6
-								(e-string @8.9-8.16
-									(e-literal @8.10-8.15 (string "SMALL")))))))
-				(e-nominal @10.5-10.12 (nominal "Result")
-					(e-tag @10.5-10.12 (name "Ok")
+							(e-block @5.12-7.6
+								(e-string @6.9-6.16
+									(e-literal @6.10-6.15 (string "SMALL")))))))
+				(e-nominal @8.5-8.12 (nominal "Result")
+					(e-tag @8.5-8.12 (name "Ok")
 						(args
-							(e-lookup-local @10.8-10.11
-								(p-assign @5.5-5.8 (ident "str"))))))))
-		(annotation @4.1-4.4
+							(e-lookup-local @8.8-8.11
+								(p-assign @3.5-3.8 (ident "str"))))))))
+		(annotation @2.1-2.4
 			(declared-type
-				(ty-fn @3.7-3.35 (effectful false)
-					(ty @3.7-3.10 (name "U64"))
-					(ty-apply @3.14-3.35 (symbol "Result")
-						(ty @3.21-3.24 (name "Str"))
-						(ty-tag-union @3.26-3.34
-							(ty @3.27-3.33 (name "TooBig")))))))))
+				(ty-fn @1.7-1.35 (effectful false)
+					(ty @1.7-1.10 (name "U64"))
+					(ty-apply @1.14-1.35 (symbol "Result")
+						(ty @1.21-1.24 (name "Str"))
+						(ty-tag-union @1.26-1.34
+							(ty @1.27-1.33 (name "TooBig")))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.4 (type "U64 -> Result(Error, [TooBig])")))
+		(patt @2.1-2.4 (type "U64 -> Result(Error, [TooBig])")))
 	(expressions
-		(expr @4.7-11.2 (type "U64 -> Result(Error, [TooBig])"))))
+		(expr @2.7-9.2 (type "U64 -> Result(Error, [TooBig])"))))
 ~~~

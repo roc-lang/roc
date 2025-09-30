@@ -5,33 +5,42 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-module []
-
 x : Dec
 x = 123.456
 ~~~
 # EXPECTED
-NIL
+MISSING MAIN! FUNCTION - dec_annotation.md:1:1:2:12
 # PROBLEMS
-NIL
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
+
+No `main!` function was found.
+
+Add a main! function like:
+`main! = |arg| { ... }`
+**dec_annotation.md:1:1:2:12:**
+```roc
+x : Dec
+x = 123.456
+```
+
+
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
-LowerIdent(3:1-3:2),OpColon(3:3-3:4),UpperIdent(3:5-3:8),
-LowerIdent(4:1-4:2),OpAssign(4:3-4:4),Float(4:5-4:12),
-EndOfFile(5:1-5:1),
+LowerIdent(1:1-1:2),OpColon(1:3-1:4),UpperIdent(1:5-1:8),
+LowerIdent(2:1-2:2),OpAssign(2:3-2:4),Float(2:5-2:12),
+EndOfFile(3:1-3:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-4.12
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+(file @1.1-2.12
+	(type-module @1.1-1.2)
 	(statements
-		(s-type-anno @3.1-3.8 (name "x")
-			(ty @3.5-3.8 (name "Dec")))
-		(s-decl @4.1-4.12
-			(p-ident @4.1-4.2 (raw "x"))
-			(e-frac @4.5-4.12 (raw "123.456")))))
+		(s-type-anno @1.1-1.8 (name "x")
+			(ty @1.5-1.8 (name "Dec")))
+		(s-decl @2.1-2.12
+			(p-ident @2.1-2.2 (raw "x"))
+			(e-frac @2.5-2.12 (raw "123.456")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -41,17 +50,17 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @4.1-4.2 (ident "x"))
-		(e-frac-dec @4.5-4.12 (value "123.456"))
-		(annotation @4.1-4.2
+		(p-assign @2.1-2.2 (ident "x"))
+		(e-frac-dec @2.5-2.12 (value "123.456"))
+		(annotation @2.1-2.2
 			(declared-type
-				(ty @3.5-3.8 (name "Dec"))))))
+				(ty @1.5-1.8 (name "Dec"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.2 (type "Dec")))
+		(patt @2.1-2.2 (type "Dec")))
 	(expressions
-		(expr @4.5-4.12 (type "Dec"))))
+		(expr @2.5-2.12 (type "Dec"))))
 ~~~
