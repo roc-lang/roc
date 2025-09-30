@@ -31,6 +31,7 @@ runs:
           eval "${{ inputs.command }}" 2>&1 | tee "$output_file"
           exit_code=${PIPESTATUS[0]}
 
+          echo "All output:"
           cat "$output_file"
 
           # Check if command succeeded
