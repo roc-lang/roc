@@ -856,8 +856,8 @@ pub const Statement = union(enum) {
         anno: TypeAnno.Idx,
         where: ?Collection.Idx,
         kind: TypeDeclKind,
-        /// Optional block for nominal types (e.g., `Foo := [A, B].{ x = 5 }`)
-        /// Only valid when kind is .nominal
+        /// Block for associated items in .nominal types
+        /// (e.g. the curly braces in `Foo := [A, B].{ x = 5 }`)
         block: ?Block,
         region: TokenizedRegion,
     },
