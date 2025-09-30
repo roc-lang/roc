@@ -98,9 +98,16 @@ module [Hash]
 
 Hash(a, hasher) # After header
 	: # After colon
-		a
+		a # After var
+			where # After where
+				module(a).hash : hasher # After method
+					-> # After arrow
+						hasher, # After first clause
+				module(hasher).Hasher
 
 Decode(a) : a
+	where
+		module(a).decode : List(U8) -> a
 ~~~
 # CANONICALIZE
 ~~~clojure

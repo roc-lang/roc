@@ -1177,7 +1177,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 self.advance();
                 const anno = try self.parseTypeAnno(.not_looking_for_args);
 
-                // Parse where clause if present, but immediately error and discard it
+                // Parse where clause if present, but report an error (it's invalid in type declarations)
                 const where_start = self.pos;
                 const where_clause = try self.parseWhereConstraint();
                 if (where_clause) |_| {
@@ -1187,6 +1187,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                         .start = where_start,
                         .end = where_end,
                     });
+                    // Note: We keep the where_clause in the AST for formatting/error recovery
                 }
 
                 // Check if there's a .{ block } after the type annotation
@@ -1227,6 +1228,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     .header = header,
                     .anno = anno,
                     .kind = kind,
+                    .where = where_clause,
                     .block = block,
                     .region = .{ .start = start, .end = self.pos },
                 } });

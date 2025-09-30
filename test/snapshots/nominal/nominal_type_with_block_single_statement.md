@@ -36,9 +36,7 @@ EndOfFile(4:1-4:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-Foo := [A, B, C]
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

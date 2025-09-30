@@ -368,37 +368,7 @@ EndOfFile(32:1-32:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-# Import exposing
-import I1 exposing [I11, I12]
-import I2 exposing [I21 as Ias1, I22 as Ias2]
-
-# Where constraint
-A(a) : a
-B(b) : b
-
-C(a, b) : (a, b)
-D(a, b) : C(a, b)
-E : { a : Str, b : Str }
-F : [A, B]
-
-g : e -> e where module(e).A, module(e).B
-
-h = |x, y| {
-	h1 = { h11: x, h12: x, h13: { h131: x, h132: y } }
-	h2 = h(x, y)
-	h3 = A(x, y)
-	h4 = [x, y]
-	h5 = (x, y)
-
-	match x {
-		Z1((a, b)) => a
-		Z2(a, b) => a
-		Z3({ a, b }) => a
-		Z4([a, b]) => a
-	}
-}
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -38,7 +38,7 @@ EndOfFile(4:1-4:1),
 ~~~roc
 module []
 
-Foo := [A, B, C]
+Foo := [A, B, C].{}
 ~~~
 # CANONICALIZE
 ~~~clojure

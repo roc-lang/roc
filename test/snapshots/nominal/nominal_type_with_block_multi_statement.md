@@ -46,7 +46,7 @@ EndOfFile(8:1-8:1),
 ~~~roc
 module []
 
-Foo := [A, B, C]
+Foo := [A, B, C].{ x = 5, y = 10, z = 15 }
 ~~~
 # CANONICALIZE
 ~~~clojure

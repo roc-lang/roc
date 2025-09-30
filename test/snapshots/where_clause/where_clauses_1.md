@@ -75,11 +75,7 @@ EndOfFile(9:1-9:1),
 ~~~
 # FORMATTED
 ~~~roc
-module [Hash, Decode]
-
-Hash(a, hasher) : a
-
-Decode(a) : a
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

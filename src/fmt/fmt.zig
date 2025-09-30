@@ -486,6 +486,31 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
                 _ = try fmt.formatTypeAnno(d.anno);
+                if (d.where) |w| {
+                    if (multiline) {
+                        _ = try fmt.flushCommentsBefore(anno_region.end);
+                        try fmt.ensureNewline();
+                        fmt.curr_indent += 1;
+                        try fmt.pushIndent();
+                    }
+                    try fmt.formatWhereConstraint(w, multiline);
+                }
+                if (d.block) |blk| {
+                    try fmt.push('.');
+                    try fmt.push('{');
+                    if (blk.statements.span.len > 0) {
+                        try fmt.push(' ');
+                        const statements = fmt.ast.store.statementSlice(blk.statements);
+                        for (statements, 0..) |stmt_idx, i| {
+                            if (i > 0) {
+                                try fmt.pushAll(", ");
+                            }
+                            _ = try fmt.formatStatement(stmt_idx);
+                        }
+                        try fmt.push(' ');
+                    }
+                    try fmt.push('}');
+                }
             },
             .type_anno => |t| {
                 try fmt.pushTokenText(t.name);

@@ -558,7 +558,25 @@ import I2 exposing [
 
 # Where constraint
 A(a) : a
+	where
+		module(a).a1 : (
+			a,
+			a,
+		) -> Str,
+		module(a).a2 : (
+			a,
+			a,
+		) -> Str
 B(b) : b
+	where
+		module(b).b1 : (
+			b,
+			b,
+		) -> Str,
+		module(b).b2 : (
+			b,
+			b,
+		) -> Str
 
 C(
 	a,

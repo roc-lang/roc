@@ -865,6 +865,8 @@ pub const Statement = union(enum) {
         header: TypeHeader.Idx,
         anno: TypeAnno.Idx,
         kind: TypeDeclKind,
+        /// Where clause (invalid in type declarations, but preserved for error recovery/formatting)
+        where: ?Collection.Idx,
         /// Block for associated items in .nominal types
         /// (e.g. the curly braces in `Foo := [A, B].{ x = 5 }`)
         block: ?Block,
