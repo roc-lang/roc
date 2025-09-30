@@ -40,15 +40,12 @@ jobs:
         with:
           arch: x64
 
-      - name: Build roc compiler
-        id: build1
-        run: zig build
-        continue-on-error: true
-
-      - name: Build roc compiler (retry on EndOfStream)
-        if: failure() && contains(steps.build1.outputs.stderr, 'EndOfStream')
-        id: build2
-        run: zig build
+      - name: Build roc compiler and other necessary libs
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: 'zig build'
+          error_string_contains: 'EndOfStream'
+          retry_count: 3
 
       - name: Cross-compile int platform (Unix)
         if: runner.os != 'Windows'
