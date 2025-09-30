@@ -156,7 +156,7 @@ NO CHANGE
 				(ty-lookup @12.5-12.8 (name "U64") (builtin)))))
 	(d-let
 		(p-assign @16.1-16.2 (ident "e"))
-		(e-num @16.5-16.44 (value "-1"))
+		(e-num @16.5-16.44 (value "340282366920938463463374607431768211455"))
 		(annotation @16.1-16.2
 			(declared-type
 				(ty-lookup @15.5-15.9 (name "U128") (builtin)))))

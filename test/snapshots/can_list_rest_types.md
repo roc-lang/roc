@@ -94,5 +94,5 @@ match numbers {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-4.2 (type "List(Error)"))
+(expr @1.1-4.2 (type "Error"))
 ~~~

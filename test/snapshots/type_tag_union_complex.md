@@ -205,33 +205,41 @@ NO CHANGE
 	(s-alias-decl @4.1-4.37
 		(ty-header @4.1-4.7 (name "Status"))
 		(ty-tag-union @4.10-4.37
-			(tag_name @4.11-4.18 (name "Loading"))
-			(tag_name @4.20-4.28 (name "Complete"))
-			(tag_name @4.30-4.36 (name "Failed"))))
+			(ty-tag-name @4.11-4.18 (name "Loading"))
+			(ty-tag-name @4.20-4.28 (name "Complete"))
+			(ty-tag-name @4.30-4.36 (name "Failed"))))
 	(s-alias-decl @7.1-7.55
 		(ty-header @7.1-7.7 (name "Result"))
 		(ty-tag-union @7.10-7.55
-			(tag_name @7.11-7.23 (name "Success"))
-			(tag_name @7.25-7.35 (name "Error"))
-			(tag_name @7.37-7.54 (name "Warning"))))
+			(ty-tag-name @7.11-7.23 (name "Success")
+				(ty-lookup @7.19-7.22 (name "Str") (builtin)))
+			(ty-tag-name @7.25-7.35 (name "Error")
+				(ty-lookup @7.31-7.34 (name "Str") (builtin)))
+			(ty-tag-name @7.37-7.54 (name "Warning")
+				(ty-lookup @7.45-7.48 (name "Str") (builtin))
+				(ty-lookup @7.50-7.53 (name "I32") (builtin)))))
 	(s-alias-decl @10.1-10.50
 		(ty-header @10.1-10.9 (name "Response"))
 		(ty-tag-union @10.12-10.50
-			(tag_name @10.13-10.23 (name "Ok"))
-			(tag_name @10.25-10.37 (name "NetworkError"))
-			(tag_name @10.39-10.49 (name "ParseError"))))
+			(ty-tag-name @10.13-10.23 (name "Ok")
+				(ty-lookup @10.16-10.22 (name "Result") (local)))
+			(ty-tag-name @10.25-10.37 (name "NetworkError"))
+			(ty-tag-name @10.39-10.49 (name "ParseError"))))
 	(s-alias-decl @13.1-13.52
 		(ty-header @13.1-13.10 (name "UserState"))
 		(ty-tag-union @13.13-13.52
-			(tag_name @13.14-13.25 (name "Active"))
-			(tag_name @13.27-13.35 (name "Inactive"))
-			(tag_name @13.37-13.51 (name "Suspended"))))
+			(ty-tag-name @13.14-13.25 (name "Active")
+				(ty-lookup @13.21-13.24 (name "Str") (builtin)))
+			(ty-tag-name @13.27-13.35 (name "Inactive"))
+			(ty-tag-name @13.37-13.51 (name "Suspended")
+				(ty-lookup @13.47-13.50 (name "Str") (builtin)))))
 	(s-alias-decl @14.1-14.58
 		(ty-header @14.1-14.16 (name "ConnectionState"))
 		(ty-tag-union @14.19-14.58
-			(tag_name @14.20-14.26 (name "Active"))
-			(tag_name @14.28-14.40 (name "Disconnected"))
-			(tag_name @14.42-14.57 (name "Connecting")))))
+			(ty-tag-name @14.20-14.26 (name "Active"))
+			(ty-tag-name @14.28-14.40 (name "Disconnected"))
+			(ty-tag-name @14.42-14.57 (name "Connecting")
+				(ty-lookup @14.53-14.56 (name "Str") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure

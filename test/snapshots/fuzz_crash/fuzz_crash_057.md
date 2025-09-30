@@ -60,7 +60,7 @@ u : o
 		(where
 			(method @1.22-1.35 (module-of "a") (ident "t")
 				(args)
-				(ty-rigid-var @1.14-1.15 (name "c")))))
+				(ty-rigid-var-lookup (ty-rigid-var @1.14-1.15 (name "c"))))))
 	(ext-decl @1.22-1.35 (ident "module(a).t") (kind "value")))
 ~~~
 # TYPES

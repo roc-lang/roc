@@ -132,12 +132,12 @@ Decode(a) : a
 			(ty-args
 				(ty-rigid-var @3.6-3.7 (name "a"))
 				(ty-rigid-var @3.9-3.15 (name "hasher"))))
-		(ty-rigid-var @3.6-3.7 (name "a")))
+		(ty-rigid-var-lookup (ty-rigid-var @3.6-3.7 (name "a"))))
 	(s-alias-decl @12.1-16.9
 		(ty-header @12.1-12.10 (name "Decode")
 			(ty-args
 				(ty-rigid-var @12.8-12.9 (name "a"))))
-		(ty-rigid-var @12.8-12.9 (name "a"))))
+		(ty-rigid-var-lookup (ty-rigid-var @12.8-12.9 (name "a")))))
 ~~~
 # TYPES
 ~~~clojure

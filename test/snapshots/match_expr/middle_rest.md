@@ -156,5 +156,5 @@ match items {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-6.2 (type "Error"))
+(expr @1.1-6.2 (type "Num(_size)"))
 ~~~

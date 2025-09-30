@@ -52,8 +52,8 @@ Foo(a, b) : (a, b, Str, U64)
 				(ty-rigid-var @3.5-3.6 (name "a"))
 				(ty-rigid-var @3.7-3.8 (name "b"))))
 		(ty-tuple @3.12-3.25
-			(ty-rigid-var @3.5-3.6 (name "a"))
-			(ty-rigid-var @3.7-3.8 (name "b"))
+			(ty-rigid-var-lookup (ty-rigid-var @3.5-3.6 (name "a")))
+			(ty-rigid-var-lookup (ty-rigid-var @3.7-3.8 (name "b")))
 			(ty-lookup @3.17-3.20 (name "Str") (builtin))
 			(ty-lookup @3.21-3.24 (name "U64") (builtin)))))
 ~~~

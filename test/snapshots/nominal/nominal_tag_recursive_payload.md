@@ -73,8 +73,10 @@ NO CHANGE
 			(ty-args
 				(ty-rigid-var @3.10-3.11 (name "a"))))
 		(ty-tag-union @3.16-3.40
-			(tag_name @3.17-3.20 (name "Nil"))
-			(tag_name @3.22-3.39 (name "Node")))))
+			(ty-tag-name @3.17-3.20 (name "Nil"))
+			(ty-tag-name @3.22-3.39 (name "Node")
+				(ty-apply @3.27-3.38 (name "ConsList") (local)
+					(ty-rigid-var-lookup (ty-rigid-var @3.10-3.11 (name "a"))))))))
 ~~~
 # TYPES
 ~~~clojure

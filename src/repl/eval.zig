@@ -362,6 +362,11 @@ pub const Repl = struct {
         // Create CIR
         const cir = module_env; // CIR is now just ModuleEnv
         try cir.initCIRFields(self.allocator, "repl");
+        const module_common_idents: Check.CommonIdents = .{
+            .module_name = try module_env.insertIdent(base.Ident.for_text("repl")),
+            .list = try module_env.insertIdent(base.Ident.for_text("List")),
+            .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+        };
 
         // Create canonicalizer
         var czer = Can.init(cir, &parse_ast, null) catch |err| {
@@ -378,13 +383,13 @@ pub const Repl = struct {
         const final_expr_idx = canonical_expr.get_idx();
 
         // Type check
-        var checker = Check.init(self.allocator, &module_env.types, cir, &.{}, &cir.store.regions) catch |err| {
+        var checker = Check.init(self.allocator, &module_env.types, cir, &.{}, &cir.store.regions, module_common_idents) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Type check init error: {}", .{err});
         };
         defer checker.deinit();
 
         // Check the expression (no need to check defs since we're parsing as expressions)
-        _ = checker.checkExpr(final_expr_idx) catch |err| {
+        _ = checker.checkExprRepl(final_expr_idx) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Type check expr error: {}", .{err});
         };
 

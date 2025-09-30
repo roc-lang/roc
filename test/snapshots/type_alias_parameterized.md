@@ -121,8 +121,8 @@ NO CHANGE
 						(ty-rigid-var @5.12-5.22 (name "a"))
 						(ty-rigid-var @5.12-5.22 (name "b")))
 					(ty-apply @5.26-5.36 (name "Pair") (local)
-						(ty-rigid-var @5.12-5.22 (name "b"))
-						(ty-rigid-var @5.12-5.22 (name "a")))))))
+						(ty-rigid-var-lookup (ty-rigid-var @5.12-5.22 (name "b")))
+						(ty-rigid-var-lookup (ty-rigid-var @5.12-5.22 (name "a"))))))))
 	(d-let
 		(p-assign @8.1-8.6 (ident "main!"))
 		(e-closure @8.9-8.27
@@ -142,8 +142,8 @@ NO CHANGE
 				(ty-rigid-var @3.6-3.7 (name "a"))
 				(ty-rigid-var @3.9-3.10 (name "b"))))
 		(ty-tuple @3.14-3.20
-			(ty-rigid-var @3.6-3.7 (name "a"))
-			(ty-rigid-var @3.9-3.10 (name "b")))))
+			(ty-rigid-var-lookup (ty-rigid-var @3.6-3.7 (name "a")))
+			(ty-rigid-var-lookup (ty-rigid-var @3.9-3.10 (name "b"))))))
 ~~~
 # TYPES
 ~~~clojure

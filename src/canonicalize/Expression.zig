@@ -43,26 +43,20 @@ const Self = Expr;
 
 /// An expression in the Roc language.
 pub const Expr = union(enum) {
-    /// An integer literal with a specific value.
-    /// Represents whole integer in various bases (decimal, hex, octal, binary).
+    /// An number literal with a specific value.
+    /// Represents whole numbers in various bases (decimal, hex, octal, binary).
     ///
     /// ```roc
-    /// 42          # Decimal integer
+    /// 42          # Decimal number
     /// 0xFF        # Hexadecimal integer
     /// 0o755       # Octal integer
     /// 0b1010      # Binary integer
+    /// 42u8        # Decimal number with type suffix
+    /// 42f32        # Decimal number with type suffix
     /// ```
-    e_int: struct {
-        value: CIR.IntValue,
-        requirements: types.Num.IntRequirements,
-        suffix: ?types.Num.Int.Precision,
-    },
-    /// An integer literal with a specific value.
-    /// Represents whole numbers in base 10 that could later become either an Int or a Frac
     e_num: struct {
         value: CIR.IntValue,
-        requirements: types.Num.IntRequirements,
-        // TODO: We should probably capture frac requirements here too?
+        kind: CIR.NumKind,
     },
     /// A 32-bit floating-point literal.
     e_frac_f32: struct {
@@ -102,20 +96,8 @@ pub const Expr = union(enum) {
     /// 42.0    # Stored as numerator=420, denominator_power_of_ten=1 (420/10)
     /// ```
     e_dec_small: struct {
-        numerator: i16,
-        denominator_power_of_ten: u8,
+        value: CIR.SmallDecValue,
         has_suffix: bool, // If the value had a `dec` suffix
-
-        /// Convert a small dec to f64 (use for size comparisons)
-        pub fn toF64(self: @This()) f64 {
-            const numerator_f64 = @as(f64, @floatFromInt(self.numerator));
-            var divisor: f64 = 1.0;
-            var i: u8 = 0;
-            while (i < self.denominator_power_of_ten) : (i += 1) {
-                divisor *= 10.0;
-            }
-            return numerator_f64 / divisor;
-        }
     },
     // A single segment of a string literal
     // a single string may be made up of a span sequential segments
@@ -490,35 +472,14 @@ pub const Expr = union(enum) {
 
     pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, expr_idx: Self.Idx) std.mem.Allocator.Error!void {
         switch (self.*) {
-            .e_int => |int_expr| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-int");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-
-                const value_i128: i128 = @bitCast(int_expr.value.bytes);
-                var value_buf: [40]u8 = undefined;
-                const value_str = std.fmt.bufPrint(&value_buf, "{}", .{value_i128}) catch "fmt_error";
-                try tree.pushStringPair("value", value_str);
-
-                if (int_expr.suffix) |suffix| {
-                    try tree.pushStringPair("suffix", @tagName(suffix));
-                } else {
-                    try tree.pushStringPair("suffix", "none");
-                }
-
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
-            },
             .e_num => |int_expr| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-num");
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                const value_i128: i128 = @bitCast(int_expr.value.bytes);
                 var value_buf: [40]u8 = undefined;
-                const value_str = std.fmt.bufPrint(&value_buf, "{}", .{value_i128}) catch "fmt_error";
+                const value_str = int_expr.value.bufPrint(&value_buf) catch unreachable;
                 try tree.pushStringPair("value", value_str);
 
                 const attrs = tree.beginNode();
@@ -560,7 +521,7 @@ pub const Expr = union(enum) {
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
-            .e_frac_dec => |e| {
+            .e_dec => |e| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-frac-dec");
                 const region = ir.store.getExprRegion(expr_idx);
@@ -586,15 +547,15 @@ pub const Expr = union(enum) {
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
                 var num_buf: [32]u8 = undefined;
-                const num_str = std.fmt.bufPrint(&num_buf, "{}", .{e.numerator}) catch "fmt_error";
+                const num_str = std.fmt.bufPrint(&num_buf, "{}", .{e.value.numerator}) catch "fmt_error";
                 try tree.pushStringPair("numerator", num_str);
 
                 var denom_buf: [32]u8 = undefined;
-                const denom_str = std.fmt.bufPrint(&denom_buf, "{}", .{e.denominator_power_of_ten}) catch "fmt_error";
+                const denom_str = std.fmt.bufPrint(&denom_buf, "{}", .{e.value.denominator_power_of_ten}) catch "fmt_error";
                 try tree.pushStringPair("denominator-power-of-ten", denom_str);
 
-                const numerator_f64: f64 = @floatFromInt(e.numerator);
-                const denominator_f64: f64 = std.math.pow(f64, 10, @floatFromInt(e.denominator_power_of_ten));
+                const numerator_f64: f64 = @floatFromInt(e.value.numerator);
+                const denominator_f64: f64 = std.math.pow(f64, 10, @floatFromInt(e.value.denominator_power_of_ten));
                 const value_f64 = numerator_f64 / denominator_f64;
 
                 var value_buf: [512]u8 = undefined;

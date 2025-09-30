@@ -1553,10 +1553,6 @@ fn canonicalizeSingleQuote(
     const token_text = self.parse_ir.resolve(token);
 
     if (parseSingleQuoteCodepoint(token_text[1 .. token_text.len - 1])) |codepoint| {
-        const requirements = types.Num.IntRequirements{
-            .sign_needed = false,
-            .bits_needed = @intCast(@sizeOf(u21)),
-        };
         const value_content = CIR.IntValue{
             .bytes = @bitCast(@as(u128, @intCast(codepoint))),
             .kind = .u128,
@@ -1565,7 +1561,7 @@ fn canonicalizeSingleQuote(
             const expr_idx = try self.env.addExprAndTypeVar(CIR.Expr{
                 .e_num = .{
                     .value = value_content,
-                    .requirements = requirements,
+                    .kind = .int_unbound,
                 },
             }, .err, region);
             return expr_idx;
@@ -1883,50 +1879,41 @@ pub fn canonicalizeExpr(
                 return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
             }
 
-            // Now we've confirmed that our int literal is one of these:
-            // * A signed integer that fits in i128
-            // * An unsigned integer that fits in u128
-            //
-            // We'll happily bitcast a u128 to i128 for storage (and bitcast it back later
-            // using its type information), but for negative numbers, we do need to actually
-            // negate them (branchlessly) if we skipped its minus sign earlier.
-            //
-            // This operation should never overflow i128, because we already would have errored out
-            // if the u128 portion was bigger than the lowest i128 without a minus sign.
-            // Special case: exactly i128 min already has the correct bit pattern when bitcast from u128,
-            // so if we try to negate it we'll get an overflow. We specifically *don't* negate that one.
-            const i128_val: i128 = if (is_negated) blk: {
-                if (u128_val == min_i128_negated) {
-                    break :blk @as(i128, @bitCast(u128_val));
+            // Determine the appropriate storage type
+            const int_value = blk: {
+                if (is_negated) {
+                    // Negative: must be i128 (or smaller)
+                    const i128_val = if (u128_val == min_i128_negated)
+                        std.math.minInt(i128) // Special case for -2^127
+                    else
+                        -@as(i128, @intCast(u128_val));
+                    break :blk CIR.IntValue{
+                        .bytes = @bitCast(i128_val),
+                        .kind = .i128,
+                    };
                 } else {
-                    break :blk -@as(i128, @bitCast(u128_val));
+                    // Positive: could be i128 or u128
+                    if (u128_val > @as(u128, std.math.maxInt(i128))) {
+                        // Too big for i128, keep as u128
+                        break :blk CIR.IntValue{
+                            .bytes = @bitCast(u128_val),
+                            .kind = .u128,
+                        };
+                    } else {
+                        // Fits in i128
+                        break :blk CIR.IntValue{
+                            .bytes = @bitCast(@as(i128, @intCast(u128_val))),
+                            .kind = .i128,
+                        };
+                    }
                 }
-            } else @as(i128, @bitCast(u128_val));
-
-            // Calculate requirements based on the value
-            // Special handling for minimum signed values (-128, -32768, etc.)
-            // These are special because they have a power-of-2 magnitude that fits exactly
-            // in their signed type. We report them as needing one less bit to make the
-            // standard "signed types have n-1 usable bits" logic work correctly.
-            const is_negative_u1 = @as(u1, @intFromBool(is_negated));
-            const is_power_of_2 = @as(u1, @intFromBool(u128_val != 0 and (u128_val & (u128_val - 1)) == 0));
-            const is_minimum_signed = is_negative_u1 & is_power_of_2;
-            const adjusted_val = u128_val - is_minimum_signed;
-
-            const requirements = types.Num.Int.Requirements{
-                .sign_needed = is_negated and u128_val != 0,
-                .bits_needed = types.Num.Int.BitsNeeded.fromValue(adjusted_val),
-            };
-            const int_requirements = types.Num.IntRequirements{
-                .sign_needed = requirements.sign_needed,
-                .bits_needed = @intCast(@intFromEnum(requirements.bits_needed)),
             };
 
             // If a user provided a suffix, then we treat is as an type
             // annotation to apply to the number
             if (parsed.suffix) |suffix| {
                 // Capture the suffix, if provided
-                const int_suffix: types.Num.Int.Precision = blk: {
+                const num_suffix: CIR.NumKind = blk: {
                     if (std.mem.eql(u8, suffix, "u8")) {
                         break :blk .u8;
                     } else if (std.mem.eql(u8, suffix, "u16")) {
@@ -1947,6 +1934,12 @@ pub fn canonicalizeExpr(
                         break :blk .i64;
                     } else if (std.mem.eql(u8, suffix, "i128")) {
                         break :blk .i128;
+                    } else if (std.mem.eql(u8, suffix, "f32")) {
+                        break :blk .f32;
+                    } else if (std.mem.eql(u8, suffix, "f64")) {
+                        break :blk .f64;
+                    } else if (std.mem.eql(u8, suffix, "dec")) {
+                        break :blk .dec;
                     } else {
                         // TODO: Create a new error type
                         const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
@@ -1958,11 +1951,7 @@ pub fn canonicalizeExpr(
                 // fits into the provided type
 
                 const expr_idx = try self.env.addExprAndTypeVar(
-                    .{ .e_int = .{
-                        .value = .{ .bytes = @bitCast(i128_val), .kind = .i128 },
-                        .suffix = int_suffix,
-                        .requirements = int_requirements,
-                    } },
+                    .{ .e_num = .{ .value = int_value, .kind = num_suffix } },
                     .err,
                     region,
                 );
@@ -1975,26 +1964,19 @@ pub fn canonicalizeExpr(
                 if (is_not_base10) {
                     // For non-decimal integers (hex, binary, octal), set as an int
                     break :blk try self.env.addExprAndTypeVar(
-                        CIR.Expr{ .e_int = .{
-                            .value = CIR.IntValue{
-                                .bytes = @bitCast(i128_val),
-                                .kind = .i128,
-                            },
-                            .suffix = null,
-                            .requirements = int_requirements,
+                        CIR.Expr{ .e_num = .{
+                            .value = int_value,
+                            .kind = .int_unbound,
                         } },
                         .err,
                         region,
                     );
                 } else {
-                    // For decimal (base 10), use as anum so it can be either Int or Frac
+                    // For decimal (base 10), use a num so it can be either Int or Frac
                     break :blk try self.env.addExprAndTypeVar(
                         CIR.Expr{ .e_num = .{
-                            .value = CIR.IntValue{
-                                .bytes = @bitCast(i128_val),
-                                .kind = .i128,
-                            },
-                            .requirements = int_requirements,
+                            .value = int_value,
+                            .kind = .num_unbound,
                         } },
                         .err,
                         region,
@@ -2018,7 +2000,7 @@ pub fn canonicalizeExpr(
                 };
 
                 if (std.mem.eql(u8, suffix, "f32")) {
-                    if (!fitsInF32(f64_val)) {
+                    if (!CIR.fitsInF32(f64_val)) {
                         const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
                         return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
                     }
@@ -2042,7 +2024,7 @@ pub fn canonicalizeExpr(
                     );
                     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
                 } else if (std.mem.eql(u8, suffix, "dec")) {
-                    if (!fitsInDec(f64_val)) {
+                    if (!CIR.fitsInDec(f64_val)) {
                         const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
                         return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
                     }
@@ -2074,22 +2056,13 @@ pub fn canonicalizeExpr(
                 },
             };
 
-            // Parse the literal first to get requirements
-            // const requirements = switch (parsed) {
-            //     .small => |small_info| small_info.requirements,
-            //     .dec => |dec_info| dec_info.requirements,
-            //     .f64 => |f64_info| f64_info.requirements,
-            // };
-            // const frac_requirements = types.Num.FracRequirements{
-            //     .fits_in_f32 = requirements.fits_in_f32,
-            //     .fits_in_dec = requirements.fits_in_dec,
-            // };
-
             const cir_expr = switch (parsed) {
                 .small => |small_info| CIR.Expr{
                     .e_dec_small = .{
-                        .numerator = small_info.numerator,
-                        .denominator_power_of_ten = small_info.denominator_power_of_ten,
+                        .value = .{
+                            .numerator = small_info.numerator,
+                            .denominator_power_of_ten = small_info.denominator_power_of_ten,
+                        },
                         .has_suffix = false,
                     },
                 },
@@ -3318,7 +3291,7 @@ fn canonicalizePattern(
             // standard "signed types have n-1 usable bits" logic work correctly.
             if (parsed.suffix) |suffix| {
                 // Capture the suffix, if provided
-                const int_suffix: Pattern.NumKind = blk: {
+                const num_suffix: CIR.NumKind = blk: {
                     if (std.mem.eql(u8, suffix, "u8")) {
                         break :blk .u8;
                     } else if (std.mem.eql(u8, suffix, "u16")) {
@@ -3337,6 +3310,8 @@ fn canonicalizePattern(
                         break :blk .i32;
                     } else if (std.mem.eql(u8, suffix, "i64")) {
                         break :blk .i64;
+                    } else if (std.mem.eql(u8, suffix, "i128")) {
+                        break :blk .i128;
                     } else if (std.mem.eql(u8, suffix, "f32")) {
                         break :blk .f32;
                     } else if (std.mem.eql(u8, suffix, "f64")) {
@@ -3351,7 +3326,7 @@ fn canonicalizePattern(
                 const pattern_idx = try self.env.addPatternAndTypeVar(
                     .{ .num_literal = .{
                         .value = .{ .bytes = @bitCast(i128_val), .kind = .i128 },
-                        .kind = int_suffix,
+                        .kind = num_suffix,
                     } },
                     .err,
                     region,
@@ -3387,7 +3362,7 @@ fn canonicalizePattern(
                 };
 
                 if (std.mem.eql(u8, suffix, "f32")) {
-                    if (!fitsInF32(f64_val)) {
+                    if (!CIR.fitsInF32(f64_val)) {
                         const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
                         return malformed_idx;
                     }
@@ -3407,7 +3382,7 @@ fn canonicalizePattern(
                     );
                     return pattern_idx;
                 } else if (std.mem.eql(u8, suffix, "dec")) {
-                    if (!fitsInDec(f64_val)) {
+                    if (!CIR.fitsInDec(f64_val)) {
                         const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
                         return malformed_idx;
                     }
@@ -3457,8 +3432,10 @@ fn canonicalizePattern(
             const cir_pattern = switch (parsed) {
                 .small => |small_info| Pattern{
                     .small_dec_literal = .{
-                        .numerator = small_info.numerator,
-                        .denominator_power_of_ten = small_info.denominator_power_of_ten,
+                        .value = .{
+                            .numerator = small_info.numerator,
+                            .denominator_power_of_ten = small_info.denominator_power_of_ten,
+                        },
                         .has_suffix = false,
                     },
                 },
@@ -4055,25 +4032,6 @@ fn isVarReassignmentAcrossFunctionBoundary(self: *const Self, pattern_idx: Patte
     return false;
 }
 
-/// Check if the given f64 fits in f32 range (ignoring precision loss)
-pub fn fitsInF32(f64_val: f64) bool {
-    // Check if it's within the range that f32 can represent.
-    // This includes normal, subnormal, and zero values.
-    // (This is a magnitude check, so take the abs value to check
-    // positive and negative at the same time.)
-    const abs_val = @abs(f64_val);
-    return abs_val == 0.0 or (abs_val >= std.math.floatTrueMin(f32) and abs_val <= std.math.floatMax(f32));
-}
-
-/// Check if a float value can be represented accurately in RocDec
-pub fn fitsInDec(value: f64) bool {
-    // RocDec uses i128 with 18 decimal places
-    const max_dec_value = 170141183460469231731.0;
-    const min_dec_value = -170141183460469231731.0;
-
-    return value >= min_dec_value and value <= max_dec_value;
-}
-
 // Result type for parsing fractional literals into small, Dec, or f64
 const FracLiteralResult = union(enum) {
     small: struct {
@@ -4178,7 +4136,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
                     .numerator = small.numerator,
                     .denominator_power_of_ten = small.denominator_power_of_ten,
                     .requirements = types.Num.Frac.Requirements{
-                        .fits_in_f32 = fitsInF32(small_f64_val),
+                        .fits_in_f32 = CIR.fitsInF32(small_f64_val),
                         .fits_in_dec = true,
                     },
                 },
@@ -4195,7 +4153,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
                 .numerator = @as(i16, @intFromFloat(rounded)),
                 .denominator_power_of_ten = 0,
                 .requirements = types.Num.Frac.Requirements{
-                    .fits_in_f32 = fitsInF32(f64_val),
+                    .fits_in_f32 = CIR.fitsInF32(f64_val),
                     .fits_in_dec = true,
                 },
             },
@@ -4205,7 +4163,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
     // Check if the value can fit in RocDec (whether or not it uses scientific notation)
     // RocDec uses i128 with 18 decimal places
     // We need to check if the value is within RocDec's range
-    if (fitsInDec(f64_val)) {
+    if (CIR.fitsInDec(f64_val)) {
         // Convert f64 to RocDec by multiplying by 10^18
         const dec_scale = std.math.pow(f64, 10, 18);
         const scaled_val = f64_val * dec_scale;
@@ -4227,7 +4185,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
                     .f64 = .{
                         .value = f64_val,
                         .requirements = types.Num.Frac.Requirements{
-                            .fits_in_f32 = fitsInF32(f64_val),
+                            .fits_in_f32 = CIR.fitsInF32(f64_val),
                             .fits_in_dec = false,
                         },
                     },
@@ -4245,7 +4203,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
                     .f64 = .{
                         .value = f64_val,
                         .requirements = types.Num.Frac.Requirements{
-                            .fits_in_f32 = fitsInF32(f64_val),
+                            .fits_in_f32 = CIR.fitsInF32(f64_val),
                             .fits_in_dec = false,
                         },
                     },
@@ -4256,7 +4214,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
                 .dec = .{
                     .value = RocDec{ .num = dec_num },
                     .requirements = types.Num.Frac.Requirements{
-                        .fits_in_f32 = fitsInF32(f64_val),
+                        .fits_in_f32 = CIR.fitsInF32(f64_val),
                         .fits_in_dec = true,
                     },
                 },
@@ -4269,7 +4227,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
         .f64 = .{
             .value = f64_val,
             .requirements = types.Num.Frac.Requirements{
-                .fits_in_f32 = fitsInF32(f64_val),
+                .fits_in_f32 = CIR.fitsInF32(f64_val),
                 .fits_in_dec = false,
             },
         },

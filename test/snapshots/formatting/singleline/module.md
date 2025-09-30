@@ -56,9 +56,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.2 (type "Num(_size)"))
-		(patt @4.1-4.2 (type "Num(_size)")))
+		(patt @3.1-3.2 (type "Num(Int(_size))"))
+		(patt @4.1-4.2 (type "Num(Int(_size))")))
 	(expressions
-		(expr @3.5-3.8 (type "Num(_size)"))
-		(expr @4.5-4.8 (type "Num(_size)"))))
+		(expr @3.5-3.8 (type "Num(Int(_size))"))
+		(expr @4.5-4.8 (type "Num(Int(_size))"))))
 ~~~

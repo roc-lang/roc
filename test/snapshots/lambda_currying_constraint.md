@@ -144,8 +144,8 @@ NO CHANGE
 					(ty-rigid-var @4.13-4.14 (name "a"))
 					(ty-parens @4.18-4.26
 						(ty-fn @4.19-4.25 (effectful false)
-							(ty-rigid-var @4.13-4.14 (name "a"))
-							(ty-rigid-var @4.13-4.14 (name "a"))))))))
+							(ty-rigid-var-lookup (ty-rigid-var @4.13-4.14 (name "a")))
+							(ty-rigid-var-lookup (ty-rigid-var @4.13-4.14 (name "a")))))))))
 	(d-let
 		(p-assign @9.1-9.11 (ident "curriedAdd"))
 		(e-call @9.14-9.26
@@ -177,9 +177,9 @@ NO CHANGE
 					(ty-parens @12.14-12.22
 						(ty-fn @12.15-12.21 (effectful false)
 							(ty-rigid-var @12.15-12.16 (name "a"))
-							(ty-rigid-var @12.15-12.16 (name "a"))))
-					(ty-rigid-var @12.15-12.16 (name "a"))
-					(ty-rigid-var @12.15-12.16 (name "a"))))))
+							(ty-rigid-var-lookup (ty-rigid-var @12.15-12.16 (name "a")))))
+					(ty-rigid-var-lookup (ty-rigid-var @12.15-12.16 (name "a")))
+					(ty-rigid-var-lookup (ty-rigid-var @12.15-12.16 (name "a")))))))
 	(d-let
 		(p-assign @17.1-17.14 (ident "addThreeTwice"))
 		(e-closure @17.17-17.45

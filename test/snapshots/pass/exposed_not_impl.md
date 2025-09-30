@@ -109,9 +109,9 @@ NO CHANGE
 	(s-alias-decl @10.1-10.19
 		(ty-header @10.1-10.7 (name "MyType"))
 		(ty-tag-union @10.10-10.19
-			(tag_name @10.11-10.12 (name "A"))
-			(tag_name @10.14-10.15 (name "B"))
-			(tag_name @10.17-10.18 (name "C")))))
+			(ty-tag-name @10.11-10.12 (name "A"))
+			(ty-tag-name @10.14-10.15 (name "B"))
+			(ty-tag-name @10.17-10.18 (name "C")))))
 ~~~
 # TYPES
 ~~~clojure

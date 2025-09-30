@@ -108,7 +108,7 @@ pub fn deinit(store: *NodeStore) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 46;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 34;
+pub const MODULEENV_EXPR_NODE_COUNT = 33;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 14;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -323,44 +323,19 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .region = store.getRegionAt(node_idx),
             } };
         },
-        .expr_int => {
-            // Get requirements
-            const sign_needed: bool = node.data_1 != 0;
-            const bits_needed: u8 = @intCast(node.data_2);
-
-            // Read i128 from extra_data (stored as 4 u32s in data_1)
-            const value_as_u32s = store.extra_data.items.items[node.data_3..][0..4];
-
-            // Suffix
-            const suffix_parts = store.extra_data.items.items[node.data_3 + value_as_u32s.len ..];
-            const has_suffix: bool = suffix_parts[0] != 0;
-            var suffix: ?types.Num.Int.Precision = null;
-            if (has_suffix) {
-                suffix = @enumFromInt(suffix_parts[1]);
-            }
-
-            // Retrieve type variable from data_2 and requirements from data_3
-            return CIR.Expr{
-                .e_int = .{
-                    .value = .{ .bytes = @bitCast(value_as_u32s.*), .kind = .i128 },
-                    .requirements = .{ .sign_needed = sign_needed, .bits_needed = bits_needed },
-                    .suffix = suffix,
-                },
-            };
-        },
         .expr_num => {
             // Get requirements
-            const sign_needed: bool = node.data_1 != 0;
-            const bits_needed: u8 = @intCast(node.data_2);
+            const kind: CIR.NumKind = @enumFromInt(node.data_1);
 
             // Read i128 from extra_data (stored as 4 u32s in data_1)
+            const val_kind: CIR.IntValue.IntKind = @enumFromInt(node.data_2);
             const value_as_u32s = store.extra_data.items.items[node.data_3..][0..4];
 
             // Retrieve type variable from data_2 and requirements from data_3
             return CIR.Expr{
                 .e_num = .{
-                    .value = .{ .bytes = @bitCast(value_as_u32s.*), .kind = .i128 },
-                    .requirements = .{ .sign_needed = sign_needed, .bits_needed = bits_needed },
+                    .value = .{ .bytes = @bitCast(value_as_u32s.*), .kind = val_kind },
+                    .kind = kind,
                 },
             };
         },
@@ -428,8 +403,10 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 
             return CIR.Expr{
                 .e_dec_small = .{
-                    .numerator = numerator,
-                    .denominator_power_of_ten = denominator_power_of_ten,
+                    .value = .{
+                        .numerator = numerator,
+                        .denominator_power_of_ten = denominator_power_of_ten,
+                    },
                     .has_suffix = node.data_3 != 0,
                 },
             };
@@ -897,15 +874,17 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             },
         },
         .pattern_num_literal => {
-            const kind: CIR.Pattern.NumKind = @enumFromInt(node.data_1);
+            const kind: CIR.NumKind = @enumFromInt(node.data_1);
 
-            const extra_data_idx = node.data_2;
+            const val_kind: CIR.IntValue.IntKind = @enumFromInt(node.data_2);
+
+            const extra_data_idx = node.data_3;
             const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..4];
             const value_as_i128: i128 = @bitCast(value_as_u32s.*);
 
             return CIR.Pattern{
                 .num_literal = .{
-                    .value = .{ .bytes = @bitCast(value_as_i128), .kind = .i128 },
+                    .value = .{ .bytes = @bitCast(value_as_i128), .kind = val_kind },
                     .kind = kind,
                 },
             };
@@ -947,8 +926,10 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
 
             return CIR.Pattern{
                 .small_dec_literal = .{
-                    .numerator = numerator,
-                    .denominator_power_of_ten = denominator_power_of_ten,
+                    .value = .{
+                        .numerator = numerator,
+                        .denominator_power_of_ten = denominator_power_of_ten,
+                    },
                     .has_suffix = has_suffix,
                 },
             };
@@ -1323,41 +1304,11 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) std.mem.A
             node.data_1 = @intFromEnum(e.module_idx);
             node.data_2 = e.target_node_idx;
         },
-        .e_int => |e| {
-            node.tag = .expr_int;
-
-            // Store requirements
-            node.data_1 = @intFromBool(e.requirements.sign_needed);
-            node.data_2 = @intCast(e.requirements.bits_needed);
-
-            // Store i128 value in extra_data
-            const extra_data_start = store.extra_data.len();
-
-            // Store the IntLiteralValue as i128 (16 bytes = 4 u32s)
-            // We always store as i128 internally
-            const value_as_i128: i128 = @bitCast(e.value.bytes);
-            const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
-            for (value_as_u32s) |word| {
-                _ = try store.extra_data.append(store.gpa, word);
-            }
-
-            // Store the extra_data index in data_1
-            node.data_3 = @intCast(extra_data_start);
-
-            // Save the suffix
-            if (e.suffix) |suffix| {
-                _ = try store.extra_data.append(store.gpa, @intFromBool(true));
-                _ = try store.extra_data.append(store.gpa, @intFromEnum(suffix));
-            } else {
-                _ = try store.extra_data.append(store.gpa, @intFromBool(false));
-            }
-        },
         .e_num => |e| {
             node.tag = .expr_num;
 
-            // Store requirements
-            node.data_1 = @intFromBool(e.requirements.sign_needed);
-            node.data_2 = @intCast(e.requirements.bits_needed);
+            node.data_1 = @intFromEnum(e.kind);
+            node.data_2 = @intFromEnum(e.value.kind);
 
             // Store i128 value in extra_data
             const extra_data_start = store.extra_data.len();
@@ -1418,9 +1369,9 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) std.mem.A
 
             // Pack small dec data into data_1 and data_3
             // data_1: numerator (i16) - fits in lower 16 bits
-            // data_3: denominator_power_of_ten (u8) in lower 8 bits
-            node.data_1 = @as(u32, @bitCast(@as(i32, e.numerator)));
-            node.data_2 = @as(u32, e.denominator_power_of_ten);
+            // data_2: denominator_power_of_ten (u8) in lower 8 bits
+            node.data_1 = @as(u32, @bitCast(@as(i32, e.value.numerator)));
+            node.data_2 = @as(u32, e.value.denominator_power_of_ten);
             node.data_3 = @intFromBool(e.has_suffix);
         },
         .e_str_segment => |e| {
@@ -1854,7 +1805,8 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
             node.tag = .pattern_num_literal;
 
             node.data_1 = @intFromEnum(p.kind);
-            node.data_2 = @intCast(store.extra_data.len());
+            node.data_2 = @intFromEnum(p.value.kind);
+            node.data_3 = @intCast(store.extra_data.len());
 
             const value_as_u32s: [4]u32 = @bitCast(p.value.bytes);
             for (value_as_u32s) |word| {
@@ -1866,8 +1818,8 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
             // Pack small dec data into data_1 and data_3
             // data_1: numerator (i16) - fits in lower 16 bits
             // data_3: denominator_power_of_ten (u8) in lower 8 bits
-            node.data_1 = @as(u32, @bitCast(@as(i32, p.numerator)));
-            node.data_2 = @as(u32, p.denominator_power_of_ten);
+            node.data_1 = @as(u32, @bitCast(@as(i32, p.value.numerator)));
+            node.data_2 = @as(u32, p.value.denominator_power_of_ten);
             node.data_3 = @intFromBool(p.has_suffix);
         },
         .dec_literal => |p| {
@@ -3534,7 +3486,6 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     try testing.expectEqual(Node.Tag.expr_list, retrieved_list.tag);
     try testing.expectEqual(@as(u32, 10), retrieved_list.data_1);
     try testing.expectEqual(@as(u32, 3), retrieved_list.data_2);
-    try testing.expectEqual(@as(u32, 2), retrieved_list.data_3);
 
     // Verify float node and extra data
     const retrieved_float = deserialized.nodes.get(@enumFromInt(2));

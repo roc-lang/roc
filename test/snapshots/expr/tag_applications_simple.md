@@ -35,7 +35,7 @@ The second element has this type:
     _[Some(Num(_size)), None]_others_
 
 However, the third element has this type:
-    _Result(ok, err)_
+    _Result(Str, err)_
 
 All elements in a list must have compatible types.
 

@@ -198,8 +198,10 @@ InnerModule :
 				(ty-rigid-var @3.8-3.9 (name "a"))
 				(ty-rigid-var @3.11-3.12 (name "b"))))
 		(ty-tag-union @3.16-3.31
-			(tag_name @3.17-3.22 (name "Ok"))
-			(tag_name @3.24-3.30 (name "Err"))))
+			(ty-tag-name @3.17-3.22 (name "Ok")
+				(ty-rigid-var-lookup (ty-rigid-var @3.8-3.9 (name "a"))))
+			(ty-tag-name @3.24-3.30 (name "Err")
+				(ty-rigid-var-lookup (ty-rigid-var @3.11-3.12 (name "b"))))))
 	(s-alias-decl @10.1-11.31
 		(ty-header @10.1-10.12 (name "InnerModule"))
 		(ty-malformed @11.24-11.31)))

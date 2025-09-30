@@ -616,12 +616,12 @@ combineResults = |result1, result2|
 						(ty-rigid-var @30.18-30.32 (name "err")))
 					(ty-apply @30.34-30.48 (name "Result") (local)
 						(ty-rigid-var @30.34-30.48 (name "b"))
-						(ty-rigid-var @30.18-30.32 (name "err")))
+						(ty-rigid-var-lookup (ty-rigid-var @30.18-30.32 (name "err"))))
 					(ty-apply @30.52-30.71 (name "Result") (local)
 						(ty-tuple @30.52-30.71
-							(ty-rigid-var @30.18-30.32 (name "a"))
-							(ty-rigid-var @30.34-30.48 (name "b")))
-						(ty-rigid-var @30.18-30.32 (name "err")))))))
+							(ty-rigid-var-lookup (ty-rigid-var @30.18-30.32 (name "a")))
+							(ty-rigid-var-lookup (ty-rigid-var @30.34-30.48 (name "b"))))
+						(ty-rigid-var-lookup (ty-rigid-var @30.18-30.32 (name "err"))))))))
 	(s-import @3.1-3.56 (module "http.Client") (qualifier "http") (alias "Http")
 		(exposes
 			(exposed (name "Request") (wildcard false))

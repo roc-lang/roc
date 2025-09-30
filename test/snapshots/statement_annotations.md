@@ -111,7 +111,7 @@ NO CHANGE
 			(declared-type
 				(ty-fn @3.25-3.35 (effectful false)
 					(ty-rigid-var @3.25-3.28 (name "val"))
-					(ty-rigid-var @3.25-3.28 (name "val")))))))
+					(ty-rigid-var-lookup (ty-rigid-var @3.25-3.28 (name "val"))))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -146,7 +146,7 @@ pub const Pattern = union(enum) {
     /// ```
     num_literal: struct {
         value: CIR.IntValue,
-        kind: NumKind,
+        kind: CIR.NumKind,
     },
     /// Pattern that matches a small decimal literal (represented as rational number).
     /// This is Roc's preferred approach for exact decimal matching, avoiding
@@ -160,20 +160,8 @@ pub const Pattern = union(enum) {
     /// }
     /// ```
     small_dec_literal: struct {
-        numerator: i16,
-        denominator_power_of_ten: u8,
+        value: CIR.SmallDecValue,
         has_suffix: bool,
-
-        /// Convert a small dec to f64 (use for size comparisons)
-        pub fn toF64(self: @This()) f64 {
-            const numerator_f64 = @as(f64, @floatFromInt(self.numerator));
-            var divisor: f64 = 1.0;
-            var i: u8 = 0;
-            while (i < self.denominator_power_of_ten) : (i += 1) {
-                divisor *= 10.0;
-            }
-            return numerator_f64 / divisor;
-        }
     },
     /// Pattern that matches a high-precision decimal literal.
     /// Used for exact decimal matching with arbitrary precision.
@@ -445,14 +433,13 @@ pub const Pattern = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .int_literal => |p| {
+            .num_literal => |p| {
                 const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-int");
+                try tree.pushStaticAtom("p-num");
                 try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
 
-                const value_i128: i128 = @bitCast(p.value.bytes);
                 var value_buf: [40]u8 = undefined;
-                const value_str = std.fmt.bufPrint(&value_buf, "{}", .{value_i128}) catch "fmt_error";
+                const value_str = p.value.bufPrint(&value_buf) catch unreachable;
                 try tree.pushStringPair("value", value_str);
 
                 const attrs = tree.beginNode();
@@ -527,28 +514,4 @@ pub const Pattern = union(enum) {
             },
         }
     }
-
-    /// Canonical information about a number
-    pub const NumKind = enum {
-        // If this number has no restrictions
-        num_unbound,
-
-        // If this was a non-base 10 number, it must be an in
-        int_unbound,
-
-        // If the number has a suffix
-        u8,
-        i8,
-        u16,
-        i16,
-        u32,
-        i32,
-        u64,
-        i64,
-        u128,
-        i128,
-        f32,
-        f64,
-        dec,
-    };
 };

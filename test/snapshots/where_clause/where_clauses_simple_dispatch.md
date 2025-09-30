@@ -77,7 +77,7 @@ NO CHANGE
 		(where
 			(method @3.28-3.55 (module-of "a") (ident "to_str")
 				(args
-					(ty-rigid-var @3.13-3.14 (name "a")))
+					(ty-rigid-var-lookup (ty-rigid-var @3.13-3.14 (name "a"))))
 				(ty-lookup @3.52-3.55 (name "Str") (builtin)))))
 	(ext-decl @3.28-3.55 (ident "module(a).to_str") (kind "value")))
 ~~~

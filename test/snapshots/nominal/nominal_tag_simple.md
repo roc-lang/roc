@@ -94,9 +94,9 @@ NO CHANGE
 	(s-nominal-decl @3.1-3.28
 		(ty-header @3.1-3.6 (name "Color"))
 		(ty-tag-union @3.10-3.28
-			(tag_name @3.11-3.14 (name "Red"))
-			(tag_name @3.16-3.21 (name "Green"))
-			(tag_name @3.23-3.27 (name "Blue")))))
+			(ty-tag-name @3.11-3.14 (name "Red"))
+			(ty-tag-name @3.16-3.21 (name "Green"))
+			(ty-tag-name @3.23-3.27 (name "Blue")))))
 ~~~
 # TYPES
 ~~~clojure

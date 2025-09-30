@@ -194,7 +194,7 @@ main! = |_| {
 			(declared-type
 				(ty-fn @4.12-4.18 (effectful false)
 					(ty-rigid-var @4.12-4.13 (name "a"))
-					(ty-rigid-var @4.12-4.13 (name "a"))))))
+					(ty-rigid-var-lookup (ty-rigid-var @4.12-4.13 (name "a")))))))
 	(d-let
 		(p-assign @9.1-9.8 (ident "combine"))
 		(e-lambda @9.11-9.42
@@ -213,8 +213,8 @@ main! = |_| {
 					(ty-rigid-var @8.11-8.12 (name "a"))
 					(ty-rigid-var @8.14-8.15 (name "b"))
 					(ty-tuple @8.19-8.25
-						(ty-rigid-var @8.11-8.12 (name "a"))
-						(ty-rigid-var @8.14-8.15 (name "b")))))))
+						(ty-rigid-var-lookup (ty-rigid-var @8.11-8.12 (name "a")))
+						(ty-rigid-var-lookup (ty-rigid-var @8.14-8.15 (name "b"))))))))
 	(d-let
 		(p-assign @13.1-13.7 (ident "addOne"))
 		(e-lambda @13.10-13.19

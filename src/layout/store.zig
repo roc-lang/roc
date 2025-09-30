@@ -1110,7 +1110,8 @@ pub const Store = struct {
                         // For each tag, compute its payload layout: () => ZST, 1 arg => layout, >1 => tuple of arg layouts
                         var temp_scope = TypeScope.init(self.env.gpa);
                         defer temp_scope.deinit();
-                        for (tags.items(.args)) |tag_args| {
+
+                        for (tags_slice.items(.args)) |tag_args| {
                             const args_slice = self.types_store.sliceVars(tag_args);
                             if (args_slice.len == 0) {
                                 // zero-sized payload; nothing to update

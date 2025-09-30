@@ -187,7 +187,7 @@ main! = |_| {}
 				(ty-fn @4.11-4.29 (effectful false)
 					(ty-apply @4.11-4.21 (name "List") (builtin)
 						(ty-rigid-var @4.16-4.20 (name "elem")))
-					(ty-rigid-var @4.16-4.20 (name "elem"))))))
+					(ty-rigid-var-lookup (ty-rigid-var @4.16-4.20 (name "elem")))))))
 	(d-let
 		(p-assign @16.1-16.6 (ident "main!"))
 		(e-lambda @16.9-16.15

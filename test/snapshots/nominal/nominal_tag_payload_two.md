@@ -131,7 +131,7 @@ is_ok = |result| match result {
 				(ty-fn @5.6-5.27 (effectful false)
 					(ty-rigid-var @5.6-5.8 (name "ok"))
 					(ty-apply @5.12-5.27 (name "MyResult") (local)
-						(ty-rigid-var @5.6-5.8 (name "ok"))
+						(ty-rigid-var-lookup (ty-rigid-var @5.6-5.8 (name "ok")))
 						(ty-underscore @5.12-5.27))))))
 	(d-let
 		(p-assign @9.1-9.6 (ident "is_ok"))
@@ -173,8 +173,10 @@ is_ok = |result| match result {
 				(ty-rigid-var @3.10-3.12 (name "ok"))
 				(ty-rigid-var @3.14-3.17 (name "err"))))
 		(ty-tag-union @3.22-3.40
-			(tag_name @3.23-3.29 (name "Ok"))
-			(tag_name @3.31-3.39 (name "Err")))))
+			(ty-tag-name @3.23-3.29 (name "Ok")
+				(ty-rigid-var-lookup (ty-rigid-var @3.10-3.12 (name "ok"))))
+			(ty-tag-name @3.31-3.39 (name "Err")
+				(ty-rigid-var-lookup (ty-rigid-var @3.14-3.17 (name "err")))))))
 ~~~
 # TYPES
 ~~~clojure

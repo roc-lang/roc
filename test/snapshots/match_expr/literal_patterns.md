@@ -14,6 +14,7 @@ match Answer {
 ~~~
 # EXPECTED
 INCOMPATIBLE MATCH BRANCHES - literal_patterns.md:1:1:1:1
+INCOMPATIBLE MATCH PATTERNS - literal_patterns.md:1:1:1:1
 # PROBLEMS
 **INCOMPATIBLE MATCH BRANCHES**
 The second branch's type in this `match` is different from the previous ones:
@@ -35,6 +36,29 @@ All branches in an `match` must have compatible types.
 
 Note: You can wrap branches values in a tag to make them compatible.
 To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+
+**INCOMPATIBLE MATCH PATTERNS**
+The pattern in the fourth branch of this `match` differs from previous ones:
+**literal_patterns.md:1:1:**
+```roc
+match Answer {
+    Answer => 1
+    Zero => "hello"
+    Greeting => 3
+    10 => 4
+}
+```
+    ^^
+
+The fourth pattern has this type:
+    _Num(_size)_
+
+But all the previous patterns have this type: 
+    _[Answer, Zero, Greeting]_others_
+
+All patterns in an `match` must have compatible types.
+
+
 
 # TOKENS
 ~~~zig
@@ -103,7 +127,7 @@ match Answer {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-int @5.5-5.7 (value "10"))))
+						(p-num @5.5-5.7 (value "10"))))
 				(value
 					(e-num @5.11-5.12 (value "4")))))))
 ~~~

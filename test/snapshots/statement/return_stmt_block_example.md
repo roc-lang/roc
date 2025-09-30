@@ -36,7 +36,7 @@ The `else` branch has the type:
     _Str_
 
 But the `then` branch has the type:
-    _Result(ok, err)_
+    _Result(ok, [TooBig]_others)_
 
 All branches in an `if` must have compatible types.
 
@@ -155,13 +155,13 @@ foo = |num| {
 					(ty-apply @3.14-3.35 (name "Result") (local)
 						(ty-lookup @3.14-3.35 (name "Str") (builtin))
 						(ty-tag-union @3.14-3.35
-							(tag_name @3.27-3.33 (name "TooBig")))))))))
+							(ty-tag-name @3.27-3.33 (name "TooBig")))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.4 (type "Num(Int(Unsigned64)) -> Result(Str, [TooBig])")))
+		(patt @4.1-4.4 (type "Num(Int(Unsigned64)) -> Result(Error, [TooBig])")))
 	(expressions
-		(expr @4.7-11.2 (type "Num(Int(Unsigned64)) -> Result(Str, [TooBig])"))))
+		(expr @4.7-11.2 (type "Num(Int(Unsigned64)) -> Result(Error, [TooBig])"))))
 ~~~

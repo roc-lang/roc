@@ -258,8 +258,9 @@ TagType := [Some(_), None]
 	(s-nominal-decl @15.1-15.27
 		(ty-header @15.1-15.8 (name "TagType"))
 		(ty-tag-union @15.12-15.27
-			(tag_name @15.13-15.20 (name "Some"))
-			(tag_name @15.22-15.26 (name "None")))))
+			(ty-tag-name @15.13-15.20 (name "Some")
+				(ty-underscore @15.18-15.18))
+			(ty-tag-name @15.22-15.26 (name "None")))))
 ~~~
 # TYPES
 ~~~clojure

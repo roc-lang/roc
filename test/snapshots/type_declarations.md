@@ -209,13 +209,13 @@ NO CHANGE
 				(ty-rigid-var @3.8-3.9 (name "b"))))
 		(ty-fn @3.13-3.41 (effectful false)
 			(ty-apply @3.13-3.20 (name "List") (builtin)
-				(ty-rigid-var @3.5-3.6 (name "a")))
+				(ty-rigid-var-lookup (ty-rigid-var @3.5-3.6 (name "a"))))
 			(ty-parens @3.22-3.30
 				(ty-fn @3.23-3.29 (effectful false)
-					(ty-rigid-var @3.5-3.6 (name "a"))
-					(ty-rigid-var @3.8-3.9 (name "b"))))
+					(ty-rigid-var-lookup (ty-rigid-var @3.5-3.6 (name "a")))
+					(ty-rigid-var-lookup (ty-rigid-var @3.8-3.9 (name "b")))))
 			(ty-apply @3.34-3.41 (name "List") (builtin)
-				(ty-rigid-var @3.8-3.9 (name "b")))))
+				(ty-rigid-var-lookup (ty-rigid-var @3.8-3.9 (name "b"))))))
 	(s-alias-decl @5.1-5.17
 		(ty-header @5.1-5.4 (name "Foo"))
 		(ty-tuple @5.7-5.17
@@ -235,18 +235,19 @@ NO CHANGE
 			(ty-args
 				(ty-rigid-var @9.7-9.8 (name "a"))))
 		(ty-tag-union @9.12-9.27
-			(tag_name @9.13-9.20 (name "Some"))
-			(tag_name @9.22-9.26 (name "None"))))
+			(ty-tag-name @9.13-9.20 (name "Some")
+				(ty-rigid-var-lookup (ty-rigid-var @9.7-9.8 (name "a"))))
+			(ty-tag-name @9.22-9.26 (name "None"))))
 	(s-alias-decl @11.1-11.38
 		(ty-header @11.1-11.12 (name "SomeFunc")
 			(ty-args
 				(ty-rigid-var @11.10-11.11 (name "a"))))
 		(ty-fn @11.15-11.38 (effectful false)
 			(ty-apply @11.15-11.23 (name "Maybe") (local)
-				(ty-rigid-var @11.10-11.11 (name "a")))
-			(ty-rigid-var @11.10-11.11 (name "a"))
+				(ty-rigid-var-lookup (ty-rigid-var @11.10-11.11 (name "a"))))
+			(ty-rigid-var-lookup (ty-rigid-var @11.10-11.11 (name "a")))
 			(ty-apply @11.30-11.38 (name "Maybe") (local)
-				(ty-rigid-var @11.10-11.11 (name "a")))))
+				(ty-rigid-var-lookup (ty-rigid-var @11.10-11.11 (name "a"))))))
 	(s-alias-decl @13.1-13.13
 		(ty-header @13.1-13.7 (name "MyType"))
 		(ty-lookup @13.10-13.13 (name "U64") (builtin)))

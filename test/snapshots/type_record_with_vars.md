@@ -91,7 +91,7 @@ main! = |_| {}
 							(ty-rigid-var @3.21-3.22 (name "a")))
 						(field (field "other")
 							(ty-rigid-var @3.31-3.33 (name "_b"))))
-					(ty-rigid-var @3.21-3.22 (name "a"))))))
+					(ty-rigid-var-lookup (ty-rigid-var @3.21-3.22 (name "a")))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15

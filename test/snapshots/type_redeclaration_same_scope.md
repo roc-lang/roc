@@ -78,15 +78,17 @@ NO CHANGE
 			(ty-args
 				(ty-rigid-var @3.7-3.8 (name "a"))))
 		(ty-tag-union @3.12-3.27
-			(tag_name @3.13-3.20 (name "Some"))
-			(tag_name @3.22-3.26 (name "None"))))
+			(ty-tag-name @3.13-3.20 (name "Some")
+				(ty-rigid-var-lookup (ty-rigid-var @3.7-3.8 (name "a"))))
+			(ty-tag-name @3.22-3.26 (name "None"))))
 	(s-alias-decl @4.1-4.24
 		(ty-header @4.1-4.9 (name "Maybe")
 			(ty-args
 				(ty-rigid-var @4.7-4.8 (name "a"))))
 		(ty-tag-union @4.12-4.24
-			(tag_name @4.13-4.18 (name "Ok"))
-			(tag_name @4.20-4.23 (name "Err")))))
+			(ty-tag-name @4.13-4.18 (name "Ok")
+				(ty-rigid-var-lookup (ty-rigid-var @4.7-4.8 (name "a"))))
+			(ty-tag-name @4.20-4.23 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure

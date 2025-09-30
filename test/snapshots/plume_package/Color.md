@@ -80,6 +80,7 @@ is_named_color = |str|{
 # EXPECTED
 UNUSED VARIABLE - Color.md:30:5:30:25
 UNDEFINED VARIABLE - Color.md:68:14:68:27
+TYPE MISMATCH - Color.md:51:104:51:105
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `is_char_in_hex_range` is not used anywhere in your code.
@@ -103,6 +104,20 @@ Is there an `import` or `exposing` missing up-top?
 ```
              ^^^^^^^^^^^^^
 
+
+**TYPE MISMATCH**
+The first argument being passed to this function has the wrong type:
+**Color.md:51:104:51:105:**
+```roc
+    Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
+```
+                                                                                                       ^
+
+This argument has the type:
+    _Num(Frac(Decimal))_
+
+But `to_str` needs the first argument to be:
+    _Num(Int(Unsigned8))_
 
 # TOKENS
 ~~~zig
@@ -744,7 +759,7 @@ is_named_color = |str| {
 										(pattern (degenerate false)
 											(p-list @33.9-33.32
 												(patterns
-													(p-int @33.10-33.13 (value "35"))
+													(p-num @33.10-33.13 (value "35"))
 													(p-assign @33.15-33.16 (ident "a"))
 													(p-assign @33.18-33.19 (ident "b"))
 													(p-assign @33.21-33.22 (ident "c"))
@@ -836,7 +851,8 @@ is_named_color = |str| {
 					(ty-apply @26.14-26.46 (name "Result") (local)
 						(ty-lookup @26.14-26.46 (name "Color") (local))
 						(ty-tag-union @26.14-26.46
-							(tag_name @26.29-26.44 (name "InvalidHex"))))))))
+							(ty-tag-name @26.29-26.44 (name "InvalidHex")
+								(ty-lookup @26.40-26.43 (name "Str") (builtin)))))))))
 	(d-let
 		(p-assign @49.1-49.7 (ident "to_str"))
 		(e-closure @49.10-54.2
@@ -978,7 +994,8 @@ is_named_color = |str| {
 					(ty-apply @60.16-60.50 (name "Result") (local)
 						(ty-lookup @60.16-60.50 (name "Color") (local))
 						(ty-tag-union @60.16-60.50
-							(tag_name @60.31-60.48 (name "UnknownColor"))))))))
+							(ty-tag-name @60.31-60.48 (name "UnknownColor")
+								(ty-lookup @60.44-60.47 (name "Str") (builtin)))))))))
 	(d-let
 		(p-assign @67.1-67.15 (ident "is_named_color"))
 		(e-lambda @67.18-71.2
@@ -1007,10 +1024,19 @@ is_named_color = |str| {
 	(s-nominal-decl @10.1-15.2
 		(ty-header @10.1-10.6 (name "Color"))
 		(ty-tag-union @10.10-15.2
-			(tag_name @11.5-11.20 (name "RGB"))
-			(tag_name @12.5-12.26 (name "RGBA"))
-			(tag_name @13.5-13.15 (name "Named"))
-			(tag_name @14.5-14.13 (name "Hex"))))
+			(ty-tag-name @11.5-11.20 (name "RGB")
+				(ty-lookup @11.9-11.11 (name "U8") (builtin))
+				(ty-lookup @11.13-11.15 (name "U8") (builtin))
+				(ty-lookup @11.17-11.19 (name "U8") (builtin)))
+			(ty-tag-name @12.5-12.26 (name "RGBA")
+				(ty-lookup @12.10-12.12 (name "U8") (builtin))
+				(ty-lookup @12.14-12.16 (name "U8") (builtin))
+				(ty-lookup @12.18-12.20 (name "U8") (builtin))
+				(ty-lookup @12.22-12.25 (name "Dec") (builtin)))
+			(ty-tag-name @13.5-13.15 (name "Named")
+				(ty-lookup @13.11-13.14 (name "Str") (builtin)))
+			(ty-tag-name @14.5-14.13 (name "Hex")
+				(ty-lookup @14.9-14.12 (name "Str") (builtin)))))
 	(s-expect @56.1-56.57
 		(e-binop @56.8-56.57 (op "eq")
 			(e-dot-access @56.8-56.34 (field "to_str")

@@ -77,8 +77,8 @@ NO CHANGE
 		(where
 			(method @3.24-3.47 (module-of "a") (ident "to_b")
 				(args
-					(ty-rigid-var @3.11-3.12 (name "a")))
-				(ty-rigid-var @3.16-3.17 (name "b")))))
+					(ty-rigid-var-lookup (ty-rigid-var @3.11-3.12 (name "a"))))
+				(ty-rigid-var-lookup (ty-rigid-var @3.16-3.17 (name "b"))))))
 	(ext-decl @3.24-3.47 (ident "module(a).to_b") (kind "value")))
 ~~~
 # TYPES

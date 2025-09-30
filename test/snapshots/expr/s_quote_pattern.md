@@ -58,7 +58,7 @@ NO CHANGE
 					(pattern (degenerate false)
 						(p-list @2.2-2.7
 							(patterns
-								(p-int @2.3-2.6 (value "35"))))))
+								(p-num @2.3-2.6 (value "35"))))))
 				(value
 					(e-not-implemented @1.1-1.1)))
 			(branch
@@ -66,8 +66,8 @@ NO CHANGE
 					(pattern (degenerate false)
 						(p-list @3.2-3.12
 							(patterns
-								(p-int @3.3-3.6 (value "97"))
-								(p-int @3.8-3.11 (value "98"))))))
+								(p-num @3.3-3.6 (value "97"))
+								(p-num @3.8-3.11 (value "98"))))))
 				(value
 					(e-not-implemented @1.1-1.1)))
 			(branch

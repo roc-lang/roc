@@ -90,5 +90,5 @@ match person {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-3.2 (type "Error"))
+(expr @1.1-3.2 (type "Str"))
 ~~~

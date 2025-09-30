@@ -1571,7 +1571,7 @@ expect {
 								(pattern (degenerate false)
 									(p-list @58.17-58.22
 										(patterns
-											(p-int @58.18-58.19 (value "1"))))))
+											(p-num @58.18-58.19 (value "1"))))))
 							(value
 								(e-runtime-error (tag "ident_not_in_scope"))))
 						(branch
@@ -1579,9 +1579,9 @@ expect {
 								(pattern (degenerate false)
 									(p-list @60.3-60.16
 										(patterns
-											(p-int @60.4-60.5 (value "1"))
-											(p-int @60.7-60.8 (value "2"))
-											(p-int @60.10-60.11 (value "3"))
+											(p-num @60.4-60.5 (value "1"))
+											(p-num @60.7-60.8 (value "2"))
+											(p-num @60.10-60.11 (value "3"))
 											(p-assign @60.12-60.15 (ident "est"))))))
 							(value
 								(e-num @60.16-60.19 (value "123"))))
@@ -1611,7 +1611,7 @@ expect {
 								(pattern (degenerate false)
 									(p-tuple @65.3-65.8
 										(patterns
-											(p-int @65.4-65.5 (value "1"))))))
+											(p-num @65.4-65.5 (value "1"))))))
 							(value
 								(e-num @65.12-65.15 (value "123"))))
 						(branch
@@ -1619,9 +1619,9 @@ expect {
 								(pattern (degenerate false)
 									(p-tuple @66.3-66.12
 										(patterns
-											(p-int @66.4-66.5 (value "1"))
-											(p-int @66.7-66.8 (value "2"))
-											(p-int @66.10-66.11 (value "3"))))))
+											(p-num @66.4-66.5 (value "1"))
+											(p-num @66.7-66.8 (value "2"))
+											(p-num @66.10-66.11 (value "3"))))))
 							(value
 								(e-num @66.12-66.15 (value "123"))))
 						(branch
@@ -1794,7 +1794,7 @@ expect {
 			(ty-malformed @13.13-13.16)
 			(ty-malformed @13.19-13.21)
 			(ty-apply @13.26-13.33 (name "List") (builtin)
-				(ty-rigid-var @13.8-13.9 (name "b")))))
+				(ty-rigid-var-lookup (ty-rigid-var @13.8-13.9 (name "b"))))))
 	(s-alias-decl @14.1-20.15
 		(ty-header @14.1-15.2 (name "MapML"))
 		(ty-fn @17.3-20.15 (effectful false)
@@ -1824,7 +1824,7 @@ expect {
 			(ty-args
 				(ty-rigid-var @30.7-30.8 (name "a"))))
 		(ty-tag-union @30.12-30.19
-			(tag_name @30.13-30.18 (name "Somne"))))
+			(ty-tag-name @30.13-30.18 (name "Somne"))))
 	(s-alias-decl @32.1-33.2
 		(ty-header @32.1-32.10 (name "Mayine")
 			(ty-args

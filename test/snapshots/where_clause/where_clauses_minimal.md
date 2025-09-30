@@ -68,8 +68,8 @@ NO CHANGE
 		(where
 			(method @5.3-5.29 (module-of "a") (ident "convert")
 				(args
-					(ty-rigid-var @3.14-3.15 (name "a")))
-				(ty-rigid-var @3.19-3.20 (name "b")))))
+					(ty-rigid-var-lookup (ty-rigid-var @3.14-3.15 (name "a"))))
+				(ty-rigid-var-lookup (ty-rigid-var @3.19-3.20 (name "b"))))))
 	(ext-decl @5.3-5.29 (ident "module(a).convert") (kind "value")))
 ~~~
 # TYPES

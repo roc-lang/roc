@@ -155,7 +155,7 @@ handleResult = |result| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.13 (type "Error -> Error")))
+		(patt @6.1-6.13 (type "Error -> Str")))
 	(expressions
-		(expr @6.16-11.2 (type "Error -> Error"))))
+		(expr @6.16-11.2 (type "Error -> Str"))))
 ~~~

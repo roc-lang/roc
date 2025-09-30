@@ -246,7 +246,7 @@ NO CHANGE
 				(ty-fn @8.21-8.41 (effectful false)
 					(ty-apply @8.21-8.32 (name "List") (builtin)
 						(ty-rigid-var @8.26-8.31 (name "elem_")))
-					(ty-rigid-var @8.26-8.31 (name "elem_"))))))
+					(ty-rigid-var-lookup (ty-rigid-var @8.26-8.31 (name "elem_")))))))
 	(d-let
 		(p-assign @13.1-13.13 (ident "combo_single"))
 		(e-lambda @13.16-13.27
@@ -287,7 +287,7 @@ NO CHANGE
 				(ty-fn @19.15-19.33 (effectful false)
 					(ty-rigid-var @19.15-19.19 (name "elem"))
 					(ty-apply @19.23-19.33 (name "List") (builtin)
-						(ty-rigid-var @19.15-19.19 (name "elem")))))))
+						(ty-rigid-var-lookup (ty-rigid-var @19.15-19.19 (name "elem"))))))))
 	(d-let
 		(p-assign @22.1-22.5 (ident "main"))
 		(e-lambda @22.8-22.18

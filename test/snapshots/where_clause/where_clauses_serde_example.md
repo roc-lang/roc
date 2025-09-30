@@ -82,7 +82,7 @@ NO CHANGE
 					(ty-apply @3.27-3.49 (name "Result") (local)
 						(ty-rigid-var @3.27-3.49 (name "a"))
 						(ty-tag-union @3.27-3.49
-							(tag_name @3.38-3.47 (name "DecodeErr"))))))))
+							(ty-tag-name @3.38-3.47 (name "DecodeErr"))))))))
 	(s-type-anno @3.1-4.61 (name "deserialize")
 		(ty-fn @3.15-3.49 (effectful false)
 			(ty-apply @3.15-3.23 (name "List") (builtin)
@@ -90,16 +90,16 @@ NO CHANGE
 			(ty-apply @3.27-3.49 (name "Result") (local)
 				(ty-rigid-var @3.27-3.49 (name "a"))
 				(ty-tag-union @3.27-3.49
-					(tag_name @3.38-3.47 (name "DecodeErr")))))
+					(ty-tag-name @3.38-3.47 (name "DecodeErr")))))
 		(where
 			(method @4.8-4.61 (module-of "a") (ident "decode")
 				(args
 					(ty-apply @4.27-4.35 (name "List") (builtin)
 						(ty-lookup @4.32-4.34 (name "U8") (builtin))))
 				(ty-apply @4.39-4.61 (name "Result") (local)
-					(ty-rigid-var @3.27-3.49 (name "a"))
+					(ty-rigid-var-lookup (ty-rigid-var @3.27-3.49 (name "a")))
 					(ty-tag-union @4.49-4.60
-						(tag_name @4.50-4.59 (name "DecodeErr")))))))
+						(ty-tag-name @4.50-4.59 (name "DecodeErr")))))))
 	(ext-decl @4.8-4.61 (ident "module(a).decode") (kind "value")))
 ~~~
 # TYPES

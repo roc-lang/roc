@@ -360,9 +360,9 @@ y =
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.2 (type "(Num(_size), Num(_size2), Num(_size3), Error, Error, Error, Error, Num(_size4), Error, Num(_size5), Num(_size6), Error, Error, Error)"))
+		(patt @3.1-3.2 (type "(Num(Int(_size)), Num(Int(_size2)), Num(Int(_size3)), Error, Error, Error, Error, Num(Int(_size4)), Error, Num(Int(_size5)), Num(Int(_size6)), Error, Error, Error)"))
 		(patt @20.1-20.2 (type "Error")))
 	(expressions
-		(expr @3.5-18.2 (type "(Num(_size), Num(_size2), Num(_size3), Error, Error, Error, Error, Num(_size4), Error, Num(_size5), Num(_size6), Error, Error, Error)"))
+		(expr @3.5-18.2 (type "(Num(Int(_size)), Num(Int(_size2)), Num(Int(_size3)), Error, Error, Error, Error, Num(Int(_size4)), Error, Num(Int(_size5)), Num(Int(_size6)), Error, Error, Error)"))
 		(expr @20.5-20.7 (type "Error"))))
 ~~~

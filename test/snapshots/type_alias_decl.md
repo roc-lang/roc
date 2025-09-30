@@ -306,8 +306,10 @@ main! = |_| {
 				(ty-rigid-var @7.8-7.10 (name "ok"))
 				(ty-rigid-var @7.12-7.15 (name "err"))))
 		(ty-tag-union @7.19-7.37
-			(tag_name @7.20-7.26 (name "Ok"))
-			(tag_name @7.28-7.36 (name "Err"))))
+			(ty-tag-name @7.20-7.26 (name "Ok")
+				(ty-rigid-var-lookup (ty-rigid-var @7.8-7.10 (name "ok"))))
+			(ty-tag-name @7.28-7.36 (name "Err")
+				(ty-rigid-var-lookup (ty-rigid-var @7.12-7.15 (name "err"))))))
 	(s-alias-decl @10.1-10.35
 		(ty-header @10.1-10.7 (name "Person"))
 		(ty-record @10.10-10.35
@@ -321,22 +323,25 @@ main! = |_| {
 				(ty-rigid-var @13.7-13.8 (name "a"))
 				(ty-rigid-var @13.10-13.11 (name "b"))))
 		(ty-fn @13.15-13.21 (effectful false)
-			(ty-rigid-var @13.7-13.8 (name "a"))
-			(ty-rigid-var @13.10-13.11 (name "b"))))
+			(ty-rigid-var-lookup (ty-rigid-var @13.7-13.8 (name "a")))
+			(ty-rigid-var-lookup (ty-rigid-var @13.10-13.11 (name "b")))))
 	(s-alias-decl @16.1-16.38
 		(ty-header @16.1-16.18 (name "ApiResponse")
 			(ty-args
 				(ty-rigid-var @16.13-16.17 (name "data"))))
 		(ty-apply @16.21-16.38 (name "Result") (local)
-			(ty-rigid-var @16.13-16.17 (name "data"))
+			(ty-rigid-var-lookup (ty-rigid-var @16.13-16.17 (name "data")))
 			(ty-lookup @16.21-16.38 (name "Str") (builtin))))
 	(s-alias-decl @19.1-19.47
 		(ty-header @19.1-19.6 (name "Color"))
 		(ty-tag-union @19.9-19.47
-			(tag_name @19.10-19.13 (name "Red"))
-			(tag_name @19.15-19.20 (name "Green"))
-			(tag_name @19.22-19.26 (name "Blue"))
-			(tag_name @19.28-19.46 (name "Custom"))))
+			(ty-tag-name @19.10-19.13 (name "Red"))
+			(ty-tag-name @19.15-19.20 (name "Green"))
+			(ty-tag-name @19.22-19.26 (name "Blue"))
+			(ty-tag-name @19.28-19.46 (name "Custom")
+				(ty-lookup @19.35-19.37 (name "U8") (builtin))
+				(ty-lookup @19.39-19.41 (name "U8") (builtin))
+				(ty-lookup @19.43-19.45 (name "U8") (builtin)))))
 	(s-alias-decl @22.1-25.2
 		(ty-header @22.1-22.16 (name "Container")
 			(ty-args
@@ -344,7 +349,7 @@ main! = |_| {
 		(ty-record @22.19-25.2
 			(field (field "contents")
 				(ty-apply @23.16-23.26 (name "List") (builtin)
-					(ty-rigid-var @22.11-22.15 (name "item"))))
+					(ty-rigid-var-lookup (ty-rigid-var @22.11-22.15 (name "item")))))
 			(field (field "metadata")
 				(ty-record @24.16-24.45
 					(field (field "size")

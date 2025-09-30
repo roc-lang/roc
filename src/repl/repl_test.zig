@@ -4,7 +4,6 @@ const can_mod = @import("can");
 const check_mod = @import("check");
 const eval = @import("eval");
 const base = @import("base");
-const can = @import("can");
 const check = @import("check");
 const parse = @import("parse");
 const ModuleEnv = can_mod.ModuleEnv;

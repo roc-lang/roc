@@ -108,8 +108,8 @@ NO CHANGE
 						(ty-rigid-var @4.9-4.10 (name "a"))
 						(ty-rigid-var @4.12-4.13 (name "b")))
 					(ty-tuple @4.18-4.24
-						(ty-rigid-var @4.12-4.13 (name "b"))
-						(ty-rigid-var @4.9-4.10 (name "a")))))))
+						(ty-rigid-var-lookup (ty-rigid-var @4.12-4.13 (name "b")))
+						(ty-rigid-var-lookup (ty-rigid-var @4.9-4.10 (name "a"))))))))
 	(d-let
 		(p-assign @9.1-9.5 (ident "main"))
 		(e-call @9.8-9.18

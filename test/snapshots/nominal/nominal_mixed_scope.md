@@ -213,8 +213,8 @@ processColor = |color| {
 	(s-nominal-decl @3.1-3.35
 		(ty-header @3.1-3.12 (name "LocalStatus"))
 		(ty-tag-union @3.16-3.35
-			(tag_name @3.17-3.24 (name "Pending"))
-			(tag_name @3.26-3.34 (name "Complete")))))
+			(ty-tag-name @3.17-3.24 (name "Pending"))
+			(ty-tag-name @3.26-3.34 (name "Complete")))))
 ~~~
 # TYPES
 ~~~clojure

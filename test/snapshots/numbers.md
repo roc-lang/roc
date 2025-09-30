@@ -91,17 +91,17 @@ EndOfFile(14:1-14:1),
 ~~~clojure
 (e-tuple @1.1-13.2
 	(elems
-		(e-int @2.5-2.9 (value "66") (suffix "none"))
-		(e-int @3.5-3.9 (value "66") (suffix "none"))
-		(e-int @4.5-4.9 (value "1") (suffix "none"))
-		(e-int @5.5-5.9 (value "1") (suffix "none"))
-		(e-int @6.5-6.9 (value "34") (suffix "none"))
-		(e-int @7.5-7.9 (value "34") (suffix "none"))
+		(e-num @2.5-2.9 (value "66"))
+		(e-num @3.5-3.9 (value "66"))
+		(e-num @4.5-4.9 (value "1"))
+		(e-num @5.5-5.9 (value "1"))
+		(e-num @6.5-6.9 (value "34"))
+		(e-num @7.5-7.9 (value "34"))
 		(e-frac-f64 @8.5-8.11 (value "1e41"))
 		(e-frac-f64 @9.5-9.11 (value "1e41"))
-		(e-int @10.5-10.15 (value "3735928559") (suffix "none"))
-		(e-int @11.5-11.15 (value "3735928559") (suffix "none"))
-		(e-int @12.5-12.15 (value "3735928559") (suffix "none"))))
+		(e-num @10.5-10.15 (value "3735928559"))
+		(e-num @11.5-11.15 (value "3735928559"))
+		(e-num @12.5-12.15 (value "3735928559"))))
 ~~~
 # TYPES
 ~~~clojure

@@ -41,7 +41,6 @@ transform = |_, b| b
 PARSE ERROR - underscore_in_regular_annotations.md:30:22:30:24
 PARSE ERROR - underscore_in_regular_annotations.md:30:25:30:27
 UNUSED VARIABLE - underscore_in_regular_annotations.md:11:12:11:16
-INCOMPATIBLE MATCH PATTERNS - underscore_in_regular_annotations.md:20:5:20:5
 # PROBLEMS
 **PARSE ERROR**
 Function types with multiple arrows need parentheses.
@@ -78,27 +77,6 @@ The unused variable is declared here:
 process = |list| "processed"
 ```
            ^^^^
-
-
-**INCOMPATIBLE MATCH PATTERNS**
-The first pattern in this `match` is incompatible:
-**underscore_in_regular_annotations.md:20:5:**
-```roc
-    match result {
-        Ok(_) => "success",
-        Err(msg) => msg,
-    }
-```
-        ^^^^^
-
-The first pattern has the type:
-    _Result(ok, err)_
-
-But the expression right after `match` has the type:
-    _Result(ok, Str)_
-
-These two types can't never match!
-
 
 
 # TOKENS
@@ -296,7 +274,7 @@ transform = |_, b| b
 			(declared-type
 				(ty-fn @6.12-6.18 (effectful false)
 					(ty-rigid-var @6.12-6.13 (name "a"))
-					(ty-rigid-var @6.12-6.13 (name "a"))))))
+					(ty-rigid-var-lookup (ty-rigid-var @6.12-6.13 (name "a")))))))
 	(d-let
 		(p-assign @11.1-11.8 (ident "process"))
 		(e-lambda @11.11-11.29
@@ -380,9 +358,9 @@ transform = |_, b| b
 							(ty-rigid-var @26.8-26.9 (name "a"))
 							(ty-rigid-var @26.13-26.14 (name "b"))))
 					(ty-apply @26.17-26.24 (name "List") (builtin)
-						(ty-rigid-var @26.8-26.9 (name "a")))
+						(ty-rigid-var-lookup (ty-rigid-var @26.8-26.9 (name "a"))))
 					(ty-apply @26.28-26.35 (name "List") (builtin)
-						(ty-rigid-var @26.13-26.14 (name "b")))))))
+						(ty-rigid-var-lookup (ty-rigid-var @26.13-26.14 (name "b"))))))))
 	(d-let
 		(p-assign @31.1-31.10 (ident "transform"))
 		(e-lambda @31.13-31.21
@@ -400,7 +378,7 @@ transform = |_, b| b
 		(patt @7.1-7.9 (type "a -> a"))
 		(patt @11.1-11.8 (type "List(_elem) -> Str"))
 		(patt @15.1-15.9 (type "{ field: _field2, other: Num(Int(Unsigned32)) } -> Num(Int(Unsigned32))"))
-		(patt @19.1-19.14 (type "Result(_c, Str) -> Error"))
+		(patt @19.1-19.14 (type "Result(_c, Str) -> Str"))
 		(patt @27.1-27.4 (type "a -> b, List(a) -> List(b)"))
 		(patt @31.1-31.10 (type "_arg, c -> c")))
 	(expressions
@@ -408,7 +386,7 @@ transform = |_, b| b
 		(expr @7.12-7.17 (type "a -> a"))
 		(expr @11.11-11.29 (type "List(_elem) -> Str"))
 		(expr @15.12-15.33 (type "{ field: _field2, other: Num(Int(Unsigned32)) } -> Num(Int(Unsigned32))"))
-		(expr @19.17-23.6 (type "Result(_c, Str) -> Error"))
+		(expr @19.17-23.6 (type "Result(_c, Str) -> Str"))
 		(expr @27.7-27.16 (type "a -> b, List(a) -> List(b)"))
 		(expr @31.13-31.21 (type "_arg, c -> c"))))
 ~~~

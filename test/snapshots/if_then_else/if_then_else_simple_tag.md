@@ -50,5 +50,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.31 (type "Result(ok, err)"))
+(expr @1.1-1.31 (type "Result(Num(_size), Num(_size2))"))
 ~~~

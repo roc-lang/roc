@@ -118,7 +118,7 @@ main! = |_| {}
 			(declared-type
 				(ty-fn @3.9-3.15 (effectful false)
 					(ty-rigid-var @3.9-3.10 (name "a"))
-					(ty-rigid-var @3.9-3.10 (name "a"))))))
+					(ty-rigid-var-lookup (ty-rigid-var @3.9-3.10 (name "a")))))))
 	(d-let
 		(p-assign @11.1-11.6 (ident "main!"))
 		(e-lambda @11.9-11.15

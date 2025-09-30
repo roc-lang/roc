@@ -1638,16 +1638,16 @@ fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx, rank: types_mod.Rank,
             try self.updateVar(pattern_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f32 } } } }, rank);
         },
         .frac_f64_literal => |_| {
-            try self.updateVar(pattern_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f32 } } } }, rank);
+            try self.updateVar(pattern_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } }, rank);
         },
         .dec_literal => |dec| {
             if (dec.has_suffix) {
-                try self.updateVar(pattern_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f32 } } } }, rank);
+                try self.updateVar(pattern_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .dec } } } }, rank);
             } else {
                 const f64_val = dec.value.toF64();
                 const requirements = types_mod.Num.FracRequirements{
-                    .fits_in_f32 = can.Can.fitsInF32(f64_val),
-                    .fits_in_dec = can.Can.fitsInDec(f64_val),
+                    .fits_in_f32 = can.CIR.fitsInF32(f64_val),
+                    .fits_in_dec = can.CIR.fitsInDec(f64_val),
                 };
                 const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
                     .frac_unbound = requirements,
@@ -1661,15 +1661,11 @@ fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx, rank: types_mod.Rank,
         },
         .small_dec_literal => |dec| {
             if (dec.has_suffix) {
-                try self.updateVar(pattern_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f32 } } } }, rank);
+                try self.updateVar(pattern_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .dec } } } }, rank);
             } else {
-                const f64_val = dec.toF64();
-                const requirements = types_mod.Num.FracRequirements{
-                    .fits_in_f32 = can.Can.fitsInF32(f64_val),
-                    .fits_in_dec = can.Can.fitsInDec(f64_val),
-                };
+                const reqs = dec.value.toFracRequirements();
                 const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
-                    .frac_unbound = requirements,
+                    .frac_unbound = reqs,
                 } } }, rank, pattern_region);
                 try self.var_pool.addVarToRank(frac_var, rank);
 
@@ -1695,76 +1691,6 @@ fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx, rank: types_mod.Rank,
         },
     }
 }
-
-// pattern OLD //
-
-// /// Check the types for the provided pattern
-// pub fn checkPatternaself: *Self, pattern_idx: CIR.Pattern.Idx) std.mem.Allocator.Error!void {
-//     const trace = tracy.trace(@src());
-//     defer trace.end();
-
-//     const pattern = self.cir.store.getPattern(pattern_idx);
-//     const pattern_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(pattern_idx));
-//     switch (pattern) {
-//         .nominal => |p| {
-//             const real_nominal_var = ModuleEnv.varFrom(p.nominal_type_decl);
-//             const pattern_backing_var = ModuleEnv.varFrom(p.backing_pattern);
-//             try self.checkNominal(
-//                 ModuleEnv.varFrom(pattern_idx),
-//                 pattern_region,
-//                 pattern_backing_var,
-//                 p.backing_type,
-//                 real_nominal_var,
-//             );
-//         },
-//         .nominal_external => |p| {
-//             const resolved_external = try self.resolveVarFromExternal(p.module_idx, p.target_node_idx) orelse {
-//                 // If we could not copy the type, set error and continue
-//                 try self.types.setVarContent(ModuleEnv.varFrom(pattern_idx), .err);
-//                 return;
-//             };
-//             const pattern_backing_var = ModuleEnv.varFrom(p.backing_pattern);
-//             try self.checkNominal(
-//                 ModuleEnv.varFrom(pattern_idx),
-//                 pattern_region,
-//                 pattern_backing_var,
-//                 p.backing_type,
-//                 resolved_external.local_var,
-//             );
-//         },
-//         .int_literal => |_| {
-//             // Integer literal patterns have their type constraints (bits_needed, sign_needed)
-//             // created during canonicalization. The type variable for this pattern was already
-//             // created with the appropriate num_unbound or int_unbound content.
-//             // When this pattern is unified with the match scrutinee, the numeric constraints
-//             // will be checked and produce NumberDoesNotFit or NegativeUnsignedInt errors
-//             // if there's a mismatch.
-//         },
-//         .as => |p| {
-//             try self.checkPattern(p.pattern);
-//         },
-//         .applied_tag => |p| {
-//             const args_slice = self.cir.store.slicePatterns(p.args);
-//             for (args_slice) |pat_idx| {
-//                 try self.checkPattern(pat_idx);
-//             }
-//         },
-//         .tuple => |p| {
-//             const args_slice = self.cir.store.slicePatterns(p.patterns);
-//             for (args_slice) |pat_idx| {
-//                 try self.checkPattern(pat_idx);
-//             }
-//         },
-//         .record_destructure => |p| {
-//             const destructs_slice = self.cir.store.sliceRecordDestructs(p.destructs);
-//             for (destructs_slice) |destruct_idx| {
-//                 const destruct = self.cir.store.getRecordDestruct(destruct_idx);
-//                 try self.checkPattern(destruct.kind.toPatternIdx());
-//             }
-//         },
-//         else => {},
-//     }
-// }
 
 // expr //
 
@@ -1813,28 +1739,43 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
         },
         // nums //
         .e_num => |num| {
-            // TODO: Derive requirements here?
-            try self.updateVar(expr_var, .{ .structure = .{ .num = .{
-                .num_unbound = .{
-                    .int_requirements = num.requirements,
-                    .frac_requirements = Num.FracRequirements.init(),
-                },
-            } } }, rank);
-        },
-        .e_int => |num| {
-            // TODO: Derive requirements here?
-            if (num.suffix) |suffix| {
-                try self.updateVar(expr_var, .{ .structure = .{ .num = .{ .num_compact = .{ .int = suffix } } } }, rank);
-            } else {
-                const int_var = try self.freshFromContent(.{ .structure = .{ .num = .{
-                    .int_unbound = num.requirements,
-                } } }, rank, expr_region);
-                try self.var_pool.addVarToRank(int_var, rank);
+            const num_type = blk: {
+                switch (num.kind) {
+                    .num_unbound => {
+                        const int_reqs = num.value.toIntRequirements();
+                        const frac_reqs = num.value.toFracRequirements();
+                        break :blk Num{ .num_unbound = .{ .int_requirements = .{
+                            .sign_needed = int_reqs.sign_needed,
+                            .bits_needed = @intCast(@intFromEnum(int_reqs.bits_needed)),
+                        }, .frac_requirements = frac_reqs } };
+                    },
+                    .int_unbound => {
+                        const int_reqs = num.value.toIntRequirements();
+                        const int_var = try self.freshFromContent(.{ .structure = .{ .num = .{ .int_unbound = .{
+                            .sign_needed = int_reqs.sign_needed,
+                            .bits_needed = @intCast(@intFromEnum(int_reqs.bits_needed)),
+                        } } } }, rank, expr_region);
+                        try self.var_pool.addVarToRank(int_var, rank);
+                        break :blk Num{ .num_poly = int_var };
+                    },
+                    .u8 => break :blk Num{ .num_compact = Num.Compact{ .int = .u8 } },
+                    .i8 => break :blk Num{ .num_compact = Num.Compact{ .int = .i8 } },
+                    .u16 => break :blk Num{ .num_compact = Num.Compact{ .int = .u16 } },
+                    .i16 => break :blk Num{ .num_compact = Num.Compact{ .int = .i16 } },
+                    .u32 => break :blk Num{ .num_compact = Num.Compact{ .int = .u32 } },
+                    .i32 => break :blk Num{ .num_compact = Num.Compact{ .int = .i32 } },
+                    .u64 => break :blk Num{ .num_compact = Num.Compact{ .int = .u64 } },
+                    .i64 => break :blk Num{ .num_compact = Num.Compact{ .int = .i64 } },
+                    .u128 => break :blk Num{ .num_compact = Num.Compact{ .int = .u128 } },
+                    .i128 => break :blk Num{ .num_compact = Num.Compact{ .int = .i128 } },
+                    .f32 => break :blk Num{ .num_compact = Num.Compact{ .frac = .f32 } },
+                    .f64 => break :blk Num{ .num_compact = Num.Compact{ .frac = .f64 } },
+                    .dec => break :blk Num{ .num_compact = Num.Compact{ .frac = .dec } },
+                }
+            };
 
-                try self.updateVar(expr_var, .{ .structure = .{ .num = .{
-                    .num_poly = int_var,
-                } } }, rank);
-            }
+            // Update the pattern var
+            try self.updateVar(expr_var, .{ .structure = .{ .num = num_type } }, rank);
         },
         .e_frac_f32 => |frac| {
             if (frac.has_suffix) {
@@ -1842,7 +1783,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             } else {
                 const requirements = types_mod.Num.FracRequirements{
                     .fits_in_f32 = true,
-                    .fits_in_dec = can.Can.fitsInDec(@floatCast(frac.value)),
+                    .fits_in_dec = can.CIR.fitsInDec(@floatCast(frac.value)),
                 };
                 const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
                     .frac_unbound = requirements,
@@ -1859,8 +1800,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                 try self.updateVar(expr_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } }, rank);
             } else {
                 const requirements = types_mod.Num.FracRequirements{
-                    .fits_in_f32 = can.Can.fitsInF32(@floatCast(frac.value)),
-                    .fits_in_dec = can.Can.fitsInDec(@floatCast(frac.value)),
+                    .fits_in_f32 = can.CIR.fitsInF32(@floatCast(frac.value)),
+                    .fits_in_dec = can.CIR.fitsInDec(@floatCast(frac.value)),
                 };
                 const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
                     .frac_unbound = requirements,
@@ -1878,8 +1819,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             } else {
                 const f64_val = frac.value.toF64();
                 const requirements = types_mod.Num.FracRequirements{
-                    .fits_in_f32 = can.Can.fitsInF32(f64_val),
-                    .fits_in_dec = can.Can.fitsInDec(f64_val),
+                    .fits_in_f32 = can.CIR.fitsInF32(f64_val),
+                    .fits_in_dec = can.CIR.fitsInDec(f64_val),
                 };
                 const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
                     .frac_unbound = requirements,
@@ -1895,13 +1836,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             if (frac.has_suffix) {
                 try self.updateVar(expr_var, .{ .structure = .{ .num = .{ .num_compact = .{ .frac = .dec } } } }, rank);
             } else {
-                const f64_val = frac.toF64();
-                const requirements = types_mod.Num.FracRequirements{
-                    .fits_in_f32 = can.Can.fitsInF32(f64_val),
-                    .fits_in_dec = can.Can.fitsInDec(f64_val),
-                };
+                const reqs = frac.value.toFracRequirements();
                 const frac_var = try self.freshFromContent(.{ .structure = .{ .num = .{
-                    .frac_unbound = requirements,
+                    .frac_unbound = reqs,
                 } } }, rank, expr_region);
                 try self.var_pool.addVarToRank(frac_var, rank);
 
@@ -2199,13 +2136,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             const anno_free_vars_top = self.anno_free_vars.top();
             defer self.anno_free_vars.clearFrom(anno_free_vars_top);
 
-            // Enter a new rank
-            try self.var_pool.pushRank();
-            defer self.var_pool.popRank();
-
-            const next_rank = rank.next();
-            std.debug.assert(next_rank == self.var_pool.current_rank);
-
             // Check all statements in the block
             const statements = self.cir.store.sliceStatements(block.stmts);
             for (statements) |stmt_idx| {
@@ -2213,7 +2143,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                 switch (stmt) {
                     .s_decl => |decl_stmt| {
                         // Check the pattern
-                        try self.checkPattern(decl_stmt.pattern, next_rank, .no_expectation);
+                        try self.checkPattern(decl_stmt.pattern, rank, .no_expectation);
                         const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
 
                         // Check the annotation, if it exists
@@ -2229,17 +2159,57 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                                 break :blk Expected.no_expectation;
                             }
                         };
-                        does_fx = try self.checkExpr(decl_stmt.expr, next_rank, check_mode) or does_fx;
-                        const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
+
+                        {
+                            // Enter a new rank
+                            try self.var_pool.pushRank();
+                            defer self.var_pool.popRank();
+
+                            const next_rank = rank.next();
+                            std.debug.assert(next_rank == self.var_pool.current_rank);
+
+                            does_fx = try self.checkExpr(decl_stmt.expr, next_rank, check_mode) or does_fx;
+
+                            // Now that we are existing the scope, we must generalize then pop this rank
+                            try self.generalizer.generalize(&self.var_pool, next_rank);
+                        }
 
                         // Unify the pattern with the expression
-                        _ = try self.unify(decl_pattern_var, decl_expr_var, next_rank);
+                        const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
+                        _ = try self.unify(decl_pattern_var, decl_expr_var, rank);
                     },
                     .s_reassign => |reassign| {
-                        does_fx = try self.checkExpr(reassign.expr, next_rank, .no_expectation) or does_fx;
+                        // Check the pattern
+                        try self.checkPattern(reassign.pattern_idx, rank, .no_expectation);
+                        const reassign_pattern_var: Var = ModuleEnv.varFrom(reassign.pattern_idx);
+
+                        {
+                            // Enter a new rank
+                            try self.var_pool.pushRank();
+                            defer self.var_pool.popRank();
+
+                            const next_rank = rank.next();
+                            std.debug.assert(next_rank == self.var_pool.current_rank);
+
+                            does_fx = try self.checkExpr(reassign.expr, next_rank, .no_expectation) or does_fx;
+
+                            // Now that we are existing the scope, we must generalize then pop this rank
+                            try self.generalizer.generalize(&self.var_pool, next_rank);
+                        }
+
+                        // Unify the pattern with the expression
+                        const reassign_expr_var: Var = ModuleEnv.varFrom(reassign.expr);
+                        _ = try self.unify(reassign_pattern_var, reassign_expr_var, rank);
                     },
                     .s_expr => |expr_stmt| {
-                        does_fx = try self.checkExpr(expr_stmt.expr, next_rank, .no_expectation) or does_fx;
+                        does_fx = try self.checkExpr(expr_stmt.expr, rank, .no_expectation) or does_fx;
+                    },
+                    .s_expect => |expr_stmt| {
+                        does_fx = try self.checkExpr(expr_stmt.body, rank, .no_expectation) or does_fx;
+                        const stmt_expr: Var = ModuleEnv.varFrom(expr_stmt.body);
+
+                        const bool_var = try self.freshBool(rank, expr_region);
+                        _ = try self.unify(bool_var, stmt_expr, rank);
                     },
                     else => {
                         // TODO
@@ -2248,13 +2218,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             }
 
             // Check the final expression
-            does_fx = try self.checkExpr(block.final_expr, next_rank, expected) or does_fx;
+            does_fx = try self.checkExpr(block.final_expr, rank, expected) or does_fx;
 
             // Link the root expr with the final expr
             try self.types.setVarRedirect(expr_var, ModuleEnv.varFrom(block.final_expr));
-
-            // Now that we are existing the scope, we must generalize then pop this rank
-            try self.generalizer.generalize(&self.var_pool, next_rank);
         },
         // function //
         .e_lambda => |lambda| {

@@ -501,28 +501,28 @@ NO CHANGE
 		(ty-header @8.1-8.5 (name "A")
 			(ty-args
 				(ty-rigid-var @8.3-8.4 (name "a"))))
-		(ty-rigid-var @8.3-8.4 (name "a")))
+		(ty-rigid-var-lookup (ty-rigid-var @8.3-8.4 (name "a"))))
 	(s-alias-decl @9.1-9.74
 		(ty-header @9.1-9.5 (name "B")
 			(ty-args
 				(ty-rigid-var @9.3-9.4 (name "b"))))
-		(ty-rigid-var @9.3-9.4 (name "b")))
+		(ty-rigid-var-lookup (ty-rigid-var @9.3-9.4 (name "b"))))
 	(s-alias-decl @11.1-11.17
 		(ty-header @11.1-11.8 (name "C")
 			(ty-args
 				(ty-rigid-var @11.3-11.4 (name "a"))
 				(ty-rigid-var @11.6-11.7 (name "b"))))
 		(ty-tuple @11.11-11.17
-			(ty-rigid-var @11.3-11.4 (name "a"))
-			(ty-rigid-var @11.6-11.7 (name "b"))))
+			(ty-rigid-var-lookup (ty-rigid-var @11.3-11.4 (name "a")))
+			(ty-rigid-var-lookup (ty-rigid-var @11.6-11.7 (name "b")))))
 	(s-alias-decl @12.1-12.18
 		(ty-header @12.1-12.8 (name "D")
 			(ty-args
 				(ty-rigid-var @12.3-12.4 (name "a"))
 				(ty-rigid-var @12.6-12.7 (name "b"))))
 		(ty-apply @12.11-12.18 (name "C") (local)
-			(ty-rigid-var @12.3-12.4 (name "a"))
-			(ty-rigid-var @12.6-12.7 (name "b"))))
+			(ty-rigid-var-lookup (ty-rigid-var @12.3-12.4 (name "a")))
+			(ty-rigid-var-lookup (ty-rigid-var @12.6-12.7 (name "b")))))
 	(s-alias-decl @13.1-13.25
 		(ty-header @13.1-13.2 (name "E"))
 		(ty-record @13.5-13.25
@@ -533,8 +533,8 @@ NO CHANGE
 	(s-alias-decl @14.1-14.11
 		(ty-header @14.1-14.2 (name "F"))
 		(ty-tag-union @14.5-14.11
-			(tag_name @14.6-14.7 (name "A"))
-			(tag_name @14.9-14.10 (name "B"))))
+			(ty-tag-name @14.6-14.7 (name "A"))
+			(ty-tag-name @14.9-14.10 (name "B"))))
 	(s-import @4.1-4.30 (module "I1")
 		(exposes
 			(exposed (name "I11") (wildcard false))
@@ -546,7 +546,7 @@ NO CHANGE
 	(s-type-anno @16.1-16.42 (name "g")
 		(ty-fn @16.5-16.11 (effectful false)
 			(ty-rigid-var @16.5-16.6 (name "e"))
-			(ty-rigid-var @16.5-16.6 (name "e")))
+			(ty-rigid-var-lookup (ty-rigid-var @16.5-16.6 (name "e"))))
 		(where
 			(alias @16.18-16.29 (module-of "e") (ident "A"))
 			(alias @16.31-16.42 (module-of "e") (ident "B"))))
@@ -557,7 +557,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @18.1-18.2 (type "[Z1((Error, Error)), Z2(Error, Error), Z3(c), Z4(List(Error))]d, [Z1((Error, Error)), Z2(Error, Error), Z3(c), Z4(List(Error))]d -> Error")))
+		(patt @18.1-18.2 (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j, [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j -> c")))
 	(type_decls
 		(alias @8.1-8.74 (type "A(a)")
 			(ty-header @8.1-8.5 (name "A")
@@ -582,5 +582,5 @@ NO CHANGE
 		(alias @14.1-14.11 (type "F")
 			(ty-header @14.1-14.2 (name "F"))))
 	(expressions
-		(expr @18.5-31.2 (type "[Z1((Error, Error)), Z2(Error, Error), Z3(c), Z4(List(Error))]d, [Z1((Error, Error)), Z2(Error, Error), Z3(c), Z4(List(Error))]d -> Error"))))
+		(expr @18.5-31.2 (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j, [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j -> c"))))
 ~~~

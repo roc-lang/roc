@@ -120,10 +120,10 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 						(ty-rigid-var @3.16-3.17 (name "a")))
 					(ty-parens @3.20-3.28
 						(ty-fn @3.21-3.27 (effectful false)
-							(ty-rigid-var @3.16-3.17 (name "a"))
+							(ty-rigid-var-lookup (ty-rigid-var @3.16-3.17 (name "a")))
 							(ty-rigid-var @3.26-3.27 (name "b"))))
 					(ty-apply @3.32-3.39 (name "List") (builtin)
-						(ty-rigid-var @3.26-3.27 (name "b")))))))
+						(ty-rigid-var-lookup (ty-rigid-var @3.26-3.27 (name "b"))))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-closure @6.9-6.33

@@ -323,26 +323,30 @@ Complex : {
 				(ty-rigid-var @12.8-12.10 (name "ok"))
 				(ty-rigid-var @12.12-12.15 (name "err"))))
 		(ty-tag-union @12.19-12.37
-			(tag_name @12.20-12.26 (name "Ok"))
-			(tag_name @12.28-12.36 (name "Err"))))
+			(ty-tag-name @12.20-12.26 (name "Ok")
+				(ty-rigid-var-lookup (ty-rigid-var @12.8-12.10 (name "ok"))))
+			(ty-tag-name @12.28-12.36 (name "Err")
+				(ty-rigid-var-lookup (ty-rigid-var @12.12-12.15 (name "err"))))))
 	(s-alias-decl @15.1-15.37
 		(ty-header @15.1-15.8 (name "Tree")
 			(ty-args
 				(ty-rigid-var @15.6-15.7 (name "a"))))
 		(ty-tag-union @15.11-15.37
-			(tag_name @15.12-15.27 (name "Branch"))
-			(tag_name @15.29-15.36 (name "Leaf"))))
+			(ty-tag-name @15.12-15.27 (name "Branch")
+				(ty-malformed @15.19-15.23))
+			(ty-tag-name @15.29-15.36 (name "Leaf")
+				(ty-rigid-var-lookup (ty-rigid-var @15.6-15.7 (name "a"))))))
 	(s-alias-decl @18.1-18.48
 		(ty-header @18.1-18.8 (name "Node")
 			(ty-args
 				(ty-rigid-var @18.6-18.7 (name "a"))))
 		(ty-record @18.11-18.48
 			(field (field "value")
-				(ty-rigid-var @18.6-18.7 (name "a")))
+				(ty-rigid-var-lookup (ty-rigid-var @18.6-18.7 (name "a"))))
 			(field (field "children")
 				(ty-apply @18.33-18.46 (name "List") (builtin)
 					(ty-apply @18.38-18.45 (name "Tree") (local)
-						(ty-rigid-var @18.6-18.7 (name "a")))))))
+						(ty-rigid-var-lookup (ty-rigid-var @18.6-18.7 (name "a"))))))))
 	(s-alias-decl @21.1-21.28
 		(ty-header @21.1-21.9 (name "MyResult"))
 		(ty-apply @21.12-21.28 (name "Result") (local)

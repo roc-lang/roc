@@ -39,6 +39,18 @@ test "check type - num - int suffix 2" {
     try assertExprTypeCheckPass(source, "Num(Int(Signed128))");
 }
 
+test "check type - num - int big" {
+    const source =
+        \\{
+        \\  e : U128
+        \\  e = 340282366920938463463374607431768211455
+        \\
+        \\  e
+        \\}
+    ;
+    try assertExprTypeCheckPass(source, "Num(Int(Unsigned128))");
+}
+
 test "check type - num - float" {
     const source =
         \\10.1
@@ -1025,6 +1037,49 @@ test "check type - patterns record field mismatch" {
         \\}
     ;
     try assertExprTypeCheckFail(source, "INCOMPATIBLE MATCH PATTERNS");
+}
+
+// vars
+
+test "check type - var ressignment" {
+    const source =
+        \\module []
+        \\
+        \\main = {
+        \\  var x = 1
+        \\  x = x + 1
+        \\  x
+        \\}
+    ;
+    try assertFileTypeCheckPass(source, "Num(_size)");
+}
+
+// expect
+
+test "check type - expect" {
+    const source =
+        \\module []
+        \\
+        \\main = {
+        \\  x = 1
+        \\  expect x == 1
+        \\  x
+        \\}
+    ;
+    try assertFileTypeCheckPass(source, "Num(_size)");
+}
+
+test "check type - expect not bool" {
+    const source =
+        \\module []
+        \\
+        \\main = {
+        \\  x = 1
+        \\  expect x
+        \\  x
+        \\}
+    ;
+    try assertFileTypeCheckFail(source, "TYPE MISMATCH");
 }
 
 // helpers  //

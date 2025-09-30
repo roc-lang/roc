@@ -229,8 +229,8 @@ main! = |_| {
 						(ty-rigid-var @4.9-4.10 (name "a"))
 						(ty-rigid-var @4.12-4.13 (name "b")))
 					(ty-tuple @4.18-4.24
-						(ty-rigid-var @4.12-4.13 (name "b"))
-						(ty-rigid-var @4.9-4.10 (name "a")))))))
+						(ty-rigid-var-lookup (ty-rigid-var @4.12-4.13 (name "b")))
+						(ty-rigid-var-lookup (ty-rigid-var @4.9-4.10 (name "a"))))))))
 	(d-let
 		(p-assign @11.1-11.6 (ident "main!"))
 		(e-closure @11.9-24.2

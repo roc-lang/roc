@@ -36,7 +36,6 @@ UNDECLARED TYPE - type_app_complex_nested.md:4:51:4:56
 UNUSED VARIABLE - type_app_complex_nested.md:7:12:7:21
 UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
 UNDECLARED TYPE - type_app_complex_nested.md:12:32:12:36
-INCOMPATIBLE MATCH PATTERNS - type_app_complex_nested.md:6:5:6:5
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Maybe_ is not declared in this scope.
@@ -136,27 +135,6 @@ This type is referenced here:
 deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
 ```
                                ^^^^
-
-
-**INCOMPATIBLE MATCH PATTERNS**
-The first pattern in this `match` is incompatible:
-**type_app_complex_nested.md:6:5:**
-```roc
-    match result {
-        Ok(maybeList) => []
-        Err(_) => []
-    }
-```
-        ^^^^^^^^^^^^^
-
-The first pattern has the type:
-    _Result(ok, err)_
-
-But the expression right after `match` has the type:
-    _Result(List(Error), Error)_
-
-These two types can't never match!
-
 
 
 # TOKENS
@@ -341,7 +319,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 							(ty-malformed @4.30-4.35))
 						(ty-malformed @4.18-4.62))
 					(ty-apply @4.66-4.73 (name "List") (builtin)
-						(ty-rigid-var @4.36-4.37 (name "a")))))))
+						(ty-rigid-var-lookup (ty-rigid-var @4.36-4.37 (name "a"))))))))
 	(d-let
 		(p-assign @13.1-13.11 (ident "deepNested"))
 		(e-lambda @13.14-15.2
@@ -353,7 +331,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 			(declared-type
 				(ty-fn @12.14-12.56 (effectful false)
 					(ty-malformed @12.14-12.19)
-					(ty-rigid-var @12.42-12.43 (name "a"))))))
+					(ty-rigid-var-lookup (ty-rigid-var @12.42-12.43 (name "a")))))))
 	(d-let
 		(p-assign @20.1-20.6 (ident "main!"))
 		(e-closure @20.9-20.49

@@ -159,7 +159,7 @@ answer = composed([42])
 					(ty-rigid-var @5.15-5.16 (name "a"))
 					(ty-record @5.20-5.42
 						(field (field "value")
-							(ty-rigid-var @5.15-5.16 (name "a")))
+							(ty-rigid-var-lookup (ty-rigid-var @5.15-5.16 (name "a"))))
 						(field (field "tag")
 							(ty-lookup @5.37-5.40 (name "Str") (builtin))))))))
 	(d-let
@@ -179,7 +179,7 @@ answer = composed([42])
 							(ty-rigid-var @8.22-8.23 (name "a")))
 						(field (field "tag")
 							(ty-lookup @8.30-8.33 (name "Str") (builtin))))
-					(ty-rigid-var @8.22-8.23 (name "a"))))))
+					(ty-rigid-var-lookup (ty-rigid-var @8.22-8.23 (name "a")))))))
 	(d-let
 		(p-assign @12.1-12.9 (ident "composed"))
 		(e-closure @12.12-12.41

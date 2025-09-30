@@ -33,6 +33,8 @@ pub const Interpreter = struct {
         NotNumeric,
         NullStackPointer,
         RecordIndexOutOfBounds,
+        InvalidNumExt,
+        InvalidTagExt,
         StringOrderingNotSupported,
         StackOverflow,
         TupleIndexOutOfBounds,
@@ -113,6 +115,8 @@ pub const Interpreter = struct {
     bool_false_index: u8,
     bool_true_index: u8,
     canonical_bool_rt_var: ?types.Var,
+    // Used to unwrap extensible tags
+    scratch_tags: std.ArrayList(types.Tag),
 
     pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv) !Interpreter {
         const rt_types_ptr = try allocator.create(types.store.Store);
@@ -138,6 +142,7 @@ pub const Interpreter = struct {
             .bool_false_index = 0,
             .bool_true_index = 1,
             .canonical_bool_rt_var = null,
+            .scratch_tags = try std.ArrayList(types.Tag).initCapacity(allocator, 8),
         };
         result.runtime_layout_store = try layout.Store.init(env, result.runtime_types);
         return result;
@@ -407,7 +412,7 @@ pub const Interpreter = struct {
 
                 return try self.evalExprMinimal(blk.final_expr, roc_ops, null);
             },
-            .e_int => |int_lit| {
+            .e_num => |num_lit| {
                 // Use runtime type to choose layout
                 const rt_var = expected_rt_var orelse blk: {
                     const ct_var = can.ModuleEnv.varFrom(expr_idx);
@@ -419,19 +424,19 @@ pub const Interpreter = struct {
                 value.is_initialized = false;
                 switch (layout_val.tag) {
                     .scalar => switch (layout_val.data.scalar.tag) {
-                        .int => value.setInt(int_lit.value.toI128()),
+                        .int => value.setInt(num_lit.value.toI128()),
                         .frac => switch (layout_val.data.scalar.data.frac) {
                             .f32 => {
                                 const ptr = @as(*f32, @ptrCast(@alignCast(value.ptr.?)));
-                                ptr.* = @floatFromInt(int_lit.value.toI128());
+                                ptr.* = @floatFromInt(num_lit.value.toI128());
                             },
                             .f64 => {
                                 const ptr = @as(*f64, @ptrCast(@alignCast(value.ptr.?)));
-                                ptr.* = @floatFromInt(int_lit.value.toI128());
+                                ptr.* = @floatFromInt(num_lit.value.toI128());
                             },
                             .dec => {
                                 const ptr = @as(*RocDec, @ptrCast(@alignCast(value.ptr.?)));
-                                ptr.* = .{ .num = int_lit.value.toI128() * RocDec.one_point_zero_i128 };
+                                ptr.* = .{ .num = num_lit.value.toI128() * RocDec.one_point_zero_i128 };
                             },
                         },
                         else => return error.TypeMismatch,
@@ -677,7 +682,7 @@ pub const Interpreter = struct {
                 }
                 return value;
             },
-            .e_frac_dec => |dec_lit| {
+            .e_dec => |dec_lit| {
                 const rt_var = expected_rt_var orelse blk: {
                     const ct_var = can.ModuleEnv.varFrom(expr_idx);
                     break :blk try self.translateTypeVar(self.env, ct_var);
@@ -699,8 +704,8 @@ pub const Interpreter = struct {
                 const value = try self.pushRaw(layout_val, 0);
                 if (value.ptr) |ptr| {
                     const typed_ptr: *RocDec = @ptrCast(@alignCast(ptr));
-                    const scale_factor = std.math.pow(i128, 10, RocDec.decimal_places - small.denominator_power_of_ten);
-                    const scaled = @as(i128, small.numerator) * scale_factor;
+                    const scale_factor = std.math.pow(i128, 10, RocDec.decimal_places - small.value.denominator_power_of_ten);
+                    const scaled = @as(i128, small.value.numerator) * scale_factor;
                     typed_ptr.* = RocDec{ .num = scaled };
                 }
                 return value;
@@ -739,7 +744,12 @@ pub const Interpreter = struct {
                     break :blk try self.translateTypeVar(self.env, ct_var);
                 };
 
-                const elem_rt_var = try self.translateTypeVar(self.env, list_expr.elem_var);
+                // Get the first element's variables, which is representative of all the element vars
+                const elems = self.env.store.sliceExpr(list_expr.elems);
+                std.debug.assert(elems.len > 0);
+                const first_elem_var: types.Var = @enumFromInt(@intFromEnum(elems[0]));
+
+                const elem_rt_var = try self.translateTypeVar(self.env, first_elem_var);
                 const elem_layout = try self.getRuntimeLayout(elem_rt_var);
 
                 var values = try std.ArrayList(StackValue).initCapacity(self.allocator, elem_indices.len);
@@ -929,7 +939,7 @@ pub const Interpreter = struct {
                 const ct_var = can.ModuleEnv.varFrom(expr_idx);
                 const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
                 const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
-                const backing_rt_var = if (nom.nominal_type_decl == can.Can.BUILTIN_BOOL_TYPE)
+                const backing_rt_var = if (nom.nominal_type_decl == can.Can.BUILTIN_BOOL)
                     try self.getCanonicalBoolRuntimeVar()
                 else switch (nominal_resolved.desc.content) {
                     .structure => |st| switch (st) {
@@ -1792,7 +1802,7 @@ pub const Interpreter = struct {
     fn boolValueIsTrue(self: *Interpreter, value: StackValue, rt_var: types.Var) !bool {
         if (!self.isBoolLayout(value.layout)) return error.TypeMismatch;
         try self.prepareBoolIndices(rt_var);
-        if (!self.runtimeVarIsBool(rt_var)) return error.TypeMismatch;
+        if (!try self.runtimeVarIsBool(rt_var)) return error.TypeMismatch;
         const idx = try self.extractBoolTagIndex(value, rt_var);
         return idx == self.bool_true_index;
     }
@@ -2244,7 +2254,7 @@ pub const Interpreter = struct {
                 return try self.structuralEqualList(lhs, rhs, elem_var);
             },
             .empty_record => true,
-            .list_unbound, .record_unbound, .record_poly, .fn_pure, .fn_effectful, .fn_unbound, .nominal_type, .empty_tag_union, .box => error.NotImplemented,
+            .list_unbound, .record_unbound, .fn_pure, .fn_effectful, .fn_unbound, .nominal_type, .empty_tag_union, .box => error.NotImplemented,
             .str => error.NotImplemented,
             .num => error.NotImplemented,
         };
@@ -2430,8 +2440,9 @@ pub const Interpreter = struct {
         return true;
     }
 
-    fn runtimeVarIsBool(self: *Interpreter, rt_var: types.Var) bool {
+    fn runtimeVarIsBool(self: *Interpreter, rt_var: types.Var) !bool {
         var resolved = self.runtime_types.resolveVar(rt_var);
+
         unwrap: while (true) {
             switch (resolved.desc.content) {
                 .alias => |al| {
@@ -2453,13 +2464,48 @@ pub const Interpreter = struct {
         const structure = resolved.desc.content.structure;
         if (structure != .tag_union) return false;
         const tu = structure.tag_union;
-        const tags = self.runtime_types.getTagsSlice(tu.tags);
+
+        const scratch_tags_top = self.scratch_tags.items.len;
+        defer self.scratch_tags.shrinkRetainingCapacity(scratch_tags_top);
+
+        const tag_slice = self.runtime_types.getTagsSlice(tu.tags);
+        for (tag_slice.items(.name), tag_slice.items(.args)) |name, args| {
+            _ = try self.scratch_tags.append(.{ .name = name, .args = args });
+        }
+
+        var current_ext = tu.ext;
+        while (true) {
+            const resolved_ext = self.runtime_types.resolveVar(current_ext);
+            switch (resolved_ext.desc.content) {
+                .structure => |ext_flat_type| switch (ext_flat_type) {
+                    .empty_tag_union => break,
+                    .tag_union => |ext_tag_union| {
+                        if (ext_tag_union.tags.len() > 0) {
+                            const ext_tag_slice = self.runtime_types.getTagsSlice(ext_tag_union.tags);
+                            for (ext_tag_slice.items(.name), ext_tag_slice.items(.args)) |name, args| {
+                                _ = try self.scratch_tags.append(.{ .name = name, .args = args });
+                            }
+                            current_ext = ext_tag_union.ext;
+                        } else {
+                            break;
+                        }
+                    },
+                    else => return Error.InvalidTagExt,
+                },
+                .alias => |alias| {
+                    current_ext = self.runtime_types.getAliasBackingVar(alias);
+                },
+                else => return Error.InvalidTagExt,
+            }
+        }
+
+        const tags = self.scratch_tags.items[scratch_tags_top..];
         if (tags.len == 0 or tags.len > 2) return false;
 
         var false_idx: ?usize = null;
         var true_idx: ?usize = null;
-        for (tags.items(.name), 0..) |ident_idx, i| {
-            const name_text = self.env.getIdent(ident_idx);
+        for (tags, 0..) |tag, i| {
+            const name_text = self.env.getIdent(tag.name);
             if (std.mem.eql(u8, name_text, "False")) {
                 false_idx = i;
             } else if (std.mem.eql(u8, name_text, "True")) {
@@ -2477,7 +2523,7 @@ pub const Interpreter = struct {
 
     fn getCanonicalBoolRuntimeVar(self: *Interpreter) !types.Var {
         if (self.canonical_bool_rt_var) |cached| return cached;
-        const bool_decl_idx = can.Can.BUILTIN_BOOL_TYPE;
+        const bool_decl_idx = can.Can.BUILTIN_BOOL;
         const ct_var = can.ModuleEnv.varFrom(bool_decl_idx);
         const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
         const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
@@ -2493,13 +2539,13 @@ pub const Interpreter = struct {
     }
 
     fn prepareBoolIndices(self: *Interpreter, rt_var: types.Var) !void {
-        if (self.runtimeVarIsBool(rt_var)) return;
+        if (try self.runtimeVarIsBool(rt_var)) return;
         const canonical = try self.getCanonicalBoolRuntimeVar();
-        _ = self.runtimeVarIsBool(canonical);
+        _ = try self.runtimeVarIsBool(canonical);
     }
 
     fn ensureBoolRuntimeVar(self: *Interpreter, module: *can.ModuleEnv, compile_var: types.Var, runtime_var: types.Var) !types.Var {
-        if (self.runtimeVarIsBool(runtime_var)) return runtime_var;
+        if (try self.runtimeVarIsBool(runtime_var)) return runtime_var;
 
         const canonical = try self.getCanonicalBoolRuntimeVar();
         const key: u64 = (@as(u64, @intFromPtr(module)) << 32) | @as(u64, @intFromEnum(compile_var));
@@ -2880,7 +2926,7 @@ pub const Interpreter = struct {
                 return true;
             },
             .underscore => return true,
-            .int_literal => |il| {
+            .num_literal => |il| {
                 if (!(value.layout.tag == .scalar and value.layout.data.scalar.tag == .int)) return false;
                 const lit = il.value.toI128();
                 return value.asI128() == lit;
@@ -2929,7 +2975,13 @@ pub const Interpreter = struct {
                 if (value.layout.tag != .list and value.layout.tag != .list_of_zst) return false;
 
                 const list_layout = try self.getRuntimeLayout(value_rt_var);
-                const elem_rt_var = try self.translateTypeVar(self.env, list_pat.elem_var);
+
+                const list_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(pattern_idx));
+                const list_rt_content = self.runtime_types.resolveVar(list_rt_var).desc.content;
+                std.debug.assert(list_rt_content == .structure);
+                std.debug.assert(list_rt_content.structure == .list);
+
+                const elem_rt_var = list_rt_content.structure.list;
                 const elem_layout = try self.getRuntimeLayout(elem_rt_var);
 
                 var accessor = try value.asList(&self.runtime_layout_store, elem_layout);
@@ -3033,7 +3085,7 @@ pub const Interpreter = struct {
                 if (tag_data.index >= tag_list.items.len) return false;
 
                 const expected_name = self.env.getIdent(tag_pat.name);
-                if (self.runtimeVarIsBool(value_rt_var)) {
+                if (try self.runtimeVarIsBool(value_rt_var)) {
                     const actual_name = if (tag_data.index == self.bool_true_index) "True" else "False";
                     if (!std.mem.eql(u8, expected_name, actual_name)) return false;
                 } else {
@@ -3096,6 +3148,7 @@ pub const Interpreter = struct {
             else => return false,
         }
     }
+
     pub fn deinit(self: *Interpreter) void {
         self.empty_scope.deinit();
         self.translate_cache.deinit();
@@ -3116,6 +3169,7 @@ pub const Interpreter = struct {
         self.stack_memory.deinit();
         self.bindings.deinit();
         self.active_closures.deinit();
+        self.scratch_tags.deinit();
     }
 
     /// Ensure the slot array can index at least `min_len` entries; zero-fill new entries.
@@ -3208,15 +3262,6 @@ pub const Interpreter = struct {
                         try acc.put(f.name, f.var_);
                     }
                 },
-                .record_poly => |poly| {
-                    const ct_fields = module.types.getRecordFieldsSlice(poly.record.fields);
-                    var i: usize = 0;
-                    while (i < ct_fields.len) : (i += 1) {
-                        const f = ct_fields.get(i);
-                        try acc.put(f.name, f.var_);
-                    }
-                    try self.collectRecordFieldsFromVar(module, poly.var_, acc, visited);
-                },
                 .nominal_type => |nom| {
                     const backing = module.types.getNominalBackingVar(nom);
                     try self.collectRecordFieldsFromVar(module, backing, acc, visited);
@@ -3234,215 +3279,301 @@ pub const Interpreter = struct {
 
     /// Minimal translate implementation (scaffolding): handles .str only for now
     pub fn translateTypeVar(self: *Interpreter, module: *can.ModuleEnv, compile_var: types.Var) Error!types.Var {
-        const key: u64 = (@as(u64, @intFromPtr(module)) << 32) | @as(u64, @intFromEnum(compile_var));
+        const resolved = module.types.resolveVar(compile_var);
+
+        const key: u64 = (@as(u64, @intFromPtr(module)) << 32) | @as(u64, @intFromEnum(resolved.var_));
         if (self.translate_cache.get(key)) |found| return found;
 
-        const resolved = module.types.resolveVar(compile_var);
-        const out_var = switch (resolved.desc.content) {
-            .structure => |flat| switch (flat) {
-                .str => try self.runtime_types.freshFromContent(.{ .structure = .str }),
-                .num => |n| switch (n) {
-                    .num_compact => |c| switch (c) {
-                        .int => |p| try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = p } } } }),
-                        .frac => |p| try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = p } } } }),
-                    },
-                    .int_precision => |p| try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = p } } } }),
-                    .frac_precision => |p| try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = p } } } }),
-                    .num_unbound, .int_unbound => try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = types.Num.Int.Precision.default } } } }),
-                    .frac_unbound => try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = types.Num.Frac.Precision.default } } } }),
-                    .num_poly, .int_poly => try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = types.Num.Int.Precision.default } } } }),
-                    .frac_poly => try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = types.Num.Frac.Precision.default } } } }),
-                },
-                .tag_union => |tu| {
-                    const ct_tags = module.types.getTagsSlice(tu.tags);
-                    var rt_tags = try self.allocator.alloc(@import("types").Tag, ct_tags.len);
-                    defer self.allocator.free(rt_tags);
-                    for (ct_tags.items(.name), ct_tags.items(.args), 0..) |name, args_range, i| {
-                        const ct_args = module.types.sliceVars(args_range);
-                        var arg_buf = try self.allocator.alloc(types.Var, ct_args.len);
-                        defer self.allocator.free(arg_buf);
-                        for (ct_args, 0..) |ct_arg, j| {
-                            arg_buf[j] = try self.translateTypeVar(module, ct_arg);
-                        }
-                        const rt_args_range = try self.runtime_types.appendVars(arg_buf);
-                        rt_tags[i] = .{ .name = name, .args = rt_args_range };
-                    }
-                    const rt_ext = try self.translateTypeVar(module, tu.ext);
-                    const content = try self.runtime_types.mkTagUnion(rt_tags, rt_ext);
-                    return try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-                },
-                .empty_tag_union => {
-                    return try self.runtime_types.freshFromContent(.{ .structure = .empty_tag_union });
-                },
-                .tuple => |t| {
-                    const ct_elems = module.types.sliceVars(t.elems);
-                    var buf = try self.allocator.alloc(types.Var, ct_elems.len);
-                    defer self.allocator.free(buf);
-                    for (ct_elems, 0..) |ct_elem, i| {
-                        buf[i] = try self.translateTypeVar(module, ct_elem);
-                    }
-                    const range = try self.runtime_types.appendVars(buf);
-                    return try self.runtime_types.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = range } } });
-                },
-                .box => |elem_var| {
-                    const rt_elem = try self.translateTypeVar(module, elem_var);
-                    return try self.runtime_types.freshFromContent(.{ .structure = .{ .box = rt_elem } });
-                },
-                .list => |elem_var| {
-                    const rt_elem = try self.translateTypeVar(module, elem_var);
-                    return try self.runtime_types.freshFromContent(.{ .structure = .{ .list = rt_elem } });
-                },
-                .list_unbound => {
-                    return try self.runtime_types.freshFromContent(.{ .structure = .list_unbound });
-                },
-                .record => |rec| {
-                    var acc = try FieldAccumulator.init(self.allocator);
-                    defer acc.deinit();
-                    var visited = std.AutoHashMap(types.Var, void).init(self.allocator);
-                    defer visited.deinit();
+        const out_var = blk: {
+            switch (resolved.desc.content) {
+                .structure => |flat| {
+                    switch (flat) {
+                        .str => {
+                            break :blk try self.runtime_types.freshFromContent(.{ .structure = .str });
+                        },
+                        .num => |initial_num| {
+                            const compact_num: types.Num.Compact = prec: {
+                                var num = initial_num;
+                                while (true) {
+                                    switch (num) {
+                                        .num_compact => |compact| break :prec compact,
+                                        .int_precision => |precision| break :prec .{ .int = precision },
+                                        .frac_precision => |precision| break :prec .{ .frac = precision },
+                                        // For polymorphic types, use default precision
+                                        .num_unbound => |_| {
+                                            // TODO: Should we consider requirements here?
+                                            break :prec .{ .int = types.Num.Int.Precision.default };
+                                        },
+                                        .int_unbound => {
+                                            // TODO: Should we consider requirements here?
+                                            break :prec .{ .int = types.Num.Int.Precision.default };
+                                        },
+                                        .frac_unbound => {
+                                            // TODO: Should we consider requirements here?
+                                            break :prec .{ .frac = types.Num.Frac.Precision.default };
+                                        },
+                                        .num_poly => |var_| {
+                                            const next_type = module.types.resolveVar(var_).desc.content;
+                                            if (next_type == .structure and next_type.structure == .num) {
+                                                num = next_type.structure.num;
+                                            } else if (next_type == .flex_var) {
+                                                break :prec .{ .int = types.Num.Int.Precision.default };
+                                            } else {
+                                                return Error.InvalidNumExt;
+                                            }
+                                        },
+                                        .int_poly => |var_| {
+                                            const next_type = module.types.resolveVar(var_).desc.content;
+                                            if (next_type == .structure and next_type.structure == .num) {
+                                                num = next_type.structure.num;
+                                            } else if (next_type == .flex_var) {
+                                                break :prec .{ .int = types.Num.Int.Precision.default };
+                                            } else {
+                                                return Error.InvalidNumExt;
+                                            }
+                                        },
+                                        .frac_poly => |var_| {
+                                            const next_type = module.types.resolveVar(var_).desc.content;
+                                            if (next_type == .structure and next_type.structure == .num) {
+                                                num = next_type.structure.num;
+                                            } else if (next_type == .flex_var) {
+                                                break :prec .{ .frac = types.Num.Frac.Precision.default };
+                                            } else {
+                                                return Error.InvalidNumExt;
+                                            }
+                                        },
+                                    }
+                                }
+                            };
+                            break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = compact_num } } });
+                        },
+                        .tag_union => |tu| {
+                            var rt_tag_args = try std.ArrayListUnmanaged(types.Var).initCapacity(self.allocator, 8);
+                            defer rt_tag_args.deinit(self.allocator);
 
-                    try self.collectRecordFieldsFromVar(module, rec.ext, &acc, &visited);
+                            var rt_tags = try self.gatherTags(module, tu);
+                            defer rt_tags.deinit(self.allocator);
 
-                    const ct_fields = module.types.getRecordFieldsSlice(rec.fields);
-                    var i: usize = 0;
-                    while (i < ct_fields.len) : (i += 1) {
-                        const f = ct_fields.get(i);
-                        try acc.put(f.name, f.var_);
-                    }
+                            for (rt_tags.items) |*tag| {
+                                rt_tag_args.clearRetainingCapacity();
+                                const ct_args = module.types.sliceVars(tag.args);
+                                for (ct_args) |ct_arg_var| {
+                                    try rt_tag_args.append(self.allocator, try self.translateTypeVar(module, ct_arg_var));
+                                }
+                                const rt_args_range = try self.runtime_types.appendVars(rt_tag_args.items);
+                                tag.* = .{
+                                    .name = tag.name,
+                                    .args = rt_args_range,
+                                };
+                            }
 
-                    const rt_ext = try self.translateTypeVar(module, rec.ext);
-                    var runtime_fields = try self.allocator.alloc(types.RecordField, acc.fields.items.len);
-                    defer self.allocator.free(runtime_fields);
-                    var j: usize = 0;
-                    while (j < acc.fields.items.len) : (j += 1) {
-                        const ct_field = acc.fields.items[j];
-                        runtime_fields[j] = .{
-                            .name = ct_field.name,
-                            .var_ = try self.translateTypeVar(module, ct_field.var_),
-                        };
-                    }
-                    const rt_fields = try self.runtime_types.appendRecordFields(runtime_fields);
-                    return try self.runtime_types.freshFromContent(.{ .structure = .{ .record = .{ .fields = rt_fields, .ext = rt_ext } } });
-                },
-                .record_unbound => |fields_range| {
-                    const ct_fields = module.types.getRecordFieldsSlice(fields_range);
-                    var runtime_fields = try self.allocator.alloc(types.RecordField, ct_fields.len);
-                    defer self.allocator.free(runtime_fields);
-                    var i: usize = 0;
-                    while (i < ct_fields.len) : (i += 1) {
-                        const f = ct_fields.get(i);
-                        runtime_fields[i] = .{
-                            .name = f.name,
-                            .var_ = try self.translateTypeVar(module, f.var_),
-                        };
-                    }
-                    const rt_fields = try self.runtime_types.appendRecordFields(runtime_fields);
-                    const ext_empty = try self.runtime_types.freshFromContent(.{ .structure = .empty_record });
-                    return try self.runtime_types.freshFromContent(.{ .structure = .{ .record = .{ .fields = rt_fields, .ext = ext_empty } } });
-                },
-                .record_poly => |poly| {
-                    var acc = try FieldAccumulator.init(self.allocator);
-                    defer acc.deinit();
-                    var visited = std.AutoHashMap(types.Var, void).init(self.allocator);
-                    defer visited.deinit();
+                            const rt_ext = try self.runtime_types.register(.{ .content = .{ .structure = .empty_tag_union }, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                            const content = try self.runtime_types.mkTagUnion(rt_tags.items, rt_ext);
+                            break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                        },
+                        .empty_tag_union => {
+                            break :blk try self.runtime_types.freshFromContent(.{ .structure = .empty_tag_union });
+                        },
+                        .tuple => |t| {
+                            const ct_elems = module.types.sliceVars(t.elems);
+                            var buf = try self.allocator.alloc(types.Var, ct_elems.len);
+                            defer self.allocator.free(buf);
+                            for (ct_elems, 0..) |ct_elem, i| {
+                                buf[i] = try self.translateTypeVar(module, ct_elem);
+                            }
+                            const range = try self.runtime_types.appendVars(buf);
+                            break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = range } } });
+                        },
+                        .box => |elem_var| {
+                            const rt_elem = try self.translateTypeVar(module, elem_var);
+                            break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .box = rt_elem } });
+                        },
+                        .list => |elem_var| {
+                            const rt_elem = try self.translateTypeVar(module, elem_var);
+                            break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .list = rt_elem } });
+                        },
+                        .list_unbound => {
+                            const elem_var = try self.runtime_types.freshFromContent(.{ .flex_var = null });
+                            break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .list = elem_var } });
+                        },
+                        .record => |rec| {
+                            var acc = try FieldAccumulator.init(self.allocator);
+                            defer acc.deinit();
+                            var visited = std.AutoHashMap(types.Var, void).init(self.allocator);
+                            defer visited.deinit();
 
-                    try self.collectRecordFieldsFromVar(module, poly.record.ext, &acc, &visited);
+                            try self.collectRecordFieldsFromVar(module, rec.ext, &acc, &visited);
 
-                    const ct_fields = module.types.getRecordFieldsSlice(poly.record.fields);
-                    var i: usize = 0;
-                    while (i < ct_fields.len) : (i += 1) {
-                        const f = ct_fields.get(i);
-                        try acc.put(f.name, f.var_);
-                    }
+                            const ct_fields = module.types.getRecordFieldsSlice(rec.fields);
+                            var i: usize = 0;
+                            while (i < ct_fields.len) : (i += 1) {
+                                const f = ct_fields.get(i);
+                                try acc.put(f.name, f.var_);
+                            }
 
-                    const rt_ext = try self.translateTypeVar(module, poly.var_);
-                    var runtime_fields = try self.allocator.alloc(types.RecordField, acc.fields.items.len);
-                    defer self.allocator.free(runtime_fields);
-                    var j: usize = 0;
-                    while (j < acc.fields.items.len) : (j += 1) {
-                        const ct_field = acc.fields.items[j];
-                        runtime_fields[j] = .{
-                            .name = ct_field.name,
-                            .var_ = try self.translateTypeVar(module, ct_field.var_),
-                        };
+                            const rt_ext = try self.translateTypeVar(module, rec.ext);
+                            var runtime_fields = try self.allocator.alloc(types.RecordField, acc.fields.items.len);
+                            defer self.allocator.free(runtime_fields);
+                            var j: usize = 0;
+                            while (j < acc.fields.items.len) : (j += 1) {
+                                const ct_field = acc.fields.items[j];
+                                runtime_fields[j] = .{
+                                    .name = ct_field.name,
+                                    .var_ = try self.translateTypeVar(module, ct_field.var_),
+                                };
+                            }
+                            const rt_fields = try self.runtime_types.appendRecordFields(runtime_fields);
+                            break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .record = .{ .fields = rt_fields, .ext = rt_ext } } });
+                        },
+                        .record_unbound => |fields_range| {
+                            // TODO: Recursively unwrap record fields via ext, like tag unions
+                            const ct_fields = module.types.getRecordFieldsSlice(fields_range);
+                            var runtime_fields = try self.allocator.alloc(types.RecordField, ct_fields.len);
+                            defer self.allocator.free(runtime_fields);
+                            var i: usize = 0;
+                            while (i < ct_fields.len) : (i += 1) {
+                                const f = ct_fields.get(i);
+                                runtime_fields[i] = .{
+                                    .name = f.name,
+                                    .var_ = try self.translateTypeVar(module, f.var_),
+                                };
+                            }
+                            const rt_fields = try self.runtime_types.appendRecordFields(runtime_fields);
+                            const ext_empty = try self.runtime_types.freshFromContent(.{ .structure = .empty_record });
+                            break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .record = .{ .fields = rt_fields, .ext = ext_empty } } });
+                        },
+                        .empty_record => {
+                            break :blk try self.runtime_types.freshFromContent(.{ .structure = .empty_record });
+                        },
+                        .fn_pure => |f| {
+                            const ct_args = module.types.sliceVars(f.args);
+                            var buf = try self.allocator.alloc(types.Var, ct_args.len);
+                            defer self.allocator.free(buf);
+                            for (ct_args, 0..) |ct_arg, i| {
+                                buf[i] = try self.translateTypeVar(module, ct_arg);
+                            }
+                            const rt_ret = try self.translateTypeVar(module, f.ret);
+                            const content = try self.runtime_types.mkFuncPure(buf, rt_ret);
+                            break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                        },
+                        .fn_effectful => |f| {
+                            const ct_args = module.types.sliceVars(f.args);
+                            var buf = try self.allocator.alloc(types.Var, ct_args.len);
+                            defer self.allocator.free(buf);
+                            for (ct_args, 0..) |ct_arg, i| {
+                                buf[i] = try self.translateTypeVar(module, ct_arg);
+                            }
+                            const rt_ret = try self.translateTypeVar(module, f.ret);
+                            const content = try self.runtime_types.mkFuncEffectful(buf, rt_ret);
+                            break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                        },
+                        .fn_unbound => |f| {
+                            const ct_args = module.types.sliceVars(f.args);
+                            var buf = try self.allocator.alloc(types.Var, ct_args.len);
+                            defer self.allocator.free(buf);
+                            for (ct_args, 0..) |ct_arg, i| {
+                                buf[i] = try self.translateTypeVar(module, ct_arg);
+                            }
+                            const rt_ret = try self.translateTypeVar(module, f.ret);
+                            const content = try self.runtime_types.mkFuncUnbound(buf, rt_ret);
+                            break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                        },
+                        .nominal_type => |nom| {
+                            const ct_backing = module.types.getNominalBackingVar(nom);
+                            const rt_backing = try self.translateTypeVar(module, ct_backing);
+                            const ct_args = module.types.sliceNominalArgs(nom);
+                            var buf = try self.allocator.alloc(types.Var, ct_args.len);
+                            defer self.allocator.free(buf);
+                            for (ct_args, 0..) |ct_arg, i| {
+                                buf[i] = try self.translateTypeVar(module, ct_arg);
+                            }
+                            const content = try self.runtime_types.mkNominal(nom.ident, rt_backing, buf, nom.origin_module);
+                            break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                        },
                     }
-                    const rt_fields = try self.runtime_types.appendRecordFields(runtime_fields);
-                    return try self.runtime_types.freshFromContent(.{ .structure = .{ .record = .{ .fields = rt_fields, .ext = rt_ext } } });
                 },
-                .empty_record => try self.runtime_types.freshFromContent(.{ .structure = .empty_record }),
-                .fn_pure => |f| {
-                    const ct_args = module.types.sliceVars(f.args);
-                    var buf = try self.allocator.alloc(types.Var, ct_args.len);
-                    defer self.allocator.free(buf);
-                    for (ct_args, 0..) |ct_arg, i| {
-                        buf[i] = try self.translateTypeVar(module, ct_arg);
-                    }
-                    const rt_ret = try self.translateTypeVar(module, f.ret);
-                    const content = try self.runtime_types.mkFuncPure(buf, rt_ret);
-                    return try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-                },
-                .fn_effectful => |f| {
-                    const ct_args = module.types.sliceVars(f.args);
-                    var buf = try self.allocator.alloc(types.Var, ct_args.len);
-                    defer self.allocator.free(buf);
-                    for (ct_args, 0..) |ct_arg, i| {
-                        buf[i] = try self.translateTypeVar(module, ct_arg);
-                    }
-                    const rt_ret = try self.translateTypeVar(module, f.ret);
-                    const content = try self.runtime_types.mkFuncEffectful(buf, rt_ret);
-                    return try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-                },
-                .fn_unbound => |f| {
-                    const ct_args = module.types.sliceVars(f.args);
-                    var buf = try self.allocator.alloc(types.Var, ct_args.len);
-                    defer self.allocator.free(buf);
-                    for (ct_args, 0..) |ct_arg, i| {
-                        buf[i] = try self.translateTypeVar(module, ct_arg);
-                    }
-                    const rt_ret = try self.translateTypeVar(module, f.ret);
-                    const content = try self.runtime_types.mkFuncUnbound(buf, rt_ret);
-                    return try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-                },
-                .nominal_type => |nom| {
-                    const ct_backing = module.types.getNominalBackingVar(nom);
+                .alias => |alias| {
+                    const ct_backing = module.types.getAliasBackingVar(alias);
                     const rt_backing = try self.translateTypeVar(module, ct_backing);
-                    const ct_args = module.types.sliceNominalArgs(nom);
+                    const ct_args = module.types.sliceAliasArgs(alias);
                     var buf = try self.allocator.alloc(types.Var, ct_args.len);
                     defer self.allocator.free(buf);
                     for (ct_args, 0..) |ct_arg, i| {
                         buf[i] = try self.translateTypeVar(module, ct_arg);
                     }
-                    const content = try self.runtime_types.mkNominal(nom.ident, rt_backing, buf, nom.origin_module);
-                    return try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                    const content = try self.runtime_types.mkAlias(alias.ident, rt_backing, buf);
+                    break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                 },
-            },
-            .alias => |alias| {
-                const ct_backing = module.types.getAliasBackingVar(alias);
-                const rt_backing = try self.translateTypeVar(module, ct_backing);
-                const ct_args = module.types.sliceAliasArgs(alias);
-                var buf = try self.allocator.alloc(types.Var, ct_args.len);
-                defer self.allocator.free(buf);
-                for (ct_args, 0..) |ct_arg, i| {
-                    buf[i] = try self.translateTypeVar(module, ct_arg);
-                }
-                const content = try self.runtime_types.mkAlias(alias.ident, rt_backing, buf);
-                return try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-            },
-            .flex_var => |id_opt| {
-                const content: types.Content = .{ .flex_var = id_opt };
-                return try self.runtime_types.freshFromContent(content);
-            },
-            .rigid_var => |ident| {
-                const content: types.Content = .{ .rigid_var = ident };
-                return try self.runtime_types.freshFromContent(content);
-            },
-            .err => {
-                return error.TypeMismatch;
-            },
+                .flex_var => |id_opt| {
+                    const content: types.Content = .{ .flex_var = id_opt };
+                    break :blk try self.runtime_types.freshFromContent(content);
+                },
+                .rigid_var => |ident| {
+                    const content: types.Content = .{ .rigid_var = ident };
+                    break :blk try self.runtime_types.freshFromContent(content);
+                },
+                .err => {
+                    return error.TypeMismatch;
+                },
+            }
         };
 
         try self.translate_cache.put(key, out_var);
         return out_var;
+    }
+
+    /// Recursively expand a tag union's tags, returning an array list
+    /// Caller owns the returned memory
+    fn gatherTags(
+        ctx: *const Interpreter,
+        module: *can.ModuleEnv,
+        tag_union: types.TagUnion,
+    ) std.mem.Allocator.Error!std.ArrayListUnmanaged(types.Tag) {
+        var scratch_tags = try std.ArrayListUnmanaged(types.Tag).initCapacity(ctx.allocator, 8);
+
+        const tag_slice = module.types.getTagsSlice(tag_union.tags);
+        for (tag_slice.items(.name), tag_slice.items(.args)) |name, args| {
+            _ = try scratch_tags.append(ctx.allocator, .{ .name = name, .args = args });
+        }
+
+        var current_ext = tag_union.ext;
+        while (true) {
+            const resolved_ext = module.types.resolveVar(current_ext);
+            switch (resolved_ext.desc.content) {
+                .structure => |ext_flat_type| switch (ext_flat_type) {
+                    .empty_tag_union => break,
+                    .tag_union => |ext_tag_union| {
+                        if (ext_tag_union.tags.len() > 0) {
+                            const ext_tag_slice = module.types.getTagsSlice(ext_tag_union.tags);
+                            for (ext_tag_slice.items(.name), ext_tag_slice.items(.args)) |name, args| {
+                                _ = try scratch_tags.append(ctx.allocator, .{ .name = name, .args = args });
+                            }
+                            current_ext = ext_tag_union.ext;
+                        } else {
+                            break;
+                        }
+                    },
+                    else => {
+                        // TODO: Don't use unreachable here
+                        unreachable;
+                    },
+                },
+                .alias => |alias| {
+                    current_ext = module.types.getAliasBackingVar(alias);
+                },
+                .flex_var => break,
+                .rigid_var => break,
+                else => {
+                    // TODO: Don't use unreachable here
+                    unreachable;
+                },
+            }
+        }
+
+        // Sort the tags alphabetically
+        std.mem.sort(types.Tag, scratch_tags.items, module.common.getIdentStore(), comptime types.Tag.sortByNameAsc);
+
+        return scratch_tags;
     }
 
     pub fn makePolyKey(self: *Interpreter, func_id: u32, args: []const types.Var) PolyKey {
@@ -3536,6 +3667,11 @@ pub const Interpreter = struct {
         const entry = PolyEntry{ .return_var = ret_var, .return_layout_slot = slot, .args = args_copy_mut };
         try self.polyInsert(func_id, entry);
         return entry;
+    }
+
+    /// Initiale a TypeWriter from an interpreter. Useful when debugging
+    fn initTypeWriter(self: *const Interpreter) std.mem.Allocator.Error!types.TypeWriter {
+        return try types.TypeWriter.initFromParts(self.allocator, self.runtime_types, self.env.common.getIdentStore());
     }
 };
 

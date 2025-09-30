@@ -77,12 +77,12 @@ NO CHANGE
 		(where
 			(method @5.3-5.29 (module-of "a") (ident "convert")
 				(args
-					(ty-rigid-var @3.11-3.12 (name "a")))
-				(ty-rigid-var @3.19-3.20 (name "c")))
+					(ty-rigid-var-lookup (ty-rigid-var @3.11-3.12 (name "a"))))
+				(ty-rigid-var-lookup (ty-rigid-var @3.19-3.20 (name "c"))))
 			(method @6.3-6.31 (module-of "b") (ident "transform")
 				(args
-					(ty-rigid-var @3.14-3.15 (name "b")))
-				(ty-rigid-var @3.19-3.20 (name "c")))))
+					(ty-rigid-var-lookup (ty-rigid-var @3.14-3.15 (name "b"))))
+				(ty-rigid-var-lookup (ty-rigid-var @3.19-3.20 (name "c"))))))
 	(ext-decl @5.3-5.29 (ident "module(a).convert") (kind "value"))
 	(ext-decl @6.3-6.31 (ident "module(b).transform") (kind "value")))
 ~~~

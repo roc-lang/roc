@@ -41,31 +41,9 @@ type=expr
 }
 ~~~
 # EXPECTED
-INVALID NUMBER - number_literal_suffixes.md:12:9:12:15
-INVALID NUMBER - number_literal_suffixes.md:23:12:23:19
+NIL
 # PROBLEMS
-**INVALID NUMBER**
-This number literal is not valid: `123dec`
-
-**number_literal_suffixes.md:12:9:12:15:**
-```roc
-  dec:  123dec,
-```
-        ^^^^^^
-
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
-
-**INVALID NUMBER**
-This number literal is not valid: `-123dec`
-
-**number_literal_suffixes.md:23:12:23:19:**
-```roc
-  decNeg:  -123dec,
-```
-           ^^^^^^^
-
-Check that the number is correctly formatted. Valid examples include: `42`, `3.14`, `0x1A`, or `1_000_000`.
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),
@@ -214,71 +192,71 @@ EndOfFile(35:1-35:1),
 (e-record @1.1-34.2
 	(fields
 		(field (name "u8")
-			(e-int @2.9-2.14 (value "123") (suffix "u8")))
+			(e-num @2.9-2.14 (value "123")))
 		(field (name "u16")
-			(e-int @3.9-3.15 (value "123") (suffix "u16")))
+			(e-num @3.9-3.15 (value "123")))
 		(field (name "u32")
-			(e-int @4.9-4.15 (value "123") (suffix "u32")))
+			(e-num @4.9-4.15 (value "123")))
 		(field (name "u64")
-			(e-int @5.9-5.15 (value "123") (suffix "u64")))
+			(e-num @5.9-5.15 (value "123")))
 		(field (name "u128")
-			(e-int @6.9-6.16 (value "123") (suffix "u128")))
+			(e-num @6.9-6.16 (value "123")))
 		(field (name "i8")
-			(e-int @7.9-7.14 (value "123") (suffix "i8")))
+			(e-num @7.9-7.14 (value "123")))
 		(field (name "i16")
-			(e-int @8.9-8.15 (value "123") (suffix "i16")))
+			(e-num @8.9-8.15 (value "123")))
 		(field (name "i32")
-			(e-int @9.9-9.15 (value "123") (suffix "i32")))
+			(e-num @9.9-9.15 (value "123")))
 		(field (name "i64")
-			(e-int @10.9-10.15 (value "123") (suffix "i64")))
+			(e-num @10.9-10.15 (value "123")))
 		(field (name "i128")
-			(e-int @11.9-11.16 (value "123") (suffix "i128")))
+			(e-num @11.9-11.16 (value "123")))
 		(field (name "dec")
-			(e-runtime-error (tag "invalid_num_literal")))
+			(e-num @12.9-12.15 (value "123")))
 		(field (name "u8Neg")
-			(e-int @13.12-13.18 (value "-123") (suffix "u8")))
+			(e-num @13.12-13.18 (value "-123")))
 		(field (name "u16Neg")
-			(e-int @14.12-14.19 (value "-123") (suffix "u16")))
+			(e-num @14.12-14.19 (value "-123")))
 		(field (name "u32Neg")
-			(e-int @15.12-15.19 (value "-123") (suffix "u32")))
+			(e-num @15.12-15.19 (value "-123")))
 		(field (name "u64Neg")
-			(e-int @16.12-16.19 (value "-123") (suffix "u64")))
+			(e-num @16.12-16.19 (value "-123")))
 		(field (name "u128Neg")
-			(e-int @17.12-17.20 (value "-123") (suffix "u128")))
+			(e-num @17.12-17.20 (value "-123")))
 		(field (name "i8Neg")
-			(e-int @18.12-18.18 (value "-123") (suffix "i8")))
+			(e-num @18.12-18.18 (value "-123")))
 		(field (name "i16Neg")
-			(e-int @19.12-19.19 (value "-123") (suffix "i16")))
+			(e-num @19.12-19.19 (value "-123")))
 		(field (name "i32Neg")
-			(e-int @20.12-20.19 (value "-123") (suffix "i32")))
+			(e-num @20.12-20.19 (value "-123")))
 		(field (name "i64Neg")
-			(e-int @21.12-21.19 (value "-123") (suffix "i64")))
+			(e-num @21.12-21.19 (value "-123")))
 		(field (name "i128Neg")
-			(e-int @22.12-22.20 (value "-123") (suffix "i128")))
+			(e-num @22.12-22.20 (value "-123")))
 		(field (name "decNeg")
-			(e-runtime-error (tag "invalid_num_literal")))
+			(e-num @23.12-23.19 (value "-123")))
 		(field (name "u8Bin")
-			(e-int @24.12-24.19 (value "5") (suffix "u8")))
+			(e-num @24.12-24.19 (value "5")))
 		(field (name "u16Bin")
-			(e-int @25.12-25.20 (value "5") (suffix "u16")))
+			(e-num @25.12-25.20 (value "5")))
 		(field (name "u32Bin")
-			(e-int @26.12-26.20 (value "5") (suffix "u32")))
+			(e-num @26.12-26.20 (value "5")))
 		(field (name "u64Bin")
-			(e-int @27.12-27.20 (value "5") (suffix "u64")))
+			(e-num @27.12-27.20 (value "5")))
 		(field (name "u128Bin")
-			(e-int @28.12-28.21 (value "5") (suffix "u128")))
+			(e-num @28.12-28.21 (value "5")))
 		(field (name "i8Bin")
-			(e-int @29.12-29.19 (value "5") (suffix "i8")))
+			(e-num @29.12-29.19 (value "5")))
 		(field (name "i16Bin")
-			(e-int @30.12-30.20 (value "5") (suffix "i16")))
+			(e-num @30.12-30.20 (value "5")))
 		(field (name "i32Bin")
-			(e-int @31.12-31.20 (value "5") (suffix "i32")))
+			(e-num @31.12-31.20 (value "5")))
 		(field (name "i64Bin")
-			(e-int @32.12-32.20 (value "5") (suffix "i64")))
+			(e-num @32.12-32.20 (value "5")))
 		(field (name "i128Bin")
-			(e-int @33.12-33.21 (value "5") (suffix "i128")))))
+			(e-num @33.12-33.21 (value "5")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-34.2 (type "{ dec: Error, decNeg: Error, i128: Num(Int(Signed128)), i128Bin: Num(Int(Signed128)), i128Neg: Num(Int(Signed128)), i16: Num(Int(Signed16)), i16Bin: Num(Int(Signed16)), i16Neg: Num(Int(Signed16)), i32: Num(Int(Signed32)), i32Bin: Num(Int(Signed32)), i32Neg: Num(Int(Signed32)), i64: Num(Int(Signed64)), i64Bin: Num(Int(Signed64)), i64Neg: Num(Int(Signed64)), i8: Num(Int(Signed8)), i8Bin: Num(Int(Signed8)), i8Neg: Num(Int(Signed8)), u128: Num(Int(Unsigned128)), u128Bin: Num(Int(Unsigned128)), u128Neg: Num(Int(Unsigned128)), u16: Num(Int(Unsigned16)), u16Bin: Num(Int(Unsigned16)), u16Neg: Num(Int(Unsigned16)), u32: Num(Int(Unsigned32)), u32Bin: Num(Int(Unsigned32)), u32Neg: Num(Int(Unsigned32)), u64: Num(Int(Unsigned64)), u64Bin: Num(Int(Unsigned64)), u64Neg: Num(Int(Unsigned64)), u8: Num(Int(Unsigned8)), u8Bin: Num(Int(Unsigned8)), u8Neg: Num(Int(Unsigned8)) }"))
+(expr @1.1-34.2 (type "{ dec: Num(Frac(Decimal)), decNeg: Num(Frac(Decimal)), i128: Num(Int(Signed128)), i128Bin: Num(Int(Signed128)), i128Neg: Num(Int(Signed128)), i16: Num(Int(Signed16)), i16Bin: Num(Int(Signed16)), i16Neg: Num(Int(Signed16)), i32: Num(Int(Signed32)), i32Bin: Num(Int(Signed32)), i32Neg: Num(Int(Signed32)), i64: Num(Int(Signed64)), i64Bin: Num(Int(Signed64)), i64Neg: Num(Int(Signed64)), i8: Num(Int(Signed8)), i8Bin: Num(Int(Signed8)), i8Neg: Num(Int(Signed8)), u128: Num(Int(Unsigned128)), u128Bin: Num(Int(Unsigned128)), u128Neg: Num(Int(Unsigned128)), u16: Num(Int(Unsigned16)), u16Bin: Num(Int(Unsigned16)), u16Neg: Num(Int(Unsigned16)), u32: Num(Int(Unsigned32)), u32Bin: Num(Int(Unsigned32)), u32Neg: Num(Int(Unsigned32)), u64: Num(Int(Unsigned64)), u64Bin: Num(Int(Unsigned64)), u64Neg: Num(Int(Unsigned64)), u8: Num(Int(Unsigned8)), u8Bin: Num(Int(Unsigned8)), u8Neg: Num(Int(Unsigned8)) }"))
 ~~~

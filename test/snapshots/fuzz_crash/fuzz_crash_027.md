@@ -228,6 +228,7 @@ TOO FEW ARGS - fuzz_crash_027.md:21:3:22:4
 INVALID IF CONDITION - fuzz_crash_027.md:50:5:50:5
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
 TYPE MISMATCH - fuzz_crash_027.md:111:2:113:3
+TYPE MISMATCH - fuzz_crash_027.md:143:2:147:3
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.
@@ -929,6 +930,23 @@ It has the type:
 
 But I expected it to be:
     _[Red, Blue]_others, _arg -> Error_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_027.md:143:2:147:3:**
+```roc
+	Stdoline!(
+		"How about ${ #
+			Num.toStr(number) # on expr
+		} as a",
+	)
+```
+
+It has the type:
+    _[Stdoline!(Str)]_others_
+
+But the type annotation says it should have the type:
+    _Result({  }, _d)_
 
 # TOKENS
 ~~~zig
@@ -1787,9 +1805,9 @@ expect {
 								(pattern (degenerate false)
 									(p-list @70.22-70.43
 										(patterns
-											(p-int @70.23-70.24 (value "1"))
-											(p-int @70.26-70.27 (value "2"))
-											(p-int @70.29-70.30 (value "3")))
+											(p-num @70.23-70.24 (value "1"))
+											(p-num @70.26-70.27 (value "2"))
+											(p-num @70.29-70.30 (value "3")))
 										(rest-at (index 3)
 											(p-assign @1.1-1.1 (ident "rest"))))))
 							(value
@@ -1799,9 +1817,9 @@ expect {
 								(pattern (degenerate false)
 									(p-list @74.3-74.28
 										(patterns
-											(p-int @74.4-74.5 (value "1"))
+											(p-num @74.4-74.5 (value "1"))
 											(p-runtime-error @1.1-1.1 (tag "not_implemented"))
-											(p-int @74.14-74.15 (value "3")))
+											(p-num @74.14-74.15 (value "3")))
 										(rest-at (index 3)
 											(p-assign @1.1-1.1 (ident "rest"))))))
 							(value
@@ -1833,9 +1851,9 @@ expect {
 								(pattern (degenerate false)
 									(p-tuple @80.3-80.12
 										(patterns
-											(p-int @80.4-80.5 (value "1"))
-											(p-int @80.7-80.8 (value "2"))
-											(p-int @80.10-80.11 (value "3"))))))
+											(p-num @80.4-80.5 (value "1"))
+											(p-num @80.7-80.8 (value "2"))
+											(p-num @80.10-80.11 (value "3"))))))
 							(value
 								(e-num @80.16-80.19 (value "123"))))
 						(branch
@@ -1843,9 +1861,9 @@ expect {
 								(pattern (degenerate false)
 									(p-tuple @81.3-81.16
 										(patterns
-											(p-int @81.4-81.5 (value "1"))
+											(p-num @81.4-81.5 (value "1"))
 											(p-runtime-error @1.1-1.1 (tag "not_implemented"))
-											(p-int @81.14-81.15 (value "3"))))))
+											(p-num @81.14-81.15 (value "3"))))))
 							(value
 								(e-num @81.20-81.23 (value "123"))))
 						(branch
@@ -1855,10 +1873,10 @@ expect {
 										(destructs
 											(record-destruct @82.5-82.11 (label "foo") (ident "foo")
 												(sub-pattern
-													(p-int @82.10-82.11 (value "1"))))
+													(p-num @82.10-82.11 (value "1"))))
 											(record-destruct @82.13-82.19 (label "bar") (ident "bar")
 												(sub-pattern
-													(p-int @82.18-82.19 (value "2"))))
+													(p-num @82.18-82.19 (value "2"))))
 											(record-destruct @82.21-82.27 (label "rest") (ident "rest")
 												(required
 													(p-assign @82.21-82.27 (ident "rest"))))))))
@@ -1877,7 +1895,7 @@ expect {
 										(destructs
 											(record-destruct @89.5-89.11 (label "foo") (ident "foo")
 												(sub-pattern
-													(p-int @89.10-89.11 (value "1"))))
+													(p-num @89.10-89.11 (value "1"))))
 											(record-destruct @89.13-89.23 (label "bar") (ident "bar")
 												(sub-pattern
 													(p-runtime-error @1.1-1.1 (tag "not_implemented"))))))))
@@ -1890,7 +1908,7 @@ expect {
 										(destructs
 											(record-destruct @91.4-91.10 (label "foo") (ident "foo")
 												(sub-pattern
-													(p-int @91.9-91.10 (value "1"))))))))
+													(p-num @91.9-91.10 (value "1"))))))))
 							(value
 								(e-num @92.9-92.11 (value "12"))))
 						(branch
@@ -2080,8 +2098,8 @@ expect {
 					(ty-apply @99.9-99.21 (name "List") (builtin)
 						(ty-malformed @99.14-99.20))
 					(ty-apply @99.25-99.38 (name "Result") (local)
-						(ty-record @99.32-99.34)
-						(ty-underscore @1.1-1.1))))))
+						(ty-record @99.25-99.38)
+						(ty-underscore @99.25-99.38))))))
 	(d-let
 		(p-assign @151.1-151.6 (ident "empty"))
 		(e-empty_record @151.9-151.11)
@@ -2095,13 +2113,13 @@ expect {
 				(ty-rigid-var @15.8-15.9 (name "b"))))
 		(ty-fn @15.13-15.41 (effectful false)
 			(ty-apply @15.13-15.20 (name "List") (builtin)
-				(ty-rigid-var @15.5-15.6 (name "a")))
+				(ty-rigid-var-lookup (ty-rigid-var @15.5-15.6 (name "a"))))
 			(ty-parens @15.22-15.30
 				(ty-fn @15.23-15.29 (effectful false)
-					(ty-rigid-var @15.5-15.6 (name "a"))
-					(ty-rigid-var @15.8-15.9 (name "b"))))
+					(ty-rigid-var-lookup (ty-rigid-var @15.5-15.6 (name "a")))
+					(ty-rigid-var-lookup (ty-rigid-var @15.8-15.9 (name "b")))))
 			(ty-apply @15.34-15.41 (name "List") (builtin)
-				(ty-rigid-var @15.8-15.9 (name "b")))))
+				(ty-rigid-var-lookup (ty-rigid-var @15.8-15.9 (name "b"))))))
 	(s-alias-decl @16.1-24.15
 		(ty-header @16.1-19.2 (name "MapML")
 			(ty-args
@@ -2111,10 +2129,10 @@ expect {
 			(ty-apply @21.3-22.4 (name "List") (builtin))
 			(ty-parens @23.3-23.11
 				(ty-fn @23.4-23.10 (effectful false)
-					(ty-rigid-var @17.2-17.3 (name "a"))
-					(ty-rigid-var @18.2-18.3 (name "b"))))
+					(ty-rigid-var-lookup (ty-rigid-var @17.2-17.3 (name "a")))
+					(ty-rigid-var-lookup (ty-rigid-var @18.2-18.3 (name "b")))))
 			(ty-apply @24.4-24.15 (name "List") (builtin)
-				(ty-rigid-var @18.2-18.3 (name "b")))))
+				(ty-rigid-var-lookup (ty-rigid-var @18.2-18.3 (name "b"))))))
 	(s-alias-decl @26.1-26.17
 		(ty-header @26.1-26.4 (name "Foo"))
 		(ty-tuple @26.7-26.17
@@ -2149,7 +2167,7 @@ expect {
 				(ty-rigid-var @43.6-43.7 (name "a"))))
 		(ty-fn @43.11-43.34 (effectful false)
 			(ty-malformed @43.11-43.16)
-			(ty-rigid-var @43.6-43.7 (name "a"))
+			(ty-rigid-var-lookup (ty-rigid-var @43.6-43.7 (name "a")))
 			(ty-malformed @43.26-43.31)))
 	(s-import @4.1-4.38 (module "pf.Stdout") (qualifier "pf")
 		(exposes

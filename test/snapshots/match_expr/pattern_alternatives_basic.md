@@ -132,12 +132,12 @@ kind = |color| match color {
 	(s-alias-decl @3.1-3.51
 		(ty-header @3.1-3.6 (name "Color"))
 		(ty-tag-union @3.9-3.51
-			(tag_name @3.10-3.13 (name "Red"))
-			(tag_name @3.15-3.20 (name "Green"))
-			(tag_name @3.22-3.26 (name "Blue"))
-			(tag_name @3.28-3.34 (name "Yellow"))
-			(tag_name @3.36-3.42 (name "Orange"))
-			(tag_name @3.44-3.50 (name "Purple")))))
+			(ty-tag-name @3.10-3.13 (name "Red"))
+			(ty-tag-name @3.15-3.20 (name "Green"))
+			(ty-tag-name @3.22-3.26 (name "Blue"))
+			(ty-tag-name @3.28-3.34 (name "Yellow"))
+			(ty-tag-name @3.36-3.42 (name "Orange"))
+			(ty-tag-name @3.44-3.50 (name "Purple")))))
 ~~~
 # TYPES
 ~~~clojure

@@ -186,15 +186,18 @@ NO CHANGE
 				(ty-rigid-var @4.10-4.12 (name "ok"))
 				(ty-rigid-var @4.14-4.17 (name "err"))))
 		(ty-tag-union @4.21-4.41
-			(tag_name @4.22-4.30 (name "Good"))
-			(tag_name @4.32-4.40 (name "Bad"))))
+			(ty-tag-name @4.22-4.30 (name "Good")
+				(ty-rigid-var-lookup (ty-rigid-var @4.10-4.12 (name "ok"))))
+			(ty-tag-name @4.32-4.40 (name "Bad")
+				(ty-rigid-var-lookup (ty-rigid-var @4.14-4.17 (name "err"))))))
 	(s-alias-decl @11.1-11.28
 		(ty-header @11.1-11.10 (name "Option")
 			(ty-args
 				(ty-rigid-var @11.8-11.9 (name "a"))))
 		(ty-tag-union @11.13-11.28
-			(tag_name @11.14-11.21 (name "Some"))
-			(tag_name @11.23-11.27 (name "None")))))
+			(ty-tag-name @11.14-11.21 (name "Some")
+				(ty-rigid-var-lookup (ty-rigid-var @11.8-11.9 (name "a"))))
+			(ty-tag-name @11.23-11.27 (name "None")))))
 ~~~
 # TYPES
 ~~~clojure

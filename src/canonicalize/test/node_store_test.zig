@@ -182,20 +182,10 @@ test "NodeStore round trip - Expressions" {
     defer expressions.deinit();
 
     try expressions.append(CIR.Expr{
-        .e_int = .{
+        .e_num = .{
             .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
-            .requirements = .{
-                .bits_needed = 0,
-                .sign_needed = false,
-            },
-            .suffix = .u8,
+            .kind = .i128,
         },
-    });
-    try expressions.append(CIR.Expr{
-        .e_num = .{ .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 }, .requirements = .{
-            .bits_needed = 0,
-            .sign_needed = false,
-        } },
     });
     try expressions.append(CIR.Expr{
         .e_frac_f32 = .{ .value = rand.random().float(f32), .has_suffix = false },
@@ -211,8 +201,10 @@ test "NodeStore round trip - Expressions" {
     });
     try expressions.append(CIR.Expr{
         .e_dec_small = .{
-            .numerator = rand.random().int(i16),
-            .denominator_power_of_ten = rand.random().int(u8),
+            .value = .{
+                .numerator = rand.random().int(i16),
+                .denominator_power_of_ten = rand.random().int(u8),
+            },
             .has_suffix = false,
         },
     });
@@ -240,7 +232,6 @@ test "NodeStore round trip - Expressions" {
     });
     try expressions.append(CIR.Expr{
         .e_list = .{
-            .elem_var = rand_idx(TypeVar),
             .elems = CIR.Expr.Span{ .span = rand_span() },
         },
     });
@@ -931,7 +922,7 @@ test "NodeStore round trip - Pattern" {
     });
     try patterns.append(CIR.Pattern{
         .record_destructure = .{
-            .whole_var = rand_idx(TypeVar),
+            .destructs = CIR.Pattern.RecordDestruct.Span{ .span = rand_span() },
         },
     });
     try patterns.append(CIR.Pattern{
@@ -946,22 +937,27 @@ test "NodeStore round trip - Pattern" {
         },
     });
     try patterns.append(CIR.Pattern{
-        .int_literal = .{
+        .num_literal = .{
             .value = CIR.IntValue{
                 .bytes = @bitCast(rand.random().int(i128)),
                 .kind = .i128,
             },
+            .kind = .int_unbound,
         },
     });
     try patterns.append(CIR.Pattern{
         .small_dec_literal = .{
-            .numerator = rand.random().int(i16),
-            .denominator_power_of_ten = rand.random().int(u8),
+            .value = .{
+                .numerator = rand.random().int(i16),
+                .denominator_power_of_ten = rand.random().int(u8),
+            },
+            .has_suffix = true,
         },
     });
     try patterns.append(CIR.Pattern{
         .dec_literal = .{
             .value = RocDec.fromU64(rand.random().int(u64)),
+            .has_suffix = false,
         },
     });
     try patterns.append(CIR.Pattern{

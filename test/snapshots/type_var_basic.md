@@ -75,7 +75,7 @@ NO CHANGE
 			(declared-type
 				(ty-fn @4.12-4.18 (effectful false)
 					(ty-rigid-var @4.12-4.13 (name "a"))
-					(ty-rigid-var @4.12-4.13 (name "a"))))))
+					(ty-rigid-var-lookup (ty-rigid-var @4.12-4.13 (name "a")))))))
 	(d-let
 		(p-assign @7.1-7.6 (ident "main!"))
 		(e-lambda @7.9-7.15

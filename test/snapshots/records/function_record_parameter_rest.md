@@ -61,5 +61,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.65 (type "_arg -> Str"))
+(expr @1.1-1.65 (type "{ first_name: _field, rest: { last_name: _field2 } } -> Str"))
 ~~~

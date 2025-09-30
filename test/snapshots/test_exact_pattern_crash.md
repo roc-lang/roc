@@ -238,8 +238,8 @@ main = {
 						(ty-rigid-var @7.13-7.23 (name "a"))
 						(ty-rigid-var @7.13-7.23 (name "b")))
 					(ty-apply @7.27-7.37 (name "Pair") (local)
-						(ty-rigid-var @7.13-7.23 (name "b"))
-						(ty-rigid-var @7.13-7.23 (name "a")))))))
+						(ty-rigid-var-lookup (ty-rigid-var @7.13-7.23 (name "b")))
+						(ty-rigid-var-lookup (ty-rigid-var @7.13-7.23 (name "a"))))))))
 	(d-let
 		(p-assign @12.1-12.9 (ident "map_pair"))
 		(e-lambda @12.12-12.39
@@ -270,15 +270,15 @@ main = {
 						(ty-rigid-var @11.12-11.22 (name "b")))
 					(ty-parens @11.24-11.32
 						(ty-fn @11.25-11.31 (effectful false)
-							(ty-rigid-var @11.12-11.22 (name "a"))
+							(ty-rigid-var-lookup (ty-rigid-var @11.12-11.22 (name "a")))
 							(ty-rigid-var @11.30-11.31 (name "c"))))
 					(ty-parens @11.34-11.42
 						(ty-fn @11.35-11.41 (effectful false)
-							(ty-rigid-var @11.12-11.22 (name "b"))
+							(ty-rigid-var-lookup (ty-rigid-var @11.12-11.22 (name "b")))
 							(ty-rigid-var @11.40-11.41 (name "d"))))
 					(ty-apply @11.46-11.56 (name "Pair") (local)
-						(ty-rigid-var @11.30-11.31 (name "c"))
-						(ty-rigid-var @11.40-11.41 (name "d")))))))
+						(ty-rigid-var-lookup (ty-rigid-var @11.30-11.31 (name "c")))
+						(ty-rigid-var-lookup (ty-rigid-var @11.40-11.41 (name "d"))))))))
 	(d-let
 		(p-assign @17.1-17.5 (ident "main"))
 		(e-block @17.8-26.2
@@ -320,8 +320,8 @@ main = {
 				(ty-rigid-var @4.6-4.7 (name "a"))
 				(ty-rigid-var @4.9-4.10 (name "b"))))
 		(ty-tuple @4.14-4.20
-			(ty-rigid-var @4.6-4.7 (name "a"))
-			(ty-rigid-var @4.9-4.10 (name "b")))))
+			(ty-rigid-var-lookup (ty-rigid-var @4.6-4.7 (name "a")))
+			(ty-rigid-var-lookup (ty-rigid-var @4.9-4.10 (name "b"))))))
 ~~~
 # TYPES
 ~~~clojure

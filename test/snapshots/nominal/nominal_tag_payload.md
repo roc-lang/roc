@@ -115,7 +115,7 @@ NO CHANGE
 				(ty-fn @5.9-5.22 (effectful false)
 					(ty-rigid-var @5.9-5.10 (name "a"))
 					(ty-apply @5.14-5.22 (name "Maybe") (local)
-						(ty-rigid-var @5.9-5.10 (name "a")))))))
+						(ty-rigid-var-lookup (ty-rigid-var @5.9-5.10 (name "a"))))))))
 	(d-let
 		(p-assign @9.1-9.6 (ident "none1"))
 		(e-nominal @9.9-9.19 (nominal "Maybe")
@@ -143,8 +143,9 @@ NO CHANGE
 			(ty-args
 				(ty-rigid-var @3.7-3.8 (name "a"))))
 		(ty-tag-union @3.13-3.28
-			(tag_name @3.14-3.21 (name "Some"))
-			(tag_name @3.23-3.27 (name "None")))))
+			(ty-tag-name @3.14-3.21 (name "Some")
+				(ty-rigid-var-lookup (ty-rigid-var @3.7-3.8 (name "a"))))
+			(ty-tag-name @3.23-3.27 (name "None")))))
 ~~~
 # TYPES
 ~~~clojure

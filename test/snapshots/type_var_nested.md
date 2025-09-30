@@ -266,11 +266,11 @@ main = |_| "done"
 						(ty-rigid-var @4.14-4.26 (name "e")))
 					(ty-parens @4.28-4.36
 						(ty-fn @4.29-4.35 (effectful false)
-							(ty-rigid-var @4.14-4.26 (name "a"))
+							(ty-rigid-var-lookup (ty-rigid-var @4.14-4.26 (name "a")))
 							(ty-rigid-var @4.34-4.35 (name "b"))))
 					(ty-apply @4.40-4.52 (name "Result") (local)
-						(ty-rigid-var @4.34-4.35 (name "b"))
-						(ty-rigid-var @4.14-4.26 (name "e")))))))
+						(ty-rigid-var-lookup (ty-rigid-var @4.34-4.35 (name "b")))
+						(ty-rigid-var-lookup (ty-rigid-var @4.14-4.26 (name "e"))))))))
 	(d-let
 		(p-assign @14.1-14.9 (ident "identity"))
 		(e-lambda @14.12-14.17
@@ -282,7 +282,7 @@ main = |_| "done"
 			(declared-type
 				(ty-fn @13.12-13.18 (effectful false)
 					(ty-rigid-var @13.12-13.13 (name "a"))
-					(ty-rigid-var @13.12-13.13 (name "a"))))))
+					(ty-rigid-var-lookup (ty-rigid-var @13.12-13.13 (name "a")))))))
 	(d-let
 		(p-assign @18.1-18.10 (ident "make_pair"))
 		(e-lambda @18.13-18.43
@@ -304,9 +304,9 @@ main = |_| "done"
 					(ty-rigid-var @17.16-17.17 (name "b"))
 					(ty-record @17.21-17.44
 						(field (field "first")
-							(ty-rigid-var @17.13-17.14 (name "a")))
+							(ty-rigid-var-lookup (ty-rigid-var @17.13-17.14 (name "a"))))
 						(field (field "second")
-							(ty-rigid-var @17.16-17.17 (name "b"))))))))
+							(ty-rigid-var-lookup (ty-rigid-var @17.16-17.17 (name "b")))))))))
 	(d-let
 		(p-assign @22.1-22.12 (ident "list_length"))
 		(e-lambda @22.15-22.24
@@ -338,7 +338,7 @@ main = |_| "done"
 					(ty-rigid-var @25.18-25.19 (name "a"))
 					(ty-apply @25.23-25.50 (name "Result") (local)
 						(ty-apply @25.23-25.50 (name "Result") (local)
-							(ty-rigid-var @25.18-25.19 (name "a"))
+							(ty-rigid-var-lookup (ty-rigid-var @25.18-25.19 (name "a")))
 							(ty-lookup @25.30-25.44 (name "Str") (builtin)))
 						(ty-lookup @25.23-25.50 (name "Str") (builtin)))))))
 	(d-let

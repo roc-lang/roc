@@ -177,13 +177,13 @@ MultiType(_, _, c) : c
 			(ty-args
 				(ty-underscore @7.9-7.10)
 				(ty-rigid-var @7.12-7.13 (name "b"))))
-		(ty-rigid-var @7.12-7.13 (name "b")))
+		(ty-rigid-var-lookup (ty-rigid-var @7.12-7.13 (name "b"))))
 	(s-alias-decl @10.1-10.18
 		(ty-header @10.1-10.14 (name "MyType3")
 			(ty-args
 				(ty-rigid-var @10.9-10.10 (name "a"))
 				(ty-underscore @10.12-10.13)))
-		(ty-rigid-var @10.9-10.10 (name "a")))
+		(ty-rigid-var-lookup (ty-rigid-var @10.9-10.10 (name "a"))))
 	(s-alias-decl @13.1-13.33
 		(ty-header @13.1-13.18 (name "ComplexType")
 			(ty-args
@@ -191,14 +191,14 @@ MultiType(_, _, c) : c
 				(ty-rigid-var @13.16-13.17 (name "b"))))
 		(ty-record @13.21-13.33
 			(field (field "field")
-				(ty-rigid-var @13.16-13.17 (name "b")))))
+				(ty-rigid-var-lookup (ty-rigid-var @13.16-13.17 (name "b"))))))
 	(s-alias-decl @16.1-16.23
 		(ty-header @16.1-16.19 (name "MultiType")
 			(ty-args
 				(ty-underscore @16.11-16.12)
 				(ty-underscore @16.14-16.15)
 				(ty-rigid-var @16.17-16.18 (name "c"))))
-		(ty-rigid-var @16.17-16.18 (name "c"))))
+		(ty-rigid-var-lookup (ty-rigid-var @16.17-16.18 (name "c")))))
 ~~~
 # TYPES
 ~~~clojure

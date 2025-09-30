@@ -55,5 +55,5 @@ EndOfFile(5:1-5:1),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-4.2 (type "{ answer: Num(_size), launchTheNukes!: _arg -> _ret }"))
+(expr @1.1-4.2 (type "{ answer: Num(_size), launchTheNukes!: {} -> _ret }"))
 ~~~

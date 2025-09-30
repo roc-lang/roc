@@ -62,8 +62,8 @@ NO CHANGE
 	(s-nominal-decl @3.1-3.23
 		(ty-header @3.1-3.7 (name "MyType"))
 		(ty-tag-union @3.11-3.23
-			(tag_name @3.12-3.16 (name "TagA"))
-			(tag_name @3.18-3.22 (name "TagB")))))
+			(ty-tag-name @3.12-3.16 (name "TagA"))
+			(ty-tag-name @3.18-3.22 (name "TagB")))))
 ~~~
 # TYPES
 ~~~clojure

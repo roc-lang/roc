@@ -21,9 +21,6 @@ const Content = types.Content;
 fn getIntValue(module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) !i128 {
     const expr = module_env.store.getExpr(expr_idx);
     switch (expr) {
-        .e_int => |int_expr| {
-            return @bitCast(int_expr.value.bytes);
-        },
         .e_num => |int_expr| {
             return @bitCast(int_expr.value.bytes);
         },
@@ -494,10 +491,10 @@ test "hexadecimal integer literals" {
         };
 
         const expr = env.store.getExpr(canonical_expr_idx.get_idx());
-        try std.testing.expect(expr == .e_int);
+        try std.testing.expect(expr == .e_num);
 
         // Check the value
-        try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.e_int.value.bytes)));
+        try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.e_num.value.bytes)));
     }
 }
 
@@ -553,10 +550,10 @@ test "binary integer literals" {
         };
 
         const expr = env.store.getExpr(canonical_expr_idx.get_idx());
-        try std.testing.expect(expr == .e_int);
+        try std.testing.expect(expr == .e_num);
 
         // Check the value
-        try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.e_int.value.bytes)));
+        try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.e_num.value.bytes)));
     }
 }
 
@@ -612,10 +609,10 @@ test "octal integer literals" {
         };
 
         const expr = env.store.getExpr(canonical_expr_idx.get_idx());
-        try std.testing.expect(expr == .e_int);
+        try std.testing.expect(expr == .e_num);
 
         // Check the value
-        try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.e_int.value.bytes)));
+        try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.e_num.value.bytes)));
     }
 }
 
@@ -671,10 +668,10 @@ test "integer literals with uppercase base prefixes" {
         };
 
         const expr = env.store.getExpr(canonical_expr_idx.get_idx());
-        try std.testing.expect(expr == .e_int);
+        try std.testing.expect(expr == .e_num);
 
         // Check the value
-        try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.e_int.value.bytes)));
+        try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.e_num.value.bytes)));
     }
 }
 
@@ -692,8 +689,9 @@ test "numeric literal patterns use pattern idx as type var" {
 
         // Create an int literal pattern directly
         const int_pattern = CIR.Pattern{
-            .int_literal = .{
+            .num_literal = .{
                 .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
+                .kind = .num_unbound,
             },
         };
 
@@ -701,8 +699,8 @@ test "numeric literal patterns use pattern idx as type var" {
 
         // Verify the stored pattern
         const stored_pattern = env.store.getPattern(pattern_idx);
-        try std.testing.expect(stored_pattern == .int_literal);
-        try std.testing.expectEqual(@as(i128, 42), @as(i128, @bitCast(stored_pattern.int_literal.value.bytes)));
+        try std.testing.expect(stored_pattern == .num_literal);
+        try std.testing.expectEqual(@as(i128, 42), @as(i128, @bitCast(stored_pattern.num_literal.value.bytes)));
     }
 
     // Test that f64 literal patterns work
@@ -716,6 +714,7 @@ test "numeric literal patterns use pattern idx as type var" {
         const dec_pattern = CIR.Pattern{
             .dec_literal = .{
                 .value = RocDec.fromF64(3.14) orelse unreachable,
+                .has_suffix = false,
             },
         };
 
@@ -743,23 +742,25 @@ test "pattern numeric literal value edge cases" {
 
         // Test i128 max
         const max_pattern = CIR.Pattern{
-            .int_literal = .{
+            .num_literal = .{
                 .value = .{ .bytes = @bitCast(@as(i128, std.math.maxInt(i128))), .kind = .i128 },
+                .kind = .num_unbound,
             },
         };
         const max_idx = try env.store.addPattern(max_pattern, base.Region.zero());
         const stored_max = env.store.getPattern(max_idx);
-        try std.testing.expectEqual(std.math.maxInt(i128), @as(i128, @bitCast(stored_max.int_literal.value.bytes)));
+        try std.testing.expectEqual(std.math.maxInt(i128), @as(i128, @bitCast(stored_max.num_literal.value.bytes)));
 
         // Test i128 min
         const min_pattern = CIR.Pattern{
-            .int_literal = .{
+            .num_literal = .{
                 .value = .{ .bytes = @bitCast(@as(i128, std.math.minInt(i128))), .kind = .i128 },
+                .kind = .num_unbound,
             },
         };
         const min_idx = try env.store.addPattern(min_pattern, base.Region.zero());
         const stored_min = env.store.getPattern(min_idx);
-        try std.testing.expectEqual(std.math.minInt(i128), @as(i128, @bitCast(stored_min.int_literal.value.bytes)));
+        try std.testing.expectEqual(std.math.minInt(i128), @as(i128, @bitCast(stored_min.num_literal.value.bytes)));
     }
 
     // Test small decimal pattern
@@ -771,9 +772,11 @@ test "pattern numeric literal value edge cases" {
 
         const small_dec_pattern = CIR.Pattern{
             .small_dec_literal = .{
-                .numerator = 1234,
-                .denominator_power_of_ten = 2, // 12.34
-
+                .value = .{
+                    .numerator = 1234,
+                    .denominator_power_of_ten = 2, // 12.34
+                },
+                .has_suffix = false,
             },
         };
 
@@ -781,8 +784,8 @@ test "pattern numeric literal value edge cases" {
         const stored = env.store.getPattern(pattern_idx);
 
         try std.testing.expect(stored == .small_dec_literal);
-        try std.testing.expectEqual(@as(i16, 1234), stored.small_dec_literal.numerator);
-        try std.testing.expectEqual(@as(u8, 2), stored.small_dec_literal.denominator_power_of_ten);
+        try std.testing.expectEqual(@as(i16, 1234), stored.small_dec_literal.value.numerator);
+        try std.testing.expectEqual(@as(u8, 2), stored.small_dec_literal.value.denominator_power_of_ten);
     }
 
     // Test dec literal pattern
@@ -795,7 +798,7 @@ test "pattern numeric literal value edge cases" {
         const dec_pattern = CIR.Pattern{
             .dec_literal = .{
                 .value = RocDec{ .num = 314159265358979323 }, // π * 10^17
-
+                .has_suffix = false,
             },
         };
 
@@ -817,6 +820,7 @@ test "pattern numeric literal value edge cases" {
         const neg_zero_pattern = CIR.Pattern{
             .dec_literal = .{
                 .value = RocDec.fromF64(-0.0) orelse unreachable,
+                .has_suffix = false,
             },
         };
         const neg_zero_idx = try env.store.addPattern(neg_zero_pattern, base.Region.zero());
@@ -1011,5 +1015,332 @@ test "hex literal parsing logic integration" {
         }
 
         try std.testing.expectEqual(tc.expected_value, u128_val);
+    }
+}
+
+// number req tests //
+// TODO: Review, claude generated
+
+test "IntValue.toIntRequirements - boundary values for each type" {
+    // u8 boundary: 255/256
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .u64 };
+        const test_val: u64 = 255;
+        @memcpy(val.bytes[0..8], std.mem.asBytes(&test_val));
+        const req = val.toIntRequirements();
+        try testing.expect(!req.sign_needed);
+        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"8");
+    }
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .u64 };
+        const test_val: u64 = 256;
+        @memcpy(val.bytes[0..8], std.mem.asBytes(&test_val));
+        const req = val.toIntRequirements();
+        try testing.expect(!req.sign_needed);
+        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"9_to_15");
+    }
+
+    // i8 positive boundary: 127/128
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i64 };
+        const test_val: i64 = 127;
+        @memcpy(val.bytes[0..8], std.mem.asBytes(&test_val));
+        const req = val.toIntRequirements();
+        try testing.expect(!req.sign_needed); // Positive doesn't need sign
+        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"7");
+    }
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i64 };
+        const test_val: i64 = 128;
+        @memcpy(val.bytes[0..8], std.mem.asBytes(&test_val));
+        const req = val.toIntRequirements();
+        try testing.expect(!req.sign_needed); // Positive doesn't need sign
+        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"8");
+    }
+
+    // i8 negative boundary: -127/-128/-129
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i64 };
+        const test_val: i64 = -127;
+        @memcpy(val.bytes[0..8], std.mem.asBytes(&test_val));
+        const req = val.toIntRequirements();
+        try testing.expect(req.sign_needed);
+        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"7");
+    }
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i64 };
+        const test_val: i64 = -128; // Special case!
+        @memcpy(val.bytes[0..8], std.mem.asBytes(&test_val));
+        const req = val.toIntRequirements();
+        try testing.expect(req.sign_needed);
+        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"7"); // Due to special case
+    }
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i64 };
+        const test_val: i64 = -129;
+        @memcpy(val.bytes[0..8], std.mem.asBytes(&test_val));
+        const req = val.toIntRequirements();
+        try testing.expect(req.sign_needed);
+        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"8");
+    }
+
+    // u16 boundary: 65535/65536
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .u64 };
+        const test_val: u64 = 65535;
+        @memcpy(val.bytes[0..8], std.mem.asBytes(&test_val));
+        const req = val.toIntRequirements();
+        try testing.expect(!req.sign_needed);
+        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"16");
+    }
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .u64 };
+        const test_val: u64 = 65536;
+        @memcpy(val.bytes[0..8], std.mem.asBytes(&test_val));
+        const req = val.toIntRequirements();
+        try testing.expect(!req.sign_needed);
+        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"17_to_31");
+    }
+
+    // i16 boundaries: 32767/-32768/-32769
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i64 };
+        const test_val: i64 = 32767;
+        @memcpy(val.bytes[0..8], std.mem.asBytes(&test_val));
+        const req = val.toIntRequirements();
+        try testing.expect(!req.sign_needed);
+        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"9_to_15");
+    }
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i64 };
+        const test_val: i64 = -32768; // Special case!
+        @memcpy(val.bytes[0..8], std.mem.asBytes(&test_val));
+        const req = val.toIntRequirements();
+        try testing.expect(req.sign_needed);
+        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"9_to_15"); // Due to special case
+    }
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i64 };
+        const test_val: i64 = -32769;
+        @memcpy(val.bytes[0..8], std.mem.asBytes(&test_val));
+        const req = val.toIntRequirements();
+        try testing.expect(req.sign_needed);
+        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"16");
+    }
+}
+
+test "IntValue.toIntRequirements - zero and small values" {
+    // Zero (special case: doesn't need sign even if stored as signed)
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i64 };
+        const req = val.toIntRequirements();
+        try testing.expect(!req.sign_needed); // Zero doesn't need sign
+        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"7");
+    }
+
+    // 1 and -1
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i64 };
+        const test_val: i64 = 1;
+        @memcpy(val.bytes[0..8], std.mem.asBytes(&test_val));
+        const req = val.toIntRequirements();
+        try testing.expect(!req.sign_needed);
+        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"7");
+    }
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i64 };
+        const test_val: i64 = -1;
+        @memcpy(val.bytes[0..8], std.mem.asBytes(&test_val));
+        const req = val.toIntRequirements();
+        try testing.expect(req.sign_needed);
+        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"7");
+    }
+}
+
+test "IntValue.toIntRequirements - powers of 2 edge cases" {
+    // Powers of 2 that are NOT minimum signed values
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i64 };
+        const test_val: i64 = -256; // Power of 2, but not a minimum signed value
+        @memcpy(val.bytes[0..8], std.mem.asBytes(&test_val));
+        const req = val.toIntRequirements();
+        try testing.expect(req.sign_needed);
+        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"9_to_15"); // Should NOT be special cased
+    }
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i64 };
+        const test_val: i64 = -512; // Power of 2, but not a minimum signed value
+        @memcpy(val.bytes[0..8], std.mem.asBytes(&test_val));
+        const req = val.toIntRequirements();
+        try testing.expect(req.sign_needed);
+        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"9_to_15"); // Should NOT be special cased
+    }
+}
+
+test "IntValue.toIntRequirements - i32 boundaries" {
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i64 };
+        const test_val: i64 = 2147483647; // i32 max
+        @memcpy(val.bytes[0..8], std.mem.asBytes(&test_val));
+        const req = val.toIntRequirements();
+        try testing.expect(!req.sign_needed);
+        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"17_to_31");
+    }
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i64 };
+        const test_val: i64 = -2147483648; // i32 min (special case!)
+        @memcpy(val.bytes[0..8], std.mem.asBytes(&test_val));
+        const req = val.toIntRequirements();
+        try testing.expect(req.sign_needed);
+        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"17_to_31"); // Due to special case
+    }
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i64 };
+        const test_val: i64 = -2147483649;
+        @memcpy(val.bytes[0..8], std.mem.asBytes(&test_val));
+        const req = val.toIntRequirements();
+        try testing.expect(req.sign_needed);
+        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"32");
+    }
+}
+
+test "IntValue.toIntRequirements - i64 boundaries" {
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i64 };
+        const test_val: i64 = std.math.maxInt(i64); // 9223372036854775807
+        @memcpy(val.bytes[0..8], std.mem.asBytes(&test_val));
+        const req = val.toIntRequirements();
+        try testing.expect(!req.sign_needed);
+        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"33_to_63");
+    }
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i64 };
+        const test_val: i64 = std.math.minInt(i64); // -9223372036854775808 (special case!)
+        @memcpy(val.bytes[0..8], std.mem.asBytes(&test_val));
+        const req = val.toIntRequirements();
+        try testing.expect(req.sign_needed);
+        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"33_to_63"); // Due to special case
+    }
+}
+
+test "IntValue.toIntRequirements - u128 max" {
+    var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .u128 };
+    const test_val: u128 = std.math.maxInt(u128);
+    @memcpy(val.bytes[0..16], std.mem.asBytes(&test_val));
+    const req = val.toIntRequirements();
+    try testing.expect(!req.sign_needed);
+    try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"128");
+}
+
+test "IntValue.toFracRequirements - f32 precision boundaries" {
+    // 2^24 - 1 (largest consecutive integer in f32)
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .u64 };
+        const test_val: u64 = 16777215;
+        @memcpy(val.bytes[0..8], std.mem.asBytes(&test_val));
+        const req = val.toFracRequirements();
+        try testing.expect(req.fits_in_f32);
+    }
+
+    // 2^24 (still representable exactly)
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .u64 };
+        const test_val: u64 = 16777216;
+        @memcpy(val.bytes[0..8], std.mem.asBytes(&test_val));
+        const req = val.toFracRequirements();
+        try testing.expect(req.fits_in_f32);
+    }
+
+    // 2^24 + 1 (first integer that can't be exactly represented)
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .u64 };
+        const test_val: u64 = 16777217;
+        @memcpy(val.bytes[0..8], std.mem.asBytes(&test_val));
+        const req = val.toFracRequirements();
+        try testing.expect(!req.fits_in_f32); // Cannot be exactly represented
+    }
+}
+
+test "IntValue.toFracRequirements - Dec boundaries" {
+    // Value near Dec's positive limit (~1.7e20)
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i128 };
+        const test_val: i128 = 170141183460469231731; // Just under Dec's limit
+        @memcpy(val.bytes[0..16], std.mem.asBytes(&test_val));
+        const req = val.toFracRequirements();
+        try testing.expect(req.fits_in_dec);
+    }
+
+    // Value exceeding Dec's positive limit
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i128 };
+        const test_val: i128 = std.math.maxInt(i128); // Way over Dec's limit
+        @memcpy(val.bytes[0..16], std.mem.asBytes(&test_val));
+        const req = val.toFracRequirements();
+        try testing.expect(!req.fits_in_dec);
+    }
+
+    // Value near Dec's negative limit
+    {
+        var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i128 };
+        const test_val: i128 = -170141183460469231731; // Just within Dec's limit
+        @memcpy(val.bytes[0..16], std.mem.asBytes(&test_val));
+        const req = val.toFracRequirements();
+        try testing.expect(req.fits_in_dec);
+    }
+}
+
+test "SmallDecValue edge cases" {
+    // Maximum denominator power (produces very small but non-zero value)
+    {
+        const val = CIR.SmallDecValue{ .numerator = 1, .denominator_power_of_ten = 255 };
+        const f64_val = val.toF64();
+        // This doesn't underflow to 0 - f64 can represent very small values
+        try testing.expect(f64_val > 0.0);
+        try testing.expect(f64_val < 1e-250); // Very small
+        const req = val.toFracRequirements();
+        // Very small values don't fit in f32 (would underflow)
+        try testing.expect(!req.fits_in_f32); // Too small for f32
+        try testing.expect(req.fits_in_dec); // But fits in Dec (as 0 or very small)
+    }
+
+    // Large numerator with large denominator (should produce normal value)
+    {
+        const val = CIR.SmallDecValue{ .numerator = 32767, .denominator_power_of_ten = 4 };
+        const f64_val = val.toF64();
+        try testing.expectApproxEqAbs(@as(f64, 3.2767), f64_val, 0.0001);
+        const req = val.toFracRequirements();
+        try testing.expect(req.fits_in_f32);
+        try testing.expect(req.fits_in_dec);
+    }
+
+    // Negative max numerator
+    {
+        const val = CIR.SmallDecValue{ .numerator = -32768, .denominator_power_of_ten = 4 };
+        const f64_val = val.toF64();
+        try testing.expectApproxEqAbs(@as(f64, -3.2768), f64_val, 0.0001);
+        const req = val.toFracRequirements();
+        try testing.expect(req.fits_in_f32);
+        try testing.expect(req.fits_in_dec);
+    }
+
+    // Value that would be subnormal in f32 (but still representable)
+    {
+        const val = CIR.SmallDecValue{ .numerator = 1, .denominator_power_of_ten = 40 };
+        const f64_val = val.toF64();
+        try testing.expectEqual(@as(f64, 1e-40), f64_val);
+        const req = val.toFracRequirements();
+        try testing.expect(req.fits_in_f32); // CAN be represented as subnormal in f32
+        try testing.expect(req.fits_in_dec);
+    }
+
+    // Value that's too small even for f32 subnormals
+    {
+        const val = CIR.SmallDecValue{ .numerator = 1, .denominator_power_of_ten = 46 };
+        const f64_val = val.toF64();
+        try testing.expectEqual(@as(f64, 1e-46), f64_val);
+        const req = val.toFracRequirements();
+        try testing.expect(!req.fits_in_f32); // Below f32's true minimum (~1.4e-45)
+        try testing.expect(req.fits_in_dec);
     }
 }
