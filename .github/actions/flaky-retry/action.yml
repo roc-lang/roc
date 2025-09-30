@@ -44,16 +44,16 @@ runs:
           fi
 
           # Check if error matches retry condition
-          if ! grep -q "${{ inputs.error_string_contains }}" "$output_file"; then
+          if grep -q "${{ inputs.error_string_contains }}" "$output_file"; then
+            echo "Command failed with exit code $exit_code and error output contains '${{ inputs.error_string_contains }}'"
+            echo "Retrying..."
+            attempt=$((attempt + 1))
+            sleep 2
+          else
             echo "Command failed with exit code $exit_code but error output does not contain '${{ inputs.error_string_contains }}'"
             echo "Not retrying"
             exit $exit_code
           fi
-
-          echo "Command failed with exit code $exit_code and error output contains '${{ inputs.error_string_contains }}'"
-          echo "Retrying..."
-          attempt=$((attempt + 1))
-          sleep 2
         done
 
     - name: Run command with retry logic (Windows)
@@ -84,14 +84,14 @@ runs:
           }
 
           # Check if error matches retry condition
-          if ($output -notlike "*${{ inputs.error_string_contains }}*") {
+          if ($output -like "*${{ inputs.error_string_contains }}*") {
+            Write-Host "Command failed with exit code $exitCode and error output contains '${{ inputs.error_string_contains }}'"
+            Write-Host "Retrying..."
+            $attempt++
+            Start-Sleep -Seconds 2
+          } else {
             Write-Host "Command failed with exit code $exitCode but error output does not contain '${{ inputs.error_string_contains }}'"
             Write-Host "Not retrying"
             exit $exitCode
           }
-
-          Write-Host "Command failed with exit code $exitCode and error output contains '${{ inputs.error_string_contains }}'"
-          Write-Host "Retrying..."
-          $attempt++
-          Start-Sleep -Seconds 2
         }
