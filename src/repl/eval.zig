@@ -28,7 +28,7 @@ pub const Repl = struct {
     /// Shared crash context managed by the host (optional)
     crash_ctx: ?*CrashContext,
     /// Optional trace writer for debugging evaluation
-    trace_writer: ?std.io.AnyWriter,
+    //trace_writer: ?std.io.AnyWriter,
     /// ModuleEnv from last successful evaluation (for snapshot generation)
     last_module_env: ?*ModuleEnv,
     /// Debug flag to store rendered HTML for snapshot generation
@@ -44,7 +44,7 @@ pub const Repl = struct {
             .definitions = std.StringHashMap([]const u8).init(allocator),
             .roc_ops = roc_ops,
             .crash_ctx = crash_ctx,
-            .trace_writer = null,
+            //.trace_writer = null,
             .last_module_env = null,
             .debug_store_snapshots = false,
             .debug_can_html = std.array_list.Managed([]const u8).init(allocator),
@@ -52,9 +52,9 @@ pub const Repl = struct {
         };
     }
 
-    pub fn setTraceWriter(self: *Repl, trace_writer: std.io.AnyWriter) void {
-        self.trace_writer = trace_writer;
-    }
+    // pub fn setTraceWriter(self: *Repl, trace_writer: std.io.AnyWriter) void {
+    //     self.trace_writer = trace_writer;
+    // }
 
     /// Enable debug mode to store snapshot HTML for each REPL step
     pub fn enableDebugSnapshots(self: *Repl) void {

@@ -2556,9 +2556,9 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     repl_instance.enableDebugSnapshots();
 
     // Enable tracing if requested
-    if (config.trace_eval) {
-        repl_instance.setTraceWriter(stderrWriter());
-    }
+    // if (config.trace_eval) {
+    //     repl_instance.setTraceWriter(stderrWriter());
+    // }
 
     // Process each input and generate output
     var actual_outputs = std.array_list.Managed([]const u8).init(output.gpa);

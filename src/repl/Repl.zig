@@ -55,7 +55,7 @@ roc_ops: *RocOps,
 /// Shared crash context provided by the host (optional)
 crash_ctx: ?*CrashContext,
 /// Optional trace writer for debugging evaluation
-trace_writer: ?std.io.AnyWriter,
+//trace_writer: ?std.io.AnyWriter,
 
 pub fn init(allocator: Allocator, roc_ops: *RocOps, crash_ctx: ?*CrashContext) !Repl {
     return Repl{
@@ -63,14 +63,14 @@ pub fn init(allocator: Allocator, roc_ops: *RocOps, crash_ctx: ?*CrashContext) !
         .past_defs = std.array_list.Managed(PastDef).init(allocator),
         .roc_ops = roc_ops,
         .crash_ctx = crash_ctx,
-        .trace_writer = null,
+        //.trace_writer = null,
     };
 }
 
 /// Set a trace writer for debugging REPL evaluation
-pub fn setTraceWriter(self: *Repl, trace_writer: std.io.AnyWriter) void {
-    self.trace_writer = trace_writer;
-}
+// pub fn setTraceWriter(self: *Repl, trace_writer: std.io.AnyWriter) void {
+//     self.trace_writer = trace_writer;
+// }
 
 pub fn deinit(self: *Repl) void {
     for (self.past_defs.items) |*def| {
@@ -311,18 +311,18 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8) ![]const u8 {
     defer interpreter.deinit();
 
     // Evaluate the expression
-    if (self.trace_writer) |trace_writer| {
-        interpreter.startTrace(trace_writer);
-    }
+    // if (self.trace_writer) |trace_writer| {
+    //     interpreter.startTrace();
+    // }
 
     if (self.crash_ctx) |ctx| {
         ctx.reset();
     }
 
     const result = interpreter.evalMinimal(canonical_expr_idx.get_idx(), self.roc_ops) catch |err| {
-        if (self.trace_writer) |_| {
-            interpreter.endTrace();
-        }
+        // if (self.trace_writer) |_| {
+        //     interpreter.endTrace();
+        // }
         if (err == error.Crash) {
             if (self.crash_ctx) |ctx| {
                 if (ctx.crashMessage()) |msg| {
@@ -336,9 +336,9 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8) ![]const u8 {
 
     defer result.decref(&interpreter.runtime_layout_store, self.roc_ops);
 
-    if (self.trace_writer) |_| {
-        interpreter.endTrace();
-    }
+    // if (self.trace_writer) |_| {
+    //     interpreter.endTrace();
+    // }
 
     const expr_ct_var = can.ModuleEnv.varFrom(canonical_expr_idx.get_idx());
     const output = blk: {

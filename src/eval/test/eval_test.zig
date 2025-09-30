@@ -422,7 +422,7 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
 
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
-        interpreter.startTrace(std.io.getStdErr().writer().any());
+        interpreter.startTrace();
     }
     defer if (enable_trace) interpreter.endTrace();
 

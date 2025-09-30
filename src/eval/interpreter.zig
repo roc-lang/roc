@@ -148,9 +148,8 @@ pub const Interpreter = struct {
         return try self.evalExprMinimal(expr_idx, roc_ops, null);
     }
 
-    pub fn startTrace(self: *Interpreter, writer: std.io.AnyWriter) void {
+    pub fn startTrace(self: *Interpreter) void {
         _ = self;
-        _ = writer;
     }
 
     pub fn endTrace(self: *Interpreter) void {

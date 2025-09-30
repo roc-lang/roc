@@ -47,7 +47,7 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: e
 
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
-        interpreter.startTrace(std.io.getStdErr().writer().any());
+        interpreter.startTrace();
     }
     defer if (enable_trace) interpreter.endTrace();
 
@@ -74,7 +74,7 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
 
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
-        interpreter.startTrace(std.io.getStdErr().writer().any());
+        interpreter.startTrace();
     }
     defer if (enable_trace) interpreter.endTrace();
 
@@ -99,7 +99,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
 
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
-        interpreter.startTrace(std.io.getStdErr().writer().any());
+        interpreter.startTrace();
     }
     defer if (enable_trace) interpreter.endTrace();
 
@@ -133,7 +133,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
 
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
-        interpreter.startTrace(std.io.getStdErr().writer().any());
+        interpreter.startTrace();
     }
     defer if (enable_trace) interpreter.endTrace();
 
@@ -181,7 +181,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
 
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
-        interpreter.startTrace(std.io.getStdErr().writer().any());
+        interpreter.startTrace();
     }
     defer if (enable_trace) interpreter.endTrace();
 
@@ -224,7 +224,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
 
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
-        interpreter.startTrace(std.io.getStdErr().writer().any());
+        interpreter.startTrace();
     }
     defer if (enable_trace) interpreter.endTrace();
 
