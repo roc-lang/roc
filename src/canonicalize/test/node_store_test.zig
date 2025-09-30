@@ -731,6 +731,27 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
+    try diagnostics.append(CIR.Diagnostic{
+        .cannot_import_default_app = .{
+            .module_name = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .execution_requires_app_or_default_app = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .type_name_case_mismatch = .{
+            .module_name = rand_ident_idx(),
+            .type_name = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
     // Test the round-trip for all diagnostics
     for (diagnostics.items) |diagnostic| {
         const idx = try store.addDiagnostic(diagnostic);

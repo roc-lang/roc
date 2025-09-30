@@ -57,6 +57,18 @@ const TypeVarProblem = struct {
     ast_anno: AST.TypeAnno.Idx,
 };
 
+/// Context for module validation - determines what kinds of modules are valid
+pub const ValidationContext = enum {
+    /// roc check - infer whether type module or default-app, allow both
+    checking,
+    /// roc foo.roc or roc build - require app or default-app only
+    executing,
+    /// File is being imported - require proper type module only
+    importing,
+    /// REPL - no module validation needed (evaluating expressions, not files)
+    repl,
+};
+
 env: *ModuleEnv,
 parse_ir: *AST,
 scopes: std.ArrayListUnmanaged(Scope) = .{},
@@ -80,6 +92,8 @@ used_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 module_envs: ?*const std.StringHashMap(*ModuleEnv),
 /// Map from module name string to Import.Idx for tracking unique imports
 import_indices: std.StringHashMapUnmanaged(Import.Idx),
+/// Context for validation - determines what module types are valid
+validation_context: ValidationContext,
 /// Scratch type variables
 scratch_vars: base.Scratch(TypeVar),
 /// Scratch ident
@@ -190,7 +204,12 @@ pub fn deinit(
     self.scratch_free_vars.deinit(gpa);
 }
 
-pub fn init(env: *ModuleEnv, parse_ir: *AST, module_envs: ?*const std.StringHashMap(*ModuleEnv)) std.mem.Allocator.Error!Self {
+pub fn init(
+    env: *ModuleEnv,
+    parse_ir: *AST,
+    module_envs: ?*const std.StringHashMap(*ModuleEnv),
+    validation_context: ValidationContext,
+) std.mem.Allocator.Error!Self {
     const gpa = env.gpa;
 
     // Create the canonicalizer with scopes
@@ -204,6 +223,7 @@ pub fn init(env: *ModuleEnv, parse_ir: *AST, module_envs: ?*const std.StringHash
         .used_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .module_envs = module_envs,
         .import_indices = std.StringHashMapUnmanaged(Import.Idx){},
+        .validation_context = validation_context,
         .scratch_vars = try base.Scratch(TypeVar).init(gpa),
         .scratch_idents = try base.Scratch(Ident.Idx).init(gpa),
         .scratch_type_var_validation = try base.Scratch(Ident.Idx).init(gpa),
@@ -713,16 +733,65 @@ pub fn canonicalizeFile(
     }
 
     // After processing all type declarations, handle type module validation
+    // Validation rules depend on the context (checking, executing, or importing)
     if (header == .type_module) {
-        // First check if there's a main! function (for default_app modules)
-        if (self.findMainFunction()) |main_info| {
-            // This is a default_app module - main! was found with correct arity
-            // For now, we just mark it as valid; conversion to default_app happens conceptually
-            // The actual execution layer will check for either app or type_module with main!
-            _ = main_info; // We found it, that's enough for now
-        } else {
-            // No main! found, so validate as a regular type module
-            try self.validateTypeModuleName();
+        switch (self.validation_context) {
+            .checking => {
+                // INFER mode - smart error messages, accept both type modules and default-app
+                const main_result = self.findMainFunction();
+                const has_matching_type_decl = self.hasMatchingType();
+
+                if (main_result == .valid) {
+                    // Valid default-app module
+                    _ = main_result.valid; // Suppress unused warning
+                } else if (main_result == .wrong_arity) {
+                    // Report wrong arity error for default-app
+                    try self.env.pushDiagnostic(.{
+                        .default_app_wrong_arity = .{
+                            .arity = main_result.wrong_arity.arity,
+                            .region = main_result.wrong_arity.region,
+                        },
+                    });
+                } else if (has_matching_type_decl) {
+                    // Valid type module
+                } else {
+                    // Neither valid - use heuristics for helpful error
+                    try self.reportTypeModuleOrDefaultAppError();
+                }
+            },
+            .executing => {
+                // EXECUTION mode - require default-app (app header checked elsewhere)
+                const main_result = self.findMainFunction();
+                if (main_result == .valid) {
+                    // Valid default-app
+                    _ = main_result.valid; // Suppress unused warning
+                } else if (main_result == .wrong_arity) {
+                    // Report wrong arity
+                    try self.env.pushDiagnostic(.{
+                        .default_app_wrong_arity = .{
+                            .arity = main_result.wrong_arity.arity,
+                            .region = main_result.wrong_arity.region,
+                        },
+                    });
+                } else {
+                    // No main! - error, can't execute type module
+                    try self.reportExecutionRequiresAppOrDefaultApp();
+                }
+            },
+            .importing => {
+                // IMPORT mode - require type module ONLY, no default-app
+                const main_result = self.findMainFunction();
+                if (main_result != .not_found) {
+                    // Has main! - can't import default-app
+                    try self.reportCannotImportDefaultApp(main_result);
+                } else {
+                    // Validate as type module
+                    try self.validateTypeModuleName();
+                }
+            },
+            .repl => {
+                // REPL mode - no module validation needed, just evaluating expressions
+            },
         }
     }
 
@@ -7250,11 +7319,14 @@ fn createUnknownIdent(self: *Self) std.mem.Allocator.Error!Ident.Idx {
     return try self.env.insertIdent(base.Ident.for_text("unknown"));
 }
 
-/// Validate that a type module has a type declaration matching the module name.
-/// For example, if the module is named "Foo", there must be a `Foo := ...` or `Foo : ...` at the top level.
 /// Check if this module has a main! function suitable for default_app
-/// Returns the def index if found and valid, null otherwise
-fn findMainFunction(self: *Self) ?struct { def_idx: CIR.Def.Idx, region: Region } {
+const MainFunctionResult = union(enum) {
+    valid: struct { def_idx: CIR.Def.Idx, region: Region },
+    wrong_arity: struct { arity: u32, region: Region },
+    not_found,
+};
+
+fn findMainFunction(self: *Self) MainFunctionResult {
     const file = self.parse_ir.store.getFile();
 
     // Look through all statements for a definition of main!
@@ -7276,10 +7348,13 @@ fn findMainFunction(self: *Self) ?struct { def_idx: CIR.Def.Idx, region: Region 
                         const lambda = expr.lambda;
                         const params = self.parse_ir.store.patternSlice(lambda.args);
 
+                        const region = self.parse_ir.tokenizedRegionToRegion(decl.region);
                         if (params.len == 1) {
                             // Valid main! function found
-                            const region = self.parse_ir.tokenizedRegionToRegion(decl.region);
-                            return .{ .def_idx = @enumFromInt(0), .region = region }; // TODO: get actual CIR def idx
+                            return .{ .valid = .{ .def_idx = @enumFromInt(0), .region = region } }; // TODO: get actual CIR def idx
+                        } else {
+                            // main! found but with wrong arity
+                            return .{ .wrong_arity = .{ .arity = @intCast(params.len), .region = region } };
                         }
                     }
                 }
@@ -7287,16 +7362,13 @@ fn findMainFunction(self: *Self) ?struct { def_idx: CIR.Def.Idx, region: Region 
         }
     }
 
-    return null;
+    return .not_found;
 }
 
-fn validateTypeModuleName(self: *Self) std.mem.Allocator.Error!void {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
+/// Check if there's a type declaration matching the module name
+fn hasMatchingType(self: *Self) bool {
     const file = self.parse_ir.store.getFile();
     const module_name_text = self.env.module_name;
-    const module_name_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
 
     // Look through all statements for a type declaration matching the module name
     for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
@@ -7309,13 +7381,148 @@ fn validateTypeModuleName(self: *Self) std.mem.Allocator.Error!void {
             const type_name_text = self.env.getIdent(type_name_ident);
 
             if (std.mem.eql(u8, type_name_text, module_name_text)) {
-                // Found a matching type declaration!
-                return;
+                return true;
             }
         }
     }
 
+    return false;
+}
+
+/// Check if any type declarations exist in the file
+fn hasAnyTypeDeclarations(self: *Self) bool {
+    const file = self.parse_ir.store.getFile();
+
+    for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
+        const stmt = self.parse_ir.store.getStatement(stmt_id);
+        if (stmt == .type_decl) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/// Check if there's a type with a case-insensitive match to the module name
+fn hasCaseInsensitiveMatch(self: *Self) bool {
+    const file = self.parse_ir.store.getFile();
+    const module_name_text = self.env.module_name;
+
+    for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
+        const stmt = self.parse_ir.store.getStatement(stmt_id);
+        if (stmt == .type_decl) {
+            const type_decl = stmt.type_decl;
+            const header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
+            const type_name_ident = self.parse_ir.tokens.resolveIdentifier(header.name) orelse continue;
+            const type_name_text = self.env.getIdent(type_name_ident);
+
+            // Check for case-insensitive match (but not exact match, since that's checked elsewhere)
+            if (!std.mem.eql(u8, type_name_text, module_name_text) and
+                std.ascii.eqlIgnoreCase(type_name_text, module_name_text))
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+/// Report smart error when neither type module nor default-app is valid (checking mode)
+fn reportTypeModuleOrDefaultAppError(self: *Self) std.mem.Allocator.Error!void {
+    const file = self.parse_ir.store.getFile();
+    const module_name_text = self.env.module_name;
+    const module_name_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
+    const file_region = self.parse_ir.tokenizedRegionToRegion(file.region);
+
+    // Check for case mismatch
+    if (self.hasCaseInsensitiveMatch()) {
+        // Find the mismatched type name
+        for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
+            const stmt = self.parse_ir.store.getStatement(stmt_id);
+            if (stmt == .type_decl) {
+                const type_decl = stmt.type_decl;
+                const header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
+                const type_name_ident = self.parse_ir.tokens.resolveIdentifier(header.name) orelse continue;
+                const type_name_text = self.env.getIdent(type_name_ident);
+
+                if (std.ascii.eqlIgnoreCase(type_name_text, module_name_text)) {
+                    try self.env.pushDiagnostic(.{
+                        .type_name_case_mismatch = .{
+                            .module_name = module_name_ident,
+                            .type_name = type_name_ident,
+                            .region = file_region,
+                        },
+                    });
+                    return;
+                }
+            }
+        }
+    }
+
+    // Use heuristic: if there are types declared, assume type module, else assume default-app
+    if (self.hasAnyTypeDeclarations()) {
+        // Assume user wanted type module
+        try self.env.pushDiagnostic(.{
+            .type_module_missing_matching_type = .{
+                .module_name = module_name_ident,
+                .region = file_region,
+            },
+        });
+    } else {
+        // Assume user wanted default-app
+        try self.env.pushDiagnostic(.{
+            .default_app_missing_main = .{
+                .module_name = module_name_ident,
+                .region = file_region,
+            },
+        });
+    }
+}
+
+/// Report error when trying to execute a plain type module
+fn reportExecutionRequiresAppOrDefaultApp(self: *Self) std.mem.Allocator.Error!void {
+    const file = self.parse_ir.store.getFile();
+    const file_region = self.parse_ir.tokenizedRegionToRegion(file.region);
+
+    try self.env.pushDiagnostic(.{
+        .execution_requires_app_or_default_app = .{
+            .region = file_region,
+        },
+    });
+}
+
+/// Report error when trying to import a default-app module
+fn reportCannotImportDefaultApp(self: *Self, main_result: MainFunctionResult) std.mem.Allocator.Error!void {
+    const region = switch (main_result) {
+        .valid => |v| v.region,
+        .wrong_arity => |w| w.region,
+        .not_found => unreachable, // Should never be called with not_found
+    };
+
+    const module_name_text = self.env.module_name;
+    const module_name_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
+
+    try self.env.pushDiagnostic(.{
+        .cannot_import_default_app = .{
+            .module_name = module_name_ident,
+            .region = region,
+        },
+    });
+}
+
+fn validateTypeModuleName(self: *Self) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    if (self.hasMatchingType()) {
+        return;
+    }
+
     // No matching type declaration found - report error
+    const file = self.parse_ir.store.getFile();
+    const module_name_text = self.env.module_name;
+    const module_name_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
     const file_region = self.parse_ir.tokenizedRegionToRegion(file.region);
     try self.env.pushDiagnostic(Diagnostic{
         .type_module_missing_matching_type = .{

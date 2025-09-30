@@ -700,7 +700,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     try original_env.initCIRFields(gpa, "test");
 
     // Create canonicalizer
-    var czer = try Can.init(&original_env, &parse_ast, null);
+    var czer = try Can.init(&original_env, &parse_ast, null, Can.ValidationContext.checking);
     defer czer.deinit();
 
     // Canonicalize the expression

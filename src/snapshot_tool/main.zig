@@ -1080,7 +1080,7 @@ fn processSnapshotContent(
     var can_ir = &module_env; // ModuleEnv contains the canonical IR
     try can_ir.initCIRFields(allocator, module_name);
 
-    var czer = try Can.init(can_ir, &parse_ast, null);
+    var czer = try Can.init(can_ir, &parse_ast, null, Can.ValidationContext.checking);
     defer czer.deinit();
 
     var maybe_expr_idx: ?Can.CanonicalizedExpr = null;

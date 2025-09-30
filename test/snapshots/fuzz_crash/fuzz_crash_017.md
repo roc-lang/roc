@@ -10,7 +10,7 @@ foo = "hello ${namF
 ~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_017.md:2:7:2:8
-TYPE MODULE MISSING MATCHING TYPE - fuzz_crash_017.md:1:1:2:20
+MISSING MAIN! FUNCTION - fuzz_crash_017.md:1:1:2:20
 UNRECOGNIZED SYNTAX - fuzz_crash_017.md:2:7:2:20
 # PROBLEMS
 **PARSE ERROR**
@@ -24,15 +24,13 @@ foo = "hello ${namF
       ^
 
 
-**TYPE MODULE MISSING MATCHING TYPE**
-Type modules must have a type declaration matching the module name.
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
 
-This module is named `fuzz_crash_017`, but no top-level type declaration named `fuzz_crash_017` was found.
+No `main!` function was found.
 
-Add either:
-`fuzz_crash_017 := ...` (nominal type)
-or:
-`fuzz_crash_017 : ...` (type alias)
+Add a main! function like:
+`main! = |arg| { ... }`
 **fuzz_crash_017.md:1:1:2:20:**
 ```roc
 me = "luc"

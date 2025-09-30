@@ -1361,7 +1361,7 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
     try env.initCIRFields(shm_allocator, module_name);
 
     // Create canonicalizer
-    var canonicalizer = try Can.init(&env, &parse_ast, null);
+    var canonicalizer = try Can.init(&env, &parse_ast, null, Can.ValidationContext.checking);
 
     // Canonicalize the entire module
     try canonicalizer.canonicalizeFile();

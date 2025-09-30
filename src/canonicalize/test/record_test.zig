@@ -26,7 +26,7 @@ test "record literal uses record_unbound" {
         var ast = try parse.parseExpr(&env.common, gpa);
         defer ast.deinit(gpa);
 
-        var can = try Can.init(&env, &ast, null);
+        var can = try Can.init(&env, &ast, null, Can.ValidationContext.checking);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -63,7 +63,7 @@ test "record literal uses record_unbound" {
         var ast = try parse.parseExpr(&env.common, gpa);
         defer ast.deinit(gpa);
 
-        var can = try Can.init(&env, &ast, null);
+        var can = try Can.init(&env, &ast, null, Can.ValidationContext.checking);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -100,7 +100,7 @@ test "record literal uses record_unbound" {
         var ast = try parse.parseExpr(&env.common, gpa);
         defer ast.deinit(gpa);
 
-        var can = try Can.init(&env, &ast, null);
+        var can = try Can.init(&env, &ast, null, Can.ValidationContext.checking);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -144,7 +144,7 @@ test "record_unbound basic functionality" {
     var ast = try parse.parseExpr(&env.common, gpa);
     defer ast.deinit(gpa);
 
-    var can = try Can.init(&env, &ast, null);
+    var can = try Can.init(&env, &ast, null, Can.ValidationContext.checking);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -187,7 +187,7 @@ test "record_unbound with multiple fields" {
     var ast = try parse.parseExpr(&env.common, gpa);
     defer ast.deinit(gpa);
 
-    var can = try Can.init(&env, &ast, null);
+    var can = try Can.init(&env, &ast, null, Can.ValidationContext.checking);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);

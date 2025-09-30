@@ -25,7 +25,7 @@ fn typeCheck(allocator: std.mem.Allocator, source: []const u8) !bool {
     if (parse_ast.hasErrors()) return false;
 
     // Canonicalize
-    var czer = try Can.init(&module_env, &parse_ast, null);
+    var czer = try Can.init(&module_env, &parse_ast, null, Can.ValidationContext.checking);
     defer czer.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);

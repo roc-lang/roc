@@ -8,17 +8,15 @@ type=file
 helper = |x| x + 1
 ~~~
 # EXPECTED
-TYPE MODULE MISSING MATCHING TYPE - default_app_no_main.md:1:1:1:19
+MISSING MAIN! FUNCTION - default_app_no_main.md:1:1:1:19
 # PROBLEMS
-**TYPE MODULE MISSING MATCHING TYPE**
-Type modules must have a type declaration matching the module name.
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
 
-This module is named `default_app_no_main`, but no top-level type declaration named `default_app_no_main` was found.
+No `main!` function was found.
 
-Add either:
-`default_app_no_main := ...` (nominal type)
-or:
-`default_app_no_main : ...` (type alias)
+Add a main! function like:
+`main! = |arg| { ... }`
 **default_app_no_main.md:1:1:1:19:**
 ```roc
 helper = |x| x + 1

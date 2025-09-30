@@ -507,7 +507,7 @@ test "hexadecimal integer literals" {
         var ast = try parse.parseExpr(&env.common, env.gpa);
         defer ast.deinit(gpa);
 
-        var czer = try Can.init(&env, &ast, null);
+        var czer = try Can.init(&env, &ast, null, Can.ValidationContext.checking);
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -596,7 +596,7 @@ test "binary integer literals" {
         var ast = try parse.parseExpr(&env.common, env.gpa);
         defer ast.deinit(gpa);
 
-        var czer = try Can.init(&env, &ast, null);
+        var czer = try Can.init(&env, &ast, null, Can.ValidationContext.checking);
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -685,7 +685,7 @@ test "octal integer literals" {
         var ast = try parse.parseExpr(&env.common, env.gpa);
         defer ast.deinit(gpa);
 
-        var czer = try Can.init(&env, &ast, null);
+        var czer = try Can.init(&env, &ast, null, Can.ValidationContext.checking);
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -774,7 +774,7 @@ test "integer literals with uppercase base prefixes" {
         var ast = try parse.parseExpr(&env.common, gpa);
         defer ast.deinit(gpa);
 
-        var czer = try Can.init(&env, &ast, null);
+        var czer = try Can.init(&env, &ast, null, Can.ValidationContext.checking);
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);

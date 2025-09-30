@@ -526,10 +526,13 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("Type modules must have a type declaration matching the module name.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
-            const owned_module_name = try report.addOwnedString(module_name_bytes);
-            try report.document.addReflowingText("This module is named ");
-            try report.document.addAnnotated(owned_module_name, .inline_code);
+            var filename_buffer: [256]u8 = undefined;
+            const filename_with_ext = try std.fmt.bufPrint(&filename_buffer, "{s}.roc", .{module_name_bytes});
+            const owned_filename_with_ext = try report.addOwnedString(filename_with_ext);
+            try report.document.addReflowingText("This file is named ");
+            try report.document.addAnnotated(owned_filename_with_ext, .inline_code);
             try report.document.addReflowingText(", but no top-level type declaration named ");
+            const owned_module_name = try report.addOwnedString(module_name_bytes);
             try report.document.addAnnotated(owned_module_name, .inline_code);
             try report.document.addReflowingText(" was found.");
             try report.document.addLineBreak();
@@ -560,18 +563,14 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         },
         .default_app_missing_main => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
-            const module_name_bytes = self.getIdent(data.module_name);
 
-            var report = Report.init(allocator, "DEFAULT APP MISSING MAIN! FUNCTION", .fatal);
+            var report = Report.init(allocator, "MISSING MAIN! FUNCTION", .fatal);
             try report.document.addReflowingText("Default app modules must have a ");
             try report.document.addAnnotated("main!", .inline_code);
             try report.document.addReflowingText(" function.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
-            const owned_module_name = try report.addOwnedString(module_name_bytes);
-            try report.document.addReflowingText("This module is named ");
-            try report.document.addAnnotated(owned_module_name, .inline_code);
-            try report.document.addReflowingText(", but no ");
+            try report.document.addReflowingText("No ");
             try report.document.addAnnotated("main!", .inline_code);
             try report.document.addReflowingText(" function was found.");
             try report.document.addLineBreak();
@@ -594,22 +593,108 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .default_app_wrong_arity => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            var report = Report.init(allocator, "DEFAULT APP MAIN! WRONG ARITY", .fatal);
-            try report.document.addReflowingText("The ");
+            var report = Report.init(allocator, "MAIN! SHOULD TAKE 1 ARGUMENT", .fatal);
             try report.document.addAnnotated("main!", .inline_code);
-            try report.document.addReflowingText(" function must take exactly 1 argument.");
+            try report.document.addReflowingText(" is defined but has the wrong number of arguments. ");
+            try report.document.addAnnotated("main!", .inline_code);
+            try report.document.addReflowingText(" should take 1 argument.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
             var arity_buffer: [32]u8 = undefined;
             const arity_str = try std.fmt.bufPrint(&arity_buffer, "{d}", .{data.arity});
             try report.document.addReflowingText("Found ");
             try report.document.addAnnotated(arity_str, .inline_code);
-            try report.document.addReflowingText(" argument(s) instead.");
+            try report.document.addReflowingText(" arguments.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
             try report.document.addReflowingText("Change it to:");
             try report.document.addLineBreak();
             try report.document.addAnnotated("main! = |arg| { ... }", .inline_code);
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .cannot_import_default_app => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const module_name = self.getIdent(data.module_name);
+
+            var report = Report.init(allocator, "INVALID IMPORT", .fatal);
+            try report.document.addReflowingText("This is not a valid Type Module.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Since this file is named ");
+            try report.document.addAnnotated(module_name, .inline_code);
+            try report.document.addReflowingText(".roc, it would need to define a top-level type named ");
+            try report.document.addAnnotated(module_name, .inline_code);
+            try report.document.addReflowingText(" to be importable as a valid Type Module.");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .execution_requires_app_or_default_app => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "CANNOT EXECUTE TYPE MODULE", .fatal);
+            try report.document.addReflowingText("This module is a type module and cannot be executed directly.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("To execute a module, it must either:");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("1. Have an ");
+            try report.document.addAnnotated("app", .inline_code);
+            try report.document.addReflowingText(" header, or");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("2. Define a ");
+            try report.document.addAnnotated("main!", .inline_code);
+            try report.document.addReflowingText(" function with exactly 1 argument: ");
+            try report.document.addAnnotated("main! = |arg| { ... }", .inline_code);
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .type_name_case_mismatch => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const module_name = self.getIdent(data.module_name);
+            const type_name = self.getIdent(data.type_name);
+
+            var report = Report.init(allocator, "TYPE NAME CASE MISMATCH", .fatal);
+            try report.document.addReflowingText("The type name ");
+            try report.document.addAnnotated(type_name, .inline_code);
+            try report.document.addReflowingText(" matches the module name ");
+            try report.document.addAnnotated(module_name, .inline_code);
+            try report.document.addReflowingText(" but with different capitalization.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Type modules require the type name to exactly match the module name (case-sensitive).");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Change the type name to ");
+            try report.document.addAnnotated(module_name, .inline_code);
+            try report.document.addReflowingText(" to fix this error.");
             try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(

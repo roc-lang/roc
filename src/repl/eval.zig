@@ -364,7 +364,7 @@ pub const Repl = struct {
         try cir.initCIRFields(self.allocator, "repl");
 
         // Create canonicalizer
-        var czer = Can.init(cir, &parse_ast, null) catch |err| {
+        var czer = Can.init(cir, &parse_ast, null, Can.ValidationContext.repl) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err});
         };
         defer czer.deinit();

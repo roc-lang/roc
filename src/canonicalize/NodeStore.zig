@@ -106,7 +106,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 49;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 52;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 33;
 /// Count of the statement nodes in the ModuleEnv
@@ -2676,6 +2676,21 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) std.mem.Allocato
             region = r.region;
             node.data_1 = r.arity;
         },
+        .cannot_import_default_app => |r| {
+            node.tag = .diag_cannot_import_default_app;
+            region = r.region;
+            node.data_1 = @bitCast(r.module_name);
+        },
+        .execution_requires_app_or_default_app => |r| {
+            node.tag = .diag_execution_requires_app_or_default_app;
+            region = r.region;
+        },
+        .type_name_case_mismatch => |r| {
+            node.tag = .diag_type_name_case_mismatch;
+            region = r.region;
+            node.data_1 = @bitCast(r.module_name);
+            node.data_2 = @bitCast(r.type_name);
+        },
         .f64_pattern_literal => |r| {
             node.tag = .diag_f64_pattern_literal;
             region = r.region;
@@ -2958,6 +2973,18 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         } },
         .diag_default_app_wrong_arity => return CIR.Diagnostic{ .default_app_wrong_arity = .{
             .arity = node.data_1,
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_cannot_import_default_app => return CIR.Diagnostic{ .cannot_import_default_app = .{
+            .module_name = @bitCast(node.data_1),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_execution_requires_app_or_default_app => return CIR.Diagnostic{ .execution_requires_app_or_default_app = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_type_name_case_mismatch => return CIR.Diagnostic{ .type_name_case_mismatch = .{
+            .module_name = @bitCast(node.data_1),
+            .type_name = @bitCast(node.data_2),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_f64_pattern_literal => return CIR.Diagnostic{ .f64_pattern_literal = .{

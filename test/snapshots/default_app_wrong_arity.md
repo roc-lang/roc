@@ -10,18 +10,16 @@ main! = |arg1, arg2| {
 }
 ~~~
 # EXPECTED
-TYPE MODULE MISSING MATCHING TYPE - default_app_wrong_arity.md:1:1:3:2
+MAIN! SHOULD TAKE 1 ARGUMENT - default_app_wrong_arity.md:1:1:3:2
 UNUSED VARIABLE - default_app_wrong_arity.md:1:16:1:20
 # PROBLEMS
-**TYPE MODULE MISSING MATCHING TYPE**
-Type modules must have a type declaration matching the module name.
+**MAIN! SHOULD TAKE 1 ARGUMENT**
+`main!` is defined but has the wrong number of arguments. `main!` should take 1 argument.
 
-This module is named `default_app_wrong_arity`, but no top-level type declaration named `default_app_wrong_arity` was found.
+Found `2` arguments.
 
-Add either:
-`default_app_wrong_arity := ...` (nominal type)
-or:
-`default_app_wrong_arity : ...` (type alias)
+Change it to:
+`main! = |arg| { ... }`
 **default_app_wrong_arity.md:1:1:3:2:**
 ```roc
 main! = |arg1, arg2| {

@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Invalid type module with no type declaration
+description=Headerless module with no type and no main! - treated as default-app, reports missing main!
 type=file
 ~~~
 # SOURCE
@@ -8,18 +8,16 @@ type=file
 x = 5
 ~~~
 # EXPECTED
-TYPE MODULE MISSING MATCHING TYPE - NoType.md:1:1:1:6
+MISSING MAIN! FUNCTION - no_type_no_main.md:1:1:1:6
 # PROBLEMS
-**TYPE MODULE MISSING MATCHING TYPE**
-Type modules must have a type declaration matching the module name.
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
 
-This module is named `NoType`, but no top-level type declaration named `NoType` was found.
+No `main!` function was found.
 
-Add either:
-`NoType := ...` (nominal type)
-or:
-`NoType : ...` (type alias)
-**NoType.md:1:1:1:6:**
+Add a main! function like:
+`main! = |arg| { ... }`
+**no_type_no_main.md:1:1:1:6:**
 ```roc
 x = 5
 ```

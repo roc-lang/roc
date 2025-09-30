@@ -26,7 +26,7 @@ PARSE ERROR - fuzz_crash_002.md:1:20:1:21
 PARSE ERROR - fuzz_crash_002.md:1:21:1:23
 PARSE ERROR - fuzz_crash_002.md:1:23:1:24
 PARSE ERROR - fuzz_crash_002.md:1:24:1:25
-TYPE MODULE MISSING MATCHING TYPE - fuzz_crash_002.md:1:1:1:25
+MISSING MAIN! FUNCTION - fuzz_crash_002.md:1:1:1:25
 MALFORMED TYPE - fuzz_crash_002.md:1:6:1:7
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -227,15 +227,13 @@ modu:;::::::::::::::le[%
                        ^
 
 
-**TYPE MODULE MISSING MATCHING TYPE**
-Type modules must have a type declaration matching the module name.
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
 
-This module is named `fuzz_crash_002`, but no top-level type declaration named `fuzz_crash_002` was found.
+No `main!` function was found.
 
-Add either:
-`fuzz_crash_002 := ...` (nominal type)
-or:
-`fuzz_crash_002 : ...` (type alias)
+Add a main! function like:
+`main! = |arg| { ... }`
 **fuzz_crash_002.md:1:1:1:25:**
 ```roc
 modu:;::::::::::::::le[%

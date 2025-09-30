@@ -144,7 +144,7 @@ Pair(a, b+ : (
 **TYPE MODULE MISSING MATCHING TYPE**
 Type modules must have a type declaration matching the module name.
 
-This module is named `fuzz_crash_021`, but no top-level type declaration named `fuzz_crash_021` was found.
+This file is named `fuzz_crash_021.roc`, but no top-level type declaration named `fuzz_crash_021` was found.
 
 Add either:
 `fuzz_crash_021 := ...` (nominal type)

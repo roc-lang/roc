@@ -511,7 +511,9 @@ pub const PackageEnv = struct {
 
         // canonicalize using the AST
         const canon_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        var czer = try Can.init(&env, &parse_ast, null);
+        // Determine validation context: root module (depth 0) uses checking, imported modules use importing
+        const validation_context = if (st.depth == 0) Can.ValidationContext.checking else Can.ValidationContext.importing;
+        var czer = try Can.init(&env, &parse_ast, null, validation_context);
         try czer.canonicalizeFile();
         czer.deinit();
         const canon_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;

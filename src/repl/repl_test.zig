@@ -195,7 +195,7 @@ test "Repl - minimal interpreter integration" {
     try cir.initCIRFields(gpa, "test");
 
     // Step 4: Canonicalize
-    var can = try Canon.init(cir, &parse_ast, null);
+    var can = try Canon.init(cir, &parse_ast, null, Canon.ValidationContext.repl);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);

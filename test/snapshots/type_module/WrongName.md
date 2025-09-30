@@ -13,7 +13,7 @@ TYPE MODULE MISSING MATCHING TYPE - WrongName.md:1:1:1:24
 **TYPE MODULE MISSING MATCHING TYPE**
 Type modules must have a type declaration matching the module name.
 
-This module is named `WrongName`, but no top-level type declaration named `WrongName` was found.
+This file is named `WrongName.roc`, but no top-level type declaration named `WrongName` was found.
 
 Add either:
 `WrongName := ...` (nominal type)
