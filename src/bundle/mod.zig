@@ -38,6 +38,6 @@ pub const freeForZstd = bundle.freeForZstd;
 // - Large file handling
 test {
     _ = @import("test_bundle.zig");
-    //_ = @import("test_streaming.zig");
+    _ = @import("test_streaming.zig");
     _ = bundle;
 }

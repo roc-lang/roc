@@ -69,12 +69,12 @@ fn PlainTextSExprWriter(comptime WriterType: type) type {
 
 /// HTML writer implementation with syntax highlighting
 const HtmlSExprWriter = struct {
-    writer: std.io.AnyWriter,
+    writer: *std.Io.Writer,
     current_color: Color = .default,
     color_active: bool = false,
     scratch_buffer: std.array_list.Managed(u8),
 
-    pub fn init(writer: std.io.AnyWriter) HtmlSExprWriter {
+    pub fn init(writer: *std.Io.Writer) HtmlSExprWriter {
         return HtmlSExprWriter{
             .writer = writer,
             .current_color = .default,
@@ -85,7 +85,7 @@ const HtmlSExprWriter = struct {
 
     pub fn print(self: *@This(), comptime fmt: []const u8, args: anytype) !void {
         self.scratch_buffer.clearRetainingCapacity();
-        try std.fmt.format(self.scratch_buffer.writer(), fmt, args);
+        try self.scratch_buffer.print(fmt, args);
 
         for (self.scratch_buffer.items) |char| {
             try escapeHtmlChar(self.writer, char);
@@ -347,7 +347,7 @@ pub fn toStringPretty(self: *const SExprTree, writer: anytype) !void {
 }
 
 /// Render this SExprTree to HTML with syntax highlighting.
-pub fn toHtml(self: *const SExprTree, writer: anytype) !void {
+pub fn toHtml(self: *const SExprTree, writer: *std.Io.Writer) !void {
     if (self.stack.items.len == 0) return;
     var html_writer = HtmlSExprWriter.init(writer);
     try self.toStringImpl(self.stack.items[self.stack.items.len - 1], &html_writer, 0);

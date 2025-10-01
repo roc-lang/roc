@@ -213,7 +213,7 @@ pub const TestRunner = struct {
     }
 
     /// Write a html report of the test results to the given writer.
-    pub fn write_html_report(self: *const TestRunner, writer: std.io.AnyWriter) !void {
+    pub fn write_html_report(self: *const TestRunner, writer: *std.Io.Writer) !void {
         if (self.test_results.items.len > 0) {
             try writer.writeAll("<div class=\"test-results\">\n");
             for (self.test_results.items) |result| {

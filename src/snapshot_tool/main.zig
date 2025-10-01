@@ -526,36 +526,36 @@ fn generateAllReports(
 fn renderReportsToProblemsSection(output: *DualOutput, reports: *const std.array_list.Managed(reporting.Report)) !void {
     // HTML PROBLEMS section
     if (output.html_writer) |writer| {
-        try writer.writeAll(
+        try writer.writer.writeAll(
             \\                <div class="problems">
         );
     }
 
     if (reports.items.len == 0) {
-        try output.md_writer.writeAll("NIL\n");
+        try output.md_writer.writer.writeAll("NIL\n");
         if (output.html_writer) |writer| {
-            try writer.writeAll("                    <p>NIL</p>\n");
+            try writer.writer.writeAll("                    <p>NIL</p>\n");
         }
         log("reported NIL problems", .{});
     } else {
         // Render all reports in order
         for (reports.items) |report| {
-            report.render(output.md_writer.any(), .markdown) catch |err| {
+            report.render(&output.md_writer.writer, .markdown) catch |err| {
                 std.debug.panic("Failed to render report: {s}", .{@errorName(err)});
             };
 
             if (output.html_writer) |writer| {
-                try writer.writeAll("                    <div class=\"problem\">");
-                report.render(writer.any(), .markdown) catch |err| {
+                try writer.writer.writeAll("                    <div class=\"problem\">");
+                report.render(&writer.writer, .markdown) catch |err| {
                     std.debug.panic("Failed to render report to HTML: {s}", .{@errorName(err)});
                 };
-                try writer.writeAll("</div>\n");
+                try writer.writer.writeAll("</div>\n");
             }
         }
     }
 
     if (output.html_writer) |writer| {
-        try writer.writeAll(
+        try writer.writer.writeAll(
             \\                </div>
             \\
         );
@@ -569,19 +569,23 @@ fn renderReportsToExpectedContent(allocator: std.mem.Allocator, reports: *const 
     }
 
     // Render all reports to markdown and then parse the problems
-    var problems_buffer = std.array_list.Managed(u8).init(allocator);
-    defer problems_buffer.deinit();
+    var problems_buffer_unmanaged = std.ArrayListUnmanaged(u8).empty;
+    var problems_writer_allocating: std.Io.Writer.Allocating = .fromArrayList(allocator, &problems_buffer_unmanaged);
+    defer problems_buffer_unmanaged.deinit(allocator);
 
     // Render all reports to markdown
     for (reports.items) |report| {
-        report.render(problems_buffer.writer().any(), .markdown) catch |err| {
+        report.render(&problems_writer_allocating.writer, .markdown) catch |err| {
             std.debug.panic("Failed to render report for EXPECTED: {s}", .{@errorName(err)});
         };
     }
 
+    // Transfer contents from writer back to buffer before parsing
+    problems_buffer_unmanaged = problems_writer_allocating.toArrayList();
+
     // Parse the rendered problems and convert to EXPECTED format
     // TODO: rather than parsing markdown, we should directly generate EXPECTED format from the reports
-    var parsed_problems = try parseProblemsSection(allocator, problems_buffer.items);
+    var parsed_problems = try parseProblemsSection(allocator, problems_buffer_unmanaged.items);
     defer {
         for (parsed_problems.items) |p| {
             allocator.free(p.problem_type);
@@ -1161,9 +1165,13 @@ fn processSnapshotContent(
         defer original_tree.deinit();
         try ModuleEnv.pushToSExprTree(can_ir, null, &original_tree);
 
-        var original_sexpr = std.array_list.Managed(u8).init(allocator);
-        defer original_sexpr.deinit();
-        try original_tree.toStringPretty(original_sexpr.writer().any());
+        var original_sexpr_unmanaged = std.ArrayListUnmanaged(u8).empty;
+        var original_sexpr_writer: std.Io.Writer.Allocating = .fromArrayList(allocator, &original_sexpr_unmanaged);
+        defer original_sexpr_unmanaged.deinit(allocator);
+        try original_tree.toStringPretty(&original_sexpr_writer.writer);
+
+        // Transfer contents from writer back to buffer
+        original_sexpr_unmanaged = original_sexpr_writer.toArrayList();
 
         // Create arena for serialization
         var cache_arena = std.heap.ArenaAllocator.init(allocator);
@@ -1189,29 +1197,37 @@ fn processSnapshotContent(
         defer restored_tree.deinit();
         try ModuleEnv.pushToSExprTree(restored_env, null, &restored_tree);
 
-        var restored_sexpr = std.array_list.Managed(u8).init(allocator);
-        defer restored_sexpr.deinit();
-        try restored_tree.toStringPretty(restored_sexpr.writer().any());
+        var restored_sexpr_unmanaged = std.ArrayListUnmanaged(u8).empty;
+        var restored_sexpr_writer: std.Io.Writer.Allocating = .fromArrayList(allocator, &restored_sexpr_unmanaged);
+        defer restored_sexpr_unmanaged.deinit(allocator);
+        try restored_tree.toStringPretty(&restored_sexpr_writer.writer);
+
+        // Transfer contents from writer back to buffer
+        restored_sexpr_unmanaged = restored_sexpr_writer.toArrayList();
 
         // Compare S-expressions - crash if they don't match
-        if (!std.mem.eql(u8, original_sexpr.items, restored_sexpr.items)) {
+        if (!std.mem.eql(u8, original_sexpr_unmanaged.items, restored_sexpr_unmanaged.items)) {
             std.log.err("Cache round-trip validation failed for snapshot: {s}", .{output_path});
             std.log.err("Original and restored CIR S-expressions don't match!", .{});
             std.log.err("This indicates a bug in MmapCache serialization/deserialization.", .{});
-            std.log.err("Original S-expression:\n{s}", .{original_sexpr.items});
-            std.log.err("Restored S-expression:\n{s}", .{restored_sexpr.items});
+            std.log.err("Original S-expression:\n{s}", .{original_sexpr_unmanaged.items});
+            std.log.err("Restored S-expression:\n{s}", .{restored_sexpr_unmanaged.items});
             return error.CacheRoundTripValidationFailed;
         }
     }
 
     // Buffer all output in memory before writing files
-    var md_buffer = std.array_list.Managed(u8).init(allocator);
-    defer md_buffer.deinit();
+    var md_buffer_unmanaged = std.ArrayListUnmanaged(u8).empty;
+    var md_writer_allocating: std.Io.Writer.Allocating = .fromArrayList(allocator, &md_buffer_unmanaged);
+    defer md_buffer_unmanaged.deinit(allocator);
 
-    var html_buffer = if (config.generate_html) std.array_list.Managed(u8).init(allocator) else null;
-    defer if (html_buffer) |*buf| buf.deinit();
+    var html_buffer_unmanaged: ?std.ArrayListUnmanaged(u8) = if (config.generate_html) std.ArrayListUnmanaged(u8).empty else null;
+    var html_writer_allocating: ?std.Io.Writer.Allocating = if (config.generate_html) .fromArrayList(allocator, &html_buffer_unmanaged.?) else null;
+    defer {
+        if (html_buffer_unmanaged) |*buf| buf.deinit(allocator);
+    }
 
-    var output = DualOutput.init(allocator, &md_buffer, if (html_buffer) |*buf| buf else null);
+    var output = DualOutput.init(allocator, &md_writer_allocating, if (html_writer_allocating) |*hw| hw else null);
 
     // Generate HTML wrapper
     try generateHtmlWrapper(&output, &content);
@@ -1238,6 +1254,10 @@ fn processSnapshotContent(
 
     try generateHtmlClosing(&output);
 
+    // Transfer contents from writer back to buffer before writing
+    md_buffer_unmanaged = md_writer_allocating.toArrayList();
+    if (html_writer_allocating) |*hw| html_buffer_unmanaged.? = hw.toArrayList();
+
     if (!config.disable_updates) {
         // Write the markdown file
         const md_file = std.fs.cwd().createFile(output_path, .{}) catch |err| {
@@ -1246,9 +1266,9 @@ fn processSnapshotContent(
         };
         defer md_file.close();
 
-        try md_file.writeAll(md_buffer.items);
+        try md_file.writeAll(md_buffer_unmanaged.items);
 
-        if (html_buffer) |*buf| {
+        if (html_buffer_unmanaged) |*buf| {
             writeHtmlFile(allocator, output_path, buf) catch |err| {
                 warn("Failed to write HTML file for {s}: {}", .{ output_path, err });
             };
@@ -1689,22 +1709,22 @@ const Error = error{ MissingSnapshotHeader, MissingSnapshotSource, InvalidNodeTy
 
 /// Dual output writers for markdown and HTML generation
 pub const DualOutput = struct {
-    md_writer: std.array_list.Managed(u8).Writer,
-    html_writer: ?std.array_list.Managed(u8).Writer,
+    md_writer: *std.Io.Writer.Allocating,
+    html_writer: ?*std.Io.Writer.Allocating,
     gpa: Allocator,
 
-    pub fn init(gpa: Allocator, md_buffer: *std.array_list.Managed(u8), html_buffer: ?*std.array_list.Managed(u8)) DualOutput {
+    pub fn init(gpa: Allocator, md_writer: *std.Io.Writer.Allocating, html_writer: ?*std.Io.Writer.Allocating) DualOutput {
         return .{
-            .md_writer = md_buffer.writer(),
-            .html_writer = if (html_buffer) |buf| buf.writer() else null,
+            .md_writer = md_writer,
+            .html_writer = html_writer,
             .gpa = gpa,
         };
     }
 
     fn begin_section(self: *DualOutput, name: []const u8) !void {
-        try self.md_writer.print("# {s}\n", .{name});
+        try self.md_writer.writer.print("# {s}\n", .{name});
         if (self.html_writer) |writer| {
-            try writer.print(
+            try writer.writer.print(
                 \\        <div class="section" data-section="{s}">
                 \\            <div class="section-content">
             , .{name});
@@ -1713,7 +1733,7 @@ pub const DualOutput = struct {
 
     fn end_section(self: *DualOutput) !void {
         if (self.html_writer) |writer| {
-            try writer.writeAll(
+            try writer.writer.writeAll(
                 \\            </div>
                 \\        </div>
             );
@@ -1721,11 +1741,11 @@ pub const DualOutput = struct {
     }
 
     fn begin_code_block(self: *DualOutput, language: []const u8) !void {
-        try self.md_writer.print("~~~{s}\n", .{language});
+        try self.md_writer.writer.print("~~~{s}\n", .{language});
     }
 
     fn end_code_block(self: *DualOutput) !void {
-        try self.md_writer.writeAll("~~~\n");
+        try self.md_writer.writer.writeAll("~~~\n");
     }
 };
 
@@ -1745,19 +1765,19 @@ fn escapeHtmlChar(writer: anytype, char: u8) !void {
 fn generateMetaSection(output: *DualOutput, content: *const Content) !void {
     try output.begin_section("META");
     try output.begin_code_block("ini");
-    try content.meta.format(output.md_writer);
-    try output.md_writer.writeAll("\n");
+    try content.meta.format(&output.md_writer.writer);
+    try output.md_writer.writer.writeAll("\n");
 
     // HTML META section
     if (output.html_writer) |writer| {
-        try writer.writeAll(
+        try writer.writer.writeAll(
             \\                <div class="meta-info">
             \\                    <p><strong>Description:</strong>
         );
-        try writer.writeAll(content.meta.description);
-        try writer.writeAll("</p>\n                    <p><strong>Type:</strong> ");
-        try writer.writeAll(content.meta.node_type.toString());
-        try writer.writeAll(
+        try writer.writer.writeAll(content.meta.description);
+        try writer.writer.writeAll("</p>\n                    <p><strong>Type:</strong> ");
+        try writer.writer.writeAll(content.meta.node_type.toString());
+        try writer.writer.writeAll(
             \\</p>
             \\                </div>
             \\
@@ -1772,14 +1792,14 @@ fn generateMetaSection(output: *DualOutput, content: *const Content) !void {
 fn generateSourceSection(output: *DualOutput, content: *const Content) !void {
     try output.begin_section("SOURCE");
     try output.begin_code_block("roc");
-    try output.md_writer.writeAll(content.source);
+    try output.md_writer.writer.writeAll(content.source);
     if (content.source.len == 0 or content.source[content.source.len - 1] != '\n') {
-        try output.md_writer.writeAll("\n");
+        try output.md_writer.writer.writeAll("\n");
     }
 
     // HTML SOURCE section - encode source as JavaScript string
     if (output.html_writer) |writer| {
-        try writer.writeAll(
+        try writer.writer.writeAll(
             \\                <div class="source-code" id="source-display">
             \\                </div>
             \\                <script>
@@ -1787,19 +1807,19 @@ fn generateSourceSection(output: *DualOutput, content: *const Content) !void {
         );
 
         // Escape the source code for JavaScript string literal
-        try writer.writeAll("`");
+        try writer.writer.writeAll("`");
         for (content.source) |char| {
             switch (char) {
-                '`' => try writer.writeAll("\\`"),
-                '\\' => try writer.writeAll("\\\\"),
-                '$' => try writer.writeAll("\\$"),
-                '\n' => try writer.writeAll("\\n"),
-                '\r' => try writer.writeAll("\\r"),
-                '\t' => try writer.writeAll("\\t"),
-                else => try writer.writeByte(char),
+                '`' => try writer.writer.writeAll("\\`"),
+                '\\' => try writer.writer.writeAll("\\\\"),
+                '$' => try writer.writer.writeAll("\\$"),
+                '\n' => try writer.writer.writeAll("\\n"),
+                '\r' => try writer.writer.writeAll("\\r"),
+                '\t' => try writer.writer.writeAll("\\t"),
+                else => try writer.writer.writeByte(char),
             }
         }
-        try writer.writeAll(
+        try writer.writer.writeAll(
             \\`;
             \\      </script>
             \\
@@ -1867,28 +1887,28 @@ fn generateExpectedSection(
 
     // Write the expected content (either generated or existing)
     if (expected_content) |expected| {
-        try output.md_writer.writeAll(expected);
-        try output.md_writer.writeByte('\n');
+        try output.md_writer.writer.writeAll(expected);
+        try output.md_writer.writer.writeByte('\n');
 
         // HTML EXPECTED section
         if (output.html_writer) |writer| {
-            try writer.writeAll(
+            try writer.writer.writeAll(
                 \\                <div class="expected">
             );
 
             // For HTML, escape the expected content
             for (expected) |char| {
                 switch (char) {
-                    '<' => try writer.writeAll("&lt;"),
-                    '>' => try writer.writeAll("&gt;"),
-                    '&' => try writer.writeAll("&amp;"),
-                    '"' => try writer.writeAll("&quot;"),
-                    '\'' => try writer.writeAll("&#39;"),
-                    else => try writer.writeByte(char),
+                    '<' => try writer.writer.writeAll("&lt;"),
+                    '>' => try writer.writer.writeAll("&gt;"),
+                    '&' => try writer.writer.writeAll("&amp;"),
+                    '"' => try writer.writer.writeAll("&quot;"),
+                    '\'' => try writer.writer.writeAll("&#39;"),
+                    else => try writer.writer.writeByte(char),
                 }
             }
 
-            try writer.writeAll(
+            try writer.writer.writeAll(
                 \\
                 \\                </div>
                 \\
@@ -1915,7 +1935,7 @@ pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, _: *const Con
 
     // HTML TOKENS section - encode tokens as JavaScript array
     if (output.html_writer) |writer| {
-        try writer.writeAll(
+        try writer.writer.writeAll(
             \\                <div class="token-list" id="tokens-display">
             \\                </div>
             \\                <script>
@@ -1930,7 +1950,7 @@ pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, _: *const Con
         const info = module_env.calcRegionInfo(region);
 
         // Markdown token output
-        try output.md_writer.print("{s}({d}:{d}-{d}:{d}),", .{
+        try output.md_writer.writer.print("{s}({d}:{d}-{d}:{d}),", .{
             @tagName(tok),
             // add one to display numbers instead of index
             info.start_line_idx + 1,
@@ -1942,13 +1962,13 @@ pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, _: *const Con
         if (i + 1 < tokenizedBuffer.tokens.len) {
             const next_region = tokenizedBuffer.resolve(@intCast(i + 1));
             if (source_contains_newline_in_range(parse_ast.env.source, @min(region.end.offset, next_region.start.offset), @max(region.end.offset, next_region.start.offset))) {
-                try output.md_writer.writeAll("\n");
+                try output.md_writer.writer.writeAll("\n");
             }
         }
 
         // HTML token output as JavaScript array element: [token_kind_str, start_byte, end_byte]
         if (output.html_writer) |writer| {
-            try writer.print("                    [\"{s}\", {d}, {d}]", .{
+            try writer.writer.print("                    [\"{s}\", {d}, {d}]", .{
                 @tagName(tok),
                 region.start.offset,
                 region.end.offset,
@@ -1956,19 +1976,19 @@ pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, _: *const Con
 
             // Add comma except for last token
             if (i < tokens.len - 1) {
-                try writer.writeAll(",");
+                try writer.writer.writeAll(",");
             }
         }
 
         if (output.html_writer) |writer| {
-            try writer.writeAll(" ");
+            try writer.writer.writeAll(" ");
         }
     }
 
-    try output.md_writer.writeAll("\n");
+    try output.md_writer.writer.writeAll("\n");
 
     if (output.html_writer) |writer| {
-        try writer.writeAll(
+        try writer.writer.writeAll(
             \\                ];
             \\                </script>
             \\
@@ -2031,18 +2051,18 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
         try output.begin_section("PARSE");
         try output.begin_code_block("clojure");
 
-        try tree.toStringPretty(output.md_writer.any());
-        try output.md_writer.writeAll("\n");
+        try tree.toStringPretty(&output.md_writer.writer);
+        try output.md_writer.writer.writeAll("\n");
 
         // Generate HTML output with syntax highlighting
         if (output.html_writer) |writer| {
-            try writer.writeAll(
+            try writer.writer.writeAll(
                 \\                <pre class="ast-parse">
             );
 
-            try tree.toHtml(writer.any());
+            try tree.toHtml(&writer.writer);
 
-            try writer.writeAll(
+            try writer.writer.writeAll(
                 \\</pre>
                 \\
             );
@@ -2095,20 +2115,20 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
     try output.begin_section("FORMATTED");
     try output.begin_code_block("roc");
 
-    try output.md_writer.writeAll(display_content);
+    try output.md_writer.writer.writeAll(display_content);
 
     // HTML FORMATTED section
     if (output.html_writer) |writer| {
-        try writer.writeAll(
+        try writer.writer.writeAll(
             \\                <pre>
         );
 
         // Escape HTML in formatted content
         for (display_content) |char| {
-            try escapeHtmlChar(writer, char);
+            try escapeHtmlChar(&writer.writer, char);
         }
 
-        try writer.writeAll(
+        try writer.writer.writeAll(
             \\</pre>
             \\
         );
@@ -2126,15 +2146,15 @@ fn generateCanonicalizeSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_ex
     try output.begin_section("CANONICALIZE");
     try output.begin_code_block("clojure");
 
-    try tree.toStringPretty(output.md_writer.any());
-    try output.md_writer.writeAll("\n");
+    try tree.toStringPretty(&output.md_writer.writer);
+    try output.md_writer.writer.writeAll("\n");
 
     if (output.html_writer) |writer| {
-        try writer.writeAll(
+        try writer.writer.writeAll(
             \\                <pre>
         );
-        try tree.toHtml(writer.any());
-        try writer.writeAll(
+        try tree.toHtml(&writer.writer);
+        try writer.writer.writeAll(
             \\</pre>
             \\
         );
@@ -2152,16 +2172,16 @@ fn generateTypesSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx:
 
     try output.begin_section("TYPES");
     try output.begin_code_block("clojure");
-    try tree.toStringPretty(output.md_writer.any());
-    try output.md_writer.writeAll("\n");
+    try tree.toStringPretty(&output.md_writer.writer);
+    try output.md_writer.writer.writeAll("\n");
 
     // HTML TYPES section
     if (output.html_writer) |writer| {
-        try writer.writeAll(
+        try writer.writer.writeAll(
             \\                <pre>
         );
-        try tree.toHtml(writer.any());
-        try writer.writeAll(
+        try tree.toHtml(&writer.writer);
+        try writer.writer.writeAll(
             \\</pre>
             \\
         );
@@ -2173,20 +2193,24 @@ fn generateTypesSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx:
 /// Generate TYPES section displaying types store for both markdown and HTML
 /// This is used for debugging.
 fn generateTypesStoreSection(gpa: std.mem.Allocator, output: *DualOutput, can_ir: *ModuleEnv) !void {
-    var solved = std.array_list.Managed(u8).init(output.gpa);
-    defer solved.deinit();
+    var solved_unmanaged = std.ArrayListUnmanaged(u8).empty;
+    var solved_writer: std.Io.Writer.Allocating = .fromArrayList(output.gpa, &solved_unmanaged);
+    defer solved_unmanaged.deinit(output.gpa);
 
-    try types.writers.SExprWriter.allVarsToSExprStr(solved.writer().any(), gpa, can_ir.env);
+    try types.writers.SExprWriter.allVarsToSExprStr(&solved_writer.writer, gpa, can_ir.env);
+
+    // Transfer contents from writer back to buffer
+    solved_unmanaged = solved_writer.toArrayList();
 
     // Markdown TYPES section
-    try output.md_writer.writeAll(Section.TYPES);
-    try output.md_writer.writeAll(solved.items);
-    try output.md_writer.writeAll("\n");
-    try output.md_writer.writeAll(Section.SECTION_END[0 .. Section.SECTION_END.len - 1]);
+    try output.md_writer.writer.writeAll(Section.TYPES);
+    try output.md_writer.writer.writeAll(solved_unmanaged.items);
+    try output.md_writer.writer.writeAll("\n");
+    try output.md_writer.writer.writeAll(Section.SECTION_END[0 .. Section.SECTION_END.len - 1]);
 
     // HTML TYPES section
     if (output.html_writer) |writer| {
-        try writer.writeAll(
+        try writer.writer.writeAll(
             \\        <div class="section">
             \\            <div class="section-header">TYPES</div>
             \\            <div class="section-content">
@@ -2194,11 +2218,11 @@ fn generateTypesStoreSection(gpa: std.mem.Allocator, output: *DualOutput, can_ir
         );
 
         // Escape HTML in types content
-        for (solved.items) |char| {
-            try escapeHtmlChar(writer, char);
+        for (solved_unmanaged.items) |char| {
+            try escapeHtmlChar(&writer.writer, char);
         }
 
-        try writer.writeAll(
+        try writer.writer.writeAll(
             \\</pre>
             \\            </div>
             \\        </div>
@@ -2212,7 +2236,7 @@ fn generateHtmlWrapper(output: *DualOutput, content: *const Content) !void {
     const writer = output.html_writer orelse return;
 
     // Write HTML document structure
-    try writer.writeAll(
+    try writer.writer.writeAll(
         \\<!DOCTYPE html>
         \\<html lang="en">
         \\<head>
@@ -2220,14 +2244,14 @@ fn generateHtmlWrapper(output: *DualOutput, content: *const Content) !void {
         \\    <meta name="viewport" content="width=device-width, initial-scale=1.0">
         \\    <title>Roc Snapshot:
     );
-    try writer.writeAll(content.meta.description);
-    try writer.writeAll(
+    try writer.writer.writeAll(content.meta.description);
+    try writer.writer.writeAll(
         \\</title>
         \\    <style>
         \\
     );
-    try writer.writeAll(@embedFile("snapshot.css"));
-    try writer.writeAll(
+    try writer.writer.writeAll(@embedFile("snapshot.css"));
+    try writer.writer.writeAll(
         \\    </style>
         \\</head>
         \\<body>
@@ -2270,14 +2294,14 @@ fn generateHtmlClosing(output: *DualOutput) !void {
     const writer = output.html_writer orelse return;
 
     // Close data sections container and add JavaScript
-    try writer.writeAll(
+    try writer.writer.writeAll(
         \\    </div>
         \\
         \\    <script>
     );
     // Embed remaining snapshot.js directly into the HTML
-    try writer.writeAll(@embedFile("snapshot.js"));
-    try writer.writeAll(
+    try writer.writer.writeAll(@embedFile("snapshot.js"));
+    try writer.writer.writeAll(
         \\    </script>
         \\</body>
         \\</html>
@@ -2286,7 +2310,7 @@ fn generateHtmlClosing(output: *DualOutput) !void {
 }
 
 /// Write HTML buffer to file
-fn writeHtmlFile(gpa: Allocator, snapshot_path: []const u8, html_buffer: *std.array_list.Managed(u8)) !void {
+fn writeHtmlFile(gpa: Allocator, snapshot_path: []const u8, html_buffer: *std.ArrayListUnmanaged(u8)) !void {
     // Convert .md path to .html path
     const html_path = blk: {
         if (std.mem.endsWith(u8, snapshot_path, ".md")) {
@@ -2484,13 +2508,17 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
     log("Processing REPL snapshot: {s}", .{output_path});
 
     // Buffer all output in memory before writing files
-    var md_buffer = std.array_list.Managed(u8).init(allocator);
-    defer md_buffer.deinit();
+    var md_buffer_unmanaged = std.ArrayListUnmanaged(u8).empty;
+    var md_writer_allocating: std.Io.Writer.Allocating = .fromArrayList(allocator, &md_buffer_unmanaged);
+    defer md_buffer_unmanaged.deinit(allocator);
 
-    var html_buffer = if (config.generate_html) std.array_list.Managed(u8).init(allocator) else null;
-    defer if (html_buffer) |*buf| buf.deinit();
+    var html_buffer_unmanaged: ?std.ArrayListUnmanaged(u8) = if (config.generate_html) std.ArrayListUnmanaged(u8).empty else null;
+    var html_writer_allocating: ?std.Io.Writer.Allocating = if (config.generate_html) .fromArrayList(allocator, &html_buffer_unmanaged.?) else null;
+    defer {
+        if (html_buffer_unmanaged) |*buf| buf.deinit(allocator);
+    }
 
-    var output = DualOutput.init(allocator, &md_buffer, if (html_buffer) |*buf| buf else null);
+    var output = DualOutput.init(allocator, &md_writer_allocating, if (html_writer_allocating) |*hw| hw else null);
 
     // Generate HTML wrapper
     try generateHtmlWrapper(&output, &content);
@@ -2502,6 +2530,10 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
     try generateReplProblemsSection(&output, &content);
     try generateHtmlClosing(&output);
 
+    // Transfer contents from writer back to buffer before writing
+    md_buffer_unmanaged = md_writer_allocating.toArrayList();
+    if (html_writer_allocating) |*hw| html_buffer_unmanaged.? = hw.toArrayList();
+
     if (!config.disable_updates) {
         // Write the markdown file
         const md_file = std.fs.cwd().createFile(output_path, .{}) catch |err| {
@@ -2510,9 +2542,9 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
         };
         defer md_file.close();
 
-        try md_file.writeAll(md_buffer.items);
+        try md_file.writeAll(md_buffer_unmanaged.items);
 
-        if (html_buffer) |*buf| {
+        if (html_buffer_unmanaged) |*buf| {
             writeHtmlFile(allocator, output_path, buf) catch |err| {
                 warn("Failed to write HTML file for {s}: {}", .{ output_path, err });
             };
@@ -2577,21 +2609,21 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
             // Write actual outputs
             for (actual_outputs.items, 0..) |repl_output, i| {
                 if (i > 0) {
-                    try output.md_writer.writeAll("---\n");
+                    try output.md_writer.writer.writeAll("---\n");
                 }
-                try output.md_writer.writeAll(repl_output);
-                try output.md_writer.writeByte('\n');
+                try output.md_writer.writer.writeAll(repl_output);
+                try output.md_writer.writer.writeByte('\n');
 
                 // HTML output
                 if (output.html_writer) |writer| {
                     if (i > 0) {
-                        try writer.writeAll("                <hr>\n");
+                        try writer.writer.writeAll("                <hr>\n");
                     }
-                    try writer.writeAll("                <div class=\"repl-output\">");
+                    try writer.writer.writeAll("                <div class=\"repl-output\">");
                     for (repl_output) |char| {
-                        try escapeHtmlChar(writer, char);
+                        try escapeHtmlChar(&writer.writer, char);
                     }
-                    try writer.writeAll("</div>\n");
+                    try writer.writer.writeAll("</div>\n");
                 }
             }
             try output.end_section();
@@ -2637,21 +2669,21 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                 // Write the old outputs back to the file
                 for (expected_outputs.items, 0..) |expected_output, i| {
                     if (i > 0) {
-                        try output.md_writer.writeAll("---\n");
+                        try output.md_writer.writer.writeAll("---\n");
                     }
-                    try output.md_writer.writeAll(expected_output);
-                    try output.md_writer.writeByte('\n');
+                    try output.md_writer.writer.writeAll(expected_output);
+                    try output.md_writer.writer.writeByte('\n');
 
                     // HTML output
                     if (output.html_writer) |writer| {
                         if (i > 0) {
-                            try writer.writeAll("                <hr>\n");
+                            try writer.writer.writeAll("                <hr>\n");
                         }
-                        try writer.writeAll("                <div class=\"repl-output\">");
+                        try writer.writer.writeAll("                <div class=\"repl-output\">");
                         for (expected_output) |char| {
-                            try escapeHtmlChar(writer, char);
+                            try escapeHtmlChar(&writer.writer, char);
                         }
-                        try writer.writeAll("</div>\n");
+                        try writer.writer.writeAll("</div>\n");
                     }
                 }
                 try output.end_section();
@@ -2660,21 +2692,21 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                 try output.begin_section("OUTPUT");
                 for (actual_outputs.items, 0..) |repl_output, i| {
                     if (i > 0) {
-                        try output.md_writer.writeAll("---\n");
+                        try output.md_writer.writer.writeAll("---\n");
                     }
-                    try output.md_writer.writeAll(repl_output);
-                    try output.md_writer.writeByte('\n');
+                    try output.md_writer.writer.writeAll(repl_output);
+                    try output.md_writer.writer.writeByte('\n');
 
                     // HTML output
                     if (output.html_writer) |writer| {
                         if (i > 0) {
-                            try writer.writeAll("                <hr>\n");
+                            try writer.writer.writeAll("                <hr>\n");
                         }
-                        try writer.writeAll("                <div class=\"repl-output\">");
+                        try writer.writer.writeAll("                <div class=\"repl-output\">");
                         for (repl_output) |char| {
-                            try escapeHtmlChar(writer, char);
+                            try escapeHtmlChar(&writer.writer, char);
                         }
-                        try writer.writeAll("</div>\n");
+                        try writer.writer.writeAll("</div>\n");
                     }
                 }
                 try output.end_section();
@@ -2690,10 +2722,10 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
 fn generateReplProblemsSection(output: *DualOutput, content: *const Content) !void {
     _ = content;
     try output.begin_section("PROBLEMS");
-    try output.md_writer.writeAll("NIL\n");
+    try output.md_writer.writer.writeAll("NIL\n");
 
     if (output.html_writer) |writer| {
-        try writer.writeAll(
+        try writer.writer.writeAll(
             \\                <div class="problems">
             \\                    <p>NIL</p>
             \\                </div>

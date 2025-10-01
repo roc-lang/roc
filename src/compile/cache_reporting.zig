@@ -42,7 +42,7 @@ pub const Stats = struct {
         return @as(f64, @floatFromInt(self.hits)) / @as(f64, @floatFromInt(total));
     }
 
-    pub fn print(self: *const Stats, writer: std.io.AnyWriter) !void {
+    pub fn print(self: *const Stats, writer: *std.Io.Writer) !void {
         try writer.print("Cache Stats:\n", .{});
         try writer.print("  Hits: {d}\n", .{self.hits});
         try writer.print("  Misses: {d}\n", .{self.misses});
