@@ -20,6 +20,7 @@ pub const CompressingHashWriter = struct {
     in_pos: usize,
     finished: bool,
     interface: std.Io.Writer,
+    writer_buffer: []u8,
 
     const Self = @This();
     const Error = error{
@@ -54,6 +55,10 @@ pub const CompressingHashWriter = struct {
         const in_buffer = try allocator_ptr.alloc(u8, in_buffer_size);
         errdefer allocator_ptr.free(in_buffer);
 
+        // Allocate buffer for the Io.Writer interface
+        const writer_buffer = try allocator_ptr.alloc(u8, in_buffer_size);
+        errdefer allocator_ptr.free(writer_buffer);
+
         var result = Self{
             .allocator_ptr = allocator_ptr,
             .ctx = ctx,
@@ -64,12 +69,13 @@ pub const CompressingHashWriter = struct {
             .in_pos = 0,
             .finished = false,
             .interface = undefined,
+            .writer_buffer = writer_buffer,
         };
         result.interface = .{
             .vtable = &.{
                 .drain = drain,
             },
-            .buffer = &.{}, // No buffer needed, we have internal buffering
+            .buffer = writer_buffer,
         };
         return result;
     }
@@ -78,6 +84,7 @@ pub const CompressingHashWriter = struct {
         _ = c.ZSTD_freeCCtx(self.ctx);
         self.allocator_ptr.free(self.out_buffer);
         self.allocator_ptr.free(self.in_buffer);
+        self.allocator_ptr.free(self.writer_buffer);
     }
 
     fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {

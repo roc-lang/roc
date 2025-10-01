@@ -209,10 +209,10 @@ pub fn bundle(
 
         // Create a reader for the file
         var reader_buffer: [4096]u8 = undefined;
-        var file_reader = file.reader(&reader_buffer).interface;
+        var file_reader = file.reader(&reader_buffer);
 
         // Stream the file to tar
-        tar_writer.writeFileStream(tar_path, file_size, &file_reader, options) catch {
+        tar_writer.writeFileStream(tar_path, file_size, &file_reader.interface, options) catch {
             return error.TarWriteFailed;
         };
     }

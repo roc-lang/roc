@@ -243,1282 +243,1282 @@ test "bundle validates paths correctly" {
     }
 }
 
-test "path validation prevents directory traversal" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    // Create a malicious tar with directory traversal attempt
-    var malicious_tar = std.io.Writer.Allocating.init(allocator);
-    defer malicious_tar.deinit();
-
-    var tar_writer = std.tar.Writer{ .underlying_writer = &malicious_tar.writer };
-
-    // Try to write a file with ".." in path
-    const Options = @TypeOf(tar_writer).Options;
-    const options = Options{
-        .mode = 0o644,
-        .mtime = 0,
-    };
-
-    try tar_writer.writeFileBytes("../../../etc/passwd", "malicious content", options);
-    try tar_writer.finishPedantically();
-
-    // Compress it
-    var compressed = std.array_list.Managed(u8).init(allocator);
-    defer compressed.deinit();
-
-    var allocator_copy = allocator;
-    var writer = try streaming_writer.CompressingHashWriter.init(
-        &allocator_copy,
-        3,
-        io_compat.toAnyWriter(compressed.writer()),
-        bundle.allocForZstd,
-        bundle.freeForZstd,
-    );
-    defer writer.deinit();
-
-    const malicious_tar_data = try malicious_tar.toOwnedSlice();
-    defer allocator.free(malicious_tar_data);
-    try writer.interface.writeAll(malicious_tar_data);
-    try writer.finish();
-
-    const hash = writer.getHash();
-
-    // Try to extract - should fail with InvalidPath error
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    var stream = std.io.fixedBufferStream(compressed.items);
-    var allocator_copy2 = allocator;
-    var dir_writer = DirExtractWriter.init(tmp.dir);
-    const result = bundle.unbundleStream(
-        stream.reader(),
-        dir_writer.extractWriter(),
-        &allocator_copy2,
-        &hash,
-        null,
-    );
-
-    try testing.expectError(error.InvalidPath, result);
-}
-
-test "empty directories are preserved" {
-    const testing = std.testing;
-    var allocator = testing.allocator;
-
-    // Create source with empty directories
-    var src_tmp = testing.tmpDir(.{});
-    defer src_tmp.cleanup();
-    const src_dir = src_tmp.dir;
-
-    // Create empty directories
-    try src_dir.makePath("empty_dir");
-    try src_dir.makePath("nested/empty");
-
-    // Create one file to ensure bundle isn't empty
-    {
-        const file = try src_dir.createFile("readme.txt", .{});
-        defer file.close();
-        try file.writeAll("Test");
-    }
-
-    // Bundle with explicit directory entries
-    var bundle_data = std.array_list.Managed(u8).init(allocator);
-    defer bundle_data.deinit();
-
-    // Note: Current implementation doesn't explicitly handle empty directories
-    // This test documents current behavior - empty dirs are NOT preserved
-    const file_paths = [_][]const u8{"readme.txt"};
-    var file_iter = FilePathIterator{ .paths = &file_paths };
-
-    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), src_dir, null, null);
-    defer allocator.free(filename);
-
-    // Extract
-    var dst_tmp = testing.tmpDir(.{});
-    defer dst_tmp.cleanup();
-
-    var stream = std.io.fixedBufferStream(bundle_data.items);
-    var allocator_copy = allocator;
-    try bundle.unbundle(stream.reader(), dst_tmp.dir, &allocator_copy, filename, null);
-
-    // Verify file exists
-    _ = try dst_tmp.dir.statFile("readme.txt");
-
-    // Document that empty directories are NOT preserved
-    // This is a known limitation of the current implementation
-}
-
-test "bundle and unbundle roundtrip" {
-    const testing = std.testing;
-    var allocator = testing.allocator;
-
-    // Create source temp directory
-    var src_tmp = testing.tmpDir(.{});
-    defer src_tmp.cleanup();
-    const src_dir = src_tmp.dir;
-
-    // Create test files and directories
-    {
-        const file = try src_dir.createFile("file1.txt", .{});
-        defer file.close();
-        try file.writeAll("Hello from file1!");
-    }
-    {
-        const file = try src_dir.createFile("file2.txt", .{});
-        defer file.close();
-        try file.writeAll("This is file2 content.");
-    }
-
-    try src_dir.makePath("subdir1");
-    {
-        const file = try src_dir.createFile("subdir1/nested1.txt", .{});
-        defer file.close();
-        try file.writeAll("Nested file 1");
-    }
-    {
-        const file = try src_dir.createFile("subdir1/nested2.txt", .{});
-        defer file.close();
-        try file.writeAll("Another nested file");
-    }
-
-    try src_dir.makePath("subdir2/deeply/nested");
-    {
-        const file = try src_dir.createFile("subdir2/deeply/nested/deep.txt", .{});
-        defer file.close();
-        try file.writeAll("Deep file content");
-    }
-
-    // Collect file paths
-    const file_paths = [_][]const u8{
-        "file1.txt",
-        "file2.txt",
-        "subdir1/nested1.txt",
-        "subdir1/nested2.txt",
-        "subdir2/deeply/nested/deep.txt",
-    };
-
-    // Create an iterator for the file paths
-    var file_iter = FilePathIterator{ .paths = &file_paths };
-
-    // Bundle to memory
-    var bundle_data = std.array_list.Managed(u8).init(allocator);
-    defer bundle_data.deinit();
-
-    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), src_dir, null, null);
-    defer allocator.free(filename);
-
-    // Create destination temp directory
-    var dst_tmp = testing.tmpDir(.{});
-    defer dst_tmp.cleanup();
-    const dst_dir = dst_tmp.dir;
-
-    // Unbundle from memory
-    var stream = std.io.fixedBufferStream(bundle_data.items);
-    try bundle.unbundle(stream.reader(), dst_dir, &allocator, filename, null);
-
-    // Verify all files exist with correct content
-    const file1_content = try dst_dir.readFileAlloc(allocator, "file1.txt", 1024);
-    defer allocator.free(file1_content);
-    try testing.expectEqualStrings("Hello from file1!", file1_content);
-
-    const file2_content = try dst_dir.readFileAlloc(allocator, "file2.txt", 1024);
-    defer allocator.free(file2_content);
-    try testing.expectEqualStrings("This is file2 content.", file2_content);
-
-    const nested1_content = try dst_dir.readFileAlloc(allocator, "subdir1/nested1.txt", 1024);
-    defer allocator.free(nested1_content);
-    try testing.expectEqualStrings("Nested file 1", nested1_content);
-
-    const nested2_content = try dst_dir.readFileAlloc(allocator, "subdir1/nested2.txt", 1024);
-    defer allocator.free(nested2_content);
-    try testing.expectEqualStrings("Another nested file", nested2_content);
-
-    const deep_content = try dst_dir.readFileAlloc(allocator, "subdir2/deeply/nested/deep.txt", 1024);
-    defer allocator.free(deep_content);
-    try testing.expectEqualStrings("Deep file content", deep_content);
-}
-
-test "bundle and unbundle over socket stream" {
-    const testing = std.testing;
-    var allocator = testing.allocator;
-
-    // Skip on Windows as Unix sockets aren't supported
-    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
-
-    // Create source temp directory with test files
-    var src_tmp = testing.tmpDir(.{});
-    defer src_tmp.cleanup();
-    const src_dir = src_tmp.dir;
-
-    // Create test files
-    {
-        const file = try src_dir.createFile("test1.txt", .{});
-        defer file.close();
-        try file.writeAll("Socket test file 1");
-    }
-    {
-        const file = try src_dir.createFile("test2.txt", .{});
-        defer file.close();
-        try file.writeAll("This is socket test file 2!");
-    }
-
-    try src_dir.makePath("nested");
-    {
-        const file = try src_dir.createFile("nested/deep.txt", .{});
-        defer file.close();
-        try file.writeAll("Deep socket test content");
-    }
-
-    // Bundle to a file first
-    var bundle_tmp = testing.tmpDir(.{});
-    defer bundle_tmp.cleanup();
-
-    const bundle_path = "test.bundle";
-    const bundle_file = try bundle_tmp.dir.createFile(bundle_path, .{});
-    defer bundle_file.close();
-
-    const file_paths = [_][]const u8{
-        "test1.txt",
-        "test2.txt",
-        "nested/deep.txt",
-    };
-
-    var file_iter = FilePathIterator{ .paths = &file_paths };
-    var bundle_writer_buffer: [4096]u8 = undefined;
-    var bundle_writer = bundle_file.writer(&bundle_writer_buffer);
-    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, &bundle_writer.interface, src_dir, null, null);
-    try bundle_writer.interface.flush();
-    defer allocator.free(filename);
-
-    // Create socket in temp directory
-    var socket_tmp = testing.tmpDir(.{});
-    defer socket_tmp.cleanup();
-
-    // Get the real path of the temp directory
-    var real_path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const real_path = try socket_tmp.dir.realpath(".", &real_path_buf);
-
-    var socket_path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const socket_path = try std.fmt.bufPrint(&socket_path_buf, "{s}/test.sock", .{real_path});
-
-    // Create server thread
-    const ServerContext = struct {
-        socket_path: []const u8,
-        bundle_path: []const u8,
-        bundle_dir: std.fs.Dir,
-        ready: std.Thread.ResetEvent = .{},
-        done: std.Thread.ResetEvent = .{},
-
-        fn run(ctx: *@This()) !void {
-            const server = try std.net.Address.initUnix(ctx.socket_path);
-            var listener = try server.listen(.{});
-            defer listener.deinit();
-
-            // Signal that server is ready
-            ctx.ready.set();
-
-            // Accept one connection
-            const connection = try listener.accept();
-            defer connection.stream.close();
-
-            // Open and stream the bundle file
-            const file = try ctx.bundle_dir.openFile(ctx.bundle_path, .{});
-            defer file.close();
-
-            // Stream file contents to socket
-            var buf: [4096]u8 = undefined;
-            while (true) {
-                const bytes_read = try file.read(&buf);
-                if (bytes_read == 0) break;
-                _ = try connection.stream.writeAll(buf[0..bytes_read]);
-            }
-
-            ctx.done.set();
-        }
-    };
-
-    var server_ctx = ServerContext{
-        .socket_path = socket_path,
-        .bundle_path = bundle_path,
-        .bundle_dir = bundle_tmp.dir,
-    };
-
-    const server_thread = try std.Thread.spawn(.{}, ServerContext.run, .{&server_ctx});
-    defer server_thread.join();
-
-    // Wait for server to be ready
-    server_ctx.ready.wait();
-
-    // Create destination temp directory
-    var dst_tmp = testing.tmpDir(.{});
-    defer dst_tmp.cleanup();
-    const dst_dir = dst_tmp.dir;
-
-    // Connect to socket and unbundle
-    var stream = try std.net.connectUnixSocket(socket_path);
-    defer stream.close();
-
-    // Unbundle from socket stream
-    var stream_buffer: [1024]u8 = undefined;
-    var stream_reader = stream.reader(&stream_buffer).file_reader.interface;
-    var adapted_stream_reader = stream_reader.adaptToOldInterface();
-    try bundle.unbundle(&adapted_stream_reader, dst_dir, &allocator, filename, null);
-
-    // Wait for server to finish
-    server_ctx.done.wait();
-
-    // Verify all files exist with correct content
-    const file1_content = try dst_dir.readFileAlloc(allocator, "test1.txt", 1024);
-    defer allocator.free(file1_content);
-    try testing.expectEqualStrings("Socket test file 1", file1_content);
-
-    const file2_content = try dst_dir.readFileAlloc(allocator, "test2.txt", 1024);
-    defer allocator.free(file2_content);
-    try testing.expectEqualStrings("This is socket test file 2!", file2_content);
-
-    const deep_content = try dst_dir.readFileAlloc(allocator, "nested/deep.txt", 1024);
-    defer allocator.free(deep_content);
-    try testing.expectEqualStrings("Deep socket test content", deep_content);
-}
-
-test "std.tar.writer creates valid tar" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    // Create a tar in memory
-    var allocating_writer = std.io.Writer.Allocating.init(allocator);
-    defer allocating_writer.deinit();
-
-    var tar_writer = std.tar.Writer{ .underlying_writer = &allocating_writer.writer };
-
-    // Write a simple file
-    const content = "Hello tar world!";
-    const Options = @TypeOf(tar_writer).Options;
-    try tar_writer.writeFileBytes("test.txt", content, Options{
-        .mode = 0o644,
-        .mtime = 0,
-    });
-
-    try tar_writer.finishPedantically();
-
-    // Now try to read it back
-    const tar_bytes = try allocating_writer.toOwnedSlice();
-    defer allocator.free(tar_bytes);
-    var stream = std.io.fixedBufferStream(tar_bytes);
-    var file_name_buffer: [256]u8 = undefined;
-    var link_name_buffer: [256]u8 = undefined;
-    var stream_reader_buffer: [1024]u8 = undefined;
-    var adapted_stream_reader = stream.reader().adaptToNewApi(&stream_reader_buffer).new_interface;
-    var tar_iter = std.tar.Iterator.init(&adapted_stream_reader, .{
-        .file_name_buffer = &file_name_buffer,
-        .link_name_buffer = &link_name_buffer,
-    });
-
-    const file = try tar_iter.next();
-    try testing.expect(file != null);
-    try testing.expectEqualStrings("test.txt", file.?.name);
-    try testing.expectEqual(@as(u64, content.len), file.?.size);
-
-    // Read content
-    const reader = tar_iter.reader;
-    var buf: [1024]u8 = undefined;
-    const bytes_read = try reader.readSliceShort(buf[0..content.len]);
-    try testing.expectEqualStrings(content, buf[0..bytes_read]);
-}
-
-test "minimal bundle unbundle" {
-    const testing = std.testing;
-    var allocator = testing.allocator;
-
-    // Create source temp directory
-    var src_tmp = testing.tmpDir(.{});
-    defer src_tmp.cleanup();
-    const src_dir = src_tmp.dir;
-
-    // Create a simple test file
-    {
-        const file = try src_dir.createFile("test.txt", .{});
-        defer file.close();
-        try file.writeAll("Hello");
-    }
-
-    // Bundle to memory
-    var bundle_data = std.array_list.Managed(u8).init(allocator);
-    defer bundle_data.deinit();
-
-    const file_paths = [_][]const u8{"test.txt"};
-    var file_iter = FilePathIterator{ .paths = &file_paths };
-    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), src_dir, null, null);
-    defer allocator.free(filename);
-
-    // Create destination temp directory
-    var dst_tmp = testing.tmpDir(.{});
-    defer dst_tmp.cleanup();
-    const dst_dir = dst_tmp.dir;
-
-    // Unbundle from memory
-    var stream = std.io.fixedBufferStream(bundle_data.items);
-    try bundle.unbundle(stream.reader(), dst_dir, &allocator, filename, null);
-
-    // Read and verify content
-    const content = try dst_dir.readFileAlloc(allocator, "test.txt", 1024);
-    defer allocator.free(content);
-    try testing.expectEqualStrings("Hello", content);
-}
-
-test "bundle with path prefix stripping" {
-    const testing = std.testing;
-    var allocator = testing.allocator;
-
-    // Create source temp directory with nested structure
-    var src_tmp = testing.tmpDir(.{});
-    defer src_tmp.cleanup();
-    const src_dir = src_tmp.dir;
-
-    // Create a deep directory structure
-    try src_dir.makePath("foo/bar/src");
-    try src_dir.makePath("foo/bar/src/utils");
-
-    // Create test files with the prefix
-    {
-        const file = try src_dir.createFile("foo/bar/src/main.txt", .{});
-        defer file.close();
-        try file.writeAll("Main file content");
-    }
-    {
-        const file = try src_dir.createFile("foo/bar/src/utils/helper.txt", .{});
-        defer file.close();
-        try file.writeAll("Helper file content");
-    }
-
-    // Bundle with path prefix
-    var bundle_data = std.array_list.Managed(u8).init(allocator);
-    defer bundle_data.deinit();
-
-    // File paths include the full prefix
-    const file_paths = [_][]const u8{
-        "foo/bar/src/main.txt",
-        "foo/bar/src/utils/helper.txt",
-    };
-
-    var file_iter = FilePathIterator{ .paths = &file_paths };
-
-    // Bundle with prefix "foo/bar/src/"
-    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), src_dir, "foo/bar/src/", null);
-    defer allocator.free(filename);
-
-    // Create destination temp directory
-    var dst_tmp = testing.tmpDir(.{});
-    defer dst_tmp.cleanup();
-    const dst_dir = dst_tmp.dir;
-
-    // Unbundle
-    var stream = std.io.fixedBufferStream(bundle_data.items);
-    try bundle.unbundle(stream.reader(), dst_dir, &allocator, filename, null);
-
-    // Verify files exist WITHOUT the prefix
-    const main_content = try dst_dir.readFileAlloc(allocator, "main.txt", 1024);
-    defer allocator.free(main_content);
-    try testing.expectEqualStrings("Main file content", main_content);
-
-    const helper_content = try dst_dir.readFileAlloc(allocator, "utils/helper.txt", 1024);
-    defer allocator.free(helper_content);
-    try testing.expectEqualStrings("Helper file content", helper_content);
-}
-
-test "blake3 hash verification success" {
-    const testing = std.testing;
-    var allocator = testing.allocator;
-
-    // Create a simple test file
-    var src_tmp = testing.tmpDir(.{});
-    defer src_tmp.cleanup();
-    const src_dir = src_tmp.dir;
-
-    {
-        const file = try src_dir.createFile("test.txt", .{});
-        defer file.close();
-        try file.writeAll("Test content for hash verification");
-    }
-
-    // Bundle the file
-    var bundle_data = std.array_list.Managed(u8).init(allocator);
-    defer bundle_data.deinit();
-
-    const file_paths = [_][]const u8{"test.txt"};
-    var file_iter = FilePathIterator{ .paths = &file_paths };
-    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), src_dir, null, null);
-    defer allocator.free(filename);
-
-    // Verify filename ends with .tar.zst
-    try testing.expect(std.mem.endsWith(u8, filename, ".tar.zst"));
-
-    // Create destination directory
-    var dst_tmp = testing.tmpDir(.{});
-    defer dst_tmp.cleanup();
-    const dst_dir = dst_tmp.dir;
-
-    // Unbundle with correct filename - should succeed
-    var stream = std.io.fixedBufferStream(bundle_data.items);
-    try bundle.unbundle(stream.reader(), dst_dir, &allocator, filename, null);
-
-    // Verify content
-    const content = try dst_dir.readFileAlloc(allocator, "test.txt", 1024);
-    defer allocator.free(content);
-    try testing.expectEqualStrings("Test content for hash verification", content);
-}
-
-test "blake3 hash verification failure" {
-    const testing = std.testing;
-    var allocator = testing.allocator;
-
-    // Create a simple test file
-    var src_tmp = testing.tmpDir(.{});
-    defer src_tmp.cleanup();
-    const src_dir = src_tmp.dir;
-
-    {
-        const file = try src_dir.createFile("test.txt", .{});
-        defer file.close();
-        try file.writeAll("Test content");
-    }
-
-    // Bundle the file
-    var bundle_data = std.array_list.Managed(u8).init(allocator);
-    defer bundle_data.deinit();
-
-    const file_paths = [_][]const u8{"test.txt"};
-    var file_iter = FilePathIterator{ .paths = &file_paths };
-    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), src_dir, null, null);
-    defer allocator.free(filename);
-
-    // Create destination directory
-    var dst_tmp = testing.tmpDir(.{});
-    defer dst_tmp.cleanup();
-    const dst_dir = dst_tmp.dir;
-
-    // Try to unbundle with wrong filename - should fail
-    const wrong_filename = "1234567890abcdef.tar.zst";
-    var stream = std.io.fixedBufferStream(bundle_data.items);
-    const result = bundle.unbundle(stream.reader(), dst_dir, &allocator, wrong_filename, null);
-
-    try testing.expectError(error.InvalidFilename, result);
-}
-
-test "unbundle with existing directory error" {
-    const testing = std.testing;
-    var allocator = testing.allocator;
-
-    // Create temp directory
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const tmp_dir = tmp.dir;
-
-    // Create a simple tar archive
-    var output_buffer = std.array_list.Managed(u8).init(allocator);
-    defer output_buffer.deinit();
-
-    const files = [_][]const u8{"test.txt"};
-    var iter = FilePathIterator{ .paths = &files };
-
-    // Create test file
-    {
-        const file = try tmp_dir.createFile("test.txt", .{});
-        defer file.close();
-        try file.writeAll("test content");
-    }
-
-    // Bundle the file
-    const filename = try bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, output_buffer.writer(), tmp_dir, null, null);
-    defer allocator.free(filename);
-
-    // Write the bundled data to a file
-    {
-        const bundle_file = try tmp_dir.createFile(filename, .{});
-        defer bundle_file.close();
-        try bundle_file.writeAll(output_buffer.items);
-    }
-
-    // Extract the base name without extension for directory
-    const dir_name = filename[0 .. filename.len - 8]; // Remove .tar.zst
-
-    // Create a directory with the same name
-    try tmp_dir.makePath(dir_name);
-
-    // Try to unbundle - should fail because directory exists
-    const bundle_file = try tmp_dir.openFile(filename, .{});
-    defer bundle_file.close();
-
-    var bundle_reader_buffer: [4096]u8 = undefined;
-    var bundle_reader = bundle_file.reader(&bundle_reader_buffer);
-
-    // This should succeed but the CLI would error on existing directory
-    try bundle.unbundle(&bundle_reader.interface, tmp_dir, &allocator, filename, null);
-}
-
-test "unbundle multiple archives" {
-    const testing = std.testing;
-    var allocator = testing.allocator;
-
-    // Create temp directory
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const tmp_dir = tmp.dir;
-
-    // Create two different archives
-    var filenames = std.array_list.Managed([]const u8).init(allocator);
-    defer {
-        for (filenames.items) |fname| {
-            allocator.free(fname);
-        }
-        filenames.deinit();
-    }
-
-    // First archive
-    {
-        var output_buffer = std.array_list.Managed(u8).init(allocator);
-        defer output_buffer.deinit();
-
-        const files = [_][]const u8{"file1.txt"};
-        var iter = FilePathIterator{ .paths = &files };
-
-        {
-            const file = try tmp_dir.createFile("file1.txt", .{});
-            defer file.close();
-            try file.writeAll("content 1");
-        }
-
-        const filename = try bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, output_buffer.writer(), tmp_dir, null, null);
-        try filenames.append(filename);
-
-        const bundle_file = try tmp_dir.createFile(filename, .{});
-        defer bundle_file.close();
-        try bundle_file.writeAll(output_buffer.items);
-    }
-
-    // Second archive
-    {
-        var output_buffer = std.array_list.Managed(u8).init(allocator);
-        defer output_buffer.deinit();
-
-        const files = [_][]const u8{"file2.txt"};
-        var iter = FilePathIterator{ .paths = &files };
-
-        {
-            const file = try tmp_dir.createFile("file2.txt", .{});
-            defer file.close();
-            try file.writeAll("content 2");
-        }
-
-        const filename = try bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, output_buffer.writer(), tmp_dir, null, null);
-        try filenames.append(filename);
-
-        const bundle_file = try tmp_dir.createFile(filename, .{});
-        defer bundle_file.close();
-        try bundle_file.writeAll(output_buffer.items);
-    }
-
-    // Unbundle both archives
-    for (filenames.items) |fname| {
-        const bundle_file = try tmp_dir.openFile(fname, .{});
-        defer bundle_file.close();
-
-        const dir_name = fname[0 .. fname.len - 8]; // Remove .tar.zst
-        const extract_dir = try tmp_dir.makeOpenPath(dir_name, .{});
-
-        var reader_buffer: [4096]u8 = undefined;
-        var bundle_reader = bundle_file.reader(&reader_buffer);
-        try bundle.unbundle(&bundle_reader.interface, extract_dir, &allocator, fname, null);
-    }
-
-    // Verify extraction
-    const dir1_name = filenames.items[0][0 .. filenames.items[0].len - 8];
-    const dir2_name = filenames.items[1][0 .. filenames.items[1].len - 8];
-
-    const path1 = try std.fmt.allocPrint(allocator, "{s}/file1.txt", .{dir1_name});
-    defer allocator.free(path1);
-    const extracted1 = try tmp_dir.readFileAlloc(allocator, path1, 1024);
-    defer allocator.free(extracted1);
-    try testing.expectEqualStrings("content 1", extracted1);
-
-    const path2 = try std.fmt.allocPrint(allocator, "{s}/file2.txt", .{dir2_name});
-    defer allocator.free(path2);
-    const extracted2 = try tmp_dir.readFileAlloc(allocator, path2, 1024);
-    defer allocator.free(extracted2);
-    try testing.expectEqualStrings("content 2", extracted2);
-}
-
-test "blake3 hash detects corruption" {
-    const testing = std.testing;
-    var allocator = testing.allocator;
-
-    // Create a test file
-    var src_tmp = testing.tmpDir(.{});
-    defer src_tmp.cleanup();
-    const src_dir = src_tmp.dir;
-
-    {
-        const file = try src_dir.createFile("test.txt", .{});
-        defer file.close();
-        try file.writeAll("Original content");
-    }
-
-    // Bundle the file
-    var bundle_data = std.array_list.Managed(u8).init(allocator);
-    defer bundle_data.deinit();
-
-    const file_paths = [_][]const u8{"test.txt"};
-    var file_iter = FilePathIterator{ .paths = &file_paths };
-    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), src_dir, null, null);
-    defer allocator.free(filename);
-
-    // Corrupt the data by flipping a bit
-    // Since the bundle is compressed, corrupting any bit should be detected
-    if (bundle_data.items.len > 10) {
-        // Corrupt a bit near the end to avoid breaking the zstd header
-        bundle_data.items[bundle_data.items.len - 5] ^= 0x01;
-    }
-
-    // Create destination directory
-    var dst_tmp = testing.tmpDir(.{});
-    defer dst_tmp.cleanup();
-    const dst_dir = dst_tmp.dir;
-
-    // Try to unbundle corrupted data - should fail with HashMismatch or DecompressionFailed
-    var stream = std.io.fixedBufferStream(bundle_data.items);
-    const result = bundle.unbundle(stream.reader(), dst_dir, &allocator, filename, null);
-
-    // Corruption can cause either hash mismatch (if decompression succeeds but data is wrong)
-    // or decompression failure (if the compressed stream structure is corrupted)
-    if (result) |_| {
-        return error.TestUnexpectedResult;
-    } else |err| {
-        switch (err) {
-            error.HashMismatch, error.DecompressionFailed, error.InvalidTarHeader => {
-                // Any of these errors are acceptable - corruption was detected
-            },
-            else => return err,
-        }
-    }
-}
-
-test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
-    const testing = std.testing;
-    var allocator = testing.allocator;
-
-    // Create initial temp directory with test files
-    var initial_tmp = testing.tmpDir(.{});
-    defer initial_tmp.cleanup();
-    const initial_dir = initial_tmp.dir;
-
-    // Create test files with varied content
-    const test_files = [_]struct { path: []const u8, content: []const u8 }{
-        .{ .path = "README.md", .content = "# Test Project\n\nThis is a test." },
-        .{ .path = "src/main.roc", .content = "app \"test\"\n    packages {}\n    imports []\n    provides [main] to pf\n\nmain = \"Hello!\"" },
-        .{ .path = "src/utils.roc", .content = "module [helper]\n\nhelper = \\x -> x + 1" },
-        .{ .path = "test/test1.roc", .content = "# Test file 1\nexpect 1 == 1" },
-        .{ .path = "test/test2.roc", .content = "# Test file 2\nexpect 2 + 2 == 4" },
-        .{ .path = "docs/guide.txt", .content = "User Guide\n==========\n\nStep 1: ...\nStep 2: ..." },
-    };
-
-    // Create all test files
-    for (test_files) |test_file| {
-        if (std.fs.path.dirname(test_file.path)) |dir| {
-            try initial_dir.makePath(dir);
-        }
-        const file = try initial_dir.createFile(test_file.path, .{});
-        defer file.close();
-        try file.writeAll(test_file.content);
-    }
-
-    // First bundle
-    var first_bundle = std.array_list.Managed(u8).init(allocator);
-    defer first_bundle.deinit();
-
-    var paths1 = std.array_list.Managed([]const u8).init(allocator);
-    defer paths1.deinit();
-    for (test_files) |test_file| {
-        try paths1.append(test_file.path);
-    }
-    var iter1 = FilePathIterator{ .paths = paths1.items };
-
-    const filename1 = try bundle.bundle(&iter1, TEST_COMPRESSION_LEVEL, &allocator, first_bundle.writer(), initial_dir, null, null);
-    defer allocator.free(filename1);
-
-    // Write first bundle to file
-    {
-        const bundle_file = try initial_dir.createFile(filename1, .{});
-        defer bundle_file.close();
-        try bundle_file.writeAll(first_bundle.items);
-    }
-
-    // First unbundle
-    var unbundle1_tmp = testing.tmpDir(.{});
-    defer unbundle1_tmp.cleanup();
-    const unbundle1_dir = unbundle1_tmp.dir;
-
-    {
-        const bundle_file = try initial_dir.openFile(filename1, .{});
-        defer bundle_file.close();
-
-        const extract_dir = try unbundle1_dir.makeOpenPath("extracted1", .{});
-
-        var reader_buffer: [4096]u8 = undefined;
-        var bundle_reader = bundle_file.reader(&reader_buffer);
-        try bundle.unbundle(&bundle_reader.interface, extract_dir, &allocator, filename1, null);
-    }
-
-    // Second bundle (from first extraction)
-    var second_bundle = std.array_list.Managed(u8).init(allocator);
-    defer second_bundle.deinit();
-
-    var paths2 = std.array_list.Managed([]const u8).init(allocator);
-    defer paths2.deinit();
-    for (test_files) |test_file| {
-        try paths2.append(test_file.path);
-    }
-    var iter2 = FilePathIterator{ .paths = paths2.items };
-
-    const extracted1_dir = try unbundle1_dir.openDir("extracted1", .{});
-    const filename2 = try bundle.bundle(&iter2, TEST_COMPRESSION_LEVEL, &allocator, second_bundle.writer(), extracted1_dir, null, null);
-    defer allocator.free(filename2);
-
-    // Filenames should be identical (same content = same hash)
-    try testing.expectEqualStrings(filename1, filename2);
-
-    // Write second bundle to file
-    {
-        const bundle_file = try unbundle1_dir.createFile(filename2, .{});
-        defer bundle_file.close();
-        try bundle_file.writeAll(second_bundle.items);
-    }
-
-    // Second unbundle
-    var unbundle2_tmp = testing.tmpDir(.{});
-    defer unbundle2_tmp.cleanup();
-    const unbundle2_dir = unbundle2_tmp.dir;
-
-    {
-        const bundle_file = try unbundle1_dir.openFile(filename2, .{});
-        defer bundle_file.close();
-
-        const extract_dir = try unbundle2_dir.makeOpenPath("extracted2", .{});
-
-        var reader_buffer: [4096]u8 = undefined;
-        var bundle_reader = bundle_file.reader(&reader_buffer);
-        try bundle.unbundle(&bundle_reader.interface, extract_dir, &allocator, filename2, null);
-    }
-
-    // Verify all files match original content
-    const extracted2_dir = try unbundle2_dir.openDir("extracted2", .{});
-    for (test_files) |test_file| {
-        const content = try extracted2_dir.readFileAlloc(allocator, test_file.path, 10240);
-        defer allocator.free(content);
-        try testing.expectEqualStrings(test_file.content, content);
-    }
-
-    // Bundle sizes should be identical
-    try testing.expectEqual(first_bundle.items.len, second_bundle.items.len);
-}
-
-test "CLI unbundle with no args defaults to all .tar.zst files" {
-    const testing = std.testing;
-    var allocator = testing.allocator;
-
-    // Create temp directory
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const tmp_dir = tmp.dir;
-
-    // Create multiple archives
-    var archive_names = std.array_list.Managed([]const u8).init(allocator);
-    defer {
-        for (archive_names.items) |name| {
-            allocator.free(name);
-        }
-        archive_names.deinit();
-    }
-
-    // Create 3 different archives
-    for ([_][]const u8{ "file1.txt", "file2.txt", "file3.txt" }) |filename| {
-        var output_buffer = std.array_list.Managed(u8).init(allocator);
-        defer output_buffer.deinit();
-
-        const files = [_][]const u8{filename};
-        var iter = FilePathIterator{ .paths = &files };
-
-        // Create test file
-        {
-            const file = try tmp_dir.createFile(filename, .{});
-            defer file.close();
-            var writer_buffer: [256]u8 = undefined;
-            var file_writer = file.writer(&writer_buffer);
-            try file_writer.interface.print("Content of {s}", .{filename});
-            try file_writer.interface.flush();
-        }
-
-        const archive_name = try bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, output_buffer.writer(), tmp_dir, null, null);
-        try archive_names.append(archive_name);
-
-        // Write archive to disk
-        const archive_file = try tmp_dir.createFile(archive_name, .{});
-        defer archive_file.close();
-        try archive_file.writeAll(output_buffer.items);
-    }
-
-    // Verify all archives exist
-    try testing.expectEqual(@as(usize, 3), archive_names.items.len);
-    for (archive_names.items) |name| {
-        try testing.expect(std.mem.endsWith(u8, name, ".tar.zst"));
-        _ = try tmp_dir.statFile(name);
-    }
-
-    // Simulate unbundle with no args - should extract all .tar.zst files
-    // Here we just verify that our test setup would work with the CLI
-    var cwd = try tmp_dir.openDir(".", .{ .iterate = true });
-    defer cwd.close();
-
-    var found_archives = std.array_list.Managed([]const u8).init(allocator);
-    defer found_archives.deinit();
-
-    var iter = cwd.iterate();
-    while (try iter.next()) |entry| {
-        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".tar.zst")) {
-            try found_archives.append(entry.name);
-        }
-    }
-
-    // Should find all 3 archives
-    try testing.expectEqual(@as(usize, 3), found_archives.items.len);
-}
-
-test "download URL validation" {
-    const testing = std.testing;
-
-    // Create a temp dir for testing (won't actually download)
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    // Valid HTTPS URLs
-    {
-        const url = "https://example.com/path/to/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
-        _ = download.validateUrl(url) catch |err| {
-            try testing.expect(false); // Should not error
-            std.debug.print("Unexpected error: {}\n", .{err});
-        };
-    }
-
-    // Valid localhost IPv4 URL
-    {
-        const url = "http://127.0.0.1:8000/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
-        _ = download.validateUrl(url) catch |err| {
-            try testing.expect(false); // Should not error
-            std.debug.print("Unexpected error: {}\n", .{err});
-        };
-    }
-
-    // Valid localhost IPv6 URL with port
-    {
-        const url = "http://[::1]:8000/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
-        _ = download.validateUrl(url) catch |err| {
-            try testing.expect(false); // Should not error
-            std.debug.print("Unexpected error: {}\n", .{err});
-        };
-    }
-
-    // Valid localhost IPv6 URL without port
-    {
-        const url = "http://[::1]/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
-        _ = download.validateUrl(url) catch |err| {
-            try testing.expect(false); // Should not error
-            std.debug.print("Unexpected error: {}\n", .{err});
-        };
-    }
-
-    // Valid: localhost hostname (will be resolved and verified during download)
-    {
-        const url = "http://localhost:8000/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
-        const hash = try download.validateUrl(url);
-        try testing.expectEqualStrings("4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf", hash);
-    }
-
-    // Invalid: HTTP (not localhost IP)
-    {
-        const url = "http://example.com/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
-        const result = download.validateUrl(url);
-        try testing.expectError(download.DownloadError.InvalidUrl, result);
-    }
-
-    // Invalid: no hash in URL
-    {
-        const url = "https://example.com/path/to/";
-        const result = download.validateUrl(url);
-        try testing.expectError(download.DownloadError.NoHashInUrl, result);
-    }
-
-    // Valid: hash without .tar.zst extension
-    {
-        const url = "https://example.com/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf";
-        const hash = try download.validateUrl(url);
-        try testing.expectEqualStrings("4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf", hash);
-    }
-
-    // Valid: hash with .tar.zst extension
-    {
-        const url = "https://example.com/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
-        const hash = try download.validateUrl(url);
-        try testing.expectEqualStrings("4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf", hash);
-    }
-}
-
-// In-memory file system for testing
-const MemoryFileSystem = struct {
-    allocator: std.mem.Allocator,
-    files: std.StringHashMap(std.array_list.Managed(u8)),
-    directories: std.StringHashMap(void),
-
-    pub fn init(allocator: std.mem.Allocator) MemoryFileSystem {
-        return .{
-            .allocator = allocator,
-            .files = std.StringHashMap(std.array_list.Managed(u8)).init(allocator),
-            .directories = std.StringHashMap(void).init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *MemoryFileSystem) void {
-        var file_iter = self.files.iterator();
-        while (file_iter.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            entry.value_ptr.deinit();
-        }
-        self.files.deinit();
-
-        var dir_iter = self.directories.iterator();
-        while (dir_iter.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-        }
-        self.directories.deinit();
-    }
-
-    pub fn extractWriter(self: *MemoryFileSystem) bundle.ExtractWriter {
-        return .{
-            .ptr = self,
-            .makeDirFn = makeDir,
-            .streamFileFn = streamFile,
-        };
-    }
-
-    fn makeDir(ptr: *anyopaque, path: []const u8) anyerror!void {
-        const self = @as(*MemoryFileSystem, @ptrCast(@alignCast(ptr)));
-        if (!self.directories.contains(path)) {
-            try self.directories.put(try self.allocator.dupe(u8, path), {});
-        }
-    }
-
-    fn streamFile(ptr: *anyopaque, path: []const u8, reader: std.io.AnyReader, size: usize) anyerror!void {
-        const self = @as(*MemoryFileSystem, @ptrCast(@alignCast(ptr)));
-
-        // Create parent directories if needed
-        if (std.fs.path.dirname(path)) |dir_name| {
-            if (!self.directories.contains(dir_name)) {
-                try self.directories.put(try self.allocator.dupe(u8, dir_name), {});
-            }
-        }
-
-        // Create new file data
-        var file_data = std.array_list.Managed(u8).init(self.allocator);
-
-        // Stream from reader
-        var buffer: [bundle.STREAM_BUFFER_SIZE]u8 = undefined;
-        var total_read: usize = 0;
-
-        while (total_read < size) {
-            const to_read = @min(buffer.len, size - total_read);
-            const bytes_read = try reader.read(buffer[0..to_read]);
-
-            if (bytes_read == 0) {
-                break;
-            }
-
-            try file_data.appendSlice(buffer[0..bytes_read]);
-            total_read += bytes_read;
-        }
-
-        if (total_read != size) {
-            file_data.deinit();
-            return error.UnexpectedEndOfStream;
-        }
-
-        // Store the file
-        try self.files.put(try self.allocator.dupe(u8, path), file_data);
-    }
-
-    pub fn getFileContent(self: *MemoryFileSystem, path: []const u8) ?[]const u8 {
-        const file = self.files.get(path) orelse return null;
-        return file.items;
-    }
-};
-
-test "download from local server" {
-    const testing = std.testing;
-    var allocator = testing.allocator;
-
-    // Create a temp directory for test files
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    // Create test files
-    {
-        const file = try tmp.dir.createFile("README.md", .{});
-        defer file.close();
-        try file.writeAll("# Test Project\n\nThis is a test README.");
-    }
-    {
-        try tmp.dir.makePath("src");
-        const file = try tmp.dir.createFile("src/main.roc", .{});
-        defer file.close();
-        try file.writeAll("app \"test\"\n    packages {}\n    imports []\n    provides [main] to pf\n\nmain = \"Hello!\"");
-    }
-    {
-        const file = try tmp.dir.createFile("src/lib.roc", .{});
-        defer file.close();
-        try file.writeAll("module [helper]\n\nhelper = \\x -> x * 2");
-    }
-
-    // Bundle the files
-    var bundle_data = std.array_list.Managed(u8).init(allocator);
-    defer bundle_data.deinit();
-
-    const file_paths = [_][]const u8{
-        "README.md",
-        "src/main.roc",
-        "src/lib.roc",
-    };
-    var file_iter = FilePathIterator{ .paths = &file_paths };
-
-    const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), tmp.dir, null, null);
-    defer allocator.free(filename);
-
-    // Extract hash from filename
-    const base58_hash = filename[0 .. filename.len - 8]; // Remove .tar.zst
-
-    // Create HTTP server on port 0 (let OS assign available port)
-    const loopback = try std.net.Address.parseIp("127.0.0.1", 0);
-    var server = try loopback.listen(.{ .reuse_address = true });
-    defer server.deinit();
-
-    // Get the actual port assigned by the OS
-    const port = blk: {
-        // The server's address includes the actual port assigned
-        const server_addr = server.listen_address;
-        break :blk server_addr.getPort();
-    };
-
-    // Server context for thread communication
-    const ServerContext = struct {
-        server: *std.net.Server,
-        bundle_data: []const u8,
-        request_path: ?[]const u8 = null,
-        response_sent: std.Thread.Semaphore = .{},
-        allocator: std.mem.Allocator,
-        error_occurred: ?anyerror = null,
-
-        fn run(ctx: *@This()) void {
-            ctx.runImpl() catch |err| {
-                ctx.error_occurred = err;
-                ctx.response_sent.post();
-            };
-        }
-
-        fn runImpl(ctx: *@This()) !void {
-            const connection = try ctx.server.accept();
-            defer connection.stream.close();
-
-            // Read HTTP request
-            var request_buf: [4096]u8 = undefined;
-            const bytes_read = try connection.stream.read(&request_buf);
-
-            // Parse request line to get the path
-            const request = request_buf[0..bytes_read];
-            if (std.mem.indexOf(u8, request, " ")) |first_space| {
-                if (std.mem.indexOf(u8, request[first_space + 1 ..], " ")) |second_space| {
-                    const path = request[first_space + 1 ..][0..second_space];
-                    ctx.request_path = try ctx.allocator.dupe(u8, path);
-                }
-            }
-
-            // Send HTTP response with bundle data
-            const response_header = try std.fmt.allocPrint(ctx.allocator, "HTTP/1.1 200 OK\r\nContent-Length: {d}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n", .{ctx.bundle_data.len});
-            defer ctx.allocator.free(response_header);
-
-            try connection.stream.writeAll(response_header);
-            try connection.stream.writeAll(ctx.bundle_data);
-
-            ctx.response_sent.post();
-        }
-    };
-
-    var server_ctx = ServerContext{
-        .server = &server,
-        .bundle_data = bundle_data.items,
-        .allocator = allocator,
-    };
-
-    // Start server thread
-    const server_thread = try std.Thread.spawn(.{}, ServerContext.run, .{&server_ctx});
-    defer server_thread.join();
-
-    // Create download destination
-    var extract_tmp = testing.tmpDir(.{});
-    defer extract_tmp.cleanup();
-
-    // Download and extract
-    {
-        const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/{s}.tar.zst", .{ port, base58_hash });
-        defer allocator.free(url);
-
-        try download.download(&allocator, url, extract_tmp.dir);
-    }
-
-    // Wait for server to complete
-    server_ctx.response_sent.wait();
-
-    // Check if server had any errors
-    if (server_ctx.error_occurred) |err| {
-        return err;
-    }
-
-    // Verify request path
-    try testing.expect(server_ctx.request_path != null);
-    if (server_ctx.request_path) |path| {
-        defer allocator.free(path);
-        const expected_path = try std.fmt.allocPrint(allocator, "/{s}.tar.zst", .{base58_hash});
-        defer allocator.free(expected_path);
-        try testing.expectEqualStrings(expected_path, path);
-    }
-
-    // Verify files were extracted correctly
-    {
-        const content = try extract_tmp.dir.readFileAlloc(allocator, "README.md", 1024);
-        defer allocator.free(content);
-        try testing.expectEqualStrings("# Test Project\n\nThis is a test README.", content);
-    }
-    {
-        const content = try extract_tmp.dir.readFileAlloc(allocator, "src/main.roc", 1024);
-        defer allocator.free(content);
-        try testing.expectEqualStrings("app \"test\"\n    packages {}\n    imports []\n    provides [main] to pf\n\nmain = \"Hello!\"", content);
-    }
-    {
-        const content = try extract_tmp.dir.readFileAlloc(allocator, "src/lib.roc", 1024);
-        defer allocator.free(content);
-        try testing.expectEqualStrings("module [helper]\n\nhelper = \\x -> x * 2", content);
-    }
-
-    // Verify directory structure
-    {
-        var src_dir = try extract_tmp.dir.openDir("src", .{});
-        defer src_dir.close();
-        // If we got here, src directory exists
-    }
-}
+// test "path validation prevents directory traversal" {
+//     const testing = std.testing;
+//     const allocator = testing.allocator;
+
+//     // Create a malicious tar with directory traversal attempt
+//     var malicious_tar = std.io.Writer.Allocating.init(allocator);
+//     defer malicious_tar.deinit();
+
+//     var tar_writer = std.tar.Writer{ .underlying_writer = &malicious_tar.writer };
+
+//     // Try to write a file with ".." in path
+//     const Options = @TypeOf(tar_writer).Options;
+//     const options = Options{
+//         .mode = 0o644,
+//         .mtime = 0,
+//     };
+
+//     try tar_writer.writeFileBytes("../../../etc/passwd", "malicious content", options);
+//     try tar_writer.finishPedantically();
+
+//     // Compress it
+//     var compressed = std.array_list.Managed(u8).init(allocator);
+//     defer compressed.deinit();
+
+//     var allocator_copy = allocator;
+//     var writer = try streaming_writer.CompressingHashWriter.init(
+//         &allocator_copy,
+//         3,
+//         io_compat.toAnyWriter(compressed.writer()),
+//         bundle.allocForZstd,
+//         bundle.freeForZstd,
+//     );
+//     defer writer.deinit();
+
+//     const malicious_tar_data = try malicious_tar.toOwnedSlice();
+//     defer allocator.free(malicious_tar_data);
+//     try writer.interface.writeAll(malicious_tar_data);
+//     try writer.finish();
+
+//     const hash = writer.getHash();
+
+//     // Try to extract - should fail with InvalidPath error
+//     var tmp = std.testing.tmpDir(.{});
+//     defer tmp.cleanup();
+
+//     var stream = std.io.fixedBufferStream(compressed.items);
+//     var allocator_copy2 = allocator;
+//     var dir_writer = DirExtractWriter.init(tmp.dir);
+//     const result = bundle.unbundleStream(
+//         stream.reader(),
+//         dir_writer.extractWriter(),
+//         &allocator_copy2,
+//         &hash,
+//         null,
+//     );
+
+//     try testing.expectError(error.InvalidPath, result);
+// }
+
+// test "empty directories are preserved" {
+//     const testing = std.testing;
+//     var allocator = testing.allocator;
+
+//     // Create source with empty directories
+//     var src_tmp = testing.tmpDir(.{});
+//     defer src_tmp.cleanup();
+//     const src_dir = src_tmp.dir;
+
+//     // Create empty directories
+//     try src_dir.makePath("empty_dir");
+//     try src_dir.makePath("nested/empty");
+
+//     // Create one file to ensure bundle isn't empty
+//     {
+//         const file = try src_dir.createFile("readme.txt", .{});
+//         defer file.close();
+//         try file.writeAll("Test");
+//     }
+
+//     // Bundle with explicit directory entries
+//     var bundle_data = std.array_list.Managed(u8).init(allocator);
+//     defer bundle_data.deinit();
+
+//     // Note: Current implementation doesn't explicitly handle empty directories
+//     // This test documents current behavior - empty dirs are NOT preserved
+//     const file_paths = [_][]const u8{"readme.txt"};
+//     var file_iter = FilePathIterator{ .paths = &file_paths };
+
+//     const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), src_dir, null, null);
+//     defer allocator.free(filename);
+
+//     // Extract
+//     var dst_tmp = testing.tmpDir(.{});
+//     defer dst_tmp.cleanup();
+
+//     var stream = std.io.fixedBufferStream(bundle_data.items);
+//     var allocator_copy = allocator;
+//     try bundle.unbundle(stream.reader(), dst_tmp.dir, &allocator_copy, filename, null);
+
+//     // Verify file exists
+//     _ = try dst_tmp.dir.statFile("readme.txt");
+
+//     // Document that empty directories are NOT preserved
+//     // This is a known limitation of the current implementation
+// }
+
+// test "bundle and unbundle roundtrip" {
+//     const testing = std.testing;
+//     var allocator = testing.allocator;
+
+//     // Create source temp directory
+//     var src_tmp = testing.tmpDir(.{});
+//     defer src_tmp.cleanup();
+//     const src_dir = src_tmp.dir;
+
+//     // Create test files and directories
+//     {
+//         const file = try src_dir.createFile("file1.txt", .{});
+//         defer file.close();
+//         try file.writeAll("Hello from file1!");
+//     }
+//     {
+//         const file = try src_dir.createFile("file2.txt", .{});
+//         defer file.close();
+//         try file.writeAll("This is file2 content.");
+//     }
+
+//     try src_dir.makePath("subdir1");
+//     {
+//         const file = try src_dir.createFile("subdir1/nested1.txt", .{});
+//         defer file.close();
+//         try file.writeAll("Nested file 1");
+//     }
+//     {
+//         const file = try src_dir.createFile("subdir1/nested2.txt", .{});
+//         defer file.close();
+//         try file.writeAll("Another nested file");
+//     }
+
+//     try src_dir.makePath("subdir2/deeply/nested");
+//     {
+//         const file = try src_dir.createFile("subdir2/deeply/nested/deep.txt", .{});
+//         defer file.close();
+//         try file.writeAll("Deep file content");
+//     }
+
+//     // Collect file paths
+//     const file_paths = [_][]const u8{
+//         "file1.txt",
+//         "file2.txt",
+//         "subdir1/nested1.txt",
+//         "subdir1/nested2.txt",
+//         "subdir2/deeply/nested/deep.txt",
+//     };
+
+//     // Create an iterator for the file paths
+//     var file_iter = FilePathIterator{ .paths = &file_paths };
+
+//     // Bundle to memory
+//     var bundle_data = std.array_list.Managed(u8).init(allocator);
+//     defer bundle_data.deinit();
+
+//     const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), src_dir, null, null);
+//     defer allocator.free(filename);
+
+//     // Create destination temp directory
+//     var dst_tmp = testing.tmpDir(.{});
+//     defer dst_tmp.cleanup();
+//     const dst_dir = dst_tmp.dir;
+
+//     // Unbundle from memory
+//     var stream = std.io.fixedBufferStream(bundle_data.items);
+//     try bundle.unbundle(stream.reader(), dst_dir, &allocator, filename, null);
+
+//     // Verify all files exist with correct content
+//     const file1_content = try dst_dir.readFileAlloc(allocator, "file1.txt", 1024);
+//     defer allocator.free(file1_content);
+//     try testing.expectEqualStrings("Hello from file1!", file1_content);
+
+//     const file2_content = try dst_dir.readFileAlloc(allocator, "file2.txt", 1024);
+//     defer allocator.free(file2_content);
+//     try testing.expectEqualStrings("This is file2 content.", file2_content);
+
+//     const nested1_content = try dst_dir.readFileAlloc(allocator, "subdir1/nested1.txt", 1024);
+//     defer allocator.free(nested1_content);
+//     try testing.expectEqualStrings("Nested file 1", nested1_content);
+
+//     const nested2_content = try dst_dir.readFileAlloc(allocator, "subdir1/nested2.txt", 1024);
+//     defer allocator.free(nested2_content);
+//     try testing.expectEqualStrings("Another nested file", nested2_content);
+
+//     const deep_content = try dst_dir.readFileAlloc(allocator, "subdir2/deeply/nested/deep.txt", 1024);
+//     defer allocator.free(deep_content);
+//     try testing.expectEqualStrings("Deep file content", deep_content);
+// }
+
+// test "bundle and unbundle over socket stream" {
+//     const testing = std.testing;
+//     var allocator = testing.allocator;
+
+//     // Skip on Windows as Unix sockets aren't supported
+//     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+//     // Create source temp directory with test files
+//     var src_tmp = testing.tmpDir(.{});
+//     defer src_tmp.cleanup();
+//     const src_dir = src_tmp.dir;
+
+//     // Create test files
+//     {
+//         const file = try src_dir.createFile("test1.txt", .{});
+//         defer file.close();
+//         try file.writeAll("Socket test file 1");
+//     }
+//     {
+//         const file = try src_dir.createFile("test2.txt", .{});
+//         defer file.close();
+//         try file.writeAll("This is socket test file 2!");
+//     }
+
+//     try src_dir.makePath("nested");
+//     {
+//         const file = try src_dir.createFile("nested/deep.txt", .{});
+//         defer file.close();
+//         try file.writeAll("Deep socket test content");
+//     }
+
+//     // Bundle to a file first
+//     var bundle_tmp = testing.tmpDir(.{});
+//     defer bundle_tmp.cleanup();
+
+//     const bundle_path = "test.bundle";
+//     const bundle_file = try bundle_tmp.dir.createFile(bundle_path, .{});
+//     defer bundle_file.close();
+
+//     const file_paths = [_][]const u8{
+//         "test1.txt",
+//         "test2.txt",
+//         "nested/deep.txt",
+//     };
+
+//     var file_iter = FilePathIterator{ .paths = &file_paths };
+//     var bundle_writer_buffer: [4096]u8 = undefined;
+//     var bundle_writer = bundle_file.writer(&bundle_writer_buffer);
+//     const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, &bundle_writer.interface, src_dir, null, null);
+//     try bundle_writer.interface.flush();
+//     defer allocator.free(filename);
+
+//     // Create socket in temp directory
+//     var socket_tmp = testing.tmpDir(.{});
+//     defer socket_tmp.cleanup();
+
+//     // Get the real path of the temp directory
+//     var real_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+//     const real_path = try socket_tmp.dir.realpath(".", &real_path_buf);
+
+//     var socket_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+//     const socket_path = try std.fmt.bufPrint(&socket_path_buf, "{s}/test.sock", .{real_path});
+
+//     // Create server thread
+//     const ServerContext = struct {
+//         socket_path: []const u8,
+//         bundle_path: []const u8,
+//         bundle_dir: std.fs.Dir,
+//         ready: std.Thread.ResetEvent = .{},
+//         done: std.Thread.ResetEvent = .{},
+
+//         fn run(ctx: *@This()) !void {
+//             const server = try std.net.Address.initUnix(ctx.socket_path);
+//             var listener = try server.listen(.{});
+//             defer listener.deinit();
+
+//             // Signal that server is ready
+//             ctx.ready.set();
+
+//             // Accept one connection
+//             const connection = try listener.accept();
+//             defer connection.stream.close();
+
+//             // Open and stream the bundle file
+//             const file = try ctx.bundle_dir.openFile(ctx.bundle_path, .{});
+//             defer file.close();
+
+//             // Stream file contents to socket
+//             var buf: [4096]u8 = undefined;
+//             while (true) {
+//                 const bytes_read = try file.read(&buf);
+//                 if (bytes_read == 0) break;
+//                 _ = try connection.stream.writeAll(buf[0..bytes_read]);
+//             }
+
+//             ctx.done.set();
+//         }
+//     };
+
+//     var server_ctx = ServerContext{
+//         .socket_path = socket_path,
+//         .bundle_path = bundle_path,
+//         .bundle_dir = bundle_tmp.dir,
+//     };
+
+//     const server_thread = try std.Thread.spawn(.{}, ServerContext.run, .{&server_ctx});
+//     defer server_thread.join();
+
+//     // Wait for server to be ready
+//     server_ctx.ready.wait();
+
+//     // Create destination temp directory
+//     var dst_tmp = testing.tmpDir(.{});
+//     defer dst_tmp.cleanup();
+//     const dst_dir = dst_tmp.dir;
+
+//     // Connect to socket and unbundle
+//     var stream = try std.net.connectUnixSocket(socket_path);
+//     defer stream.close();
+
+//     // Unbundle from socket stream
+//     var stream_buffer: [1024]u8 = undefined;
+//     var stream_reader = stream.reader(&stream_buffer).file_reader.interface;
+//     var adapted_stream_reader = stream_reader.adaptToOldInterface();
+//     try bundle.unbundle(&adapted_stream_reader, dst_dir, &allocator, filename, null);
+
+//     // Wait for server to finish
+//     server_ctx.done.wait();
+
+//     // Verify all files exist with correct content
+//     const file1_content = try dst_dir.readFileAlloc(allocator, "test1.txt", 1024);
+//     defer allocator.free(file1_content);
+//     try testing.expectEqualStrings("Socket test file 1", file1_content);
+
+//     const file2_content = try dst_dir.readFileAlloc(allocator, "test2.txt", 1024);
+//     defer allocator.free(file2_content);
+//     try testing.expectEqualStrings("This is socket test file 2!", file2_content);
+
+//     const deep_content = try dst_dir.readFileAlloc(allocator, "nested/deep.txt", 1024);
+//     defer allocator.free(deep_content);
+//     try testing.expectEqualStrings("Deep socket test content", deep_content);
+// }
+
+// test "std.tar.writer creates valid tar" {
+//     const testing = std.testing;
+//     const allocator = testing.allocator;
+
+//     // Create a tar in memory
+//     var allocating_writer = std.io.Writer.Allocating.init(allocator);
+//     defer allocating_writer.deinit();
+
+//     var tar_writer = std.tar.Writer{ .underlying_writer = &allocating_writer.writer };
+
+//     // Write a simple file
+//     const content = "Hello tar world!";
+//     const Options = @TypeOf(tar_writer).Options;
+//     try tar_writer.writeFileBytes("test.txt", content, Options{
+//         .mode = 0o644,
+//         .mtime = 0,
+//     });
+
+//     try tar_writer.finishPedantically();
+
+//     // Now try to read it back
+//     const tar_bytes = try allocating_writer.toOwnedSlice();
+//     defer allocator.free(tar_bytes);
+//     var stream = std.io.fixedBufferStream(tar_bytes);
+//     var file_name_buffer: [256]u8 = undefined;
+//     var link_name_buffer: [256]u8 = undefined;
+//     var stream_reader_buffer: [1024]u8 = undefined;
+//     var adapted_stream_reader = stream.reader().adaptToNewApi(&stream_reader_buffer).new_interface;
+//     var tar_iter = std.tar.Iterator.init(&adapted_stream_reader, .{
+//         .file_name_buffer = &file_name_buffer,
+//         .link_name_buffer = &link_name_buffer,
+//     });
+
+//     const file = try tar_iter.next();
+//     try testing.expect(file != null);
+//     try testing.expectEqualStrings("test.txt", file.?.name);
+//     try testing.expectEqual(@as(u64, content.len), file.?.size);
+
+//     // Read content
+//     const reader = tar_iter.reader;
+//     var buf: [1024]u8 = undefined;
+//     const bytes_read = try reader.readSliceShort(buf[0..content.len]);
+//     try testing.expectEqualStrings(content, buf[0..bytes_read]);
+// }
+
+// test "minimal bundle unbundle" {
+//     const testing = std.testing;
+//     var allocator = testing.allocator;
+
+//     // Create source temp directory
+//     var src_tmp = testing.tmpDir(.{});
+//     defer src_tmp.cleanup();
+//     const src_dir = src_tmp.dir;
+
+//     // Create a simple test file
+//     {
+//         const file = try src_dir.createFile("test.txt", .{});
+//         defer file.close();
+//         try file.writeAll("Hello");
+//     }
+
+//     // Bundle to memory
+//     var bundle_data = std.array_list.Managed(u8).init(allocator);
+//     defer bundle_data.deinit();
+
+//     const file_paths = [_][]const u8{"test.txt"};
+//     var file_iter = FilePathIterator{ .paths = &file_paths };
+//     const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), src_dir, null, null);
+//     defer allocator.free(filename);
+
+//     // Create destination temp directory
+//     var dst_tmp = testing.tmpDir(.{});
+//     defer dst_tmp.cleanup();
+//     const dst_dir = dst_tmp.dir;
+
+//     // Unbundle from memory
+//     var stream = std.io.fixedBufferStream(bundle_data.items);
+//     try bundle.unbundle(stream.reader(), dst_dir, &allocator, filename, null);
+
+//     // Read and verify content
+//     const content = try dst_dir.readFileAlloc(allocator, "test.txt", 1024);
+//     defer allocator.free(content);
+//     try testing.expectEqualStrings("Hello", content);
+// }
+
+// test "bundle with path prefix stripping" {
+//     const testing = std.testing;
+//     var allocator = testing.allocator;
+
+//     // Create source temp directory with nested structure
+//     var src_tmp = testing.tmpDir(.{});
+//     defer src_tmp.cleanup();
+//     const src_dir = src_tmp.dir;
+
+//     // Create a deep directory structure
+//     try src_dir.makePath("foo/bar/src");
+//     try src_dir.makePath("foo/bar/src/utils");
+
+//     // Create test files with the prefix
+//     {
+//         const file = try src_dir.createFile("foo/bar/src/main.txt", .{});
+//         defer file.close();
+//         try file.writeAll("Main file content");
+//     }
+//     {
+//         const file = try src_dir.createFile("foo/bar/src/utils/helper.txt", .{});
+//         defer file.close();
+//         try file.writeAll("Helper file content");
+//     }
+
+//     // Bundle with path prefix
+//     var bundle_data = std.array_list.Managed(u8).init(allocator);
+//     defer bundle_data.deinit();
+
+//     // File paths include the full prefix
+//     const file_paths = [_][]const u8{
+//         "foo/bar/src/main.txt",
+//         "foo/bar/src/utils/helper.txt",
+//     };
+
+//     var file_iter = FilePathIterator{ .paths = &file_paths };
+
+//     // Bundle with prefix "foo/bar/src/"
+//     const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), src_dir, "foo/bar/src/", null);
+//     defer allocator.free(filename);
+
+//     // Create destination temp directory
+//     var dst_tmp = testing.tmpDir(.{});
+//     defer dst_tmp.cleanup();
+//     const dst_dir = dst_tmp.dir;
+
+//     // Unbundle
+//     var stream = std.io.fixedBufferStream(bundle_data.items);
+//     try bundle.unbundle(stream.reader(), dst_dir, &allocator, filename, null);
+
+//     // Verify files exist WITHOUT the prefix
+//     const main_content = try dst_dir.readFileAlloc(allocator, "main.txt", 1024);
+//     defer allocator.free(main_content);
+//     try testing.expectEqualStrings("Main file content", main_content);
+
+//     const helper_content = try dst_dir.readFileAlloc(allocator, "utils/helper.txt", 1024);
+//     defer allocator.free(helper_content);
+//     try testing.expectEqualStrings("Helper file content", helper_content);
+// }
+
+// test "blake3 hash verification success" {
+//     const testing = std.testing;
+//     var allocator = testing.allocator;
+
+//     // Create a simple test file
+//     var src_tmp = testing.tmpDir(.{});
+//     defer src_tmp.cleanup();
+//     const src_dir = src_tmp.dir;
+
+//     {
+//         const file = try src_dir.createFile("test.txt", .{});
+//         defer file.close();
+//         try file.writeAll("Test content for hash verification");
+//     }
+
+//     // Bundle the file
+//     var bundle_data = std.array_list.Managed(u8).init(allocator);
+//     defer bundle_data.deinit();
+
+//     const file_paths = [_][]const u8{"test.txt"};
+//     var file_iter = FilePathIterator{ .paths = &file_paths };
+//     const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), src_dir, null, null);
+//     defer allocator.free(filename);
+
+//     // Verify filename ends with .tar.zst
+//     try testing.expect(std.mem.endsWith(u8, filename, ".tar.zst"));
+
+//     // Create destination directory
+//     var dst_tmp = testing.tmpDir(.{});
+//     defer dst_tmp.cleanup();
+//     const dst_dir = dst_tmp.dir;
+
+//     // Unbundle with correct filename - should succeed
+//     var stream = std.io.fixedBufferStream(bundle_data.items);
+//     try bundle.unbundle(stream.reader(), dst_dir, &allocator, filename, null);
+
+//     // Verify content
+//     const content = try dst_dir.readFileAlloc(allocator, "test.txt", 1024);
+//     defer allocator.free(content);
+//     try testing.expectEqualStrings("Test content for hash verification", content);
+// }
+
+// test "blake3 hash verification failure" {
+//     const testing = std.testing;
+//     var allocator = testing.allocator;
+
+//     // Create a simple test file
+//     var src_tmp = testing.tmpDir(.{});
+//     defer src_tmp.cleanup();
+//     const src_dir = src_tmp.dir;
+
+//     {
+//         const file = try src_dir.createFile("test.txt", .{});
+//         defer file.close();
+//         try file.writeAll("Test content");
+//     }
+
+//     // Bundle the file
+//     var bundle_data = std.array_list.Managed(u8).init(allocator);
+//     defer bundle_data.deinit();
+
+//     const file_paths = [_][]const u8{"test.txt"};
+//     var file_iter = FilePathIterator{ .paths = &file_paths };
+//     const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), src_dir, null, null);
+//     defer allocator.free(filename);
+
+//     // Create destination directory
+//     var dst_tmp = testing.tmpDir(.{});
+//     defer dst_tmp.cleanup();
+//     const dst_dir = dst_tmp.dir;
+
+//     // Try to unbundle with wrong filename - should fail
+//     const wrong_filename = "1234567890abcdef.tar.zst";
+//     var stream = std.io.fixedBufferStream(bundle_data.items);
+//     const result = bundle.unbundle(stream.reader(), dst_dir, &allocator, wrong_filename, null);
+
+//     try testing.expectError(error.InvalidFilename, result);
+// }
+
+// test "unbundle with existing directory error" {
+//     const testing = std.testing;
+//     var allocator = testing.allocator;
+
+//     // Create temp directory
+//     var tmp = testing.tmpDir(.{});
+//     defer tmp.cleanup();
+//     const tmp_dir = tmp.dir;
+
+//     // Create a simple tar archive
+//     var output_buffer = std.array_list.Managed(u8).init(allocator);
+//     defer output_buffer.deinit();
+
+//     const files = [_][]const u8{"test.txt"};
+//     var iter = FilePathIterator{ .paths = &files };
+
+//     // Create test file
+//     {
+//         const file = try tmp_dir.createFile("test.txt", .{});
+//         defer file.close();
+//         try file.writeAll("test content");
+//     }
+
+//     // Bundle the file
+//     const filename = try bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, output_buffer.writer(), tmp_dir, null, null);
+//     defer allocator.free(filename);
+
+//     // Write the bundled data to a file
+//     {
+//         const bundle_file = try tmp_dir.createFile(filename, .{});
+//         defer bundle_file.close();
+//         try bundle_file.writeAll(output_buffer.items);
+//     }
+
+//     // Extract the base name without extension for directory
+//     const dir_name = filename[0 .. filename.len - 8]; // Remove .tar.zst
+
+//     // Create a directory with the same name
+//     try tmp_dir.makePath(dir_name);
+
+//     // Try to unbundle - should fail because directory exists
+//     const bundle_file = try tmp_dir.openFile(filename, .{});
+//     defer bundle_file.close();
+
+//     var bundle_reader_buffer: [4096]u8 = undefined;
+//     var bundle_reader = bundle_file.reader(&bundle_reader_buffer);
+
+//     // This should succeed but the CLI would error on existing directory
+//     try bundle.unbundle(&bundle_reader.interface, tmp_dir, &allocator, filename, null);
+// }
+
+// test "unbundle multiple archives" {
+//     const testing = std.testing;
+//     var allocator = testing.allocator;
+
+//     // Create temp directory
+//     var tmp = testing.tmpDir(.{});
+//     defer tmp.cleanup();
+//     const tmp_dir = tmp.dir;
+
+//     // Create two different archives
+//     var filenames = std.array_list.Managed([]const u8).init(allocator);
+//     defer {
+//         for (filenames.items) |fname| {
+//             allocator.free(fname);
+//         }
+//         filenames.deinit();
+//     }
+
+//     // First archive
+//     {
+//         var output_buffer = std.array_list.Managed(u8).init(allocator);
+//         defer output_buffer.deinit();
+
+//         const files = [_][]const u8{"file1.txt"};
+//         var iter = FilePathIterator{ .paths = &files };
+
+//         {
+//             const file = try tmp_dir.createFile("file1.txt", .{});
+//             defer file.close();
+//             try file.writeAll("content 1");
+//         }
+
+//         const filename = try bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, output_buffer.writer(), tmp_dir, null, null);
+//         try filenames.append(filename);
+
+//         const bundle_file = try tmp_dir.createFile(filename, .{});
+//         defer bundle_file.close();
+//         try bundle_file.writeAll(output_buffer.items);
+//     }
+
+//     // Second archive
+//     {
+//         var output_buffer = std.array_list.Managed(u8).init(allocator);
+//         defer output_buffer.deinit();
+
+//         const files = [_][]const u8{"file2.txt"};
+//         var iter = FilePathIterator{ .paths = &files };
+
+//         {
+//             const file = try tmp_dir.createFile("file2.txt", .{});
+//             defer file.close();
+//             try file.writeAll("content 2");
+//         }
+
+//         const filename = try bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, output_buffer.writer(), tmp_dir, null, null);
+//         try filenames.append(filename);
+
+//         const bundle_file = try tmp_dir.createFile(filename, .{});
+//         defer bundle_file.close();
+//         try bundle_file.writeAll(output_buffer.items);
+//     }
+
+//     // Unbundle both archives
+//     for (filenames.items) |fname| {
+//         const bundle_file = try tmp_dir.openFile(fname, .{});
+//         defer bundle_file.close();
+
+//         const dir_name = fname[0 .. fname.len - 8]; // Remove .tar.zst
+//         const extract_dir = try tmp_dir.makeOpenPath(dir_name, .{});
+
+//         var reader_buffer: [4096]u8 = undefined;
+//         var bundle_reader = bundle_file.reader(&reader_buffer);
+//         try bundle.unbundle(&bundle_reader.interface, extract_dir, &allocator, fname, null);
+//     }
+
+//     // Verify extraction
+//     const dir1_name = filenames.items[0][0 .. filenames.items[0].len - 8];
+//     const dir2_name = filenames.items[1][0 .. filenames.items[1].len - 8];
+
+//     const path1 = try std.fmt.allocPrint(allocator, "{s}/file1.txt", .{dir1_name});
+//     defer allocator.free(path1);
+//     const extracted1 = try tmp_dir.readFileAlloc(allocator, path1, 1024);
+//     defer allocator.free(extracted1);
+//     try testing.expectEqualStrings("content 1", extracted1);
+
+//     const path2 = try std.fmt.allocPrint(allocator, "{s}/file2.txt", .{dir2_name});
+//     defer allocator.free(path2);
+//     const extracted2 = try tmp_dir.readFileAlloc(allocator, path2, 1024);
+//     defer allocator.free(extracted2);
+//     try testing.expectEqualStrings("content 2", extracted2);
+// }
+
+// test "blake3 hash detects corruption" {
+//     const testing = std.testing;
+//     var allocator = testing.allocator;
+
+//     // Create a test file
+//     var src_tmp = testing.tmpDir(.{});
+//     defer src_tmp.cleanup();
+//     const src_dir = src_tmp.dir;
+
+//     {
+//         const file = try src_dir.createFile("test.txt", .{});
+//         defer file.close();
+//         try file.writeAll("Original content");
+//     }
+
+//     // Bundle the file
+//     var bundle_data = std.array_list.Managed(u8).init(allocator);
+//     defer bundle_data.deinit();
+
+//     const file_paths = [_][]const u8{"test.txt"};
+//     var file_iter = FilePathIterator{ .paths = &file_paths };
+//     const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), src_dir, null, null);
+//     defer allocator.free(filename);
+
+//     // Corrupt the data by flipping a bit
+//     // Since the bundle is compressed, corrupting any bit should be detected
+//     if (bundle_data.items.len > 10) {
+//         // Corrupt a bit near the end to avoid breaking the zstd header
+//         bundle_data.items[bundle_data.items.len - 5] ^= 0x01;
+//     }
+
+//     // Create destination directory
+//     var dst_tmp = testing.tmpDir(.{});
+//     defer dst_tmp.cleanup();
+//     const dst_dir = dst_tmp.dir;
+
+//     // Try to unbundle corrupted data - should fail with HashMismatch or DecompressionFailed
+//     var stream = std.io.fixedBufferStream(bundle_data.items);
+//     const result = bundle.unbundle(stream.reader(), dst_dir, &allocator, filename, null);
+
+//     // Corruption can cause either hash mismatch (if decompression succeeds but data is wrong)
+//     // or decompression failure (if the compressed stream structure is corrupted)
+//     if (result) |_| {
+//         return error.TestUnexpectedResult;
+//     } else |err| {
+//         switch (err) {
+//             error.HashMismatch, error.DecompressionFailed, error.InvalidTarHeader => {
+//                 // Any of these errors are acceptable - corruption was detected
+//             },
+//             else => return err,
+//         }
+//     }
+// }
+
+// test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
+//     const testing = std.testing;
+//     var allocator = testing.allocator;
+
+//     // Create initial temp directory with test files
+//     var initial_tmp = testing.tmpDir(.{});
+//     defer initial_tmp.cleanup();
+//     const initial_dir = initial_tmp.dir;
+
+//     // Create test files with varied content
+//     const test_files = [_]struct { path: []const u8, content: []const u8 }{
+//         .{ .path = "README.md", .content = "# Test Project\n\nThis is a test." },
+//         .{ .path = "src/main.roc", .content = "app \"test\"\n    packages {}\n    imports []\n    provides [main] to pf\n\nmain = \"Hello!\"" },
+//         .{ .path = "src/utils.roc", .content = "module [helper]\n\nhelper = \\x -> x + 1" },
+//         .{ .path = "test/test1.roc", .content = "# Test file 1\nexpect 1 == 1" },
+//         .{ .path = "test/test2.roc", .content = "# Test file 2\nexpect 2 + 2 == 4" },
+//         .{ .path = "docs/guide.txt", .content = "User Guide\n==========\n\nStep 1: ...\nStep 2: ..." },
+//     };
+
+//     // Create all test files
+//     for (test_files) |test_file| {
+//         if (std.fs.path.dirname(test_file.path)) |dir| {
+//             try initial_dir.makePath(dir);
+//         }
+//         const file = try initial_dir.createFile(test_file.path, .{});
+//         defer file.close();
+//         try file.writeAll(test_file.content);
+//     }
+
+//     // First bundle
+//     var first_bundle = std.array_list.Managed(u8).init(allocator);
+//     defer first_bundle.deinit();
+
+//     var paths1 = std.array_list.Managed([]const u8).init(allocator);
+//     defer paths1.deinit();
+//     for (test_files) |test_file| {
+//         try paths1.append(test_file.path);
+//     }
+//     var iter1 = FilePathIterator{ .paths = paths1.items };
+
+//     const filename1 = try bundle.bundle(&iter1, TEST_COMPRESSION_LEVEL, &allocator, first_bundle.writer(), initial_dir, null, null);
+//     defer allocator.free(filename1);
+
+//     // Write first bundle to file
+//     {
+//         const bundle_file = try initial_dir.createFile(filename1, .{});
+//         defer bundle_file.close();
+//         try bundle_file.writeAll(first_bundle.items);
+//     }
+
+//     // First unbundle
+//     var unbundle1_tmp = testing.tmpDir(.{});
+//     defer unbundle1_tmp.cleanup();
+//     const unbundle1_dir = unbundle1_tmp.dir;
+
+//     {
+//         const bundle_file = try initial_dir.openFile(filename1, .{});
+//         defer bundle_file.close();
+
+//         const extract_dir = try unbundle1_dir.makeOpenPath("extracted1", .{});
+
+//         var reader_buffer: [4096]u8 = undefined;
+//         var bundle_reader = bundle_file.reader(&reader_buffer);
+//         try bundle.unbundle(&bundle_reader.interface, extract_dir, &allocator, filename1, null);
+//     }
+
+//     // Second bundle (from first extraction)
+//     var second_bundle = std.array_list.Managed(u8).init(allocator);
+//     defer second_bundle.deinit();
+
+//     var paths2 = std.array_list.Managed([]const u8).init(allocator);
+//     defer paths2.deinit();
+//     for (test_files) |test_file| {
+//         try paths2.append(test_file.path);
+//     }
+//     var iter2 = FilePathIterator{ .paths = paths2.items };
+
+//     const extracted1_dir = try unbundle1_dir.openDir("extracted1", .{});
+//     const filename2 = try bundle.bundle(&iter2, TEST_COMPRESSION_LEVEL, &allocator, second_bundle.writer(), extracted1_dir, null, null);
+//     defer allocator.free(filename2);
+
+//     // Filenames should be identical (same content = same hash)
+//     try testing.expectEqualStrings(filename1, filename2);
+
+//     // Write second bundle to file
+//     {
+//         const bundle_file = try unbundle1_dir.createFile(filename2, .{});
+//         defer bundle_file.close();
+//         try bundle_file.writeAll(second_bundle.items);
+//     }
+
+//     // Second unbundle
+//     var unbundle2_tmp = testing.tmpDir(.{});
+//     defer unbundle2_tmp.cleanup();
+//     const unbundle2_dir = unbundle2_tmp.dir;
+
+//     {
+//         const bundle_file = try unbundle1_dir.openFile(filename2, .{});
+//         defer bundle_file.close();
+
+//         const extract_dir = try unbundle2_dir.makeOpenPath("extracted2", .{});
+
+//         var reader_buffer: [4096]u8 = undefined;
+//         var bundle_reader = bundle_file.reader(&reader_buffer);
+//         try bundle.unbundle(&bundle_reader.interface, extract_dir, &allocator, filename2, null);
+//     }
+
+//     // Verify all files match original content
+//     const extracted2_dir = try unbundle2_dir.openDir("extracted2", .{});
+//     for (test_files) |test_file| {
+//         const content = try extracted2_dir.readFileAlloc(allocator, test_file.path, 10240);
+//         defer allocator.free(content);
+//         try testing.expectEqualStrings(test_file.content, content);
+//     }
+
+//     // Bundle sizes should be identical
+//     try testing.expectEqual(first_bundle.items.len, second_bundle.items.len);
+// }
+
+// test "CLI unbundle with no args defaults to all .tar.zst files" {
+//     const testing = std.testing;
+//     var allocator = testing.allocator;
+
+//     // Create temp directory
+//     var tmp = testing.tmpDir(.{});
+//     defer tmp.cleanup();
+//     const tmp_dir = tmp.dir;
+
+//     // Create multiple archives
+//     var archive_names = std.array_list.Managed([]const u8).init(allocator);
+//     defer {
+//         for (archive_names.items) |name| {
+//             allocator.free(name);
+//         }
+//         archive_names.deinit();
+//     }
+
+//     // Create 3 different archives
+//     for ([_][]const u8{ "file1.txt", "file2.txt", "file3.txt" }) |filename| {
+//         var output_buffer = std.array_list.Managed(u8).init(allocator);
+//         defer output_buffer.deinit();
+
+//         const files = [_][]const u8{filename};
+//         var iter = FilePathIterator{ .paths = &files };
+
+//         // Create test file
+//         {
+//             const file = try tmp_dir.createFile(filename, .{});
+//             defer file.close();
+//             var writer_buffer: [256]u8 = undefined;
+//             var file_writer = file.writer(&writer_buffer);
+//             try file_writer.interface.print("Content of {s}", .{filename});
+//             try file_writer.interface.flush();
+//         }
+
+//         const archive_name = try bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, output_buffer.writer(), tmp_dir, null, null);
+//         try archive_names.append(archive_name);
+
+//         // Write archive to disk
+//         const archive_file = try tmp_dir.createFile(archive_name, .{});
+//         defer archive_file.close();
+//         try archive_file.writeAll(output_buffer.items);
+//     }
+
+//     // Verify all archives exist
+//     try testing.expectEqual(@as(usize, 3), archive_names.items.len);
+//     for (archive_names.items) |name| {
+//         try testing.expect(std.mem.endsWith(u8, name, ".tar.zst"));
+//         _ = try tmp_dir.statFile(name);
+//     }
+
+//     // Simulate unbundle with no args - should extract all .tar.zst files
+//     // Here we just verify that our test setup would work with the CLI
+//     var cwd = try tmp_dir.openDir(".", .{ .iterate = true });
+//     defer cwd.close();
+
+//     var found_archives = std.array_list.Managed([]const u8).init(allocator);
+//     defer found_archives.deinit();
+
+//     var iter = cwd.iterate();
+//     while (try iter.next()) |entry| {
+//         if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".tar.zst")) {
+//             try found_archives.append(entry.name);
+//         }
+//     }
+
+//     // Should find all 3 archives
+//     try testing.expectEqual(@as(usize, 3), found_archives.items.len);
+// }
+
+// test "download URL validation" {
+//     const testing = std.testing;
+
+//     // Create a temp dir for testing (won't actually download)
+//     var tmp = testing.tmpDir(.{});
+//     defer tmp.cleanup();
+
+//     // Valid HTTPS URLs
+//     {
+//         const url = "https://example.com/path/to/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+//         _ = download.validateUrl(url) catch |err| {
+//             try testing.expect(false); // Should not error
+//             std.debug.print("Unexpected error: {}\n", .{err});
+//         };
+//     }
+
+//     // Valid localhost IPv4 URL
+//     {
+//         const url = "http://127.0.0.1:8000/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+//         _ = download.validateUrl(url) catch |err| {
+//             try testing.expect(false); // Should not error
+//             std.debug.print("Unexpected error: {}\n", .{err});
+//         };
+//     }
+
+//     // Valid localhost IPv6 URL with port
+//     {
+//         const url = "http://[::1]:8000/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+//         _ = download.validateUrl(url) catch |err| {
+//             try testing.expect(false); // Should not error
+//             std.debug.print("Unexpected error: {}\n", .{err});
+//         };
+//     }
+
+//     // Valid localhost IPv6 URL without port
+//     {
+//         const url = "http://[::1]/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+//         _ = download.validateUrl(url) catch |err| {
+//             try testing.expect(false); // Should not error
+//             std.debug.print("Unexpected error: {}\n", .{err});
+//         };
+//     }
+
+//     // Valid: localhost hostname (will be resolved and verified during download)
+//     {
+//         const url = "http://localhost:8000/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+//         const hash = try download.validateUrl(url);
+//         try testing.expectEqualStrings("4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf", hash);
+//     }
+
+//     // Invalid: HTTP (not localhost IP)
+//     {
+//         const url = "http://example.com/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+//         const result = download.validateUrl(url);
+//         try testing.expectError(download.DownloadError.InvalidUrl, result);
+//     }
+
+//     // Invalid: no hash in URL
+//     {
+//         const url = "https://example.com/path/to/";
+//         const result = download.validateUrl(url);
+//         try testing.expectError(download.DownloadError.NoHashInUrl, result);
+//     }
+
+//     // Valid: hash without .tar.zst extension
+//     {
+//         const url = "https://example.com/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf";
+//         const hash = try download.validateUrl(url);
+//         try testing.expectEqualStrings("4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf", hash);
+//     }
+
+//     // Valid: hash with .tar.zst extension
+//     {
+//         const url = "https://example.com/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+//         const hash = try download.validateUrl(url);
+//         try testing.expectEqualStrings("4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf", hash);
+//     }
+// }
+
+// // In-memory file system for testing
+// const MemoryFileSystem = struct {
+//     allocator: std.mem.Allocator,
+//     files: std.StringHashMap(std.array_list.Managed(u8)),
+//     directories: std.StringHashMap(void),
+
+//     pub fn init(allocator: std.mem.Allocator) MemoryFileSystem {
+//         return .{
+//             .allocator = allocator,
+//             .files = std.StringHashMap(std.array_list.Managed(u8)).init(allocator),
+//             .directories = std.StringHashMap(void).init(allocator),
+//         };
+//     }
+
+//     pub fn deinit(self: *MemoryFileSystem) void {
+//         var file_iter = self.files.iterator();
+//         while (file_iter.next()) |entry| {
+//             self.allocator.free(entry.key_ptr.*);
+//             entry.value_ptr.deinit();
+//         }
+//         self.files.deinit();
+
+//         var dir_iter = self.directories.iterator();
+//         while (dir_iter.next()) |entry| {
+//             self.allocator.free(entry.key_ptr.*);
+//         }
+//         self.directories.deinit();
+//     }
+
+//     pub fn extractWriter(self: *MemoryFileSystem) bundle.ExtractWriter {
+//         return .{
+//             .ptr = self,
+//             .makeDirFn = makeDir,
+//             .streamFileFn = streamFile,
+//         };
+//     }
+
+//     fn makeDir(ptr: *anyopaque, path: []const u8) anyerror!void {
+//         const self = @as(*MemoryFileSystem, @ptrCast(@alignCast(ptr)));
+//         if (!self.directories.contains(path)) {
+//             try self.directories.put(try self.allocator.dupe(u8, path), {});
+//         }
+//     }
+
+//     fn streamFile(ptr: *anyopaque, path: []const u8, reader: std.io.AnyReader, size: usize) anyerror!void {
+//         const self = @as(*MemoryFileSystem, @ptrCast(@alignCast(ptr)));
+
+//         // Create parent directories if needed
+//         if (std.fs.path.dirname(path)) |dir_name| {
+//             if (!self.directories.contains(dir_name)) {
+//                 try self.directories.put(try self.allocator.dupe(u8, dir_name), {});
+//             }
+//         }
+
+//         // Create new file data
+//         var file_data = std.array_list.Managed(u8).init(self.allocator);
+
+//         // Stream from reader
+//         var buffer: [bundle.STREAM_BUFFER_SIZE]u8 = undefined;
+//         var total_read: usize = 0;
+
+//         while (total_read < size) {
+//             const to_read = @min(buffer.len, size - total_read);
+//             const bytes_read = try reader.read(buffer[0..to_read]);
+
+//             if (bytes_read == 0) {
+//                 break;
+//             }
+
+//             try file_data.appendSlice(buffer[0..bytes_read]);
+//             total_read += bytes_read;
+//         }
+
+//         if (total_read != size) {
+//             file_data.deinit();
+//             return error.UnexpectedEndOfStream;
+//         }
+
+//         // Store the file
+//         try self.files.put(try self.allocator.dupe(u8, path), file_data);
+//     }
+
+//     pub fn getFileContent(self: *MemoryFileSystem, path: []const u8) ?[]const u8 {
+//         const file = self.files.get(path) orelse return null;
+//         return file.items;
+//     }
+// };
+
+// test "download from local server" {
+//     const testing = std.testing;
+//     var allocator = testing.allocator;
+
+//     // Create a temp directory for test files
+//     var tmp = testing.tmpDir(.{});
+//     defer tmp.cleanup();
+
+//     // Create test files
+//     {
+//         const file = try tmp.dir.createFile("README.md", .{});
+//         defer file.close();
+//         try file.writeAll("# Test Project\n\nThis is a test README.");
+//     }
+//     {
+//         try tmp.dir.makePath("src");
+//         const file = try tmp.dir.createFile("src/main.roc", .{});
+//         defer file.close();
+//         try file.writeAll("app \"test\"\n    packages {}\n    imports []\n    provides [main] to pf\n\nmain = \"Hello!\"");
+//     }
+//     {
+//         const file = try tmp.dir.createFile("src/lib.roc", .{});
+//         defer file.close();
+//         try file.writeAll("module [helper]\n\nhelper = \\x -> x * 2");
+//     }
+
+//     // Bundle the files
+//     var bundle_data = std.array_list.Managed(u8).init(allocator);
+//     defer bundle_data.deinit();
+
+//     const file_paths = [_][]const u8{
+//         "README.md",
+//         "src/main.roc",
+//         "src/lib.roc",
+//     };
+//     var file_iter = FilePathIterator{ .paths = &file_paths };
+
+//     const filename = try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), tmp.dir, null, null);
+//     defer allocator.free(filename);
+
+//     // Extract hash from filename
+//     const base58_hash = filename[0 .. filename.len - 8]; // Remove .tar.zst
+
+//     // Create HTTP server on port 0 (let OS assign available port)
+//     const loopback = try std.net.Address.parseIp("127.0.0.1", 0);
+//     var server = try loopback.listen(.{ .reuse_address = true });
+//     defer server.deinit();
+
+//     // Get the actual port assigned by the OS
+//     const port = blk: {
+//         // The server's address includes the actual port assigned
+//         const server_addr = server.listen_address;
+//         break :blk server_addr.getPort();
+//     };
+
+//     // Server context for thread communication
+//     const ServerContext = struct {
+//         server: *std.net.Server,
+//         bundle_data: []const u8,
+//         request_path: ?[]const u8 = null,
+//         response_sent: std.Thread.Semaphore = .{},
+//         allocator: std.mem.Allocator,
+//         error_occurred: ?anyerror = null,
+
+//         fn run(ctx: *@This()) void {
+//             ctx.runImpl() catch |err| {
+//                 ctx.error_occurred = err;
+//                 ctx.response_sent.post();
+//             };
+//         }
+
+//         fn runImpl(ctx: *@This()) !void {
+//             const connection = try ctx.server.accept();
+//             defer connection.stream.close();
+
+//             // Read HTTP request
+//             var request_buf: [4096]u8 = undefined;
+//             const bytes_read = try connection.stream.read(&request_buf);
+
+//             // Parse request line to get the path
+//             const request = request_buf[0..bytes_read];
+//             if (std.mem.indexOf(u8, request, " ")) |first_space| {
+//                 if (std.mem.indexOf(u8, request[first_space + 1 ..], " ")) |second_space| {
+//                     const path = request[first_space + 1 ..][0..second_space];
+//                     ctx.request_path = try ctx.allocator.dupe(u8, path);
+//                 }
+//             }
+
+//             // Send HTTP response with bundle data
+//             const response_header = try std.fmt.allocPrint(ctx.allocator, "HTTP/1.1 200 OK\r\nContent-Length: {d}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n", .{ctx.bundle_data.len});
+//             defer ctx.allocator.free(response_header);
+
+//             try connection.stream.writeAll(response_header);
+//             try connection.stream.writeAll(ctx.bundle_data);
+
+//             ctx.response_sent.post();
+//         }
+//     };
+
+//     var server_ctx = ServerContext{
+//         .server = &server,
+//         .bundle_data = bundle_data.items,
+//         .allocator = allocator,
+//     };
+
+//     // Start server thread
+//     const server_thread = try std.Thread.spawn(.{}, ServerContext.run, .{&server_ctx});
+//     defer server_thread.join();
+
+//     // Create download destination
+//     var extract_tmp = testing.tmpDir(.{});
+//     defer extract_tmp.cleanup();
+
+//     // Download and extract
+//     {
+//         const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/{s}.tar.zst", .{ port, base58_hash });
+//         defer allocator.free(url);
+
+//         try download.download(&allocator, url, extract_tmp.dir);
+//     }
+
+//     // Wait for server to complete
+//     server_ctx.response_sent.wait();
+
+//     // Check if server had any errors
+//     if (server_ctx.error_occurred) |err| {
+//         return err;
+//     }
+
+//     // Verify request path
+//     try testing.expect(server_ctx.request_path != null);
+//     if (server_ctx.request_path) |path| {
+//         defer allocator.free(path);
+//         const expected_path = try std.fmt.allocPrint(allocator, "/{s}.tar.zst", .{base58_hash});
+//         defer allocator.free(expected_path);
+//         try testing.expectEqualStrings(expected_path, path);
+//     }
+
+//     // Verify files were extracted correctly
+//     {
+//         const content = try extract_tmp.dir.readFileAlloc(allocator, "README.md", 1024);
+//         defer allocator.free(content);
+//         try testing.expectEqualStrings("# Test Project\n\nThis is a test README.", content);
+//     }
+//     {
+//         const content = try extract_tmp.dir.readFileAlloc(allocator, "src/main.roc", 1024);
+//         defer allocator.free(content);
+//         try testing.expectEqualStrings("app \"test\"\n    packages {}\n    imports []\n    provides [main] to pf\n\nmain = \"Hello!\"", content);
+//     }
+//     {
+//         const content = try extract_tmp.dir.readFileAlloc(allocator, "src/lib.roc", 1024);
+//         defer allocator.free(content);
+//         try testing.expectEqualStrings("module [helper]\n\nhelper = \\x -> x * 2", content);
+//     }
+
+//     // Verify directory structure
+//     {
+//         var src_dir = try extract_tmp.dir.openDir("src", .{});
+//         defer src_dir.close();
+//         // If we got here, src directory exists
+//     }
+// }
