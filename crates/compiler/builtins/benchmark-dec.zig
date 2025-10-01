@@ -5,13 +5,13 @@ const Timer = time.Timer;
 const RocStr = @import("./bitcode/src/str.zig").RocStr;
 const RocDec = @import("./bitcode/src/dec.zig").RocDec;
 
-fn roc_alloc(_: usize, _: u32) callconv(.c) ?*anyopaque {
+fn roc_alloc(_: usize, _: u32) callconv(.C) ?*anyopaque {
     @panic("Not needed for dec benchmark");
 }
-fn roc_panic(_: *anyopaque, _: u32) callconv(.c) void {
+fn roc_panic(_: *anyopaque, _: u32) callconv(.C) void {
     @panic("Not needed for dec benchmark");
 }
-fn roc_dbg(_: *anyopaque, _: *anyopaque, _: *anyopaque) callconv(.c) void {
+fn roc_dbg(_: *anyopaque, _: *anyopaque, _: *anyopaque) callconv(.C) void {
     @panic("Not needed for dec benchmark");
 }
 
@@ -32,7 +32,7 @@ pub export fn main() u8 {
 }
 
 fn run_tests() !void {
-    const stdout = std.fs.File.stdout().deprecatedWriter();
+    const stdout = std.io.getStdOut().writer();
     try stdout.print("Warning: Timer seems to step in units of 41ns\n\n", .{});
     timer = try Timer.start();
 
@@ -129,7 +129,7 @@ fn run_tests() !void {
 }
 
 fn avg_runs(comptime T: type, comptime n: usize, comptime op: fn (T, T) T, v: T) !u64 {
-    const stdout = std.fs.File.stdout().deprecatedWriter();
+    const stdout = std.io.getStdOut().writer();
 
     const warmups = 10000;
     const repeats = 10000;

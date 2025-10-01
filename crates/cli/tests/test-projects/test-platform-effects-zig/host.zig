@@ -14,10 +14,10 @@ extern fn roc__main_for_host_1_exposed_generic([*]u8) void;
 extern fn roc__main_for_host_1_exposed_size() i64;
 
 const Align = 2 * @alignOf(usize);
-extern fn malloc(size: usize) callconv(.c) ?*align(Align) anyopaque;
-extern fn realloc(c_ptr: [*]align(Align) u8, size: usize) callconv(.c) ?*anyopaque;
-extern fn free(c_ptr: [*]align(Align) u8) callconv(.c) void;
-extern fn memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.c) void;
+extern fn malloc(size: usize) callconv(.C) ?*align(Align) anyopaque;
+extern fn realloc(c_ptr: [*]align(Align) u8, size: usize) callconv(.C) ?*anyopaque;
+extern fn free(c_ptr: [*]align(Align) u8) callconv(.C) void;
+extern fn memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
 extern fn memset(dst: [*]u8, value: i32, size: usize) void;
 extern fn kill(pid: c_int, sig: c_int) c_int;
 extern fn shm_open(name: *const i8, oflag: c_int, mode: c_uint) c_int;
@@ -26,10 +26,10 @@ extern fn getppid() c_int;
 
 const DEBUG: bool = false;
 
-export fn roc_alloc(size: usize, alignment: u32) callconv(.c) ?*anyopaque {
+export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*anyopaque {
     if (DEBUG) {
         const ptr = malloc(size);
-        const stdout = std.fs.File.stdout().deprecatedWriter();
+        const stdout = std.io.getStdOut().writer();
         stdout.print("alloc:   {d} (alignment {d}, size {d})\n", .{ ptr, alignment, size }) catch unreachable;
         return ptr;
     } else {
@@ -37,26 +37,26 @@ export fn roc_alloc(size: usize, alignment: u32) callconv(.c) ?*anyopaque {
     }
 }
 
-export fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.c) ?*anyopaque {
+export fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*anyopaque {
     if (DEBUG) {
-        const stdout = std.fs.File.stdout().deprecatedWriter();
+        const stdout = std.io.getStdOut().writer();
         stdout.print("realloc: {d} (alignment {d}, old_size {d})\n", .{ c_ptr, alignment, old_size }) catch unreachable;
     }
 
     return realloc(@as([*]align(Align) u8, @alignCast(@ptrCast(c_ptr))), new_size);
 }
 
-export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.c) void {
+export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
     if (DEBUG) {
-        const stdout = std.fs.File.stdout().deprecatedWriter();
+        const stdout = std.io.getStdOut().writer();
         stdout.print("dealloc: {d} (alignment {d})\n", .{ c_ptr, alignment }) catch unreachable;
     }
 
     free(@as([*]align(Align) u8, @alignCast(@ptrCast(c_ptr))));
 }
 
-export fn roc_panic(msg: *RocStr, tag_id: u32) callconv(.c) void {
-    const stderr = std.fs.File.stderr().deprecatedWriter();
+export fn roc_panic(msg: *RocStr, tag_id: u32) callconv(.C) void {
+    const stderr = std.io.getStdErr().writer();
     switch (tag_id) {
         0 => {
             stderr.print("Roc standard library crashed with message\n\n    {s}\n\nShutting down\n", .{msg.asSlice()}) catch unreachable;
@@ -69,27 +69,27 @@ export fn roc_panic(msg: *RocStr, tag_id: u32) callconv(.c) void {
     std.process.exit(1);
 }
 
-export fn roc_dbg(loc: *RocStr, msg: *RocStr, src: *RocStr) callconv(.c) void {
-    const stderr = std.fs.File.stderr().deprecatedWriter();
+export fn roc_dbg(loc: *RocStr, msg: *RocStr, src: *RocStr) callconv(.C) void {
+    const stderr = std.io.getStdErr().writer();
     stderr.print("[{s}] {s} = {s}\n", .{ loc.asSlice(), src.asSlice(), msg.asSlice() }) catch unreachable;
 }
 
-export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.c) void {
+export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {
     return memset(dst, value, size);
 }
 
-fn roc_getppid() callconv(.c) c_int {
+fn roc_getppid() callconv(.C) c_int {
     return getppid();
 }
 
-fn roc_getppid_windows_stub() callconv(.c) c_int {
+fn roc_getppid_windows_stub() callconv(.C) c_int {
     return 0;
 }
 
-fn roc_shm_open(name: *const i8, oflag: c_int, mode: c_uint) callconv(.c) c_int {
+fn roc_shm_open(name: *const i8, oflag: c_int, mode: c_uint) callconv(.C) c_int {
     return shm_open(name, oflag, mode);
 }
-fn roc_mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) callconv(.c) *anyopaque {
+fn roc_mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) callconv(.C) *anyopaque {
     return mmap(addr, length, prot, flags, fd, offset);
 }
 
@@ -138,7 +138,7 @@ fn roc_fx_get_line_help() !RocStr {
 }
 
 pub export fn roc_fx_put_line(rocPath: *str.RocStr) i64 {
-    const stdout = std.fs.File.stdout().deprecatedWriter();
+    const stdout = std.io.getStdOut().writer();
 
     for (rocPath.asSlice()) |char| {
         stdout.print("{c}", .{char}) catch unreachable;

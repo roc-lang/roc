@@ -541,24 +541,24 @@ pub const RocStr = extern struct {
     }
 };
 
-pub fn init(bytes_ptr: [*]const u8, length: usize) callconv(.c) RocStr {
+pub fn init(bytes_ptr: [*]const u8, length: usize) callconv(.C) RocStr {
     return @call(.always_inline, RocStr.init, .{ bytes_ptr, length });
 }
 
 // Str.equal
-pub fn strEqual(self: RocStr, other: RocStr) callconv(.c) bool {
+pub fn strEqual(self: RocStr, other: RocStr) callconv(.C) bool {
     return self.eq(other);
 }
 
 // Str.numberOfBytes
-pub fn strNumberOfBytes(string: RocStr) callconv(.c) usize {
+pub fn strNumberOfBytes(string: RocStr) callconv(.C) usize {
     return string.len();
 }
 
 // Str.fromInt
 pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
     const f = struct {
-        fn func(int: T) callconv(.c) RocStr {
+        fn func(int: T) callconv(.C) RocStr {
             return @call(.always_inline, strFromIntHelp, .{ T, int });
         }
     }.func;
@@ -586,7 +586,7 @@ fn strFromIntHelp(comptime T: type, int: T) RocStr {
 // Str.fromFloat
 pub fn exportFromFloat(comptime T: type, comptime name: []const u8) void {
     const f = struct {
-        fn func(float: T) callconv(.c) RocStr {
+        fn func(float: T) callconv(.C) RocStr {
             return @call(.always_inline, strFromFloatHelp, .{ T, float });
         }
     }.func;
@@ -602,7 +602,7 @@ fn strFromFloatHelp(comptime T: type, float: T) RocStr {
 }
 
 // Str.splitOn
-pub fn strSplitOn(string: RocStr, delimiter: RocStr) callconv(.c) RocList {
+pub fn strSplitOn(string: RocStr, delimiter: RocStr) callconv(.C) RocList {
     const segment_count = countSegments(string, delimiter);
     const list = RocList.allocate(@alignOf(RocStr), segment_count, @sizeOf(RocStr), true);
 
@@ -964,7 +964,7 @@ test "strSplitHelp: overlapping delimiter 2" {
 // It is used to count how many segments the input `_str`
 // needs to be broken into, so that we can allocate a array
 // of that size. It always returns at least 1.
-pub fn countSegments(string: RocStr, delimiter: RocStr) callconv(.c) usize {
+pub fn countSegments(string: RocStr, delimiter: RocStr) callconv(.C) usize {
     if (delimiter.isEmpty()) {
         return 1;
     }
@@ -1062,19 +1062,19 @@ test "countSegments: overlapping delimiter 2" {
     try expectEqual(segments_count, 3);
 }
 
-pub fn countUtf8Bytes(string: RocStr) callconv(.c) u64 {
+pub fn countUtf8Bytes(string: RocStr) callconv(.C) u64 {
     return @intCast(string.len());
 }
 
-pub fn isEmpty(string: RocStr) callconv(.c) bool {
+pub fn isEmpty(string: RocStr) callconv(.C) bool {
     return string.isEmpty();
 }
 
-pub fn getCapacity(string: RocStr) callconv(.c) usize {
+pub fn getCapacity(string: RocStr) callconv(.C) usize {
     return string.getCapacity();
 }
 
-pub fn substringUnsafeC(string: RocStr, start_u64: u64, length_u64: u64) callconv(.c) RocStr {
+pub fn substringUnsafeC(string: RocStr, start_u64: u64, length_u64: u64) callconv(.C) RocStr {
     const start: usize = @intCast(start_u64);
     const length: usize = @intCast(length_u64);
 
@@ -1113,7 +1113,7 @@ fn substringUnsafe(string: RocStr, start: usize, length: usize) RocStr {
     return RocStr.empty();
 }
 
-pub fn getUnsafeC(string: RocStr, index: u64) callconv(.c) u8 {
+pub fn getUnsafeC(string: RocStr, index: u64) callconv(.C) u8 {
     return string.getUnchecked(@intCast(index));
 }
 
@@ -1154,7 +1154,7 @@ test "substringUnsafe: end" {
 }
 
 // Str.startsWith
-pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.c) bool {
+pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.C) bool {
     const bytes_len = string.len();
     const bytes_ptr = string.asU8ptr();
 
@@ -1177,7 +1177,7 @@ pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.c) bool {
 }
 
 // Str.repeat
-pub fn repeatC(string: RocStr, count_u64: u64) callconv(.c) RocStr {
+pub fn repeatC(string: RocStr, count_u64: u64) callconv(.C) RocStr {
     const count: usize = @intCast(count_u64);
     const bytes_len = string.len();
     const bytes_ptr = string.asU8ptr();
@@ -1216,7 +1216,7 @@ test "startsWith: 12345678912345678910 starts with 123456789123456789" {
 }
 
 // Str.endsWith
-pub fn endsWith(string: RocStr, suffix: RocStr) callconv(.c) bool {
+pub fn endsWith(string: RocStr, suffix: RocStr) callconv(.C) bool {
     const bytes_len = string.len();
     const bytes_ptr = string.asU8ptr();
 
@@ -1272,7 +1272,7 @@ test "endsWith: hello world ends with world" {
 }
 
 // Str.concat
-pub fn strConcatC(arg1: RocStr, arg2: RocStr) callconv(.c) RocStr {
+pub fn strConcatC(arg1: RocStr, arg2: RocStr) callconv(.C) RocStr {
     return @call(.always_inline, strConcat, .{ arg1, arg2 });
 }
 
@@ -1328,7 +1328,7 @@ pub const RocListStr = extern struct {
 };
 
 // Str.joinWith
-pub fn strJoinWithC(list: RocList, separator: RocStr) callconv(.c) RocStr {
+pub fn strJoinWithC(list: RocList, separator: RocStr) callconv(.C) RocStr {
     const roc_list_str = RocListStr{
         .list_elements = @as(?[*]RocStr, @ptrCast(@alignCast(list.bytes))),
         .list_length = list.length,
@@ -1412,7 +1412,7 @@ test "RocStr.joinWith: result is big" {
 }
 
 // Str.toUtf8
-pub fn strToUtf8C(arg: RocStr) callconv(.c) RocList {
+pub fn strToUtf8C(arg: RocStr) callconv(.C) RocList {
     return strToBytes(arg);
 }
 
@@ -1442,7 +1442,7 @@ const FromUtf8Result = extern struct {
 pub fn fromUtf8C(
     list: RocList,
     update_mode: UpdateMode,
-) callconv(.c) FromUtf8Result {
+) callconv(.C) FromUtf8Result {
     return fromUtf8(list, update_mode);
 }
 
@@ -1520,7 +1520,7 @@ fn utf8EncodeLossy(c: u32, out: []u8) u3 {
 
 pub fn fromUtf8Lossy(
     list: RocList,
-) callconv(.c) RocStr {
+) callconv(.C) RocStr {
     if (list.len() == 0) {
         return RocStr.empty();
     }
@@ -1958,7 +1958,7 @@ test "isWhitespace" {
     try expect(!isWhitespace('x'));
 }
 
-pub fn strTrim(input_string: RocStr) callconv(.c) RocStr {
+pub fn strTrim(input_string: RocStr) callconv(.C) RocStr {
     var string = input_string;
 
     if (string.isEmpty()) {
@@ -2007,7 +2007,7 @@ pub fn strTrim(input_string: RocStr) callconv(.c) RocStr {
     }
 }
 
-pub fn strTrimStart(input_string: RocStr) callconv(.c) RocStr {
+pub fn strTrimStart(input_string: RocStr) callconv(.C) RocStr {
     var string = input_string;
 
     if (string.isEmpty()) {
@@ -2055,7 +2055,7 @@ pub fn strTrimStart(input_string: RocStr) callconv(.c) RocStr {
     }
 }
 
-pub fn strTrimEnd(input_string: RocStr) callconv(.c) RocStr {
+pub fn strTrimEnd(input_string: RocStr) callconv(.C) RocStr {
     var string = input_string;
 
     if (string.isEmpty()) {
@@ -2136,7 +2136,7 @@ fn countTrailingWhitespaceBytes(string: RocStr) usize {
 }
 
 // Str.with_ascii_lowercased
-pub fn strWithAsciiLowercased(string: RocStr) callconv(.c) RocStr {
+pub fn strWithAsciiLowercased(string: RocStr) callconv(.C) RocStr {
     var new_str = if (string.isUnique())
         string
     else blk: {
@@ -2196,7 +2196,7 @@ test "withAsciiLowercased: seamless slice" {
 }
 
 // Str.with_ascii_uppercased
-pub fn strWithAsciiUppercased(string: RocStr) callconv(.c) RocStr {
+pub fn strWithAsciiUppercased(string: RocStr) callconv(.C) RocStr {
     var new_str = if (string.isUnique())
         string
     else blk: {
@@ -2255,7 +2255,7 @@ test "withAsciiUppercased: seamless slice" {
     try expect(str_result.eq(expected));
 }
 
-pub fn strCaselessAsciiEquals(self: RocStr, other: RocStr) callconv(.c) bool {
+pub fn strCaselessAsciiEquals(self: RocStr, other: RocStr) callconv(.C) bool {
     if (self.bytes == other.bytes and self.length == other.length) {
         return true;
     }
@@ -2323,9 +2323,9 @@ test "caselessAsciiEquals: seamless slice" {
     try expect(are_equal);
 }
 
-fn rcNone(_: ?[*]u8) callconv(.c) void {}
+fn rcNone(_: ?[*]u8) callconv(.C) void {}
 
-fn decStr(ptr: ?[*]u8) callconv(.c) void {
+fn decStr(ptr: ?[*]u8) callconv(.C) void {
     const str_ptr = @as(*RocStr, @ptrCast(@alignCast(ptr orelse unreachable)));
     str_ptr.decref();
 }
@@ -2664,7 +2664,7 @@ test "capacity: big string" {
     try expect(data.getCapacity() >= data_bytes.len);
 }
 
-pub fn reserveC(string: RocStr, spare_u64: u64) callconv(.c) RocStr {
+pub fn reserveC(string: RocStr, spare_u64: u64) callconv(.C) RocStr {
     return reserve(string, @intCast(spare_u64));
 }
 
@@ -2680,7 +2680,7 @@ fn reserve(string: RocStr, spare: usize) RocStr {
     }
 }
 
-pub fn withCapacityC(capacity: u64) callconv(.c) RocStr {
+pub fn withCapacityC(capacity: u64) callconv(.C) RocStr {
     var str = RocStr.allocate(@intCast(capacity));
     str.setLen(0);
     return str;
@@ -2691,7 +2691,7 @@ pub fn strCloneTo(
     ptr: [*]u8,
     offset: usize,
     extra_offset: usize,
-) callconv(.c) usize {
+) callconv(.C) usize {
     const WIDTH: usize = @sizeOf(RocStr);
     if (string.isSmallStr()) {
         const array: [@sizeOf(RocStr)]u8 = @as([@sizeOf(RocStr)]u8, @bitCast(string));
@@ -2721,13 +2721,13 @@ pub fn strCloneTo(
 
 pub fn strAllocationPtr(
     string: RocStr,
-) callconv(.c) ?[*]u8 {
+) callconv(.C) ?[*]u8 {
     return string.getAllocationPtr();
 }
 
 pub fn strReleaseExcessCapacity(
     string: RocStr,
-) callconv(.c) RocStr {
+) callconv(.C) RocStr {
     const old_length = string.len();
     // We use the direct list.capacity_or_alloc_ptr to make sure both that there is no extra capacity and that it isn't a seamless slice.
     if (string.isSmallStr()) {

@@ -1,10 +1,10 @@
 const std = @import("std");
 const sort = @import("sort.zig");
 
-extern fn malloc(size: usize) callconv(.c) ?*anyopaque;
-extern fn free(c_ptr: *anyopaque) callconv(.c) void;
+extern fn malloc(size: usize) callconv(.C) ?*anyopaque;
+extern fn free(c_ptr: *anyopaque) callconv(.C) void;
 
-fn cMain() callconv(.c) i32 {
+fn cMain() callconv(.C) i32 {
     fuzz_main() catch unreachable;
     return 0;
 }
@@ -48,7 +48,7 @@ pub fn fuzz_main() !void {
 }
 
 const Opaque = ?[*]u8;
-fn test_i64_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
+fn test_i64_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.C) u8 {
     const a = @as(*i64, @alignCast(@ptrCast(a_ptr))).*;
     const b = @as(*i64, @alignCast(@ptrCast(b_ptr))).*;
 
@@ -63,11 +63,11 @@ fn test_i64_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) 
     return lt + lt + gt;
 }
 
-fn test_i64_copy(dst_ptr: Opaque, src_ptr: Opaque) callconv(.c) void {
+fn test_i64_copy(dst_ptr: Opaque, src_ptr: Opaque) callconv(.C) void {
     @as(*i64, @alignCast(@ptrCast(dst_ptr))).* = @as(*i64, @alignCast(@ptrCast(src_ptr))).*;
 }
 
-fn test_inc_n_data(count_ptr: Opaque, n: usize) callconv(.c) void {
+fn test_inc_n_data(count_ptr: Opaque, n: usize) callconv(.C) void {
     @as(*isize, @ptrCast(@alignCast(count_ptr))).* += @intCast(n);
 }
 
@@ -77,7 +77,7 @@ comptime {
     @export(testing_roc_panic, .{ .name = "roc_panic", .linkage = .Strong });
 }
 
-fn testing_roc_alloc(size: usize, _: u32) callconv(.c) ?*anyopaque {
+fn testing_roc_alloc(size: usize, _: u32) callconv(.C) ?*anyopaque {
     // We store an extra usize which is the size of the full allocation.
     const full_size = size + @sizeOf(usize);
     var raw_ptr = (allocator.alloc(u8, full_size) catch unreachable).ptr;
@@ -86,14 +86,14 @@ fn testing_roc_alloc(size: usize, _: u32) callconv(.c) ?*anyopaque {
     return @as(?*anyopaque, @ptrCast(raw_ptr));
 }
 
-fn testing_roc_dealloc(c_ptr: *anyopaque, _: u32) callconv(.c) void {
+fn testing_roc_dealloc(c_ptr: *anyopaque, _: u32) callconv(.C) void {
     const raw_ptr = @as([*]u8, @ptrCast(c_ptr)) - @sizeOf(usize);
     const full_size = @as([*]usize, @alignCast(@ptrCast(raw_ptr)))[0];
     const slice = raw_ptr[0..full_size];
     allocator.free(slice);
 }
 
-fn testing_roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.c) void {
+fn testing_roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void {
     _ = c_ptr;
     _ = tag_id;
 

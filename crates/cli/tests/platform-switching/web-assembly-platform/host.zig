@@ -9,25 +9,25 @@ comptime {
 }
 
 const Align = 2 * @alignOf(usize);
-extern fn malloc(size: usize) callconv(.c) ?*align(Align) anyopaque;
-extern fn realloc(c_ptr: [*]align(Align) u8, size: usize) callconv(.c) ?*anyopaque;
-extern fn free(c_ptr: [*]align(Align) u8) callconv(.c) void;
+extern fn malloc(size: usize) callconv(.C) ?*align(Align) anyopaque;
+extern fn realloc(c_ptr: [*]align(Align) u8, size: usize) callconv(.C) ?*anyopaque;
+extern fn free(c_ptr: [*]align(Align) u8) callconv(.C) void;
 extern fn memcpy(dest: *anyopaque, src: *anyopaque, count: usize) *anyopaque;
 
-export fn roc_alloc(size: usize, alignment: u32) callconv(.c) ?*anyopaque {
+export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*anyopaque {
     _ = alignment;
 
     return malloc(size);
 }
 
-export fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.c) ?*anyopaque {
+export fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*anyopaque {
     _ = old_size;
     _ = alignment;
 
     return realloc(@as([*]align(Align) u8, @alignCast(@ptrCast(c_ptr))), new_size);
 }
 
-export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.c) void {
+export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
     _ = alignment;
 
     free(@as([*]align(Align) u8, @alignCast(@ptrCast(c_ptr))));
