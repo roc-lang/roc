@@ -503,8 +503,6 @@ const TarEntryReader = struct {
         const slice = dest[0..read_limit];
 
         const bytes_read = self.iterator.reader.readSliceShort(slice) catch |err| switch (err) {
-            error.StreamTooLong => unreachable, // we sized the slice correctly
-            error.EndOfStream => return std.Io.Reader.StreamError.EndOfStream,
             error.ReadFailed => return std.Io.Reader.StreamError.ReadFailed,
         };
 
@@ -559,7 +557,7 @@ pub const DirExtractWriter = struct {
         var total_written: usize = 0;
 
         while (total_written < size) {
-            const bytes_read = reader.stream(&file_writer.interface, .{ .max = size - total_written }) catch |err| switch (err) {
+            const bytes_read = reader.stream(&file_writer.interface, std.Io.Limit.limited(size - total_written)) catch |err| switch (err) {
                 error.EndOfStream => break,
                 error.ReadFailed, error.WriteFailed => return err,
             };
