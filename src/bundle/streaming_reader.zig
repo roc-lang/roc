@@ -72,6 +72,7 @@ pub const DecompressingHashReader = struct {
         result.interface = .{
             .vtable = &.{
                 .stream = stream,
+                .discard = discard,
             },
             .buffer = &.{}, // No buffer needed, we have internal buffering
             .seek = 0,
@@ -101,6 +102,50 @@ pub const DecompressingHashReader = struct {
         return n;
     }
 
+    fn discard(r: *std.Io.Reader, limit: std.Io.Limit) std.Io.Reader.Error!usize {
+        const self: *Self = @alignCast(@fieldParentPtr("interface", r));
+
+        var total: usize = 0;
+        var remaining: ?usize = limit.toInt();
+
+        // Consume any buffered output data first.
+        if (self.out_pos < self.out_end) {
+            const available = self.out_end - self.out_pos;
+            const to_consume = if (remaining) |rem| @min(available, rem) else available;
+            self.out_pos += to_consume;
+            total += to_consume;
+            if (remaining) |*rem| {
+                rem.* -= to_consume;
+                if (rem.* == 0) return total;
+            }
+        }
+
+        var discard_buffer: [4096]u8 = undefined;
+
+        while (true) {
+            if (remaining) |rem| {
+                if (rem == 0) break;
+            }
+
+            const chunk_len = if (remaining) |rem| @min(discard_buffer.len, rem) else discard_buffer.len;
+            const n = self.read(discard_buffer[0..chunk_len]) catch |err| switch (err) {
+                error.DecompressionFailed, error.HashMismatch => return std.Io.Reader.Error.ReadFailed,
+                error.UnexpectedEndOfStream => return std.Io.Reader.Error.EndOfStream,
+                error.OutOfMemory => return std.Io.Reader.Error.ReadFailed,
+            };
+
+            if (n == 0) break;
+
+            total += n;
+            if (remaining) |*rem| {
+                rem.* -= n;
+                if (rem.* == 0) break;
+            }
+        }
+
+        return total;
+    }
+
     pub fn read(self: *Self, dest: []u8) Error!usize {
         if (dest.len == 0) return 0;
 
@@ -127,24 +172,34 @@ pub const DecompressingHashReader = struct {
 
             // Read more compressed data using a fixed writer
             var in_writer = std.Io.Writer.fixed(self.in_buffer);
+            var reached_end = false;
             const bytes_read = self.input_reader.stream(&in_writer, std.Io.Limit.limited(self.in_buffer.len)) catch |err| switch (err) {
-                error.EndOfStream => 0,
+                error.EndOfStream => blk: {
+                    reached_end = true;
+                    break :blk 0;
+                },
                 error.ReadFailed => return error.UnexpectedEndOfStream,
                 error.WriteFailed => unreachable, // fixed buffer writer doesn't fail
             };
 
             if (bytes_read == 0) {
-                // End of input stream - verify final hash
-                if (!self.hash_verified) {
-                    var actual_hash: [32]u8 = undefined;
-                    self.hasher.final(&actual_hash);
-                    if (!std.mem.eql(u8, &actual_hash, &self.expected_hash)) {
-                        return error.HashMismatch;
+                if (reached_end) {
+                    if (!self.hash_verified) {
+                        var actual_hash: [32]u8 = undefined;
+                        self.hasher.final(&actual_hash);
+                        if (!std.mem.eql(u8, &actual_hash, &self.expected_hash)) {
+                            return error.HashMismatch;
+                        }
+                        self.hash_verified = true;
                     }
-                    self.hash_verified = true;
+                    self.finished = true;
+                    break;
                 }
-                self.finished = true;
-                break;
+
+                if (total_read > 0) {
+                    break;
+                }
+                continue;
             }
 
             // Update hash with compressed data
