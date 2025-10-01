@@ -34,7 +34,7 @@ pub fn fuzz_main() !void {
     defer allocator.free(data);
 
     const len = data.len / @sizeOf(i64);
-    const arr_ptr: [*]i64 = @alignCast(@ptrCast(data.ptr));
+    const arr_ptr: [*]i64 = @ptrCast(@alignCast(data.ptr));
 
     if (DEBUG) {
         std.debug.print("Input: [{d}]{d}\n", .{ len, arr_ptr[0..len] });
@@ -53,8 +53,8 @@ pub fn fuzz_main() !void {
 
 const Opaque = ?[*]u8;
 fn test_i64_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
-    const a = @as(*i64, @alignCast(@ptrCast(a_ptr))).*;
-    const b = @as(*i64, @alignCast(@ptrCast(b_ptr))).*;
+    const a = @as(*i64, @ptrCast(@alignCast(a_ptr))).*;
+    const b = @as(*i64, @ptrCast(@alignCast(b_ptr))).*;
 
     const gt = @as(u8, @intFromBool(a > b));
     const lt = @as(u8, @intFromBool(a < b));
@@ -68,7 +68,7 @@ fn test_i64_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) 
 }
 
 fn test_i64_copy(dst_ptr: Opaque, src_ptr: Opaque) callconv(.c) void {
-    @as(*i64, @alignCast(@ptrCast(dst_ptr))).* = @as(*i64, @alignCast(@ptrCast(src_ptr))).*;
+    @as(*i64, @ptrCast(@alignCast(dst_ptr))).* = @as(*i64, @ptrCast(@alignCast(src_ptr))).*;
 }
 
 fn test_inc_n_data(count_ptr: Opaque, n: usize) callconv(.c) void {
@@ -85,14 +85,14 @@ fn testing_roc_alloc(size: usize, _: u32) callconv(.c) ?*anyopaque {
     // We store an extra usize which is the size of the full allocation.
     const full_size = size + @sizeOf(usize);
     var raw_ptr = (allocator.alloc(u8, full_size) catch unreachable).ptr;
-    @as([*]usize, @alignCast(@ptrCast(raw_ptr)))[0] = full_size;
+    @as([*]usize, @ptrCast(@alignCast(raw_ptr)))[0] = full_size;
     raw_ptr += @sizeOf(usize);
     return @as(?*anyopaque, @ptrCast(raw_ptr));
 }
 
 fn testing_roc_dealloc(c_ptr: *anyopaque, _: u32) callconv(.c) void {
     const raw_ptr = @as([*]u8, @ptrCast(c_ptr)) - @sizeOf(usize);
-    const full_size = @as([*]usize, @alignCast(@ptrCast(raw_ptr)))[0];
+    const full_size = @as([*]usize, @ptrCast(@alignCast(raw_ptr)))[0];
     const slice = raw_ptr[0..full_size];
     allocator.free(slice);
 }

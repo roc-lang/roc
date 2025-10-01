@@ -150,7 +150,7 @@ pub const RocList = extern struct {
         if (elements_refcounted and !self.isSeamlessSlice()) {
             // - 1 is refcount.
             // - 2 is size on heap.
-            const ptr = @as([*]usize, @alignCast(@ptrCast(self.getAllocationDataPtr()))) - 2;
+            const ptr = @as([*]usize, @ptrCast(@alignCast(self.getAllocationDataPtr()))) - 2;
             ptr[0] = self.length;
         }
     }
@@ -161,7 +161,7 @@ pub const RocList = extern struct {
             if (self.getAllocationDataPtr()) |source| {
                 // - 1 is refcount.
                 // - 2 is size on heap.
-                const ptr = @as([*]usize, @alignCast(@ptrCast(source))) - 2;
+                const ptr = @as([*]usize, @ptrCast(@alignCast(source))) - 2;
                 ptr[0] = self.length;
             }
         }

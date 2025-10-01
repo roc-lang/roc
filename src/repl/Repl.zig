@@ -122,7 +122,7 @@ fn processInput(self: *Repl, input: []const u8) ![]const u8 {
             defer self.allocator.free(info.ident);
 
             // Add to past definitions (allows redefinition)
-            try self.past_defs.append( .{
+            try self.past_defs.append(.{
                 .source = try self.allocator.dupe(u8, input),
                 .kind = .{ .assignment = try self.allocator.dupe(u8, info.ident) },
             });
@@ -147,7 +147,7 @@ fn processInput(self: *Repl, input: []const u8) ![]const u8 {
         },
         .import => {
             // Add import to past definitions
-            try self.past_defs.append( .{
+            try self.past_defs.append(.{
                 .source = try self.allocator.dupe(u8, input),
                 .kind = .import,
             });
@@ -454,17 +454,17 @@ test "Repl - build full source with redefinitions" {
     defer repl.deinit();
 
     // Add definitions manually to test source building
-    try repl.past_defs.append( .{
+    try repl.past_defs.append(.{
         .source = try std.testing.allocator.dupe(u8, "x = 5"),
         .kind = .{ .assignment = try std.testing.allocator.dupe(u8, "x") },
     });
 
-    try repl.past_defs.append( .{
+    try repl.past_defs.append(.{
         .source = try std.testing.allocator.dupe(u8, "y = x + 1"),
         .kind = .{ .assignment = try std.testing.allocator.dupe(u8, "y") },
     });
 
-    try repl.past_defs.append( .{
+    try repl.past_defs.append(.{
         .source = try std.testing.allocator.dupe(u8, "x = 6"),
         .kind = .{ .assignment = try std.testing.allocator.dupe(u8, "x") },
     });
@@ -500,7 +500,7 @@ test "Repl - past def ordering" {
         .kind = .{ .assignment = try std.testing.allocator.dupe(u8, "x") },
     });
 
-    try repl.past_defs.append( .{
+    try repl.past_defs.append(.{
         .source = try std.testing.allocator.dupe(u8, "x = 3"),
         .kind = .{ .assignment = try std.testing.allocator.dupe(u8, "x") },
     });

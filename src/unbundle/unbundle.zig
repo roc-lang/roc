@@ -428,7 +428,7 @@ const HashingReader = struct {
             return std.Io.Reader.StreamError.EndOfStream;
         }
         // Update hash with data that was written
-        const written_slice = w.buffer[w.buffer.len - n..];
+        const written_slice = w.buffer[w.buffer.len - n ..];
         self.hasher.update(written_slice);
         return n;
     }

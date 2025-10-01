@@ -121,7 +121,6 @@ fn stderrWriter() *std.Io.Writer {
     return &stderr_file_writer.interface;
 }
 
-
 // POSIX shared memory functions
 const posix = if (!is_windows) struct {
     extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: std.c.mode_t) c_int;

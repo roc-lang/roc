@@ -36,7 +36,6 @@ fn stderrWriter() *std.Io.Writer {
     return &stderr_file_writer.interface;
 }
 
-
 const FormatFlags = enum {
     debug_binop,
     no_debug,

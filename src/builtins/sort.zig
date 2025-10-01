@@ -2892,12 +2892,12 @@ inline fn compare_inc(
 /// Copies the value pointed to by `src_ptr` into the location pointed to by `dst_ptr`.
 /// Both pointers must be valid and properly aligned.
 pub fn pointer_copy(dst_ptr: Opaque, src_ptr: Opaque) callconv(.c) void {
-    @as(*usize, @alignCast(@ptrCast(dst_ptr))).* = @as(*usize, @alignCast(@ptrCast(src_ptr))).*;
+    @as(*usize, @ptrCast(@alignCast(dst_ptr))).* = @as(*usize, @ptrCast(@alignCast(src_ptr))).*;
 }
 
 fn test_i64_compare(_: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
-    const a = @as(*i64, @alignCast(@ptrCast(a_ptr))).*;
-    const b = @as(*i64, @alignCast(@ptrCast(b_ptr))).*;
+    const a = @as(*i64, @ptrCast(@alignCast(a_ptr))).*;
+    const b = @as(*i64, @ptrCast(@alignCast(b_ptr))).*;
 
     const gt = @as(u8, @intFromBool(a > b));
     const lt = @as(u8, @intFromBool(a < b));
@@ -2909,8 +2909,8 @@ fn test_i64_compare(_: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
 }
 
 fn test_i64_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
-    const a = @as(*i64, @alignCast(@ptrCast(a_ptr))).*;
-    const b = @as(*i64, @alignCast(@ptrCast(b_ptr))).*;
+    const a = @as(*i64, @ptrCast(@alignCast(a_ptr))).*;
+    const b = @as(*i64, @ptrCast(@alignCast(b_ptr))).*;
 
     const gt = @as(u8, @intFromBool(a > b));
     const lt = @as(u8, @intFromBool(a < b));
@@ -2923,7 +2923,7 @@ fn test_i64_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) 
 }
 
 fn test_i64_copy(dst_ptr: Opaque, src_ptr: Opaque) callconv(.c) void {
-    @as(*i64, @alignCast(@ptrCast(dst_ptr))).* = @as(*i64, @alignCast(@ptrCast(src_ptr))).*;
+    @as(*i64, @ptrCast(@alignCast(dst_ptr))).* = @as(*i64, @ptrCast(@alignCast(src_ptr))).*;
 }
 
 fn test_inc_n_data(count_ptr: Opaque, n: usize) callconv(.c) void {

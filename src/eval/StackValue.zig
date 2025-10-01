@@ -416,7 +416,7 @@ pub const ListAccessor = struct {
 fn storeListElementCount(list: *RocList, elements_refcounted: bool) void {
     if (elements_refcounted and !list.isSeamlessSlice()) {
         if (list.getAllocationDataPtr()) |source| {
-            const ptr = @as([*]usize, @alignCast(@ptrCast(source))) - 2;
+            const ptr = @as([*]usize, @ptrCast(@alignCast(source))) - 2;
             ptr[0] = list.length;
         }
     }
@@ -765,7 +765,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
                 if (list_value.isUnique()) {
                     if (list_value.getAllocationDataPtr()) |source| {
                         const count: usize = if (list_value.isSeamlessSlice()) blk: {
-                            const ptr = @as([*]usize, @alignCast(@ptrCast(source))) - 2;
+                            const ptr = @as([*]usize, @ptrCast(@alignCast(source))) - 2;
                             break :blk ptr[0];
                         } else list_value.len();
 

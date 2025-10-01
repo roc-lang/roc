@@ -2812,7 +2812,7 @@ pub const Interpreter = struct {
     fn markListElementCount(list: *RocList, elements_refcounted: bool) void {
         if (elements_refcounted and !list.isSeamlessSlice()) {
             if (list.getAllocationDataPtr()) |source| {
-                const ptr = @as([*]usize, @alignCast(@ptrCast(source))) - 2;
+                const ptr = @as([*]usize, @ptrCast(@alignCast(source))) - 2;
                 ptr[0] = list.length;
             }
         }
