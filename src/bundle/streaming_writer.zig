@@ -14,7 +14,7 @@ pub const CompressingHashWriter = struct {
     allocator_ptr: *std.mem.Allocator,
     ctx: *c.ZSTD_CCtx,
     hasher: std.crypto.hash.Blake3,
-    output_writer: std.io.AnyWriter,
+    output_writer: *std.Io.Writer,
     out_buffer: []u8,
     in_buffer: []u8,
     in_pos: usize,
@@ -32,7 +32,7 @@ pub const CompressingHashWriter = struct {
     pub fn init(
         allocator_ptr: *std.mem.Allocator,
         compression_level: c_int,
-        output_writer: std.io.AnyWriter,
+        output_writer: *std.Io.Writer,
         allocForZstd: *const fn (?*anyopaque, usize) callconv(.c) ?*anyopaque,
         freeForZstd: *const fn (?*anyopaque, ?*anyopaque) callconv(.c) void,
     ) !Self {

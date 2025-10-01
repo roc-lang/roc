@@ -19,7 +19,6 @@ const std = @import("std");
 const base58 = @import("base58");
 const streaming_writer = @import("streaming_writer.zig");
 const streaming_reader = @import("streaming_reader.zig");
-const io_compat = @import("io_compat.zig");
 const c = @cImport({
     @cDefine("ZSTD_STATIC_LINKING_ONLY", "1");
     @cInclude("zstd.h");
@@ -123,7 +122,7 @@ pub fn bundle(
     file_path_iter: anytype,
     compression_level: c_int,
     allocator: *std.mem.Allocator,
-    output_writer: anytype,
+    output_writer: *std.Io.Writer,
     base_dir: std.fs.Dir,
     path_prefix: ?[]const u8,
     error_context: ?*ErrorContext,
@@ -132,7 +131,7 @@ pub fn bundle(
     var compress_writer = streaming_writer.CompressingHashWriter.init(
         allocator,
         compression_level,
-        io_compat.toAnyWriter(output_writer),
+        output_writer,
         allocForZstd,
         freeForZstd,
     ) catch |err| switch (err) {
@@ -458,13 +457,13 @@ pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
 pub const ExtractWriter = struct {
     ptr: *anyopaque,
     makeDirFn: *const fn (ptr: *anyopaque, path: []const u8) anyerror!void,
-    streamFileFn: *const fn (ptr: *anyopaque, path: []const u8, reader: std.io.AnyReader, size: usize) anyerror!void,
+    streamFileFn: *const fn (ptr: *anyopaque, path: []const u8, reader: *std.Io.Reader, size: usize) anyerror!void,
 
     pub fn makeDir(self: ExtractWriter, path: []const u8) !void {
         return self.makeDirFn(self.ptr, path);
     }
 
-    pub fn streamFile(self: ExtractWriter, path: []const u8, reader: std.io.AnyReader, size: usize) !void {
+    pub fn streamFile(self: ExtractWriter, path: []const u8, reader: *std.Io.Reader, size: usize) !void {
         return self.streamFileFn(self.ptr, path, reader, size);
     }
 };
@@ -472,39 +471,49 @@ pub const ExtractWriter = struct {
 const TarEntryReader = struct {
     iterator: *std.tar.Iterator,
     remaining: u64,
+    interface: std.Io.Reader,
 
     fn init(iterator: *std.tar.Iterator, remaining: u64) TarEntryReader {
-        return .{ .iterator = iterator, .remaining = remaining };
+        var result: TarEntryReader = .{
+            .iterator = iterator,
+            .remaining = remaining,
+            .interface = undefined,
+        };
+        result.interface = .{
+            .vtable = &.{
+                .stream = stream,
+            },
+            .buffer = &.{}, // No buffer needed, we delegate to iterator.reader
+            .seek = 0,
+            .end = 0,
+        };
+        return result;
     }
 
-    fn anyReader(self: *TarEntryReader) std.io.AnyReader {
-        return .{ .context = self, .readFn = readAny };
-    }
+    fn stream(r: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
+        const self: *TarEntryReader = @alignCast(@fieldParentPtr("interface", r));
 
-    fn read(self: *TarEntryReader, dest: []u8) anyerror!usize {
-        if (dest.len == 0 or self.remaining == 0) {
-            return 0;
+        if (self.remaining == 0) {
+            return std.Io.Reader.StreamError.EndOfStream;
         }
 
+        const dest = limit.slice(try w.writableSliceGreedy(1));
         const max_bytes = std.math.cast(usize, self.remaining) orelse std.math.maxInt(usize);
-        const limit = @min(dest.len, max_bytes);
-        const slice = dest[0..limit];
+        const read_limit = @min(dest.len, max_bytes);
+        const slice = dest[0..read_limit];
 
-        const bytes_read = self.iterator.reader.readSliceShort(slice) catch |err| {
-            return err;
+        const bytes_read = self.iterator.reader.readSliceShort(slice) catch |err| switch (err) {
+            error.StreamTooLong => unreachable, // we sized the slice correctly
+            error.EndOfStream => return std.Io.Reader.StreamError.EndOfStream,
+            error.ReadFailed => return std.Io.Reader.StreamError.ReadFailed,
         };
 
-        if (bytes_read == 0) return error.UnexpectedEndOfStream;
+        if (bytes_read == 0) return std.Io.Reader.StreamError.EndOfStream;
 
         self.remaining -= bytes_read;
         self.iterator.unread_file_bytes = self.remaining;
+        w.advance(bytes_read);
         return bytes_read;
-    }
-
-    fn readAny(context: *const anyopaque, dest: []u8) anyerror!usize {
-        const ptr = @as(*const TarEntryReader, @ptrCast(@alignCast(context)));
-        const self: *TarEntryReader = @constCast(ptr);
-        return self.read(dest);
     }
 };
 
@@ -529,7 +538,7 @@ pub const DirExtractWriter = struct {
         try self.dir.makePath(path);
     }
 
-    fn streamFile(ptr: *anyopaque, path: []const u8, reader: std.io.AnyReader, size: usize) anyerror!void {
+    fn streamFile(ptr: *anyopaque, path: []const u8, reader: *std.Io.Reader, size: usize) anyerror!void {
         const self = @as(*DirExtractWriter, @ptrCast(@alignCast(ptr)));
 
         // Create parent directories if needed
@@ -545,20 +554,21 @@ pub const DirExtractWriter = struct {
         // due to internal buffering limitations. We handle this gracefully by reading what's
         // available rather than treating it as an error.
         // See: https://github.com/ziglang/zig/issues/[TODO: file issue and add number]
-        var buffer: [STREAM_BUFFER_SIZE]u8 = undefined;
+        var file_writer_buffer: [STREAM_BUFFER_SIZE]u8 = undefined;
+        var file_writer = file.writer(&file_writer_buffer);
         var total_written: usize = 0;
 
         while (total_written < size) {
-            const bytes_read = reader.read(&buffer) catch |err| {
-                if (err == error.EndOfStream) break;
-                return err;
+            const bytes_read = reader.stream(&file_writer.interface, .{ .max = size - total_written }) catch |err| switch (err) {
+                error.EndOfStream => break,
+                error.ReadFailed, error.WriteFailed => return err,
             };
 
             if (bytes_read == 0) break;
-
-            try file.writeAll(buffer[0..bytes_read]);
             total_written += bytes_read;
         }
+
+        try file_writer.interface.flush();
 
         // Verify we got a reasonable amount of data
         if (total_written == 0 and size > 0) {
@@ -573,7 +583,7 @@ pub const DirExtractWriter = struct {
 /// unbundling and network-based downloading.
 /// If an InvalidPath error is returned, error_context will contain details about the invalid path.
 pub fn unbundleStream(
-    input_reader: anytype,
+    input_reader: *std.Io.Reader,
     extract_writer: ExtractWriter,
     allocator: *std.mem.Allocator,
     expected_hash: *const [32]u8,
@@ -582,7 +592,7 @@ pub fn unbundleStream(
     // Create decompressing hash reader that chains: input → verify hash → decompress
     var decompress_reader = streaming_reader.DecompressingHashReader.init(
         allocator,
-        io_compat.toAnyReader(input_reader),
+        input_reader,
         expected_hash.*,
         allocForZstd,
         freeForZstd,
@@ -627,9 +637,8 @@ pub fn unbundleStream(
                 const tar_file_size = std.math.cast(usize, tar_file.size) orelse return error.FileTooLarge;
 
                 var tar_file_reader = TarEntryReader.init(&tar_iter, tar_file.size);
-                const tar_reader = tar_file_reader.anyReader();
 
-                extract_writer.streamFile(tar_file.name, tar_reader, tar_file_size) catch |err| {
+                extract_writer.streamFile(tar_file.name, &tar_file_reader.interface, tar_file_size) catch |err| {
                     switch (err) {
                         error.UnexpectedEndOfStream => return error.UnexpectedEndOfStream,
                         else => return error.FileWriteFailed,

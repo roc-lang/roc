@@ -12,7 +12,6 @@ const bundle = @import("bundle.zig");
 const download = @import("download.zig");
 const streaming_writer = @import("streaming_writer.zig");
 const test_util = @import("test_util.zig");
-const io_compat = @import("io_compat.zig");
 const DirExtractWriter = bundle.DirExtractWriter;
 const FilePathIterator = test_util.FilePathIterator;
 
@@ -209,14 +208,14 @@ test "bundle validates paths correctly" {
         try file.writeAll("Test content");
     }
     {
-        var bundle_data = std.array_list.Managed(u8).init(allocator);
-        defer bundle_data.deinit();
+        var bundle_writer: std.Io.Writer.Allocating = .init(allocator);
+        defer bundle_writer.deinit();
 
         const paths = [_][]const u8{"CON.txt"};
         var iter = FilePathIterator{ .paths = &paths };
 
         var error_ctx: bundle.ErrorContext = undefined;
-        const result = bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), tmp.dir, null, &error_ctx);
+        const result = bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, &bundle_writer.writer, tmp.dir, null, &error_ctx);
 
         try testing.expectError(error.InvalidPath, result);
         try testing.expectEqual(bundle.PathValidationReason.windows_reserved_name, error_ctx.reason);
@@ -229,17 +228,18 @@ test "bundle validates paths correctly" {
         try file.writeAll("Normal content");
     }
     {
-        var bundle_data = std.array_list.Managed(u8).init(allocator);
-        defer bundle_data.deinit();
+        var bundle_writer: std.Io.Writer.Allocating = .init(allocator);
+        defer bundle_writer.deinit();
 
         const paths = [_][]const u8{"normal.txt"};
         var iter = FilePathIterator{ .paths = &paths };
 
-        const filename = try bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, bundle_data.writer(), tmp.dir, null, null);
+        const filename = try bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, &bundle_writer.writer, tmp.dir, null, null);
         defer allocator.free(filename);
 
         // Should succeed
-        try testing.expect(bundle_data.items.len > 0);
+        const list = bundle_writer.toArrayList();
+        try testing.expect(list.items.len > 0);
     }
 }
 

@@ -14,7 +14,7 @@ pub const DecompressingHashReader = struct {
     allocator_ptr: *std.mem.Allocator,
     dctx: *c.ZSTD_DCtx,
     hasher: std.crypto.hash.Blake3,
-    input_reader: std.io.AnyReader,
+    input_reader: *std.Io.Reader,
     expected_hash: [32]u8,
     in_buffer: []u8,
     out_buffer: []u8,
@@ -33,7 +33,7 @@ pub const DecompressingHashReader = struct {
 
     pub fn init(
         allocator_ptr: *std.mem.Allocator,
-        input_reader: std.io.AnyReader,
+        input_reader: *std.Io.Reader,
         expected_hash: [32]u8,
         allocForZstd: *const fn (?*anyopaque, usize) callconv(.c) ?*anyopaque,
         freeForZstd: *const fn (?*anyopaque, ?*anyopaque) callconv(.c) void,
@@ -125,9 +125,12 @@ pub const DecompressingHashReader = struct {
                 break;
             }
 
-            // Read more compressed data
-            const bytes_read = self.input_reader.read(self.in_buffer) catch {
-                return error.UnexpectedEndOfStream;
+            // Read more compressed data using a fixed writer
+            var in_writer = std.Io.Writer.fixed(self.in_buffer);
+            const bytes_read = self.input_reader.stream(&in_writer, std.Io.Limit.limited(self.in_buffer.len)) catch |err| switch (err) {
+                error.EndOfStream => 0,
+                error.ReadFailed => return error.UnexpectedEndOfStream,
+                error.WriteFailed => unreachable, // fixed buffer writer doesn't fail
             };
 
             if (bytes_read == 0) {

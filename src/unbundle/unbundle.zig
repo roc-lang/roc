@@ -19,37 +19,6 @@ const STREAM_BUFFER_SIZE: usize = 64 * 1024; // 64KB buffer for streaming operat
 /// with larger window sizes.
 const ZSTD_WINDOW_BUFFER_SIZE: usize = 1 << 23; // 8MB
 
-fn toAnyReader(reader: anytype) std.io.AnyReader {
-    const T = @TypeOf(reader);
-    if (T == std.io.AnyReader) {
-        return reader;
-    }
-
-    switch (@typeInfo(T)) {
-        .pointer => |ptr_info| {
-            if (ptr_info.child == std.io.AnyReader) {
-                return reader.*;
-            }
-            if (ptr_info.child == std.io.Reader) {
-                return reader.adaptToOldInterface();
-            }
-            if (ptr_info.child != void and ptr_info.size == .One) {
-                if (@hasDecl(ptr_info.child, "any")) {
-                    return reader.*.any();
-                }
-                return toAnyReader(reader.*);
-            }
-        },
-        else => {
-            if (@hasDecl(T, "any")) {
-                return reader.any();
-            }
-        },
-    }
-
-    @compileError("cannot convert type '" ++ @typeName(T) ++ "' to std.io.AnyReader");
-}
-
 /// Errors that can occur during the unbundle operation.
 pub const UnbundleError = error{
     DecompressionFailed,
@@ -424,53 +393,46 @@ pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
     return null;
 }
 
-/// Generic hashing reader that works with any reader type
-fn HashingReader(comptime ReaderType: type) type {
-    return struct {
-        child_reader: ReaderType,
-        hasher: *std.crypto.hash.Blake3,
-        interface: std.Io.Reader,
+const HashingReader = struct {
+    child_reader: *std.Io.Reader,
+    hasher: *std.crypto.hash.Blake3,
+    interface: std.Io.Reader,
 
-        const Self = @This();
-        pub const Error = ReaderType.Error;
+    const Self = @This();
 
-        pub fn init(child_reader: ReaderType, hasher: *std.crypto.hash.Blake3) Self {
-            var result = Self{
-                .child_reader = child_reader,
-                .hasher = hasher,
-                .interface = undefined,
-            };
-            result.interface = .{
-                .vtable = &.{
-                    .stream = stream,
-                },
-                .buffer = &.{},
-                .seek = 0,
-                .end = 0,
-            };
-            return result;
+    pub fn init(child_reader: *std.Io.Reader, hasher: *std.crypto.hash.Blake3) Self {
+        var result = Self{
+            .child_reader = child_reader,
+            .hasher = hasher,
+            .interface = undefined,
+        };
+        result.interface = .{
+            .vtable = &.{
+                .stream = stream,
+            },
+            .buffer = &.{},
+            .seek = 0,
+            .end = 0,
+        };
+        return result;
+    }
+
+    fn stream(r: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
+        const self: *Self = @alignCast(@fieldParentPtr("interface", r));
+        const n = self.child_reader.stream(w, limit) catch |err| switch (err) {
+            error.EndOfStream => return std.Io.Reader.StreamError.EndOfStream,
+            error.ReadFailed => return std.Io.Reader.StreamError.ReadFailed,
+            error.WriteFailed => return std.Io.Reader.StreamError.WriteFailed,
+        };
+        if (n == 0) {
+            return std.Io.Reader.StreamError.EndOfStream;
         }
-
-        fn stream(r: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
-            const self: *Self = @alignCast(@fieldParentPtr("interface", r));
-            const dest = limit.slice(try w.writableSliceGreedy(1));
-            const n = self.read(dest) catch return std.Io.Reader.StreamError.ReadFailed;
-            if (n == 0) {
-                return std.Io.Reader.StreamError.EndOfStream;
-            }
-            w.advance(n);
-            return n;
-        }
-
-        pub fn read(self: *Self, buffer: []u8) Error!usize {
-            const n = try self.child_reader.read(buffer);
-            if (n > 0) {
-                self.hasher.update(buffer[0..n]);
-            }
-            return n;
-        }
-    };
-}
+        // Update hash with data that was written
+        const written_slice = w.buffer[w.buffer.len - n..];
+        self.hasher.update(written_slice);
+        return n;
+    }
+};
 
 /// Unbundle a compressed tar archive, streaming from input_reader to extract_writer.
 ///
@@ -478,17 +440,13 @@ fn HashingReader(comptime ReaderType: type) type {
 /// unbundling and network-based downloading.
 /// If an InvalidPath error is returned, error_context will contain details about the invalid path.
 pub fn unbundleStream(
-    input_reader: anytype,
+    input_reader: *std.Io.Reader,
     extract_writer: ExtractWriter,
     expected_hash: *const [32]u8,
     error_context: ?*ErrorContext,
 ) UnbundleError!void {
     var hasher = std.crypto.hash.Blake3.init(.{});
-    const any_reader = toAnyReader(input_reader);
-    const ReaderType = @TypeOf(any_reader);
-    const HashingReaderType = HashingReader(ReaderType);
-
-    var hashing_reader = HashingReaderType.init(any_reader, &hasher);
+    var hashing_reader = HashingReader.init(input_reader, &hasher);
 
     var window_buffer: [ZSTD_WINDOW_BUFFER_SIZE]u8 = undefined;
 
@@ -605,7 +563,7 @@ pub fn validateBase58Hash(base58_str: []const u8) !?[32]u8 {
 /// If an InvalidPath error is returned, error_context will contain details about the invalid path.
 pub fn unbundle(
     allocator: std.mem.Allocator,
-    input_reader: anytype,
+    input_reader: *std.Io.Reader,
     extract_dir: std.fs.Dir,
     filename: []const u8,
     error_context: ?*ErrorContext,
