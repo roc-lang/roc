@@ -88,15 +88,57 @@ pub const CompressingHashWriter = struct {
     }
 
     fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
-        _ = splat; // TODO: implement splat support
         const self: *Self = @alignCast(@fieldParentPtr("interface", w));
 
-        var total: usize = 0;
-        for (data) |bytes| {
-            const n = self.write(bytes) catch return std.Io.Writer.Error.WriteFailed;
-            total += n;
+        try self.writeBuffered(w);
+
+        if (data.len == 0) return 0;
+
+        var consumed: usize = 0;
+
+        // Write all slices except the final pattern exactly once.
+        if (data.len > 1) {
+            for (data[0 .. data.len - 1]) |chunk| {
+                try self.writeAll(chunk);
+                consumed += chunk.len;
+            }
         }
-        return total;
+
+        const pattern = data[data.len - 1];
+        if (splat == 0 or pattern.len == 0) return consumed;
+
+        const extra = std.math.mul(usize, pattern.len, splat) catch |err| switch (err) {
+            error.Overflow => return std.Io.Writer.Error.WriteFailed,
+        };
+
+        var remaining = splat;
+        while (remaining > 0) : (remaining -= 1) {
+            try self.writeAll(pattern);
+        }
+
+        consumed += extra;
+        return consumed;
+    }
+
+    fn writeBuffered(self: *Self, w: *std.Io.Writer) std.Io.Writer.Error!void {
+        if (w.end == 0) return;
+        if (self.finished) {
+            w.end = 0;
+            return;
+        }
+
+        const buffered = w.buffer[0..w.end];
+        try self.writeAll(buffered);
+        w.end = 0;
+    }
+
+    fn writeAll(self: *Self, bytes: []const u8) std.Io.Writer.Error!void {
+        var offset: usize = 0;
+        while (offset < bytes.len) {
+            const written = self.write(bytes[offset..]) catch return std.Io.Writer.Error.WriteFailed;
+            if (written == 0) return std.Io.Writer.Error.WriteFailed;
+            offset += written;
+        }
     }
 
     fn write(self: *Self, bytes: []const u8) Error!usize {
@@ -148,6 +190,7 @@ pub const CompressingHashWriter = struct {
 
     pub fn finish(self: *Self) Error!void {
         if (self.finished) return;
+        self.interface.flush() catch return error.WriteFailed;
         try self.compressBuffer(true);
         self.finished = true;
     }

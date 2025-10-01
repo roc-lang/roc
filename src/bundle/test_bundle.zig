@@ -238,7 +238,8 @@ test "bundle validates paths correctly" {
         defer allocator.free(filename);
 
         // Should succeed
-        const list = bundle_writer.toArrayList();
+        var list = bundle_writer.toArrayList();
+        defer list.deinit(allocator);
         try testing.expect(list.items.len > 0);
     }
 }

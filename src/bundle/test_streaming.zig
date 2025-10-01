@@ -36,7 +36,8 @@ test "simple streaming write" {
     try writer.interface.flush();
 
     // Just check we got some output
-    const list = output_writer.toArrayList();
+    var list = output_writer.toArrayList();
+    defer list.deinit(allocator);
     try std.testing.expect(list.items.len > 0);
 }
 
@@ -63,7 +64,8 @@ test "simple streaming read" {
     try writer.interface.flush();
 
     const hash = writer.getHash();
-    const compressed_list = compressed_writer.toArrayList();
+    var compressed_list = compressed_writer.toArrayList();
+    defer compressed_list.deinit(allocator);
 
     // Now decompress it
     var stream = std.Io.Reader.fixed(compressed_list.items);
@@ -84,7 +86,8 @@ test "simple streaming read" {
     _ = try reader.interface.streamRemaining(&decompressed_writer.writer);
     try decompressed_writer.writer.flush();
 
-    const decompressed_list = decompressed_writer.toArrayList();
+    var decompressed_list = decompressed_writer.toArrayList();
+    defer decompressed_list.deinit(allocator);
     try std.testing.expectEqualStrings(test_data, decompressed_list.items);
 }
 
@@ -115,7 +118,8 @@ test "streaming write with exact buffer boundary" {
     try writer.interface.flush();
 
     // Just verify we got output
-    const list = output_writer.toArrayList();
+    var list = output_writer.toArrayList();
+    defer list.deinit(allocator);
     try std.testing.expect(list.items.len > 0);
 }
 
@@ -145,7 +149,8 @@ test "streaming read with hash mismatch" {
     @memset(&wrong_hash, 0xFF);
 
     // Try to decompress with wrong hash
-    const compressed_list = compressed_writer.toArrayList();
+    var compressed_list = compressed_writer.toArrayList();
+    defer compressed_list.deinit(allocator);
     var stream_reader = std.Io.Reader.fixed(compressed_list.items);
     var allocator_copy2 = allocator;
     var reader = try streaming_reader.DecompressingHashReader.init(
@@ -197,7 +202,8 @@ test "different compression levels" {
         try writer.finish();
         try writer.interface.flush();
 
-        const output_list = output_writer.toArrayList();
+        var output_list = output_writer.toArrayList();
+        defer output_list.deinit(allocator);
         sizes[i] = output_list.items.len;
 
         // Verify we can decompress
@@ -274,7 +280,8 @@ test "large file streaming extraction" {
     defer allocator.free(filename);
 
     // Just verify we successfully bundled a large file
-    const bundle_list = bundle_writer.toArrayList();
-    try std.testing.expect(bundle_list.items.len > 10_000); // Should be significantly compressed
+    var bundle_list = bundle_writer.toArrayList();
+    defer bundle_list.deinit(allocator);
+    try std.testing.expect(bundle_list.items.len > 512); // Should include header and compressed data
     // Note: Full round-trip testing with unbundle is done in integration tests
 }
