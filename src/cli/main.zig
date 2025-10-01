@@ -121,22 +121,6 @@ fn stderrWriter() *std.Io.Writer {
     return &stderr_file_writer.interface;
 }
 
-fn stdoutAnyWriter() std.io.AnyWriter {
-    return anyWriterFrom(stdoutWriter());
-}
-
-fn stderrAnyWriter() std.io.AnyWriter {
-    return anyWriterFrom(stderrWriter());
-}
-
-fn anyWriterFrom(writer: *std.Io.Writer) std.io.AnyWriter {
-    return .{ .context = writer, .writeFn = writeFromIoWriter };
-}
-
-fn writeFromIoWriter(context: *const anyopaque, bytes: []const u8) anyerror!usize {
-    const writer: *std.Io.Writer = @ptrCast(@alignCast(@constCast(context)));
-    return writer.write(bytes);
-}
 
 // POSIX shared memory functions
 const posix = if (!is_windows) struct {
@@ -2772,7 +2756,6 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
 
     const stdout = stdoutWriter();
     const stderr = stderrWriter();
-    const stderr_writer = anyWriterFrom(stderr);
 
     var timer = try std.time.Timer.start();
 
@@ -2824,7 +2807,7 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
             for (module.reports) |*report| {
 
                 // Render the diagnostic report to stderr
-                reporting.renderReportToTerminal(report, stderr_writer, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
+                reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
                     stderr.print("Error rendering diagnostic report: {}", .{render_err}) catch {};
                     // Fallback to just printing the title
                     stderr.print("  {s}", .{report.title}) catch {};

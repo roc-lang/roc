@@ -22,9 +22,9 @@ pub const DecompressingHashReader = struct {
     out_end: usize,
     finished: bool,
     hash_verified: bool,
+    interface: std.Io.Reader,
 
     const Self = @This();
-    const Reader = std.io.GenericReader(*Self, Error, read);
     const Error = error{
         DecompressionFailed,
         UnexpectedEndOfStream,
@@ -55,7 +55,7 @@ pub const DecompressingHashReader = struct {
         const out_buffer = try allocator_ptr.alloc(u8, out_buffer_size);
         errdefer allocator_ptr.free(out_buffer);
 
-        return Self{
+        var result = Self{
             .allocator_ptr = allocator_ptr,
             .dctx = dctx,
             .hasher = std.crypto.hash.Blake3.init(.{}),
@@ -67,7 +67,17 @@ pub const DecompressingHashReader = struct {
             .out_end = 0,
             .finished = false,
             .hash_verified = false,
+            .interface = undefined,
         };
+        result.interface = .{
+            .vtable = &.{
+                .stream = stream,
+            },
+            .buffer = &.{}, // No buffer needed, we have internal buffering
+            .seek = 0,
+            .end = 0,
+        };
+        return result;
     }
 
     pub fn deinit(self: *Self) void {
@@ -76,11 +86,22 @@ pub const DecompressingHashReader = struct {
         self.allocator_ptr.free(self.out_buffer);
     }
 
-    pub fn reader(self: *Self) Reader {
-        return .{ .context = self };
+    fn stream(r: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
+        const self: *Self = @alignCast(@fieldParentPtr("interface", r));
+        const dest = limit.slice(try w.writableSliceGreedy(1));
+        const n = self.read(dest) catch |err| switch (err) {
+            error.DecompressionFailed, error.HashMismatch => return std.Io.Reader.StreamError.ReadFailed,
+            error.UnexpectedEndOfStream => return std.Io.Reader.StreamError.EndOfStream,
+            error.OutOfMemory => return std.Io.Reader.StreamError.ReadFailed,
+        };
+        if (n == 0) {
+            return std.Io.Reader.StreamError.EndOfStream;
+        }
+        w.advance(n);
+        return n;
     }
 
-    fn read(self: *Self, dest: []u8) Error!usize {
+    pub fn read(self: *Self, dest: []u8) Error!usize {
         if (dest.len == 0) return 0;
 
         var total_read: usize = 0;

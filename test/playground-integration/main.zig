@@ -280,13 +280,11 @@ const TestData = struct {
 /// Helper to send a message to the WASM Playground and get a response.
 fn sendMessageToWasm(wasm_interface: *const WasmInterface, allocator: std.mem.Allocator, message: WasmMessage) !WasmResponse {
     // Serialize message to JSON
-    var message_json_buffer = std.array_list.Managed(u8).init(allocator);
+    var message_json_buffer: std.Io.Writer.Allocating = .init(allocator);
     defer message_json_buffer.deinit();
-    var buffer: [1024]u8 = undefined;
-    var json_writer = message_json_buffer.writer().adaptToNewApi(&buffer).new_interface;
-    try std.json.Stringify.value(message, .{}, &json_writer);
-    const message_json = message_json_buffer.items;
-    try json_writer.flush();
+    try std.json.Stringify.value(message, .{}, &message_json_buffer.writer);
+    const message_json = message_json_buffer.written();
+    try message_json_buffer.writer.flush();
 
     // Allocate a buffer in WASM for the message.
     // The WASM module's allocateMessageBuffer export handles this.

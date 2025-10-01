@@ -19,9 +19,9 @@ pub const CompressingHashWriter = struct {
     in_buffer: []u8,
     in_pos: usize,
     finished: bool,
+    interface: std.Io.Writer,
 
     const Self = @This();
-    const Writer = std.io.GenericWriter(*Self, Error, write);
     const Error = error{
         CompressionFailed,
         WriteFailed,
@@ -54,7 +54,7 @@ pub const CompressingHashWriter = struct {
         const in_buffer = try allocator_ptr.alloc(u8, in_buffer_size);
         errdefer allocator_ptr.free(in_buffer);
 
-        return Self{
+        var result = Self{
             .allocator_ptr = allocator_ptr,
             .ctx = ctx,
             .hasher = std.crypto.hash.Blake3.init(.{}),
@@ -63,7 +63,15 @@ pub const CompressingHashWriter = struct {
             .in_buffer = in_buffer,
             .in_pos = 0,
             .finished = false,
+            .interface = undefined,
         };
+        result.interface = .{
+            .vtable = &.{
+                .drain = drain,
+            },
+            .buffer = &.{}, // No buffer needed, we have internal buffering
+        };
+        return result;
     }
 
     pub fn deinit(self: *Self) void {
@@ -72,8 +80,16 @@ pub const CompressingHashWriter = struct {
         self.allocator_ptr.free(self.in_buffer);
     }
 
-    pub fn writer(self: *Self) Writer {
-        return .{ .context = self };
+    fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
+        _ = splat; // TODO: implement splat support
+        const self: *Self = @alignCast(@fieldParentPtr("interface", w));
+
+        var total: usize = 0;
+        for (data) |bytes| {
+            const n = self.write(bytes) catch return std.Io.Writer.Error.WriteFailed;
+            total += n;
+        }
+        return total;
     }
 
     fn write(self: *Self, bytes: []const u8) Error!usize {

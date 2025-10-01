@@ -98,8 +98,8 @@ pub const ExtractWriter = struct {
     vtable: *const VTable,
 
     pub const VTable = struct {
-        createFile: *const fn (ptr: *anyopaque, path: []const u8) CreateFileError!std.io.AnyWriter,
-        finishFile: *const fn (ptr: *anyopaque, writer: std.io.AnyWriter) void,
+        createFile: *const fn (ptr: *anyopaque, path: []const u8) CreateFileError!*std.Io.Writer,
+        finishFile: *const fn (ptr: *anyopaque, writer: *std.Io.Writer) void,
         makeDir: *const fn (ptr: *anyopaque, path: []const u8) MakeDirError!void,
     };
 
@@ -112,11 +112,11 @@ pub const ExtractWriter = struct {
         DirectoryCreateFailed,
     };
 
-    pub fn createFile(self: ExtractWriter, path: []const u8) CreateFileError!std.io.AnyWriter {
+    pub fn createFile(self: ExtractWriter, path: []const u8) CreateFileError!*std.Io.Writer {
         return self.vtable.createFile(self.ptr, path);
     }
 
-    pub fn finishFile(self: ExtractWriter, writer: std.io.AnyWriter) void {
+    pub fn finishFile(self: ExtractWriter, writer: *std.Io.Writer) void {
         return self.vtable.finishFile(self.ptr, writer);
     }
 
@@ -129,20 +129,26 @@ pub const ExtractWriter = struct {
 pub const DirExtractWriter = struct {
     dir: std.fs.Dir,
     allocator: std.mem.Allocator,
-    open_files: std.array_list.Managed(std.fs.File),
+    open_files: std.array_list.Managed(FileWriterEntry),
+
+    const FileWriterEntry = struct {
+        file: std.fs.File,
+        buffer: [4096]u8,
+        writer: std.fs.File.Writer,
+    };
 
     pub fn init(dir: std.fs.Dir, allocator: std.mem.Allocator) DirExtractWriter {
         return .{
             .dir = dir,
             .allocator = allocator,
-            .open_files = std.array_list.Managed(std.fs.File).init(allocator),
+            .open_files = std.array_list.Managed(FileWriterEntry).init(allocator),
         };
     }
 
     pub fn deinit(self: *DirExtractWriter) void {
         // Close any remaining open files
-        for (self.open_files.items) |*file| {
-            file.close();
+        for (self.open_files.items) |*entry| {
+            entry.file.close();
         }
         self.open_files.deinit();
     }
@@ -160,7 +166,7 @@ pub const DirExtractWriter = struct {
         .makeDir = makeDir,
     };
 
-    fn createFile(ptr: *anyopaque, path: []const u8) ExtractWriter.CreateFileError!std.io.AnyWriter {
+    fn createFile(ptr: *anyopaque, path: []const u8) ExtractWriter.CreateFileError!*std.Io.Writer {
         const self: *DirExtractWriter = @ptrCast(@alignCast(ptr));
 
         // Ensure parent directories exist
@@ -169,28 +175,31 @@ pub const DirExtractWriter = struct {
         }
 
         const file = self.dir.createFile(path, .{}) catch return error.FileCreateFailed;
-        self.open_files.append(file) catch {
+
+        var entry = FileWriterEntry{
+            .file = file,
+            .buffer = undefined,
+            .writer = undefined,
+        };
+        entry.writer = file.writer(&entry.buffer);
+
+        self.open_files.append(entry) catch {
             file.close();
             return error.OutOfMemory;
         };
 
-        return .{
-            .context = @ptrCast(&self.open_files.items[self.open_files.items.len - 1]),
-            .writeFn = fileWrite,
-        };
+        return &self.open_files.items[self.open_files.items.len - 1].writer.interface;
     }
 
-    fn fileWrite(context: *const anyopaque, bytes: []const u8) anyerror!usize {
-        const file: *std.fs.File = @ptrCast(@alignCast(@constCast(context)));
-        return file.write(bytes);
-    }
-
-    fn finishFile(ptr: *anyopaque, _: std.io.AnyWriter) void {
+    fn finishFile(ptr: *anyopaque, writer: *std.Io.Writer) void {
+        _ = writer;
         const self: *DirExtractWriter = @ptrCast(@alignCast(ptr));
         // Close and remove the last file
         if (self.open_files.items.len > 0) {
             const last_idx = self.open_files.items.len - 1;
-            self.open_files.items[last_idx].close();
+            // Flush before closing
+            self.open_files.items[last_idx].writer.interface.flush() catch {};
+            self.open_files.items[last_idx].file.close();
             _ = self.open_files.orderedRemove(last_idx);
         }
     }
@@ -206,7 +215,8 @@ pub const BufferExtractWriter = struct {
     allocator: std.mem.Allocator,
     files: std.StringHashMap(std.array_list.Managed(u8)),
     directories: std.array_list.Managed([]u8),
-    current_file: ?*std.array_list.Managed(u8) = null,
+    current_file_writer: ?std.Io.Writer.Allocating = null,
+    current_file_path: ?[]const u8 = null,
 
     pub fn init(allocator: std.mem.Allocator) BufferExtractWriter {
         return .{
@@ -243,36 +253,36 @@ pub const BufferExtractWriter = struct {
         .makeDir = makeDir,
     };
 
-    fn createFile(ptr: *anyopaque, path: []const u8) ExtractWriter.CreateFileError!std.io.AnyWriter {
+    fn createFile(ptr: *anyopaque, path: []const u8) ExtractWriter.CreateFileError!*std.Io.Writer {
         const self: *BufferExtractWriter = @ptrCast(@alignCast(ptr));
 
         const key = self.allocator.dupe(u8, path) catch return error.OutOfMemory;
-        errdefer self.allocator.free(key);
+        self.current_file_path = key;
 
-        const result = self.files.getOrPut(key) catch return error.OutOfMemory;
-        if (result.found_existing) {
-            self.allocator.free(key);
-            result.value_ptr.clearRetainingCapacity();
-        } else {
-            result.value_ptr.* = std.array_list.Managed(u8).init(self.allocator);
-        }
+        // Create allocating writer
+        self.current_file_writer = std.Io.Writer.Allocating.init(self.allocator);
 
-        self.current_file = result.value_ptr;
-        return .{
-            .context = @ptrCast(result.value_ptr),
-            .writeFn = arrayListWrite,
-        };
+        return &self.current_file_writer.?.writer;
     }
 
-    fn arrayListWrite(context: *const anyopaque, bytes: []const u8) anyerror!usize {
-        const list: *std.array_list.Managed(u8) = @ptrCast(@alignCast(@constCast(context)));
-        try list.appendSlice(bytes);
-        return bytes.len;
-    }
-
-    fn finishFile(ptr: *anyopaque, _: std.io.AnyWriter) void {
+    fn finishFile(ptr: *anyopaque, _: *std.Io.Writer) void {
         const self: *BufferExtractWriter = @ptrCast(@alignCast(ptr));
-        self.current_file = null;
+        if (self.current_file_writer) |*writer| {
+            if (self.current_file_path) |path| {
+                // Convert writer contents to Managed ArrayList
+                const unmanaged_list = writer.toArrayList();
+                var managed_list = std.array_list.Managed(u8).fromOwnedSlice(self.allocator, unmanaged_list.items);
+                self.files.put(path, managed_list) catch {
+                    // If put fails, clean up
+                    managed_list.deinit();
+                    self.allocator.free(path);
+                };
+                self.current_file_path = null;
+            } else {
+                writer.deinit();
+            }
+            self.current_file_writer = null;
+        }
     }
 
     fn makeDir(ptr: *anyopaque, path: []const u8) ExtractWriter.MakeDirError!void {
@@ -419,10 +429,38 @@ fn HashingReader(comptime ReaderType: type) type {
     return struct {
         child_reader: ReaderType,
         hasher: *std.crypto.hash.Blake3,
+        interface: std.Io.Reader,
 
         const Self = @This();
         pub const Error = ReaderType.Error;
-        pub const Reader = std.io.GenericReader(*Self, Error, read);
+
+        pub fn init(child_reader: ReaderType, hasher: *std.crypto.hash.Blake3) Self {
+            var result = Self{
+                .child_reader = child_reader,
+                .hasher = hasher,
+                .interface = undefined,
+            };
+            result.interface = .{
+                .vtable = &.{
+                    .stream = stream,
+                },
+                .buffer = &.{},
+                .seek = 0,
+                .end = 0,
+            };
+            return result;
+        }
+
+        fn stream(r: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
+            const self: *Self = @alignCast(@fieldParentPtr("interface", r));
+            const dest = limit.slice(try w.writableSliceGreedy(1));
+            const n = self.read(dest) catch return std.Io.Reader.StreamError.ReadFailed;
+            if (n == 0) {
+                return std.Io.Reader.StreamError.EndOfStream;
+            }
+            w.advance(n);
+            return n;
+        }
 
         pub fn read(self: *Self, buffer: []u8) Error!usize {
             const n = try self.child_reader.read(buffer);
@@ -430,10 +468,6 @@ fn HashingReader(comptime ReaderType: type) type {
                 self.hasher.update(buffer[0..n]);
             }
             return n;
-        }
-
-        pub fn reader(self: *Self) Reader {
-            return .{ .context = self };
         }
     };
 }
@@ -454,16 +488,11 @@ pub fn unbundleStream(
     const ReaderType = @TypeOf(any_reader);
     const HashingReaderType = HashingReader(ReaderType);
 
-    var hashing_reader = HashingReaderType{
-        .child_reader = any_reader,
-        .hasher = &hasher,
-    };
+    var hashing_reader = HashingReaderType.init(any_reader, &hasher);
 
     var window_buffer: [ZSTD_WINDOW_BUFFER_SIZE]u8 = undefined;
 
-    var hashing_reader_buffer: [4096]u8 = undefined;
-    var adapted_hashing_reader = hashing_reader.reader().adaptToNewApi(&hashing_reader_buffer).new_interface;
-    const zstd_stream = std.compress.zstd.Decompress.init(&adapted_hashing_reader, &window_buffer, .{});
+    const zstd_stream = std.compress.zstd.Decompress.init(&hashing_reader.interface, &window_buffer, .{});
     var decompressed_reader = zstd_stream.reader;
 
     var file_name_buffer: [std.fs.max_path_bytes]u8 = undefined;
@@ -501,11 +530,8 @@ pub fn unbundleStream(
                 const file_writer = try extract_writer.createFile(file_path);
                 defer extract_writer.finishFile(file_writer);
 
-                var buffer: [STREAM_BUFFER_SIZE]u8 = undefined;
-                var adapted_file_writer = file_writer.adaptToNewApi(&buffer).new_interface;
-
-                try tar_iterator.streamRemaining(entry, &adapted_file_writer);
-                try adapted_file_writer.flush();
+                try tar_iterator.streamRemaining(entry, file_writer);
+                try file_writer.flush();
 
                 data_extracted = true;
             },

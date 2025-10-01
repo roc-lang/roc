@@ -32,7 +32,7 @@ test "simple streaming write" {
     );
     defer writer.deinit();
 
-    try writer.writer().writeAll("Hello, world!");
+    try writer.interface.writeAll("Hello, world!");
     try writer.finish();
 
     // Just check we got some output
@@ -57,7 +57,7 @@ test "simple streaming read" {
     defer writer.deinit();
 
     const test_data = "Hello, world! This is a test.";
-    try writer.writer().writeAll(test_data);
+    try writer.interface.writeAll(test_data);
     try writer.finish();
 
     const hash = writer.getHash();
@@ -79,7 +79,7 @@ test "simple streaming read" {
 
     var buffer: [1024]u8 = undefined;
     while (true) {
-        const n = try reader.reader().read(&buffer);
+        const n = try reader.read(&buffer);
         if (n == 0) break;
         try decompressed.appendSlice(buffer[0..n]);
     }
@@ -109,7 +109,7 @@ test "streaming write with exact buffer boundary" {
     defer allocator.free(exact_data);
     @memset(exact_data, 'X');
 
-    try writer.writer().writeAll(exact_data);
+    try writer.interface.writeAll(exact_data);
     try writer.finish();
 
     // Just verify we got output
@@ -133,7 +133,7 @@ test "streaming read with hash mismatch" {
     );
     defer writer.deinit();
 
-    try writer.writer().writeAll("Test data");
+    try writer.interface.writeAll("Test data");
     try writer.finish();
 
     // Use wrong hash
@@ -154,7 +154,7 @@ test "streaming read with hash mismatch" {
 
     var buffer: [1024]u8 = undefined;
     while (true) {
-        const n = reader.reader().read(&buffer) catch |err| {
+        const n = reader.read(&buffer) catch |err| {
             try std.testing.expectEqual(err, error.HashMismatch);
             return;
         };
@@ -188,7 +188,7 @@ test "different compression levels" {
         );
         defer writer.deinit();
 
-        try writer.writer().writeAll(test_data);
+        try writer.interface.writeAll(test_data);
         try writer.finish();
 
         sizes[i] = output.items.len;
@@ -210,7 +210,7 @@ test "different compression levels" {
 
         var buffer: [1024]u8 = undefined;
         while (true) {
-            const n = try reader.reader().read(&buffer);
+            const n = try reader.read(&buffer);
             if (n == 0) break;
             try decompressed.appendSlice(buffer[0..n]);
         }

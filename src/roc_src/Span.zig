@@ -10,13 +10,7 @@ len: u32,
 /// Write the debug format of a span to a writer.
 pub fn format(
     self: *const Self,
-    comptime fmt: []const u8,
-    _: std.fmt.FormatOptions,
-    writer: std.io.AnyWriter,
-) !void {
-    if (fmt.len != 0) {
-        std.fmt.invalidFmtError(fmt, self);
-    }
-
+    writer: *std.Io.Writer,
+) std.Io.Writer.Error!void {
     try writer.print("@{}-{}", .{ self.start, self.start + self.len });
 }

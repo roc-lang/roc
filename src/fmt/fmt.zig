@@ -36,18 +36,6 @@ fn stderrWriter() *std.Io.Writer {
     return &stderr_file_writer.interface;
 }
 
-fn stderrAnyWriter() std.io.AnyWriter {
-    return anyWriterFrom(stderrWriter());
-}
-
-fn anyWriterFrom(writer: *std.Io.Writer) std.io.AnyWriter {
-    return .{ .context = writer, .writeFn = writeFromIoWriter };
-}
-
-fn writeFromIoWriter(context: *const anyopaque, bytes: []const u8) anyerror!usize {
-    const writer: *std.Io.Writer = @ptrCast(@alignCast(@constCast(context)));
-    return writer.write(bytes);
-}
 
 const FormatFlags = enum {
     debug_binop,
@@ -198,19 +186,17 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(gpa, &module_env.common, stderrAnyWriter()) catch @panic("Failed to print SExpr");
+        parse_ast.toSExprStr(gpa, &module_env.common, stderrWriter()) catch @panic("Failed to print SExpr");
         try printParseErrors(gpa, module_env.common.source, parse_ast);
         return error.ParsingFailed;
     }
 
     // Check if the file is formatted without actually formatting it
     if (unformatted_files != null) {
-        var formatted = std.array_list.Managed(u8).init(gpa);
+        var formatted: std.Io.Writer.Allocating = .init(gpa);
         defer formatted.deinit();
-        var formatted_writer = formatted.writer();
-        var formatted_adapter = formatted_writer.adaptToNewApi(&.{});
-        try formatAst(parse_ast, &formatted_adapter.new_interface);
-        if (!std.mem.eql(u8, formatted.items, module_env.common.source)) {
+        try formatAst(parse_ast, &formatted.writer);
+        if (!std.mem.eql(u8, formatted.written(), module_env.common.source)) {
             try unformatted_files.?.append(path);
         }
     } else { // Otherwise actually format it
@@ -235,7 +221,7 @@ pub fn formatStdin(gpa: std.mem.Allocator) !void {
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(gpa, &module_env.common, stderrAnyWriter()) catch @panic("Failed to print SExpr");
+        parse_ast.toSExprStr(gpa, &module_env.common, stderrWriter()) catch @panic("Failed to print SExpr");
         try printParseErrors(gpa, module_env.common.source, parse_ast);
         return error.ParsingFailed;
     }
@@ -2349,7 +2335,7 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
         parse_ast.store.emptyScratch();
 
         std.debug.print("Parsed SExpr:\n==========\n", .{});
-        parse_ast.toSExprStr(module_env, stderrAnyWriter()) catch @panic("Failed to print SExpr");
+        parse_ast.toSExprStr(module_env, stderrWriter()) catch @panic("Failed to print SExpr");
         std.debug.print("\n==========\n\n", .{});
     }
 
@@ -2357,13 +2343,12 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
         return error.ParseFailed;
     };
 
-    var result = std.array_list.Managed(u8).init(gpa);
-    var result_writer = result.writer();
-    var result_adapter = result_writer.adaptToNewApi(&.{});
-    try formatAst(parse_ast, &result_adapter.new_interface);
+    var result: std.Io.Writer.Allocating = .init(gpa);
+    defer result.deinit();
+    try formatAst(parse_ast, &result.writer);
 
     if (debug) {
-        std.debug.print("Formatted:\n==========\n{s}\n==========\n\n", .{result.items});
+        std.debug.print("Formatted:\n==========\n{s}\n==========\n\n", .{result.written()});
     }
     return try result.toOwnedSlice();
 }

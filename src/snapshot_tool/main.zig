@@ -2055,36 +2055,33 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
 
 /// Generate FORMATTED section for both markdown and HTML
 fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_ast: *AST) !void {
-    var formatted = std.array_list.Managed(u8).init(output.gpa);
+    var formatted: std.Io.Writer.Allocating = .init(output.gpa);
     defer formatted.deinit();
-    var formatted_writer = formatted.writer();
-    var formatted_adapter = formatted_writer.adaptToNewApi(&.{});
-    const formatted_io = &formatted_adapter.new_interface;
 
     switch (content.meta.node_type) {
         .file => {
-            try fmt.formatAst(parse_ast.*, formatted_io);
+            try fmt.formatAst(parse_ast.*, &formatted.writer);
         },
         .header => {
-            try fmt.formatHeader(parse_ast.*, formatted_io);
-            try formatted.append('\n');
+            try fmt.formatHeader(parse_ast.*, &formatted.writer);
+            try formatted.writer.writeByte('\n');
         },
         .expr => {
-            try fmt.formatExpr(parse_ast.*, formatted_io);
-            try formatted.append('\n');
+            try fmt.formatExpr(parse_ast.*, &formatted.writer);
+            try formatted.writer.writeByte('\n');
         },
         .statement => {
-            try fmt.formatStatement(parse_ast.*, formatted_io);
-            try formatted.append('\n');
+            try fmt.formatStatement(parse_ast.*, &formatted.writer);
+            try formatted.writer.writeByte('\n');
         },
         .package => {
-            try fmt.formatAst(parse_ast.*, formatted_io);
+            try fmt.formatAst(parse_ast.*, &formatted.writer);
         },
         .platform => {
-            try fmt.formatAst(parse_ast.*, formatted_io);
+            try fmt.formatAst(parse_ast.*, &formatted.writer);
         },
         .app => {
-            try fmt.formatAst(parse_ast.*, formatted_io);
+            try fmt.formatAst(parse_ast.*, &formatted.writer);
         },
         .repl => {
             // REPL doesn't use formatting
@@ -2092,8 +2089,8 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
         },
     }
 
-    const is_changed = !std.mem.eql(u8, formatted.items, content.source);
-    const display_content = if (is_changed) formatted.items else "NO CHANGE\n";
+    const is_changed = !std.mem.eql(u8, formatted.written(), content.source);
+    const display_content = if (is_changed) formatted.written() else "NO CHANGE\n";
 
     try output.begin_section("FORMATTED");
     try output.begin_code_block("roc");

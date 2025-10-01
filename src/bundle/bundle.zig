@@ -141,9 +141,7 @@ pub fn bundle(
     defer compress_writer.deinit();
 
     // Create tar writer that writes to the compressing writer
-    var compress_writer_buffer: [4096]u8 = undefined;
-    var adapted_compress_writer = compress_writer.writer().adaptToNewApi(&compress_writer_buffer).new_interface;
-    var tar_writer = std.tar.Writer{ .underlying_writer = &adapted_compress_writer };
+    var tar_writer = std.tar.Writer{ .underlying_writer = &compress_writer.interface };
 
     // Process files one at a time
     while (try file_path_iter.next()) |file_path| {
@@ -232,8 +230,8 @@ pub fn bundle(
         error.OutOfMemory => return error.OutOfMemory,
     };
 
-    // flush the adapted writer
-    try adapted_compress_writer.flush();
+    // flush the compress writer
+    try compress_writer.interface.flush();
 
     // Get the blake3 hash and encode as base58
     const hash = compress_writer.getHash();
@@ -597,9 +595,7 @@ pub fn unbundleStream(
     var file_name_buffer: [TAR_PATH_MAX_LENGTH + 1]u8 = undefined;
     var link_name_buffer: [TAR_PATH_MAX_LENGTH + 1]u8 = undefined;
 
-    var decompress_reader_buffer: [4096]u8 = undefined;
-    var adapted_decompress_reader = decompress_reader.reader().adaptToNewApi(&decompress_reader_buffer).new_interface;
-    var tar_iter = std.tar.Iterator.init(&adapted_decompress_reader, .{
+    var tar_iter = std.tar.Iterator.init(&decompress_reader.interface, .{
         .file_name_buffer = &file_name_buffer,
         .link_name_buffer = &link_name_buffer,
     });
