@@ -822,33 +822,26 @@ fn compileSource(source: []const u8) !CompilerStageData {
     const temp_alloc = local_arena.allocator();
 
     // Generate Tokens HTML
-    var tokens_html_buffer = std.array_list.Managed(u8).init(temp_alloc);
-    const tokens_writer = tokens_html_buffer.writer().any();
-    AST.tokensToHtml(&parse_ast, &module_env.common, tokens_writer) catch |err| {
+    var tokens_writer: std.Io.Writer.Allocating = .init(temp_alloc);
+    AST.tokensToHtml(&parse_ast, &module_env.common, &tokens_writer.writer) catch |err| {
         logDebug("compileSource: tokensToHtml failed: {}\n", .{err});
     };
-    result.tokens_html = allocator.dupe(u8, tokens_html_buffer.items) catch |err| {
+    result.tokens_html = allocator.dupe(u8, tokens_writer.written()) catch |err| {
         logDebug("compileSource: failed to dupe tokens_html: {}\n", .{err});
         return err;
     };
 
     // Generate AST HTML
-    var ast_html_unmanaged = std.ArrayListUnmanaged(u8).empty;
-    var ast_writer_allocating: std.Io.Writer.Allocating = .fromArrayList(temp_alloc, &ast_html_unmanaged);
-    defer ast_html_unmanaged = ast_writer_allocating.toArrayList();
-    {
-        const file = parse_ast.store.getFile();
+    var ast_writer: std.Io.Writer.Allocating = .init(temp_alloc);
+    const file = parse_ast.store.getFile();
 
-        var tree = SExprTree.init(temp_alloc);
-        defer tree.deinit();
+    var tree = SExprTree.init(temp_alloc);
 
-        try file.pushToSExprTree(module_env.gpa, &module_env.common, &parse_ast, &tree);
+    try file.pushToSExprTree(module_env.gpa, &module_env.common, &parse_ast, &tree);
 
-        try tree.toHtml(&ast_writer_allocating.writer);
-    }
-    try ast_writer_allocating.writer.flush();
+    try tree.toHtml(&ast_writer.writer);
 
-    result.ast_html = allocator.dupe(u8, ast_html_unmanaged.items) catch |err| {
+    result.ast_html = allocator.dupe(u8, ast_writer.written()) catch |err| {
         logDebug("compileSource: failed to dupe ast_html: {}\n", .{err});
         return err;
     };
@@ -1108,31 +1101,30 @@ fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 
     // Collect HTML in a buffer first, then escape it for JSON
     var html_buffer: [65536]u8 = undefined;
-    var html_stream = std.io.fixedBufferStream(&html_buffer);
-    const html_writer = html_stream.writer();
+    var html_writer = std.io.Writer.fixed(&html_buffer);
 
     if (data.tokenize_reports.items.len > 0) {
         for (data.tokenize_reports.items) |report| {
-            writeDiagnosticHtml(html_writer, report) catch return error.OutOfBufferSpace;
+            writeDiagnosticHtml(&html_writer, report) catch return error.OutOfBufferSpace;
         }
     }
     if (data.parse_reports.items.len > 0) {
         for (data.parse_reports.items) |report| {
-            writeDiagnosticHtml(html_writer, report) catch return error.OutOfBufferSpace;
+            writeDiagnosticHtml(&html_writer, report) catch return error.OutOfBufferSpace;
         }
     }
     if (data.can_reports.items.len > 0) {
         for (data.can_reports.items) |report| {
-            writeDiagnosticHtml(html_writer, report) catch return error.OutOfBufferSpace;
+            writeDiagnosticHtml(&html_writer, report) catch return error.OutOfBufferSpace;
         }
     }
     if (data.type_reports.items.len > 0) {
         for (data.type_reports.items) |report| {
-            writeDiagnosticHtml(html_writer, report) catch return error.OutOfBufferSpace;
+            writeDiagnosticHtml(&html_writer, report) catch return error.OutOfBufferSpace;
         }
     }
 
-    const html_content = html_stream.getWritten();
+    const html_content = html_writer.buffer[0..html_writer.end];
     try writeJsonString(w, html_content);
     try w.writeAll("\"}}");
 
@@ -1335,10 +1327,7 @@ fn writeReplCanCirResponse(response_buffer: []u8, module_env: *ModuleEnv) Respon
 
     var local_arena = std.heap.ArenaAllocator.init(allocator);
     defer local_arena.deinit();
-    var sexpr_buffer = std.ArrayListUnmanaged(u8).empty;
-    var sexpr_writer_allocating: std.Io.Writer.Allocating = .fromArrayList(local_arena.allocator(), &sexpr_buffer);
-    defer sexpr_buffer = sexpr_writer_allocating.toArrayList();
-
+    var sexpr_writer_allocating: std.Io.Writer.Allocating = .init(local_arena.allocator());
     var tree = SExprTree.init(local_arena.allocator());
     defer tree.deinit();
 
@@ -1358,7 +1347,7 @@ fn writeReplCanCirResponse(response_buffer: []u8, module_env: *ModuleEnv) Respon
     tree.toHtml(&sexpr_writer_allocating.writer) catch {};
     sexpr_writer_allocating.writer.flush() catch {};
 
-    try writeJsonString(w, sexpr_buffer.items);
+    try writeJsonString(w, sexpr_writer_allocating.written());
     try w.writeAll("\"}");
     try resp_writer.finalize();
 }
@@ -1374,9 +1363,7 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
     const cir = data.module_env;
     var local_arena = std.heap.ArenaAllocator.init(allocator);
     defer local_arena.deinit();
-    var sexpr_buffer = std.ArrayListUnmanaged(u8).empty;
-    var sexpr_writer_allocating: std.Io.Writer.Allocating = .fromArrayList(local_arena.allocator(), &sexpr_buffer);
-    defer sexpr_buffer = sexpr_writer_allocating.toArrayList();
+    var sexpr_writer_allocating: std.Io.Writer.Allocating = .init(local_arena.allocator());
 
     var tree = SExprTree.init(local_arena.allocator());
     defer tree.deinit();
@@ -1397,7 +1384,7 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
     tree.toHtml(&sexpr_writer_allocating.writer) catch {};
     sexpr_writer_allocating.writer.flush() catch {};
 
-    try writeJsonString(w, sexpr_buffer.items);
+    try writeJsonString(w, sexpr_writer_allocating.written());
     try w.writeAll("\"}");
     try resp_writer.finalize();
 }
@@ -1421,9 +1408,7 @@ fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) Re
         return;
     };
 
-    var html_buffer_unmanaged = std.ArrayListUnmanaged(u8).empty;
-    var html_writer_allocating: std.Io.Writer.Allocating = .fromArrayList(local_arena.allocator(), &html_buffer_unmanaged);
-    defer html_buffer_unmanaged = html_writer_allocating.toArrayList();
+    var html_writer_allocating: std.Io.Writer.Allocating = .init(local_arena.allocator());
 
     test_runner.write_html_report(&html_writer_allocating.writer) catch {
         try writeErrorResponse(response_buffer, .ERROR, "Failed to generate test report.");
@@ -1436,7 +1421,7 @@ fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) Re
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
 
-    try writeJsonString(w, html_buffer_unmanaged.items);
+    try writeJsonString(w, html_writer_allocating.written());
 
     try w.writeAll("\"}");
     try resp_writer.finalize();
@@ -1623,10 +1608,7 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) ResponseWr
     const cir = data.module_env;
     var local_arena = std.heap.ArenaAllocator.init(allocator);
     defer local_arena.deinit();
-    var sexpr_buffer = std.ArrayListUnmanaged(u8).empty;
-    var sexpr_writer_allocating: std.Io.Writer.Allocating = .fromArrayList(local_arena.allocator(), &sexpr_buffer);
-    defer sexpr_buffer = sexpr_writer_allocating.toArrayList();
-
+    var sexpr_writer_allocating: std.Io.Writer.Allocating = .init(local_arena.allocator());
     var tree = SExprTree.init(local_arena.allocator());
     defer tree.deinit();
 
@@ -1643,13 +1625,13 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) ResponseWr
     sexpr_writer_allocating.writer.flush() catch {};
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
-    try writeJsonString(w, sexpr_buffer.items);
+    try writeJsonString(w, sexpr_writer_allocating.written());
     try w.writeAll("\"}");
     try resp_writer.finalize();
 }
 
 /// Write a diagnostic as JSON
-fn writeDiagnosticHtml(writer: anytype, report: reporting.Report) !void {
+fn writeDiagnosticHtml(writer: *std.io.Writer, report: reporting.Report) !void {
     try reporting.renderReportToHtml(&report, writer, reporting.ReportingConfig.initHtml());
 }
 
@@ -1711,7 +1693,7 @@ fn writeDiagnosticJson(writer: anytype, diagnostic: Diagnostic) !void {
 }
 
 /// Write a string with JSON escaping
-fn writeJsonString(writer: anytype, str: []const u8) !void {
+fn writeJsonString(writer: *std.io.Writer, str: []const u8) !void {
     for (str) |char| {
         switch (char) {
             '"' => try writer.writeAll("\\\""),
