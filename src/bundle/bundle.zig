@@ -222,12 +222,7 @@ pub fn bundle(
     };
 
     // Finish compression
-    compress_writer.finish() catch |err| switch (err) {
-        error.CompressionFailed => return error.CompressionFailed,
-        error.WriteFailed => return error.WriteFailed,
-        error.AlreadyFinished => return error.CompressionFailed,
-        error.OutOfMemory => return error.OutOfMemory,
-    };
+    compress_writer.finish() catch return error.WriteFailed;
 
     // flush the compress writer
     try compress_writer.interface.flush();
