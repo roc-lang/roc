@@ -221,11 +221,8 @@ pub fn bundle(
         return error.TarWriteFailed;
     };
 
-    // Finish compression
+    // Finish compression, also flushes the writer
     compress_writer.finish() catch return error.WriteFailed;
-
-    // flush the compress writer
-    try compress_writer.interface.flush();
 
     // Get the blake3 hash and encode as base58
     const hash = compress_writer.getHash();

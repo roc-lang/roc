@@ -78,6 +78,7 @@ pub const CompressingHashWriter = struct {
 
     fn flush(w: *Writer) Error!void {
         const self: *Self = @alignCast(@fieldParentPtr("interface", w));
+        if (self.finished and w.end != 0) return Error.WriteFailed;
         _ = self.compressAndHash(w.buffer[0..w.end], false) catch return error.WriteFailed;
         w.end = 0;
         return;
@@ -85,6 +86,7 @@ pub const CompressingHashWriter = struct {
 
     fn drain(w: *Writer, data: []const []const u8, splat: usize) Error!usize {
         const self: *Self = @alignCast(@fieldParentPtr("interface", w));
+        if (self.finished) return Error.WriteFailed;
         _ = self.compressAndHash(w.buffer[0..w.end], false) catch return error.WriteFailed;
         w.end = 0;
         if (data.len == 0) return 0;
