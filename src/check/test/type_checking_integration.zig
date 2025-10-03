@@ -1039,7 +1039,7 @@ test "check type - patterns record field mismatch" {
     try assertExprTypeCheckFail(source, "INCOMPATIBLE MATCH PATTERNS");
 }
 
-// vars
+// vars + reassignment //
 
 test "check type - var ressignment" {
     const source =
@@ -1054,7 +1054,7 @@ test "check type - var ressignment" {
     try assertFileTypeCheckPass(source, "Num(_size)");
 }
 
-// expect
+// expect //
 
 test "check type - expect" {
     const source =
@@ -1077,6 +1077,77 @@ test "check type - expect not bool" {
         \\  x = 1
         \\  expect x
         \\  x
+        \\}
+    ;
+    try assertFileTypeCheckFail(source, "TYPE MISMATCH");
+}
+
+// crash //
+
+test "check type - crash" {
+    const source =
+        \\module []
+        \\
+        \\y : U64
+        \\y = {
+        \\  crash "bug"
+        \\}
+        \\
+        \\main = {
+        \\  x = 1
+        \\  x + y
+        \\}
+    ;
+    try assertFileTypeCheckPass(source, "Num(Int(Unsigned64))");
+}
+
+// debug //
+
+test "check type - debug" {
+    const source =
+        \\module []
+        \\
+        \\y : U64
+        \\y = {
+        \\  debug 2
+        \\}
+        \\
+        \\main = {
+        \\  x = 1
+        \\  x + y
+        \\}
+    ;
+    try assertFileTypeCheckPass(source, "Num(Int(Unsigned64))");
+}
+
+// for //
+
+test "check type - for" {
+    const source =
+        \\module []
+        \\
+        \\main = {
+        \\  var result = 0
+        \\  for x in [1, 2, 3] {
+        \\    result = result + x
+        \\  } 
+        \\  result
+        \\}
+    ;
+    try assertFileTypeCheckPass(source, "Num(_size)");
+}
+
+// TODO SHOULED FAIL
+test "check type - for mismatch" {
+    const source =
+        \\module []
+        \\
+        \\main = {
+        \\  var result = 0
+        \\  for x in ["a", "b", "c"] {
+        \\    result = result + x
+        \\  } 
+        \\  result
         \\}
     ;
     try assertFileTypeCheckFail(source, "TYPE MISMATCH");
