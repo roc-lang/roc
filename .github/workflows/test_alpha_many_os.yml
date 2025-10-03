@@ -9,11 +9,11 @@ permissions: {}
 
 jobs:
   test-alpha:
-    name: test alpha macos 13 (x64), macos 14 (aarch64), ubuntu 22.04-24.04 (x64), ubuntu 22.04-24.04 (aarch64)
+    name: test alpha macos 15 intel (x64), macos 14 (aarch64), ubuntu 22.04-24.04 (x64), ubuntu 22.04-24.04 (aarch64)
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-13, macos-14, ubuntu-22.04, ubuntu-24.04, ubuntu-22.04-arm, ubuntu-24.04-arm]
+        os: [macos-15-intel, macos-14, ubuntu-22.04, ubuntu-24.04, ubuntu-22.04-arm, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
@@ -46,8 +46,8 @@ jobs:
           DOWNLOAD_URL=$(curl -sH "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$ASSETS_URL" | jq -r '.[] | select(.name | startswith("roc-linux_arm64-") and (contains("old") | not)) | .browser_download_url')
           curl -fLH "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$DOWNLOAD_URL" -o roc_release.tar.gz
 
-      - name: get the latest release archive for macos 13 (x86_64)
-        if: matrix.os == 'macos-13'
+      - name: get the latest release archive for macos 15 intel (x86_64)
+        if: matrix.os == 'macos-15'
         run: |
           ASSETS_URL="${{ steps.get_release.outputs.assets_url }}"
           DOWNLOAD_URL=$(curl -sH "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$ASSETS_URL" | jq -r '.[] | select(.name | startswith("roc-macos_x86_64-")) | .browser_download_url')

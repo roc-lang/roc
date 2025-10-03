@@ -9,11 +9,11 @@ permissions: {}
 
 jobs:
   test-nightly:
-    name: test nightly macos 13 (x64), macos 14 (aarch64), ubuntu 22.04-24.04 (x64), ubuntu 22.04-24.04 (aarch64)
+    name: test nightly macos 15 intel (x64), macos 14 (aarch64), ubuntu 22.04-24.04 (x64), ubuntu 22.04-24.04 (aarch64)
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-13, macos-14, ubuntu-22.04, ubuntu-24.04, ubuntu-22.04-arm, ubuntu-24.04-arm]
+        os: [macos-15-intel, macos-14, ubuntu-22.04, ubuntu-24.04, ubuntu-22.04-arm, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
@@ -35,8 +35,8 @@ jobs:
         run: |
           curl -fL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-latest.tar.gz -o roc_release.tar.gz
 
-      - name: get the latest release archive for macos 13 (x86_64)
-        if: matrix.os == 'macos-13'
+      - name: get the latest release archive for macos 15 intel (x86_64)
+        if: matrix.os == 'macos-15-intel'
         run: curl -fL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-latest.tar.gz -o roc_release.tar.gz
 
       - name: get the latest release archive for macos 14 (aarch64)

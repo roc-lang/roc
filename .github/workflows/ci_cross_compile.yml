@@ -15,7 +15,7 @@ jobs:
       matrix:
         host: [
             ubuntu-22.04, # Linux x64 host
-            macos-13, # macOS x64 host
+            macos-15-intel, # macOS x64 host
             macos-15, # macOS ARM64 host
             windows-2022, # Windows x64 host
           ]
