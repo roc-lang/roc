@@ -87,10 +87,12 @@ pub fn build(b: *std.Build) void {
     // Add snapshot tool
     const snapshot_exe = b.addExecutable(.{
         .name = "snapshot",
-        .root_source_file = b.path("src/snapshot_tool/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/snapshot_tool/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
     });
     roc_modules.addAll(snapshot_exe);
     add_tracy(b, roc_modules.build_options, snapshot_exe, target, false, flag_enable_tracy);
@@ -98,12 +100,14 @@ pub fn build(b: *std.Build) void {
 
     const playground_exe = b.addExecutable(.{
         .name = "playground",
-        .root_source_file = b.path("src/playground_wasm/main.zig"),
-        .target = b.resolveTargetQuery(.{
-            .cpu_arch = .wasm32,
-            .os_tag = .freestanding,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/playground_wasm/main.zig"),
+            .target = b.resolveTargetQuery(.{
+                .cpu_arch = .wasm32,
+                .os_tag = .freestanding,
+            }),
+            .optimize = optimize,
         }),
-        .optimize = optimize,
     });
     playground_exe.entry = .disabled;
     playground_exe.rdynamic = true;
@@ -126,9 +130,11 @@ pub fn build(b: *std.Build) void {
     const playground_test_install = blk: {
         const playground_integration_test_exe = b.addExecutable(.{
             .name = "playground_integration_test",
-            .root_source_file = b.path("test/playground-integration/main.zig"),
-            .target = target,
-            .optimize = optimize,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/playground-integration/main.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
         });
         playground_integration_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
         playground_integration_test_exe.root_module.addImport("build_options", build_options.createModule());
@@ -162,10 +168,12 @@ pub fn build(b: *std.Build) void {
     // Add snapshot tool test
     const snapshot_test = b.addTest(.{
         .name = "snapshot_tool_test",
-        .root_source_file = b.path("src/snapshot_tool/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/snapshot_tool/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
         .filters = test_filters,
     });
     roc_modules.addAll(snapshot_test);
@@ -180,10 +188,12 @@ pub fn build(b: *std.Build) void {
     // Add CLI test
     const cli_test = b.addTest(.{
         .name = "cli_test",
-        .root_source_file = b.path("src/cli/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/cli/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
         .filters = test_filters,
     });
     roc_modules.addAll(cli_test);
@@ -199,10 +209,12 @@ pub fn build(b: *std.Build) void {
     // Add watch tests
     const watch_test = b.addTest(.{
         .name = "watch_test",
-        .root_source_file = b.path("src/watch/watch.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/watch/watch.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
         .filters = test_filters,
     });
     roc_modules.addAll(watch_test);
@@ -301,10 +313,12 @@ fn add_fuzz_target(
     const root_source_file = b.path(b.fmt("test/fuzzing/fuzz-{s}.zig", .{name}));
     const fuzz_obj = b.addObject(.{
         .name = b.fmt("{s}_obj", .{name}),
-        .root_source_file = root_source_file,
-        .target = target,
-        // Work around instrumentation bugs on mac without giving up perf on linux.
-        .optimize = if (target.result.os.tag == .macos) .Debug else .ReleaseSafe,
+        .root_module = b.createModule(.{
+            .root_source_file = root_source_file,
+            .target = target,
+            // Work around instrumentation bugs on mac without giving up perf on linux.
+            .optimize = if (target.result.os.tag == .macos) .Debug else .ReleaseSafe,
+        }),
     });
     roc_modules.addAll(fuzz_obj);
     add_tracy(b, roc_modules.build_options, fuzz_obj, target, false, tracy);
@@ -314,10 +328,12 @@ fn add_fuzz_target(
     const repro_step = b.step(name_repro, b.fmt("run fuzz reproduction for {s}", .{name}));
     const repro_exe = b.addExecutable(.{
         .name = name_repro,
-        .root_source_file = b.path("test/fuzzing/fuzz-repro.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/fuzzing/fuzz-repro.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
     });
     repro_exe.root_module.addImport("fuzz_test", fuzz_obj.root_module);
 
@@ -349,16 +365,19 @@ fn addMainExe(
 ) ?*Step.Compile {
     const exe = b.addExecutable(.{
         .name = "roc",
-        .root_source_file = b.path("src/cli/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .strip = strip,
-        .link_libc = true,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/cli/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .link_libc = true,
+        }),
     });
 
     // Create test platform host static library (str)
     const test_platform_host_lib = b.addLibrary(.{
         .name = "test_platform_str_host",
+        .linkage = .static,
         .root_module = b.createModule(.{
             .root_source_file = b.path("test/str/platform/host.zig"),
             .target = target,
@@ -366,7 +385,6 @@ fn addMainExe(
             .strip = true,
             .pic = true, // Enable Position Independent Code for PIE compatibility
         }),
-        .linkage = .static,
     });
     test_platform_host_lib.root_module.addImport("builtins", roc_modules.builtins);
 
@@ -382,6 +400,7 @@ fn addMainExe(
     // Create test platform host static library (int) - native target
     const test_platform_int_host_lib = b.addLibrary(.{
         .name = "test_platform_int_host",
+        .linkage = .static,
         .root_module = b.createModule(.{
             .root_source_file = b.path("test/int/platform/host.zig"),
             .target = target,
@@ -389,7 +408,6 @@ fn addMainExe(
             .strip = true,
             .pic = true, // Enable Position Independent Code for PIE compatibility
         }),
-        .linkage = .static,
     });
     test_platform_int_host_lib.root_module.addImport("builtins", roc_modules.builtins);
     // Force bundle compiler-rt to resolve runtime symbols like __main
@@ -444,11 +462,13 @@ fn addMainExe(
     // Create builtins static library at build time with minimal dependencies
     const builtins_obj = b.addObject(.{
         .name = "roc_builtins",
-        .root_source_file = b.path("src/builtins/static_lib.zig"),
-        .target = target,
-        .optimize = optimize,
-        .strip = true,
-        .pic = true, // Enable Position Independent Code for PIE compatibility
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/builtins/static_lib.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .pic = true, // Enable Position Independent Code for PIE compatibility
+        }),
     });
 
     // Create shim static library at build time - fully static without libc
@@ -537,7 +557,7 @@ const ParsedBuildArgs = struct {
 };
 
 fn appendFilter(
-    list: *std.ArrayList([]const u8),
+    list: *std.array_list.Managed([]const u8),
     b: *std.Build,
     value: []const u8,
 ) void {
@@ -552,8 +572,8 @@ fn parseBuildArgs(b: *std.Build) ParsedBuildArgs {
         .test_filters = &.{},
     };
 
-    var run_args_list = std.ArrayList([]const u8).init(b.allocator);
-    var filter_list = std.ArrayList([]const u8).init(b.allocator);
+    var run_args_list = std.array_list.Managed([]const u8).init(b.allocator);
+    var filter_list = std.array_list.Managed([]const u8).init(b.allocator);
 
     var i: usize = 0;
     while (i < raw_args.len) {
@@ -820,6 +840,10 @@ const llvm_libs = [_][]const u8{
     "LLVMNVPTXCodeGen",
     "LLVMNVPTXDesc",
     "LLVMNVPTXInfo",
+    "LLVMSPIRVAnalysis",
+    "LLVMSPIRVCodeGen",
+    "LLVMSPIRVDesc",
+    "LLVMSPIRVInfo",
     "LLVMMSP430Disassembler",
     "LLVMMSP430AsmParser",
     "LLVMMSP430CodeGen",
@@ -894,14 +918,17 @@ const llvm_libs = [_][]const u8{
     "LLVMMCDisassembler",
     "LLVMLTO",
     "LLVMPasses",
+    "LLVMCGData",
     "LLVMHipStdPar",
     "LLVMCFGuard",
     "LLVMCoroutines",
+    "LLVMSandboxIR",
     "LLVMipo",
     "LLVMVectorize",
     "LLVMLinker",
     "LLVMInstrumentation",
     "LLVMFrontendOpenMP",
+    "LLVMFrontendAtomic",
     "LLVMFrontendOffloading",
     "LLVMFrontendOpenACC",
     "LLVMFrontendHLSL",
@@ -1000,7 +1027,7 @@ fn getCompilerVersion(b: *std.Build, optimize: OptimizeMode) []const u8 {
 fn generateGlibcStub(b: *std.Build, target: ResolvedTarget, target_name: []const u8) ?*Step.UpdateSourceFiles {
 
     // Generate assembly stub with comprehensive symbols using the new build module
-    var assembly_buf = std.ArrayList(u8).init(b.allocator);
+    var assembly_buf = std.array_list.Managed(u8).init(b.allocator);
     defer assembly_buf.deinit();
 
     const writer = assembly_buf.writer();

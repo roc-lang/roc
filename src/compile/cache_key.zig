@@ -69,7 +69,7 @@ pub const CacheKey = struct {
 
         // Convert to hex string
         const filename = try allocator.alloc(u8, combined_hash.len * 2);
-        _ = std.fmt.bufPrint(filename, "{}", .{std.fmt.fmtSliceHexLower(&combined_hash)}) catch unreachable;
+        _ = std.fmt.bufPrint(filename, "{x}", .{&combined_hash}) catch unreachable;
 
         return filename;
     }
@@ -91,10 +91,10 @@ pub const CacheKey = struct {
         _ = fmt;
         _ = options;
 
-        try writer.print("CacheKey{{ content: {}, mtime: {}, compiler: {} }}", .{
-            std.fmt.fmtSliceHexLower(self.content_hash[0..8]), // First 8 bytes for readability
+        try writer.print("CacheKey{{ content: {x}, mtime: {}, compiler: {x} }}", .{
+            self.content_hash[0..8], // First 8 bytes for readability
             self.file_mtime,
-            std.fmt.fmtSliceHexLower(self.compiler_version[0..8]), // First 8 bytes for readability
+            self.compiler_version[0..8], // First 8 bytes for readability
         });
     }
 

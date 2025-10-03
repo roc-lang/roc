@@ -35,8 +35,8 @@ env: *CommonEnv,
 tokens: TokenizedBuffer,
 store: NodeStore,
 root_node_idx: u32 = 0,
-tokenize_diagnostics: std.ArrayListUnmanaged(tokenize.Diagnostic),
-parse_diagnostics: std.ArrayListUnmanaged(AST.Diagnostic),
+tokenize_diagnostics: std.ArrayList(tokenize.Diagnostic),
+parse_diagnostics: std.ArrayList(AST.Diagnostic),
 
 /// Calculate whether this region is - or will be - multiline
 pub fn regionIsMultiline(self: *AST, region: TokenizedRegion) bool {
@@ -770,7 +770,7 @@ test {
 }
 
 /// Helper function to convert the AST to a human friendly representation in S-expression format
-pub fn toSExprStr(ast: *@This(), gpa: std.mem.Allocator, env: *const CommonEnv, writer: std.io.AnyWriter) !void {
+pub fn toSExprStr(ast: *@This(), gpa: std.mem.Allocator, env: *const CommonEnv, writer: anytype) !void {
     const file = ast.store.getFile();
 
     var tree = SExprTree.init(gpa);

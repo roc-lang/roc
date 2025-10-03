@@ -67,20 +67,23 @@ pub fn compileAssemblyStub(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
 ) *std.Build.Step.Compile {
-    // Create a shared library compilation
-    const lib = b.addSharedLibrary(.{
+    // Create a dynamic (shared) library
+    const lib = b.addLibrary(.{
         .name = "c",
-        .target = target,
-        .optimize = optimize,
-        .version = std.SemanticVersion{ .major = 6, .minor = 0, .patch = 0 },
+        .linkage = .dynamic, // replaces addSharedLibrary(...)
+        .version = .{ .major = 6, .minor = 0, .patch = 0 },
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+        }),
     });
-
     // Add the assembly file as a source
     lib.addAssemblyFile(asm_path);
 
-    // Set shared library properties
+    // Allow unresolved symbols at link time
     lib.linker_allow_shlib_undefined = true;
-    lib.pie = false; // Shared libraries should not be PIE
 
+    // Shared libraries should not be PIE
+    lib.pie = false;
     return lib;
 }

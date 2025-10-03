@@ -15,9 +15,9 @@ const testing = std.testing;
 
 /// TODO
 pub const Opaque = ?[*]u8;
-const CompareFn = *const fn (Opaque, Opaque, Opaque) callconv(.C) u8;
-const CopyFn = *const fn (Opaque, Opaque) callconv(.C) void;
-const IncN = *const fn (?[*]u8, usize) callconv(.C) void;
+const CompareFn = *const fn (Opaque, Opaque, Opaque) callconv(.c) u8;
+const CopyFn = *const fn (Opaque, Opaque) callconv(.c) void;
+const IncN = *const fn (?[*]u8, usize) callconv(.c) void;
 
 /// Any size larger than the max element buffer will be sorted indirectly via pointers.
 /// TODO: tune this. I think due to llvm inlining the compare, the value likely should be lower.
@@ -2891,13 +2891,13 @@ inline fn compare_inc(
 
 /// Copies the value pointed to by `src_ptr` into the location pointed to by `dst_ptr`.
 /// Both pointers must be valid and properly aligned.
-pub fn pointer_copy(dst_ptr: Opaque, src_ptr: Opaque) callconv(.C) void {
-    @as(*usize, @alignCast(@ptrCast(dst_ptr))).* = @as(*usize, @alignCast(@ptrCast(src_ptr))).*;
+pub fn pointer_copy(dst_ptr: Opaque, src_ptr: Opaque) callconv(.c) void {
+    @as(*usize, @ptrCast(@alignCast(dst_ptr))).* = @as(*usize, @ptrCast(@alignCast(src_ptr))).*;
 }
 
-fn test_i64_compare(_: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.C) u8 {
-    const a = @as(*i64, @alignCast(@ptrCast(a_ptr))).*;
-    const b = @as(*i64, @alignCast(@ptrCast(b_ptr))).*;
+fn test_i64_compare(_: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
+    const a = @as(*i64, @ptrCast(@alignCast(a_ptr))).*;
+    const b = @as(*i64, @ptrCast(@alignCast(b_ptr))).*;
 
     const gt = @as(u8, @intFromBool(a > b));
     const lt = @as(u8, @intFromBool(a < b));
@@ -2908,9 +2908,9 @@ fn test_i64_compare(_: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.C) u8 {
     return lt + lt + gt;
 }
 
-fn test_i64_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.C) u8 {
-    const a = @as(*i64, @alignCast(@ptrCast(a_ptr))).*;
-    const b = @as(*i64, @alignCast(@ptrCast(b_ptr))).*;
+fn test_i64_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
+    const a = @as(*i64, @ptrCast(@alignCast(a_ptr))).*;
+    const b = @as(*i64, @ptrCast(@alignCast(b_ptr))).*;
 
     const gt = @as(u8, @intFromBool(a > b));
     const lt = @as(u8, @intFromBool(a < b));
@@ -2922,11 +2922,11 @@ fn test_i64_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) 
     return lt + lt + gt;
 }
 
-fn test_i64_copy(dst_ptr: Opaque, src_ptr: Opaque) callconv(.C) void {
-    @as(*i64, @alignCast(@ptrCast(dst_ptr))).* = @as(*i64, @alignCast(@ptrCast(src_ptr))).*;
+fn test_i64_copy(dst_ptr: Opaque, src_ptr: Opaque) callconv(.c) void {
+    @as(*i64, @ptrCast(@alignCast(dst_ptr))).* = @as(*i64, @ptrCast(@alignCast(src_ptr))).*;
 }
 
-fn test_inc_n_data(count_ptr: Opaque, n: usize) callconv(.C) void {
+fn test_inc_n_data(count_ptr: Opaque, n: usize) callconv(.c) void {
     @as(*isize, @ptrCast(@alignCast(count_ptr))).* += @intCast(n);
 }
 

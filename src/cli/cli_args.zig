@@ -290,7 +290,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
 }
 
 fn parseBundle(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
-    var paths = std.ArrayList([]const u8).init(gpa);
+    var paths = std.array_list.Managed([]const u8).init(gpa);
     var output_dir: ?[]const u8 = null;
     var compression_level: i32 = 3;
 
@@ -355,7 +355,7 @@ fn parseBundle(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.E
 }
 
 fn parseUnbundle(gpa: mem.Allocator, args: []const []const u8) !CliArgs {
-    var paths = std.ArrayList([]const u8).init(gpa);
+    var paths = std.array_list.Managed([]const u8).init(gpa);
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
@@ -419,7 +419,7 @@ fn parseUnbundle(gpa: mem.Allocator, args: []const []const u8) !CliArgs {
 }
 
 fn parseFormat(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
-    var paths = std.ArrayList([]const u8).init(gpa);
+    var paths = std.array_list.Managed([]const u8).init(gpa);
     var stdin = false;
     var check = false;
     for (args) |arg| {
@@ -612,7 +612,7 @@ fn parseRun(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.Erro
     var opt: OptLevel = .dev;
     var target: ?[]const u8 = null;
     var no_cache: bool = false;
-    var app_args = std.ArrayList([]const u8).init(gpa);
+    var app_args = std.array_list.Managed([]const u8).init(gpa);
     for (args) |arg| {
         if (isHelpFlag(arg)) {
             // We need to free the paths here because we aren't returning the .run variant

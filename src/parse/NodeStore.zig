@@ -20,7 +20,7 @@ const NodeStore = @This();
 
 gpa: std.mem.Allocator,
 nodes: Node.List,
-extra_data: std.ArrayListUnmanaged(u32),
+extra_data: std.ArrayList(u32),
 scratch_statements: base.Scratch(AST.Statement.Idx),
 scratch_tokens: base.Scratch(Token.Idx),
 scratch_exprs: base.Scratch(AST.Expr.Idx),
@@ -54,7 +54,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
     var store: NodeStore = .{
         .gpa = gpa,
         .nodes = try Node.List.initCapacity(gpa, capacity),
-        .extra_data = try std.ArrayListUnmanaged(u32).initCapacity(gpa, capacity / 2),
+        .extra_data = try std.ArrayList(u32).initCapacity(gpa, capacity / 2),
         .scratch_statements = try base.Scratch(AST.Statement.Idx).init(gpa),
         .scratch_tokens = try base.Scratch(Token.Idx).init(gpa),
         .scratch_exprs = try base.Scratch(AST.Expr.Idx).init(gpa),

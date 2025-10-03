@@ -52,7 +52,7 @@ Try it with `zig build -Dno-bin -fincremental --watch`
 ### Expanding to ZLS
 
 This fast config can also be used with `zls`. Simply follow these steps:
-1. run `zls --version` and make sure it is `0.14.0` (this is still used for zig `0.14.1`).
+1. run `zls --version` and make sure it is `0.15.0` (this is still used for zig `0.15.1`).
 2. run `zls env` and grab the `config_file` path.
 3. Edit the config file to include
 ```json

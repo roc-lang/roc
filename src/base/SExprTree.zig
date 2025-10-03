@@ -33,57 +33,59 @@ fn escapeHtmlChar(writer: anytype, char: u8) !void {
 }
 
 /// Plain text writer implementation
-const PlainTextSExprWriter = struct {
-    writer: std.io.AnyWriter,
+fn PlainTextSExprWriter(comptime WriterType: type) type {
+    return struct {
+        writer: WriterType,
 
-    pub fn print(self: *@This(), comptime fmt: []const u8, args: anytype) !void {
-        try self.writer.print(fmt, args);
-    }
-
-    pub fn setColor(self: *@This(), color: Color) !void {
-        _ = self;
-        _ = color;
-        // No-op for plain text
-    }
-
-    pub fn beginSourceRange(self: *@This(), start_byte: u32, end_byte: u32) !void {
-        _ = self;
-        _ = start_byte;
-        _ = end_byte;
-        // No-op for plain text
-    }
-
-    pub fn endSourceRange(self: *@This()) !void {
-        _ = self;
-        // No-op for plain text
-    }
-
-    pub fn writeIndent(self: *@This(), tabs: usize) !void {
-        for (0..tabs) |_| {
-            try self.writer.writeAll("\t");
+        pub fn print(self: *@This(), comptime fmt: []const u8, args: anytype) !void {
+            try self.writer.print(fmt, args);
         }
-    }
-};
+
+        pub fn setColor(self: *@This(), color: Color) !void {
+            _ = self;
+            _ = color;
+            // No-op for plain text
+        }
+
+        pub fn beginSourceRange(self: *@This(), start_byte: u32, end_byte: u32) !void {
+            _ = self;
+            _ = start_byte;
+            _ = end_byte;
+            // No-op for plain text
+        }
+
+        pub fn endSourceRange(self: *@This()) !void {
+            _ = self;
+            // No-op for plain text
+        }
+
+        pub fn writeIndent(self: *@This(), tabs: usize) !void {
+            for (0..tabs) |_| {
+                try self.writer.writeAll("\t");
+            }
+        }
+    };
+}
 
 /// HTML writer implementation with syntax highlighting
 const HtmlSExprWriter = struct {
-    writer: std.io.AnyWriter,
+    writer: *std.Io.Writer,
     current_color: Color = .default,
     color_active: bool = false,
-    scratch_buffer: std.ArrayList(u8),
+    scratch_buffer: std.array_list.Managed(u8),
 
-    pub fn init(writer: std.io.AnyWriter) HtmlSExprWriter {
+    pub fn init(writer: *std.Io.Writer) HtmlSExprWriter {
         return HtmlSExprWriter{
             .writer = writer,
             .current_color = .default,
             .color_active = false,
-            .scratch_buffer = std.ArrayList(u8).init(std.heap.page_allocator),
+            .scratch_buffer = std.array_list.Managed(u8).init(std.heap.page_allocator),
         };
     }
 
     pub fn print(self: *@This(), comptime fmt: []const u8, args: anytype) !void {
         self.scratch_buffer.clearRetainingCapacity();
-        try std.fmt.format(self.scratch_buffer.writer(), fmt, args);
+        try self.scratch_buffer.print(fmt, args);
 
         for (self.scratch_buffer.items) |char| {
             try escapeHtmlChar(self.writer, char);
@@ -144,9 +146,9 @@ const Node = union(enum) {
     BytesRange: struct { begin: u32, end: u32, region: RegionInfo },
 };
 
-children: std.ArrayListUnmanaged(Node),
-data: std.ArrayListUnmanaged(u8),
-stack: std.ArrayListUnmanaged(Node),
+children: std.ArrayList(Node),
+data: std.ArrayList(u8),
+stack: std.ArrayList(Node),
 allocator: std.mem.Allocator,
 
 pub fn init(allocator: std.mem.Allocator) SExprTree {
@@ -333,19 +335,19 @@ fn toStringImpl(self: *const SExprTree, node: Node, writer_impl: anytype, indent
 /// Pretty-print the root node (top of stack) to the writer
 pub fn printTree(self: *const SExprTree, writer: anytype) !void {
     if (self.stack.items.len == 0) return;
-    var plain_writer = PlainTextSExprWriter{ .writer = writer.any() };
+    var plain_writer = PlainTextSExprWriter(@TypeOf(writer.any())){ .writer = writer.any() };
     try self.toStringImpl(self.stack.items[self.stack.items.len - 1], &plain_writer, 0);
 }
 
 /// Render this SExprTree to a writer with pleasing indentation.
-pub fn toStringPretty(self: *const SExprTree, writer: std.io.AnyWriter) !void {
+pub fn toStringPretty(self: *const SExprTree, writer: anytype) !void {
     if (self.stack.items.len == 0) return;
-    var plain_writer = PlainTextSExprWriter{ .writer = writer };
+    var plain_writer = PlainTextSExprWriter(@TypeOf(writer)){ .writer = writer };
     try self.toStringImpl(self.stack.items[self.stack.items.len - 1], &plain_writer, 0);
 }
 
 /// Render this SExprTree to HTML with syntax highlighting.
-pub fn toHtml(self: *const SExprTree, writer: std.io.AnyWriter) !void {
+pub fn toHtml(self: *const SExprTree, writer: *std.Io.Writer) !void {
     if (self.stack.items.len == 0) return;
     var html_writer = HtmlSExprWriter.init(writer);
     try self.toStringImpl(self.stack.items[self.stack.items.len - 1], &html_writer, 0);
