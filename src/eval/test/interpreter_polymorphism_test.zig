@@ -212,29 +212,6 @@ test "interpreter captures (polymorphic): capture id and apply to string" {
     try std.testing.expectEqualStrings(expected, rendered);
 }
 
-// Jared: This _should_ fail i think, unless we had rank 2 types
-// test "interpreter captures (polymorphic): same captured id used at two types" {
-//     const roc_src =
-//         \\(((|f| (|a| (|b| (f(a), f(b)))))(|x| x))(1))("hi")
-//     ;
-
-//     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-//     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
-
-//     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env);
-//     defer interp2.deinit();
-
-//     var host = TestHost{ .allocator = std.testing.allocator };
-//     var ops = makeOps(&host);
-//     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
-//     const rendered = try interp2.renderValueRoc(result);
-//     defer std.testing.allocator.free(rendered);
-//     const expected =
-//         \\(1, "hi")
-//     ;
-//     try std.testing.expectEqualStrings(expected, rendered);
-// }
-
 // Higher-order: pass a function and apply inside another function
 test "interpreter higher-order: apply f then call with 41" {
     const roc_src =

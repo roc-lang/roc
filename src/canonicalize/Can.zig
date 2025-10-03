@@ -3334,10 +3334,6 @@ fn canonicalizePattern(
                 return pattern_idx;
             }
 
-            // For non-decimal integers (hex, binary, octal), use int_poly directly
-            // For decimal integers, use num_poly so they can be either Int or Frac
-            // const is_non_decimal = int_base != DEFAULT_BASE;
-
             const pattern_idx = try self.env.addPatternAndTypeVar(
                 Pattern{ .num_literal = .{
                     .value = CIR.IntValue{ .bytes = @bitCast(i128_val), .kind = .i128 },
@@ -3368,7 +3364,6 @@ fn canonicalizePattern(
                     }
                     const pattern_idx = try self.env.addPatternAndTypeVar(
                         .{ .frac_f32_literal = .{ .value = @floatCast(f64_val) } },
-                        // .{ .structure = FlatType{ .num = .{ .frac_precision = .f32 } } },
                         .err,
                         region,
                     );
@@ -3377,7 +3372,6 @@ fn canonicalizePattern(
                     const pattern_idx = try self.env.addPatternAndTypeVar(
                         .{ .frac_f64_literal = .{ .value = f64_val } },
                         .err,
-                        // .{ .structure = FlatType{ .num = .{ .frac_precision = .f64 } } },
                         region,
                     );
                     return pattern_idx;
@@ -3393,7 +3387,6 @@ fn canonicalizePattern(
                     const pattern_idx = try self.env.addPatternAndTypeVar(
                         .{ .dec_literal = .{ .value = dec_val, .has_suffix = true } },
                         .err,
-                        // .{ .structure = FlatType{ .num = .{ .frac_precision = .dec } } },
                         region,
                     );
                     return pattern_idx;
@@ -3408,18 +3401,6 @@ fn canonicalizePattern(
                     return malformed_idx;
                 },
             };
-
-            // Parse the literal first to get requirements
-            // const requirements = switch (parsed) {
-            //     .small => |small_info| small_info.requirements,
-            //     .dec => |dec_info| dec_info.requirements,
-            //     .f64 => |f64_info| f64_info.requirements,
-            // };
-
-            // const frac_requirements = types.Num.FracRequirements{
-            //     .fits_in_f32 = requirements.fits_in_f32,
-            //     .fits_in_dec = requirements.fits_in_dec,
-            // };
 
             // Check for f64 literals which are not allowed in patterns
             if (parsed == .f64) {
