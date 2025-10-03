@@ -38,13 +38,13 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @3.1-3.2 (ident "x"))
-		(e-int @3.5-3.9 (value "255"))))
+		(e-num @3.5-3.9 (value "255"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.2 (type "Int(_size)")))
+		(patt @3.1-3.2 (type "Num(Int(_size))")))
 	(expressions
-		(expr @3.5-3.9 (type "Int(_size)"))))
+		(expr @3.5-3.9 (type "Num(Int(_size))"))))
 ~~~

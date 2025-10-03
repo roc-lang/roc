@@ -53,17 +53,17 @@ EndOfFile(6:1-6:1),
 (e-block @1.1-5.2
 	(s-let @2.5-2.11
 		(p-assign @2.5-2.6 (ident "x"))
-		(e-int @2.9-2.11 (value "42")))
+		(e-num @2.9-2.11 (value "42")))
 	(s-let @3.5-3.14
 		(p-assign @3.5-3.6 (ident "y"))
 		(e-binop @3.9-3.14 (op "add")
 			(e-lookup-local @3.9-3.10
 				(p-assign @2.5-2.6 (ident "x")))
-			(e-int @3.13-3.14 (value "1"))))
+			(e-num @3.13-3.14 (value "1"))))
 	(e-binop @4.5-4.10 (op "mul")
 		(e-lookup-local @4.5-4.6
 			(p-assign @3.5-3.6 (ident "y")))
-		(e-int @4.9-4.10 (value "2"))))
+		(e-num @4.9-4.10 (value "2"))))
 ~~~
 # TYPES
 ~~~clojure

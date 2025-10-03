@@ -116,5 +116,5 @@ match shape {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-5.2 (type "Num(_size)"))
+(expr @1.1-5.2 (type "Num(Frac(_size))"))
 ~~~

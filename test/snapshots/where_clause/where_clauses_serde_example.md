@@ -77,36 +77,36 @@ NO CHANGE
 		(annotation @5.1-5.12
 			(declared-type
 				(ty-fn @3.15-3.49 (effectful false)
-					(ty-apply @3.15-3.23 (symbol "List")
-						(ty @3.20-3.22 (name "U8")))
-					(ty-apply @3.27-3.49 (symbol "Result")
-						(ty-var @3.34-3.35 (name "a"))
-						(ty-tag-union @3.37-3.48
-							(ty @3.38-3.47 (name "DecodeErr"))))))))
+					(ty-apply @3.15-3.23 (name "List") (builtin)
+						(ty-lookup @3.20-3.22 (name "U8") (builtin)))
+					(ty-apply @3.27-3.49 (name "Result") (local)
+						(ty-rigid-var @3.27-3.49 (name "a"))
+						(ty-tag-union @3.27-3.49
+							(ty-tag-name @3.38-3.47 (name "DecodeErr"))))))))
 	(s-type-anno @3.1-4.61 (name "deserialize")
 		(ty-fn @3.15-3.49 (effectful false)
-			(ty-apply @3.15-3.23 (symbol "List")
-				(ty @3.20-3.22 (name "U8")))
-			(ty-apply @3.27-3.49 (symbol "Result")
-				(ty-var @3.34-3.35 (name "a"))
-				(ty-tag-union @3.37-3.48
-					(ty @3.38-3.47 (name "DecodeErr")))))
+			(ty-apply @3.15-3.23 (name "List") (builtin)
+				(ty-lookup @3.20-3.22 (name "U8") (builtin)))
+			(ty-apply @3.27-3.49 (name "Result") (local)
+				(ty-rigid-var @3.27-3.49 (name "a"))
+				(ty-tag-union @3.27-3.49
+					(ty-tag-name @3.38-3.47 (name "DecodeErr")))))
 		(where
 			(method @4.8-4.61 (module-of "a") (ident "decode")
 				(args
-					(ty-apply @4.27-4.35 (symbol "List")
-						(ty @4.32-4.34 (name "U8"))))
-				(ty-apply @4.39-4.61 (symbol "Result")
-					(ty-var @4.46-4.47 (name "a"))
+					(ty-apply @4.27-4.35 (name "List") (builtin)
+						(ty-lookup @4.32-4.34 (name "U8") (builtin))))
+				(ty-apply @4.39-4.61 (name "Result") (local)
+					(ty-rigid-var-lookup (ty-rigid-var @3.27-3.49 (name "a")))
 					(ty-tag-union @4.49-4.60
-						(ty @4.50-4.59 (name "DecodeErr")))))))
+						(ty-tag-name @4.50-4.59 (name "DecodeErr")))))))
 	(ext-decl @4.8-4.61 (ident "module(a).decode") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.12 (type "List(U8) -> Result(a, [DecodeErr])")))
+		(patt @5.1-5.12 (type "List(Num(Int(Unsigned8))) -> Result(a, [DecodeErr])")))
 	(expressions
-		(expr @5.15-5.22 (type "List(U8) -> Result(a, [DecodeErr])"))))
+		(expr @5.15-5.22 (type "List(Num(Int(Unsigned8))) -> Result(a, [DecodeErr])"))))
 ~~~

@@ -128,10 +128,10 @@ main! = |_| {}
 				(ty-fn @5.13-5.43 (effectful true)
 					(ty-record @5.13-5.36
 						(field (field "name")
-							(ty @5.21-5.24 (name "Str")))
+							(ty-lookup @5.21-5.24 (name "Str") (builtin)))
 						(field (field "age")
-							(ty @5.31-5.34 (name "U64"))))
-					(ty @5.40-5.43 (name "Str"))))))
+							(ty-lookup @5.31-5.34 (name "U64") (builtin))))
+					(ty-lookup @5.40-5.43 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @10.1-10.6 (ident "main!"))
 		(e-lambda @10.9-10.15
@@ -145,9 +145,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.10 (type "{ age: U64, name: Str } => Str"))
+		(patt @6.1-6.10 (type "{ age: Num(Int(Unsigned64)), name: Str } => Str"))
 		(patt @10.1-10.6 (type "_arg -> {}")))
 	(expressions
-		(expr @6.13-9.2 (type "{ age: U64, name: Str } => Str"))
+		(expr @6.13-9.2 (type "{ age: Num(Int(Unsigned64)), name: Str } => Str"))
 		(expr @10.9-10.15 (type "_arg -> {}"))))
 ~~~

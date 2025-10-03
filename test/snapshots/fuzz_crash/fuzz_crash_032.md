@@ -365,21 +365,21 @@ olor = |color| {
 			(declared-type
 				(ty-fn @5.8-5.16 (effectful false)
 					(ty-underscore @1.1-1.1)
-					(ty-var @5.13-5.16 (name "tus"))))))
+					(ty-rigid-var @5.13-5.16 (name "tus"))))))
 	(s-alias-decl @3.1-3.24
 		(ty-header @3.1-3.12 (name "LocalStatus"))
 		(ty-fn @3.14-3.24 (effectful true)
 			(ty-malformed @3.14-3.17)
-			(ty @3.21-3.24 (name "Loc")))))
+			(ty-malformed @3.21-3.24))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.5 (type "Error -> Error")))
+		(patt @6.1-6.5 (type "_arg -> Error")))
 	(type_decls
 		(alias @3.1-3.24 (type "LocalStatus")
 			(ty-header @3.1-3.12 (name "LocalStatus"))))
 	(expressions
-		(expr @6.8-12.2 (type "Error -> Error"))))
+		(expr @6.8-12.2 (type "_arg -> Error"))))
 ~~~

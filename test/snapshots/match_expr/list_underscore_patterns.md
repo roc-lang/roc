@@ -103,7 +103,7 @@ match items {
 							(patterns
 								(p-underscore @2.6-2.7)))))
 				(value
-					(e-int @2.12-2.13 (value "1"))))
+					(e-num @2.12-2.13 (value "1"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -156,7 +156,7 @@ match items {
 						(p-list @7.5-7.7
 							(patterns))))
 				(value
-					(e-int @7.11-7.12 (value "0")))))))
+					(e-num @7.11-7.12 (value "0")))))))
 ~~~
 # TYPES
 ~~~clojure

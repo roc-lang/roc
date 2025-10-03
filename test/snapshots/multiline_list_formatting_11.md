@@ -55,17 +55,17 @@ NO CHANGE
 	(elems
 		(e-list @2.2-2.5
 			(elems
-				(e-int @2.3-2.4 (value "1"))))
+				(e-num @2.3-2.4 (value "1"))))
 		(e-list @3.2-3.5
 			(elems
-				(e-int @3.3-3.4 (value "2"))))
+				(e-num @3.3-3.4 (value "2"))))
 		(e-list @4.2-7.3
 			(elems
-				(e-int @5.3-5.4 (value "3"))
-				(e-int @6.3-6.4 (value "4"))))
+				(e-num @5.3-5.4 (value "3"))
+				(e-num @6.3-6.4 (value "4"))))
 		(e-list @8.2-8.5
 			(elems
-				(e-int @8.3-8.4 (value "5"))))))
+				(e-num @8.3-8.4 (value "5"))))))
 ~~~
 # TYPES
 ~~~clojure

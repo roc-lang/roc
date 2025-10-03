@@ -71,8 +71,8 @@ match (1, 2) {
 		(cond
 			(e-tuple @1.7-1.13
 				(elems
-					(e-int @1.8-1.9 (value "1"))
-					(e-int @1.11-1.12 (value "2")))))
+					(e-num @1.8-1.9 (value "1"))
+					(e-num @1.11-1.12 (value "2")))))
 		(branches
 			(branch
 				(patterns
@@ -92,5 +92,5 @@ match (1, 2) {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-3.2 (type "(Num(_size), Num(_size2))"))
+(expr @1.1-3.2 (type "Error"))
 ~~~

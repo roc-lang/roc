@@ -91,7 +91,7 @@ match result {
 					(e-binop @2.18-2.27 (op "add")
 						(e-lookup-local @2.18-2.23
 							(p-assign @2.8-2.13 (ident "value")))
-						(e-int @2.26-2.27 (value "1")))))
+						(e-num @2.26-2.27 (value "1")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -101,7 +101,7 @@ match result {
 					(e-binop @3.19-3.28 (op "sub")
 						(e-lookup-local @3.19-3.24
 							(p-assign @3.9-3.14 (ident "value")))
-						(e-int @3.27-3.28 (value "1")))))
+						(e-num @3.27-3.28 (value "1")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -111,7 +111,7 @@ match result {
 					(e-binop @4.22-4.35 (op "mul")
 						(e-lookup-local @4.22-4.31
 							(p-assign @4.8-4.17 (ident "different")))
-						(e-int @4.34-4.35 (value "2")))))
+						(e-num @4.34-4.35 (value "2")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -121,7 +121,7 @@ match result {
 					(e-binop @5.23-5.36 (op "div")
 						(e-lookup-local @5.23-5.32
 							(p-assign @5.9-5.18 (ident "different")))
-						(e-int @5.35-5.36 (value "2"))))))))
+						(e-num @5.35-5.36 (value "2"))))))))
 ~~~
 # TYPES
 ~~~clojure

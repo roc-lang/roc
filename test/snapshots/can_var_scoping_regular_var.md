@@ -139,22 +139,22 @@ NO CHANGE
 			(e-block @4.24-21.2
 				(s-var @5.2-5.16
 					(p-assign @5.2-5.16 (ident "count_"))
-					(e-int @5.15-5.16 (value "0")))
+					(e-num @5.15-5.16 (value "0")))
 				(s-var @6.2-6.16
 					(p-assign @6.2-6.16 (ident "total_"))
-					(e-int @6.15-6.16 (value "0")))
+					(e-num @6.15-6.16 (value "0")))
 				(s-reassign @9.2-9.8
 					(p-assign @5.2-5.16 (ident "count_"))
 					(e-binop @9.11-9.21 (op "add")
 						(e-lookup-local @9.11-9.17
 							(p-assign @5.2-5.16 (ident "count_")))
-						(e-int @9.20-9.21 (value "1"))))
+						(e-num @9.20-9.21 (value "1"))))
 				(s-reassign @10.2-10.8
 					(p-assign @6.2-6.16 (ident "total_"))
 					(e-binop @10.11-10.22 (op "add")
 						(e-lookup-local @10.11-10.17
 							(p-assign @6.2-6.16 (ident "total_")))
-						(e-int @10.20-10.22 (value "10"))))
+						(e-num @10.20-10.22 (value "10"))))
 				(s-let @13.2-17.3
 					(p-assign @13.2-13.12 (ident "nestedFunc"))
 					(e-closure @13.15-17.3
@@ -188,7 +188,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.13 (type "_arg -> Num(_size)")))
+		(patt @4.1-4.13 (type "_arg -> Error")))
 	(expressions
-		(expr @4.16-21.2 (type "_arg -> Num(_size)"))))
+		(expr @4.16-21.2 (type "_arg -> Error"))))
 ~~~

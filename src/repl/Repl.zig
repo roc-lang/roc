@@ -277,7 +277,14 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8) ![]const u8 {
 
     // Create CIR
     const cir = &module_env; // CIR is now just ModuleEnv
-    try cir.initCIRFields(self.allocator, "repl");
+    const module_name = "repl";
+    try cir.initCIRFields(self.allocator, module_name);
+
+    const common_idents: Check.CommonIdents = .{
+        .module_name = try cir.insertIdent(base.Ident.for_text(module_name)),
+        .list = try cir.insertIdent(base.Ident.for_text("List")),
+        .box = try cir.insertIdent(base.Ident.for_text("Box")),
+    };
 
     // Create czer
     //
@@ -295,12 +302,12 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8) ![]const u8 {
     };
 
     // Type check
-    var checker = Check.init(self.allocator, &module_env.types, cir, &.{}, &cir.store.regions) catch |err| {
+    var checker = Check.init(self.allocator, &module_env.types, cir, &.{}, &cir.store.regions, common_idents) catch |err| {
         return try std.fmt.allocPrint(self.allocator, "Type check init error: {}", .{err});
     };
     defer checker.deinit();
 
-    _ = checker.checkExpr(canonical_expr_idx.get_idx()) catch |err| {
+    _ = checker.checkExprRepl(canonical_expr_idx.get_idx()) catch |err| {
         return try std.fmt.allocPrint(self.allocator, "Type check error: {}", .{err});
     };
 
@@ -546,6 +553,12 @@ test "Repl - minimal interpreter integration" {
     const cir = &module_env; // CIR is now just ModuleEnv
     try cir.initCIRFields(gpa, "test");
 
+    const module_common_idents: Check.CommonIdents = .{
+        .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
+        .list = try module_env.insertIdent(base.Ident.for_text("List")),
+        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+    };
+
     // Step 4: Canonicalize
     var czer = try Can.init(cir, &parse_ast, null);
     defer czer.deinit();
@@ -556,10 +569,10 @@ test "Repl - minimal interpreter integration" {
     };
 
     // Step 5: Type check
-    var checker = try Check.init(gpa, &module_env.types, cir, &.{}, &cir.store.regions);
+    var checker = try Check.init(gpa, &module_env.types, cir, &.{}, &cir.store.regions, module_common_idents);
     defer checker.deinit();
 
-    _ = try checker.checkExpr(canonical_expr_idx.get_idx());
+    _ = try checker.checkExprRepl(canonical_expr_idx.get_idx());
 
     // Step 6: Create interpreter
     var interpreter = try eval.Interpreter.init(gpa, cir);

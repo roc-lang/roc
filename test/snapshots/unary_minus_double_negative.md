@@ -43,7 +43,7 @@ NO CHANGE
 			(e-unary-minus @1.8-1.10
 				(e-lookup-local @1.9-1.10
 					(p-assign @1.3-1.4 (ident "x"))))))
-	(e-int @1.13-1.14 (value "5")))
+	(e-num @1.13-1.14 (value "5")))
 ~~~
 # TYPES
 ~~~clojure

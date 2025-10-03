@@ -32,7 +32,7 @@ NO CHANGE
 ~~~clojure
 (e-tuple @1.1-1.19
 	(elems
-		(e-int @1.2-1.3 (value "1"))
+		(e-num @1.2-1.3 (value "1"))
 		(e-string @1.5-1.12
 			(e-literal @1.6-1.11 (string "hello")))
 		(e-nominal @1.14-1.18 (nominal "Bool")

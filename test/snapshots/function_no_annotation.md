@@ -140,13 +140,13 @@ NO CHANGE
 							(p-assign @6.1-6.9 (ident "multiply")))
 						(e-lookup-local @12.39-12.40
 							(p-assign @12.13-12.14 (ident "x")))
-						(e-int @12.42-12.43 (value "2")))))))
+						(e-num @12.42-12.43 (value "2")))))))
 	(d-let
 		(p-assign @14.1-14.6 (ident "main!"))
 		(e-call @14.9-14.21
 			(e-lookup-local @14.9-14.17
 				(p-assign @12.1-12.9 (ident "process!")))
-			(e-int @14.18-14.20 (value "42"))))
+			(e-num @14.18-14.20 (value "42"))))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
 		(exposes)))
 ~~~

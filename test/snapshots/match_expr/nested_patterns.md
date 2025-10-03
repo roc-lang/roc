@@ -120,7 +120,7 @@ match data {
 					(pattern (degenerate false)
 						(p-applied-tag @3.5-3.29)))
 				(value
-					(e-int @3.33-3.34 (value "0"))))
+					(e-num @3.33-3.34 (value "0"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)

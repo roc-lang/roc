@@ -1080,6 +1080,12 @@ fn processSnapshotContent(
     var can_ir = &module_env; // ModuleEnv contains the canonical IR
     try can_ir.initCIRFields(allocator, module_name);
 
+    const common_idents: Check.CommonIdents = .{
+        .module_name = try can_ir.insertIdent(base.Ident.for_text(module_name)),
+        .list = try can_ir.insertIdent(base.Ident.for_text("List")),
+        .box = try can_ir.insertIdent(base.Ident.for_text("Box")),
+    };
+
     var czer = try Can.init(can_ir, &parse_ast, null);
     defer czer.deinit();
 
@@ -1096,20 +1102,12 @@ fn processSnapshotContent(
         },
         .statement => {
             const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
-
-            var last_anno: ?Can.StmtTypeAnno = null;
-            const can_stmt_result = try czer.canonicalizeStatement(ast_stmt_idx, &last_anno);
-            switch (can_stmt_result) {
-                .import_stmt => {
-                    // After we process import statements, there's no
-                    // need to include then in the canonicalize IR
-                },
-                .stmt => |can_stmt| {
-                    // Manually track scratch statements because we aren't using the file entrypoint
-                    const scratch_statements_start = can_ir.store.scratch_statements.top();
-                    try can_ir.store.addScratchStatement(can_stmt.idx);
-                    can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
-                },
+            const can_stmt_result = try czer.canonicalizeBlockStatement(czer.parse_ir.store.getStatement(ast_stmt_idx), &.{}, 0);
+            if (can_stmt_result.canonicalized_stmt) |can_stmt| {
+                // Manually track scratch statements because we aren't using the file entrypoint
+                const scratch_statements_start = can_ir.store.scratch_statements.top();
+                try can_ir.store.addScratchStatement(can_stmt.idx);
+                can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
             }
         },
         .package => try czer.canonicalizeFile(),
@@ -1129,6 +1127,7 @@ fn processSnapshotContent(
         can_ir,
         empty_modules,
         &can_ir.store.regions,
+        common_idents,
     );
     defer solver.deinit();
 
@@ -1136,9 +1135,9 @@ fn processSnapshotContent(
     solver.debugAssertArraysInSync();
 
     if (maybe_expr_idx) |expr_idx| {
-        _ = try solver.checkExpr(expr_idx.idx);
+        _ = try solver.checkExprRepl(expr_idx.idx);
     } else {
-        try solver.checkDefs();
+        try solver.checkFile();
     }
 
     // Cache round-trip validation - ensure ModuleCache serialization/deserialization works

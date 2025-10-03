@@ -274,19 +274,234 @@ pub const PatternRecordField = struct {
     pub const Span = struct { start: u32, len: u32 };
 };
 
+/// Represents an arbitrary precision smallish decimal value
+pub const SmallDecValue = struct {
+    numerator: i16,
+    denominator_power_of_ten: u8,
+
+    /// Convert a small dec to f64 (use for size comparisons)
+    /// TODO: Review, claude generated
+    pub fn toF64(self: @This()) f64 {
+        const numerator_f64 = @as(f64, @floatFromInt(self.numerator));
+        const divisor = std.math.pow(f64, 10, @as(f64, @floatFromInt(self.denominator_power_of_ten)));
+        return numerator_f64 / divisor;
+    }
+
+    /// Calculate the int requirements of a SmallDecValue
+    pub fn toFracRequirements(self: SmallDecValue) types_mod.Num.FracRequirements {
+        const f64_val = self.toF64();
+        return types_mod.Num.FracRequirements{
+            .fits_in_f32 = fitsInF32(f64_val),
+            .fits_in_dec = fitsInDec(f64_val),
+        };
+    }
+
+    test "SmallDecValue.toF64 - basic cases" {
+        // Test integer values
+        {
+            const val = SmallDecValue{ .numerator = 42, .denominator_power_of_ten = 0 };
+            try std.testing.expectEqual(@as(f64, 42.0), val.toF64());
+        }
+
+        // Test decimal values
+        {
+            const val = SmallDecValue{ .numerator = 314, .denominator_power_of_ten = 2 };
+            try std.testing.expectApproxEqAbs(@as(f64, 3.14), val.toF64(), 0.0001);
+        }
+
+        // Test negative values
+        {
+            const val = SmallDecValue{ .numerator = -500, .denominator_power_of_ten = 3 };
+            try std.testing.expectApproxEqAbs(@as(f64, -0.5), val.toF64(), 0.0001);
+        }
+
+        // Test very small values
+        {
+            const val = SmallDecValue{ .numerator = 1, .denominator_power_of_ten = 10 };
+            try std.testing.expectApproxEqAbs(@as(f64, 1e-10), val.toF64(), 1e-15);
+        }
+
+        // Test maximum numerator
+        {
+            const val = SmallDecValue{ .numerator = 32767, .denominator_power_of_ten = 0 };
+            try std.testing.expectEqual(@as(f64, 32767.0), val.toF64());
+        }
+
+        // Test minimum numerator
+        {
+            const val = SmallDecValue{ .numerator = -32768, .denominator_power_of_ten = 0 };
+            try std.testing.expectEqual(@as(f64, -32768.0), val.toF64());
+        }
+    }
+
+    test "SmallDecValue.toFracRequirements - fits in all types" {
+        // Small integer - fits in everything
+        {
+            const val = SmallDecValue{ .numerator = 100, .denominator_power_of_ten = 0 };
+            const req = val.toFracRequirements();
+            try std.testing.expect(req.fits_in_f32);
+            try std.testing.expect(req.fits_in_dec);
+        }
+
+        // Pi approximation - fits in everything
+        {
+            const val = SmallDecValue{ .numerator = 31416, .denominator_power_of_ten = 4 };
+            const req = val.toFracRequirements();
+            try std.testing.expect(req.fits_in_f32);
+            try std.testing.expect(req.fits_in_dec);
+        }
+    }
+};
+
+/// Check if the given f64 fits in f32 range (ignoring precision loss)
+pub fn fitsInF32(f64_val: f64) bool {
+    // Check if it's within the range that f32 can represent.
+    // This includes normal, subnormal, and zero values.
+    // (This is a magnitude check, so take the abs value to check
+    // positive and negative at the same time.)
+    const abs_val = @abs(f64_val);
+    return abs_val == 0.0 or (abs_val >= std.math.floatTrueMin(f32) and abs_val <= std.math.floatMax(f32));
+}
+
+/// Check if a float value can be represented accurately in RocDec
+pub fn fitsInDec(value: f64) bool {
+    // RocDec uses i128 with 18 decimal places
+    const max_dec_value = 170141183460469231731.0;
+    const min_dec_value = -170141183460469231731.0;
+
+    return value >= min_dec_value and value <= max_dec_value;
+}
+
 /// Represents an arbitrary precision integer value
 pub const IntValue = struct {
     bytes: [16]u8,
-    kind: enum {
-        i64,
-        u64,
+    kind: IntKind,
+
+    pub const IntKind = enum {
         i128,
         u128,
-    },
+    };
 
     pub fn toI128(self: IntValue) i128 {
         return @bitCast(self.bytes);
     }
+
+    pub fn bufPrint(self: IntValue, buf: []u8) ![]u8 {
+        switch (self.kind) {
+            .i128 => {
+                const val: i128 = @bitCast(self.bytes);
+                return std.fmt.bufPrint(buf, "{d}", .{val});
+            },
+            .u128 => {
+                const val: u128 = @bitCast(self.bytes);
+                return std.fmt.bufPrint(buf, "{d}", .{val});
+            },
+        }
+    }
+
+    /// Calculate the int requirements of an IntValue
+    /// TODO: Review, claude generated
+    pub fn toIntRequirements(self: IntValue) types_mod.Num.Int.Requirements {
+        var is_negated = false;
+        var u128_val: u128 = undefined;
+
+        switch (self.kind) {
+            .i128 => {
+                const val: i128 = @bitCast(self.bytes);
+                is_negated = val < 0;
+                u128_val = if (val < 0) @abs(val) else @intCast(val);
+            },
+            .u128 => {
+                const val: u128 = @bitCast(self.bytes);
+                is_negated = false;
+                u128_val = val;
+            },
+        }
+
+        // Special handling for minimum signed values
+        // These are the exact minimum values for each signed integer type.
+        // They need special handling because their absolute value is one more
+        // than the maximum positive value of the same signed type.
+        // For example: i8 range is -128 to 127, so abs(-128) = 128 doesn't fit in i8's positive range
+        const is_minimum_signed = is_negated and switch (u128_val) {
+            @as(u128, @intCast(std.math.maxInt(i8))) + 1 => true,
+            @as(u128, @intCast(std.math.maxInt(i16))) + 1 => true,
+            @as(u128, @intCast(std.math.maxInt(i32))) + 1 => true,
+            @as(u128, @intCast(std.math.maxInt(i64))) + 1 => true,
+            @as(u128, @intCast(std.math.maxInt(i128))) + 1 => true,
+            else => false,
+        };
+
+        // For minimum signed values, subtract 1 from the magnitude
+        // This makes the bit calculation work correctly with the "n-1 bits for magnitude" rule
+        const adjusted_val = if (is_minimum_signed) u128_val - 1 else u128_val;
+        const bits_needed = types_mod.Num.Int.BitsNeeded.fromValue(adjusted_val);
+        return types_mod.Num.Int.Requirements{
+            .sign_needed = is_negated and u128_val != 0, // -0 doesn't need a sign
+            .bits_needed = bits_needed,
+        };
+    }
+
+    /// Calculate the frac requirements of an IntValue
+    /// TODO: Review, claude generated
+    /// Calculate the frac requirements of an IntValue
+    pub fn toFracRequirements(self: IntValue) types_mod.Num.FracRequirements {
+        // Convert to f64 for checking
+        const f64_val: f64 = switch (self.kind) {
+            .i128 => @floatFromInt(@as(i128, @bitCast(self.bytes))),
+            .u128 => blk: {
+                const val = @as(u128, @bitCast(self.bytes));
+                if (val > @as(u128, 1) << 64) {
+                    break :blk std.math.inf(f64);
+                }
+                break :blk @floatFromInt(val);
+            },
+        };
+
+        // For integers, check both range AND exact representability in f32
+        const fits_in_f32 = blk: {
+            // Check range
+            if (!fitsInF32(f64_val)) {
+                break :blk false;
+            }
+
+            // Additionally check exact representability for integers
+            // F32 can exactly represent integers only up to 2^24
+            const f32_max_exact_int = 16777216.0; // 2^24
+            break :blk @abs(f64_val) <= f32_max_exact_int;
+        };
+
+        const fits_in_dec = fitsInDec(f64_val);
+
+        return types_mod.Num.FracRequirements{
+            .fits_in_f32 = fits_in_f32,
+            .fits_in_dec = fits_in_dec,
+        };
+    }
+};
+
+/// Canonical information about a number
+pub const NumKind = enum {
+    // If this number has no restrictions
+    num_unbound,
+
+    // If this number is an int with no restrictions
+    int_unbound,
+
+    // If the number has an explicit suffix
+    u8,
+    i8,
+    u16,
+    i16,
+    u32,
+    i32,
+    u64,
+    i64,
+    u128,
+    i128,
+    f32,
+    f64,
+    dec,
 };
 
 // RocDec type definition (for missing export)

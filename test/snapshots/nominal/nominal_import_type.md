@@ -64,9 +64,7 @@ NO CHANGE
 			(e-tag @6.7-6.20 (name "Red")))
 		(annotation @6.1-6.4
 			(declared-type
-				(ty-lookup-external @5.7-5.16
-					(module-idx "0")
-					(target-node-idx "0")))))
+				(ty-lookup @5.7-5.16 (name "RGB") (external (module-idx "0") (target-node-idx "0"))))))
 	(s-import @3.1-3.13 (module "Color")
 		(exposes)))
 ~~~

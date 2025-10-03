@@ -84,31 +84,31 @@ NO CHANGE
 		(annotation @4.1-4.6
 			(declared-type
 				(ty-fn @3.9-3.21 (effectful false)
-					(ty @3.9-3.11 (name "U8"))
-					(ty @3.13-3.15 (name "U8"))
-					(ty @3.19-3.21 (name "U8"))))))
+					(ty-lookup @3.9-3.11 (name "U8") (builtin))
+					(ty-lookup @3.13-3.15 (name "U8") (builtin))
+					(ty-lookup @3.19-3.21 (name "U8") (builtin))))))
 	(s-expect @6.1-6.24
 		(e-binop @6.8-6.24 (op "eq")
 			(e-call @6.8-6.19
 				(e-lookup-local @6.8-6.13
 					(p-assign @4.1-4.6 (ident "addU8")))
-				(e-int @6.14-6.15 (value "1"))
-				(e-int @6.17-6.18 (value "2")))
-			(e-int @6.23-6.24 (value "3"))))
+				(e-num @6.14-6.15 (value "1"))
+				(e-num @6.17-6.18 (value "2")))
+			(e-num @6.23-6.24 (value "3"))))
 	(s-expect @7.1-7.26
 		(e-binop @7.8-7.26 (op "eq")
 			(e-call @7.8-7.20
 				(e-lookup-local @7.8-7.13
 					(p-assign @4.1-4.6 (ident "addU8")))
-				(e-int @7.14-7.15 (value "0"))
-				(e-int @7.17-7.19 (value "10")))
-			(e-int @7.24-7.26 (value "10")))))
+				(e-num @7.14-7.15 (value "0"))
+				(e-num @7.17-7.19 (value "10")))
+			(e-num @7.24-7.26 (value "10")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.6 (type "U8, U8 -> U8")))
+		(patt @4.1-4.6 (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Num(Int(Unsigned8))")))
 	(expressions
-		(expr @4.9-4.21 (type "U8, U8 -> U8"))))
+		(expr @4.9-4.21 (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Num(Int(Unsigned8))"))))
 ~~~

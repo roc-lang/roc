@@ -45,7 +45,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @2.1-2.4 (type "Frac(_size)")))
+		(patt @2.1-2.4 (type "Num(Frac(_size))")))
 	(expressions
-		(expr @2.7-2.12 (type "Frac(_size)"))))
+		(expr @2.7-2.12 (type "Num(Frac(_size))"))))
 ~~~

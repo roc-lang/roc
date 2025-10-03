@@ -73,5 +73,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.84 (type "(Bool, Bool, Bool, Bool, Bool, Bool, _field, _field2)"))
+(expr @1.1-1.84 (type "(Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool)"))
 ~~~

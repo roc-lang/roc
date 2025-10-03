@@ -110,9 +110,9 @@ NO CHANGE
 		(annotation @5.1-5.4
 			(declared-type
 				(ty-fn @4.7-4.22 (effectful false)
-					(ty @4.7-4.10 (name "I32"))
-					(ty @4.12-4.15 (name "I32"))
-					(ty @4.19-4.22 (name "I32"))))))
+					(ty-lookup @4.7-4.10 (name "I32") (builtin))
+					(ty-lookup @4.12-4.15 (name "I32") (builtin))
+					(ty-lookup @4.19-4.22 (name "I32") (builtin))))))
 	(d-let
 		(p-assign @9.1-9.7 (ident "double"))
 		(e-closure @9.10-9.23
@@ -131,25 +131,25 @@ NO CHANGE
 		(annotation @9.1-9.7
 			(declared-type
 				(ty-fn @8.10-8.20 (effectful false)
-					(ty @8.10-8.13 (name "I32"))
-					(ty @8.17-8.20 (name "I32"))))))
+					(ty-lookup @8.10-8.13 (name "I32") (builtin))
+					(ty-lookup @8.17-8.20 (name "I32") (builtin))))))
 	(d-let
 		(p-assign @11.1-11.6 (ident "main!"))
 		(e-call @11.9-11.18
 			(e-lookup-local @11.9-11.12
 				(p-assign @5.1-5.4 (ident "add")))
-			(e-int @11.13-11.14 (value "1"))
-			(e-int @11.16-11.17 (value "2")))))
+			(e-num @11.13-11.14 (value "1"))
+			(e-num @11.16-11.17 (value "2")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.4 (type "I32, I32 -> I32"))
-		(patt @9.1-9.7 (type "I32 -> I32"))
-		(patt @11.1-11.6 (type "I32")))
+		(patt @5.1-5.4 (type "Num(Int(Signed32)), Num(Int(Signed32)) -> Num(Int(Signed32))"))
+		(patt @9.1-9.7 (type "Num(Int(Signed32)) -> Num(Int(Signed32))"))
+		(patt @11.1-11.6 (type "Num(Int(Signed32))")))
 	(expressions
-		(expr @5.7-5.30 (type "I32, I32 -> I32"))
-		(expr @9.10-9.23 (type "I32 -> I32"))
-		(expr @11.9-11.18 (type "I32"))))
+		(expr @5.7-5.30 (type "Num(Int(Signed32)), Num(Int(Signed32)) -> Num(Int(Signed32))"))
+		(expr @9.10-9.23 (type "Num(Int(Signed32)) -> Num(Int(Signed32))"))
+		(expr @11.9-11.18 (type "Num(Int(Signed32))"))))
 ~~~

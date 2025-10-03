@@ -82,7 +82,7 @@ NO CHANGE
 					(e-binop @6.13-6.22 (op "mul")
 						(e-lookup-local @6.13-6.18
 							(p-assign @4.13-4.18 (ident "input")))
-						(e-int @6.21-6.22 (value "2"))))
+						(e-num @6.21-6.22 (value "2"))))
 				(s-reassign @8.2-8.6
 					(p-assign @6.2-6.22 (ident "sum_"))
 					(e-binop @8.9-8.19 (op "add")

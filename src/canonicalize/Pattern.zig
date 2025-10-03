@@ -101,8 +101,6 @@ pub const Pattern = union(enum) {
     /// }
     /// ```
     record_destructure: struct {
-        whole_var: TypeVar,
-        ext_var: TypeVar,
         destructs: RecordDestruct.Span,
     },
     /// Pattern that destructures a list, with optional rest pattern.
@@ -118,8 +116,6 @@ pub const Pattern = union(enum) {
     /// }
     /// ```
     list: struct {
-        list_var: TypeVar,
-        elem_var: TypeVar,
         patterns: Pattern.Span, // All non-rest patterns
         rest_info: ?struct {
             index: u32, // Where the rest appears (split point)
@@ -148,8 +144,9 @@ pub const Pattern = union(enum) {
     ///     n => "many"
     /// }
     /// ```
-    int_literal: struct {
+    num_literal: struct {
         value: CIR.IntValue,
+        kind: CIR.NumKind,
     },
     /// Pattern that matches a small decimal literal (represented as rational number).
     /// This is Roc's preferred approach for exact decimal matching, avoiding
@@ -163,8 +160,8 @@ pub const Pattern = union(enum) {
     /// }
     /// ```
     small_dec_literal: struct {
-        numerator: i16,
-        denominator_power_of_ten: u8,
+        value: CIR.SmallDecValue,
+        has_suffix: bool,
     },
     /// Pattern that matches a high-precision decimal literal.
     /// Used for exact decimal matching with arbitrary precision.
@@ -177,6 +174,7 @@ pub const Pattern = union(enum) {
     /// ```
     dec_literal: struct {
         value: RocDec,
+        has_suffix: bool,
     },
     /// Pattern that matches a specific f32 literal value exactly.
     /// Used for exact matching in pattern expressions.
@@ -435,14 +433,13 @@ pub const Pattern = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .int_literal => |p| {
+            .num_literal => |p| {
                 const begin = tree.beginNode();
-                try tree.pushStaticAtom("p-int");
+                try tree.pushStaticAtom("p-num");
                 try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
 
-                const value_i128: i128 = @bitCast(p.value.bytes);
                 var value_buf: [40]u8 = undefined;
-                const value_str = std.fmt.bufPrint(&value_buf, "{}", .{value_i128}) catch "fmt_error";
+                const value_str = p.value.bufPrint(&value_buf) catch unreachable;
                 try tree.pushStringPair("value", value_str);
 
                 const attrs = tree.beginNode();

@@ -91,19 +91,19 @@ EndOfFile(14:1-14:1),
 ~~~clojure
 (e-tuple @1.1-13.2
 	(elems
-		(e-int @2.5-2.9 (value "66"))
-		(e-int @3.5-3.9 (value "66"))
-		(e-int @4.5-4.9 (value "1"))
-		(e-int @5.5-5.9 (value "1"))
-		(e-int @6.5-6.9 (value "34"))
-		(e-int @7.5-7.9 (value "34"))
+		(e-num @2.5-2.9 (value "66"))
+		(e-num @3.5-3.9 (value "66"))
+		(e-num @4.5-4.9 (value "1"))
+		(e-num @5.5-5.9 (value "1"))
+		(e-num @6.5-6.9 (value "34"))
+		(e-num @7.5-7.9 (value "34"))
 		(e-frac-f64 @8.5-8.11 (value "1e41"))
 		(e-frac-f64 @9.5-9.11 (value "1e41"))
-		(e-int @10.5-10.15 (value "3735928559"))
-		(e-int @11.5-11.15 (value "3735928559"))
-		(e-int @12.5-12.15 (value "3735928559"))))
+		(e-num @10.5-10.15 (value "3735928559"))
+		(e-num @11.5-11.15 (value "3735928559"))
+		(e-num @12.5-12.15 (value "3735928559"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-13.2 (type "(Int(_size), Int(_size2), Int(_size3), Int(_size4), Int(_size5), Int(_size6), Frac(_size7), Frac(_size8), Int(_size9), Int(_size10), Int(_size11))"))
+(expr @1.1-13.2 (type "(Num(Int(_size)), Num(Int(_size2)), Num(Int(_size3)), Num(Int(_size4)), Num(Int(_size5)), Num(Int(_size6)), Num(Frac(_size7)), Num(Frac(_size8)), Num(Int(_size9)), Num(Int(_size10)), Num(Int(_size11)))"))
 ~~~

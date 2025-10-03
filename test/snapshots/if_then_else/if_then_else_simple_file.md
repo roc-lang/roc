@@ -98,7 +98,7 @@ foo = if 1 A
 		(e-if @3.7-7.6
 			(if-branches
 				(if-branch
-					(e-int @3.10-3.11 (value "1"))
+					(e-num @3.10-3.11 (value "1"))
 					(e-tag @3.12-3.13 (name "A"))))
 			(if-else
 				(e-block @5.10-7.6

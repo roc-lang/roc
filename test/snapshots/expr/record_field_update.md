@@ -45,9 +45,9 @@ NO CHANGE
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(fields
 		(field (name "age")
-			(e-int @1.18-1.20 (value "31")))))
+			(e-num @1.18-1.20 (value "31")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.22 (type "{ age: Num(_size) }"))
+(expr @1.1-1.22 (type "{ age: Num(_size), Error }"))
 ~~~

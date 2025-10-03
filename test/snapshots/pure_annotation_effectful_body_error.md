@@ -94,7 +94,7 @@ NO CHANGE
 		(annotation @7.1-7.13
 			(declared-type
 				(ty-fn @6.16-6.25 (effectful false)
-					(ty @6.16-6.19 (name "Str"))
+					(ty-lookup @6.16-6.19 (name "Str") (builtin))
 					(ty-record @6.23-6.25)))))
 	(d-let
 		(p-assign @9.1-9.6 (ident "main!"))

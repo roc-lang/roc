@@ -53,14 +53,14 @@ NO CHANGE
 (can-ir
 	(s-alias-decl @3.1-3.16
 		(ty-header @3.1-3.10 (name "FirstType"))
-		(ty @3.13-3.16 (name "U64")))
+		(ty-lookup @3.13-3.16 (name "U64") (builtin)))
 	(s-alias-decl @4.1-4.17
 		(ty-header @4.1-4.11 (name "SecondType"))
-		(ty @4.14-4.17 (name "Str")))
+		(ty-lookup @4.14-4.17 (name "Str") (builtin)))
 	(s-alias-decl @5.1-5.21
 		(ty-header @5.1-5.10 (name "ThirdType"))
-		(ty-apply @5.13-5.21 (symbol "List")
-			(ty @5.18-5.20 (name "U8")))))
+		(ty-apply @5.13-5.21 (name "List") (builtin)
+			(ty-lookup @5.18-5.20 (name "U8") (builtin)))))
 ~~~
 # TYPES
 ~~~clojure

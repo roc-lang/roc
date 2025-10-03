@@ -70,7 +70,7 @@ NO CHANGE
 							(e-binop @3.14-3.20 (op "le")
 								(e-lookup-local @3.14-3.15
 									(p-assign @3.8-3.9 (ident "n")))
-								(e-int @3.19-3.20 (value "1")))
+								(e-num @3.19-3.20 (value "1")))
 							(e-lookup-local @3.21-3.22
 								(p-assign @3.8-3.9 (ident "n")))))
 					(if-else
@@ -81,14 +81,14 @@ NO CHANGE
 								(e-binop @3.32-3.37 (op "sub")
 									(e-lookup-local @3.32-3.33
 										(p-assign @3.8-3.9 (ident "n")))
-									(e-int @3.36-3.37 (value "1"))))
+									(e-num @3.36-3.37 (value "1"))))
 							(e-call @3.41-3.51
 								(e-lookup-local @3.41-3.44
 									(p-assign @3.1-3.4 (ident "fib")))
 								(e-binop @3.45-3.50 (op "sub")
 									(e-lookup-local @3.45-3.46
 										(p-assign @3.8-3.9 (ident "n")))
-									(e-int @3.49-3.50 (value "2")))))))))))
+									(e-num @3.49-3.50 (value "2")))))))))))
 ~~~
 # TYPES
 ~~~clojure

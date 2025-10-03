@@ -39,6 +39,9 @@ pub const Store = struct {
     // Content storage
     contents: SnapshotContentList,
 
+    // Catch recursive references
+    seen_vars: base.Scratch(Var),
+
     /// Storage for compound type parts
     content_indexes: SnapshotContentIdxSafeList,
     record_fields: SnapshotRecordFieldSafeList,
@@ -53,6 +56,7 @@ pub const Store = struct {
         return .{
             .gpa = gpa,
             .contents = try SnapshotContentList.initCapacity(gpa, capacity),
+            .seen_vars = try base.Scratch(Var).init(gpa),
             .content_indexes = try SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
             .record_fields = try SnapshotRecordFieldSafeList.initCapacity(gpa, 256),
             .tags = try SnapshotTagSafeList.initCapacity(gpa, 256),
@@ -64,6 +68,7 @@ pub const Store = struct {
 
     pub fn deinit(self: *Self) void {
         self.contents.deinit(self.gpa);
+        self.seen_vars.deinit(self.gpa);
         self.content_indexes.deinit(self.gpa);
         self.record_fields.deinit(self.gpa);
         self.tags.deinit(self.gpa);
@@ -76,12 +81,33 @@ pub const Store = struct {
     /// Deep copy a type variable's content into self-contained snapshot storage
     pub fn deepCopyVar(self: *Self, store: *const TypesStore, var_: types.Var) std.mem.Allocator.Error!SnapshotContentIdx {
         const resolved = store.resolveVar(var_);
-        return try self.deepCopyContent(store, resolved.desc.content);
+
+        // Check if we've seen this variable
+        var has_seen_var = false;
+        for (self.seen_vars.items.items) |seen_var| {
+            if (seen_var == resolved.var_) {
+                has_seen_var = true;
+                break;
+            }
+        }
+
+        // If we've seen this variable, then return it as a recursive type
+        if (has_seen_var) {
+            return try self.contents.append(self.gpa, .recursive);
+        }
+
+        // If not, add it to the seen list
+        try self.seen_vars.append(self.gpa, resolved.var_);
+        defer _ = self.seen_vars.pop();
+
+        return try self.deepCopyContent(store, resolved.var_, resolved.desc.content);
     }
 
-    fn deepCopyContent(self: *Self, store: *const TypesStore, content: Content) std.mem.Allocator.Error!SnapshotContentIdx {
+    fn deepCopyContent(self: *Self, store: *const TypesStore, var_: types.Var, content: Content) std.mem.Allocator.Error!SnapshotContentIdx {
         const deep_content = switch (content) {
-            .flex_var => |ident| SnapshotContent{ .flex_var = ident },
+            .flex_var => |ident| SnapshotContent{
+                .flex_var = .{ .ident = ident, .var_ = var_ },
+            },
             .rigid_var => |ident| SnapshotContent{ .rigid_var = ident },
             .alias => |alias| SnapshotContent{ .alias = try self.deepCopyAlias(store, alias) },
             .structure => |flat_type| SnapshotContent{ .structure = try self.deepCopyFlatType(store, flat_type) },
@@ -95,13 +121,11 @@ pub const Store = struct {
         return switch (flat_type) {
             .str => SnapshotFlatType.str,
             .box => |box_var| {
-                const resolved = store.resolveVar(box_var);
-                const deep_content = try self.deepCopyContent(store, resolved.desc.content);
+                const deep_content = try self.deepCopyVar(store, box_var);
                 return SnapshotFlatType{ .box = deep_content };
             },
             .list => |list_var| {
-                const resolved = store.resolveVar(list_var);
-                const deep_content = try self.deepCopyContent(store, resolved.desc.content);
+                const deep_content = try self.deepCopyVar(store, list_var);
                 return SnapshotFlatType{ .list = deep_content };
             },
             .list_unbound => {
@@ -115,10 +139,6 @@ pub const Store = struct {
             .fn_unbound => |func| SnapshotFlatType{ .fn_unbound = try self.deepCopyFunc(store, func) },
             .record => |record| SnapshotFlatType{ .record = try self.deepCopyRecord(store, record) },
             .record_unbound => |fields| SnapshotFlatType{ .record_unbound = try self.deepCopyRecordFields(store, fields) },
-            .record_poly => |poly| SnapshotFlatType{ .record_poly = .{
-                .record = try self.deepCopyRecord(store, poly.record),
-                .var_ = try self.deepCopyContent(store, store.resolveVar(poly.var_).desc.content),
-            } },
             .empty_record => SnapshotFlatType.empty_record,
             .tag_union => |tag_union| SnapshotFlatType{ .tag_union = try self.deepCopyTagUnion(store, tag_union) },
             .empty_tag_union => SnapshotFlatType.empty_tag_union,
@@ -126,19 +146,16 @@ pub const Store = struct {
     }
 
     fn deepCopyAlias(self: *Self, store: *const TypesStore, alias: types.Alias) std.mem.Allocator.Error!SnapshotAlias {
+        const backing_var = store.getAliasBackingVar(alias);
+        const deep_backing = try self.deepCopyVar(store, backing_var);
+
         // Mark starting position in the scratch array
         const scratch_top = self.scratch_content.top();
-
-        const backing_var = store.getAliasBackingVar(alias);
-        const backing_resolved = store.resolveVar(backing_var);
-        const deep_backing = try self.deepCopyContent(store, backing_resolved.desc.content);
-        _ = try self.scratch_content.append(self.gpa, deep_backing);
 
         // Iterate and append to scratch array
         var arg_iter = store.iterAliasArgs(alias);
         while (arg_iter.next()) |arg_var| {
-            const arg_resolved = store.resolveVar(arg_var);
-            const deep_arg = try self.deepCopyContent(store, arg_resolved.desc.content);
+            const deep_arg = try self.deepCopyVar(store, arg_var);
             _ = try self.scratch_content.append(self.gpa, deep_arg);
         }
 
@@ -148,7 +165,7 @@ pub const Store = struct {
 
         return SnapshotAlias{
             .ident = alias.ident,
-            .backing = try self.deepCopyContent(store, backing_resolved.desc.content),
+            .backing = deep_backing,
             .vars = args_range,
         };
     }
@@ -161,8 +178,7 @@ pub const Store = struct {
 
         // Iterate and append to scratch array
         for (elems_slice) |elem_var| {
-            const elem_resolved = store.resolveVar(elem_var);
-            const deep_elem = try self.deepCopyContent(store, elem_resolved.desc.content);
+            const deep_elem = try self.deepCopyVar(store, elem_var);
             _ = try self.scratch_content.append(self.gpa, deep_elem);
         }
 
@@ -177,19 +193,20 @@ pub const Store = struct {
 
     fn deepCopyNum(self: *Self, store: *const TypesStore, num: types.Num) std.mem.Allocator.Error!SnapshotNum {
         switch (num) {
-            .num_poly => |poly| {
-                const resolved_poly = store.resolveVar(poly.var_);
-                const deep_poly = try self.deepCopyContent(store, resolved_poly.desc.content);
+            .num_poly => |poly_var| {
+                const deep_poly = try self.deepCopyVar(store, poly_var);
                 return SnapshotNum{ .num_poly = deep_poly };
             },
-            .int_poly => |poly| {
-                const resolved_poly = store.resolveVar(poly.var_);
-                const deep_poly = try self.deepCopyContent(store, resolved_poly.desc.content);
+            .int_poly => |poly_var| {
+                const deep_poly = try self.deepCopyVar(store, poly_var);
                 return SnapshotNum{ .int_poly = deep_poly };
             },
-            .num_unbound => |requirements| {
+            .num_unbound => |unbound| {
                 // For unbound types, we don't have a var to resolve, just return the requirements
-                return SnapshotNum{ .num_unbound = requirements };
+                return SnapshotNum{ .num_unbound = .{
+                    .int_requirements = unbound.int_requirements,
+                    .frac_requirements = unbound.frac_requirements,
+                } };
             },
             .int_unbound => |requirements| {
                 // For unbound types, we don't have a var to resolve, just return the requirements
@@ -199,9 +216,8 @@ pub const Store = struct {
                 // For unbound types, we don't have a var to resolve, just return the requirements
                 return SnapshotNum{ .frac_unbound = requirements };
             },
-            .frac_poly => |poly| {
-                const resolved_poly = store.resolveVar(poly.var_);
-                const deep_poly = try self.deepCopyContent(store, resolved_poly.desc.content);
+            .frac_poly => |poly_var| {
+                const deep_poly = try self.deepCopyVar(store, poly_var);
                 return SnapshotNum{ .frac_poly = deep_poly };
             },
             .int_precision => |prec| {
@@ -222,15 +238,13 @@ pub const Store = struct {
 
         // Add backing var (must be first)
         const backing_var = store.getNominalBackingVar(nominal_type);
-        const backing_resolved = store.resolveVar(backing_var);
-        const deep_var = try self.deepCopyContent(store, backing_resolved.desc.content);
+        const deep_var = try self.deepCopyVar(store, backing_var);
         _ = try self.scratch_content.append(self.gpa, deep_var);
 
         // Add args after
         var arg_iter = store.iterNominalArgs(nominal_type);
         while (arg_iter.next()) |arg_var| {
-            const arg_resolved = store.resolveVar(arg_var);
-            const deep_arg = try self.deepCopyContent(store, arg_resolved.desc.content);
+            const deep_arg = try self.deepCopyVar(store, arg_var);
             _ = try self.scratch_content.append(self.gpa, deep_arg);
         }
 
@@ -253,8 +267,7 @@ pub const Store = struct {
 
         // Iterate and append directly
         for (args_slice) |arg_var| {
-            const arg_resolved = store.resolveVar(arg_var);
-            const deep_arg = try self.deepCopyContent(store, arg_resolved.desc.content);
+            const deep_arg = try self.deepCopyVar(store, arg_var);
             _ = try self.scratch_content.append(self.gpa, deep_arg);
         }
 
@@ -263,8 +276,7 @@ pub const Store = struct {
         self.scratch_content.clearFrom(scratch_top);
 
         // Deep copy return type
-        const ret_resolved = store.resolveVar(func.ret);
-        const deep_ret = try self.deepCopyContent(store, ret_resolved.desc.content);
+        const deep_ret = try self.deepCopyVar(store, func.ret);
 
         return SnapshotFunc{
             .args = args_range,
@@ -279,8 +291,7 @@ pub const Store = struct {
 
         const fields_slice = store.getRecordFieldsSlice(fields);
         for (fields_slice.items(.name), fields_slice.items(.var_)) |name, var_| {
-            const field_resolved = store.resolveVar(var_);
-            const deep_field_content = try self.deepCopyContent(store, field_resolved.desc.content);
+            const deep_field_content = try self.deepCopyVar(store, var_);
 
             const snapshot_field = SnapshotRecordField{
                 .name = name,
@@ -306,8 +317,7 @@ pub const Store = struct {
         while (fields_iter.next()) |field_idx| {
             const field = store.record_fields.get(field_idx);
 
-            const field_resolved = store.resolveVar(field.var_);
-            const deep_field_content = try self.deepCopyContent(store, field_resolved.desc.content);
+            const deep_field_content = try self.deepCopyVar(store, field.var_);
 
             const snapshot_field = SnapshotRecordField{
                 .name = field.name,
@@ -322,8 +332,7 @@ pub const Store = struct {
         self.scratch_record_fields.clearFrom(scratch_top);
 
         // Deep copy extension type
-        const ext_resolved = store.resolveVar(record.ext);
-        const deep_ext = try self.deepCopyContent(store, ext_resolved.desc.content);
+        const deep_ext = try self.deepCopyVar(store, record.ext);
 
         return SnapshotRecord{
             .fields = fields_range,
@@ -347,8 +356,7 @@ pub const Store = struct {
 
             // Iterate over tag arguments and append to scratch array
             for (tag_args_slice) |tag_arg_var| {
-                const tag_arg_resolved = store.resolveVar(tag_arg_var);
-                const deep_tag_arg = try self.deepCopyContent(store, tag_arg_resolved.desc.content);
+                const deep_tag_arg = try self.deepCopyVar(store, tag_arg_var);
                 _ = try self.scratch_content.append(self.gpa, deep_tag_arg);
             }
 
@@ -370,8 +378,7 @@ pub const Store = struct {
         self.scratch_tags.clearFrom(tags_scratch_top);
 
         // Deep copy extension type
-        const ext_resolved = store.resolveVar(tag_union.ext);
-        const deep_ext = try self.deepCopyContent(store, ext_resolved.desc.content);
+        const deep_ext = try self.deepCopyVar(store, tag_union.ext);
 
         return SnapshotTagUnion{
             .tags = tags_range,
@@ -395,10 +402,11 @@ pub const Store = struct {
 
 /// Snapshot types (no Var references!)
 pub const SnapshotContent = union(enum) {
-    flex_var: ?Ident.Idx,
+    flex_var: struct { ident: ?Ident.Idx, var_: Var },
     rigid_var: Ident.Idx,
     alias: SnapshotAlias,
     structure: SnapshotFlatType,
+    recursive,
     err,
 };
 
@@ -423,7 +431,6 @@ pub const SnapshotFlatType = union(enum) {
     fn_unbound: SnapshotFunc,
     record: SnapshotRecord,
     record_unbound: SnapshotRecordFieldSafeList.Range,
-    record_poly: struct { record: SnapshotRecord, var_: SnapshotContentIdx },
     empty_record,
     tag_union: SnapshotTagUnion,
     empty_tag_union,
@@ -439,7 +446,7 @@ pub const SnapshotNum = union(enum) {
     num_poly: SnapshotContentIdx,
     int_poly: SnapshotContentIdx,
     frac_poly: SnapshotContentIdx,
-    num_unbound: types.Num.IntRequirements,
+    num_unbound: struct { int_requirements: types.Num.IntRequirements, frac_requirements: types.Num.FracRequirements },
     int_unbound: types.Num.IntRequirements,
     frac_unbound: types.Num.FracRequirements,
     int_precision: types.Num.Int.Precision,
@@ -502,7 +509,7 @@ const TypeContext = enum {
 pub const SnapshotWriter = struct {
     const Self = @This();
 
-    writer: std.ArrayList(u8).Writer,
+    buf: std.ArrayList(u8),
     snapshots: *const Store,
     idents: *const Ident.Store,
     current_module_name: ?[]const u8,
@@ -510,10 +517,14 @@ pub const SnapshotWriter = struct {
     other_modules: ?[]const *const ModuleEnv,
     next_name_index: u32,
     name_counters: std.EnumMap(TypeContext, u32),
+    flex_var_names_map: std.AutoHashMap(Var, FlexVarNameRange),
+    flex_var_names: std.ArrayList(u8),
 
-    pub fn init(writer: std.ArrayList(u8).Writer, snapshots: *const Store, idents: *const Ident.Store) Self {
+    const FlexVarNameRange = struct { start: usize, end: usize };
+
+    pub fn init(gpa: std.mem.Allocator, snapshots: *const Store, idents: *const Ident.Store) Self {
         return .{
-            .writer = writer,
+            .buf = std.ArrayList(u8).init(gpa),
             .snapshots = snapshots,
             .idents = idents,
             .current_module_name = null,
@@ -521,11 +532,13 @@ pub const SnapshotWriter = struct {
             .other_modules = null,
             .next_name_index = 0,
             .name_counters = std.EnumMap(TypeContext, u32).init(.{}),
+            .flex_var_names_map = std.AutoHashMap(Var, FlexVarNameRange).init(gpa),
+            .flex_var_names = std.ArrayList(u8).init(gpa),
         };
     }
 
     pub fn initWithContext(
-        writer: std.ArrayList(u8).Writer,
+        gpa: std.mem.Allocator,
         snapshots: *const Store,
         idents: *const Ident.Store,
         current_module_name: []const u8,
@@ -533,7 +546,7 @@ pub const SnapshotWriter = struct {
         other_modules: []const *const ModuleEnv,
     ) Self {
         return .{
-            .writer = writer,
+            .buf = std.ArrayList(u8).init(gpa),
             .snapshots = snapshots,
             .idents = idents,
             .current_module_name = current_module_name,
@@ -541,13 +554,33 @@ pub const SnapshotWriter = struct {
             .other_modules = other_modules,
             .next_name_index = 0,
             .name_counters = std.EnumMap(TypeContext, u32).init(.{}),
+            .flex_var_names_map = std.AutoHashMap(Var, FlexVarNameRange).init(gpa),
+            .flex_var_names = std.ArrayList(u8).init(gpa),
         };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.buf.deinit();
+        self.flex_var_names_map.deinit();
+        self.flex_var_names.deinit();
     }
 
     pub fn resetContext(self: *Self) void {
         self.next_name_index = 0;
         self.name_counters = std.EnumMap(TypeContext, u32).init(.{});
+        self.buf.clearRetainingCapacity();
+        self.flex_var_names_map.clearRetainingCapacity();
+        self.flex_var_names.clearRetainingCapacity();
     }
+
+    pub fn get(self: *const Self) []const u8 {
+        return self.buf.items;
+    }
+
+    const GenerateNameMode = union(enum) {
+        print,
+        persist_flex_var: Var,
+    };
 
     fn generateNextName(self: *Self) !void {
         // Generate name: a, b, ..., z, aa, ab, ..., az, ba, ...
@@ -581,9 +614,8 @@ pub const SnapshotWriter = struct {
             const exists = self.idents.interner.contains(candidate_name);
 
             if (!exists) {
-                // This name is available, write it to the writer
                 for (candidate_name) |c| {
-                    try self.writer.writeByte(c);
+                    try self.buf.writer().writeByte(c);
                 }
                 break;
             }
@@ -592,8 +624,8 @@ pub const SnapshotWriter = struct {
 
         // This should never happen in practice, but let's handle it gracefully
         if (attempts >= max_attempts) {
-            _ = try self.writer.write("var");
-            try self.writer.print("{}", .{self.next_name_index});
+            _ = try self.buf.writer().write("var");
+            try self.buf.writer().print("{}", .{self.next_name_index});
         }
     }
 
@@ -640,7 +672,7 @@ pub const SnapshotWriter = struct {
             if (!exists) {
                 // This name is available, write it to the writer
                 for (candidate_name) |c| {
-                    try self.writer.writeByte(c);
+                    try self.buf.writer().writeByte(c);
                 }
                 found = true;
             } else {
@@ -659,89 +691,6 @@ pub const SnapshotWriter = struct {
     }
 
     /// Count how many times a content appears in a type
-    fn countOccurrences(self: *const Self, search_idx: SnapshotContentIdx, root_idx: SnapshotContentIdx) usize {
-        var count: usize = 0;
-        self.countContent(search_idx, root_idx, &count);
-        return count;
-    }
-
-    fn countContent(self: *const Self, search_idx: SnapshotContentIdx, current_idx: SnapshotContentIdx, count: *usize) void {
-        if (current_idx == search_idx) {
-            count.* += 1;
-        }
-
-        const content = self.snapshots.contents.get(current_idx);
-        switch (content.*) {
-            .flex_var, .rigid_var, .err => {},
-            .alias => |alias| {
-                const args = self.snapshots.sliceVars(alias.vars);
-                for (args) |arg_idx| {
-                    self.countContent(search_idx, arg_idx, count);
-                }
-            },
-            .structure => |flat_type| {
-                self.countInFlatType(search_idx, flat_type, count);
-            },
-        }
-    }
-
-    fn countInFlatType(self: *const Self, search_idx: SnapshotContentIdx, flat_type: SnapshotFlatType, count: *usize) void {
-        switch (flat_type) {
-            .str, .empty_record, .empty_tag_union => {},
-            .box => |sub_idx| self.countContent(search_idx, sub_idx, count),
-            .list => |sub_idx| self.countContent(search_idx, sub_idx, count),
-            .list_unbound, .num => {},
-            .tuple => |tuple| {
-                const elems = self.snapshots.sliceVars(tuple.elems);
-                for (elems) |elem| {
-                    self.countContent(search_idx, elem, count);
-                }
-            },
-            .nominal_type => |nominal_type| {
-                const args = self.snapshots.sliceVars(nominal_type.vars);
-                // Skip the first var which is the nominal type's backing var
-                for (args[1..]) |arg_idx| {
-                    self.countContent(search_idx, arg_idx, count);
-                }
-            },
-            .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                const args = self.snapshots.sliceVars(func.args);
-                for (args) |arg| {
-                    self.countContent(search_idx, arg, count);
-                }
-                self.countContent(search_idx, func.ret, count);
-            },
-            .record => |record| {
-                const fields = self.snapshots.record_fields.sliceRange(record.fields);
-                for (fields.items(.content)) |field_content| {
-                    self.countContent(search_idx, field_content, count);
-                }
-                self.countContent(search_idx, record.ext, count);
-            },
-            .record_unbound => |fields| {
-                const fields_slice = self.snapshots.record_fields.sliceRange(fields);
-                for (fields_slice.items(.content)) |field_content| {
-                    self.countContent(search_idx, field_content, count);
-                }
-            },
-            .record_poly => |poly| {
-                self.countInFlatType(search_idx, SnapshotFlatType{ .record = poly.record }, count);
-                self.countContent(search_idx, poly.var_, count);
-            },
-            .tag_union => |tag_union| {
-                var iter = tag_union.tags.iterIndices();
-                while (iter.next()) |tag_idx| {
-                    const tag = self.snapshots.tags.get(tag_idx);
-                    const args = self.snapshots.sliceVars(tag.args);
-                    for (args) |arg_idx| {
-                        self.countContent(search_idx, arg_idx, count);
-                    }
-                }
-                self.countContent(search_idx, tag_union.ext, count);
-            },
-        }
-    }
-
     /// Convert a content to a type string with context
     pub fn writeWithContext(self: *Self, idx: SnapshotContentIdx, context: TypeContext, root_idx: SnapshotContentIdx) Allocator.Error!void {
         const content = self.snapshots.contents.get(idx);
@@ -749,22 +698,17 @@ pub const SnapshotWriter = struct {
     }
 
     /// Convert a content to a type string
-    pub fn writeContent(self: *Self, content: SnapshotContent, context: TypeContext, current_idx: SnapshotContentIdx, root_idx: SnapshotContentIdx) Allocator.Error!void {
+    pub fn writeContent(self: *Self, content: SnapshotContent, context: TypeContext, content_idx: SnapshotContentIdx, root_idx: SnapshotContentIdx) Allocator.Error!void {
         switch (content) {
-            .flex_var => |mb_ident_idx| {
-                if (mb_ident_idx) |ident_idx| {
-                    _ = try self.writer.write(self.idents.getText(ident_idx));
+            .flex_var => |flex| {
+                if (flex.ident) |ident_idx| {
+                    _ = try self.buf.writer().write(self.idents.getText(ident_idx));
                 } else {
-                    // Check if this variable appears multiple times
-                    const occurrences = self.countOccurrences(current_idx, root_idx);
-                    if (occurrences == 1) {
-                        _ = try self.writer.write("_");
-                    }
-                    try self.generateContextualName(context);
+                    _ = try self.writeFlexVarName(flex.var_, content_idx, context, root_idx);
                 }
             },
             .rigid_var => |ident_idx| {
-                _ = try self.writer.write(self.idents.getText(ident_idx));
+                _ = try self.buf.writer().write(self.idents.getText(ident_idx));
             },
             .alias => |alias| {
                 try self.writeAlias(alias, root_idx);
@@ -772,28 +716,27 @@ pub const SnapshotWriter = struct {
             .structure => |flat_type| {
                 try self.writeFlatType(flat_type, root_idx);
             },
+            .recursive => {
+                _ = try self.buf.writer().write("RecursiveType");
+            },
             .err => {
-                _ = try self.writer.write("Error");
+                _ = try self.buf.writer().write("Error");
             },
         }
     }
 
     /// Write an alias type
     pub fn writeAlias(self: *Self, alias: SnapshotAlias, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        _ = try self.writer.write(self.idents.getText(alias.ident.ident_idx));
+        _ = try self.buf.writer().write(self.idents.getText(alias.ident.ident_idx));
 
-        // The 1st var is the alias type's backing var, so we skip it
-        var vars = self.snapshots.sliceVars(alias.vars);
-        std.debug.assert(vars.len > 0);
-        vars = vars[1..];
-
+        const vars = self.snapshots.sliceVars(alias.vars);
         if (vars.len > 0) {
-            _ = try self.writer.write("(");
+            _ = try self.buf.writer().write("(");
             for (vars, 0..) |arg, i| {
-                if (i > 0) _ = try self.writer.write(", ");
+                if (i > 0) _ = try self.buf.writer().write(", ");
                 try self.writeWithContext(arg, .General, root_idx);
             }
-            _ = try self.writer.write(")");
+            _ = try self.buf.writer().write(")");
         }
     }
 
@@ -801,22 +744,22 @@ pub const SnapshotWriter = struct {
     pub fn writeFlatType(self: *Self, flat_type: SnapshotFlatType, root_idx: SnapshotContentIdx) Allocator.Error!void {
         switch (flat_type) {
             .str => {
-                _ = try self.writer.write("Str");
+                _ = try self.buf.writer().write("Str");
             },
             .box => |sub_var| {
-                _ = try self.writer.write("Box(");
+                _ = try self.buf.writer().write("Box(");
                 try self.writeWithContext(sub_var, .General, root_idx);
-                _ = try self.writer.write(")");
+                _ = try self.buf.writer().write(")");
             },
             .list => |sub_var| {
-                _ = try self.writer.write("List(");
+                _ = try self.buf.writer().write("List(");
                 try self.writeWithContext(sub_var, .ListContent, root_idx);
-                _ = try self.writer.write(")");
+                _ = try self.buf.writer().write(")");
             },
             .list_unbound => {
-                _ = try self.writer.write("List(_");
+                _ = try self.buf.writer().write("List(_");
                 try self.generateContextualName(.ListContent);
-                _ = try self.writer.write(")");
+                _ = try self.buf.writer().write(")");
             },
             .tuple => |tuple| {
                 try self.writeTuple(tuple, root_idx);
@@ -842,18 +785,14 @@ pub const SnapshotWriter = struct {
             .record_unbound => |fields| {
                 try self.writeRecordFields(fields, root_idx);
             },
-            .record_poly => |poly| {
-                try self.writeRecord(poly.record, root_idx);
-                try self.writeWithContext(poly.var_, .General, root_idx);
-            },
             .empty_record => {
-                _ = try self.writer.write("{}");
+                _ = try self.buf.writer().write("{}");
             },
             .tag_union => |tag_union| {
                 try self.writeTagUnion(tag_union, root_idx);
             },
             .empty_tag_union => {
-                _ = try self.writer.write("[]");
+                _ = try self.buf.writer().write("[]");
             },
         }
     }
@@ -861,17 +800,17 @@ pub const SnapshotWriter = struct {
     /// Write a tuple type
     pub fn writeTuple(self: *Self, tuple: SnapshotTuple, root_idx: SnapshotContentIdx) Allocator.Error!void {
         const elems = self.snapshots.sliceVars(tuple.elems);
-        _ = try self.writer.write("(");
+        _ = try self.buf.writer().write("(");
         for (elems, 0..) |elem, i| {
-            if (i > 0) _ = try self.writer.write(", ");
+            if (i > 0) _ = try self.buf.writer().write(", ");
             try self.writeWithContext(elem, .TupleFieldContent, root_idx);
         }
-        _ = try self.writer.write(")");
+        _ = try self.buf.writer().write(")");
     }
 
     /// Write a nominal type
     pub fn writeNominalType(self: *Self, nominal_type: SnapshotNominalType, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        _ = try self.writer.write(self.idents.getText(nominal_type.ident.ident_idx));
+        _ = try self.buf.writer().write(self.idents.getText(nominal_type.ident.ident_idx));
 
         // The 1st var is the nominal type's backing var, so we skip it
         var vars = self.snapshots.sliceVars(nominal_type.vars);
@@ -879,12 +818,12 @@ pub const SnapshotWriter = struct {
         vars = vars[1..];
 
         if (vars.len > 0) {
-            _ = try self.writer.write("(");
+            _ = try self.buf.writer().write("(");
             for (vars, 0..) |arg, i| {
-                if (i > 0) _ = try self.writer.write(", ");
+                if (i > 0) _ = try self.buf.writer().write(", ");
                 try self.writeWithContext(arg, .General, root_idx);
             }
-            _ = try self.writer.write(")");
+            _ = try self.buf.writer().write(")");
         }
 
         // Add origin information if it's from a different module
@@ -893,9 +832,9 @@ pub const SnapshotWriter = struct {
 
             // Only show origin if it's different from the current module
             if (!std.mem.eql(u8, origin_module_name, current_module)) {
-                _ = try self.writer.write(" (from ");
-                _ = try self.writer.write(origin_module_name);
-                _ = try self.writer.write(")");
+                _ = try self.buf.writer().write(" (from ");
+                _ = try self.buf.writer().write(origin_module_name);
+                _ = try self.buf.writer().write(")");
             }
         }
     }
@@ -911,38 +850,38 @@ pub const SnapshotWriter = struct {
 
         // Write arguments
         if (args.len == 0) {
-            _ = try self.writer.write("({})");
+            _ = try self.buf.writer().write("({})");
         } else if (args.len == 1) {
             try self.writeWithContext(args[0], .FunctionArgument, root_idx);
         } else {
             for (args, 0..) |arg, i| {
-                if (i > 0) _ = try self.writer.write(", ");
+                if (i > 0) _ = try self.buf.writer().write(", ");
                 try self.writeWithContext(arg, .FunctionArgument, root_idx);
             }
         }
 
-        _ = try self.writer.write(arrow);
+        _ = try self.buf.writer().write(arrow);
 
         try self.writeWithContext(func.ret, .FunctionReturn, root_idx);
     }
 
     /// Write a record type
     pub fn writeRecord(self: *Self, record: SnapshotRecord, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        _ = try self.writer.write("{ ");
+        _ = try self.buf.writer().write("{ ");
 
         const fields_slice = self.snapshots.record_fields.sliceRange(record.fields);
 
         if (fields_slice.len > 0) {
             // Write first field
-            _ = try self.writer.write(self.idents.getText(fields_slice.items(.name)[0]));
-            _ = try self.writer.write(": ");
+            _ = try self.buf.writer().write(self.idents.getText(fields_slice.items(.name)[0]));
+            _ = try self.buf.writer().write(": ");
             try self.writeWithContext(fields_slice.items(.content)[0], .RecordFieldContent, root_idx);
 
             // Write remaining fields
             for (fields_slice.items(.name)[1..], fields_slice.items(.content)[1..]) |name, content| {
-                _ = try self.writer.write(", ");
-                _ = try self.writer.write(self.idents.getText(name));
-                _ = try self.writer.write(": ");
+                _ = try self.buf.writer().write(", ");
+                _ = try self.buf.writer().write(self.idents.getText(name));
+                _ = try self.buf.writer().write(": ");
                 try self.writeWithContext(content, .RecordFieldContent, root_idx);
             }
         }
@@ -952,73 +891,68 @@ pub const SnapshotWriter = struct {
             .structure => |flat_type| switch (flat_type) {
                 .empty_record => {}, // Don't show empty extension
                 else => {
-                    if (fields_slice.len > 0) _ = try self.writer.write(", ");
+                    if (fields_slice.len > 0) _ = try self.buf.writer().write(", ");
                     try self.writeWithContext(record.ext, .RecordExtension, root_idx);
                 },
             },
             else => {
-                if (fields_slice.len > 0) _ = try self.writer.write(", ");
+                if (fields_slice.len > 0) _ = try self.buf.writer().write(", ");
                 try self.writeWithContext(record.ext, .RecordExtension, root_idx);
             },
         }
 
-        _ = try self.writer.write(" }");
+        _ = try self.buf.writer().write(" }");
     }
 
     /// Write record fields without extension
     pub fn writeRecordFields(self: *Self, fields: SnapshotRecordFieldSafeList.Range, root_idx: SnapshotContentIdx) Allocator.Error!void {
         if (fields.isEmpty()) {
-            _ = try self.writer.write("{}");
+            _ = try self.buf.writer().write("{}");
             return;
         }
 
         const fields_slice = self.snapshots.record_fields.sliceRange(fields);
 
-        _ = try self.writer.write("{ ");
+        _ = try self.buf.writer().write("{ ");
 
         // Write first field - we already verified that there is at least one field.
-        _ = try self.writer.write(self.idents.getText(fields_slice.items(.name)[0]));
-        _ = try self.writer.write(": ");
+        _ = try self.buf.writer().write(self.idents.getText(fields_slice.items(.name)[0]));
+        _ = try self.buf.writer().write(": ");
         try self.writeWithContext(fields_slice.items(.content)[0], .RecordFieldContent, root_idx);
 
         // Write remaining fields
         for (fields_slice.items(.name)[1..], fields_slice.items(.content)[1..]) |name, content| {
-            _ = try self.writer.write(", ");
-            _ = try self.writer.write(self.idents.getText(name));
-            _ = try self.writer.write(": ");
+            _ = try self.buf.writer().write(", ");
+            _ = try self.buf.writer().write(self.idents.getText(name));
+            _ = try self.buf.writer().write(": ");
             try self.writeWithContext(content, .RecordFieldContent, root_idx);
         }
 
-        _ = try self.writer.write(" }");
+        _ = try self.buf.writer().write(" }");
     }
 
     /// Write a tag union
     pub fn writeTagUnion(self: *Self, tag_union: SnapshotTagUnion, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        _ = try self.writer.write("[");
+        _ = try self.buf.writer().write("[");
         var iter = tag_union.tags.iterIndices();
         while (iter.next()) |tag_idx| {
             if (@intFromEnum(tag_idx) > @intFromEnum(tag_union.tags.start)) {
-                _ = try self.writer.write(", ");
+                _ = try self.buf.writer().write(", ");
             }
 
             const tag = self.snapshots.tags.get(tag_idx);
             try self.writeTag(tag, root_idx);
         }
 
-        _ = try self.writer.write("]");
+        _ = try self.buf.writer().write("]");
 
         // Show extension variable if it's not empty
         switch (self.snapshots.contents.get(tag_union.ext).*) {
-            .flex_var => |mb_ident| {
-                if (mb_ident) |ident_idx| {
-                    _ = try self.writer.write(self.idents.getText(ident_idx));
+            .flex_var => |flex| {
+                if (flex.ident) |ident_idx| {
+                    _ = try self.buf.writer().write(self.idents.getText(ident_idx));
                 } else {
-                    // Check if this variable appears multiple times
-                    const occurrences = self.countOccurrences(tag_union.ext, root_idx);
-                    if (occurrences == 1) {
-                        _ = try self.writer.write("_");
-                    }
-                    try self.generateContextualName(.TagUnionExtension);
+                    _ = try self.writeFlexVarName(flex.var_, tag_union.ext, .TagUnionExtension, root_idx);
                 }
             },
             .structure => |flat_type| switch (flat_type) {
@@ -1028,7 +962,7 @@ pub const SnapshotWriter = struct {
                 },
             },
             .rigid_var => |ident_idx| {
-                _ = try self.writer.write(self.idents.getText(ident_idx));
+                _ = try self.buf.writer().write(self.idents.getText(ident_idx));
             },
             else => {
                 try self.writeWithContext(tag_union.ext, .TagUnionExtension, root_idx);
@@ -1038,15 +972,15 @@ pub const SnapshotWriter = struct {
 
     /// Write a single tag
     pub fn writeTag(self: *Self, tag: SnapshotTag, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        _ = try self.writer.write(self.idents.getText(tag.name));
+        _ = try self.buf.writer().write(self.idents.getText(tag.name));
         const args = self.snapshots.sliceVars(tag.args);
         if (args.len > 0) {
-            _ = try self.writer.write("(");
+            _ = try self.buf.writer().write("(");
             for (args, 0..) |arg, i| {
-                if (i > 0) _ = try self.writer.write(", ");
+                if (i > 0) _ = try self.buf.writer().write(", ");
                 try self.writeWithContext(arg, .General, root_idx);
             }
-            _ = try self.writer.write(")");
+            _ = try self.buf.writer().write(")");
         }
     }
 
@@ -1054,74 +988,222 @@ pub const SnapshotWriter = struct {
     pub fn writeNum(self: *Self, num: SnapshotNum, root_idx: SnapshotContentIdx) Allocator.Error!void {
         switch (num) {
             .num_poly => |sub_var| {
-                _ = try self.writer.write("Num(");
+                _ = try self.buf.writer().write("Num(");
                 try self.writeWithContext(sub_var, .NumContent, root_idx);
-                _ = try self.writer.write(")");
+                _ = try self.buf.writer().write(")");
             },
             .int_poly => |sub_var| {
-                _ = try self.writer.write("Int(");
+                _ = try self.buf.writer().write("Int(");
                 try self.writeWithContext(sub_var, .NumContent, root_idx);
-                _ = try self.writer.write(")");
+                _ = try self.buf.writer().write(")");
             },
             .frac_poly => |sub_var| {
-                _ = try self.writer.write("Frac(");
+                _ = try self.buf.writer().write("Frac(");
                 try self.writeWithContext(sub_var, .NumContent, root_idx);
-                _ = try self.writer.write(")");
+                _ = try self.buf.writer().write(")");
             },
             .num_unbound => |_| {
-                _ = try self.writer.write("Num(_");
+                _ = try self.buf.writer().write("Num(_");
                 try self.generateContextualName(.NumContent);
-                _ = try self.writer.write(")");
+                _ = try self.buf.writer().write(")");
             },
             .int_unbound => |_| {
-                _ = try self.writer.write("Int(_");
+                _ = try self.buf.writer().write("Int(_");
                 try self.generateContextualName(.NumContent);
-                _ = try self.writer.write(")");
+                _ = try self.buf.writer().write(")");
             },
             .frac_unbound => |_| {
-                _ = try self.writer.write("Frac(_");
+                _ = try self.buf.writer().write("Frac(_");
                 try self.generateContextualName(.NumContent);
-                _ = try self.writer.write(")");
+                _ = try self.buf.writer().write(")");
             },
             .int_precision => |prec| {
-                try self.writeIntType(prec);
+                try self.writeIntType(prec, .precision);
             },
             .frac_precision => |prec| {
-                try self.writeFracType(prec);
+                try self.writeFracType(prec, .precision);
             },
             .num_compact => |compact| {
                 switch (compact) {
                     .int => |prec| {
-                        try self.writeIntType(prec);
+                        try self.writeIntType(prec, .compacted);
                     },
                     .frac => |prec| {
-                        try self.writeFracType(prec);
+                        try self.writeFracType(prec, .compacted);
                     },
                 }
             },
         }
     }
 
-    pub fn writeIntType(self: *Self, prec: types.Num.Int.Precision) Allocator.Error!void {
-        _ = switch (prec) {
-            .u8 => try self.writer.write("U8"),
-            .i8 => try self.writer.write("I8"),
-            .u16 => try self.writer.write("U16"),
-            .i16 => try self.writer.write("I16"),
-            .u32 => try self.writer.write("U32"),
-            .i32 => try self.writer.write("I32"),
-            .u64 => try self.writer.write("U64"),
-            .i64 => try self.writer.write("I64"),
-            .u128 => try self.writer.write("U128"),
-            .i128 => try self.writer.write("I128"),
-        };
+    const NumPrecType = enum { precision, compacted };
+
+    fn writeIntType(self: *Self, prec: types.Num.Int.Precision, num_type: NumPrecType) std.mem.Allocator.Error!void {
+        switch (num_type) {
+            .compacted => {
+                _ = switch (prec) {
+                    .u8 => try self.buf.writer().write("Num(Int(Unsigned8))"),
+                    .i8 => try self.buf.writer().write("Num(Int(Signed8))"),
+                    .u16 => try self.buf.writer().write("Num(Int(Unsigned16))"),
+                    .i16 => try self.buf.writer().write("Num(Int(Signed16))"),
+                    .u32 => try self.buf.writer().write("Num(Int(Unsigned32))"),
+                    .i32 => try self.buf.writer().write("Num(Int(Signed32))"),
+                    .u64 => try self.buf.writer().write("Num(Int(Unsigned64))"),
+                    .i64 => try self.buf.writer().write("Num(Int(Signed64))"),
+                    .u128 => try self.buf.writer().write("Num(Int(Unsigned128))"),
+                    .i128 => try self.buf.writer().write("Num(Int(Signed128))"),
+                };
+            },
+            .precision => {
+                _ = switch (prec) {
+                    .u8 => try self.buf.writer().write("Unsigned8"),
+                    .i8 => try self.buf.writer().write("Signed8"),
+                    .u16 => try self.buf.writer().write("Unsigned16"),
+                    .i16 => try self.buf.writer().write("Signed16"),
+                    .u32 => try self.buf.writer().write("Unsigned32"),
+                    .i32 => try self.buf.writer().write("Signed32"),
+                    .u64 => try self.buf.writer().write("Unsigned64"),
+                    .i64 => try self.buf.writer().write("Signed64"),
+                    .u128 => try self.buf.writer().write("Unsigned128"),
+                    .i128 => try self.buf.writer().write("Signed128"),
+                };
+            },
+        }
     }
 
-    pub fn writeFracType(self: *Self, prec: types.Num.Frac.Precision) Allocator.Error!void {
-        _ = switch (prec) {
-            .f32 => try self.writer.write("F32"),
-            .f64 => try self.writer.write("F64"),
-            .dec => try self.writer.write("Dec"),
-        };
+    fn writeFracType(self: *Self, prec: types.Num.Frac.Precision, num_type: NumPrecType) std.mem.Allocator.Error!void {
+        switch (num_type) {
+            .compacted => {
+                _ = switch (prec) {
+                    .f32 => try self.buf.writer().write("Num(Frac(Float32))"),
+                    .f64 => try self.buf.writer().write("Num(Frac(Float64))"),
+                    .dec => try self.buf.writer().write("Num(Frac(Decimal))"),
+                };
+            },
+            .precision => {
+                _ = switch (prec) {
+                    .f32 => try self.buf.writer().write("Float32"),
+                    .f64 => try self.buf.writer().write("Float64"),
+                    .dec => try self.buf.writer().write("Decimal"),
+                };
+            },
+        }
+    }
+
+    /// Generate a name for a flex var that may appear multiple times in the type
+    pub fn writeFlexVarName(self: *Self, flex_var: Var, _: SnapshotContentIdx, context: TypeContext, root_idx: SnapshotContentIdx) std.mem.Allocator.Error!void {
+        // Check if we've seen this flex var before.
+        if (self.flex_var_names_map.get(flex_var)) |range| {
+            // If so, then use that name
+            _ = try self.buf.writer().write(
+                self.flex_var_names.items[range.start..range.end],
+            );
+        } else {
+
+            // Check if this variable appears multiple times
+            const occurrences = self.countOccurrences(flex_var, root_idx);
+
+            if (occurrences == 1) {
+                // If it appears once, then generate the contextual name
+                _ = try self.buf.writer().write("_");
+                try self.generateContextualName(context);
+            } else {
+                // If it appears more than once, then we have to track the name we
+                // assign it so it appears consistently across the type str
+
+                // Generate a new general var name. We do not use the context here
+                // because that may be the current context the var appears in, but
+                // the var may later appear in a different context
+                const buf_start = self.buf.items.len;
+                try self.generateContextualName(.General);
+                const buf_end = self.buf.items.len;
+
+                // Then write down the name we generated for later
+                const flex_start = self.flex_var_names.items.len;
+                try self.flex_var_names.appendSlice(self.buf.items[buf_start..buf_end]);
+                const flex_end = self.flex_var_names.items.len;
+                try self.flex_var_names_map.put(flex_var, .{ .start = flex_start, .end = flex_end });
+            }
+        }
+    }
+
+    fn countOccurrences(self: *const Self, search_flex_var: Var, root_idx: SnapshotContentIdx) usize {
+        var count: usize = 0;
+        self.countContent(search_flex_var, root_idx, &count);
+        return count;
+    }
+
+    fn countContent(self: *const Self, search_flex_var: Var, current_idx: SnapshotContentIdx, count: *usize) void {
+        const content = self.snapshots.contents.get(current_idx);
+        switch (content.*) {
+            .flex_var => |cur_flex| {
+                if (search_flex_var == cur_flex.var_) {
+                    count.* += 1;
+                }
+            },
+            .rigid_var, .recursive, .err => {},
+            .alias => |alias| {
+                const args = self.snapshots.sliceVars(alias.vars);
+                for (args) |arg_idx| {
+                    self.countContent(search_flex_var, arg_idx, count);
+                }
+            },
+            .structure => |flat_type| {
+                self.countInFlatType(search_flex_var, flat_type, count);
+            },
+        }
+    }
+
+    fn countInFlatType(self: *const Self, search_flex_var: Var, flat_type: SnapshotFlatType, count: *usize) void {
+        switch (flat_type) {
+            .str, .empty_record, .empty_tag_union => {},
+            .box => |sub_idx| self.countContent(search_flex_var, sub_idx, count),
+            .list => |sub_idx| self.countContent(search_flex_var, sub_idx, count),
+            .list_unbound, .num => {},
+            .tuple => |tuple| {
+                const elems = self.snapshots.sliceVars(tuple.elems);
+                for (elems) |elem| {
+                    self.countContent(search_flex_var, elem, count);
+                }
+            },
+            .nominal_type => |nominal_type| {
+                const args = self.snapshots.sliceVars(nominal_type.vars);
+                // Skip the first var which is the nominal type's backing var
+                for (args[1..]) |arg_idx| {
+                    self.countContent(search_flex_var, arg_idx, count);
+                }
+            },
+            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                const args = self.snapshots.sliceVars(func.args);
+                for (args) |arg| {
+                    self.countContent(search_flex_var, arg, count);
+                }
+                self.countContent(search_flex_var, func.ret, count);
+            },
+            .record => |record| {
+                const fields = self.snapshots.record_fields.sliceRange(record.fields);
+                for (fields.items(.content)) |field_content| {
+                    self.countContent(search_flex_var, field_content, count);
+                }
+                self.countContent(search_flex_var, record.ext, count);
+            },
+            .record_unbound => |fields| {
+                const fields_slice = self.snapshots.record_fields.sliceRange(fields);
+                for (fields_slice.items(.content)) |field_content| {
+                    self.countContent(search_flex_var, field_content, count);
+                }
+            },
+            .tag_union => |tag_union| {
+                var iter = tag_union.tags.iterIndices();
+                while (iter.next()) |tag_idx| {
+                    const tag = self.snapshots.tags.get(tag_idx);
+                    const args = self.snapshots.sliceVars(tag.args);
+                    for (args) |arg_idx| {
+                        self.countContent(search_flex_var, arg_idx, count);
+                    }
+                }
+                self.countContent(search_flex_var, tag_union.ext, count);
+            },
+        }
     }
 };

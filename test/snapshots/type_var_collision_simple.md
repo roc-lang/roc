@@ -167,13 +167,13 @@ main! = |_| {
 (can-ir
 	(d-let
 		(p-assign @4.1-4.2 (ident "a"))
-		(e-int @4.5-4.6 (value "1")))
+		(e-num @4.5-4.6 (value "1")))
 	(d-let
 		(p-assign @5.1-5.2 (ident "b"))
-		(e-int @5.5-5.6 (value "2")))
+		(e-num @5.5-5.6 (value "2")))
 	(d-let
 		(p-assign @6.1-6.2 (ident "c"))
-		(e-int @6.5-6.6 (value "3")))
+		(e-num @6.5-6.6 (value "3")))
 	(d-let
 		(p-assign @9.1-9.9 (ident "identity"))
 		(e-lambda @9.12-9.17
@@ -205,10 +205,10 @@ main! = |_| {
 		(e-closure @17.9-23.2
 			(captures
 				(capture @9.1-9.9 (ident "identity"))
-				(capture @4.1-4.2 (ident "a"))
-				(capture @5.1-5.2 (ident "b"))
 				(capture @12.1-12.10 (ident "identity2"))
 				(capture @15.1-15.5 (ident "pair"))
+				(capture @5.1-5.2 (ident "b"))
+				(capture @4.1-4.2 (ident "a"))
 				(capture @6.1-6.2 (ident "c")))
 			(e-lambda @17.9-23.2
 				(args
@@ -219,7 +219,7 @@ main! = |_| {
 						(e-call @18.15-18.27
 							(e-lookup-local @18.15-18.23
 								(p-assign @9.1-9.9 (ident "identity")))
-							(e-int @18.24-18.26 (value "42"))))
+							(e-num @18.24-18.26 (value "42"))))
 					(s-let @19.5-19.33
 						(p-assign @19.5-19.12 (ident "result2"))
 						(e-call @19.15-19.33
@@ -252,16 +252,16 @@ main! = |_| {
 		(patt @4.1-4.2 (type "Num(_size)"))
 		(patt @5.1-5.2 (type "Num(_size)"))
 		(patt @6.1-6.2 (type "Num(_size)"))
-		(patt @9.1-9.9 (type "_arg -> _ret"))
-		(patt @12.1-12.10 (type "_arg -> _ret"))
-		(patt @15.1-15.5 (type "_arg, _arg2 -> (_field, _field2)"))
+		(patt @9.1-9.9 (type "d -> d"))
+		(patt @12.1-12.10 (type "d -> d"))
+		(patt @15.1-15.5 (type "d, e -> (d, e)"))
 		(patt @17.1-17.6 (type "_arg -> Num(_size)")))
 	(expressions
 		(expr @4.5-4.6 (type "Num(_size)"))
 		(expr @5.5-5.6 (type "Num(_size)"))
 		(expr @6.5-6.6 (type "Num(_size)"))
-		(expr @9.12-9.17 (type "_arg -> _ret"))
-		(expr @12.13-12.18 (type "_arg -> _ret"))
-		(expr @15.8-15.39 (type "_arg, _arg2 -> (_field, _field2)"))
+		(expr @9.12-9.17 (type "d -> d"))
+		(expr @12.13-12.18 (type "d -> d"))
+		(expr @15.8-15.39 (type "d, e -> (d, e)"))
 		(expr @17.9-23.2 (type "_arg -> Num(_size)"))))
 ~~~

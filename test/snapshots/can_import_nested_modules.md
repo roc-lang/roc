@@ -547,7 +547,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(declared-type
 				(ty-fn @8.15-8.37 (effectful false)
 					(ty-malformed @8.15-8.30)
-					(ty @8.34-8.37 (name "Str"))))))
+					(ty-lookup @8.34-8.37 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @13.1-13.13 (ident "authenticate"))
 		(e-lambda @13.16-13.55
@@ -563,8 +563,8 @@ validateAuth = |creds| HttpAuth.validate(creds)
 		(annotation @13.1-13.13
 			(declared-type
 				(ty-fn @12.16-12.42 (effectful false)
-					(ty @12.16-12.19 (name "Str"))
-					(ty @12.21-12.24 (name "Str"))
+					(ty-lookup @12.16-12.19 (name "Str") (builtin))
+					(ty-lookup @12.21-12.24 (name "Str") (builtin))
 					(ty-malformed @12.28-12.42)))))
 	(d-let
 		(p-assign @17.1-17.12 (ident "processData"))
@@ -582,10 +582,10 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(declared-type
 				(ty-fn @16.15-16.78 (effectful false)
 					(ty-malformed @16.15-16.37)
-					(ty @16.39-16.42 (name "Str"))
-					(ty-apply @16.46-16.78 (symbol "Result")
-						(ty @16.53-16.56 (name "Str"))
-						(ty-malformed @16.58-16.77))))))
+					(ty-lookup @16.39-16.42 (name "Str") (builtin))
+					(ty-apply @16.46-16.78 (name "Result") (local)
+						(ty-lookup @16.46-16.78 (name "Str") (builtin))
+						(ty-malformed @16.46-16.78))))))
 	(d-let
 		(p-assign @22.1-22.13 (ident "formatOutput"))
 		(e-lambda @22.16-22.59
@@ -599,8 +599,8 @@ validateAuth = |creds| HttpAuth.validate(creds)
 		(annotation @22.1-22.13
 			(declared-type
 				(ty-fn @21.16-21.26 (effectful false)
-					(ty @21.16-21.19 (name "Str"))
-					(ty @21.23-21.26 (name "Str"))))))
+					(ty-lookup @21.16-21.19 (name "Str") (builtin))
+					(ty-lookup @21.23-21.26 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @26.1-26.13 (ident "validateAuth"))
 		(e-lambda @26.16-26.48
@@ -614,9 +614,9 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(declared-type
 				(ty-fn @25.16-25.78 (effectful false)
 					(ty-malformed @25.16-25.36)
-					(ty-apply @25.40-25.78 (symbol "Result")
-						(ty-malformed @25.47-25.61)
-						(ty-malformed @25.63-25.77))))))
+					(ty-apply @25.40-25.78 (name "Result") (local)
+						(ty-malformed @25.40-25.78)
+						(ty-malformed @25.40-25.78))))))
 	(s-import @3.1-3.19 (module "json.Parser") (qualifier "json")
 		(exposes))
 	(s-import @4.1-4.19 (module "http.Client") (qualifier "http")

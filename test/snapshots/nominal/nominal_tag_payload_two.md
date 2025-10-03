@@ -129,10 +129,10 @@ is_ok = |result| match result {
 		(annotation @6.1-6.3
 			(declared-type
 				(ty-fn @5.6-5.27 (effectful false)
-					(ty-var @5.6-5.8 (name "ok"))
-					(ty-apply @5.12-5.27 (symbol "MyResult")
-						(ty-var @5.21-5.23 (name "ok"))
-						(ty-underscore @1.1-1.1))))))
+					(ty-rigid-var @5.6-5.8 (name "ok"))
+					(ty-apply @5.12-5.27 (name "MyResult") (local)
+						(ty-rigid-var-lookup (ty-rigid-var @5.6-5.8 (name "ok")))
+						(ty-underscore @5.12-5.27))))))
 	(d-let
 		(p-assign @9.1-9.6 (ident "is_ok"))
 		(e-lambda @9.9-12.2
@@ -163,20 +163,20 @@ is_ok = |result| match result {
 		(annotation @9.1-9.6
 			(declared-type
 				(ty-fn @8.9-8.36 (effectful false)
-					(ty-apply @8.9-8.28 (symbol "MyResult")
-						(ty-var @8.18-8.21 (name "_ok"))
-						(ty-var @8.23-8.27 (name "_err")))
-					(ty @8.32-8.36 (name "Bool"))))))
+					(ty-apply @8.9-8.28 (name "MyResult") (local)
+						(ty-rigid-var @8.9-8.28 (name "_ok"))
+						(ty-rigid-var @8.9-8.28 (name "_err")))
+					(ty-lookup @8.32-8.36 (name "Bool") (local))))))
 	(s-nominal-decl @3.1-3.40
 		(ty-header @3.1-3.18 (name "MyResult")
 			(ty-args
-				(ty-var @3.10-3.12 (name "ok"))
-				(ty-var @3.14-3.17 (name "err"))))
+				(ty-rigid-var @3.10-3.12 (name "ok"))
+				(ty-rigid-var @3.14-3.17 (name "err"))))
 		(ty-tag-union @3.22-3.40
-			(ty-apply @3.23-3.29 (symbol "Ok")
-				(ty-var @3.26-3.28 (name "ok")))
-			(ty-apply @3.31-3.39 (symbol "Err")
-				(ty-var @3.35-3.38 (name "err"))))))
+			(ty-tag-name @3.23-3.29 (name "Ok")
+				(ty-rigid-var-lookup (ty-rigid-var @3.10-3.12 (name "ok"))))
+			(ty-tag-name @3.31-3.39 (name "Err")
+				(ty-rigid-var-lookup (ty-rigid-var @3.14-3.17 (name "err")))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -188,8 +188,8 @@ is_ok = |result| match result {
 		(nominal @3.1-3.40 (type "MyResult(ok, err)")
 			(ty-header @3.1-3.18 (name "MyResult")
 				(ty-args
-					(ty-var @3.10-3.12 (name "ok"))
-					(ty-var @3.14-3.17 (name "err"))))))
+					(ty-rigid-var @3.10-3.12 (name "ok"))
+					(ty-rigid-var @3.14-3.17 (name "err"))))))
 	(expressions
 		(expr @6.6-6.24 (type "ok -> MyResult(ok, err)"))
 		(expr @9.9-12.2 (type "MyResult(_ok, _err) -> Bool"))))

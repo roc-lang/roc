@@ -136,6 +136,12 @@ pub const Store = struct {
         return try self.freshFromContent(Content{ .flex_var = null });
     }
 
+    /// Create a new unbound, flexible type variable without a name
+    /// Used in canonicalization when creating type slots
+    pub fn freshWithRank(self: *Self, rank: Rank) std.mem.Allocator.Error!Var {
+        return try self.freshFromContentWithRank(Content{ .flex_var = null }, rank);
+    }
+
     /// Create a new variable with the provided desc
     /// Used in tests
     pub fn freshFromContent(self: *Self, content: Content) std.mem.Allocator.Error!Var {
@@ -165,7 +171,22 @@ pub const Store = struct {
         return Self.slotIdxToVar(slot_idx);
     }
 
+    /// Check if a variable is a rediret
+    pub fn isRedirect(self: *const Self, var_: Var) bool {
+        switch (self.slots.get(Self.varToSlotIdx(var_))) {
+            .redirect => return true,
+            .root => return false,
+        }
+    }
+
     // setting variables //
+
+    /// Set a type variable to the provided content
+    pub fn setVarDesc(self: *Self, target_var: Var, desc: Desc) Allocator.Error!void {
+        std.debug.assert(@intFromEnum(target_var) < self.len());
+        const resolved = self.resolveVar(target_var);
+        self.descs.set(resolved.desc_idx, desc);
+    }
 
     /// Set a type variable to the provided content
     pub fn setVarContent(self: *Self, target_var: Var, content: Content) Allocator.Error!void {
@@ -370,7 +391,7 @@ pub const Store = struct {
             .str => false,
             .box => |box_var| self.needsInstantiation(box_var),
             .list => |list_var| self.needsInstantiation(list_var),
-            .list_unbound => false,
+            .list_unbound => true,
             .tuple => |tuple| blk: {
                 const elems_slice = self.sliceVars(tuple.elems);
                 for (elems_slice) |elem_var| {
@@ -379,9 +400,12 @@ pub const Store = struct {
                 break :blk false;
             },
             .num => |num| switch (num) {
-                .num_poly => |poly| self.needsInstantiation(poly.var_),
-                .int_poly => |poly| self.needsInstantiation(poly.var_),
-                .frac_poly => |poly| self.needsInstantiation(poly.var_),
+                .num_poly => |poly_var| self.needsInstantiation(poly_var),
+                .num_unbound => true,
+                .int_poly => |poly_var| self.needsInstantiation(poly_var),
+                .int_unbound => true,
+                .frac_poly => |poly_var| self.needsInstantiation(poly_var),
+                .frac_unbound => true,
                 else => false, // Concrete numeric types don't need instantiation
             },
             .nominal_type => false, // Nominal types are concrete
@@ -390,7 +414,6 @@ pub const Store = struct {
             .fn_unbound => |func| func.needs_instantiation,
             .record => |record| self.needsInstantiationRecord(record),
             .record_unbound => |fields| self.needsInstantiationRecordFields(fields),
-            .record_poly => |poly| self.needsInstantiation(poly.var_) or self.needsInstantiationRecord(poly.record),
             .empty_record => false,
             .tag_union => |tag_union| self.needsInstantiationTagUnion(tag_union),
             .empty_tag_union => false,
@@ -633,6 +656,11 @@ pub const Store = struct {
     /// Link the variables & updated the content in the unification table
     /// * update b to to the new desc value
     /// * redirect a -> b
+    ///
+    /// CRITICAL: The merge direction (a -> b) is load-bearing and must not be changed!
+    /// Multiple parts of the unification algorithm depend on this specific order:
+    /// - When unifying aliases with structures, we rely on this order to ensure
+    ///   that we don't loose alias context
     ///
     // NOTE: The elm & the roc compiler this step differently
     // * The elm compiler sets b to redirect to a
@@ -1088,11 +1116,7 @@ test "resolveVarAndCompressPath - no-op on already root" {
     defer store.deinit();
 
     const num_flex = try store.fresh();
-    const requirements = Num.IntRequirements{
-        .sign_needed = false,
-        .bits_needed = 0,
-    };
-    const num = Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = num_flex, .requirements = requirements } } } };
+    const num = Content{ .structure = .{ .num = .{ .num_poly = num_flex } } };
     const num_var = try store.freshFromContent(num);
 
     const result = store.resolveVarAndCompressPath(num_var);
@@ -1109,11 +1133,7 @@ test "resolveVarAndCompressPath - flattens redirect chain to structure" {
     defer store.deinit();
 
     const num_flex = try store.fresh();
-    const requirements = Num.IntRequirements{
-        .sign_needed = false,
-        .bits_needed = 0,
-    };
-    const num = Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = num_flex, .requirements = requirements } } } };
+    const num = Content{ .structure = .{ .num = .{ .num_poly = num_flex } } };
     const c = try store.freshFromContent(num);
     const b = try store.freshRedirect(c);
     const a = try store.freshRedirect(b);

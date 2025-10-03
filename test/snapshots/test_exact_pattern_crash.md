@@ -34,7 +34,7 @@ main = {
 ~~~
 # EXPECTED
 UNUSED VARIABLE - test_exact_pattern_crash.md:19:5:19:7
-TYPE MISMATCH - test_exact_pattern_crash.md:23:10:23:18
+TYPE MISMATCH - test_exact_pattern_crash.md:23:10:23:50
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `p1` is not used anywhere in your code.
@@ -50,16 +50,16 @@ The unused variable is declared here:
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**test_exact_pattern_crash.md:23:10:23:18:**
+**test_exact_pattern_crash.md:23:10:23:50:**
 ```roc
     p2 = map_pair(3, 4, (|x| x + 1), (|y| y * 2))
 ```
-         ^^^^^^^^
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
     _Num(_size), Num(_size2), Num(_size3) -> Num(_size4), Num(_size5) -> Num(_size6) -> _ret_
 
-But here it's being used as:
+But I expected it to be:
     _Pair(a, b), a -> c, b -> d -> Pair(c, d)_
 
 # TOKENS
@@ -234,12 +234,12 @@ main = {
 		(annotation @8.1-8.10
 			(declared-type
 				(ty-fn @7.13-7.37 (effectful false)
-					(ty-apply @7.13-7.23 (symbol "Pair")
-						(ty-var @7.18-7.19 (name "a"))
-						(ty-var @7.21-7.22 (name "b")))
-					(ty-apply @7.27-7.37 (symbol "Pair")
-						(ty-var @7.32-7.33 (name "b"))
-						(ty-var @7.35-7.36 (name "a")))))))
+					(ty-apply @7.13-7.23 (name "Pair") (local)
+						(ty-rigid-var @7.13-7.23 (name "a"))
+						(ty-rigid-var @7.13-7.23 (name "b")))
+					(ty-apply @7.27-7.37 (name "Pair") (local)
+						(ty-rigid-var-lookup (ty-rigid-var @7.13-7.23 (name "b")))
+						(ty-rigid-var-lookup (ty-rigid-var @7.13-7.23 (name "a"))))))))
 	(d-let
 		(p-assign @12.1-12.9 (ident "map_pair"))
 		(e-lambda @12.12-12.39
@@ -265,20 +265,20 @@ main = {
 		(annotation @12.1-12.9
 			(declared-type
 				(ty-fn @11.12-11.56 (effectful false)
-					(ty-apply @11.12-11.22 (symbol "Pair")
-						(ty-var @11.17-11.18 (name "a"))
-						(ty-var @11.20-11.21 (name "b")))
+					(ty-apply @11.12-11.22 (name "Pair") (local)
+						(ty-rigid-var @11.12-11.22 (name "a"))
+						(ty-rigid-var @11.12-11.22 (name "b")))
 					(ty-parens @11.24-11.32
 						(ty-fn @11.25-11.31 (effectful false)
-							(ty-var @11.25-11.26 (name "a"))
-							(ty-var @11.30-11.31 (name "c"))))
+							(ty-rigid-var-lookup (ty-rigid-var @11.12-11.22 (name "a")))
+							(ty-rigid-var @11.30-11.31 (name "c"))))
 					(ty-parens @11.34-11.42
 						(ty-fn @11.35-11.41 (effectful false)
-							(ty-var @11.35-11.36 (name "b"))
-							(ty-var @11.40-11.41 (name "d"))))
-					(ty-apply @11.46-11.56 (symbol "Pair")
-						(ty-var @11.51-11.52 (name "c"))
-						(ty-var @11.54-11.55 (name "d")))))))
+							(ty-rigid-var-lookup (ty-rigid-var @11.12-11.22 (name "b")))
+							(ty-rigid-var @11.40-11.41 (name "d"))))
+					(ty-apply @11.46-11.56 (name "Pair") (local)
+						(ty-rigid-var-lookup (ty-rigid-var @11.30-11.31 (name "c")))
+						(ty-rigid-var-lookup (ty-rigid-var @11.40-11.41 (name "d"))))))))
 	(d-let
 		(p-assign @17.1-17.5 (ident "main"))
 		(e-block @17.8-26.2
@@ -289,55 +289,55 @@ main = {
 						(p-assign @8.1-8.10 (ident "swap_pair")))
 					(e-tuple @19.20-19.26
 						(elems
-							(e-int @19.21-19.22 (value "1"))
-							(e-int @19.24-19.25 (value "2"))))))
+							(e-num @19.21-19.22 (value "1"))
+							(e-num @19.24-19.25 (value "2"))))))
 			(s-let @23.5-23.50
 				(p-assign @23.5-23.7 (ident "p2"))
 				(e-call @23.10-23.50
 					(e-lookup-local @23.10-23.18
 						(p-assign @12.1-12.9 (ident "map_pair")))
-					(e-int @23.19-23.20 (value "3"))
-					(e-int @23.22-23.23 (value "4"))
+					(e-num @23.19-23.20 (value "3"))
+					(e-num @23.22-23.23 (value "4"))
 					(e-lambda @23.26-23.35
 						(args
 							(p-assign @23.27-23.28 (ident "x")))
 						(e-binop @23.30-23.35 (op "add")
 							(e-lookup-local @23.30-23.31
 								(p-assign @23.27-23.28 (ident "x")))
-							(e-int @23.34-23.35 (value "1"))))
+							(e-num @23.34-23.35 (value "1"))))
 					(e-lambda @23.39-23.48
 						(args
 							(p-assign @23.40-23.41 (ident "y")))
 						(e-binop @23.43-23.48 (op "mul")
 							(e-lookup-local @23.43-23.44
 								(p-assign @23.40-23.41 (ident "y")))
-							(e-int @23.47-23.48 (value "2"))))))
+							(e-num @23.47-23.48 (value "2"))))))
 			(e-lookup-local @25.5-25.7
 				(p-assign @23.5-23.7 (ident "p2")))))
 	(s-alias-decl @4.1-4.20
 		(ty-header @4.1-4.11 (name "Pair")
 			(ty-args
-				(ty-var @4.6-4.7 (name "a"))
-				(ty-var @4.9-4.10 (name "b"))))
+				(ty-rigid-var @4.6-4.7 (name "a"))
+				(ty-rigid-var @4.9-4.10 (name "b"))))
 		(ty-tuple @4.14-4.20
-			(ty-var @4.15-4.16 (name "a"))
-			(ty-var @4.18-4.19 (name "b")))))
+			(ty-rigid-var-lookup (ty-rigid-var @4.6-4.7 (name "a")))
+			(ty-rigid-var-lookup (ty-rigid-var @4.9-4.10 (name "b"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @8.1-8.10 (type "Pair(a, a) -> Pair(a, a)"))
+		(patt @8.1-8.10 (type "Pair(a, b) -> Pair(b, a)"))
 		(patt @12.1-12.9 (type "Pair(a, b), a -> c, b -> d -> Pair(c, d)"))
 		(patt @17.1-17.5 (type "_e")))
 	(type_decls
 		(alias @4.1-4.20 (type "Pair(a, b)")
 			(ty-header @4.1-4.11 (name "Pair")
 				(ty-args
-					(ty-var @4.6-4.7 (name "a"))
-					(ty-var @4.9-4.10 (name "b"))))))
+					(ty-rigid-var @4.6-4.7 (name "a"))
+					(ty-rigid-var @4.9-4.10 (name "b"))))))
 	(expressions
-		(expr @8.13-8.28 (type "Pair(a, a) -> Pair(a, a)"))
+		(expr @8.13-8.28 (type "Pair(a, b) -> Pair(b, a)"))
 		(expr @12.12-12.39 (type "Pair(a, b), a -> c, b -> d -> Pair(c, d)"))
 		(expr @17.8-26.2 (type "_e"))))
 ~~~

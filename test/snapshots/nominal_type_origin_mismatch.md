@@ -118,8 +118,8 @@ main =
 		(annotation @6.1-6.14
 			(declared-type
 				(ty-fn @5.17-5.30 (effectful false)
-					(ty @5.17-5.23 (name "Person"))
-					(ty @5.27-5.30 (name "Str"))))))
+					(ty-malformed @5.17-5.23)
+					(ty-lookup @5.27-5.30 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @8.1-8.5 (ident "main"))
 		(e-call @10.5-10.34

@@ -102,7 +102,7 @@ extract_age = |person| {
 								(e-record @7.2-7.10
 									(fields
 										(field (name "a")
-											(e-int @7.7-7.8 (value "0")))))))
+											(e-num @7.7-7.8 (value "0")))))))
 						(e-lookup-local @7.15-7.18
 							(p-assign @5.7-5.10 (ident "age"))))
 					(e-dot-access @7.21-7.31 (field "a")
@@ -110,20 +110,20 @@ extract_age = |person| {
 							(e-record @7.21-7.29
 								(fields
 									(field (name "a")
-										(e-int @7.26-7.27 (value "0"))))))))))
+										(e-num @7.26-7.27 (value "0"))))))))))
 		(annotation @4.1-4.12
 			(declared-type
 				(ty-fn @3.15-3.35 (effectful false)
 					(ty-record @3.15-3.28
 						(field (field "age")
-							(ty @3.23-3.26 (name "U64"))))
-					(ty @3.32-3.35 (name "U64")))))))
+							(ty-lookup @3.23-3.26 (name "U64") (builtin))))
+					(ty-lookup @3.32-3.35 (name "U64") (builtin)))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.12 (type "{ age: U64 } -> U64")))
+		(patt @4.1-4.12 (type "{ age: Num(Int(Unsigned64)) } -> Num(Int(Unsigned64))")))
 	(expressions
-		(expr @4.15-8.2 (type "{ age: U64 } -> U64"))))
+		(expr @4.15-8.2 (type "{ age: Num(Int(Unsigned64)) } -> Num(Int(Unsigned64))"))))
 ~~~

@@ -60,8 +60,8 @@ NO CHANGE
 							(p-assign @1.11-1.17 (ident "middle")))
 						(e-closure @1.19-1.49
 							(captures
-								(capture @1.3-1.8 (ident "outer"))
-								(capture @1.11-1.17 (ident "middle")))
+								(capture @1.11-1.17 (ident "middle"))
+								(capture @1.3-1.8 (ident "outer")))
 							(e-lambda @1.19-1.49
 								(args
 									(p-assign @1.20-1.25 (ident "inner")))
@@ -73,9 +73,9 @@ NO CHANGE
 											(p-assign @1.11-1.17 (ident "middle"))))
 									(e-lookup-local @1.44-1.49
 										(p-assign @1.20-1.25 (ident "inner")))))))))
-			(e-int @1.51-1.52 (value "1")))
-		(e-int @1.54-1.55 (value "2")))
-	(e-int @1.57-1.58 (value "3")))
+			(e-num @1.51-1.52 (value "1")))
+		(e-num @1.54-1.55 (value "2")))
+	(e-num @1.57-1.58 (value "3")))
 ~~~
 # TYPES
 ~~~clojure

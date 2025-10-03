@@ -36,6 +36,7 @@ pub const LayoutError = error{
     ZeroSizedType,
     TypeContainedMismatch,
     InvalidRecordExtension,
+    InvalidNumberExtension,
     // Compiler bugs. Hopefully these never come up, but if they do, the caller should gracefully recover.
     BugUnboxedFlexVar,
     BugUnboxedRigidVar,
@@ -473,6 +474,56 @@ pub const Store = struct {
         };
     }
 
+    /// Add the tag union's tags to self.pending_tags,
+    /// then add the tag union's extension fields too (recursively).
+    fn gatherTags(
+        self: *Self,
+        tag_union: types.TagUnion,
+    ) (LayoutError || std.mem.Allocator.Error)!usize {
+        var num_tags = tag_union.tags.len();
+
+        const tag_slice = self.types_store.getTagsSlice(tag_union.tags);
+        for (tag_slice.items(.name), tag_slice.items(.args)) |name, args| {
+            // TODO is it possible that here we're encountering record fields with names
+            // already in the list? Would type-checking have already deduped them?
+            // We would certainly rather not spend time doing hashmap things if we can avoid it here.
+            try self.work.pending_tags.append(self.env.gpa, .{ .name = name, .args = args });
+        }
+
+        var current_ext = tag_union.ext;
+        while (true) {
+            const resolved_ext = self.types_store.resolveVar(current_ext);
+            switch (resolved_ext.desc.content) {
+                .structure => |ext_flat_type| switch (ext_flat_type) {
+                    .empty_tag_union => break,
+                    .tag_union => |ext_tag_union| {
+                        if (ext_tag_union.tags.len() > 0) {
+                            num_tags += ext_tag_union.tags.len();
+                            const ext_tag_slice = self.types_store.getTagsSlice(ext_tag_union.tags);
+                            for (ext_tag_slice.items(.name), ext_tag_slice.items(.args)) |name, args| {
+                                // TODO is it possible that here we're adding fields with names
+                                // already in the list? Would type-checking have already collapsed these?
+                                // We would certainly rather not spend time doing hashmap things
+                                // if we can avoid it here.
+                                try self.work.pending_tags.append(self.env.gpa, .{ .name = name, .args = args });
+                            }
+                            current_ext = ext_tag_union.ext;
+                        } else {
+                            break;
+                        }
+                    },
+                    else => return LayoutError.InvalidRecordExtension,
+                },
+                .alias => |alias| {
+                    current_ext = self.types_store.getAliasBackingVar(alias);
+                },
+                else => return LayoutError.InvalidRecordExtension,
+            }
+        }
+
+        return num_tags;
+    }
+
     /// Add the record's fields to self.pending_record_fields,
     /// then add the record's extension fields too (recursively).
     fn gatherRecordFields(
@@ -526,25 +577,13 @@ pub const Store = struct {
                         // record_unbound has no extension, so stop here
                         break;
                     },
-                    .record_poly => |poly| {
-                        if (poly.record.fields.len() > 0) {
-                            num_fields += poly.record.fields.len();
-                            const poly_field_slice = self.types_store.getRecordFieldsSlice(poly.record.fields);
-                            for (poly_field_slice.items(.name), poly_field_slice.items(.var_)) |name, var_| {
-                                // TODO is it possible that here we're adding fields with names
-                                // already in the list? Would type-checking have already collapsed these?
-                                // We would certainly rather not spend time doing hashmap things
-                                // if we can avoid it here.
-                                try self.work.pending_record_fields.append(self.env.gpa, .{ .name = name, .var_ = var_ });
-                            }
-                        }
-                        current_ext = poly.record.ext;
-                    },
                     else => return LayoutError.InvalidRecordExtension,
                 },
                 .alias => |alias| {
                     current_ext = self.types_store.getAliasBackingVar(alias);
                 },
+                .flex_var => |_| break,
+                .rigid_var => |_| break,
                 else => return LayoutError.InvalidRecordExtension,
             }
         }
@@ -820,13 +859,24 @@ pub const Store = struct {
                         continue;
                     },
                     .list => |elem_var| {
-                        try self.work.pending_containers.append(self.env.gpa, .{
-                            .var_ = current.var_,
-                            .container = .list,
-                        });
-                        // Push a pending List container and "recurse" on the elem type
-                        current = self.types_store.resolveVar(elem_var);
-                        continue;
+                        const elem_content = self.types_store.resolveVar(elem_var).desc.content;
+                        if (elem_content == .flex_var or elem_content == .rigid_var) {
+                            // For unbound lists (empty lists), use list of zero-sized type
+                            const layout = Layout.listOfZst();
+                            const idx = try self.insertLayout(layout);
+                            try self.layouts_by_var.put(self.env.gpa, current.var_, idx);
+                            return idx;
+                        } else {
+                            // Otherwise, add this to the stack of pending work
+                            try self.work.pending_containers.append(self.env.gpa, .{
+                                .var_ = current.var_,
+                                .container = .list,
+                            });
+
+                            // Push a pending List container and "recurse" on the elem type
+                            current = self.types_store.resolveVar(elem_var);
+                            continue;
+                        }
                     },
                     .list_unbound => {
                         // For unbound lists (empty lists), use list of zero-sized type
@@ -848,20 +898,63 @@ pub const Store = struct {
                         current = resolved;
                         continue;
                     },
-                    .num => |num| switch (num) {
-                        .num_compact => |compact| switch (compact) {
-                            .int => |precision| Layout.int(precision),
-                            .frac => |precision| Layout.frac(precision),
-                        },
-                        .int_precision => |precision| Layout.int(precision),
-                        .frac_precision => |precision| Layout.frac(precision),
-                        // For polymorphic types, use default precision
-                        .num_unbound => Layout.int(types.Num.Int.Precision.default),
-                        .int_unbound => Layout.int(types.Num.Int.Precision.default),
-                        .frac_unbound => Layout.frac(types.Num.Frac.Precision.default),
-                        .num_poly => Layout.int(types.Num.Int.Precision.default),
-                        .int_poly => Layout.int(types.Num.Int.Precision.default),
-                        .frac_poly => Layout.frac(types.Num.Frac.Precision.default),
+                    .num => |initial_num| {
+                        var num = initial_num;
+
+                        while (true) {
+                            switch (num) {
+                                // TODO: Unwrap number to get the root precision or requiremnets
+                                .num_compact => |compact| switch (compact) {
+                                    .int => |precision| break :flat_type Layout.int(precision),
+                                    .frac => |precision| break :flat_type Layout.frac(precision),
+                                },
+                                .int_precision => |precision| break :flat_type Layout.int(precision),
+                                .frac_precision => |precision| break :flat_type Layout.frac(precision),
+                                // For polymorphic types, use default precision
+                                .num_unbound => |_| {
+                                    // TODO: Should we consider requirements here?
+                                    break :flat_type Layout.int(types.Num.Int.Precision.default);
+                                },
+                                .int_unbound => {
+                                    // TODO: Should we consider requirements here?
+                                    break :flat_type Layout.int(types.Num.Int.Precision.default);
+                                },
+                                .frac_unbound => {
+                                    // TODO: Should we consider requirements here?
+                                    break :flat_type Layout.frac(types.Num.Frac.Precision.default);
+                                },
+                                .num_poly => |var_| {
+                                    const next_type = self.types_store.resolveVar(var_).desc.content;
+                                    if (next_type == .structure and next_type.structure == .num) {
+                                        num = next_type.structure.num;
+                                    } else if (next_type == .flex_var) {
+                                        break :flat_type Layout.int(types.Num.Int.Precision.default);
+                                    } else {
+                                        return LayoutError.InvalidRecordExtension;
+                                    }
+                                },
+                                .int_poly => |var_| {
+                                    const next_type = self.types_store.resolveVar(var_).desc.content;
+                                    if (next_type == .structure and next_type.structure == .num) {
+                                        num = next_type.structure.num;
+                                    } else if (next_type == .flex_var) {
+                                        break :flat_type Layout.int(types.Num.Int.Precision.default);
+                                    } else {
+                                        return LayoutError.InvalidRecordExtension;
+                                    }
+                                },
+                                .frac_poly => |var_| {
+                                    const next_type = self.types_store.resolveVar(var_).desc.content;
+                                    if (next_type == .structure and next_type.structure == .num) {
+                                        num = next_type.structure.num;
+                                    } else if (next_type == .flex_var) {
+                                        break :flat_type Layout.frac(types.Num.Frac.Precision.default);
+                                    } else {
+                                        return LayoutError.InvalidRecordExtension;
+                                    }
+                                },
+                            }
+                        }
                     },
                     .tuple => |tuple_type| {
                         const num_fields = try self.gatherTupleFields(tuple_type);
@@ -933,13 +1026,23 @@ pub const Store = struct {
                         // Handle tag unions by computing the layout based on:
                         // 1. Discriminant size (based on number of tags)
                         // 2. Maximum payload size and alignment
-                        const tags = self.types_store.getTagsSlice(tag_union.tags);
+
+                        const pending_tags_top = self.work.pending_tags.len;
+                        defer self.work.pending_tags.shrinkRetainingCapacity(pending_tags_top);
+
+                        // Recursively get all tags by checking the tag extension
+                        const num_tags = try self.gatherTags(tag_union);
+                        const tags_slice = self.work.pending_tags.slice();
+
+                        // Get the slices of tags
+                        const tags_args = tags_slice.items(.args)[pending_tags_top..];
 
                         // Check if this is a Bool (2 tags with no payload) as a special case
                         // This is a legitimate layout optimization for boolean tag unions
-                        if (tags.len == 2) {
+                        // TODO: Is this necessary?
+                        if (num_tags == 2) {
                             var is_bool = true;
-                            for (tags.items(.args)) |tag_args| {
+                            for (tags_args) |tag_args| {
                                 const args_slice = self.types_store.sliceVars(tag_args);
                                 if (args_slice.len != 0) {
                                     is_bool = false;
@@ -958,19 +1061,19 @@ pub const Store = struct {
 
                         // For general tag unions, we need to compute the layout
                         // First, determine discriminant size based on number of tags
-                        const discriminant_layout = if (tags.len == 0)
+                        const discriminant_layout = if (num_tags == 0)
                             // Empty tag union - should not happen in practice
                             return LayoutError.ZeroSizedType
-                        else if (tags.len <= 256)
+                        else if (num_tags <= 256)
                             Layout.int(.u8)
-                        else if (tags.len <= 65536)
+                        else if (num_tags <= 65536)
                             Layout.int(.u16)
                         else
                             Layout.int(.u32);
 
                         // If all tags have no payload, we just need the discriminant
                         var has_payload = false;
-                        for (tags.items(.args)) |tag_args| {
+                        for (tags_args) |tag_args| {
                             const args_slice = self.types_store.sliceVars(tag_args);
                             if (args_slice.len > 0) {
                                 has_payload = true;
@@ -1018,7 +1121,8 @@ pub const Store = struct {
                         // For each tag, compute its payload layout: () => ZST, 1 arg => layout, >1 => tuple of arg layouts
                         var temp_scope = TypeScope.init(self.env.gpa);
                         defer temp_scope.deinit();
-                        for (tags.items(.args)) |tag_args| {
+
+                        for (tags_slice.items(.args)) |tag_args| {
                             const args_slice = self.types_store.sliceVars(tag_args);
                             if (args_slice.len == 0) {
                                 // zero-sized payload; nothing to update
@@ -1083,30 +1187,6 @@ pub const Store = struct {
                                 try self.work.pending_record_fields.append(self.env.gpa, .{ .name = name, .var_ = var_ });
                             }
                         }
-
-                        if (num_fields == 0) {
-                            continue :flat_type .empty_record;
-                        }
-
-                        try self.work.pending_containers.append(self.env.gpa, .{
-                            .var_ = current.var_,
-                            .container = .{
-                                .record = .{
-                                    .num_fields = @intCast(num_fields),
-                                    .resolved_fields_start = @intCast(self.work.resolved_record_fields.len),
-                                    .pending_fields = @intCast(num_fields),
-                                },
-                            },
-                        });
-
-                        // Start working on the last pending field (we want to pop them).
-                        const field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
-
-                        current = self.types_store.resolveVar(field.var_);
-                        continue;
-                    },
-                    .record_poly => |poly| {
-                        const num_fields = try self.gatherRecordFields(poly.record);
 
                         if (num_fields == 0) {
                             continue :flat_type .empty_record;

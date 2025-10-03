@@ -312,8 +312,8 @@ EndOfFile(20:1-20:1),
 				(p-assign @4.9-4.10 (ident "y"))))
 		(e-tuple @4.14-4.20
 			(elems
-				(e-int @4.15-4.16 (value "1"))
-				(e-int @4.18-4.19 (value "2")))))
+				(e-num @4.15-4.16 (value "1"))
+				(e-num @4.18-4.19 (value "2")))))
 	(s-let @7.5-7.44
 		(p-tuple @7.5-7.21
 			(patterns
@@ -329,12 +329,12 @@ EndOfFile(20:1-20:1),
 			(elems
 				(e-tuple @7.25-7.33
 					(elems
-						(e-int @7.26-7.28 (value "10"))
-						(e-int @7.30-7.32 (value "20"))))
+						(e-num @7.26-7.28 (value "10"))
+						(e-num @7.30-7.32 (value "20"))))
 				(e-tuple @7.35-7.43
 					(elems
-						(e-int @7.36-7.38 (value "30"))
-						(e-int @7.40-7.42 (value "40")))))))
+						(e-num @7.36-7.38 (value "30"))
+						(e-num @7.40-7.42 (value "40")))))))
 	(s-let @10.5-10.44
 		(p-tuple @10.5-10.27
 			(patterns
@@ -343,9 +343,9 @@ EndOfFile(20:1-20:1),
 				(p-assign @10.21-10.26 (ident "third"))))
 		(e-tuple @10.30-10.44
 			(elems
-				(e-int @10.31-10.34 (value "100"))
-				(e-int @10.36-10.38 (value "42"))
-				(e-int @10.40-10.43 (value "200")))))
+				(e-num @10.31-10.34 (value "100"))
+				(e-num @10.36-10.38 (value "42"))
+				(e-num @10.40-10.43 (value "200")))))
 	(s-let @13.5-13.55
 		(p-tuple @13.5-13.28
 			(patterns
@@ -369,9 +369,9 @@ EndOfFile(20:1-20:1),
 			(elems
 				(e-list @16.22-16.31
 					(elems
-						(e-int @16.23-16.24 (value "1"))
-						(e-int @16.26-16.27 (value "2"))
-						(e-int @16.29-16.30 (value "3"))))
+						(e-num @16.23-16.24 (value "1"))
+						(e-num @16.26-16.27 (value "2"))
+						(e-num @16.29-16.30 (value "3"))))
 				(e-string @16.33-16.40
 					(e-literal @16.34-16.39 (string "hello"))))))
 	(e-empty_record @18.5-18.7))

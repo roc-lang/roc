@@ -59,9 +59,9 @@ NO CHANGE
 	(e-record @1.20-1.36
 		(fields
 			(field (name "x")
-				(e-int @1.25-1.27 (value "10")))
+				(e-num @1.25-1.27 (value "10")))
 			(field (name "y")
-				(e-int @1.32-1.34 (value "20"))))))
+				(e-num @1.32-1.34 (value "20"))))))
 ~~~
 # TYPES
 ~~~clojure

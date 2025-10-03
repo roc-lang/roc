@@ -107,7 +107,7 @@ main = {
 							(e-string @6.20-6.27
 								(e-literal @6.21-6.26 (string "Alice"))))
 						(field (name "age")
-							(e-int @6.34-6.36 (value "30"))))))
+							(e-num @6.34-6.36 (value "30"))))))
 			(s-let @7.5-7.27
 				(p-assign @7.5-7.12 (ident "encoded"))
 				(e-call @7.15-7.27

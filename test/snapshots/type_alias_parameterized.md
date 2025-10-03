@@ -15,21 +15,21 @@ swapPair = |(x, y)| (y, x)
 main! = |_| swapPair(1, 2)
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_alias_parameterized.md:8:13:8:21
+TYPE MISMATCH - type_alias_parameterized.md:8:13:8:27
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**type_alias_parameterized.md:8:13:8:21:**
+**type_alias_parameterized.md:8:13:8:27:**
 ```roc
 main! = |_| swapPair(1, 2)
 ```
-            ^^^^^^^^
+            ^^^^^^^^^^^^^^
 
 It has the type:
     _Num(_size), Num(_size2) -> _ret_
 
-But here it's being used as:
-    _Pair(a, a) -> Pair(a, a)_
+But I expected it to be:
+    _Pair(a, b) -> Pair(b, a)_
 
 # TOKENS
 ~~~zig
@@ -117,12 +117,12 @@ NO CHANGE
 		(annotation @6.1-6.9
 			(declared-type
 				(ty-fn @5.12-5.36 (effectful false)
-					(ty-apply @5.12-5.22 (symbol "Pair")
-						(ty-var @5.17-5.18 (name "a"))
-						(ty-var @5.20-5.21 (name "b")))
-					(ty-apply @5.26-5.36 (symbol "Pair")
-						(ty-var @5.31-5.32 (name "b"))
-						(ty-var @5.34-5.35 (name "a")))))))
+					(ty-apply @5.12-5.22 (name "Pair") (local)
+						(ty-rigid-var @5.12-5.22 (name "a"))
+						(ty-rigid-var @5.12-5.22 (name "b")))
+					(ty-apply @5.26-5.36 (name "Pair") (local)
+						(ty-rigid-var-lookup (ty-rigid-var @5.12-5.22 (name "b")))
+						(ty-rigid-var-lookup (ty-rigid-var @5.12-5.22 (name "a"))))))))
 	(d-let
 		(p-assign @8.1-8.6 (ident "main!"))
 		(e-closure @8.9-8.27
@@ -134,30 +134,30 @@ NO CHANGE
 				(e-call @8.13-8.27
 					(e-lookup-local @8.13-8.21
 						(p-assign @6.1-6.9 (ident "swapPair")))
-					(e-int @8.22-8.23 (value "1"))
-					(e-int @8.25-8.26 (value "2"))))))
+					(e-num @8.22-8.23 (value "1"))
+					(e-num @8.25-8.26 (value "2"))))))
 	(s-alias-decl @3.1-3.20
 		(ty-header @3.1-3.11 (name "Pair")
 			(ty-args
-				(ty-var @3.6-3.7 (name "a"))
-				(ty-var @3.9-3.10 (name "b"))))
+				(ty-rigid-var @3.6-3.7 (name "a"))
+				(ty-rigid-var @3.9-3.10 (name "b"))))
 		(ty-tuple @3.14-3.20
-			(ty-var @3.15-3.16 (name "a"))
-			(ty-var @3.18-3.19 (name "b")))))
+			(ty-rigid-var-lookup (ty-rigid-var @3.6-3.7 (name "a")))
+			(ty-rigid-var-lookup (ty-rigid-var @3.9-3.10 (name "b"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.9 (type "Pair(a, a) -> Pair(a, a)"))
+		(patt @6.1-6.9 (type "Pair(a, b) -> Pair(b, a)"))
 		(patt @8.1-8.6 (type "_arg -> _ret")))
 	(type_decls
 		(alias @3.1-3.20 (type "Pair(a, b)")
 			(ty-header @3.1-3.11 (name "Pair")
 				(ty-args
-					(ty-var @3.6-3.7 (name "a"))
-					(ty-var @3.9-3.10 (name "b"))))))
+					(ty-rigid-var @3.6-3.7 (name "a"))
+					(ty-rigid-var @3.9-3.10 (name "b"))))))
 	(expressions
-		(expr @6.12-6.27 (type "Pair(a, a) -> Pair(a, a)"))
+		(expr @6.12-6.27 (type "Pair(a, b) -> Pair(b, a)"))
 		(expr @8.9-8.27 (type "_arg -> _ret"))))
 ~~~

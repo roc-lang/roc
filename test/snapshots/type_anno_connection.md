@@ -71,29 +71,29 @@ NO CHANGE
 			(e-binop @4.15-4.20 (op "add")
 				(e-lookup-local @4.15-4.16
 					(p-assign @4.12-4.13 (ident "x")))
-				(e-int @4.19-4.20 (value "1"))))
+				(e-num @4.19-4.20 (value "1"))))
 		(annotation @4.1-4.8
 			(declared-type
 				(ty-fn @3.11-3.21 (effectful false)
-					(ty @3.11-3.14 (name "U64"))
-					(ty @3.18-3.21 (name "U64"))))))
+					(ty-lookup @3.11-3.14 (name "U64") (builtin))
+					(ty-lookup @3.18-3.21 (name "U64") (builtin))))))
 	(d-let
 		(p-assign @7.1-7.10 (ident "my_number"))
 		(e-call @7.13-7.24
 			(e-lookup-local @7.13-7.20
 				(p-assign @4.1-4.8 (ident "add_one")))
-			(e-int @7.21-7.23 (value "42")))
+			(e-num @7.21-7.23 (value "42")))
 		(annotation @7.1-7.10
 			(declared-type
-				(ty @6.13-6.16 (name "U64"))))))
+				(ty-lookup @6.13-6.16 (name "U64") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.8 (type "U64 -> U64"))
-		(patt @7.1-7.10 (type "U64")))
+		(patt @4.1-4.8 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(patt @7.1-7.10 (type "Num(Int(Unsigned64))")))
 	(expressions
-		(expr @4.11-4.20 (type "U64 -> U64"))
-		(expr @7.13-7.24 (type "U64"))))
+		(expr @4.11-4.20 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(expr @7.13-7.24 (type "Num(Int(Unsigned64))"))))
 ~~~

@@ -133,7 +133,7 @@ foo = |num| {
 								(e-binop @5.15-5.23 (op "gt")
 									(e-lookup-local @5.15-5.18
 										(p-assign @4.8-4.11 (ident "num")))
-									(e-int @5.21-5.23 (value "10")))
+									(e-num @5.21-5.23 (value "10")))
 								(e-block @5.25-7.6
 									(e-nominal @6.16-6.27 (nominal "Result")
 										(e-tag @6.16-6.27 (name "Err")
@@ -151,17 +151,17 @@ foo = |num| {
 		(annotation @4.1-4.4
 			(declared-type
 				(ty-fn @3.7-3.35 (effectful false)
-					(ty @3.7-3.10 (name "U64"))
-					(ty-apply @3.14-3.35 (symbol "Result")
-						(ty @3.21-3.24 (name "Str"))
-						(ty-tag-union @3.26-3.34
-							(ty @3.27-3.33 (name "TooBig")))))))))
+					(ty-lookup @3.7-3.10 (name "U64") (builtin))
+					(ty-apply @3.14-3.35 (name "Result") (local)
+						(ty-lookup @3.14-3.35 (name "Str") (builtin))
+						(ty-tag-union @3.14-3.35
+							(ty-tag-name @3.27-3.33 (name "TooBig")))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.4 (type "U64 -> Result(Error, [TooBig])")))
+		(patt @4.1-4.4 (type "Num(Int(Unsigned64)) -> Result(Error, [TooBig])")))
 	(expressions
-		(expr @4.7-11.2 (type "U64 -> Result(Error, [TooBig])"))))
+		(expr @4.7-11.2 (type "Num(Int(Unsigned64)) -> Result(Error, [TooBig])"))))
 ~~~

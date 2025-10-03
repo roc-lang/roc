@@ -68,17 +68,17 @@ NO CHANGE
 		(annotation @4.1-4.10
 			(declared-type
 				(ty-fn @3.13-3.21 (effectful false)
-					(ty-var @3.13-3.14 (name "a"))
-					(ty @3.18-3.21 (name "Str"))))))
+					(ty-rigid-var @3.13-3.14 (name "a"))
+					(ty-lookup @3.18-3.21 (name "Str") (builtin))))))
 	(s-type-anno @3.1-3.55 (name "stringify")
 		(ty-fn @3.13-3.21 (effectful false)
-			(ty-var @3.13-3.14 (name "a"))
-			(ty @3.18-3.21 (name "Str")))
+			(ty-rigid-var @3.13-3.14 (name "a"))
+			(ty-lookup @3.18-3.21 (name "Str") (builtin)))
 		(where
 			(method @3.28-3.55 (module-of "a") (ident "to_str")
 				(args
-					(ty-var @3.47-3.48 (name "a")))
-				(ty @3.52-3.55 (name "Str")))))
+					(ty-rigid-var-lookup (ty-rigid-var @3.13-3.14 (name "a"))))
+				(ty-lookup @3.52-3.55 (name "Str") (builtin)))))
 	(ext-decl @3.28-3.55 (ident "module(a).to_str") (kind "value")))
 ~~~
 # TYPES

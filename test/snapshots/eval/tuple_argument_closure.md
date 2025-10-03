@@ -52,8 +52,8 @@ EndOfFile(2:1-2:1),
 				(p-assign @1.6-1.7 (ident "y")))))
 	(e-tuple @1.18-1.23
 		(elems
-			(e-int @1.19-1.20 (value "1"))
-			(e-int @1.21-1.22 (value "2")))))
+			(e-num @1.19-1.20 (value "1"))
+			(e-num @1.21-1.22 (value "2")))))
 ~~~
 # TYPES
 ~~~clojure

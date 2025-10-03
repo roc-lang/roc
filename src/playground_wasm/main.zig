@@ -886,6 +886,12 @@ fn compileSource(source: []const u8) !CompilerStageData {
     const env = result.module_env;
     try env.initCIRFields(allocator, "main");
 
+    const module_common_idents: Check.CommonIdents = .{
+        .module_name = try module_env.insertIdent(base.Ident.for_text("main")),
+        .list = try module_env.insertIdent(base.Ident.for_text("List")),
+        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+    };
+
     var czer = try Can.init(env, &result.parse_ast.?, null);
     defer czer.deinit();
 
@@ -920,11 +926,11 @@ fn compileSource(source: []const u8) !CompilerStageData {
         const type_can_ir = result.module_env;
         const empty_modules: []const *ModuleEnv = &.{};
         // Use pointer to the stored CIR to ensure solver references valid memory
-        var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, empty_modules, &type_can_ir.store.regions);
+        var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, empty_modules, &type_can_ir.store.regions, module_common_idents);
         result.solver = solver;
 
-        solver.checkDefs() catch |check_err| {
-            logDebug("compileSource: checkDefs failed: {}\n", .{check_err});
+        solver.checkFile() catch |check_err| {
+            logDebug("compileSource: checkFile failed: {}\n", .{check_err});
             if (check_err == error.OutOfMemory) {
                 // OOM during type checking is critical.
                 // Deinit solver and propagate error.

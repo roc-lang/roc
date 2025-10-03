@@ -61,7 +61,7 @@ test = {
 		(e-block @3.8-6.2
 			(s-let @4.5-4.11
 				(p-assign @4.5-4.6 (ident "x"))
-				(e-int @4.9-4.11 (value "42")))
+				(e-num @4.9-4.11 (value "42")))
 			(e-dbg @5.5-5.11
 				(e-lookup-local @5.9-5.10
 					(p-assign @4.5-4.6 (ident "x")))))))

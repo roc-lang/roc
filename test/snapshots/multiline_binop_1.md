@@ -42,10 +42,10 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-binop @1.1-8.4 (op "add")
-	(e-int @1.1-1.2 (value "1"))
+	(e-num @1.1-1.2 (value "1"))
 	(e-binop @6.2-8.4 (op "mul")
-		(e-int @6.2-6.3 (value "2"))
-		(e-int @8.3-8.4 (value "3"))))
+		(e-num @6.2-6.3 (value "2"))
+		(e-num @8.3-8.4 (value "3"))))
 ~~~
 # TYPES
 ~~~clojure

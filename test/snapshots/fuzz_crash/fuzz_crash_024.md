@@ -224,7 +224,7 @@ t = 0
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(d-let
 		(p-assign @7.5-7.6 (ident "t"))
-		(e-int @7.8-7.9 (value "0"))))
+		(e-num @7.8-7.9 (value "0"))))
 ~~~
 # TYPES
 ~~~clojure

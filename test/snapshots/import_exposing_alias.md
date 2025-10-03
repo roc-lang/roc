@@ -100,7 +100,7 @@ NO CHANGE
 							(e-string @6.17-6.22
 								(e-literal @6.18-6.21 (string "Bob"))))
 						(field (name "age")
-							(e-int @6.29-6.31 (value "25"))))))
+							(e-num @6.29-6.31 (value "25"))))))
 			(s-let @7.2-7.24
 				(p-assign @7.2-7.9 (ident "encoded"))
 				(e-call @7.12-7.24

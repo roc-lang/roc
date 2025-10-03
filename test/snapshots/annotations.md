@@ -29,16 +29,11 @@ failPairDiffTypes2 = Pair.Pair(1, "str")
 
 mkPairInvalid : a, b -> Pair(a)
 mkPairInvalid = |x, y| Pair.Pair(x, y)
-
-mkPairInferred = |x, y| Pair.Pair(x, y)
-
-failWithImplicit = mkPairInferred("str", 2)
 ~~~
 # EXPECTED
 TYPE MISMATCH - annotations.md:18:28:18:28
 INVALID NOMINAL TAG - annotations.md:21:22:21:41
 INVALID NOMINAL TAG - annotations.md:24:24:24:39
-TYPE MISMATCH - annotations.md:28:35:28:35
 # PROBLEMS
 **TYPE MISMATCH**
 The first and second arguments to `mkPair` must have compatible types, but they are incompatible in this call:
@@ -67,8 +62,8 @@ failPairDiffTypes2 = Pair.Pair(1, "str")
 The tag is:
     _Pair(Num(_size), Str)_
 
-But it should be:
-    _Pair(Num(_size2), Num(_size3))_
+But the nominal type needs it to be:
+    _Pair(Num(_size), Num(_size2))_
 
 **INVALID NOMINAL TAG**
 I'm having trouble with this nominal tag:
@@ -81,24 +76,8 @@ mkPairInvalid = |x, y| Pair.Pair(x, y)
 The tag is:
     _Pair(a, b)_
 
-But it should be:
+But the nominal type needs it to be:
     _Pair(a, a)_
-
-**TYPE MISMATCH**
-The first and second arguments to `mkPairInferred` must have compatible types, but they are incompatible in this call:
-**annotations.md:28:35:**
-```roc
-failWithImplicit = mkPairInferred("str", 2)
-```
-                                  ^^^^^  ^
-
-The first argument has the type:
-    _Str_
-
-But the second argument has the type:
-    _Num(_size)_
-
-`mkPairInferred` needs these arguments to have compatible types.
 
 # TOKENS
 ~~~zig
@@ -118,13 +97,11 @@ LowerIdent(20:1-20:19),OpColon(20:20-20:21),UpperIdent(20:22-20:26),NoSpaceOpenR
 LowerIdent(21:1-21:19),OpAssign(21:20-21:21),UpperIdent(21:22-21:26),NoSpaceDotUpperIdent(21:26-21:31),NoSpaceOpenRound(21:31-21:32),Int(21:32-21:33),Comma(21:33-21:34),StringStart(21:35-21:36),StringPart(21:36-21:39),StringEnd(21:39-21:40),CloseRound(21:40-21:41),
 LowerIdent(23:1-23:14),OpColon(23:15-23:16),LowerIdent(23:17-23:18),Comma(23:18-23:19),LowerIdent(23:20-23:21),OpArrow(23:22-23:24),UpperIdent(23:25-23:29),NoSpaceOpenRound(23:29-23:30),LowerIdent(23:30-23:31),CloseRound(23:31-23:32),
 LowerIdent(24:1-24:14),OpAssign(24:15-24:16),OpBar(24:17-24:18),LowerIdent(24:18-24:19),Comma(24:19-24:20),LowerIdent(24:21-24:22),OpBar(24:22-24:23),UpperIdent(24:24-24:28),NoSpaceDotUpperIdent(24:28-24:33),NoSpaceOpenRound(24:33-24:34),LowerIdent(24:34-24:35),Comma(24:35-24:36),LowerIdent(24:37-24:38),CloseRound(24:38-24:39),
-LowerIdent(26:1-26:15),OpAssign(26:16-26:17),OpBar(26:18-26:19),LowerIdent(26:19-26:20),Comma(26:20-26:21),LowerIdent(26:22-26:23),OpBar(26:23-26:24),UpperIdent(26:25-26:29),NoSpaceDotUpperIdent(26:29-26:34),NoSpaceOpenRound(26:34-26:35),LowerIdent(26:35-26:36),Comma(26:36-26:37),LowerIdent(26:38-26:39),CloseRound(26:39-26:40),
-LowerIdent(28:1-28:17),OpAssign(28:18-28:19),LowerIdent(28:20-28:34),NoSpaceOpenRound(28:34-28:35),StringStart(28:35-28:36),StringPart(28:36-28:39),StringEnd(28:39-28:40),Comma(28:40-28:41),Int(28:42-28:43),CloseRound(28:43-28:44),
-EndOfFile(29:1-29:1),
+EndOfFile(25:1-25:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-28.44
+(file @1.1-24.39
 	(module @1.1-1.10
 		(exposes @1.8-1.10))
 	(statements
@@ -225,24 +202,7 @@ EndOfFile(29:1-29:1),
 				(e-apply @24.24-24.39
 					(e-tag @24.24-24.33 (raw "Pair.Pair"))
 					(e-ident @24.34-24.35 (raw "x"))
-					(e-ident @24.37-24.38 (raw "y")))))
-		(s-decl @26.1-26.40
-			(p-ident @26.1-26.15 (raw "mkPairInferred"))
-			(e-lambda @26.18-26.40
-				(args
-					(p-ident @26.19-26.20 (raw "x"))
-					(p-ident @26.22-26.23 (raw "y")))
-				(e-apply @26.25-26.40
-					(e-tag @26.25-26.34 (raw "Pair.Pair"))
-					(e-ident @26.35-26.36 (raw "x"))
-					(e-ident @26.38-26.39 (raw "y")))))
-		(s-decl @28.1-28.44
-			(p-ident @28.1-28.17 (raw "failWithImplicit"))
-			(e-apply @28.20-28.44
-				(e-ident @28.20-28.34 (raw "mkPairInferred"))
-				(e-string @28.35-28.40
-					(e-string-part @28.36-28.39 (raw "str")))
-				(e-int @28.42-28.43 (raw "2"))))))
+					(e-ident @24.37-24.38 (raw "y")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -256,12 +216,12 @@ NO CHANGE
 		(e-nominal @6.11-6.26 (nominal "Pair")
 			(e-tag @6.11-6.26 (name "Pair")
 				(args
-					(e-int @6.21-6.22 (value "1"))
-					(e-int @6.24-6.25 (value "2")))))
+					(e-num @6.21-6.22 (value "1"))
+					(e-num @6.24-6.25 (value "2")))))
 		(annotation @6.1-6.8
 			(declared-type
-				(ty-apply @5.11-5.20 (symbol "Pair")
-					(ty @5.16-5.19 (name "U64"))))))
+				(ty-apply @5.11-5.20 (name "Pair") (local)
+					(ty-lookup @5.11-5.20 (name "U64") (builtin))))))
 	(d-let
 		(p-assign @9.1-9.8 (ident "pairStr"))
 		(e-nominal @9.11-9.38 (nominal "Pair")
@@ -273,8 +233,8 @@ NO CHANGE
 						(e-literal @9.31-9.36 (string "world"))))))
 		(annotation @9.1-9.8
 			(declared-type
-				(ty-apply @8.11-8.20 (symbol "Pair")
-					(ty @8.16-8.19 (name "Str"))))))
+				(ty-apply @8.11-8.20 (name "Pair") (local)
+					(ty-lookup @8.11-8.20 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @12.1-12.7 (ident "mkPair"))
 		(e-lambda @12.10-12.32
@@ -291,21 +251,21 @@ NO CHANGE
 		(annotation @12.1-12.7
 			(declared-type
 				(ty-fn @11.10-11.25 (effectful false)
-					(ty-var @11.10-11.11 (name "a"))
-					(ty-var @11.13-11.14 (name "a"))
-					(ty-apply @11.18-11.25 (symbol "Pair")
-						(ty-var @11.23-11.24 (name "a")))))))
+					(ty-rigid-var @11.10-11.11 (name "a"))
+					(ty-rigid-var-lookup (ty-rigid-var @11.10-11.11 (name "a")))
+					(ty-apply @11.18-11.25 (name "Pair") (local)
+						(ty-rigid-var-lookup (ty-rigid-var @11.10-11.11 (name "a"))))))))
 	(d-let
 		(p-assign @15.1-15.20 (ident "succeedPairSameType"))
 		(e-call @15.23-15.35
 			(e-lookup-local @15.23-15.29
 				(p-assign @12.1-12.7 (ident "mkPair")))
-			(e-int @15.30-15.31 (value "1"))
-			(e-int @15.33-15.34 (value "2")))
+			(e-num @15.30-15.31 (value "1"))
+			(e-num @15.33-15.34 (value "2")))
 		(annotation @15.1-15.20
 			(declared-type
-				(ty-apply @14.23-14.31 (symbol "Pair")
-					(ty @14.28-14.30 (name "U8"))))))
+				(ty-apply @14.23-14.31 (name "Pair") (local)
+					(ty-lookup @14.23-14.31 (name "U8") (builtin))))))
 	(d-let
 		(p-assign @18.1-18.18 (ident "failPairDiffTypes"))
 		(e-call @18.21-18.35
@@ -313,23 +273,23 @@ NO CHANGE
 				(p-assign @12.1-12.7 (ident "mkPair")))
 			(e-string @18.28-18.31
 				(e-literal @18.29-18.30 (string "1")))
-			(e-int @18.33-18.34 (value "2")))
+			(e-num @18.33-18.34 (value "2")))
 		(annotation @18.1-18.18
 			(declared-type
-				(ty-apply @17.21-17.29 (symbol "Pair")
-					(ty @17.26-17.28 (name "U8"))))))
+				(ty-apply @17.21-17.29 (name "Pair") (local)
+					(ty-lookup @17.21-17.29 (name "U8") (builtin))))))
 	(d-let
 		(p-assign @21.1-21.19 (ident "failPairDiffTypes2"))
 		(e-nominal @21.22-21.41 (nominal "Pair")
 			(e-tag @21.22-21.41 (name "Pair")
 				(args
-					(e-int @21.32-21.33 (value "1"))
+					(e-num @21.32-21.33 (value "1"))
 					(e-string @21.35-21.40
 						(e-literal @21.36-21.39 (string "str"))))))
 		(annotation @21.1-21.19
 			(declared-type
-				(ty-apply @20.22-20.31 (symbol "Pair")
-					(ty @20.27-20.30 (name "U64"))))))
+				(ty-apply @20.22-20.31 (name "Pair") (local)
+					(ty-lookup @20.22-20.31 (name "U64") (builtin))))))
 	(d-let
 		(p-assign @24.1-24.14 (ident "mkPairInvalid"))
 		(e-lambda @24.17-24.39
@@ -346,66 +306,41 @@ NO CHANGE
 		(annotation @24.1-24.14
 			(declared-type
 				(ty-fn @23.17-23.32 (effectful false)
-					(ty-var @23.17-23.18 (name "a"))
-					(ty-var @23.20-23.21 (name "b"))
-					(ty-apply @23.25-23.32 (symbol "Pair")
-						(ty-var @23.30-23.31 (name "a")))))))
-	(d-let
-		(p-assign @26.1-26.15 (ident "mkPairInferred"))
-		(e-lambda @26.18-26.40
-			(args
-				(p-assign @26.19-26.20 (ident "x"))
-				(p-assign @26.22-26.23 (ident "y")))
-			(e-nominal @26.25-26.40 (nominal "Pair")
-				(e-tag @26.25-26.40 (name "Pair")
-					(args
-						(e-lookup-local @26.35-26.36
-							(p-assign @26.19-26.20 (ident "x")))
-						(e-lookup-local @26.38-26.39
-							(p-assign @26.22-26.23 (ident "y"))))))))
-	(d-let
-		(p-assign @28.1-28.17 (ident "failWithImplicit"))
-		(e-call @28.20-28.44
-			(e-lookup-local @28.20-28.34
-				(p-assign @26.1-26.15 (ident "mkPairInferred")))
-			(e-string @28.35-28.40
-				(e-literal @28.36-28.39 (string "str")))
-			(e-int @28.42-28.43 (value "2"))))
+					(ty-rigid-var @23.17-23.18 (name "a"))
+					(ty-rigid-var @23.20-23.21 (name "b"))
+					(ty-apply @23.25-23.32 (name "Pair") (local)
+						(ty-rigid-var-lookup (ty-rigid-var @23.17-23.18 (name "a"))))))))
 	(s-nominal-decl @3.1-3.24
 		(ty-header @3.1-3.8 (name "Pair")
 			(ty-args
-				(ty-var @3.6-3.7 (name "a"))))
+				(ty-rigid-var @3.6-3.7 (name "a"))))
 		(ty-tag-union @3.12-3.24
-			(ty-apply @3.13-3.23 (symbol "Pair")
-				(ty-var @3.18-3.19 (name "a"))
-				(ty-var @3.21-3.22 (name "a"))))))
+			(ty-tag-name @3.13-3.23 (name "Pair")
+				(ty-rigid-var-lookup (ty-rigid-var @3.6-3.7 (name "a")))
+				(ty-rigid-var-lookup (ty-rigid-var @3.6-3.7 (name "a")))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.8 (type "Pair(U64)"))
+		(patt @6.1-6.8 (type "Pair(Num(Int(Unsigned64)))"))
 		(patt @9.1-9.8 (type "Pair(Str)"))
 		(patt @12.1-12.7 (type "a, a -> Pair(a)"))
-		(patt @15.1-15.20 (type "Pair(U8)"))
-		(patt @18.1-18.18 (type "Pair(U8)"))
+		(patt @15.1-15.20 (type "Pair(Num(Int(Unsigned8)))"))
+		(patt @18.1-18.18 (type "Error"))
 		(patt @21.1-21.19 (type "Error"))
-		(patt @24.1-24.14 (type "a, b -> Error"))
-		(patt @26.1-26.15 (type "a, a -> Pair(a)"))
-		(patt @28.1-28.17 (type "_c")))
+		(patt @24.1-24.14 (type "a, b -> Error")))
 	(type_decls
 		(nominal @3.1-3.24 (type "Pair(a)")
 			(ty-header @3.1-3.8 (name "Pair")
 				(ty-args
-					(ty-var @3.6-3.7 (name "a"))))))
+					(ty-rigid-var @3.6-3.7 (name "a"))))))
 	(expressions
-		(expr @6.11-6.26 (type "Pair(U64)"))
+		(expr @6.11-6.26 (type "Pair(Num(Int(Unsigned64)))"))
 		(expr @9.11-9.38 (type "Pair(Str)"))
 		(expr @12.10-12.32 (type "a, a -> Pair(a)"))
-		(expr @15.23-15.35 (type "Pair(U8)"))
-		(expr @18.21-18.35 (type "Pair(U8)"))
+		(expr @15.23-15.35 (type "Pair(Num(Int(Unsigned8)))"))
+		(expr @18.21-18.35 (type "Error"))
 		(expr @21.22-21.41 (type "Error"))
-		(expr @24.17-24.39 (type "a, b -> Error"))
-		(expr @26.18-26.40 (type "a, a -> Pair(a)"))
-		(expr @28.20-28.44 (type "_c"))))
+		(expr @24.17-24.39 (type "a, b -> Error"))))
 ~~~

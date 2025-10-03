@@ -6,39 +6,13 @@ const base = @import("base");
 const parse = @import("parse");
 const can = @import("can");
 const Check = @import("../Check.zig");
+const TestEnv = @import("./TestEnv.zig");
 
 const Can = can.Can;
 const ModuleEnv = can.ModuleEnv;
 const CanonicalizedExpr = can.Can.CanonicalizedExpr;
 const testing = std.testing;
 const test_allocator = testing.allocator;
-
-/// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
-fn typeCheck(allocator: std.mem.Allocator, source: []const u8) !bool {
-    // Set up module environment
-    var module_env = try ModuleEnv.init(allocator, source);
-    defer module_env.deinit();
-
-    // Parse
-    var parse_ast = try parse.parseExpr(&module_env.common, allocator);
-    defer parse_ast.deinit(allocator);
-    if (parse_ast.hasErrors()) return false;
-
-    // Canonicalize
-    var czer = try Can.init(&module_env, &parse_ast, null);
-    defer czer.deinit();
-
-    const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-    const canon_expr = try czer.canonicalizeExpr(expr_idx) orelse return false;
-
-    // Type check
-    var checker = try Check.init(allocator, &module_env.types, &module_env, &.{}, &module_env.store.regions);
-    defer checker.deinit();
-
-    _ = try checker.checkExpr(canon_expr.get_idx());
-
-    return checker.problems.problems.items.len == 0;
-}
 
 test "direct polymorphic identity usage" {
     const source =
@@ -49,7 +23,7 @@ test "direct polymorphic identity usage" {
         \\    { a, b }
         \\}
     ;
-    try testing.expect(try typeCheck(test_allocator, source));
+    try typeCheck(source, "{ a: Num(_size), b: Str }");
 }
 
 test "higher-order function with polymorphic identity" {
@@ -62,7 +36,7 @@ test "higher-order function with polymorphic identity" {
         \\    { a, b }
         \\}
     ;
-    try testing.expect(try typeCheck(test_allocator, source));
+    try typeCheck(source, "{ a: Num(_size), b: Str }");
 }
 
 test "let-polymorphism with function composition" {
@@ -76,7 +50,7 @@ test "let-polymorphism with function composition" {
         \\    { result1 }
         \\}
     ;
-    try testing.expect(try typeCheck(test_allocator, source));
+    try typeCheck(source, "Num(_size)");
 }
 
 test "polymorphic empty list" {
@@ -88,7 +62,7 @@ test "polymorphic empty list" {
         \\    { empty, nums, strs }
         \\}
     ;
-    try testing.expect(try typeCheck(test_allocator, source));
+    try typeCheck(source, "{ empty: List(_elem), nums: List(Num(_size)), strs: List(Str) }");
 }
 
 test "polymorphic cons function" {
@@ -105,7 +79,7 @@ test "polymorphic cons function" {
         \\    { list1, list2 }
         \\}
     ;
-    try testing.expect(try typeCheck(test_allocator, source));
+    try typeCheck(source, "TODO");
 }
 
 test "polymorphic map function" {
@@ -121,7 +95,7 @@ test "polymorphic map function" {
 
     const source =
         \\{
-        \\    map = |f, xs| 
+        \\    map = |f, xs|
         \\        if xs == [] then
         \\            []
         \\        else
@@ -131,7 +105,7 @@ test "polymorphic map function" {
         \\    { nums }
         \\}
     ;
-    try testing.expect(try typeCheck(test_allocator, source));
+    try typeCheck(source, "TODO");
 }
 
 test "polymorphic record constructor" {
@@ -140,11 +114,11 @@ test "polymorphic record constructor" {
         \\    make_pair = |x, y| { first: x, second: y }
         \\    pair1 = make_pair(1, "a")
         \\    pair2 = make_pair("hello", 42)
-        \\    pair3 = make_pair(true, false)
+        \\    pair3 = make_pair(True, False)
         \\    { pair1, pair2, pair3 }
         \\}
     ;
-    try testing.expect(try typeCheck(test_allocator, source));
+    try typeCheck(source, "{ pair1: { first: Num(_size), second: Str }, pair2: { first: Str, second: Num(_size2) }, pair3: { first: Bool, second: Bool } }");
 }
 
 test "polymorphic identity with various numeric types" {
@@ -157,7 +131,7 @@ test "polymorphic identity with various numeric types" {
         \\    { int_val, float_val, bool_val }
         \\}
     ;
-    try testing.expect(try typeCheck(test_allocator, source));
+    try typeCheck(source, "{ bool_val: Error, float_val: Num(Frac(_size)), int_val: Num(_size2) }");
 }
 
 test "nested polymorphic data structures" {
@@ -170,7 +144,7 @@ test "nested polymorphic data structures" {
         \\    { box1, box2, nested }
         \\}
     ;
-    try testing.expect(try typeCheck(test_allocator, source));
+    try typeCheck(source, "{ box1: { value: Num(_size) }, box2: { value: Str }, nested: { value: { value: Num(_size2) } } }");
 }
 
 test "polymorphic function in let binding" {
@@ -185,31 +159,21 @@ test "polymorphic function in let binding" {
         \\    result
         \\}
     ;
-    try testing.expect(try typeCheck(test_allocator, source));
+    try typeCheck(source, "{ a: Num(_size), b: Str }");
 }
 
 test "polymorphic swap function" {
-    // This test is skipped because these features are missing:
-    //   - Type inference for field access on polymorphic record parameters
-    //     [parses and canonicalizes successfully, fails at type-check stage]
-    // The syntax `pair.field` works for concrete types but fails when `pair` is
-    // a polymorphic parameter with fields that have different types across usages.
-    // The type checker cannot properly infer that `swap` should be polymorphic
-    // over records with `first` and `second` fields of arbitrary types.
-    // TODO: Enable when polymorphic record field access type inference is improved
-    if (true) return error.SkipZigTest;
-
     const source =
         \\{
         \\    swap = |pair| { first: pair.second, second: pair.first }
         \\    pair1 = { first: 1, second: "a" }
-        \\    pair2 = { first: true, second: 42 }
+        \\    pair2 = { first: True, second: 42 }
         \\    swapped1 = swap(pair1)
         \\    swapped2 = swap(pair2)
         \\    { swapped1, swapped2 }
         \\}
     ;
-    try testing.expect(try typeCheck(test_allocator, source));
+    try typeCheck(source, "{ swapped1: { first: Str, second: Num(_size) }, swapped2: { first: Num(_size2), second: Bool } }");
 }
 
 test "polymorphic fold function" {
@@ -236,7 +200,7 @@ test "polymorphic fold function" {
         \\    { sum, concat }
         \\}
     ;
-    try testing.expect(try typeCheck(test_allocator, source));
+    try typeCheck(source, "TODO");
 }
 
 test "polymorphic option type simulation" {
@@ -250,7 +214,7 @@ test "polymorphic option type simulation" {
         \\    { opt1, opt2, opt3 }
         \\}
     ;
-    try testing.expect(try typeCheck(test_allocator, source));
+    try typeCheck(source, "{ opt1: { tag: Str, value: Num(_size) }, opt2: { tag: Str, value: Str }, opt3: { tag: Str } }");
 }
 
 test "polymorphic const function" {
@@ -264,7 +228,7 @@ test "polymorphic const function" {
         \\    { num, str }
         \\}
     ;
-    try testing.expect(try typeCheck(test_allocator, source));
+    try typeCheck(source, "{ num: Num(_size), str: Str }");
 }
 
 test "shadowing of polymorphic values" {
@@ -292,7 +256,7 @@ test "shadowing of polymorphic values" {
         \\    { a, inner, c }
         \\}
     ;
-    try testing.expect(try typeCheck(test_allocator, source));
+    try typeCheck(source, "TODO");
 }
 
 test "polymorphic pipe function" {
@@ -300,11 +264,18 @@ test "polymorphic pipe function" {
         \\{
         \\    pipe = |x, f| f(x)
         \\    double = |n| n * 2
-        \\    length = |s| 5  // simplified string length
+        \\    length = |s| 5 
         \\    num_result = pipe(21, double)
         \\    str_result = pipe("hello", length)
         \\    { num_result, str_result }
         \\}
     ;
-    try testing.expect(try typeCheck(test_allocator, source));
+    try typeCheck(source, "{ num_result: Num(_size), str_result: Num(_size2) }");
+}
+
+/// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
+fn typeCheck(comptime source_expr: []const u8, expected_type: []const u8) !void {
+    var test_env = try TestEnv.initExpr(source_expr);
+    defer test_env.deinit();
+    return test_env.assertLastDefType(expected_type);
 }

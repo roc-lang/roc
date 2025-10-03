@@ -73,8 +73,8 @@ NO CHANGE
 		(annotation @4.1-4.9
 			(declared-type
 				(ty-fn @3.12-3.22 (effectful false)
-					(ty @3.12-3.15 (name "Str"))
-					(ty @3.19-3.22 (name "Str"))))))
+					(ty-lookup @3.12-3.15 (name "Str") (builtin))
+					(ty-lookup @3.19-3.22 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15

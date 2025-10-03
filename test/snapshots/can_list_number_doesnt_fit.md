@@ -19,7 +19,7 @@ The number **300** does not fit in its inferred type:
            ^^^
 
 Its inferred type is:
-    _U8_
+    _Num(Int(Unsigned8))_
 
 # TOKENS
 ~~~zig
@@ -41,9 +41,9 @@ NO CHANGE
 ~~~clojure
 (e-list @1.1-1.16
 	(elems
-		(e-int @1.2-1.5 (value "1"))
-		(e-int @1.7-1.10 (value "2"))
-		(e-int @1.12-1.15 (value "300"))))
+		(e-num @1.2-1.5 (value "1"))
+		(e-num @1.7-1.10 (value "2"))
+		(e-num @1.12-1.15 (value "300"))))
 ~~~
 # TYPES
 ~~~clojure

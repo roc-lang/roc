@@ -30,7 +30,7 @@ EndOfFile(4:1-4:1),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-int @1.1-1.2 (value "4"))
+(e-num @1.1-1.2 (value "4"))
 ~~~
 # TYPES
 ~~~clojure

@@ -55,7 +55,7 @@ x = {
 ~~~
 # EXPECTED
 TYPE MISMATCH - multiline_string_complex.md:37:7:37:10
-TYPE MISMATCH - multiline_string_complex.md:40:5:40:9
+TYPE MISMATCH - multiline_string_complex.md:40:6:40:9
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -68,22 +68,22 @@ This expression is used in an unexpected way:
 It has the type:
     _Str_
 
-But here it's being used as:
+But I expected it to be:
     _Num(_size)_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**multiline_string_complex.md:40:5:40:9:**
+**multiline_string_complex.md:40:6:40:9:**
 ```roc
 	e: !"""
 ```
-	   ^^^^
+	    ^^^
 
 It has the type:
-    _Bool_
-
-But here it's being used as:
     _Str_
+
+But I expected it to be:
+    _Bool_
 
 # TOKENS
 ~~~zig
@@ -251,7 +251,7 @@ NO CHANGE
 								(e-literal @33.6-33.15 (string "multiline"))))))
 				(field (name "d")
 					(e-binop @37.3-37.10 (op "sub")
-						(e-int @37.3-37.4 (value "0"))
+						(e-num @37.3-37.4 (value "0"))
 						(e-string @37.7-37.10)))
 				(field (name "e")
 					(e-unary-not @40.5-40.9
@@ -270,13 +270,13 @@ NO CHANGE
 		(patt @10.1-10.7 (type "Str"))
 		(patt @13.1-13.7 (type "Str"))
 		(patt @17.1-17.7 (type "Str"))
-		(patt @23.1-23.7 (type "{ a: Str, b: (Str, Str), c: List(Str), d: Num(_size), e: Error }"))
+		(patt @23.1-23.7 (type "{ a: Str, b: (Str, Str), c: List(Str), d: Error, e: Error }"))
 		(patt @44.1-44.2 (type "Str")))
 	(expressions
 		(expr @8.10-8.50 (type "Str"))
 		(expr @11.2-11.42 (type "Str"))
 		(expr @13.10-15.14 (type "Str"))
 		(expr @18.2-21.14 (type "Str"))
-		(expr @23.10-42.2 (type "{ a: Str, b: (Str, Str), c: List(Str), d: Num(_size), e: Error }"))
+		(expr @23.10-42.2 (type "{ a: Str, b: (Str, Str), c: List(Str), d: Error, e: Error }"))
 		(expr @44.5-47.2 (type "Str"))))
 ~~~

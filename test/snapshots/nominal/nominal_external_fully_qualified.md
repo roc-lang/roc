@@ -144,10 +144,10 @@ handleResult = |result| {
 		(annotation @6.1-6.13
 			(declared-type
 				(ty-fn @5.16-5.60 (effectful false)
-					(ty-apply-external @5.16-5.53
-						(module-idx "0")
-						(target-node-idx "0"))
-					(ty @5.57-5.60 (name "Str"))))))
+					(ty-apply @5.16-5.53 (name "MyResultType") (external (module-idx "0") (target-node-idx "0"))
+						(ty-lookup @5.44-5.47 (name "Str") (builtin))
+						(ty-lookup @5.49-5.52 (name "I32") (builtin)))
+					(ty-lookup @5.57-5.60 (name "Str") (builtin))))))
 	(s-import @3.1-3.22 (module "MyResultModule")
 		(exposes)))
 ~~~

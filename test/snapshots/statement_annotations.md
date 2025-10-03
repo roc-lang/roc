@@ -7,158 +7,117 @@ type=file
 ~~~roc
 module []
 
-addOneU64 = |x| {
-  y : U64
-  y = x + 1
+scopedTypeVarInternal : val -> val
+scopedTypeVarInternal = |a| {
+	b : other_val -> other_val
+	b = |c| {
+		d : other_val
+		d = c
 
-  y
-}
+		d
+	}
 
-func : val -> val
-func = |x| {
-  y : val
-  y = x
-
-  y
+	b(a)
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - statement_annotations.md:13:7:13:8
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**statement_annotations.md:13:7:13:8:**
-```roc
-  y = x
-```
-      ^
-
-The type annotation says it should have the type:
-    _val_
-
-But here it's being used as:
-    _val_
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
-LowerIdent(3:1-3:10),OpAssign(3:11-3:12),OpBar(3:13-3:14),LowerIdent(3:14-3:15),OpBar(3:15-3:16),OpenCurly(3:17-3:18),
-LowerIdent(4:3-4:4),OpColon(4:5-4:6),UpperIdent(4:7-4:10),
-LowerIdent(5:3-5:4),OpAssign(5:5-5:6),LowerIdent(5:7-5:8),OpPlus(5:9-5:10),Int(5:11-5:12),
-LowerIdent(7:3-7:4),
-CloseCurly(8:1-8:2),
-LowerIdent(10:1-10:5),OpColon(10:6-10:7),LowerIdent(10:8-10:11),OpArrow(10:12-10:14),LowerIdent(10:15-10:18),
-LowerIdent(11:1-11:5),OpAssign(11:6-11:7),OpBar(11:8-11:9),LowerIdent(11:9-11:10),OpBar(11:10-11:11),OpenCurly(11:12-11:13),
-LowerIdent(12:3-12:4),OpColon(12:5-12:6),LowerIdent(12:7-12:10),
-LowerIdent(13:3-13:4),OpAssign(13:5-13:6),LowerIdent(13:7-13:8),
-LowerIdent(15:3-15:4),
-CloseCurly(16:1-16:2),
-EndOfFile(17:1-17:1),
+LowerIdent(3:1-3:22),OpColon(3:23-3:24),LowerIdent(3:25-3:28),OpArrow(3:29-3:31),LowerIdent(3:32-3:35),
+LowerIdent(4:1-4:22),OpAssign(4:23-4:24),OpBar(4:25-4:26),LowerIdent(4:26-4:27),OpBar(4:27-4:28),OpenCurly(4:29-4:30),
+LowerIdent(5:2-5:3),OpColon(5:4-5:5),LowerIdent(5:6-5:15),OpArrow(5:16-5:18),LowerIdent(5:19-5:28),
+LowerIdent(6:2-6:3),OpAssign(6:4-6:5),OpBar(6:6-6:7),LowerIdent(6:7-6:8),OpBar(6:8-6:9),OpenCurly(6:10-6:11),
+LowerIdent(7:3-7:4),OpColon(7:5-7:6),LowerIdent(7:7-7:16),
+LowerIdent(8:3-8:4),OpAssign(8:5-8:6),LowerIdent(8:7-8:8),
+LowerIdent(10:3-10:4),
+CloseCurly(11:2-11:3),
+LowerIdent(13:2-13:3),NoSpaceOpenRound(13:3-13:4),LowerIdent(13:4-13:5),CloseRound(13:5-13:6),
+CloseCurly(14:1-14:2),
+EndOfFile(15:1-15:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-16.2
+(file @1.1-14.2
 	(module @1.1-1.10
 		(exposes @1.8-1.10))
 	(statements
-		(s-decl @3.1-8.2
-			(p-ident @3.1-3.10 (raw "addOneU64"))
-			(e-lambda @3.13-8.2
+		(s-type-anno @3.1-3.35 (name "scopedTypeVarInternal")
+			(ty-fn @3.25-3.35
+				(ty-var @3.25-3.28 (raw "val"))
+				(ty-var @3.32-3.35 (raw "val"))))
+		(s-decl @4.1-14.2
+			(p-ident @4.1-4.22 (raw "scopedTypeVarInternal"))
+			(e-lambda @4.25-14.2
 				(args
-					(p-ident @3.14-3.15 (raw "x")))
-				(e-block @3.17-8.2
+					(p-ident @4.26-4.27 (raw "a")))
+				(e-block @4.29-14.2
 					(statements
-						(s-type-anno @4.3-4.10 (name "y")
-							(ty @4.7-4.10 (name "U64")))
-						(s-decl @5.3-5.12
-							(p-ident @5.3-5.4 (raw "y"))
-							(e-binop @5.7-5.12 (op "+")
-								(e-ident @5.7-5.8 (raw "x"))
-								(e-int @5.11-5.12 (raw "1"))))
-						(e-ident @7.3-7.4 (raw "y"))))))
-		(s-type-anno @10.1-10.18 (name "func")
-			(ty-fn @10.8-10.18
-				(ty-var @10.8-10.11 (raw "val"))
-				(ty-var @10.15-10.18 (raw "val"))))
-		(s-decl @11.1-16.2
-			(p-ident @11.1-11.5 (raw "func"))
-			(e-lambda @11.8-16.2
-				(args
-					(p-ident @11.9-11.10 (raw "x")))
-				(e-block @11.12-16.2
-					(statements
-						(s-type-anno @12.3-12.10 (name "y")
-							(ty-var @12.7-12.10 (raw "val")))
-						(s-decl @13.3-13.8
-							(p-ident @13.3-13.4 (raw "y"))
-							(e-ident @13.7-13.8 (raw "x")))
-						(e-ident @15.3-15.4 (raw "y"))))))))
+						(s-type-anno @5.2-5.28 (name "b")
+							(ty-fn @5.6-5.28
+								(ty-var @5.6-5.15 (raw "other_val"))
+								(ty-var @5.19-5.28 (raw "other_val"))))
+						(s-decl @6.2-11.3
+							(p-ident @6.2-6.3 (raw "b"))
+							(e-lambda @6.6-11.3
+								(args
+									(p-ident @6.7-6.8 (raw "c")))
+								(e-block @6.10-11.3
+									(statements
+										(s-type-anno @7.3-7.16 (name "d")
+											(ty-var @7.7-7.16 (raw "other_val")))
+										(s-decl @8.3-8.8
+											(p-ident @8.3-8.4 (raw "d"))
+											(e-ident @8.7-8.8 (raw "c")))
+										(e-ident @10.3-10.4 (raw "d"))))))
+						(e-apply @13.2-13.6
+							(e-ident @13.2-13.3 (raw "b"))
+							(e-ident @13.4-13.5 (raw "a")))))))))
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-addOneU64 = |x| {
-	y : U64
-	y = x + 1
-
-	y
-}
-
-func : val -> val
-func = |x| {
-	y : val
-	y = x
-
-	y
-}
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @3.1-3.10 (ident "addOneU64"))
-		(e-lambda @3.13-8.2
+		(p-assign @4.1-4.22 (ident "scopedTypeVarInternal"))
+		(e-lambda @4.25-14.2
 			(args
-				(p-assign @3.14-3.15 (ident "x")))
-			(e-block @3.17-8.2
-				(s-type-anno @4.3-4.10 (name "y")
-					(ty @4.7-4.10 (name "U64")))
-				(s-let @5.3-5.12
-					(p-assign @5.3-5.4 (ident "y"))
-					(e-binop @5.7-5.12 (op "add")
-						(e-lookup-local @5.7-5.8
-							(p-assign @3.14-3.15 (ident "x")))
-						(e-int @5.11-5.12 (value "1"))))
-				(e-lookup-local @7.3-7.4
-					(p-assign @5.3-5.4 (ident "y"))))))
-	(d-let
-		(p-assign @11.1-11.5 (ident "func"))
-		(e-lambda @11.8-16.2
-			(args
-				(p-assign @11.9-11.10 (ident "x")))
-			(e-block @11.12-16.2
-				(s-type-anno @12.3-12.10 (name "y")
-					(ty-var @12.7-12.10 (name "val")))
-				(s-let @13.3-13.8
-					(p-assign @13.3-13.4 (ident "y"))
-					(e-lookup-local @13.7-13.8
-						(p-assign @11.9-11.10 (ident "x"))))
-				(e-lookup-local @15.3-15.4
-					(p-assign @13.3-13.4 (ident "y")))))
-		(annotation @11.1-11.5
+				(p-assign @4.26-4.27 (ident "a")))
+			(e-block @4.29-14.2
+				(s-let @6.2-11.3
+					(p-assign @6.2-6.3 (ident "b"))
+					(e-lambda @6.6-11.3
+						(args
+							(p-assign @6.7-6.8 (ident "c")))
+						(e-block @6.10-11.3
+							(s-let @8.3-8.8
+								(p-assign @8.3-8.4 (ident "d"))
+								(e-lookup-local @8.7-8.8
+									(p-assign @6.7-6.8 (ident "c"))))
+							(e-lookup-local @10.3-10.4
+								(p-assign @8.3-8.4 (ident "d"))))))
+				(e-call @13.2-13.6
+					(e-lookup-local @13.2-13.3
+						(p-assign @6.2-6.3 (ident "b")))
+					(e-lookup-local @13.4-13.5
+						(p-assign @4.26-4.27 (ident "a"))))))
+		(annotation @4.1-4.22
 			(declared-type
-				(ty-fn @10.8-10.18 (effectful false)
-					(ty-var @10.8-10.11 (name "val"))
-					(ty-var @10.15-10.18 (name "val")))))))
+				(ty-fn @3.25-3.35 (effectful false)
+					(ty-rigid-var @3.25-3.28 (name "val"))
+					(ty-rigid-var-lookup (ty-rigid-var @3.25-3.28 (name "val"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.10 (type "U64 -> U64"))
-		(patt @11.1-11.5 (type "Error -> Error")))
+		(patt @4.1-4.22 (type "val -> val")))
 	(expressions
-		(expr @3.13-8.2 (type "U64 -> U64"))
-		(expr @11.8-16.2 (type "Error -> Error"))))
+		(expr @4.25-14.2 (type "val -> val"))))
 ~~~

@@ -101,7 +101,7 @@ EndOfFile(9:1-9:1),
 (e-block @1.1-8.2
 	(s-let @2.5-2.10
 		(p-assign @2.5-2.6 (ident "x"))
-		(e-int @2.9-2.10 (value "5")))
+		(e-num @2.9-2.10 (value "5")))
 	(s-let @3.5-6.11
 		(p-assign @3.5-3.6 (ident "y"))
 		(e-call @3.9-6.11
@@ -111,7 +111,7 @@ EndOfFile(9:1-9:1),
 				(e-block @3.14-6.6
 					(s-let @4.9-4.15
 						(p-assign @4.9-4.10 (ident "x"))
-						(e-int @4.13-4.15 (value "10")))
+						(e-num @4.13-4.15 (value "10")))
 					(e-lookup-local @5.9-5.10
 						(p-assign @4.9-4.10 (ident "x")))))
 			(e-empty_record @6.8-6.10)))

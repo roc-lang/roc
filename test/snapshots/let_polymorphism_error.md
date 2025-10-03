@@ -19,7 +19,7 @@ The second and third elements in this list have incompatible types:
      ^^^  ^^^^^^^
 
 The second element has this type:
-    _Frac(_size)_
+    _Num(Frac(_size))_
 
 However, the third element has this type:
     _Str_
@@ -50,7 +50,7 @@ NO CHANGE
 ~~~clojure
 (e-list @1.1-1.19
 	(elems
-		(e-int @1.2-1.4 (value "42"))
+		(e-num @1.2-1.4 (value "42"))
 		(e-dec-small @1.6-1.9 (numerator "42") (denominator-power-of-ten "1") (value "4.2"))
 		(e-string @1.11-1.18
 			(e-literal @1.12-1.17 (string "hello")))))

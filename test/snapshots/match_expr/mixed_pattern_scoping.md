@@ -105,7 +105,7 @@ match data {
 					(e-binop @3.15-3.20 (op "sub")
 						(e-lookup-local @3.15-3.16
 							(p-assign @3.9-3.10 (ident "x")))
-						(e-int @3.19-3.20 (value "1")))))
+						(e-num @3.19-3.20 (value "1")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -115,7 +115,7 @@ match data {
 					(e-binop @4.16-4.21 (op "mul")
 						(e-lookup-local @4.16-4.17
 							(p-assign @4.9-4.10 (ident "x")))
-						(e-int @4.20-4.21 (value "2")))))
+						(e-num @4.20-4.21 (value "2")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -125,7 +125,7 @@ match data {
 					(e-binop @5.15-5.20 (op "div")
 						(e-lookup-local @5.15-5.16
 							(p-assign @5.9-5.10 (ident "y")))
-						(e-int @5.19-5.20 (value "2"))))))))
+						(e-num @5.19-5.20 (value "2"))))))))
 ~~~
 # TYPES
 ~~~clojure

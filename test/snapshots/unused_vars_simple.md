@@ -179,7 +179,7 @@ main! = |_| {
 		(e-lambda @4.18-4.24
 			(args
 				(p-assign @4.19-4.20 (ident "x")))
-			(e-int @4.22-4.24 (value "42"))))
+			(e-num @4.22-4.24 (value "42"))))
 	(d-let
 		(p-assign @7.1-7.16 (ident "used_underscore"))
 		(e-lambda @7.19-7.34
@@ -192,7 +192,7 @@ main! = |_| {
 		(e-lambda @10.21-10.35
 			(args
 				(p-assign @10.22-10.30 (ident "_ignored")))
-			(e-int @10.32-10.35 (value "100"))))
+			(e-num @10.32-10.35 (value "100"))))
 	(d-let
 		(p-assign @13.1-13.13 (ident "used_regular"))
 		(e-lambda @13.16-13.35
@@ -201,7 +201,7 @@ main! = |_| {
 			(e-binop @13.25-13.35 (op "add")
 				(e-lookup-local @13.25-13.31
 					(p-assign @13.17-13.23 (ident "number")))
-				(e-int @13.34-13.35 (value "1")))))
+				(e-num @13.34-13.35 (value "1")))))
 	(d-let
 		(p-assign @15.1-15.6 (ident "main!"))
 		(e-closure @15.9-21.2
@@ -219,25 +219,25 @@ main! = |_| {
 						(e-call @16.9-16.26
 							(e-lookup-local @16.9-16.23
 								(p-assign @4.1-4.15 (ident "unused_regular")))
-							(e-int @16.24-16.25 (value "5"))))
+							(e-num @16.24-16.25 (value "5"))))
 					(s-let @17.5-17.28
 						(p-assign @17.5-17.6 (ident "b"))
 						(e-call @17.9-17.28
 							(e-lookup-local @17.9-17.24
 								(p-assign @7.1-7.16 (ident "used_underscore")))
-							(e-int @17.25-17.27 (value "10"))))
+							(e-num @17.25-17.27 (value "10"))))
 					(s-let @18.5-18.30
 						(p-assign @18.5-18.6 (ident "c"))
 						(e-call @18.9-18.30
 							(e-lookup-local @18.9-18.26
 								(p-assign @10.1-10.18 (ident "unused_underscore")))
-							(e-int @18.27-18.29 (value "15"))))
+							(e-num @18.27-18.29 (value "15"))))
 					(s-let @19.5-19.25
 						(p-assign @19.5-19.6 (ident "d"))
 						(e-call @19.9-19.25
 							(e-lookup-local @19.9-19.21
 								(p-assign @13.1-13.13 (ident "used_regular")))
-							(e-int @19.22-19.24 (value "20"))))
+							(e-num @19.22-19.24 (value "20"))))
 					(e-binop @20.5-20.18 (op "add")
 						(e-binop @20.5-20.14 (op "add")
 							(e-binop @20.5-20.10 (op "add")
@@ -255,13 +255,13 @@ main! = |_| {
 (inferred-types
 	(defs
 		(patt @4.1-4.15 (type "_arg -> Num(_size)"))
-		(patt @7.1-7.16 (type "_arg -> _ret"))
+		(patt @7.1-7.16 (type "e -> e"))
 		(patt @10.1-10.18 (type "_arg -> Num(_size)"))
 		(patt @13.1-13.13 (type "Num(_size) -> Num(_size2)"))
 		(patt @15.1-15.6 (type "_arg -> Num(_size)")))
 	(expressions
 		(expr @4.18-4.24 (type "_arg -> Num(_size)"))
-		(expr @7.19-7.34 (type "_arg -> _ret"))
+		(expr @7.19-7.34 (type "e -> e"))
 		(expr @10.21-10.35 (type "_arg -> Num(_size)"))
 		(expr @13.16-13.35 (type "Num(_size) -> Num(_size2)"))
 		(expr @15.9-21.2 (type "_arg -> Num(_size)"))))

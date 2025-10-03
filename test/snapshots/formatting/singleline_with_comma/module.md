@@ -53,18 +53,18 @@ b = 'a'
 (can-ir
 	(d-let
 		(p-assign @3.1-3.2 (ident "a"))
-		(e-int @3.5-3.8 (value "97")))
+		(e-num @3.5-3.8 (value "97")))
 	(d-let
 		(p-assign @4.1-4.2 (ident "b"))
-		(e-int @4.5-4.8 (value "97"))))
+		(e-num @4.5-4.8 (value "97"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.2 (type "Num(_size)"))
-		(patt @4.1-4.2 (type "Num(_size)")))
+		(patt @3.1-3.2 (type "Num(Int(_size))"))
+		(patt @4.1-4.2 (type "Num(Int(_size))")))
 	(expressions
-		(expr @3.5-3.8 (type "Num(_size)"))
-		(expr @4.5-4.8 (type "Num(_size)"))))
+		(expr @3.5-3.8 (type "Num(Int(_size))"))
+		(expr @4.5-4.8 (type "Num(Int(_size))"))))
 ~~~

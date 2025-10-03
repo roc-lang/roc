@@ -45,13 +45,13 @@ NO CHANGE
 		(e-frac-dec @4.5-4.12 (value "123.456"))
 		(annotation @4.1-4.2
 			(declared-type
-				(ty @3.5-3.8 (name "Dec"))))))
+				(ty-lookup @3.5-3.8 (name "Dec") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.2 (type "Dec")))
+		(patt @4.1-4.2 (type "Num(Frac(Decimal))")))
 	(expressions
-		(expr @4.5-4.12 (type "Dec"))))
+		(expr @4.5-4.12 (type "Num(Frac(Decimal))"))))
 ~~~

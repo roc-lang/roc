@@ -102,13 +102,27 @@ pub const Descriptor = struct { content: Content, rank: Rank, mark: Mark };
 pub const Rank = enum(u4) {
     /// When the corresponding type is generic, like in `List.len`.
     generalized = 0,
-
     top_level = 1,
     _,
 
     /// Get the lowest rank
     pub fn min(a: Rank, b: Rank) Rank {
         return @enumFromInt(@min(@intFromEnum(a), @intFromEnum(b)));
+    }
+
+    /// Get the lowest rank
+    pub fn max(a: Rank, b: Rank) Rank {
+        return @enumFromInt(@max(@intFromEnum(a), @intFromEnum(b)));
+    }
+
+    /// Get the next rank
+    pub fn next(a: Rank) Rank {
+        return @enumFromInt(@intFromEnum(a) + 1);
+    }
+
+    /// Get the prev rank
+    pub fn prev(a: Rank) Rank {
+        return @enumFromInt(@intFromEnum(a) - 1);
     }
 };
 
@@ -230,15 +244,14 @@ pub const FlatType = union(enum) {
     box: Var,
     list: Var,
     list_unbound,
+    record: Record,
     record_unbound: RecordField.SafeMultiList.Range,
-    record_poly: struct { record: Record, var_: Var },
     tuple: Tuple,
     num: Num,
     nominal_type: NominalType,
     fn_pure: Func,
     fn_effectful: Func,
     fn_unbound: Func,
-    record: Record,
     empty_record,
     tag_union: TagUnion,
     empty_tag_union,
@@ -272,15 +285,29 @@ pub const Tuple = struct {
 /// form always wins: we discard the polymorphic wrapper and store the
 /// concrete, memory-efficient version instead.
 pub const Num = union(enum) {
-    num_unbound: IntRequirements,
+    // These are Num(a)
+    //           ^^^
+    num_poly: Var,
+    num_unbound: NumRequirements,
+
+    // These are Num(int) or Num(frac)
+    //               ^^^         ^^^^
+    int_poly: Var,
     int_unbound: IntRequirements,
+    frac_poly: Var,
     frac_unbound: FracRequirements,
-    num_poly: struct { var_: Var, requirements: IntRequirements },
-    int_poly: struct { var_: Var, requirements: IntRequirements },
-    frac_poly: struct { var_: Var, requirements: FracRequirements },
-    int_precision: Int.Precision, // TODO instead of storing this, can we just always store a num_compact instead?
-    frac_precision: Frac.Precision, // TODO instead of storing this, can we just always store a num_compact instead?
+
+    // These are Num(Int(Signed8)) or Num(Frac(Decimal))
+    //                   ^^^^^^^               ^^^^^^^
+    int_precision: Int.Precision,
+    frac_precision: Frac.Precision,
+
+    // This is the whole Num(Int(Signed8)), compacted into a single variable
+    //                   ^^^^^^^^^^^^^^^^
     num_compact: Compact,
+
+    /// Represents requirements for number
+    pub const NumRequirements = struct { int_requirements: IntRequirements, frac_requirements: FracRequirements };
 
     /// Represents a compact number
     pub const Compact = union(enum) {
@@ -325,6 +352,10 @@ pub const Num = union(enum) {
         // The lowest number of bits that can represent the decimal value of the Int literal  *excluding* its sign.
         bits_needed: u8,
 
+        pub fn init() @This() {
+            return .{ .sign_needed = false, .bits_needed = 0 };
+        }
+
         /// Unifies two IntRequirements, returning the most restrictive combination
         pub fn unify(self: IntRequirements, other: IntRequirements) IntRequirements {
             return IntRequirements{
@@ -352,6 +383,10 @@ pub const Num = union(enum) {
     pub const FracRequirements = struct {
         fits_in_f32: bool,
         fits_in_dec: bool,
+
+        pub fn init() @This() {
+            return .{ .fits_in_f32 = true, .fits_in_dec = true };
+        }
 
         /// Unifies two FracRequirements, returning the intersection of capabilities
         pub fn unify(self: FracRequirements, other: FracRequirements) FracRequirements {

@@ -27,11 +27,11 @@ string_function = |x| x + 42
 ```
                           ^^
 
-The type annotation says it should have the type:
-    _Str_
-
-But here it's being used as:
+It has the type:
     _Num(_size)_
+
+But the type annotation says it should have the type:
+    _Str_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -41,11 +41,13 @@ wrong_type_function = |x| x * 3.14
 ```
                               ^^^^
 
-The type annotation says it should have the type:
-    _I64_
+It has the type:
+    _Num(Frac(_size))_
 
-But here it's being used as:
-    _Frac(_size)_
+But the type annotation says it should have the type:
+    _Num(Int(Signed64))_
+
+**Hint:** This might be because the numeric literal is too large to fit in the target type.
 
 # TOKENS
 ~~~zig
@@ -106,12 +108,12 @@ NO CHANGE
 			(e-binop @5.23-5.29 (op "add")
 				(e-lookup-local @5.23-5.24
 					(p-assign @5.20-5.21 (ident "x")))
-				(e-int @5.27-5.29 (value "42"))))
+				(e-num @5.27-5.29 (value "42"))))
 		(annotation @5.1-5.16
 			(declared-type
 				(ty-fn @4.19-4.29 (effectful false)
-					(ty @4.19-4.22 (name "Str"))
-					(ty @4.26-4.29 (name "Str"))))))
+					(ty-lookup @4.19-4.22 (name "Str") (builtin))
+					(ty-lookup @4.26-4.29 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @9.1-9.20 (ident "wrong_type_function"))
 		(e-lambda @9.23-9.35
@@ -124,16 +126,16 @@ NO CHANGE
 		(annotation @9.1-9.20
 			(declared-type
 				(ty-fn @8.23-8.33 (effectful false)
-					(ty @8.23-8.26 (name "I64"))
-					(ty @8.30-8.33 (name "I64")))))))
+					(ty-lookup @8.23-8.26 (name "I64") (builtin))
+					(ty-lookup @8.30-8.33 (name "I64") (builtin)))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.16 (type "Error -> Error"))
-		(patt @9.1-9.20 (type "Error -> Error")))
+		(patt @5.1-5.16 (type "Str -> Error"))
+		(patt @9.1-9.20 (type "Num(Int(Signed64)) -> Error")))
 	(expressions
-		(expr @5.19-5.29 (type "Error -> Error"))
-		(expr @9.23-9.35 (type "Error -> Error"))))
+		(expr @5.19-5.29 (type "Str -> Error"))
+		(expr @9.23-9.35 (type "Num(Int(Signed64)) -> Error"))))
 ~~~

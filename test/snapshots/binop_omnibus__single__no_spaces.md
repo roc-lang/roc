@@ -73,19 +73,19 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10
 				(e-tag @1.1-1.9 (name "Err")
 					(args
 						(e-runtime-error (tag "ident_not_in_scope")))))
-			(e-int @1.11-1.13 (value "12")))
+			(e-num @1.11-1.13 (value "12")))
 		(e-binop @1.14-1.17 (op "mul")
-			(e-int @1.14-1.15 (value "5"))
-			(e-int @1.16-1.17 (value "5"))))
+			(e-num @1.14-1.15 (value "5"))
+			(e-num @1.16-1.17 (value "5"))))
 	(e-binop @1.21-1.34 (op "and")
 		(e-binop @1.21-1.27 (op "lt")
 			(e-binop @1.21-1.25 (op "add")
-				(e-int @1.21-1.23 (value "13"))
-				(e-int @1.24-1.25 (value "2")))
-			(e-int @1.26-1.27 (value "5")))
-		(e-int @1.32-1.34 (value "10"))))
+				(e-num @1.21-1.23 (value "13"))
+				(e-num @1.24-1.25 (value "2")))
+			(e-num @1.26-1.27 (value "5")))
+		(e-num @1.32-1.34 (value "10"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.34 (type "_a"))
+(expr @1.1-1.34 (type "Error"))
 ~~~

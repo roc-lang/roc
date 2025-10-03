@@ -35,11 +35,11 @@ NO CHANGE
 	(if-branches
 		(if-branch
 			(e-binop @1.4-1.9 (op "gt")
-				(e-int @1.4-1.5 (value "5"))
-				(e-int @1.8-1.9 (value "3")))
-			(e-int @1.10-1.11 (value "1"))))
+				(e-num @1.4-1.5 (value "5"))
+				(e-num @1.8-1.9 (value "3")))
+			(e-num @1.10-1.11 (value "1"))))
 	(if-else
-		(e-int @1.17-1.18 (value "2"))))
+		(e-num @1.17-1.18 (value "2"))))
 ~~~
 # TYPES
 ~~~clojure

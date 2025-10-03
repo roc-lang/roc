@@ -25,6 +25,7 @@ TagType := [Some(_), None]
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:7:21:7:21
+UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:7:16:7:20
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
@@ -62,6 +63,17 @@ Underscores are not allowed in type alias declarations.
 ComplexType := List(_)
 ```
                     ^
+
+Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+
+**UNDERSCORE IN TYPE ALIAS**
+Underscores are not allowed in type alias declarations.
+
+**underscore_in_type_alias.md:7:16:7:20:**
+```roc
+ComplexType := List(_)
+```
+               ^^^^
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
@@ -223,7 +235,7 @@ TagType := [Some(_), None]
 		(ty-underscore @1.1-1.1))
 	(s-nominal-decl @7.1-7.23
 		(ty-header @7.1-7.12 (name "ComplexType"))
-		(ty-apply @7.16-7.23 (symbol "List")
+		(ty-apply @7.16-7.23 (name "List") (builtin)
 			(ty-underscore @7.21-7.21)))
 	(s-nominal-decl @9.1-9.39
 		(ty-header @9.1-9.11 (name "RecordType"))
@@ -231,7 +243,7 @@ TagType := [Some(_), None]
 			(field (field "field")
 				(ty-underscore @1.1-1.1))
 			(field (field "other")
-				(ty @9.34-9.37 (name "U32")))))
+				(ty-lookup @9.34-9.37 (name "U32") (builtin)))))
 	(s-nominal-decl @11.1-11.23
 		(ty-header @11.1-11.13 (name "FunctionType"))
 		(ty-fn @11.17-11.23 (effectful false)
@@ -241,33 +253,33 @@ TagType := [Some(_), None]
 		(ty-header @13.1-13.10 (name "TupleType"))
 		(ty-tuple @13.14-13.25
 			(ty-underscore @13.15-13.15)
-			(ty @13.18-13.21 (name "U32"))
+			(ty-lookup @13.18-13.21 (name "U32") (builtin))
 			(ty-underscore @1.1-1.1)))
 	(s-nominal-decl @15.1-15.27
 		(ty-header @15.1-15.8 (name "TagType"))
 		(ty-tag-union @15.12-15.27
-			(ty-apply @15.13-15.20 (symbol "Some")
+			(ty-tag-name @15.13-15.20 (name "Some")
 				(ty-underscore @15.18-15.18))
-			(ty @15.22-15.26 (name "None")))))
+			(ty-tag-name @15.22-15.26 (name "None")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @3.1-3.11 (type "Error")
+		(alias @3.1-3.11 (type "MyType")
 			(ty-header @3.1-3.7 (name "MyType")))
-		(nominal @5.1-5.15 (type "Error")
+		(nominal @5.1-5.15 (type "OtherType")
 			(ty-header @5.1-5.10 (name "OtherType")))
-		(nominal @7.1-7.23 (type "Error")
+		(nominal @7.1-7.23 (type "ComplexType")
 			(ty-header @7.1-7.12 (name "ComplexType")))
-		(nominal @9.1-9.39 (type "Error")
+		(nominal @9.1-9.39 (type "RecordType")
 			(ty-header @9.1-9.11 (name "RecordType")))
-		(nominal @11.1-11.23 (type "Error")
+		(nominal @11.1-11.23 (type "FunctionType")
 			(ty-header @11.1-11.13 (name "FunctionType")))
-		(nominal @13.1-13.25 (type "Error")
+		(nominal @13.1-13.25 (type "TupleType")
 			(ty-header @13.1-13.10 (name "TupleType")))
-		(nominal @15.1-15.27 (type "Error")
+		(nominal @15.1-15.27 (type "TagType")
 			(ty-header @15.1-15.8 (name "TagType"))))
 	(expressions))
 ~~~

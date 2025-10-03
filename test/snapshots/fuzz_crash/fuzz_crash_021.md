@@ -184,7 +184,7 @@ EndOfFile(4:1-4:1),
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @3.1-3.15 (type "Error")
+		(alias @3.1-3.15 (type "")
 			(ty-header @3.1-3.11 (name ""))))
 	(expressions))
 ~~~

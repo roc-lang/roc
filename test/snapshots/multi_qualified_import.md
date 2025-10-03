@@ -364,7 +364,7 @@ data = json
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation @6.1-6.13
 			(declared-type
-				(ty @5.16-5.23 (name "Encoder")))))
+				(ty-malformed @5.16-5.23))))
 	(d-let
 		(p-assign @10.1-10.8 (ident "process"))
 		(e-lambda @10.11-10.33
@@ -376,7 +376,7 @@ data = json
 			(declared-type
 				(ty-fn @9.11-9.40 (effectful false)
 					(ty-malformed @9.11-9.33)
-					(ty @9.37-9.40 (name "Str"))))))
+					(ty-lookup @9.37-9.40 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @14.1-14.5 (ident "data"))
 		(e-runtime-error (tag "ident_not_in_scope"))

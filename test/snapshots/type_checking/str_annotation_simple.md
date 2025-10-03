@@ -47,7 +47,7 @@ NO CHANGE
 			(e-literal @4.6-4.11 (string "hello")))
 		(annotation @4.1-4.2
 			(declared-type
-				(ty @3.5-3.8 (name "Str"))))))
+				(ty-lookup @3.5-3.8 (name "Str") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure

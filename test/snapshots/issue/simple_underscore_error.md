@@ -14,6 +14,7 @@ foo = 42
 ~~~
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - simple_underscore_error.md:1:1:1:1
+TYPE MISMATCH - simple_underscore_error.md:6:7:6:9
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
@@ -25,6 +26,20 @@ module []
 ^
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**simple_underscore_error.md:6:7:6:9:**
+```roc
+foo = 42
+```
+      ^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _BadType_
 
 # TOKENS
 ~~~zig
@@ -59,10 +74,10 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @6.1-6.4 (ident "foo"))
-		(e-int @6.7-6.9 (value "42"))
+		(e-num @6.7-6.9 (value "42"))
 		(annotation @6.1-6.4
 			(declared-type
-				(ty @5.7-5.14 (name "BadType")))))
+				(ty-lookup @5.7-5.14 (name "BadType") (local)))))
 	(s-nominal-decl @3.1-3.13
 		(ty-header @3.1-3.8 (name "BadType"))
 		(ty-underscore @1.1-1.1)))
@@ -73,7 +88,7 @@ NO CHANGE
 	(defs
 		(patt @6.1-6.4 (type "Error")))
 	(type_decls
-		(nominal @3.1-3.13 (type "Error")
+		(nominal @3.1-3.13 (type "BadType")
 			(ty-header @3.1-3.8 (name "BadType"))))
 	(expressions
 		(expr @6.7-6.9 (type "Error"))))

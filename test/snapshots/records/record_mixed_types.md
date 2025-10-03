@@ -56,19 +56,19 @@ NO CHANGE
 			(e-string @1.9-1.16
 				(e-literal @1.10-1.15 (string "Alice"))))
 		(field (name "age")
-			(e-int @1.23-1.25 (value "30")))
+			(e-num @1.23-1.25 (value "30")))
 		(field (name "active")
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(field (name "scores")
 			(e-list @1.54-1.66
 				(elems
-					(e-int @1.55-1.57 (value "95"))
-					(e-int @1.59-1.61 (value "87"))
-					(e-int @1.63-1.65 (value "92")))))
+					(e-num @1.55-1.57 (value "95"))
+					(e-num @1.59-1.61 (value "87"))
+					(e-num @1.63-1.65 (value "92")))))
 		(field (name "balance")
 			(e-frac-dec @1.77-1.84 (value "1250.75")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.86 (type "{ name: Str, age: Num(_size), active: Error, scores: List(Num(_size2)), balance: Frac(_size3) }"))
+(expr @1.1-1.86 (type "{ active: Error, age: Num(_size), balance: Num(Frac(_size2)), name: Str, scores: List(Num(_size3)) }"))
 ~~~

@@ -67,9 +67,9 @@ match [] {
 							(field (name "ints")
 								(e-list @2.22-2.31
 									(elems
-										(e-int @2.23-2.24 (value "1"))
-										(e-int @2.26-2.27 (value "2"))
-										(e-int @2.29-2.30 (value "3")))))
+										(e-num @2.23-2.24 (value "1"))
+										(e-num @2.26-2.27 (value "2"))
+										(e-num @2.29-2.30 (value "3")))))
 							(field (name "strs")
 								(e-list @2.39-2.54
 									(elems
@@ -85,5 +85,5 @@ match [] {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-3.2 (type "{ ints: List(Num(_size)), strs: List(Str), empty: List(_elem) }"))
+(expr @1.1-3.2 (type "{ empty: List(_elem), ints: List(Num(_size)), strs: List(Str) }"))
 ~~~

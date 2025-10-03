@@ -171,7 +171,7 @@ main = |_| {
 (can-ir
 	(d-let
 		(p-assign @4.1-4.4 (ident "num"))
-		(e-int @4.7-4.9 (value "42")))
+		(e-num @4.7-4.9 (value "42")))
 	(d-let
 		(p-assign @5.1-5.5 (ident "frac"))
 		(e-dec-small @5.8-5.11 (numerator "42") (denominator-power-of-ten "1") (value "4.2")))
@@ -188,13 +188,13 @@ main = |_| {
 		(e-binop @12.11-12.19 (op "add")
 			(e-lookup-local @12.11-12.14
 				(p-assign @4.1-4.4 (ident "num")))
-			(e-int @12.17-12.19 (value "10"))))
+			(e-num @12.17-12.19 (value "10"))))
 	(d-let
 		(p-assign @13.1-13.13 (ident "int_multiply"))
 		(e-binop @13.16-13.23 (op "mul")
 			(e-lookup-local @13.16-13.19
 				(p-assign @4.1-4.4 (ident "num")))
-			(e-int @13.22-13.23 (value "2"))))
+			(e-num @13.22-13.23 (value "2"))))
 	(d-let
 		(p-assign @16.1-16.10 (ident "float_add"))
 		(e-binop @16.13-16.23 (op "add")
@@ -215,13 +215,13 @@ main = |_| {
 			(e-binop @20.14-20.19 (op "mul")
 				(e-lookup-local @20.14-20.15
 					(p-assign @20.11-20.12 (ident "x")))
-				(e-int @20.18-20.19 (value "2")))))
+				(e-num @20.18-20.19 (value "2")))))
 	(d-let
 		(p-assign @23.1-23.12 (ident "int_doubled"))
 		(e-call @23.15-23.24
 			(e-lookup-local @23.15-23.21
 				(p-assign @20.1-20.7 (ident "double")))
-			(e-int @23.22-23.23 (value "5"))))
+			(e-num @23.22-23.23 (value "5"))))
 	(d-let
 		(p-assign @24.1-24.14 (ident "float_doubled"))
 		(e-call @24.17-24.28
@@ -248,29 +248,29 @@ main = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.4 (type "Num(_size)"))
-		(patt @5.1-5.5 (type "Frac(_size)"))
-		(patt @8.1-8.8 (type "Num(_size)"))
-		(patt @9.1-9.10 (type "Frac(_size)"))
-		(patt @12.1-12.8 (type "Num(_size)"))
-		(patt @13.1-13.13 (type "Num(_size)"))
-		(patt @16.1-16.10 (type "Num(_size)"))
-		(patt @17.1-17.15 (type "Num(_size)"))
+		(patt @4.1-4.4 (type "Num(Frac(_size))"))
+		(patt @5.1-5.5 (type "Num(Frac(_size))"))
+		(patt @8.1-8.8 (type "Num(Frac(_size))"))
+		(patt @9.1-9.10 (type "Num(Frac(_size))"))
+		(patt @12.1-12.8 (type "Num(Frac(_size))"))
+		(patt @13.1-13.13 (type "Num(Frac(_size))"))
+		(patt @16.1-16.10 (type "Num(Frac(_size))"))
+		(patt @17.1-17.15 (type "Num(Frac(_size))"))
 		(patt @20.1-20.7 (type "Num(_size) -> Num(_size2)"))
 		(patt @23.1-23.12 (type "Num(_size)"))
-		(patt @24.1-24.14 (type "Num(_size)"))
-		(patt @26.1-26.5 (type "_arg -> Num(_size)")))
+		(patt @24.1-24.14 (type "Num(Frac(_size))"))
+		(patt @26.1-26.5 (type "_arg -> Num(Frac(_size))")))
 	(expressions
-		(expr @4.7-4.9 (type "Num(_size)"))
-		(expr @5.8-5.11 (type "Frac(_size)"))
-		(expr @8.11-8.14 (type "Num(_size)"))
-		(expr @9.13-9.17 (type "Frac(_size)"))
-		(expr @12.11-12.19 (type "Num(_size)"))
-		(expr @13.16-13.23 (type "Num(_size)"))
-		(expr @16.13-16.23 (type "Num(_size)"))
-		(expr @17.18-17.27 (type "Num(_size)"))
+		(expr @4.7-4.9 (type "Num(Frac(_size))"))
+		(expr @5.8-5.11 (type "Num(Frac(_size))"))
+		(expr @8.11-8.14 (type "Num(Frac(_size))"))
+		(expr @9.13-9.17 (type "Num(Frac(_size))"))
+		(expr @12.11-12.19 (type "Num(Frac(_size))"))
+		(expr @13.16-13.23 (type "Num(Frac(_size))"))
+		(expr @16.13-16.23 (type "Num(Frac(_size))"))
+		(expr @17.18-17.27 (type "Num(Frac(_size))"))
 		(expr @20.10-20.19 (type "Num(_size) -> Num(_size2)"))
 		(expr @23.15-23.24 (type "Num(_size)"))
-		(expr @24.17-24.28 (type "Num(_size)"))
-		(expr @26.8-29.2 (type "_arg -> Num(_size)"))))
+		(expr @24.17-24.28 (type "Num(Frac(_size))"))
+		(expr @26.8-29.2 (type "_arg -> Num(Frac(_size))"))))
 ~~~

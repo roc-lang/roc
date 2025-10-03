@@ -56,13 +56,13 @@ add2 = x + 2
 		(p-assign @3.1-3.5 (ident "add2"))
 		(e-binop @3.8-3.18 (op "add")
 			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-int @3.17-3.18 (value "2")))))
+			(e-num @3.17-3.18 (value "2")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.5 (type "Num(_size)")))
+		(patt @3.1-3.5 (type "Error")))
 	(expressions
-		(expr @3.8-3.18 (type "Num(_size)"))))
+		(expr @3.8-3.18 (type "Error"))))
 ~~~

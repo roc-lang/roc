@@ -43,6 +43,8 @@ all_defs: CIR.Def.Span,
 all_statements: CIR.Statement.Span,
 /// Definitions that are exported by this module (populated by canonicalization)
 exports: CIR.Def.Span,
+/// All builtin stmts (temporary until module imports are working)
+builtin_statements: CIR.Statement.Span,
 /// All external declarations referenced in this module
 external_decls: CIR.ExternalDecl.SafeList,
 /// Store for interned module imports
@@ -62,6 +64,7 @@ pub fn initCIRFields(self: *Self, gpa: std.mem.Allocator, module_name: []const u
     self.all_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.all_statements = .{ .span = .{ .start = 0, .len = 0 } };
     self.exports = .{ .span = .{ .start = 0, .len = 0 } };
+    self.builtin_statements = .{ .span = .{ .start = 0, .len = 0 } };
     // Note: external_decls already exists from ModuleEnv.init(), so we don't create a new one
     self.imports = CIR.Import.Store.init();
     self.module_name = module_name;
@@ -85,6 +88,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .exports = .{ .span = .{ .start = 0, .len = 0 } },
+        .builtin_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = try CIR.ExternalDecl.SafeList.initCapacity(gpa, 16),
         .imports = CIR.Import.Store.init(),
         .module_name = "", // Will be set later during canonicalization
@@ -1021,6 +1025,7 @@ pub fn serialize(
         .all_defs = self.all_defs,
         .all_statements = self.all_statements,
         .exports = self.exports,
+        .builtin_statements = self.builtin_statements,
         .external_decls = (try self.external_decls.serialize(allocator, writer)).*,
         .imports = (try self.imports.serialize(allocator, writer)).*,
         .module_name = "", // Will be set when deserializing
@@ -1063,6 +1068,7 @@ pub const Serialized = struct {
     all_defs: CIR.Def.Span,
     all_statements: CIR.Statement.Span,
     exports: CIR.Def.Span,
+    builtin_statements: CIR.Statement.Span,
     external_decls: CIR.ExternalDecl.SafeList.Serialized,
     imports: CIR.Import.Store.Serialized,
     module_name: []const u8, // Serialized as zeros, provided during deserialization
@@ -1086,6 +1092,7 @@ pub const Serialized = struct {
         self.all_defs = env.all_defs;
         self.all_statements = env.all_statements;
         self.exports = env.exports;
+        self.builtin_statements = env.builtin_statements;
 
         try self.external_decls.serialize(&env.external_decls, allocator, writer);
         try self.imports.serialize(&env.imports, allocator, writer);
@@ -1121,6 +1128,7 @@ pub const Serialized = struct {
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
             .exports = self.exports,
+            .builtin_statements = self.builtin_statements,
             .external_decls = self.external_decls.deserialize(offset).*,
             .imports = self.imports.deserialize(offset, gpa).*,
             .module_name = module_name,
@@ -1822,6 +1830,11 @@ pub fn insertString(self: *Self, string: []const u8) std.mem.Allocator.Error!Str
 
 /// Returns a mutable reference to the identifier store.
 pub fn getIdentStore(self: *Self) *Ident.Store {
+    return &self.common.idents;
+}
+
+/// Returns an immutable reference to the identifier store.
+pub fn getIdentStoreConst(self: *const Self) *const Ident.Store {
     return &self.common.idents;
 }
 

@@ -228,7 +228,7 @@ C : k
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @1.9-1.12 (type "Error")
+		(alias @1.9-1.12 (type "C")
 			(ty-header @1.9-1.10 (name "C"))))
 	(expressions))
 ~~~

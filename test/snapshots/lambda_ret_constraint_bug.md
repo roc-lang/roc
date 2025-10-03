@@ -83,12 +83,12 @@ NO CHANGE
 			(e-binop @4.14-4.19 (op "mul")
 				(e-lookup-local @4.14-4.15
 					(p-assign @4.11-4.12 (ident "n")))
-				(e-int @4.18-4.19 (value "2"))))
+				(e-num @4.18-4.19 (value "2"))))
 		(annotation @4.1-4.7
 			(declared-type
 				(ty-fn @3.10-3.20 (effectful false)
-					(ty @3.10-3.13 (name "I64"))
-					(ty @3.17-3.20 (name "I64"))))))
+					(ty-lookup @3.10-3.13 (name "I64") (builtin))
+					(ty-lookup @3.17-3.20 (name "I64") (builtin))))))
 	(d-let
 		(p-assign @7.1-7.5 (ident "main"))
 		(e-closure @7.8-7.24
@@ -101,21 +101,21 @@ NO CHANGE
 				(e-call @7.15-7.24
 					(e-lookup-local @7.15-7.21
 						(p-assign @4.1-4.7 (ident "helper")))
-					(e-int @7.22-7.23 (value "5")))))
+					(e-num @7.22-7.23 (value "5")))))
 		(annotation @7.1-7.5
 			(declared-type
 				(ty-fn @6.8-6.23 (effectful false)
-					(ty @6.8-6.11 (name "I64"))
-					(ty @6.13-6.16 (name "I64"))
-					(ty @6.20-6.23 (name "I64")))))))
+					(ty-lookup @6.8-6.11 (name "I64") (builtin))
+					(ty-lookup @6.13-6.16 (name "I64") (builtin))
+					(ty-lookup @6.20-6.23 (name "I64") (builtin)))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.7 (type "I64 -> I64"))
-		(patt @7.1-7.5 (type "I64, I64 -> I64")))
+		(patt @4.1-4.7 (type "Num(Int(Signed64)) -> Num(Int(Signed64))"))
+		(patt @7.1-7.5 (type "Num(Int(Signed64)), Num(Int(Signed64)) -> Num(Int(Signed64))")))
 	(expressions
-		(expr @4.10-4.19 (type "I64 -> I64"))
-		(expr @7.8-7.24 (type "I64, I64 -> I64"))))
+		(expr @4.10-4.19 (type "Num(Int(Signed64)) -> Num(Int(Signed64))"))
+		(expr @7.8-7.24 (type "Num(Int(Signed64)), Num(Int(Signed64)) -> Num(Int(Signed64))"))))
 ~~~

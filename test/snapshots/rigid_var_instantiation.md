@@ -167,8 +167,8 @@ main! = |_| {
 		(annotation @5.1-5.9
 			(declared-type
 				(ty-fn @4.12-4.18 (effectful false)
-					(ty-var @4.12-4.13 (name "a"))
-					(ty-var @4.17-4.18 (name "a"))))))
+					(ty-rigid-var @4.12-4.13 (name "a"))
+					(ty-rigid-var-lookup (ty-rigid-var @4.12-4.13 (name "a")))))))
 	(d-let
 		(p-assign @8.1-8.6 (ident "main!"))
 		(e-closure @8.9-19.2
@@ -183,7 +183,7 @@ main! = |_| {
 						(e-call @10.11-10.23
 							(e-lookup-local @10.11-10.19
 								(p-assign @5.1-5.9 (ident "identity")))
-							(e-int @10.20-10.22 (value "42"))))
+							(e-num @10.20-10.22 (value "42"))))
 					(s-let @13.5-13.28
 						(p-assign @13.5-13.8 (ident "str"))
 						(e-call @13.11-13.28
@@ -198,9 +198,9 @@ main! = |_| {
 								(p-assign @5.1-5.9 (ident "identity")))
 							(e-list @16.20-16.29
 								(elems
-									(e-int @16.21-16.22 (value "1"))
-									(e-int @16.24-16.25 (value "2"))
-									(e-int @16.27-16.28 (value "3"))))))
+									(e-num @16.21-16.22 (value "1"))
+									(e-num @16.24-16.25 (value "2"))
+									(e-num @16.27-16.28 (value "3"))))))
 					(e-empty_record @18.5-18.7))))))
 ~~~
 # TYPES

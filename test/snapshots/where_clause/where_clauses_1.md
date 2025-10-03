@@ -95,14 +95,14 @@ NO CHANGE
 	(s-alias-decl @3.1-6.24
 		(ty-header @3.1-3.16 (name "Hash")
 			(ty-args
-				(ty-var @3.6-3.7 (name "a"))
-				(ty-var @3.9-3.15 (name "hasher"))))
-		(ty-var @3.19-3.20 (name "a")))
+				(ty-rigid-var @3.6-3.7 (name "a"))
+				(ty-rigid-var @3.9-3.15 (name "hasher"))))
+		(ty-rigid-var-lookup (ty-rigid-var @3.6-3.7 (name "a"))))
 	(s-alias-decl @8.1-8.53
 		(ty-header @8.1-8.10 (name "Decode")
 			(ty-args
-				(ty-var @8.8-8.9 (name "a"))))
-		(ty-var @8.13-8.14 (name "a"))))
+				(ty-rigid-var @8.8-8.9 (name "a"))))
+		(ty-rigid-var-lookup (ty-rigid-var @8.8-8.9 (name "a")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -112,11 +112,11 @@ NO CHANGE
 		(alias @3.1-6.24 (type "Hash(a, hasher)")
 			(ty-header @3.1-3.16 (name "Hash")
 				(ty-args
-					(ty-var @3.6-3.7 (name "a"))
-					(ty-var @3.9-3.15 (name "hasher")))))
+					(ty-rigid-var @3.6-3.7 (name "a"))
+					(ty-rigid-var @3.9-3.15 (name "hasher")))))
 		(alias @8.1-8.53 (type "Decode(a)")
 			(ty-header @8.1-8.10 (name "Decode")
 				(ty-args
-					(ty-var @8.8-8.9 (name "a"))))))
+					(ty-rigid-var @8.8-8.9 (name "a"))))))
 	(expressions))
 ~~~

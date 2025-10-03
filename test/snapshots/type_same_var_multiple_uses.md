@@ -81,10 +81,10 @@ NO CHANGE
 		(annotation @4.1-4.5
 			(declared-type
 				(ty-fn @3.8-3.19 (effectful false)
-					(ty-var @3.8-3.9 (name "a"))
+					(ty-rigid-var @3.8-3.9 (name "a"))
 					(ty-tuple @3.13-3.19
-						(ty-var @3.14-3.15 (name "a"))
-						(ty-var @3.17-3.18 (name "a")))))))
+						(ty-rigid-var-lookup (ty-rigid-var @3.8-3.9 (name "a")))
+						(ty-rigid-var-lookup (ty-rigid-var @3.8-3.9 (name "a"))))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15

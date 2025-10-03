@@ -680,6 +680,12 @@ pub const PackageEnv = struct {
         var st = &self.modules.items[module_id];
         var env = st.env.?;
 
+        const module_common_idents: Check.CommonIdents = .{
+            .module_name = try env.insertIdent(base.Ident.for_text("test")),
+            .list = try env.insertIdent(base.Ident.for_text("List")),
+            .box = try env.insertIdent(base.Ident.for_text("Box")),
+        };
+
         // Build other_modules array according to env.imports order
         const import_count = env.imports.imports.items.items.len;
         var others = try std.ArrayList(*ModuleEnv).initCapacity(self.gpa, import_count);
@@ -710,11 +716,11 @@ pub const PackageEnv = struct {
             }
         }
 
-        var checker = try Check.init(self.gpa, &env.types, &env, others.items, &env.store.regions);
+        var checker = try Check.init(self.gpa, &env.types, &env, others.items, &env.store.regions, module_common_idents);
         defer checker.deinit();
         // Note: checkDefs runs type checking for module
         const check_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        try checker.checkDefs();
+        try checker.checkFile();
         const check_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         if (@import("builtin").target.cpu.arch != .wasm32) {
             self.total_type_checking_ns += @intCast(check_end - check_start);

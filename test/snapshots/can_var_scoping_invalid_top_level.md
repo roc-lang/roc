@@ -53,7 +53,7 @@ topLevelVar_ = 0
 (can-ir
 	(d-let
 		(p-assign @4.5-4.17 (ident "topLevelVar_"))
-		(e-int @4.20-4.21 (value "0"))))
+		(e-num @4.20-4.21 (value "0"))))
 ~~~
 # TYPES
 ~~~clojure

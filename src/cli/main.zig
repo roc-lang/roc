@@ -1359,6 +1359,11 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
 
     // Initialize CIR fields in ModuleEnv
     try env.initCIRFields(shm_allocator, module_name);
+    const common_idents: Check.CommonIdents = .{
+        .module_name = try env.insertIdent(base.Ident.for_text("test")),
+        .list = try env.insertIdent(base.Ident.for_text("List")),
+        .box = try env.insertIdent(base.Ident.for_text("Box")),
+    };
 
     // Create canonicalizer
     var canonicalizer = try Can.init(&env, &parse_ast, null);
@@ -1391,8 +1396,8 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
     }
 
     // Type check the module
-    var checker = try Check.init(shm_allocator, &env.types, &env, &.{}, &env.store.regions);
-    try checker.checkDefs();
+    var checker = try Check.init(shm_allocator, &env.types, &env, &.{}, &env.store.regions, common_idents);
+    try checker.checkFile();
 
     // Copy the ModuleEnv to the allocated space
     env_ptr.* = env;
@@ -2401,6 +2406,12 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
     env.module_name = module_name;
     try env.common.calcLineStarts(gpa);
 
+    const module_common_idents: Check.CommonIdents = .{
+        .module_name = try env.insertIdent(base.Ident.for_text(module_name)),
+        .list = try env.insertIdent(base.Ident.for_text("List")),
+        .box = try env.insertIdent(base.Ident.for_text("Box")),
+    };
+
     // Parse the source code as a full module
     var parse_ast = parse.parse(&env.common, gpa) catch |err| {
         try stderr.print("Failed to parse file: {}", .{err});
@@ -2428,13 +2439,13 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
     };
 
     // Type check the module
-    var checker = Check.init(gpa, &env.types, &env, &.{}, &env.store.regions) catch |err| {
+    var checker = Check.init(gpa, &env.types, &env, &.{}, &env.store.regions, module_common_idents) catch |err| {
         try stderr.print("Failed to initialize type checker: {}", .{err});
         std.process.exit(1);
     };
     defer checker.deinit();
 
-    checker.checkDefs() catch |err| {
+    checker.checkFile() catch |err| {
         try stderr.print("Type checking failed: {}", .{err});
         std.process.exit(1);
     };

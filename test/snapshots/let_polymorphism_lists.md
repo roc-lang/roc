@@ -347,9 +347,9 @@ main = |_| {
 		(p-assign @7.1-7.9 (ident "int_list"))
 		(e-list @7.12-7.21
 			(elems
-				(e-int @7.13-7.14 (value "1"))
-				(e-int @7.16-7.17 (value "2"))
-				(e-int @7.19-7.20 (value "3")))))
+				(e-num @7.13-7.14 (value "1"))
+				(e-num @7.16-7.17 (value "2"))
+				(e-num @7.19-7.20 (value "3")))))
 	(d-let
 		(p-assign @8.1-8.9 (ident "str_list"))
 		(e-list @8.12-8.30
@@ -385,7 +385,7 @@ main = |_| {
 		(e-call @20.18-20.31
 			(e-lookup-local @20.18-20.27
 				(p-assign @17.1-17.10 (ident "get_empty")))
-			(e-int @20.28-20.30 (value "42"))))
+			(e-num @20.28-20.30 (value "42"))))
 	(d-let
 		(p-assign @21.1-21.15 (ident "empty_str_list"))
 		(e-call @21.18-21.35
@@ -397,9 +397,9 @@ main = |_| {
 		(p-assign @23.1-23.5 (ident "main"))
 		(e-closure @23.8-29.2
 			(captures
-				(capture @13.1-13.13 (ident "all_str_list"))
 				(capture @14.1-14.15 (ident "all_float_list"))
-				(capture @12.1-12.13 (ident "all_int_list")))
+				(capture @12.1-12.13 (ident "all_int_list"))
+				(capture @13.1-13.13 (ident "all_str_list")))
 			(e-lambda @23.8-29.2
 				(args
 					(p-underscore @23.9-23.10))
@@ -438,7 +438,7 @@ main = |_| {
 		(patt @4.1-4.14 (type "List(_elem)"))
 		(patt @7.1-7.9 (type "List(Num(_size))"))
 		(patt @8.1-8.9 (type "List(Str)"))
-		(patt @9.1-9.11 (type "List(Frac(_size))"))
+		(patt @9.1-9.11 (type "List(Num(Frac(_size)))"))
 		(patt @12.1-12.13 (type "Error"))
 		(patt @13.1-13.13 (type "Error"))
 		(patt @14.1-14.15 (type "Error"))
@@ -450,7 +450,7 @@ main = |_| {
 		(expr @4.17-4.19 (type "List(_elem)"))
 		(expr @7.12-7.21 (type "List(Num(_size))"))
 		(expr @8.12-8.30 (type "List(Str)"))
-		(expr @9.14-9.29 (type "List(Frac(_size))"))
+		(expr @9.14-9.29 (type "List(Num(Frac(_size)))"))
 		(expr @12.16-12.27 (type "Error"))
 		(expr @13.16-13.27 (type "Error"))
 		(expr @14.18-14.31 (type "Error"))

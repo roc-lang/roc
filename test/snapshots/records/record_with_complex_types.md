@@ -152,10 +152,10 @@ EndOfFile(16:1-16:1),
 		(field (name "scores")
 			(e-list @3.13-3.29
 				(elems
-					(e-int @3.14-3.16 (value "95"))
-					(e-int @3.18-3.20 (value "87"))
-					(e-int @3.22-3.24 (value "92"))
-					(e-int @3.26-3.28 (value "78")))))
+					(e-num @3.14-3.16 (value "95"))
+					(e-num @3.18-3.20 (value "87"))
+					(e-num @3.22-3.24 (value "92"))
+					(e-num @3.26-3.28 (value "78")))))
 		(field (name "status")
 			(e-tag @4.13-4.44 (name "Active")
 				(args
@@ -202,7 +202,7 @@ EndOfFile(16:1-16:1),
 				(e-binop @10.19-10.24 (op "add")
 					(e-lookup-local @10.19-10.20
 						(p-assign @10.16-10.17 (ident "x")))
-					(e-int @10.23-10.24 (value "1")))))
+					(e-num @10.23-10.24 (value "1")))))
 		(field (name "nested")
 			(e-record @11.13-14.6
 				(fields
@@ -226,14 +226,14 @@ EndOfFile(16:1-16:1),
 										(field (name "data")
 											(e-list @13.33-13.42
 												(elems
-													(e-int @13.34-13.35 (value "1"))
-													(e-int @13.37-13.38 (value "2"))
-													(e-int @13.40-13.41 (value "3")))))
+													(e-num @13.34-13.35 (value "1"))
+													(e-num @13.37-13.38 (value "2"))
+													(e-num @13.40-13.41 (value "3")))))
 										(field (name "timestamp")
 											(e-string @13.55-13.67
 												(e-literal @13.56-13.66 (string "2024-01-01"))))))))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-15.2 (type "{ name: Str, scores: List(Num(_size)), status: [Active({ since: Str })]_others, preferences: { theme: [Dark]_others2, notifications: [Email(Str)]_others3 }, metadata: Result({ tags: List(Str), permissions: List([Read]_others4) }, err), callback: Num(_size2) -> Num(_size3), nested: { items: List([Some(Str)][None]_others5), result: [Success({ data: List(Num(_size4)), timestamp: Str })]_others6 } }"))
+(expr @1.1-15.2 (type "{ callback: Num(_size) -> Num(_size2), metadata: Result({ permissions: List([Read, Write, Admin]_others), tags: List(Str) }, err), name: Str, nested: { items: List([Some(Str)][None]_others2), result: [Success({ data: List(Num(_size3)), timestamp: Str })]_others3 }, preferences: { notifications: [Email(Str)]_others4, theme: [Dark]_others5 }, scores: List(Num(_size4)), status: [Active({ since: Str })]_others6 }"))
 ~~~

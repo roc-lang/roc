@@ -73,12 +73,12 @@ NO CHANGE
 ~~~clojure
 (e-list @1.1-1.27
 	(elems
-		(e-int @1.2-1.3 (value "1"))
+		(e-num @1.2-1.3 (value "1"))
 		(e-string @1.5-1.12
 			(e-literal @1.6-1.11 (string "hello")))
 		(e-list @1.14-1.26
 			(elems
-				(e-int @1.15-1.16 (value "3"))
+				(e-num @1.15-1.16 (value "3"))
 				(e-string @1.18-1.25
 					(e-literal @1.19-1.24 (string "world")))))))
 ~~~

@@ -92,13 +92,13 @@ NO CHANGE
 			(e-block @4.21-9.2
 				(s-var @5.2-5.12
 					(p-assign @5.2-5.12 (ident "x_"))
-					(e-int @5.11-5.12 (value "5")))
+					(e-num @5.11-5.12 (value "5")))
 				(s-var @6.2-6.13
 					(p-assign @6.2-6.13 (ident "x_"))
-					(e-int @6.11-6.13 (value "10")))
+					(e-num @6.11-6.13 (value "10")))
 				(s-reassign @7.2-7.4
 					(p-assign @6.2-6.13 (ident "x_"))
-					(e-int @7.7-7.9 (value "15")))
+					(e-num @7.7-7.9 (value "15")))
 				(e-lookup-local @8.2-8.4
 					(p-assign @6.2-6.13 (ident "x_"))))))
 	(d-let

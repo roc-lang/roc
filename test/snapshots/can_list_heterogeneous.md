@@ -50,7 +50,7 @@ NO CHANGE
 ~~~clojure
 (e-list @1.1-1.19
 	(elems
-		(e-int @1.2-1.3 (value "1"))
+		(e-num @1.2-1.3 (value "1"))
 		(e-string @1.5-1.12
 			(e-literal @1.6-1.11 (string "hello")))
 		(e-dec-small @1.14-1.18 (numerator "314") (denominator-power-of-ten "2") (value "3.14"))))

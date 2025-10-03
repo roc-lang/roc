@@ -102,10 +102,6 @@ main! = |_| {}
 			(args
 				(p-assign @4.10-4.11 (ident "x")))
 			(e-block @4.13-9.2
-				(s-type-anno @5.5-5.19 (name "inner")
-					(ty-fn @5.13-5.19 (effectful false)
-						(ty-var @5.13-5.14 (name "b"))
-						(ty-var @5.18-5.19 (name "b"))))
 				(s-let @6.5-6.18
 					(p-assign @6.5-6.10 (ident "inner"))
 					(e-lambda @6.13-6.18
@@ -121,8 +117,8 @@ main! = |_| {}
 		(annotation @4.1-4.6
 			(declared-type
 				(ty-fn @3.9-3.15 (effectful false)
-					(ty-var @3.9-3.10 (name "a"))
-					(ty-var @3.14-3.15 (name "a"))))))
+					(ty-rigid-var @3.9-3.10 (name "a"))
+					(ty-rigid-var-lookup (ty-rigid-var @3.9-3.10 (name "a")))))))
 	(d-let
 		(p-assign @11.1-11.6 (ident "main!"))
 		(e-lambda @11.9-11.15

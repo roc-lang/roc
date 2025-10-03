@@ -62,7 +62,7 @@ jobs:
 
       - name: Run Playground Tests
         run: |
-          zig build playground-test -Doptimize=ReleaseSmall -- --verbose
+          zig build test-playground -Doptimize=ReleaseSmall -- --verbose
 
   zig-tests:
     needs: check-once

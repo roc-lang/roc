@@ -66,23 +66,23 @@ NO CHANGE
 		(annotation @7.1-7.8
 			(declared-type
 				(ty-fn @3.11-3.20 (effectful false)
-					(ty-var @3.11-3.12 (name "a"))
-					(ty-var @3.14-3.15 (name "b"))
-					(ty-var @3.19-3.20 (name "c"))))))
+					(ty-rigid-var @3.11-3.12 (name "a"))
+					(ty-rigid-var @3.14-3.15 (name "b"))
+					(ty-rigid-var @3.19-3.20 (name "c"))))))
 	(s-type-anno @3.1-6.31 (name "process")
 		(ty-fn @3.11-3.20 (effectful false)
-			(ty-var @3.11-3.12 (name "a"))
-			(ty-var @3.14-3.15 (name "b"))
-			(ty-var @3.19-3.20 (name "c")))
+			(ty-rigid-var @3.11-3.12 (name "a"))
+			(ty-rigid-var @3.14-3.15 (name "b"))
+			(ty-rigid-var @3.19-3.20 (name "c")))
 		(where
 			(method @5.3-5.29 (module-of "a") (ident "convert")
 				(args
-					(ty-var @5.23-5.24 (name "a")))
-				(ty-var @5.28-5.29 (name "c")))
+					(ty-rigid-var-lookup (ty-rigid-var @3.11-3.12 (name "a"))))
+				(ty-rigid-var-lookup (ty-rigid-var @3.19-3.20 (name "c"))))
 			(method @6.3-6.31 (module-of "b") (ident "transform")
 				(args
-					(ty-var @6.25-6.26 (name "b")))
-				(ty-var @6.30-6.31 (name "c")))))
+					(ty-rigid-var-lookup (ty-rigid-var @3.14-3.15 (name "b"))))
+				(ty-rigid-var-lookup (ty-rigid-var @3.19-3.20 (name "c"))))))
 	(ext-decl @5.3-5.29 (ident "module(a).convert") (kind "value"))
 	(ext-decl @6.3-6.31 (ident "module(b).transform") (kind "value")))
 ~~~

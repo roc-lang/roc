@@ -49,13 +49,13 @@ Foo(a, b) : (a, b, Str, U64)
 	(s-alias-decl @3.1-3.25
 		(ty-header @3.1-3.9 (name "Foo")
 			(ty-args
-				(ty-var @3.5-3.6 (name "a"))
-				(ty-var @3.7-3.8 (name "b"))))
+				(ty-rigid-var @3.5-3.6 (name "a"))
+				(ty-rigid-var @3.7-3.8 (name "b"))))
 		(ty-tuple @3.12-3.25
-			(ty-var @3.13-3.14 (name "a"))
-			(ty-var @3.15-3.16 (name "b"))
-			(ty @3.17-3.20 (name "Str"))
-			(ty @3.21-3.24 (name "U64")))))
+			(ty-rigid-var-lookup (ty-rigid-var @3.5-3.6 (name "a")))
+			(ty-rigid-var-lookup (ty-rigid-var @3.7-3.8 (name "b")))
+			(ty-lookup @3.17-3.20 (name "Str") (builtin))
+			(ty-lookup @3.21-3.24 (name "U64") (builtin)))))
 ~~~
 # TYPES
 ~~~clojure
@@ -65,7 +65,7 @@ Foo(a, b) : (a, b, Str, U64)
 		(alias @3.1-3.25 (type "Foo(a, b)")
 			(ty-header @3.1-3.9 (name "Foo")
 				(ty-args
-					(ty-var @3.5-3.6 (name "a"))
-					(ty-var @3.7-3.8 (name "b"))))))
+					(ty-rigid-var @3.5-3.6 (name "a"))
+					(ty-rigid-var @3.7-3.8 (name "b"))))))
 	(expressions))
 ~~~

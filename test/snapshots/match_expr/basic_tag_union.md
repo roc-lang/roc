@@ -89,13 +89,13 @@ NO CHANGE
 					(pattern (degenerate false)
 						(p-applied-tag @2.2-2.5)))
 				(value
-					(e-int @2.9-2.10 (value "1"))))
+					(e-num @2.9-2.10 (value "1"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
 						(p-applied-tag @3.2-3.6)))
 				(value
-					(e-int @3.10-3.11 (value "2"))))
+					(e-num @3.10-3.11 (value "2"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)

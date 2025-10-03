@@ -56,7 +56,7 @@ NO CHANGE
 (inferred-types
 	(defs)
 	(type_decls
-		(nominal @3.1-3.13 (type "Error")
+		(nominal @3.1-3.13 (type "BadType")
 			(ty-header @3.1-3.8 (name "BadType"))))
 	(expressions))
 ~~~

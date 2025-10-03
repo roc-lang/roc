@@ -113,17 +113,17 @@ NO CHANGE
 		(annotation @6.1-6.6
 			(declared-type
 				(ty-fn @5.9-5.22 (effectful false)
-					(ty-var @5.9-5.10 (name "a"))
-					(ty-apply @5.14-5.22 (symbol "Maybe")
-						(ty-var @5.20-5.21 (name "a")))))))
+					(ty-rigid-var @5.9-5.10 (name "a"))
+					(ty-apply @5.14-5.22 (name "Maybe") (local)
+						(ty-rigid-var-lookup (ty-rigid-var @5.9-5.10 (name "a"))))))))
 	(d-let
 		(p-assign @9.1-9.6 (ident "none1"))
 		(e-nominal @9.9-9.19 (nominal "Maybe")
 			(e-tag @9.9-9.19 (name "None")))
 		(annotation @9.1-9.6
 			(declared-type
-				(ty-apply @8.9-8.18 (symbol "Maybe")
-					(ty-var @8.15-8.17 (name "_a"))))))
+				(ty-apply @8.9-8.18 (name "Maybe") (local)
+					(ty-rigid-var @8.9-8.18 (name "_a"))))))
 	(d-let
 		(p-assign @11.1-11.6 (ident "some2"))
 		(e-lambda @11.9-11.26
@@ -141,28 +141,28 @@ NO CHANGE
 	(s-nominal-decl @3.1-3.28
 		(ty-header @3.1-3.9 (name "Maybe")
 			(ty-args
-				(ty-var @3.7-3.8 (name "a"))))
+				(ty-rigid-var @3.7-3.8 (name "a"))))
 		(ty-tag-union @3.13-3.28
-			(ty-apply @3.14-3.21 (symbol "Some")
-				(ty-var @3.19-3.20 (name "a")))
-			(ty @3.23-3.27 (name "None")))))
+			(ty-tag-name @3.14-3.21 (name "Some")
+				(ty-rigid-var-lookup (ty-rigid-var @3.7-3.8 (name "a"))))
+			(ty-tag-name @3.23-3.27 (name "None")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @6.1-6.6 (type "a -> Maybe(a)"))
-		(patt @9.1-9.6 (type "Maybe(a)"))
+		(patt @9.1-9.6 (type "Maybe(_a)"))
 		(patt @11.1-11.6 (type "a -> Maybe(a)"))
 		(patt @13.1-13.6 (type "Maybe(a)")))
 	(type_decls
 		(nominal @3.1-3.28 (type "Maybe(a)")
 			(ty-header @3.1-3.9 (name "Maybe")
 				(ty-args
-					(ty-var @3.7-3.8 (name "a"))))))
+					(ty-rigid-var @3.7-3.8 (name "a"))))))
 	(expressions
 		(expr @6.9-6.26 (type "a -> Maybe(a)"))
-		(expr @9.9-9.19 (type "Maybe(a)"))
+		(expr @9.9-9.19 (type "Maybe(_a)"))
 		(expr @11.9-11.26 (type "a -> Maybe(a)"))
 		(expr @13.9-13.19 (type "Maybe(a)"))))
 ~~~

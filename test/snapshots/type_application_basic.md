@@ -94,9 +94,9 @@ main! = |_| processList(["one", "two", "three"])
 		(annotation @4.1-4.12
 			(declared-type
 				(ty-fn @3.15-3.31 (effectful false)
-					(ty-apply @3.15-3.24 (symbol "List")
-						(ty @3.20-3.23 (name "Str")))
-					(ty @3.28-3.31 (name "U64"))))))
+					(ty-apply @3.15-3.24 (name "List") (builtin)
+						(ty-lookup @3.20-3.23 (name "Str") (builtin)))
+					(ty-lookup @3.28-3.31 (name "U64") (builtin))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-closure @6.9-6.47
@@ -121,9 +121,9 @@ main! = |_| processList(["one", "two", "three"])
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.12 (type "List(Str) -> U64"))
-		(patt @6.1-6.6 (type "_arg -> U64")))
+		(patt @4.1-4.12 (type "List(Str) -> Num(Int(Unsigned64))"))
+		(patt @6.1-6.6 (type "_arg -> Num(Int(Unsigned64))")))
 	(expressions
-		(expr @4.15-4.32 (type "List(Str) -> U64"))
-		(expr @6.9-6.47 (type "_arg -> U64"))))
+		(expr @4.15-4.32 (type "List(Str) -> Num(Int(Unsigned64))"))
+		(expr @6.9-6.47 (type "_arg -> Num(Int(Unsigned64))"))))
 ~~~

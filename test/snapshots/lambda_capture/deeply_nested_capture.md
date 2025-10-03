@@ -96,7 +96,7 @@ EndOfFile(8:1-8:1),
 						(e-binop @2.13-2.18 (op "mul")
 							(e-lookup-local @2.13-2.14
 								(p-assign @1.5-1.6 (ident "a")))
-							(e-int @2.17-2.18 (value "2"))))
+							(e-num @2.17-2.18 (value "2"))))
 					(e-closure @3.5-6.6
 						(captures
 							(capture @2.5-2.10 (ident "a_loc")))
@@ -122,9 +122,9 @@ EndOfFile(8:1-8:1),
 												(p-assign @4.9-4.14 (ident "b_loc")))
 											(e-lookup-local @5.21-5.22
 												(p-assign @5.10-5.11 (ident "c")))))))))))
-			(e-int @7.4-7.7 (value "100")))
-		(e-int @7.10-7.12 (value "20")))
-	(e-int @7.15-7.16 (value "3")))
+			(e-num @7.4-7.7 (value "100")))
+		(e-num @7.10-7.12 (value "20")))
+	(e-num @7.15-7.16 (value "3")))
 ~~~
 # TYPES
 ~~~clojure

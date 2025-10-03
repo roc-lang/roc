@@ -13,9 +13,20 @@ processDict = |_dict| []
 main! = |_| processDict(Dict.empty().insert("one", 1))
 ~~~
 # EXPECTED
+UNDECLARED TYPE - type_app_multiple_args.md:3:15:3:19
 UNDEFINED VARIABLE - type_app_multiple_args.md:6:25:6:35
-TOO MANY ARGS - type_app_multiple_args.md:3:15:3:29
 # PROBLEMS
+**UNDECLARED TYPE**
+The type _Dict_ is not declared in this scope.
+
+This type is referenced here:
+**type_app_multiple_args.md:3:15:3:19:**
+```roc
+processDict : Dict(Str, U64) -> List(Str)
+```
+              ^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `empty` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -25,16 +36,6 @@ Is there an `import` or `exposing` missing up-top?
 main! = |_| processDict(Dict.empty().insert("one", 1))
 ```
                         ^^^^^^^^^^
-
-
-**TOO MANY ARGS**
-The type _Dict_ expects 0 argument, but got 2 instead.
-**type_app_multiple_args.md:3:15:3:29:**
-```roc
-processDict : Dict(Str, U64) -> List(Str)
-```
-              ^^^^^^^^^^^^^^
-
 
 
 # TOKENS
@@ -107,11 +108,9 @@ NO CHANGE
 		(annotation @4.1-4.12
 			(declared-type
 				(ty-fn @3.15-3.42 (effectful false)
-					(ty-apply @3.15-3.29 (symbol "Dict")
-						(ty @3.20-3.23 (name "Str"))
-						(ty @3.25-3.28 (name "U64")))
-					(ty-apply @3.33-3.42 (symbol "List")
-						(ty @3.38-3.41 (name "Str")))))))
+					(ty-malformed @3.15-3.19)
+					(ty-apply @3.33-3.42 (name "List") (builtin)
+						(ty-lookup @3.38-3.41 (name "Str") (builtin)))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-closure @6.9-6.55
@@ -130,7 +129,7 @@ NO CHANGE
 						(args
 							(e-string @6.45-6.50
 								(e-literal @6.46-6.49 (string "one")))
-							(e-int @6.52-6.53 (value "1")))))))))
+							(e-num @6.52-6.53 (value "1")))))))))
 ~~~
 # TYPES
 ~~~clojure

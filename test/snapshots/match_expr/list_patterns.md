@@ -126,7 +126,7 @@ match numbers {
 							(rest-at (index 1)
 								(p-assign @3.15-3.15 (ident "rest"))))))
 				(value
-					(e-int @3.24-3.25 (value "0")))))))
+					(e-num @3.24-3.25 (value "0")))))))
 ~~~
 # TYPES
 ~~~clojure

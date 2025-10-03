@@ -118,10 +118,10 @@ outerFunc = |_| {
 (can-ir
 	(d-let
 		(p-assign @4.1-4.2 (ident "x"))
-		(e-int @4.5-4.6 (value "5")))
+		(e-num @4.5-4.6 (value "5")))
 	(d-let
 		(p-assign @5.1-5.2 (ident "y"))
-		(e-int @5.5-5.7 (value "10")))
+		(e-num @5.5-5.7 (value "10")))
 	(d-let
 		(p-assign @8.1-8.10 (ident "outerFunc"))
 		(e-closure @8.13-16.2
@@ -133,7 +133,7 @@ outerFunc = |_| {
 				(e-block @8.17-16.2
 					(s-let @9.5-9.11
 						(p-assign @9.5-9.6 (ident "x"))
-						(e-int @9.9-9.11 (value "20")))
+						(e-num @9.9-9.11 (value "20")))
 					(s-let @10.5-14.6
 						(p-assign @10.5-10.16 (ident "innerResult"))
 						(e-block @10.19-14.6
@@ -147,7 +147,7 @@ outerFunc = |_| {
 							(e-binop @13.9-13.14 (op "add")
 								(e-lookup-local @13.9-13.10
 									(p-assign @12.9-12.10 (ident "z")))
-								(e-int @13.13-13.14 (value "1")))))
+								(e-num @13.13-13.14 (value "1")))))
 					(e-lookup-local @15.5-15.16
 						(p-assign @10.5-10.16 (ident "innerResult"))))))))
 ~~~

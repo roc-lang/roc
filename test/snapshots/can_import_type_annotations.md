@@ -434,8 +434,8 @@ combineResults = |result1, result2|
 		(annotation @8.1-8.15
 			(declared-type
 				(ty-fn @7.18-7.37 (effectful false)
-					(ty @7.18-7.25 (name "Request"))
-					(ty @7.29-7.37 (name "Response"))))))
+					(ty-malformed @7.18-7.25)
+					(ty-malformed @7.29-7.37)))))
 	(d-let
 		(p-assign @11.1-11.10 (ident "parseJson"))
 		(e-lambda @11.13-11.38
@@ -450,10 +450,8 @@ combineResults = |result1, result2|
 		(annotation @11.1-11.10
 			(declared-type
 				(ty-fn @10.13-10.30 (effectful false)
-					(ty @10.13-10.16 (name "Str"))
-					(ty-lookup-external @10.20-10.30
-						(module-idx "1")
-						(target-node-idx "0"))))))
+					(ty-lookup @10.13-10.16 (name "Str") (builtin))
+					(ty-lookup @10.20-10.30 (name "Value") (external (module-idx "1") (target-node-idx "0")))))))
 	(d-let
 		(p-assign @14.1-14.10 (ident "handleApi"))
 		(e-closure @14.13-20.2
@@ -509,16 +507,10 @@ combineResults = |result1, result2|
 		(annotation @14.1-14.10
 			(declared-type
 				(ty-fn @13.13-13.62 (effectful false)
-					(ty-lookup-external @13.13-13.25
-						(module-idx "0")
-						(target-node-idx "0"))
-					(ty-apply @13.29-13.62 (symbol "Result")
-						(ty-lookup-external @13.36-13.49
-							(module-idx "0")
-							(target-node-idx "0"))
-						(ty-lookup-external @13.51-13.61
-							(module-idx "1")
-							(target-node-idx "0")))))))
+					(ty-lookup @13.13-13.25 (name "Request") (external (module-idx "0") (target-node-idx "0")))
+					(ty-apply @13.29-13.62 (name "Result") (local)
+						(ty-lookup @13.29-13.62 (name "Response") (external (module-idx "0") (target-node-idx "0")))
+						(ty-lookup @13.29-13.62 (name "Error") (external (module-idx "1") (target-node-idx "0"))))))))
 	(d-let
 		(p-assign @23.1-23.7 (ident "config"))
 		(e-lookup-external @23.10-23.28
@@ -526,9 +518,7 @@ combineResults = |result1, result2|
 			(target-node-idx "0"))
 		(annotation @23.1-23.7
 			(declared-type
-				(ty-lookup-external @22.10-22.21
-					(module-idx "1")
-					(target-node-idx "0")))))
+				(ty-lookup @22.10-22.21 (name "Config") (external (module-idx "1") (target-node-idx "0"))))))
 	(d-let
 		(p-assign @27.1-27.15 (ident "advancedParser"))
 		(e-lambda @27.18-27.82
@@ -547,20 +537,18 @@ combineResults = |result1, result2|
 			(declared-type
 				(ty-fn @26.18-26.82 (effectful false)
 					(ty-malformed @26.18-26.36)
-					(ty @26.38-26.41 (name "Str"))
-					(ty-apply @26.45-26.82 (symbol "Result")
-						(ty-lookup-external @26.52-26.62
-							(module-idx "1")
-							(target-node-idx "0"))
-						(ty-malformed @26.64-26.81))))))
+					(ty-lookup @26.38-26.41 (name "Str") (builtin))
+					(ty-apply @26.45-26.82 (name "Result") (local)
+						(ty-lookup @26.45-26.82 (name "Value") (external (module-idx "1") (target-node-idx "0")))
+						(ty-malformed @26.45-26.82))))))
 	(d-let
 		(p-assign @31.1-31.15 (ident "combineResults"))
 		(e-closure @31.18-39.6
 			(captures
-				(capture @38.13-38.16 (ident "err"))
 				(capture @36.21-36.24 (ident "err"))
-				(capture @33.12-33.18 (ident "value1"))
-				(capture @35.20-35.26 (ident "value2")))
+				(capture @35.20-35.26 (ident "value2"))
+				(capture @38.13-38.16 (ident "err"))
+				(capture @33.12-33.18 (ident "value1")))
 			(e-lambda @31.18-39.6
 				(args
 					(p-assign @31.19-31.26 (ident "result1"))
@@ -623,17 +611,17 @@ combineResults = |result1, result2|
 		(annotation @31.1-31.15
 			(declared-type
 				(ty-fn @30.18-30.71 (effectful false)
-					(ty-apply @30.18-30.32 (symbol "Result")
-						(ty-var @30.25-30.26 (name "a"))
-						(ty-var @30.28-30.31 (name "err")))
-					(ty-apply @30.34-30.48 (symbol "Result")
-						(ty-var @30.41-30.42 (name "b"))
-						(ty-var @30.44-30.47 (name "err")))
-					(ty-apply @30.52-30.71 (symbol "Result")
-						(ty-tuple @30.59-30.65
-							(ty-var @30.60-30.61 (name "a"))
-							(ty-var @30.63-30.64 (name "b")))
-						(ty-var @30.67-30.70 (name "err")))))))
+					(ty-apply @30.18-30.32 (name "Result") (local)
+						(ty-rigid-var @30.18-30.32 (name "a"))
+						(ty-rigid-var @30.18-30.32 (name "err")))
+					(ty-apply @30.34-30.48 (name "Result") (local)
+						(ty-rigid-var @30.34-30.48 (name "b"))
+						(ty-rigid-var-lookup (ty-rigid-var @30.18-30.32 (name "err"))))
+					(ty-apply @30.52-30.71 (name "Result") (local)
+						(ty-tuple @30.52-30.71
+							(ty-rigid-var-lookup (ty-rigid-var @30.18-30.32 (name "a")))
+							(ty-rigid-var-lookup (ty-rigid-var @30.34-30.48 (name "b"))))
+						(ty-rigid-var-lookup (ty-rigid-var @30.18-30.32 (name "err"))))))))
 	(s-import @3.1-3.56 (module "http.Client") (qualifier "http") (alias "Http")
 		(exposes
 			(exposed (name "Request") (wildcard false))

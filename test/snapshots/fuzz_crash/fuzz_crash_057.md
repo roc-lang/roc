@@ -55,12 +55,12 @@ u : o
 (can-ir
 	(s-type-anno @1.9-1.36 (name "s")
 		(ty-fn @1.11-1.15 (effectful false)
-			(ty-var @1.11-1.12 (name "b"))
-			(ty-var @1.14-1.15 (name "c")))
+			(ty-rigid-var @1.11-1.12 (name "b"))
+			(ty-rigid-var @1.14-1.15 (name "c")))
 		(where
 			(method @1.22-1.35 (module-of "a") (ident "t")
 				(args)
-				(ty-var @1.34-1.35 (name "c")))))
+				(ty-rigid-var-lookup (ty-rigid-var @1.14-1.15 (name "c"))))))
 	(ext-decl @1.22-1.35 (ident "module(a).t") (kind "value")))
 ~~~
 # TYPES

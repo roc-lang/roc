@@ -466,13 +466,6 @@ fn Unifier(comptime StoreTypeB: type) type {
                     try self.unifyRigid(vars, vars.b.desc.content);
                 },
                 .alias => |a_alias| {
-                    const backing_var = self.types_store.getAliasBackingVar(a_alias);
-                    const backing_resolved = self.types_store.resolveVar(backing_var);
-                    if (backing_resolved.desc.content == .err) {
-                        // Invalid alias - treat as transparent
-                        self.merge(vars, vars.b.desc.content);
-                        return;
-                    }
                     try self.unifyAlias(vars, a_alias, vars.b.desc.content);
                 },
                 .structure => |a_flat_type| {
@@ -583,7 +576,21 @@ fn Unifier(comptime StoreTypeB: type) type {
                     }
                 },
                 .structure => {
-                    try self.unifyGuarded(backing_var, vars.b.var_);
+                    // When unifying an alias with a concrete structure, we
+                    // want to preserve the alias for display while ensuring the
+                    // types are compatible.
+
+                    // First, we unify the concrete var with the alias backing var
+                    // IMPORTANT: The arg order here is important! Unifying
+                    // updates the second var to hold the type, and the first
+                    // var to redirect to the second
+                    try self.unifyGuarded(vars.b.var_, backing_var);
+
+                    // Next, we create a fresh alias (which internally points to `backing_var`),
+                    // then we redirect both a & b to the new alias.
+                    const fresh_alias_var = self.fresh(vars, .{ .alias = a_alias }) catch return Error.AllocatorError;
+                    self.types_store.setVarRedirect(vars.a.var_, fresh_alias_var) catch return Error.AllocatorError;
+                    self.types_store.setVarRedirect(vars.b.var_, fresh_alias_var) catch return Error.AllocatorError;
                 },
                 .err => self.merge(vars, .err),
             }
@@ -642,7 +649,23 @@ fn Unifier(comptime StoreTypeB: type) type {
                 },
                 .rigid_var => return error.TypeMismatch,
                 .alias => |b_alias| {
-                    try self.unifyGuarded(vars.a.var_, self.types_store.getAliasBackingVar(b_alias));
+                    // When unifying an alias with a concrete structure, we
+                    // want to preserve the alias for display while ensuring the
+                    // types are compatible.
+
+                    const backing_var = self.types_store.getAliasBackingVar(b_alias);
+
+                    // First, we unify the concrete var with the alias backing var
+                    // IMPORTANT: The arg order here is important! Unifying
+                    // updates the second var to hold the type, and the first
+                    // var to redirect to the second
+                    try self.unifyGuarded(vars.a.var_, backing_var);
+
+                    // Next, we create a fresh alias (which internally points to `backing_var`),
+                    // then we redirect both a & b to the new alias.
+                    const fresh_alias_var = self.fresh(vars, .{ .alias = b_alias }) catch return Error.AllocatorError;
+                    self.types_store.setVarRedirect(vars.a.var_, fresh_alias_var) catch return Error.AllocatorError;
+                    self.types_store.setVarRedirect(vars.b.var_, fresh_alias_var) catch return Error.AllocatorError;
                 },
                 .structure => |b_flat_type| {
                     try self.unifyFlatType(vars, a_flat_type, b_flat_type);
@@ -819,49 +842,22 @@ fn Unifier(comptime StoreTypeB: type) type {
                             }
                         },
                         .record => |b_record| {
-                            try self.unifyTwoRecords(vars, a_record, b_record);
+                            try self.unifyTwoRecords(
+                                vars,
+                                a_record.fields,
+                                .{ .ext = a_record.ext },
+                                b_record.fields,
+                                .{ .ext = b_record.ext },
+                            );
                         },
                         .record_unbound => |b_fields| {
-                            // When unifying record with record_unbound, record wins
-                            // First gather the fields from the record
-                            const a_gathered_fields = try self.gatherRecordFields(a_record);
-
-                            // For record_unbound, we just have the fields directly (no extension)
-                            const b_gathered_range = self.scratch.copyGatherFieldsFromMultiList(
-                                &self.types_store.record_fields,
-                                b_fields,
-                            ) catch return Error.AllocatorError;
-
-                            // Partition the fields
-                            const partitioned = Self.partitionFields(
-                                self.module_env.getIdentStore(),
-                                self.scratch,
-                                a_gathered_fields.range,
-                                b_gathered_range,
-                            ) catch return Error.AllocatorError;
-
-                            // record_unbound requires at least its fields to be present in the record
-                            // The record can have additional fields (that's what makes it extensible)
-                            if (partitioned.only_in_b.len() > 0) {
-                                // The record_unbound has fields that the record doesn't have
-                                return error.TypeMismatch;
-                            }
-
-                            // Unify shared fields
-                            try self.unifySharedFields(
+                            try self.unifyTwoRecords(
                                 vars,
-                                self.scratch.in_both_fields.sliceRange(partitioned.in_both),
-                                null,
-                                null,
-                                a_gathered_fields.ext,
+                                a_record.fields,
+                                .{ .ext = a_record.ext },
+                                b_fields,
+                                .unbound,
                             );
-
-                            // Record wins (keeps its extension and any extra fields)
-                            self.merge(vars, vars.a.desc.content);
-                        },
-                        .record_poly => |b_poly| {
-                            // When unifying record with record_poly, unify the records
-                            try self.unifyTwoRecords(vars, a_record, b_poly.record);
                         },
                         else => return error.TypeMismatch,
                     }
@@ -877,173 +873,22 @@ fn Unifier(comptime StoreTypeB: type) type {
                             }
                         },
                         .record => |b_record| {
-                            // When unifying record_unbound with record, record wins
-                            // Copy unbound fields into scratch
-                            const a_gathered_range = self.scratch.copyGatherFieldsFromMultiList(
-                                &self.types_store.record_fields,
-                                a_fields,
-                            ) catch return Error.AllocatorError;
-
-                            // Gather fields from the record
-                            const b_gathered_fields = try self.gatherRecordFields(b_record);
-
-                            // Partition the fields
-                            const partitioned = Self.partitionFields(
-                                self.module_env.getIdentStore(),
-                                self.scratch,
-                                a_gathered_range,
-                                b_gathered_fields.range,
-                            ) catch return Error.AllocatorError;
-
-                            // record_unbound requires at least its fields to be present in the record
-                            // The record can have additional fields (that's what makes it extensible)
-                            if (partitioned.only_in_a.len() > 0) {
-                                // The record_unbound has fields that the record doesn't have
-                                return error.TypeMismatch;
-                            }
-
-                            // Unify shared fields
-                            try self.unifySharedFields(
+                            try self.unifyTwoRecords(
                                 vars,
-                                self.scratch.in_both_fields.sliceRange(partitioned.in_both),
-                                null,
-                                null,
-                                b_gathered_fields.ext,
+                                a_fields,
+                                .unbound,
+                                b_record.fields,
+                                .{ .ext = b_record.ext },
                             );
-
-                            // Record wins
-                            self.merge(vars, vars.b.desc.content);
                         },
                         .record_unbound => |b_fields| {
-                            // Both are record_unbound - unify fields and stay unbound
-                            // Copy both field sets into scratch
-                            const a_gathered_range = self.scratch.copyGatherFieldsFromMultiList(
-                                &self.types_store.record_fields,
+                            try self.unifyTwoRecords(
+                                vars,
                                 a_fields,
-                            ) catch return Error.AllocatorError;
-                            const b_gathered_range = self.scratch.copyGatherFieldsFromMultiList(
-                                &self.types_store.record_fields,
+                                .unbound,
                                 b_fields,
-                            ) catch return Error.AllocatorError;
-
-                            // Partition the fields
-                            const partitioned = Self.partitionFields(
-                                self.module_env.getIdentStore(),
-                                self.scratch,
-                                a_gathered_range,
-                                b_gathered_range,
-                            ) catch return Error.AllocatorError;
-
-                            // Check that they have the same fields
-                            if (partitioned.only_in_a.len() > 0 or partitioned.only_in_b.len() > 0) {
-                                return error.TypeMismatch;
-                            }
-
-                            // Unify shared fields (no extension since both are unbound)
-                            const dummy_ext = self.fresh(vars, .{ .structure = .empty_record }) catch return Error.AllocatorError;
-                            try self.unifySharedFields(
-                                vars,
-                                self.scratch.in_both_fields.sliceRange(partitioned.in_both),
-                                null,
-                                null,
-                                dummy_ext,
+                                .unbound,
                             );
-
-                            // Stay unbound (use the first one's fields since they're unified now)
-                            self.merge(vars, vars.a.desc.content);
-                        },
-                        .record_poly => |b_poly| {
-                            // When unifying record_unbound with record_poly, poly wins
-                            // Copy unbound fields into scratch
-                            const a_gathered_range = self.scratch.copyGatherFieldsFromMultiList(
-                                &self.types_store.record_fields,
-                                a_fields,
-                            ) catch return Error.AllocatorError;
-
-                            // Gather fields from the poly record
-                            const b_gathered_fields = try self.gatherRecordFields(b_poly.record);
-
-                            // Partition the fields
-                            const partitioned = Self.partitionFields(
-                                self.module_env.getIdentStore(),
-                                self.scratch,
-                                a_gathered_range,
-                                b_gathered_fields.range,
-                            ) catch return Error.AllocatorError;
-
-                            // Check that they have the same fields
-                            if (partitioned.only_in_a.len() > 0 or partitioned.only_in_b.len() > 0) {
-                                return error.TypeMismatch;
-                            }
-
-                            // Unify shared fields
-                            try self.unifySharedFields(
-                                vars,
-                                self.scratch.in_both_fields.sliceRange(partitioned.in_both),
-                                null,
-                                null,
-                                b_gathered_fields.ext,
-                            );
-
-                            // Poly wins
-                            self.merge(vars, vars.b.desc.content);
-                        },
-                        else => return error.TypeMismatch,
-                    }
-                },
-                .record_poly => |a_poly| {
-                    switch (b_flat_type) {
-                        .empty_record => {
-                            if (a_poly.record.fields.len() == 0) {
-                                try self.unifyGuarded(a_poly.record.ext, vars.b.var_);
-                            } else {
-                                return error.TypeMismatch;
-                            }
-                        },
-                        .record => |b_record| {
-                            // When unifying record_poly with record, unify the records
-                            try self.unifyTwoRecords(vars, a_poly.record, b_record);
-                        },
-                        .record_unbound => |b_fields| {
-                            // When unifying record_poly with record_unbound, poly wins
-                            // Gather fields from the poly record
-                            const a_gathered_fields = try self.gatherRecordFields(a_poly.record);
-
-                            // Copy unbound fields into scratch
-                            const b_gathered_range = self.scratch.copyGatherFieldsFromMultiList(
-                                &self.types_store.record_fields,
-                                b_fields,
-                            ) catch return Error.AllocatorError;
-
-                            // Partition the fields
-                            const partitioned = Self.partitionFields(
-                                self.module_env.getIdentStore(),
-                                self.scratch,
-                                a_gathered_fields.range,
-                                b_gathered_range,
-                            ) catch return Error.AllocatorError;
-
-                            // Check that they have the same fields
-                            if (partitioned.only_in_a.len() > 0 or partitioned.only_in_b.len() > 0) {
-                                return error.TypeMismatch;
-                            }
-
-                            // Unify shared fields
-                            try self.unifySharedFields(
-                                vars,
-                                self.scratch.in_both_fields.sliceRange(partitioned.in_both),
-                                null,
-                                null,
-                                a_gathered_fields.ext,
-                            );
-
-                            // Poly wins
-                            self.merge(vars, vars.a.desc.content);
-                        },
-                        .record_poly => |b_poly| {
-                            // Both are record_poly - unify the records and vars
-                            try self.unifyTwoRecords(vars, a_poly.record, b_poly.record);
-                            try self.unifyGuarded(a_poly.var_, b_poly.var_);
                         },
                         else => return error.TypeMismatch,
                     }
@@ -1064,13 +909,6 @@ fn Unifier(comptime StoreTypeB: type) type {
                             if (b_fields.len() == 0) {
                                 // Both are empty, merge as empty_record
                                 self.merge(vars, Content{ .structure = .empty_record });
-                            } else {
-                                return error.TypeMismatch;
-                            }
-                        },
-                        .record_poly => |b_poly| {
-                            if (b_poly.record.fields.len() == 0) {
-                                try self.unifyGuarded(vars.a.var_, b_poly.record.ext);
                             } else {
                                 return error.TypeMismatch;
                             }
@@ -1144,335 +982,103 @@ fn Unifier(comptime StoreTypeB: type) type {
             a_num: Num,
             b_num: Num,
         ) Error!void {
-            const trace = tracy.trace(@src());
-            defer trace.end();
-
             switch (a_num) {
+                // Nums //
+                // Num(a)
+                // ^^^
                 .num_poly => |a_poly| {
                     switch (b_num) {
                         .num_poly => |b_poly| {
-                            // Unify the variables
-                            try self.unifyGuarded(a_poly.var_, b_poly.var_);
-
-                            // num_poly always contains IntRequirements
-                            self.merge(vars, Content{ .structure = .{ .num = .{ .num_poly = .{
-                                .var_ = a_poly.var_,
-                                .requirements = a_poly.requirements.unify(b_poly.requirements),
-                            } } } });
+                            try self.unifyGuarded(a_poly, b_poly);
+                            self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = b_poly } } });
                         },
-                        .num_unbound => |b_requirements| {
-                            // When unifying num_poly with num_unbound, the unbound picks up the poly's var
-                            self.merge(vars, Content{ .structure = .{ .num = .{ .num_poly = .{
-                                .var_ = a_poly.var_,
-                                .requirements = a_poly.requirements.unify(b_requirements),
-                            } } } });
+                        .num_unbound => |b_reqs| {
+                            try self.unifyPolyAndUnboundNums(vars, a_poly, b_reqs);
                         },
                         .num_compact => |b_num_compact| {
-                            // num_poly always contains IntRequirements
-                            switch (b_num_compact) {
-                                .int => |prec| {
-                                    const result = self.checkIntPrecisionRequirements(prec, a_poly.requirements);
-                                    switch (result) {
-                                        .ok => {},
-                                        .negative_unsigned => return error.NegativeUnsignedInt,
-                                        .too_large => return error.NumberDoesNotFit,
-                                    }
+                            try self.unifyPolyAndCompactNums(vars, a_poly, b_num_compact);
+                        },
+                        else => return error.TypeMismatch,
+                    }
+                },
+                .num_unbound => |a_reqs| {
+                    switch (b_num) {
+                        .num_poly => |b_poly| {
+                            try self.unifyUnboundAndPolyNums(vars, a_reqs, b_poly);
+                        },
+                        .num_unbound => |b_requirements| {
+                            self.merge(vars, .{ .structure = .{ .num = .{
+                                .num_unbound = .{
+                                    .int_requirements = a_reqs.int_requirements.unify(b_requirements.int_requirements),
+                                    .frac_requirements = a_reqs.frac_requirements.unify(b_requirements.frac_requirements),
                                 },
-                                .frac => return error.TypeMismatch,
-                            }
+                            } } });
+                        },
+                        .num_compact => |b_num_compact| {
+                            try self.unifyUnboundAndCompactNums(
+                                vars,
+                                a_reqs,
+                                b_num_compact,
+                            );
+                        },
+                        else => return error.TypeMismatch,
+                    }
+                },
+                // Ints
+                // Num(Int(a))
+                //     ^^^^^^
+                .int_poly => |a_poly_var| {
+                    switch (b_num) {
+                        .int_poly => |b_poly_var| {
+                            try self.unifyGuarded(a_poly_var, b_poly_var);
+                            self.merge(vars, vars.a.desc.content);
+                        },
+                        .int_unbound => {
+                            self.merge(vars, vars.a.desc.content);
+                        },
+                        else => return error.TypeMismatch,
+                    }
+                },
+                .int_unbound => {
+                    switch (b_num) {
+                        .int_poly => |_| {
                             self.merge(vars, vars.b.desc.content);
                         },
-                        .int_poly => |b_poly| {
-                            // Both are int requirements - unify and merge
-                            try self.unifyGuarded(a_poly.var_, b_poly.var_);
-                            self.merge(vars, Content{ .structure = .{ .num = .{ .int_poly = .{
-                                .var_ = a_poly.var_,
-                                .requirements = a_poly.requirements.unify(b_poly.requirements),
-                            } } } });
+                        .int_unbound => {
+                            self.merge(vars, vars.b.desc.content);
                         },
-                        .int_unbound => |b_requirements| {
-                            // When unifying int_poly with int_unbound, keep as int_poly
-                            self.merge(vars, Content{ .structure = .{ .num = .{ .int_poly = .{
-                                .var_ = a_poly.var_,
-                                .requirements = a_poly.requirements.unify(b_requirements),
-                            } } } });
-                        },
-                        .frac_poly => {
-                            // num_poly has IntRequirements, frac_poly has FracRequirements - incompatible
-                            return error.TypeMismatch;
+                        else => return error.TypeMismatch,
+                    }
+                },
+                // Fracs //
+                // Num(Frac(a))
+                //     ^^^^^^^
+                .frac_poly => |a_poly_var| {
+                    switch (b_num) {
+                        .frac_poly => |b_poly_var| {
+                            try self.unifyGuarded(a_poly_var, b_poly_var);
+                            self.merge(vars, vars.a.desc.content);
                         },
                         .frac_unbound => {
-                            // num_poly has IntRequirements, frac_unbound has FracRequirements - incompatible
-                            return error.TypeMismatch;
-                        },
-                        .int_precision => |prec| {
-                            // num_poly always contains IntRequirements
-                            const result = self.checkIntPrecisionRequirements(prec, a_poly.requirements);
-                            switch (result) {
-                                .ok => {},
-                                .negative_unsigned => return error.NegativeUnsignedInt,
-                                .too_large => return error.NumberDoesNotFit,
-                            }
-                            self.merge(vars, vars.b.desc.content);
-                        },
-                        .frac_precision => {
-                            // num_poly has IntRequirements, frac_precision is for fractions - incompatible
-                            return error.TypeMismatch;
-                        },
-                    }
-                },
-                .int_poly => |a_poly| {
-                    switch (b_num) {
-                        .num_poly => |b_poly| {
-                            // Both are int requirements - unify and merge
-                            try self.unifyGuarded(a_poly.var_, b_poly.var_);
-                            self.merge(vars, Content{ .structure = .{ .num = .{ .int_poly = .{
-                                .var_ = a_poly.var_,
-                                .requirements = a_poly.requirements.unify(b_poly.requirements),
-                            } } } });
-                        },
-                        .num_unbound => |b_requirements| {
-                            // When unifying int_poly with num_unbound, keep as int_poly
-                            self.merge(vars, Content{ .structure = .{ .num = .{ .int_poly = .{
-                                .var_ = a_poly.var_,
-                                .requirements = a_poly.requirements.unify(b_requirements),
-                            } } } });
-                        },
-                        .int_poly => |b_poly| {
-                            try self.unifyGuarded(a_poly.var_, b_poly.var_);
-                            self.merge(vars, Content{ .structure = .{ .num = .{ .int_poly = .{
-                                .var_ = a_poly.var_,
-                                .requirements = a_poly.requirements.unify(b_poly.requirements),
-                            } } } });
-                        },
-                        .int_unbound => |b_requirements| {
-                            // When unifying int_poly with int_unbound, keep as int_poly
-                            self.merge(vars, Content{ .structure = .{ .num = .{ .int_poly = .{
-                                .var_ = a_poly.var_,
-                                .requirements = a_poly.requirements.unify(b_requirements),
-                            } } } });
-                        },
-                        .int_precision => |prec| {
-                            // Check if the requirements variable is rigid
-                            const req_var_desc = self.module_env.types.resolveVar(a_poly.var_).desc;
-                            if (req_var_desc.content == .rigid_var) {
-                                return error.TypeMismatch;
-                            }
-                            // Check if the precision satisfies the requirements
-                            const result = self.checkIntPrecisionRequirements(prec, a_poly.requirements);
-                            switch (result) {
-                                .ok => {},
-                                .negative_unsigned => return error.NegativeUnsignedInt,
-                                .too_large => return error.NumberDoesNotFit,
-                            }
-                            self.merge(vars, vars.b.desc.content);
-                        },
-
-                        else => return error.TypeMismatch,
-                    }
-                },
-                .frac_poly => |a_poly| {
-                    switch (b_num) {
-                        .frac_poly => |b_poly| {
-                            try self.unifyGuarded(a_poly.var_, b_poly.var_);
-                            self.merge(vars, Content{ .structure = .{ .num = .{ .frac_poly = .{
-                                .var_ = a_poly.var_,
-                                .requirements = a_poly.requirements.unify(b_poly.requirements),
-                            } } } });
-                        },
-                        .frac_unbound => |b_requirements| {
-                            // When unifying frac_poly with frac_unbound, keep as frac_poly
-                            self.merge(vars, Content{ .structure = .{ .num = .{ .frac_poly = .{
-                                .var_ = a_poly.var_,
-                                .requirements = a_poly.requirements.unify(b_requirements),
-                            } } } });
-                        },
-                        .frac_precision => |prec| {
-                            // Check if the precision satisfies the requirements
-                            if (!self.fracPrecisionSatisfiesRequirements(prec, a_poly.requirements)) {
-                                return error.TypeMismatch;
-                            }
-                            self.merge(vars, vars.b.desc.content);
-                        },
-                        .num_poly => {
-                            // num_poly has IntRequirements, frac_poly has FracRequirements - incompatible
-                            return error.TypeMismatch;
-                        },
-                        .num_compact => |b_compact| {
-                            // Check if the requirements variable is rigid
-                            const req_var_desc = self.module_env.types.resolveVar(a_poly.var_).desc;
-                            if (req_var_desc.content == .rigid_var) {
-                                return error.TypeMismatch;
-                            }
-                            // Check if the compact frac type satisfies the requirements
-                            switch (b_compact) {
-                                .frac => |prec| {
-                                    if (!self.fracPrecisionSatisfiesRequirements(prec, a_poly.requirements)) {
-                                        return error.TypeMismatch;
-                                    }
-                                    self.merge(vars, vars.b.desc.content);
-                                },
-                                .int => return error.TypeMismatch,
-                            }
+                            self.merge(vars, vars.a.desc.content);
                         },
                         else => return error.TypeMismatch,
                     }
                 },
-                .num_unbound => |a_requirements| {
+                .frac_unbound => {
                     switch (b_num) {
-                        .num_poly => |b_poly| {
-                            // When unifying num_unbound with num_poly, the unbound picks up the poly's var
-                            self.merge(vars, Content{ .structure = .{ .num = .{ .num_poly = .{
-                                .var_ = b_poly.var_,
-                                .requirements = a_requirements.unify(b_poly.requirements),
-                            } } } });
-                        },
-                        .num_unbound => |b_requirements| {
-                            // Both unbound - merge requirements, stay unbound
-                            self.merge(vars, Content{ .structure = .{ .num = .{ .num_unbound = a_requirements.unify(b_requirements) } } });
-                        },
-                        .int_poly => |b_poly| {
-                            // When unifying num_unbound with int_poly, keep as int_poly
-                            self.merge(vars, Content{ .structure = .{ .num = .{ .int_poly = .{
-                                .var_ = b_poly.var_,
-                                .requirements = a_requirements.unify(b_poly.requirements),
-                            } } } });
-                        },
-                        .int_unbound => |b_requirements| {
-                            // When unifying num_unbound with int_unbound, keep as int_unbound
-                            self.merge(vars, Content{ .structure = .{ .num = .{ .int_unbound = a_requirements.unify(b_requirements) } } });
-                        },
-                        .num_compact => |b_num_compact| {
-                            // Check if the compact type satisfies the requirements
-                            switch (b_num_compact) {
-                                .int => |int_prec| {
-                                    const result = self.checkIntPrecisionRequirements(int_prec, a_requirements);
-                                    switch (result) {
-                                        .ok => {},
-                                        .negative_unsigned => return error.NegativeUnsignedInt,
-                                        .too_large => return error.NumberDoesNotFit,
-                                    }
-                                },
-                                .frac => return error.TypeMismatch,
-                            }
+                        .frac_poly => |_| {
                             self.merge(vars, vars.b.desc.content);
                         },
-                        .int_precision => |prec| {
-                            // Check if the precision satisfies the requirements
-                            const result = self.checkIntPrecisionRequirements(prec, a_requirements);
-                            switch (result) {
-                                .ok => {},
-                                .negative_unsigned => return error.NegativeUnsignedInt,
-                                .too_large => return error.NumberDoesNotFit,
-                            }
-                            self.merge(vars, vars.b.desc.content);
-                        },
-                        .frac_precision => |prec| {
-                            // Promote decimal integers to the concrete fractional precision.
-                            // Any fractional precision can represent integer literals, so no
-                            // additional requirement checks are needed here.
-                            self.merge(vars, Content{ .structure = .{ .num = .{ .frac_precision = prec } } });
-                        },
-                        .frac_unbound => |b_requirements| {
-                            // When unifying num_unbound with frac_unbound, frac wins
-                            self.merge(vars, Content{ .structure = .{ .num = .{ .frac_unbound = b_requirements } } });
-                        },
-                        else => return error.TypeMismatch,
-                    }
-                },
-                .int_unbound => |a_requirements| {
-                    switch (b_num) {
-                        .num_poly => |b_poly| {
-                            // When unifying int_unbound with num_poly, keep as int_poly
-                            self.merge(vars, Content{ .structure = .{ .num = .{ .int_poly = .{
-                                .var_ = b_poly.var_,
-                                .requirements = a_requirements.unify(b_poly.requirements),
-                            } } } });
-                        },
-                        .num_unbound => |b_requirements| {
-                            // When unifying int_unbound with num_unbound, keep as int_unbound
-                            self.merge(vars, Content{ .structure = .{ .num = .{ .int_unbound = a_requirements.unify(b_requirements) } } });
-                        },
-                        .int_poly => |b_poly| {
-                            // When unifying int_unbound with int_poly, keep as int_poly
-                            self.merge(vars, Content{ .structure = .{ .num = .{ .int_poly = .{
-                                .var_ = b_poly.var_,
-                                .requirements = a_requirements.unify(b_poly.requirements),
-                            } } } });
-                        },
-                        .int_unbound => |b_requirements| {
-                            // Both int_unbound - merge requirements
-                            self.merge(vars, Content{ .structure = .{ .num = .{ .int_unbound = a_requirements.unify(b_requirements) } } });
-                        },
-                        .num_compact => |b_num_compact| {
-                            // Check if it's an int
-                            switch (b_num_compact) {
-                                .int => |int_prec| {
-                                    const result = self.checkIntPrecisionRequirements(int_prec, a_requirements);
-                                    switch (result) {
-                                        .ok => {},
-                                        .negative_unsigned => return error.NegativeUnsignedInt,
-                                        .too_large => return error.NumberDoesNotFit,
-                                    }
-                                },
-                                .frac => return error.TypeMismatch,
-                            }
-                            self.merge(vars, vars.b.desc.content);
-                        },
-                        .int_precision => |prec| {
-                            // Check if the precision satisfies the requirements
-                            const result = self.checkIntPrecisionRequirements(prec, a_requirements);
-                            switch (result) {
-                                .ok => {},
-                                .negative_unsigned => return error.NegativeUnsignedInt,
-                                .too_large => return error.NumberDoesNotFit,
-                            }
+                        .frac_unbound => {
                             self.merge(vars, vars.b.desc.content);
                         },
                         else => return error.TypeMismatch,
                     }
                 },
-                .frac_unbound => |a_requirements| {
-                    switch (b_num) {
-                        .frac_poly => |b_poly| {
-                            // When unifying frac_unbound with frac_poly, keep as frac_poly
-                            self.merge(vars, Content{ .structure = .{ .num = .{ .frac_poly = .{
-                                .var_ = b_poly.var_,
-                                .requirements = a_requirements.unify(b_poly.requirements),
-                            } } } });
-                        },
-                        .frac_unbound => |b_requirements| {
-                            // Both frac_unbound - merge requirements
-                            self.merge(vars, Content{ .structure = .{ .num = .{ .frac_unbound = a_requirements.unify(b_requirements) } } });
-                        },
-                        .num_compact => |b_num_compact| {
-                            // Check if it's a frac
-                            switch (b_num_compact) {
-                                .frac => |frac_prec| {
-                                    if (!self.fracPrecisionSatisfiesRequirements(frac_prec, a_requirements)) {
-                                        return error.TypeMismatch;
-                                    }
-                                },
-                                .int => return error.TypeMismatch,
-                            }
-                            self.merge(vars, vars.b.desc.content);
-                        },
-                        .frac_precision => |prec| {
-                            // Check if the precision satisfies the requirements
-                            if (!self.fracPrecisionSatisfiesRequirements(prec, a_requirements)) {
-                                return error.TypeMismatch;
-                            }
-                            self.merge(vars, vars.b.desc.content);
-                        },
-                        .num_unbound => |b_requirements| {
-                            // When unifying frac_unbound with num_unbound, frac wins
-                            // Note: b_requirements are IntRequirements, we just keep our FracRequirements
-                            _ = b_requirements;
-                            self.merge(vars, Content{ .structure = .{ .num = .{ .frac_unbound = a_requirements } } });
-                        },
-                        else => return error.TypeMismatch,
-                    }
-                },
+                // Precisions //
+                // This Num(Int(a)), Num(Int(Signed8)), Num(Frac(...))
+                //              ^            ^^^^^^^             ^^^
                 .int_precision => |a_prec| {
                     switch (b_num) {
                         .int_precision => |b_prec| {
@@ -1480,18 +1086,6 @@ fn Unifier(comptime StoreTypeB: type) type {
                                 self.merge(vars, vars.b.desc.content);
                             } else {
                                 return error.TypeMismatch;
-                            }
-                        },
-                        .num_compact => |b_compact| {
-                            switch (b_compact) {
-                                .int => |b_prec| {
-                                    if (a_prec == b_prec) {
-                                        self.merge(vars, vars.b.desc.content);
-                                    } else {
-                                        return error.TypeMismatch;
-                                    }
-                                },
-                                .frac => return error.TypeMismatch,
                             }
                         },
                         else => return error.TypeMismatch,
@@ -1506,100 +1100,30 @@ fn Unifier(comptime StoreTypeB: type) type {
                                 return error.TypeMismatch;
                             }
                         },
-                        .num_unbound => {
-                            // Fractional precision wins when unified with decimal integer literals.
-                            self.merge(vars, vars.a.desc.content);
-                        },
-                        .num_compact => |b_compact| {
-                            switch (b_compact) {
-                                .frac => |b_prec| {
-                                    if (a_prec == b_prec) {
-                                        self.merge(vars, vars.b.desc.content);
-                                    } else {
-                                        return error.TypeMismatch;
-                                    }
-                                },
-                                .int => return error.TypeMismatch,
-                            }
-                        },
                         else => return error.TypeMismatch,
                     }
                 },
+                // Compacted nums //
+                // The whole Num(Int(Signed8)), compacted into a single variable
+                //           ^^^^^^^^^^^^^^^^
                 .num_compact => |a_num_compact| {
                     switch (b_num) {
                         .num_compact => |b_num_compact| {
                             try self.unifyTwoCompactNums(vars, a_num_compact, b_num_compact);
                         },
                         .num_poly => |b_poly| {
-                            // num_poly always contains IntRequirements
-                            switch (a_num_compact) {
-                                .int => |prec| {
-                                    const result = self.checkIntPrecisionRequirements(prec, b_poly.requirements);
-                                    switch (result) {
-                                        .ok => {},
-                                        .negative_unsigned => return error.NegativeUnsignedInt,
-                                        .too_large => return error.NumberDoesNotFit,
-                                    }
-                                },
-                                .frac => return error.TypeMismatch,
-                            }
-                            self.merge(vars, vars.a.desc.content);
+                            try self.unifyCompactAndPolyNums(
+                                vars,
+                                a_num_compact,
+                                b_poly,
+                            );
                         },
-                        .int_precision => |b_prec| {
-                            switch (a_num_compact) {
-                                .int => |a_prec| {
-                                    if (a_prec == b_prec) {
-                                        self.merge(vars, vars.a.desc.content);
-                                    } else {
-                                        return error.TypeMismatch;
-                                    }
-                                },
-                                .frac => return error.TypeMismatch,
-                            }
-                        },
-                        .frac_precision => |b_prec| {
-                            switch (a_num_compact) {
-                                .frac => |a_prec| {
-                                    if (a_prec == b_prec) {
-                                        self.merge(vars, vars.a.desc.content);
-                                    } else {
-                                        return error.TypeMismatch;
-                                    }
-                                },
-                                .int => return error.TypeMismatch,
-                            }
-                        },
-                        .frac_poly => |b_poly| {
-                            // Check if the requirements variable is rigid
-                            const req_var_desc = self.module_env.types.resolveVar(b_poly.var_).desc;
-                            if (req_var_desc.content == .rigid_var) {
-                                return error.TypeMismatch;
-                            }
-                            // Check if the compact frac type satisfies the requirements
-                            switch (a_num_compact) {
-                                .frac => |prec| {
-                                    if (!self.fracPrecisionSatisfiesRequirements(prec, b_poly.requirements)) {
-                                        return error.TypeMismatch;
-                                    }
-                                    self.merge(vars, vars.a.desc.content);
-                                },
-                                .int => return error.TypeMismatch,
-                            }
-                        },
-                        .num_unbound => |b_num_unbound| {
-                            // Check if the compact type satisfies the requirements
-                            switch (a_num_compact) {
-                                .int => |int_prec| {
-                                    const result = self.checkIntPrecisionRequirements(int_prec, b_num_unbound);
-                                    switch (result) {
-                                        .ok => {},
-                                        .negative_unsigned => return error.NegativeUnsignedInt,
-                                        .too_large => return error.NumberDoesNotFit,
-                                    }
-                                },
-                                .frac => return error.TypeMismatch,
-                            }
-                            self.merge(vars, vars.a.desc.content);
+                        .num_unbound => |b_reqs| {
+                            try self.unifyCompactAndUnboundNums(
+                                vars,
+                                a_num_compact,
+                                b_reqs,
+                            );
                         },
                         else => return error.TypeMismatch,
                     }
@@ -1607,12 +1131,457 @@ fn Unifier(comptime StoreTypeB: type) type {
             }
         }
 
+        // number unification helpers //
+
+        // Unify when a is polymorphic and b is unbound with requirements
+        /// Preserves rigid variables from a, or merges requirements appropriately
+        fn unifyPolyAndUnboundNums(
+            self: *Self,
+            vars: *const ResolvedVarDescs,
+            a_num_var: Var,
+            b_reqs: Num.NumRequirements,
+        ) Error!void {
+            const a_num_resolved = self.resolvePolyNum(a_num_var);
+            switch (a_num_resolved) {
+                // If the variable inside a was flex, then b wins
+                .num_flex => self.merge(vars, vars.b.desc.content),
+
+                // If the variable inside a was flex, then have it become unbound with requirements
+                .int_flex => {
+                    const int_unbound = self.fresh(vars, .{ .structure = .{
+                        .num = .{ .int_unbound = b_reqs.int_requirements },
+                    } }) catch return Error.AllocatorError;
+                    self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = int_unbound } } });
+                },
+                .frac_flex => {
+                    const frac_unbound = self.fresh(vars, .{ .structure = .{
+                        .num = .{ .frac_unbound = b_reqs.frac_requirements },
+                    } }) catch return Error.AllocatorError;
+                    self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = frac_unbound } } });
+                },
+
+                // If the variable was rigid, then the rigid wins
+                .num_rigid => self.merge(vars, vars.a.desc.content),
+                .int_rigid => self.merge(vars, vars.a.desc.content),
+                .frac_rigid => self.merge(vars, vars.a.desc.content),
+
+                // If the variable inside a was unbound with recs, unify the reqs
+                .num_unbound => |a_reqs| self.merge(vars, .{ .structure = .{ .num = .{ .num_unbound = .{
+                    .int_requirements = b_reqs.int_requirements.unify(a_reqs.int_requirements),
+                    .frac_requirements = b_reqs.frac_requirements.unify(a_reqs.frac_requirements),
+                } } } }),
+                .int_unbound => |a_reqs| {
+                    const poly_unbound = self.fresh(vars, .{ .structure = .{
+                        .num = .{ .int_unbound = b_reqs.int_requirements.unify(a_reqs) },
+                    } }) catch return Error.AllocatorError;
+                    self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = poly_unbound } } });
+                },
+                .frac_unbound => |a_reqs| {
+                    const poly_unbound = self.fresh(vars, .{ .structure = .{
+                        .num = .{ .frac_unbound = b_reqs.frac_requirements.unify(a_reqs) },
+                    } }) catch return Error.AllocatorError;
+                    self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = poly_unbound } } });
+                },
+
+                // If the variable inside an int with a precision
+                .int_resolved => |a_int| {
+                    const result = self.checkIntPrecisionRequirements(a_int, b_reqs.int_requirements);
+                    switch (result) {
+                        .ok => {},
+                        .negative_unsigned => return error.NegativeUnsignedInt,
+                        .too_large => return error.NumberDoesNotFit,
+                    }
+                    self.merge(vars, vars.b.desc.content);
+                },
+
+                // If the variable inside an frac with a precision or requirements
+                .frac_resolved => |a_frac| {
+                    const does_fit = self.checkFracPrecisionRequirements(a_frac, b_reqs.frac_requirements);
+                    if (!does_fit) {
+                        return error.NumberDoesNotFit;
+                    }
+                    self.merge(vars, vars.b.desc.content);
+                },
+
+                // If the variable inside a wasn't a num, then this in an error
+                .err => |var_| {
+                    return self.setUnifyErrAndThrow(.{ .invalid_number_type = var_ });
+                },
+            }
+        }
+
+        /// Unify when a is unbound with requirements and b is polymorphic
+        /// Preserves rigid variables from b, or merges requirements appropriately
+        fn unifyUnboundAndPolyNums(
+            self: *Self,
+            vars: *const ResolvedVarDescs,
+            a_reqs: Num.NumRequirements,
+            b_num_var: Var,
+        ) Error!void {
+            const b_num_resolved = self.resolvePolyNum(b_num_var);
+            switch (b_num_resolved) {
+                // If the variable inside a was flex, then b wins
+                .num_flex => self.merge(vars, vars.a.desc.content),
+
+                // If the variable inside a was flex, then have it become unbound with requirements
+                .int_flex => {
+                    const int_unbound = self.fresh(vars, .{ .structure = .{
+                        .num = .{ .int_unbound = a_reqs.int_requirements },
+                    } }) catch return Error.AllocatorError;
+                    self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = int_unbound } } });
+                },
+                .frac_flex => {
+                    const frac_unbound = self.fresh(vars, .{ .structure = .{
+                        .num = .{ .frac_unbound = a_reqs.frac_requirements },
+                    } }) catch return Error.AllocatorError;
+                    self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = frac_unbound } } });
+                },
+
+                // If the variable was rigid, then the rigid wins
+                .num_rigid => self.merge(vars, vars.b.desc.content),
+                .int_rigid => self.merge(vars, vars.b.desc.content),
+                .frac_rigid => self.merge(vars, vars.b.desc.content),
+
+                // If the variable inside a was unbound with recs, unify the reqs
+                .num_unbound => |b_reqs| self.merge(vars, .{ .structure = .{ .num = .{ .num_unbound = .{
+                    .int_requirements = a_reqs.int_requirements.unify(b_reqs.int_requirements),
+                    .frac_requirements = a_reqs.frac_requirements.unify(b_reqs.frac_requirements),
+                } } } }),
+                .int_unbound => |b_reqs| {
+                    const poly_unbound = self.fresh(vars, .{ .structure = .{
+                        .num = .{ .int_unbound = a_reqs.int_requirements.unify(b_reqs) },
+                    } }) catch return Error.AllocatorError;
+                    self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = poly_unbound } } });
+                },
+                .frac_unbound => |b_reqs| {
+                    const poly_unbound = self.fresh(vars, .{ .structure = .{
+                        .num = .{ .frac_unbound = a_reqs.frac_requirements.unify(b_reqs) },
+                    } }) catch return Error.AllocatorError;
+                    self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = poly_unbound } } });
+                },
+
+                // If the variable inside an int with a precision
+                .int_resolved => |b_int| {
+                    const result = self.checkIntPrecisionRequirements(b_int, a_reqs.int_requirements);
+                    switch (result) {
+                        .ok => {},
+                        .negative_unsigned => return error.NegativeUnsignedInt,
+                        .too_large => return error.NumberDoesNotFit,
+                    }
+                    self.merge(vars, vars.a.desc.content);
+                },
+
+                // If the variable inside an frac with a precision or requirements
+                .frac_resolved => |b_frac| {
+                    const does_fit = self.checkFracPrecisionRequirements(b_frac, a_reqs.frac_requirements);
+                    if (!does_fit) {
+                        return error.NumberDoesNotFit;
+                    }
+                    self.merge(vars, vars.a.desc.content);
+                },
+
+                // If the variable inside a wasn't a num, then this in an error
+                .err => |var_| {
+                    return self.setUnifyErrAndThrow(.{ .invalid_number_type = var_ });
+                },
+            }
+        }
+
+        /// Unify when a is compact and b is polymorphic
+        /// Since a is compact, we must merge with it (unless b is rigid, which errors)
+        fn unifyCompactAndPolyNums(
+            self: *Self,
+            vars: *const ResolvedVarDescs,
+            a_num: NumCompact,
+            b_num_var: Var,
+        ) Error!void {
+            const b_num_resolved = self.resolvePolyNum(b_num_var);
+            switch (a_num) {
+                .int => |a_int| {
+                    switch (b_num_resolved) {
+                        // If the variable inside a was flex, then b wins
+                        .num_flex => self.merge(vars, vars.a.desc.content),
+                        .int_flex => self.merge(vars, vars.a.desc.content),
+
+                        // If the var inside was a num with requirements
+                        .num_unbound => |b_reqs| {
+                            const result = self.checkIntPrecisionRequirements(a_int, b_reqs.int_requirements);
+                            switch (result) {
+                                .ok => {},
+                                .negative_unsigned => return error.NegativeUnsignedInt,
+                                .too_large => return error.NumberDoesNotFit,
+                            }
+                            self.merge(vars, vars.a.desc.content);
+                        },
+
+                        // If the variable inside an int with a precision or requirements
+                        .int_resolved => |b_int| if (@intFromEnum(a_int) == @intFromEnum(b_int)) {
+                            self.merge(vars, vars.a.desc.content);
+                        } else {
+                            return error.TypeMismatch;
+                        },
+                        .int_unbound => |b_reqs| {
+                            const result = self.checkIntPrecisionRequirements(a_int, b_reqs);
+                            switch (result) {
+                                .ok => {},
+                                .negative_unsigned => return error.NegativeUnsignedInt,
+                                .too_large => return error.NumberDoesNotFit,
+                            }
+                            self.merge(vars, vars.a.desc.content);
+                        },
+
+                        // If the variable inside b was a frac, error
+                        .frac_flex => return error.TypeMismatch,
+                        .frac_resolved => return error.TypeMismatch,
+                        .frac_unbound => return error.TypeMismatch,
+
+                        // If the variable was rigid, then error
+                        .num_rigid => return error.TypeMismatch,
+                        .int_rigid => return error.TypeMismatch,
+                        .frac_rigid => return error.TypeMismatch,
+
+                        // If the variable inside a wasn't a num, then this in an error
+                        .err => |var_| {
+                            return self.setUnifyErrAndThrow(.{ .invalid_number_type = var_ });
+                        },
+                    }
+                },
+                .frac => |a_frac| {
+                    switch (b_num_resolved) {
+                        // If the variable inside a was flex, then b wins
+                        .num_flex => self.merge(vars, vars.a.desc.content),
+                        .frac_flex => self.merge(vars, vars.a.desc.content),
+
+                        // If the var inside was a num with requirements
+                        .num_unbound => |b_reqs| {
+                            const does_fit = self.checkFracPrecisionRequirements(a_frac, b_reqs.frac_requirements);
+                            if (!does_fit) {
+                                return error.NumberDoesNotFit;
+                            }
+                            self.merge(vars, vars.a.desc.content);
+                        },
+
+                        // If the variable inside an int with a precision or requirements
+                        .frac_resolved => |b_frac| if (@intFromEnum(a_frac) == @intFromEnum(b_frac)) {
+                            self.merge(vars, vars.a.desc.content);
+                        } else {
+                            return error.TypeMismatch;
+                        },
+                        .frac_unbound => |b_reqs| {
+                            const does_fit = self.checkFracPrecisionRequirements(a_frac, b_reqs);
+                            if (!does_fit) {
+                                return error.NumberDoesNotFit;
+                            }
+                            self.merge(vars, vars.a.desc.content);
+                        },
+
+                        // If the variable inside b was an int, error
+                        .int_flex => return error.TypeMismatch,
+                        .int_resolved => return error.TypeMismatch,
+                        .int_unbound => return error.TypeMismatch,
+
+                        // If the variable was rigid, then error
+                        .num_rigid => return error.TypeMismatch,
+                        .int_rigid => return error.TypeMismatch,
+                        .frac_rigid => return error.TypeMismatch,
+
+                        // If the variable inside a wasn't a num, then this in an error
+                        .err => |var_| {
+                            return self.setUnifyErrAndThrow(.{ .invalid_number_type = var_ });
+                        },
+                    }
+                },
+            }
+        }
+
+        /// Unify when a is polymorphic and b is compact
+        /// Since b is compact, we must merge with it (unless a is rigid, which errors)
+        fn unifyPolyAndCompactNums(
+            self: *Self,
+            vars: *const ResolvedVarDescs,
+            a_num_var: Var,
+            b_num: NumCompact,
+        ) Error!void {
+            const a_num_resolved = self.resolvePolyNum(a_num_var);
+            switch (a_num_resolved) {
+                // If the variable inside a was flex, then b wins
+                .num_flex => self.merge(vars, vars.b.desc.content),
+                .int_flex => self.merge(vars, vars.b.desc.content),
+                .frac_flex => self.merge(vars, vars.b.desc.content),
+
+                // If the variable was rigid, then error
+                .num_rigid => return error.TypeMismatch,
+                .int_rigid => return error.TypeMismatch,
+                .frac_rigid => return error.TypeMismatch,
+
+                // If the var inside was a num with requirements
+                .num_unbound => |a_reqs| switch (b_num) {
+                    .int => |b_int| {
+                        const result = self.checkIntPrecisionRequirements(b_int, a_reqs.int_requirements);
+                        switch (result) {
+                            .ok => {},
+                            .negative_unsigned => return error.NegativeUnsignedInt,
+                            .too_large => return error.NumberDoesNotFit,
+                        }
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                    .frac => |b_frac| {
+                        const does_fit = self.checkFracPrecisionRequirements(b_frac, a_reqs.frac_requirements);
+                        if (!does_fit) {
+                            return error.NumberDoesNotFit;
+                        }
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                },
+
+                // If the variable inside an int with a precision or requirements
+                .int_resolved => |a_int| switch (b_num) {
+                    .int => |b_int| if (@intFromEnum(a_int) == @intFromEnum(b_int)) {
+                        self.merge(vars, vars.b.desc.content);
+                    } else {
+                        return error.TypeMismatch;
+                    },
+                    .frac => return error.TypeMismatch,
+                },
+                .int_unbound => |a_reqs| switch (b_num) {
+                    .int => |b_int| {
+                        const result = self.checkIntPrecisionRequirements(b_int, a_reqs);
+                        switch (result) {
+                            .ok => {},
+                            .negative_unsigned => return error.NegativeUnsignedInt,
+                            .too_large => return error.NumberDoesNotFit,
+                        }
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                    .frac => return error.TypeMismatch,
+                },
+
+                // If the variable inside an frac with a precision or requirements
+                .frac_resolved => |a_frac| switch (b_num) {
+                    .frac => |b_frac| if (@intFromEnum(a_frac) == @intFromEnum(b_frac)) {
+                        self.merge(vars, vars.b.desc.content);
+                    } else {
+                        return error.TypeMismatch;
+                    },
+                    .int => return error.TypeMismatch,
+                },
+                .frac_unbound => |a_reqs| switch (b_num) {
+                    .frac => |b_frac| {
+                        const does_fit = self.checkFracPrecisionRequirements(b_frac, a_reqs);
+                        if (!does_fit) {
+                            return error.NumberDoesNotFit;
+                        }
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                    .int => return error.TypeMismatch,
+                },
+
+                // If the variable inside a wasn't a num, then this in an error
+                .err => |var_| {
+                    return self.setUnifyErrAndThrow(.{ .invalid_number_type = var_ });
+                },
+            }
+        }
+
+        /// Unify when a is compact and b is unbound with requirements
+        /// Since a is compact, we must merge with it after checking requirements
+        fn unifyCompactAndUnboundNums(
+            self: *Self,
+            vars: *const ResolvedVarDescs,
+            a_num: NumCompact,
+            b_reqs: Num.NumRequirements,
+        ) Error!void {
+            switch (a_num) {
+                .int => |a_int| {
+                    const result = self.checkIntPrecisionRequirements(a_int, b_reqs.int_requirements);
+                    switch (result) {
+                        .ok => {},
+                        .negative_unsigned => return error.NegativeUnsignedInt,
+                        .too_large => return error.NumberDoesNotFit,
+                    }
+                    self.merge(vars, vars.a.desc.content);
+                },
+                .frac => |a_frac| {
+                    const does_fit = self.checkFracPrecisionRequirements(a_frac, b_reqs.frac_requirements);
+                    if (!does_fit) {
+                        return error.NumberDoesNotFit;
+                    }
+                    self.merge(vars, vars.a.desc.content);
+                },
+            }
+        }
+
+        /// Unify when a is unbound with requirements and b is compact
+        /// Since b is compact, we must merge with it after checking requirements
+        fn unifyUnboundAndCompactNums(
+            self: *Self,
+            vars: *const ResolvedVarDescs,
+            a_reqs: Num.NumRequirements,
+            b_num: NumCompact,
+        ) Error!void {
+            switch (b_num) {
+                .int => |b_int| {
+                    const result = self.checkIntPrecisionRequirements(b_int, a_reqs.int_requirements);
+                    switch (result) {
+                        .ok => {},
+                        .negative_unsigned => return error.NegativeUnsignedInt,
+                        .too_large => return error.NumberDoesNotFit,
+                    }
+                    self.merge(vars, vars.b.desc.content);
+                },
+                .frac => |b_frac| {
+                    const does_fit = self.checkFracPrecisionRequirements(b_frac, a_reqs.frac_requirements);
+                    if (!does_fit) {
+                        return error.NumberDoesNotFit;
+                    }
+                    self.merge(vars, vars.b.desc.content);
+                },
+            }
+        }
+
+        fn unifyTwoCompactNums(
+            self: *Self,
+            vars: *const ResolvedVarDescs,
+            a_num: NumCompact,
+            b_num: NumCompact,
+        ) Error!void {
+            const trace = tracy.trace(@src());
+            defer trace.end();
+
+            switch (a_num) {
+                .int => |a_int| {
+                    switch (b_num) {
+                        .int => |b_int| if (a_int == b_int) {
+                            self.merge(vars, vars.b.desc.content);
+                        } else {
+                            return error.TypeMismatch;
+                        },
+                        else => return error.TypeMismatch,
+                    }
+                },
+                .frac => |a_frac| {
+                    switch (b_num) {
+                        .frac => |b_frac| if (a_frac == b_frac) {
+                            self.merge(vars, vars.b.desc.content);
+                        } else {
+                            return error.TypeMismatch;
+                        },
+                        else => return error.TypeMismatch,
+                    }
+                },
+            }
+        }
+
+        // number requirement helpers //
+
+        /// The result of checking if an imprecision is compatible with a set of requirements.
         const IntPrecisionCheckResult = enum {
             ok,
             negative_unsigned,
             too_large,
         };
 
+        /// Checks if the int precision satisfies the requirements
         fn checkIntPrecisionRequirements(self: *Self, prec: Num.Int.Precision, requirements: Num.IntRequirements) IntPrecisionCheckResult {
             _ = self;
 
@@ -1661,11 +1630,8 @@ fn Unifier(comptime StoreTypeB: type) type {
             return if (usable_bits >= required_bits) .ok else .too_large;
         }
 
-        fn intPrecisionSatisfiesRequirements(self: *Self, prec: Num.Int.Precision, requirements: Num.IntRequirements) bool {
-            return self.checkIntPrecisionRequirements(prec, requirements) == .ok;
-        }
-
-        fn fracPrecisionSatisfiesRequirements(self: *Self, prec: Num.Frac.Precision, requirements: Num.FracRequirements) bool {
+        /// Checks if the frac precision satisfies the requirements
+        fn checkFracPrecisionRequirements(self: *Self, prec: Num.Frac.Precision, requirements: Num.FracRequirements) bool {
             _ = self;
 
             switch (prec) {
@@ -1675,43 +1641,20 @@ fn Unifier(comptime StoreTypeB: type) type {
             }
         }
 
-        fn unifyTwoCompactNums(
-            self: *Self,
-            vars: *const ResolvedVarDescs,
-            a_num: NumCompact,
-            b_num: NumCompact,
-        ) Error!void {
-            const trace = tracy.trace(@src());
-            defer trace.end();
-
-            switch (a_num) {
-                .int => |a_int| {
-                    switch (b_num) {
-                        .int => |b_int| if (a_int == b_int) {
-                            self.merge(vars, vars.b.desc.content);
-                        } else {
-                            return error.TypeMismatch;
-                        },
-                        else => return error.TypeMismatch,
-                    }
-                },
-                .frac => |a_frac| {
-                    switch (b_num) {
-                        .frac => |b_frac| if (a_frac == b_frac) {
-                            self.merge(vars, vars.b.desc.content);
-                        } else {
-                            return error.TypeMismatch;
-                        },
-                        else => return error.TypeMismatch,
-                    }
-                },
-            }
-        }
+        // polymorphic num helpers //
 
         /// The result of attempting to resolve a polymorphic number
         const ResolvedNum = union(enum) {
-            flex_resolved,
+            num_flex,
+            num_rigid: Var,
+            num_unbound: Num.NumRequirements,
+            int_flex,
+            int_rigid: Var,
+            int_unbound: Num.IntRequirements,
             int_resolved: Num.Int.Precision,
+            frac_flex,
+            frac_rigid: Var,
+            frac_unbound: Num.FracRequirements,
             frac_resolved: Num.Frac.Precision,
             err: Var,
         };
@@ -1741,21 +1684,58 @@ fn Unifier(comptime StoreTypeB: type) type {
             initial_num_var: Var,
         ) ResolvedNum {
             var num_var = initial_num_var;
+            var seen_int = false;
+            var seen_frac = false;
             while (true) {
                 const resolved = self.types_store.resolveVar(num_var);
                 switch (resolved.desc.content) {
-                    .flex_var => return .flex_resolved,
+                    .flex_var => {
+                        if (seen_int and seen_frac) {
+                            return .{ .err = num_var };
+                        } else if (seen_int) {
+                            return .int_flex;
+                        } else if (seen_frac) {
+                            return .frac_flex;
+                        } else {
+                            return .num_flex;
+                        }
+                    },
+                    .rigid_var => {
+                        if (seen_int and seen_frac) {
+                            return .{ .err = num_var };
+                        } else if (seen_int) {
+                            return .{ .int_rigid = num_var };
+                        } else if (seen_frac) {
+                            return .{ .frac_rigid = num_var };
+                        } else {
+                            return .{ .num_rigid = num_var };
+                        }
+                    },
+                    .alias => |alias| {
+                        num_var = self.types_store.getAliasBackingVar(alias);
+                    },
                     .structure => |flat_type| {
                         switch (flat_type) {
                             .num => |num| switch (num) {
-                                .num_poly => |requirements| {
-                                    num_var = requirements.var_;
+                                .num_poly => |var_| {
+                                    num_var = var_;
                                 },
-                                .int_poly => |requirements| {
-                                    num_var = requirements.var_;
+                                .num_unbound => |reqs| {
+                                    return .{ .num_unbound = reqs };
                                 },
-                                .frac_poly => |requirements| {
-                                    num_var = requirements.var_;
+                                .int_poly => |var_| {
+                                    seen_int = true;
+                                    num_var = var_;
+                                },
+                                .int_unbound => |reqs| {
+                                    return .{ .int_unbound = reqs };
+                                },
+                                .frac_poly => |var_| {
+                                    seen_frac = true;
+                                    num_var = var_;
+                                },
+                                .frac_unbound => |reqs| {
+                                    return .{ .frac_unbound = reqs };
                                 },
                                 .int_precision => |prec| {
                                     return .{ .int_resolved = prec };
@@ -1925,16 +1905,18 @@ fn Unifier(comptime StoreTypeB: type) type {
         fn unifyTwoRecords(
             self: *Self,
             vars: *const ResolvedVarDescs,
-            a_record: Record,
-            b_record: Record,
+            a_fields: RecordField.SafeMultiList.Range,
+            a_ext: RecordExt,
+            b_fields: RecordField.SafeMultiList.Range,
+            b_ext: RecordExt,
         ) Error!void {
             const trace = tracy.trace(@src());
             defer trace.end();
 
             // First, unwrap all fields for record, erroring if we encounter an
             // invalid record ext var
-            const a_gathered_fields = try self.gatherRecordFields(a_record);
-            const b_gathered_fields = try self.gatherRecordFields(b_record);
+            const a_gathered_fields = try self.gatherRecordFields(a_fields, a_ext);
+            const b_gathered_fields = try self.gatherRecordFields(b_fields, b_ext);
 
             // Then partition the fields
             const partitioned = Self.partitionFields(
@@ -1957,11 +1939,24 @@ fn Unifier(comptime StoreTypeB: type) type {
                 fields_ext = .b_extends_a;
             }
 
+            const a_gathered_ext = blk: {
+                switch (a_gathered_fields.ext) {
+                    .unbound => break :blk self.fresh(vars, .{ .flex_var = null }) catch return Error.AllocatorError,
+                    .ext => |ext_var| break :blk ext_var,
+                }
+            };
+            const b_gathered_ext = blk: {
+                switch (b_gathered_fields.ext) {
+                    .unbound => break :blk self.fresh(vars, .{ .flex_var = null }) catch return Error.AllocatorError,
+                    .ext => |ext_var| break :blk ext_var,
+                }
+            };
+
             // Unify fields
             switch (fields_ext) {
                 .exactly_the_same => {
                     // Unify exts
-                    try self.unifyGuarded(a_gathered_fields.ext, b_gathered_fields.ext);
+                    try self.unifyGuarded(a_gathered_ext, b_gathered_ext);
 
                     // Unify shared fields
                     // This copies fields from scratch into type_store
@@ -1970,7 +1965,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                         self.scratch.in_both_fields.sliceRange(partitioned.in_both),
                         null,
                         null,
-                        a_gathered_fields.ext,
+                        a_gathered_ext,
                     );
                 },
                 .a_extends_b => {
@@ -1981,11 +1976,11 @@ fn Unifier(comptime StoreTypeB: type) type {
                     ) catch return Error.AllocatorError;
                     const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
                         .fields = only_in_a_fields_range,
-                        .ext = a_gathered_fields.ext,
+                        .ext = a_gathered_ext,
                     } } }) catch return Error.AllocatorError;
 
                     // Unify the sub record with b's ext
-                    try self.unifyGuarded(only_in_a_var, b_gathered_fields.ext);
+                    try self.unifyGuarded(only_in_a_var, b_gathered_ext);
 
                     // Unify shared fields
                     // This copies fields from scratch into type_store
@@ -2005,11 +2000,11 @@ fn Unifier(comptime StoreTypeB: type) type {
                     ) catch return Error.AllocatorError;
                     const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
                         .fields = only_in_b_fields_range,
-                        .ext = b_gathered_fields.ext,
+                        .ext = b_gathered_ext,
                     } } }) catch return Error.AllocatorError;
 
                     // Unify the sub record with a's ext
-                    try self.unifyGuarded(a_gathered_fields.ext, only_in_b_var);
+                    try self.unifyGuarded(a_gathered_ext, only_in_b_var);
 
                     // Unify shared fields
                     // This copies fields from scratch into type_store
@@ -2029,7 +2024,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                     ) catch return Error.AllocatorError;
                     const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
                         .fields = only_in_a_fields_range,
-                        .ext = a_gathered_fields.ext,
+                        .ext = a_gathered_ext,
                     } } }) catch return Error.AllocatorError;
 
                     // Create a new variable of a record with only b's uniq fields
@@ -2039,15 +2034,15 @@ fn Unifier(comptime StoreTypeB: type) type {
                     ) catch return Error.AllocatorError;
                     const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
                         .fields = only_in_b_fields_range,
-                        .ext = b_gathered_fields.ext,
+                        .ext = b_gathered_ext,
                     } } }) catch return Error.AllocatorError;
 
                     // Create a new ext var
                     const new_ext_var = self.fresh(vars, .{ .flex_var = null }) catch return Error.AllocatorError;
 
                     // Unify the sub records with exts
-                    try self.unifyGuarded(a_gathered_fields.ext, only_in_b_var);
-                    try self.unifyGuarded(only_in_a_var, b_gathered_fields.ext);
+                    try self.unifyGuarded(a_gathered_ext, only_in_b_var);
+                    try self.unifyGuarded(only_in_a_var, b_gathered_ext);
 
                     // Unify shared fields
                     // This copies fields from scratch into type_store
@@ -2064,7 +2059,9 @@ fn Unifier(comptime StoreTypeB: type) type {
 
         const FieldsExtension = enum { exactly_the_same, a_extends_b, b_extends_a, both_extend };
 
-        const GatheredFields = struct { ext: Var, range: RecordFieldSafeList.Range };
+        const RecordExt = union(enum) { ext: Var, unbound };
+
+        const GatheredFields = struct { ext: RecordExt, range: RecordFieldSafeList.Range };
 
         /// Recursively unwraps the fields of an extensible record, flattening all visible fields
         /// into `scratch.gathered_fields` and following through:
@@ -2076,61 +2073,60 @@ fn Unifier(comptime StoreTypeB: type) type {
         /// * the final tail extension variable, which is either a flex var or an empty record
         ///
         /// Errors if it encounters a malformed or invalid extension (e.g. a non-record type).
-        fn gatherRecordFields(self: *Self, record: Record) Error!GatheredFields {
+        fn gatherRecordFields(self: *Self, record_fields: RecordField.SafeMultiList.Range, record_ext: RecordExt) Error!GatheredFields {
             // first, copy from the store's MultiList record fields array into scratch's
             // regular list, capturing the insertion range
             var range = self.scratch.copyGatherFieldsFromMultiList(
                 &self.types_store.record_fields,
-                record.fields,
+                record_fields,
             ) catch return Error.AllocatorError;
 
             // then recursiv
-            var ext_var = record.ext;
+            var ext = record_ext;
             while (true) {
-                switch (self.types_store.resolveVar(ext_var).desc.content) {
-                    .flex_var => {
-                        return .{ .ext = ext_var, .range = range };
+                switch (ext) {
+                    .unbound => {
+                        return .{ .ext = ext, .range = range };
                     },
-                    .rigid_var => {
-                        return .{ .ext = ext_var, .range = range };
-                    },
-                    .alias => |alias| {
-                        ext_var = self.types_store.getAliasBackingVar(alias);
-                    },
-                    .structure => |flat_type| {
-                        switch (flat_type) {
-                            .record => |ext_record| {
-                                const next_range = self.scratch.copyGatherFieldsFromMultiList(
-                                    &self.types_store.record_fields,
-                                    ext_record.fields,
-                                ) catch return Error.AllocatorError;
-                                range.count += next_range.count;
-                                ext_var = ext_record.ext;
+                    .ext => |ext_var| {
+                        switch (self.types_store.resolveVar(ext_var).desc.content) {
+                            .flex_var => {
+                                return .{ .ext = .{ .ext = ext_var }, .range = range };
                             },
-                            .record_unbound => |fields| {
-                                const next_range = self.scratch.copyGatherFieldsFromMultiList(
-                                    &self.types_store.record_fields,
-                                    fields,
-                                ) catch return Error.AllocatorError;
-                                range.count += next_range.count;
-                                // record_unbound has no extension, so we're done
-                                return .{ .ext = ext_var, .range = range };
+                            .rigid_var => {
+                                return .{ .ext = .{ .ext = ext_var }, .range = range };
                             },
-                            .record_poly => |poly| {
-                                const next_range = self.scratch.copyGatherFieldsFromMultiList(
-                                    &self.types_store.record_fields,
-                                    poly.record.fields,
-                                ) catch return Error.AllocatorError;
-                                range.count += next_range.count;
-                                ext_var = poly.record.ext;
+                            .alias => |alias| {
+                                ext = .{ .ext = self.types_store.getAliasBackingVar(alias) };
                             },
-                            .empty_record => {
-                                return .{ .ext = ext_var, .range = range };
+                            .structure => |flat_type| {
+                                switch (flat_type) {
+                                    .record => |ext_record| {
+                                        const next_range = self.scratch.copyGatherFieldsFromMultiList(
+                                            &self.types_store.record_fields,
+                                            ext_record.fields,
+                                        ) catch return Error.AllocatorError;
+                                        range.count += next_range.count;
+                                        ext = .{ .ext = ext_record.ext };
+                                    },
+                                    .record_unbound => |fields| {
+                                        const next_range = self.scratch.copyGatherFieldsFromMultiList(
+                                            &self.types_store.record_fields,
+                                            fields,
+                                        ) catch return Error.AllocatorError;
+                                        range.count += next_range.count;
+                                        // record_unbound has no extension, so we're done
+                                        return .{ .ext = ext, .range = range };
+                                    },
+                                    .empty_record => {
+                                        return .{ .ext = ext, .range = range };
+                                    },
+                                    else => try self.setUnifyErrAndThrow(.{ .invalid_record_ext = ext_var }),
+                                }
                             },
                             else => try self.setUnifyErrAndThrow(.{ .invalid_record_ext = ext_var }),
                         }
                     },
-                    else => try self.setUnifyErrAndThrow(.{ .invalid_record_ext = ext_var }),
                 }
             }
         }
@@ -2666,7 +2662,7 @@ fn Unifier(comptime StoreTypeB: type) type {
         }
 
         /// Set error data in scratch & throw
-        fn setUnifyErrAndThrow(self: *Self, err: UnifyErrCtx) Error!void {
+        inline fn setUnifyErrAndThrow(self: *Self, err: UnifyErrCtx) Error!void {
             self.scratch.setUnifyErr(err);
             return error.UnifyErr;
         }

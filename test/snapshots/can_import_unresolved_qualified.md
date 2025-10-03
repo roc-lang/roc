@@ -213,10 +213,8 @@ NO CHANGE
 		(annotation @11.1-11.10
 			(declared-type
 				(ty-fn @10.13-10.36 (effectful false)
-					(ty-lookup-external @10.13-10.29
-						(module-idx "0")
-						(target-node-idx "0"))
-					(ty @10.33-10.36 (name "Str"))))))
+					(ty-lookup @10.13-10.29 (name "InvalidType") (external (module-idx "0") (target-node-idx "0")))
+					(ty-lookup @10.33-10.36 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @15.1-15.15 (ident "processRequest"))
 		(e-lambda @15.18-15.51
