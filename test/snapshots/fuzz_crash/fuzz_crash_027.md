@@ -674,10 +674,16 @@ Is there an `import` or `exposing` missing up-top?
 	^^^^^^^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: statement type in block
+**UNDEFINED VARIABLE**
+Nothing is named `line!` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+**fuzz_crash_027.md:128:2:128:7:**
+```roc
+	line!("Adding ${n} to ${number}")
+```
+	^^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `punned` in this scope.
@@ -770,18 +776,6 @@ The unused variable is declared here:
 **fuzz_crash_027.md:120:2:120:6:**
 ```roc
 	ited = "Hello, ${world}"
-```
-	^^^^
-
-
-**UNUSED VARIABLE**
-Variable `list` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:121:2:121:6:**
-```roc
-	list = [
 ```
 	^^^^
 
@@ -1973,7 +1967,30 @@ expect {
 						(e-list
 							(elems
 								(e-num (value "456")))))
-					(s-runtime-error (tag "not_implemented"))
+					(s-for
+						(p-assign (ident "n"))
+						(e-lookup-local
+							(p-assign (ident "list")))
+						(e-block
+							(s-expr
+								(e-call
+									(e-runtime-error (tag "ident_not_in_scope"))
+									(e-string
+										(e-literal (string "Adding "))
+										(e-lookup-local
+											(p-assign (ident "n")))
+										(e-literal (string " to "))
+										(e-lookup-local
+											(p-assign (ident "number")))
+										(e-literal (string "")))))
+							(s-reassign
+								(p-assign (ident "number"))
+								(e-binop (op "add")
+									(e-lookup-local
+										(p-assign (ident "number")))
+									(e-lookup-local
+										(p-assign (ident "n")))))
+							(e-empty_record)))
 					(s-let
 						(p-assign (ident "record"))
 						(e-record
