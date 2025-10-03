@@ -2695,8 +2695,6 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, rank
         const stmt_var = ModuleEnv.varFrom(stmt_idx);
         const stmt_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(stmt_idx));
 
-        std.debug.print("stmt {}\n", .{stmt});
-
         switch (stmt) {
             .s_decl => |decl_stmt| {
                 // Check the pattern
@@ -2800,8 +2798,6 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, rank
                 try self.checkPattern(for_stmt.patt, rank, .no_expectation);
                 const for_ptrn_var: Var = ModuleEnv.varFrom(for_stmt.patt);
 
-                std.debug.print("for_ptrn_var {s}\n", .{try tw.writeGet(for_ptrn_var)});
-
                 // Check the expr
                 // for item in [1,2,3] {
                 //             ^^^^^^^
@@ -2809,13 +2805,9 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, rank
                 const for_expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(for_stmt.expr));
                 const for_expr_var: Var = ModuleEnv.varFrom(for_stmt.expr);
 
-                std.debug.print("for_expr_var {s}\n", .{try tw.writeGet(for_expr_var)});
-
                 // Check that the expr is list of the ptrn
                 const list_var = try self.freshFromContent(.{ .structure = .{ .list = for_ptrn_var } }, rank, for_expr_region);
                 _ = try self.unify(list_var, for_expr_var, rank);
-
-                std.debug.print("list_var {s}\n", .{try tw.writeGet(list_var)});
 
                 // Check the body
                 // for item in [1,2,3] {
@@ -2823,8 +2815,6 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, rank
                 // }
                 does_fx = try self.checkExpr(for_stmt.body, rank, .no_expectation) or does_fx;
                 const for_body_var: Var = ModuleEnv.varFrom(for_stmt.body);
-
-                std.debug.print("for_body_var {s}\n", .{try tw.writeGet(for_body_var)});
 
                 // Check that the for body evaluates to {}
                 const body_ret = try self.freshFromContent(.{ .structure = .empty_record }, rank, for_expr_region);
@@ -2857,12 +2847,13 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, rank
                 try self.updateVar(stmt_var, .{ .flex_var = null }, rank);
             },
             .s_return => |_| {
-                // To implement early returns, we need to:
+                // To implement early returns and make them usable, we need to:
                 // 1. Update the parse to allow for if statements (as opposed to if expressions)
-                // 2. Track function scope in can and capture the function for this return in `s_return`
+                // 2. Track function scope in czer and capture the function for this return in `s_return`
                 // 3. When type checking a lambda, capture all early returns
                 //    a. Unify all early returns together
-                //    b. Unify early returns with funct return type
+                //    b. Unify early returns with func return type
+
                 try self.updateVar(stmt_var, .{ .structure = .empty_record }, rank);
             },
             .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno => {

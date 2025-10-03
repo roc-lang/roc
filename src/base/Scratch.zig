@@ -48,6 +48,25 @@ pub fn Scratch(comptime T: type) type {
             return self.items.items[@intCast(start)..];
         }
 
+        /// Creates slice from the provided start index
+        pub fn sliceFromSpan(self: *Self, span: DataSpan) []T {
+            const start: usize = @intCast(span.start);
+            const end: usize = @intCast(span.start + span.len);
+
+            std.debug.assert(start <= end);
+            std.debug.assert(end <= self.items.items.len);
+
+            return self.items.items[start..end];
+        }
+
+        /// Creates span from the provided start index to the end of the list
+        pub fn spanFrom(self: *Self, start: u32) DataSpan {
+            return DataSpan{
+                .start = start,
+                .len = @as(u32, @intCast(self.items.items.len)) - start,
+            };
+        }
+
         /// Creates a new span starting at start.  Moves the items from scratch
         /// to extra_data as appropriate.
         pub fn spanFromStart(self: *Self, start: u32, gpa: std.mem.Allocator, data: *std.ArrayListUnmanaged(u32)) std.mem.Allocator.Error!DataSpan {

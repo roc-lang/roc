@@ -30,7 +30,7 @@ const Node = @import("Node.zig");
 /// in our Lambda's in a single forward pass during canonicalization.
 pub const CanonicalizedExpr = struct {
     idx: Expr.Idx,
-    free_vars: ?[]Pattern.Idx,
+    free_vars: ?DataSpan, // This is a span into scratch_free_vars
 
     pub fn get_idx(self: @This()) Expr.Idx {
         return self.idx;
@@ -1418,19 +1418,7 @@ fn canonicalizeDeclWithAnnotation(
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region());
-
-    const pattern_idx = blk: {
-        if (try self.canonicalizePattern(decl.pattern)) |idx| {
-            break :blk idx;
-        } else {
-            const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .pattern_not_canonicalized = .{
-                .region = pattern_region,
-            } });
-            break :blk malformed_idx;
-        }
-    };
-
+    const pattern_idx = try self.canonicalizePatternOrMalformed(decl.pattern);
     const can_expr = try self.canonicalizeExprOrMalformed(decl.body);
 
     // Create the def entry and set def type variable to a flex var
@@ -1537,7 +1525,7 @@ fn canonicalizeStringLike(
         .span = can_str_span,
     } }, Content{ .structure = .str }, region);
 
-    const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
+    const free_vars_slice = self.scratch_free_vars.spanFrom(free_vars_start);
     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
 }
 
@@ -1689,7 +1677,7 @@ pub fn canonicalizeExpr(
                 },
             }, .err, region);
 
-            const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
+            const free_vars_slice = self.scratch_free_vars.spanFrom(free_vars_start);
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
         },
         .ident => |e| {
@@ -1763,7 +1751,7 @@ pub fn canonicalizeExpr(
 
                         const free_vars_start = self.scratch_free_vars.top();
                         try self.scratch_free_vars.append(self.env.gpa, found_pattern_idx);
-                        const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
+                        const free_vars_slice = self.scratch_free_vars.spanFrom(free_vars_start);
                         return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
                     },
                     .not_found => {
@@ -2137,7 +2125,7 @@ pub fn canonicalizeExpr(
                 .e_list = .{ .elems = elems_span },
             }, .err, region);
 
-            const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
+            const free_vars_slice = self.scratch_free_vars.spanFrom(free_vars_start);
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
         },
         .tag => |e| {
@@ -2219,7 +2207,7 @@ pub fn canonicalizeExpr(
                     .tuple = types.Tuple{ .elems = elems_var_range },
                 } }, region);
 
-                const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
+                const free_vars_slice = self.scratch_free_vars.spanFrom(free_vars_start);
                 return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
             }
         },
@@ -2334,7 +2322,7 @@ pub fn canonicalizeExpr(
                 },
             }, Content{ .structure = .{ .record_unbound = type_fields_range } }, region);
 
-            const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
+            const free_vars_slice = self.scratch_free_vars.spanFrom(free_vars_start);
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
         },
         .lambda => |e| {
@@ -2387,7 +2375,7 @@ pub fn canonicalizeExpr(
             var captures_set = std.AutoHashMapUnmanaged(Pattern.Idx, void){};
             defer captures_set.deinit(self.env.gpa);
 
-            const body_free_vars_slice = can_body.free_vars orelse &.{};
+            const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_body.free_vars orelse DataSpan.empty());
             for (body_free_vars_slice) |fv| {
                 if (!bound_vars.contains(fv)) {
                     try captures_set.put(self.env.gpa, fv, {});
@@ -2458,7 +2446,7 @@ pub fn canonicalizeExpr(
             while (cap_it.next()) |entry| {
                 try self.scratch_free_vars.append(self.env.gpa, entry.key_ptr.*);
             }
-            const free_vars_slice = self.scratch_free_vars.slice(lambda_free_vars_start, self.scratch_free_vars.top());
+            const free_vars_slice = self.scratch_free_vars.spanFrom(lambda_free_vars_start);
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
         },
         .record_updater => |_| {
@@ -2533,7 +2521,7 @@ pub fn canonicalizeExpr(
                 .e_binop = Expr.Binop.init(op, can_lhs.idx, can_rhs.idx),
             }, Content{ .flex_var = null }, region);
 
-            const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
+            const free_vars_slice = self.scratch_free_vars.spanFrom(free_vars_start);
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
         },
         .suffix_single_question => |_| {
@@ -2660,7 +2648,7 @@ pub fn canonicalizeExpr(
             const expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(expr_idx)));
             try self.env.types.setVarRedirect(expr_var, first_branch_type_var);
 
-            const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
+            const free_vars_slice = self.scratch_free_vars.spanFrom(free_vars_start);
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
         },
         .match => |m| {
@@ -2797,7 +2785,7 @@ pub fn canonicalizeExpr(
                 try self.env.types.setVarRedirect(expr_var, branch_var);
             }
 
-            const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
+            const free_vars_slice = self.scratch_free_vars.spanFrom(free_vars_start);
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
         },
         .dbg => |d| {
@@ -2938,10 +2926,10 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                     },
                 }, .err, region);
 
-                const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
+                const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
                 return CanonicalizedExpr{
                     .idx = expr_idx,
-                    .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null,
+                    .free_vars = if (free_vars_span.len > 0) free_vars_span else null,
                 };
             },
             .s_alias_decl => {
@@ -3047,7 +3035,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
             },
         }, .err, region);
 
-        const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
+        const free_vars_slice = self.scratch_free_vars.spanFrom(free_vars_start);
         return CanonicalizedExpr{
             .idx = expr_idx,
             .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null,
@@ -3134,6 +3122,21 @@ fn extractMultilineStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.
     }
 
     return try self.env.store.exprSpanFrom(start);
+}
+
+fn canonicalizePatternOrMalformed(
+    self: *Self,
+    ast_pattern_idx: AST.Pattern.Idx,
+) std.mem.Allocator.Error!Pattern.Idx {
+    if (try self.canonicalizePattern(ast_pattern_idx)) |idx| {
+        return idx;
+    } else {
+        const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(ast_pattern_idx).to_tokenized_region());
+        const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .pattern_not_canonicalized = .{
+            .region = pattern_region,
+        } });
+        return malformed_idx;
+    }
 }
 
 fn canonicalizePattern(
@@ -5380,11 +5383,10 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
                 }
 
                 // Collect free vars from the other statement
-                if (other_stmt.free_vars) |fvs| {
-                    for (fvs) |fv| {
-                        if (!bound_vars.contains(fv)) {
-                            try captures.put(self.env.gpa, fv, {});
-                        }
+                const other_stmt_free_vars_slice = self.scratch_free_vars.sliceFromSpan(other_stmt.free_vars orelse DataSpan.empty());
+                for (other_stmt_free_vars_slice) |fv| {
+                    if (!bound_vars.contains(fv)) {
+                        try captures.put(self.env.gpa, fv, {});
                     }
                 }
 
@@ -5405,11 +5407,10 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
                 }
 
                 // Collect free vars from the statement into the block's scratch space
-                if (canonicailzed_stmt.free_vars) |fvs| {
-                    for (fvs) |fv| {
-                        if (!bound_vars.contains(fv)) {
-                            try captures.put(self.env.gpa, fv, {});
-                        }
+                const stmt_free_vars_slice = self.scratch_free_vars.sliceFromSpan(canonicailzed_stmt.free_vars orelse DataSpan.empty());
+                for (stmt_free_vars_slice) |fv| {
+                    if (!bound_vars.contains(fv)) {
+                        try captures.put(self.env.gpa, fv, {});
                     }
                 }
             }
@@ -5427,11 +5428,10 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
     const final_expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(final_expr.idx)));
 
     // Add free vars from the final expression to the block's scratch space
-    if (final_expr.free_vars) |fvs| {
-        for (fvs) |fv| {
-            if (!bound_vars.contains(fv)) {
-                try captures.put(self.env.gpa, fv, {});
-            }
+    const final_expr_free_vars_slice = self.scratch_free_vars.sliceFromSpan(final_expr.free_vars orelse DataSpan.empty());
+    for (final_expr_free_vars_slice) |fv| {
+        if (!bound_vars.contains(fv)) {
+            try captures.put(self.env.gpa, fv, {});
         }
     }
 
@@ -5441,7 +5441,7 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
     while (cap_it.next()) |entry| {
         try self.scratch_free_vars.append(self.env.gpa, entry.key_ptr.*);
     }
-    const captures_slice = self.scratch_free_vars.slice(captures_start, self.scratch_free_vars.top());
+    const captures_slice = self.scratch_free_vars.spanFrom(captures_start);
 
     // Create statement span
     const stmt_span = try self.env.store.statementSpanFrom(stmt_start);
@@ -5606,6 +5606,13 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars };
         },
         .@"return" => |r| {
+            // To implement early returns and make them usable, we need to:
+            // 1. Update the parse to allow for if statements (as opposed to if expressions)
+            // 2. Track function scope in czer and capture the function for this return in `s_return`
+            // 3. When type checking a lambda, capture all early returns
+            //    a. Unify all early returns together
+            //    b. Unify early returns with func return type
+
             const region = self.parse_ir.tokenizedRegionToRegion(r.region);
 
             // Canonicalize the return expression
@@ -5714,14 +5721,54 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             // then in the canonicalize IR
             _ = try self.canonicalizeImportStatement(import_stmt);
         },
-        else => {
-            // Other statement types not yet implemented
-            const feature = try self.env.insertString("statement type in block");
-            const malformed_idx = try self.env.pushMalformed(Statement.Idx, Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = Region.zero(),
-            } });
-            mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = malformed_idx, .free_vars = null };
+        .@"for" => |for_stmt| {
+            // Canoncalize the pattern
+            // for item in [1,2,3] {
+            //     ^^^^
+            const ptrn = try self.canonicalizePatternOrMalformed(for_stmt.patt);
+
+            // Canoncalize the list expr
+            // for item in [1,2,3] {
+            //             ^^^^^^^
+            const expr = try self.canonicalizeExprOrMalformed(for_stmt.expr);
+
+            // Canoncalize the body
+            // for item in [1,2,3] {
+            //     print!(item.toStr())  <<<<
+            // }
+            const body = try self.canonicalizeExprOrMalformed(for_stmt.body);
+
+            // Merge the free vars from the two exprs canonicalized together
+            var free_vars: ?DataSpan = null;
+            if (expr.free_vars) |expr_free_vars| {
+                if (body.free_vars) |body_free_vars| {
+                    std.debug.assert((expr_free_vars.start + expr_free_vars.len) == body_free_vars.start);
+                    free_vars = DataSpan{
+                        .start = expr_free_vars.start,
+                        .len = expr_free_vars.len + body_free_vars.len,
+                    };
+                } else {
+                    free_vars = expr_free_vars;
+                }
+            } else {
+                free_vars = body.free_vars;
+            }
+
+            // Insert into store
+            const region = self.parse_ir.tokenizedRegionToRegion(for_stmt.region);
+            const stmt_idx = try self.env.addStatementAndTypeVar(Statement{
+                .s_for = .{
+                    .patt = ptrn,
+                    .expr = expr.idx,
+                    .body = body.idx,
+                },
+            }, .err, region);
+
+            mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = free_vars };
+        },
+        .malformed => |_| {
+            // Stmt was malformed, parse reports this error, so do nothing here
+            mb_canonicailzed_stmt = null;
         },
     }
 
@@ -5825,7 +5872,7 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
 // A canonicalized statement
 const CanonicalizedStatement = struct {
     idx: Statement.Idx,
-    free_vars: ?[]Pattern.Idx,
+    free_vars: ?DataSpan, // This is a span into scratch_free_vars
 };
 
 // special type var scope //
