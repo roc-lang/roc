@@ -221,16 +221,8 @@ pub fn bundle(
         return error.TarWriteFailed;
     };
 
-    // Finish compression
-    compress_writer.finish() catch |err| switch (err) {
-        error.CompressionFailed => return error.CompressionFailed,
-        error.WriteFailed => return error.WriteFailed,
-        error.AlreadyFinished => return error.CompressionFailed,
-        error.OutOfMemory => return error.OutOfMemory,
-    };
-
-    // flush the compress writer
-    try compress_writer.interface.flush();
+    // Finish compression, also flushes the writer
+    compress_writer.finish() catch return error.WriteFailed;
 
     // Get the blake3 hash and encode as base58
     const hash = compress_writer.getHash();

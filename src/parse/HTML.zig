@@ -9,7 +9,7 @@ const CommonEnv = base.CommonEnv;
 const Token = @import("tokenize.zig").Token;
 
 /// Generate an interactive source range span for the playground
-fn writeSourceRangeSpan(writer: anytype, region: base.Region, source: []const u8, line_starts: []const u32) !void {
+fn writeSourceRangeSpan(writer: *std.io.Writer, region: base.Region, source: []const u8, line_starts: []const u32) !void {
     const region_info = base.RegionInfo.position(source, line_starts, region.start.offset, region.end.offset) catch {
         try writer.print("<span class=\"source-range\" data-start-byte=\"{d}\" data-end-byte=\"{d}\">@{d}-{d}</span>", .{ region.start.offset, region.end.offset, region.start.offset, region.end.offset });
         return;
@@ -18,7 +18,7 @@ fn writeSourceRangeSpan(writer: anytype, region: base.Region, source: []const u8
 }
 
 /// Generate an HTML representation of the tokens in the AST
-pub fn tokensToHtml(ast: *const AST, env: *const CommonEnv, writer: anytype) !void {
+pub fn tokensToHtml(ast: *const AST, env: *const CommonEnv, writer: *std.io.Writer) !void {
     try writer.writeAll("<div class=\"token-list\">");
 
     const token_tags = ast.tokens.tokens.items(.tag);

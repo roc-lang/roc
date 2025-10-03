@@ -9,30 +9,25 @@ const c = @cImport({
     @cInclude("zstd.h");
 });
 
+const Writer = std.io.Writer;
+const Error = Writer.Error;
+
 /// A writer that compresses data with zstd and computes a hash incrementally
 pub const CompressingHashWriter = struct {
     allocator_ptr: *std.mem.Allocator,
     ctx: *c.ZSTD_CCtx,
     hasher: std.crypto.hash.Blake3,
-    output_writer: *std.Io.Writer,
+    output_writer: *Writer,
     out_buffer: []u8,
-    in_buffer: []u8,
-    in_pos: usize,
     finished: bool,
-    interface: std.Io.Writer,
-    writer_buffer: []u8,
+    interface: Writer,
 
     const Self = @This();
-    const Error = error{
-        CompressionFailed,
-        WriteFailed,
-        AlreadyFinished,
-    } || std.mem.Allocator.Error;
 
     pub fn init(
         allocator_ptr: *std.mem.Allocator,
         compression_level: c_int,
-        output_writer: *std.Io.Writer,
+        output_writer: *Writer,
         allocForZstd: *const fn (?*anyopaque, usize) callconv(.c) ?*anyopaque,
         freeForZstd: *const fn (?*anyopaque, ?*anyopaque) callconv(.c) void,
     ) !Self {
@@ -51,12 +46,9 @@ pub const CompressingHashWriter = struct {
         const out_buffer = try allocator_ptr.alloc(u8, out_buffer_size);
         errdefer allocator_ptr.free(out_buffer);
 
-        const in_buffer_size = c.ZSTD_CStreamInSize();
-        const in_buffer = try allocator_ptr.alloc(u8, in_buffer_size);
-        errdefer allocator_ptr.free(in_buffer);
-
         // Allocate buffer for the Io.Writer interface
-        const writer_buffer = try allocator_ptr.alloc(u8, in_buffer_size);
+        const write_buffer_size = c.ZSTD_CStreamInSize();
+        const writer_buffer = try allocator_ptr.alloc(u8, write_buffer_size);
         errdefer allocator_ptr.free(writer_buffer);
 
         var result = Self{
@@ -65,15 +57,13 @@ pub const CompressingHashWriter = struct {
             .hasher = std.crypto.hash.Blake3.init(.{}),
             .output_writer = output_writer,
             .out_buffer = out_buffer,
-            .in_buffer = in_buffer,
-            .in_pos = 0,
             .finished = false,
             .interface = undefined,
-            .writer_buffer = writer_buffer,
         };
         result.interface = .{
             .vtable = &.{
                 .drain = drain,
+                .flush = flush,
             },
             .buffer = writer_buffer,
         };
@@ -83,97 +73,47 @@ pub const CompressingHashWriter = struct {
     pub fn deinit(self: *Self) void {
         _ = c.ZSTD_freeCCtx(self.ctx);
         self.allocator_ptr.free(self.out_buffer);
-        self.allocator_ptr.free(self.in_buffer);
-        self.allocator_ptr.free(self.writer_buffer);
+        self.allocator_ptr.free(self.interface.buffer);
     }
 
-    fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
+    fn flush(w: *Writer) Error!void {
         const self: *Self = @alignCast(@fieldParentPtr("interface", w));
+        if (self.finished and w.end != 0) return Error.WriteFailed;
+        _ = self.compressAndHash(w.buffer[0..w.end], false) catch return error.WriteFailed;
+        w.end = 0;
+        return;
+    }
 
-        try self.writeBuffered(w);
-
+    fn drain(w: *Writer, data: []const []const u8, splat: usize) Error!usize {
+        const self: *Self = @alignCast(@fieldParentPtr("interface", w));
+        if (self.finished) return Error.WriteFailed;
+        _ = self.compressAndHash(w.buffer[0..w.end], false) catch return error.WriteFailed;
+        w.end = 0;
         if (data.len == 0) return 0;
 
-        var consumed: usize = 0;
-
-        // Write all slices except the final pattern exactly once.
-        if (data.len > 1) {
-            for (data[0 .. data.len - 1]) |chunk| {
-                try self.writeAll(chunk);
-                consumed += chunk.len;
-            }
+        var written: usize = 0;
+        for (data[0 .. data.len - 1]) |bytes| {
+            const len = self.compressAndHash(bytes, false) catch return error.WriteFailed;
+            written += len;
         }
 
         const pattern = data[data.len - 1];
-        if (splat == 0 or pattern.len == 0) return consumed;
-
-        const extra = std.math.mul(usize, pattern.len, splat) catch |err| switch (err) {
-            error.Overflow => return std.Io.Writer.Error.WriteFailed,
-        };
-
-        var remaining = splat;
-        while (remaining > 0) : (remaining -= 1) {
-            try self.writeAll(pattern);
-        }
-
-        consumed += extra;
-        return consumed;
-    }
-
-    fn writeBuffered(self: *Self, w: *std.Io.Writer) std.Io.Writer.Error!void {
-        if (w.end == 0) return;
-        if (self.finished) {
-            w.end = 0;
-            return;
-        }
-
-        const buffered = w.buffer[0..w.end];
-        try self.writeAll(buffered);
-        w.end = 0;
-    }
-
-    fn writeAll(self: *Self, bytes: []const u8) std.Io.Writer.Error!void {
-        var offset: usize = 0;
-        while (offset < bytes.len) {
-            const written = self.write(bytes[offset..]) catch return std.Io.Writer.Error.WriteFailed;
-            if (written == 0) return std.Io.Writer.Error.WriteFailed;
-            offset += written;
-        }
-    }
-
-    fn write(self: *Self, bytes: []const u8) Error!usize {
-        if (self.finished) return error.AlreadyFinished;
-
-        var written: usize = 0;
-        while (written < bytes.len) {
-            // Fill input buffer
-            const space_available = self.in_buffer.len - self.in_pos;
-            const to_copy = @min(space_available, bytes.len - written);
-            @memcpy(self.in_buffer[self.in_pos..][0..to_copy], bytes[written..][0..to_copy]);
-            self.in_pos += to_copy;
-            written += to_copy;
-
-            // If buffer is full, compress it
-            if (self.in_pos == self.in_buffer.len) {
-                try self.compressBuffer(false);
-            }
+        for (0..splat) |_| {
+            const len = self.compressAndHash(pattern, false) catch return error.WriteFailed;
+            written += len;
         }
         return written;
     }
 
-    fn compressBuffer(self: *Self, end_stream: bool) Error!void {
-        if (self.in_pos == 0 and !end_stream) return;
-
-        var in_buf = c.ZSTD_inBuffer{ .src = self.in_buffer.ptr, .size = self.in_pos, .pos = 0 };
-
+    fn compressAndHash(self: *Self, data: []const u8, end_stream: bool) Error!usize {
+        var in_buf = c.ZSTD_inBuffer{ .src = data.ptr, .size = data.len, .pos = 0 };
         const mode: c_uint = if (end_stream) c.ZSTD_e_end else c.ZSTD_e_continue;
-
         while (in_buf.pos < in_buf.size or end_stream) {
             var out_buf = c.ZSTD_outBuffer{ .dst = self.out_buffer.ptr, .size = self.out_buffer.len, .pos = 0 };
 
             const remaining = c.ZSTD_compressStream2(self.ctx, &out_buf, &in_buf, mode);
             if (c.ZSTD_isError(remaining) != 0) {
-                return error.CompressionFailed;
+                return Error.WriteFailed;
             }
 
             if (out_buf.pos > 0) {
@@ -184,14 +124,13 @@ pub const CompressingHashWriter = struct {
 
             if (end_stream and remaining == 0) break;
         }
-
-        self.in_pos = 0;
+        return 0;
     }
 
     pub fn finish(self: *Self) Error!void {
         if (self.finished) return;
-        self.interface.flush() catch return error.WriteFailed;
-        try self.compressBuffer(true);
+        _ = self.compressAndHash(self.interface.buffer[0..self.interface.end], true) catch return error.WriteFailed;
+        self.interface.end = 0;
         self.finished = true;
     }
 
