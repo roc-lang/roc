@@ -859,13 +859,24 @@ pub const Store = struct {
                         continue;
                     },
                     .list => |elem_var| {
-                        try self.work.pending_containers.append(self.env.gpa, .{
-                            .var_ = current.var_,
-                            .container = .list,
-                        });
-                        // Push a pending List container and "recurse" on the elem type
-                        current = self.types_store.resolveVar(elem_var);
-                        continue;
+                        const elem_content = self.types_store.resolveVar(elem_var).desc.content;
+                        if (elem_content == .flex_var or elem_content == .rigid_var) {
+                            // For unbound lists (empty lists), use list of zero-sized type
+                            const layout = Layout.listOfZst();
+                            const idx = try self.insertLayout(layout);
+                            try self.layouts_by_var.put(self.env.gpa, current.var_, idx);
+                            return idx;
+                        } else {
+                            // Otherwise, add this to the stack of pending work
+                            try self.work.pending_containers.append(self.env.gpa, .{
+                                .var_ = current.var_,
+                                .container = .list,
+                            });
+
+                            // Push a pending List container and "recurse" on the elem type
+                            current = self.types_store.resolveVar(elem_var);
+                            continue;
+                        }
                     },
                     .list_unbound => {
                         // For unbound lists (empty lists), use list of zero-sized type

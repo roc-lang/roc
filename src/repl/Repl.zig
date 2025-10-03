@@ -553,6 +553,12 @@ test "Repl - minimal interpreter integration" {
     const cir = &module_env; // CIR is now just ModuleEnv
     try cir.initCIRFields(gpa, "test");
 
+    const module_common_idents: Check.CommonIdents = .{
+        .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
+        .list = try module_env.insertIdent(base.Ident.for_text("List")),
+        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+    };
+
     // Step 4: Canonicalize
     var czer = try Can.init(cir, &parse_ast, null);
     defer czer.deinit();
@@ -563,10 +569,10 @@ test "Repl - minimal interpreter integration" {
     };
 
     // Step 5: Type check
-    var checker = try Check.init(gpa, &module_env.types, cir, &.{}, &cir.store.regions);
+    var checker = try Check.init(gpa, &module_env.types, cir, &.{}, &cir.store.regions, module_common_idents);
     defer checker.deinit();
 
-    _ = try checker.checkExpr(canonical_expr_idx.get_idx());
+    _ = try checker.checkExprRepl(canonical_expr_idx.get_idx());
 
     // Step 6: Create interpreter
     var interpreter = try eval.Interpreter.init(gpa, cir);

@@ -112,9 +112,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.14 (type "_arg -> Error"))
-		(patt @11.1-11.7 (type "Error")))
+		(patt @4.1-4.14 (type "_arg -> Num(_size)"))
+		(patt @11.1-11.7 (type "Num(_size)")))
 	(expressions
-		(expr @4.17-9.2 (type "_arg -> Error"))
-		(expr @11.10-11.27 (type "Error"))))
+		(expr @4.17-9.2 (type "_arg -> Num(_size)"))
+		(expr @11.10-11.27 (type "Num(_size)"))))
 ~~~

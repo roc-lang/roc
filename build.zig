@@ -163,8 +163,8 @@ pub fn build(b: *std.Build) void {
 
         // Create run step that accepts command line args (including --test-filter)
         const individual_run = b.addRunArtifact(module_test.test_step);
-        if (b.args) |args| {
-            individual_run.addArgs(args);
+        if (run_args.len != 0) {
+            individual_run.addArgs(run_args);
         }
         individual_test_step.dependOn(&individual_run.step);
 

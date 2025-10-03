@@ -1584,7 +1584,7 @@ fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx, rank: types_mod.Rank,
                 });
             }
 
-            // Copy the scatch record fields into the types store
+            // Copy the scratch record fields into the types store
             const record_fields_scratch = self.scratch_record_fields.sliceFromStart(scratch_records_top);
             std.mem.sort(types_mod.RecordField, record_fields_scratch, self.cir.getIdentStore(), comptime types_mod.RecordField.sortByNameAsc);
             const record_fields_range = try self.types.appendRecordFields(record_fields_scratch);
