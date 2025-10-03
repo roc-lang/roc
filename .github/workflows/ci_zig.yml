@@ -97,9 +97,12 @@ jobs:
         run: |
           sudo rm /usr/lib/llvm-18/bin/llvm-config
 
-      - name: build roc
-        run: |
-          zig build -Dfuzz -Dsystem-afl=false
+      - name: build repro executables
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: 'zig build -Dfuzz -Dsystem-afl=false'
+          error_string_contains: 'double roundtrip bundle'
+          retry_count: 3
 
       - name: Run Test Platforms (Unix)
         if: runner.os != 'Windows'

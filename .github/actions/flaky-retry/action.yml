@@ -28,11 +28,11 @@ runs:
           output_file=$(mktemp)
           trap 'rm -f "$output_file"' EXIT
 
+          set +e
           eval "${{ inputs.command }}" 2>&1 | tee "$output_file"
           exit_code=${PIPESTATUS[0]}
+          set -e
 
-          echo "All output:"
-          cat "$output_file"
 
           # Check if command succeeded
           if [ $exit_code -eq 0 ]; then
