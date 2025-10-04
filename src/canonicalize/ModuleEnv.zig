@@ -960,6 +960,220 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .type_module_missing_matching_type => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "TYPE MODULE MISSING MATCHING TYPE", .runtime_error);
+
+            const module_name_bytes = self.getIdent(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+
+            try report.document.addReflowingText("Type modules must have a type declaration matching the module name.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addText("This file is named ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(".roc, but no top-level type declaration named ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(" was found.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Add either:");
+            try report.document.addLineBreak();
+            const nominal_msg = try std.fmt.allocPrint(allocator, "{s} := ...", .{module_name_bytes});
+            defer allocator.free(nominal_msg);
+            const owned_nominal = try report.addOwnedString(nominal_msg);
+            try report.document.addInlineCode(owned_nominal);
+            try report.document.addReflowingText(" (nominal type)");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("or:");
+            try report.document.addLineBreak();
+            const alias_msg = try std.fmt.allocPrint(allocator, "{s} : ...", .{module_name_bytes});
+            defer allocator.free(alias_msg);
+            const owned_alias = try report.addOwnedString(alias_msg);
+            try report.document.addInlineCode(owned_alias);
+            try report.document.addReflowingText(" (type alias)");
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .default_app_missing_main => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "MISSING MAIN! FUNCTION", .runtime_error);
+
+            try report.document.addReflowingText("Default app modules must have a ");
+            try report.document.addInlineCode("main!");
+            try report.document.addReflowingText(" function.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addText("No ");
+            try report.document.addInlineCode("main!");
+            try report.document.addReflowingText(" function was found.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Add a main! function like:");
+            try report.document.addLineBreak();
+            try report.document.addInlineCode("main! = |arg| { ... }");
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .default_app_wrong_arity => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "MAIN! SHOULD TAKE 1 ARGUMENT", .runtime_error);
+
+            try report.document.addInlineCode("main!");
+            try report.document.addReflowingText(" is defined but has the wrong number of arguments. ");
+            try report.document.addInlineCode("main!");
+            try report.document.addReflowingText(" should take 1 argument.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            const arity_msg = try std.fmt.allocPrint(allocator, "{d}", .{data.arity});
+            defer allocator.free(arity_msg);
+            const owned_arity = try report.addOwnedString(arity_msg);
+            try report.document.addText("Found ");
+            try report.document.addInlineCode(owned_arity);
+            try report.document.addReflowingText(" arguments.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Change it to:");
+            try report.document.addLineBreak();
+            try report.document.addInlineCode("main! = |arg| { ... }");
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .cannot_import_default_app => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "CANNOT IMPORT DEFAULT APP", .runtime_error);
+
+            const module_name_bytes = self.getIdent(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+
+            try report.document.addReflowingText("You cannot import a default app module.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addText("The module ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(" is a default app module and cannot be imported.");
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .execution_requires_app_or_default_app => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "EXECUTION REQUIRES APP OR DEFAULT APP", .runtime_error);
+
+            try report.document.addReflowingText("This file cannot be executed because it is not an app or default-app module.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Add either:");
+            try report.document.addLineBreak();
+            try report.document.addInlineCode("app");
+            try report.document.addReflowingText(" header at the top of the file");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("or:");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("a ");
+            try report.document.addInlineCode("main!");
+            try report.document.addReflowingText(" function with 1 argument (for default-app)");
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .type_name_case_mismatch => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "TYPE NAME CASE MISMATCH", .runtime_error);
+
+            const module_name_bytes = self.getIdent(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+            const type_name_bytes = self.getIdent(data.type_name);
+            const type_name = try report.addOwnedString(type_name_bytes);
+
+            try report.document.addReflowingText("Type module name must match the type declaration.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addText("This file is named ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(".roc, but the type is named ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Make sure the type name matches the filename exactly (case-sensitive).");
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         else => {
             // For unhandled diagnostics, create a generic report
             const diagnostic_name = @tagName(diagnostic);

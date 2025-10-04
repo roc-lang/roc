@@ -48,6 +48,8 @@ pub const Tag = enum {
     hosted_header,
     package_header,
     platform_header,
+    type_module_header,
+    default_app_header,
 
     // Statements
 

@@ -8,16 +8,13 @@ type=file
 0 (
 ~~~
 # EXPECTED
-MISSING HEADER - fuzz_hang_001.md:1:1:1:2
+PARSE ERROR - fuzz_hang_001.md:1:1:1:2
 PARSE ERROR - fuzz_hang_001.md:1:3:1:4
+TYPE MODULE MISSING MATCHING TYPE - fuzz_hang_001.md:1:1:1:4
 # PROBLEMS
-**MISSING HEADER**
-Roc files must start with a module header.
-
-For example:
-        module [main]
-or for an app:
-        app [main!] { pf: platform "../basic-cli/platform.roc" }
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 **fuzz_hang_001.md:1:1:1:2:**
 ```roc
@@ -37,6 +34,22 @@ This is an unexpected parsing error. Please check your syntax.
   ^
 
 
+**TYPE MODULE MISSING MATCHING TYPE**
+Type modules must have a type declaration matching the module name.
+
+This file is named `fuzz_hang_001`.roc, but no top-level type declaration named `fuzz_hang_001` was found.
+
+Add either:
+`fuzz_hang_001 := ...` (nominal type)
+or:
+`fuzz_hang_001 : ...` (type alias)
+**fuzz_hang_001.md:1:1:1:4:**
+```roc
+0 (
+```
+^^^
+
+
 # TOKENS
 ~~~zig
 Int(1:1-1:2),OpenRound(1:3-1:4),
@@ -45,8 +58,9 @@ EndOfFile(2:1-2:1),
 # PARSE
 ~~~clojure
 (file @1.1-1.4
-	(malformed-header @1.1-1.2 (tag "missing_header"))
+	(type-module @1.1-1.2)
 	(statements
+		(s-malformed @1.1-1.2 (tag "statement_unexpected_token"))
 		(s-malformed @1.3-1.4 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
