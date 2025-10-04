@@ -495,6 +495,23 @@ const Formatter = struct {
                     }
                     try fmt.formatWhereConstraint(w, multiline);
                 }
+                if (d.associated) |assoc| {
+                    try fmt.pushAll(".");
+                    try fmt.push('{');
+                    if (assoc.statements.span.len > 0) {
+                        try fmt.ensureNewline();
+                        fmt.curr_indent += 1;
+                        const statements = fmt.ast.store.statementSlice(assoc.statements);
+                        for (statements) |stmt_idx| {
+                            try fmt.pushIndent();
+                            _ = try fmt.formatStatement(stmt_idx);
+                            try fmt.ensureNewline();
+                        }
+                        fmt.curr_indent -= 1;
+                        try fmt.pushIndent();
+                    }
+                    try fmt.push('}');
+                }
             },
             .type_anno => |t| {
                 try fmt.pushTokenText(t.name);
