@@ -23,6 +23,7 @@ ComplexType(_, b) : { field: b }
 MultiType(_, _, c) : c
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - underscore_in_type_parameters.md:1:1:1:10
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:4:8:4:9
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:7:9:7:10
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:10:12:10:13
@@ -30,6 +31,19 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:13:13:13:14
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:16:11:16:12
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:16:14:16:15
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**underscore_in_type_parameters.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
+
+
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
 

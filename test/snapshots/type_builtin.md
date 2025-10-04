@@ -11,9 +11,21 @@ MyNumber : U64
 MyString : Str
 ~~~
 # EXPECTED
-NIL
+MODULE HEADER DEPRECATED - type_builtin.md:1:1:1:28
 # PROBLEMS
-NIL
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**type_builtin.md:1:1:1:28:**
+```roc
+module [MyNumber, MyString]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),Comma(1:17-1:18),UpperIdent(1:19-1:27),CloseSquare(1:27-1:28),

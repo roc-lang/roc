@@ -12,8 +12,22 @@ f = || {
 }
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - fuzz_crash_067.md:1:1:1:10
 CRASH EXPECTS STRING - fuzz_crash_067.md:3:8:5:2
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**fuzz_crash_067.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
+
+
 **CRASH EXPECTS STRING**
 The `crash` keyword expects a string literal as its argument.
 For example: `crash "Something went wrong"`

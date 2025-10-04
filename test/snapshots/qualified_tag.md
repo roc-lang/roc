@@ -12,9 +12,21 @@ Color := [Red, Blue]
 test = Color.Red
 ~~~
 # EXPECTED
-NIL
+MODULE HEADER DEPRECATED - qualified_tag.md:1:1:1:15
 # PROBLEMS
-NIL
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**qualified_tag.md:1:1:1:15:**
+```roc
+module [Color]
+```
+^^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:14),CloseSquare(1:14-1:15),

@@ -34,12 +34,26 @@ client = Http.invalidMethod
 parser = Json.Parser.Advanced.NonExistent.create
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - can_import_unresolved_qualified.md:1:1:1:10
 MODULE NOT FOUND - can_import_unresolved_qualified.md:3:1:3:17
 MODULE NOT FOUND - can_import_unresolved_qualified.md:4:1:4:27
 MODULE NOT IMPORTED - can_import_unresolved_qualified.md:14:18:14:37
 MODULE NOT IMPORTED - can_import_unresolved_qualified.md:14:41:14:61
 UNUSED VARIABLE - can_import_unresolved_qualified.md:15:19:15:22
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**can_import_unresolved_qualified.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
+
+
 **MODULE NOT FOUND**
 The module `json.Json` was not found in this Roc project.
 

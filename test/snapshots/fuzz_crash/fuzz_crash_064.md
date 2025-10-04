@@ -8,17 +8,15 @@ type=file
 
 ~~~
 # EXPECTED
-TYPE MODULE MISSING MATCHING TYPE - fuzz_crash_064.md:2:1:2:1
+MISSING MAIN! FUNCTION - fuzz_crash_064.md:2:1:2:1
 # PROBLEMS
-**TYPE MODULE MISSING MATCHING TYPE**
-Type modules must have a type declaration matching the module name.
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
 
-This file is named `fuzz_crash_064`.roc, but no top-level type declaration named `fuzz_crash_064` was found.
+No `main!` function was found.
 
-Add either:
-`fuzz_crash_064 := ...` (nominal type)
-or:
-`fuzz_crash_064 : ...` (type alias)
+Add a main! function like:
+`main! = |arg| { ... }`
 **fuzz_crash_064.md:2:1:2:1:**
 ```roc
 

@@ -14,6 +14,7 @@ PARSE ERROR - stmt_import.md:3:18:3:19
 PARSE ERROR - stmt_import.md:3:19:3:22
 PARSE ERROR - stmt_import.md:3:22:3:23
 PARSE ERROR - stmt_import.md:3:27:3:28
+MODULE HEADER DEPRECATED - stmt_import.md:1:1:1:10
 MODULE NOT FOUND - stmt_import.md:3:1:3:17
 # PROBLEMS
 **PARSE ERROR**
@@ -70,6 +71,19 @@ Other valid examples:
 import json.Json [foo, BAR]
 ```
                           ^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**stmt_import.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
 
 
 **MODULE NOT FOUND**

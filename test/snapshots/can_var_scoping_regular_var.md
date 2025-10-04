@@ -28,10 +28,24 @@ processItems = |items| {
 }
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - can_var_scoping_regular_var.md:1:1:1:10
 VAR REASSIGNMENT ERROR - :0:0:0:0
 VAR REASSIGNMENT ERROR - :0:0:0:0
 UNUSED VARIABLE - can_var_scoping_regular_var.md:4:17:4:22
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**can_var_scoping_regular_var.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
+
+
 **VAR REASSIGNMENT ERROR**
 Cannot reassign a `var` from outside the function where it was declared.
 Variables declared with `var` can only be reassigned within the same function scope.

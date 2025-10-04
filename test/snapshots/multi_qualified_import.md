@@ -33,6 +33,7 @@ PARSE ERROR - multi_qualified_import.md:14:30:14:31
 PARSE ERROR - multi_qualified_import.md:14:31:14:36
 PARSE ERROR - multi_qualified_import.md:14:36:14:37
 PARSE ERROR - multi_qualified_import.md:14:37:14:38
+MODULE HEADER DEPRECATED - multi_qualified_import.md:1:1:1:22
 MODULE NOT FOUND - multi_qualified_import.md:3:1:3:17
 UNDECLARED TYPE - multi_qualified_import.md:5:16:5:23
 UNDEFINED VARIABLE - multi_qualified_import.md:6:16:6:45
@@ -183,6 +184,19 @@ This is an unexpected parsing error. Please check your syntax.
 data = json.Core.Utf8.encode("hello")
 ```
                                     ^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**multi_qualified_import.md:1:1:1:22:**
+```roc
+module [json_encoder]
+```
+^^^^^^^^^^^^^^^^^^^^^
 
 
 **MODULE NOT FOUND**

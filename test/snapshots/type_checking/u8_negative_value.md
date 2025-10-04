@@ -11,8 +11,22 @@ x : U8
 x = -1
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - u8_negative_value.md:1:1:1:10
 NEGATIVE UNSIGNED INTEGER - u8_negative_value.md:4:5:4:7
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**u8_negative_value.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
+
+
 **NEGATIVE UNSIGNED INTEGER**
 The number **-1** is **signed** because it is negative:
 **u8_negative_value.md:4:5:4:7:**

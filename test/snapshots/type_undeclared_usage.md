@@ -17,11 +17,25 @@ processValue = |value| {
 AnotherType : SomeModule.MissingType
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - type_undeclared_usage.md:1:1:1:30
 UNDECLARED TYPE - type_undeclared_usage.md:3:10:3:21
 MODULE NOT IMPORTED - type_undeclared_usage.md:10:15:10:37
 UNDECLARED TYPE - type_undeclared_usage.md:5:16:5:32
 UNUSED VARIABLE - type_undeclared_usage.md:6:17:6:22
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**type_undeclared_usage.md:1:1:1:30:**
+```roc
+module [MyType, processValue]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **UNDECLARED TYPE**
 The type _UnknownType_ is not declared in this scope.
 

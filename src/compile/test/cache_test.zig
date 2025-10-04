@@ -333,7 +333,7 @@
 //     var ast = try parse.parse(&module_env);
 //     defer ast.deinit(gpa);
 
-//     var czer = try Can.init(cir, &ast, null);
+//     var czer = try Can.init(cir, &ast, null, .checking);
 //     defer czer
 //         .deinit();
 //     try czer
@@ -409,7 +409,7 @@
 // //     var ast = try parse.parse(&module_env);
 // //     defer ast.deinit(gpa);
 
-// //     var czer = try Can.init(cir, &ast, null);
+// //     var czer = try Can.init(cir, &ast, null, .checking);
 // //     defer czer
 // //         .deinit();
 // //     try czer

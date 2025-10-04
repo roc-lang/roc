@@ -106,7 +106,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 52;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 55;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 33;
 /// Count of the statement nodes in the ModuleEnv
@@ -2673,6 +2673,22 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) std.mem.Allocato
             node.data_1 = @bitCast(r.module_name);
             node.data_2 = @bitCast(r.type_name);
         },
+        .module_header_deprecated => |r| {
+            node.tag = .diag_module_header_deprecated;
+            region = r.region;
+        },
+        .redundant_expose_main_type => |r| {
+            node.tag = .diag_redundant_expose_main_type;
+            region = r.region;
+            node.data_1 = @bitCast(r.type_name);
+            node.data_2 = @bitCast(r.module_name);
+        },
+        .invalid_main_type_rename_in_exposing => |r| {
+            node.tag = .diag_invalid_main_type_rename_in_exposing;
+            region = r.region;
+            node.data_1 = @bitCast(r.type_name);
+            node.data_2 = @bitCast(r.alias);
+        },
         .var_across_function_boundary => |r| {
             node.tag = .diag_var_across_function_boundary;
             region = r.region;
@@ -3025,6 +3041,19 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_type_name_case_mismatch => return CIR.Diagnostic{ .type_name_case_mismatch = .{
             .module_name = @bitCast(node.data_1),
             .type_name = @bitCast(node.data_2),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_module_header_deprecated => return CIR.Diagnostic{ .module_header_deprecated = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_redundant_expose_main_type => return CIR.Diagnostic{ .redundant_expose_main_type = .{
+            .type_name = @bitCast(node.data_1),
+            .module_name = @bitCast(node.data_2),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_invalid_main_type_rename_in_exposing => return CIR.Diagnostic{ .invalid_main_type_rename_in_exposing = .{
+            .type_name = @bitCast(node.data_1),
+            .alias = @bitCast(node.data_2),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_type_alias_redeclared => return CIR.Diagnostic{ .type_alias_redeclared = .{

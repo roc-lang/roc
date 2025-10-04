@@ -14,9 +14,21 @@ message = "Hello! Here are some emojis: 👻 🎉 🚀"
 greet = "Welcome! café résumé naïve 你好 こんにちは α β γ ∑ ∫ ∞"
 ~~~
 # EXPECTED
-NIL
+MODULE HEADER DEPRECATED - string_unicode_emoji.md:1:1:1:24
 # PROBLEMS
-NIL
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**string_unicode_emoji.md:1:1:1:24:**
+```roc
+module [message, greet]
+```
+^^^^^^^^^^^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:16),Comma(1:16-1:17),LowerIdent(1:18-1:23),CloseSquare(1:23-1:24),

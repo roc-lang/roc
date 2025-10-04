@@ -11,6 +11,7 @@ foo = asd.0
 ~~~
 # EXPECTED
 PARSE ERROR - expr_no_space_dot_int.md:3:10:3:12
+MODULE HEADER DEPRECATED - expr_no_space_dot_int.md:1:1:1:10
 UNRECOGNIZED SYNTAX - expr_no_space_dot_int.md:3:10:3:12
 # PROBLEMS
 **PARSE ERROR**
@@ -22,6 +23,19 @@ This is an unexpected parsing error. Please check your syntax.
 foo = asd.0
 ```
          ^^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**expr_no_space_dot_int.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
 
 
 **UNRECOGNIZED SYNTAX**

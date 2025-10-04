@@ -16,8 +16,22 @@ yellow : Color
 yellow = Color.Yellow
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - nominal_tag_simple.md:1:1:1:21
 INVALID NOMINAL TAG - nominal_tag_simple.md:9:10:9:22
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**nominal_tag_simple.md:1:1:1:21:**
+```roc
+module [Color, blue]
+```
+^^^^^^^^^^^^^^^^^^^^
+
+
 **INVALID NOMINAL TAG**
 I'm having trouble with this nominal tag:
 **nominal_tag_simple.md:9:10:9:22:**

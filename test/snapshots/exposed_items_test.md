@@ -12,8 +12,22 @@ import pf.Stdout exposing [line!, write!]
 main = 42
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - exposed_items_test.md:1:1:1:14
 MODULE NOT FOUND - exposed_items_test.md:3:1:3:42
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**exposed_items_test.md:1:1:1:14:**
+```roc
+module [main]
+```
+^^^^^^^^^^^^^
+
+
 **MODULE NOT FOUND**
 The module `pf.Stdout` was not found in this Roc project.
 

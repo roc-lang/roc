@@ -14,9 +14,21 @@ foo = |a| {
 }
 ~~~
 # EXPECTED
-NIL
+MODULE HEADER DEPRECATED - expect_stmt_block_assertion.md:1:1:1:13
 # PROBLEMS
-NIL
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**expect_stmt_block_assertion.md:1:1:1:13:**
+```roc
+module [foo]
+```
+^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),

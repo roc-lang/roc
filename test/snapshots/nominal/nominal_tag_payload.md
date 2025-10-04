@@ -20,9 +20,21 @@ some2 = |a| Maybe.Some(a)
 none2 = Maybe.None
 ~~~
 # EXPECTED
-NIL
+MODULE HEADER DEPRECATED - nominal_tag_payload.md:1:1:1:43
 # PROBLEMS
-NIL
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**nominal_tag_payload.md:1:1:1:43:**
+```roc
+module [Maybe, some1, none1, some2, none2]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:14),Comma(1:14-1:15),LowerIdent(1:16-1:21),Comma(1:21-1:22),LowerIdent(1:23-1:28),Comma(1:28-1:29),LowerIdent(1:30-1:35),Comma(1:35-1:36),LowerIdent(1:37-1:42),CloseSquare(1:42-1:43),

@@ -17,10 +17,24 @@ main =
     expectsPerson("not a person")
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - nominal_type_origin_mismatch.md:1:1:1:10
 MODULE NOT FOUND - nominal_type_origin_mismatch.md:3:1:3:30
 UNDECLARED TYPE - nominal_type_origin_mismatch.md:5:17:5:23
 UNUSED VARIABLE - nominal_type_origin_mismatch.md:6:18:6:19
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**nominal_type_origin_mismatch.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
+
+
 **MODULE NOT FOUND**
 The module `Data` was not found in this Roc project.
 

@@ -1086,7 +1086,7 @@ fn processSnapshotContent(
         .box = try can_ir.insertIdent(base.Ident.for_text("Box")),
     };
 
-    var czer = try Can.init(can_ir, &parse_ast, null);
+    var czer = try Can.init(can_ir, &parse_ast, null, .checking);
     defer czer.deinit();
 
     var maybe_expr_idx: ?Can.CanonicalizedExpr = null;

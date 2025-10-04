@@ -13,9 +13,21 @@ updated2 = { ..updated_one, city: "New York" }
 final = { ..updated2, name: "Alice Smith", age: 32 }
 ~~~
 # EXPECTED
-NIL
+MODULE HEADER DEPRECATED - record_updater_chained.md:1:1:1:23
 # PROBLEMS
-NIL
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**record_updater_chained.md:1:1:1:23:**
+```roc
+module [person, final]
+```
+^^^^^^^^^^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:15),Comma(1:15-1:16),LowerIdent(1:17-1:22),CloseSquare(1:22-1:23),

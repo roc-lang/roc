@@ -15,10 +15,24 @@ value : UsedType
 value = 42
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - usage_test.md:1:1:1:10
 UNDERSCORE IN TYPE ALIAS - usage_test.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - usage_test.md:1:1:1:1
 TYPE MISMATCH - usage_test.md:8:9:8:11
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**usage_test.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
+
+
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
 

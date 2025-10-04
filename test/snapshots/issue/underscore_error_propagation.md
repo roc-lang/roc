@@ -22,10 +22,24 @@ goodValue : GoodDerived
 goodValue = "test"
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - underscore_error_propagation.md:1:1:1:10
 UNDERSCORE IN TYPE ALIAS - underscore_error_propagation.md:1:1:1:1
 TYPE MISMATCH - underscore_error_propagation.md:8:9:8:15
 TYPE MISMATCH - underscore_error_propagation.md:15:13:15:19
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**underscore_error_propagation.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
+
+
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
 

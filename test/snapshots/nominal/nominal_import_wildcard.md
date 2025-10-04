@@ -20,6 +20,7 @@ green = Green
 ~~~
 # EXPECTED
 PARSE ERROR - nominal_import_wildcard.md:3:13:3:15
+MODULE HEADER DEPRECATED - nominal_import_wildcard.md:1:1:1:26
 MODULE NOT FOUND - nominal_import_wildcard.md:3:1:3:13
 UNDECLARED TYPE - nominal_import_wildcard.md:5:7:5:12
 UNDECLARED TYPE - nominal_import_wildcard.md:8:8:8:13
@@ -34,6 +35,19 @@ This is an unexpected parsing error. Please check your syntax.
 import Color.*
 ```
             ^^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**nominal_import_wildcard.md:1:1:1:26:**
+```roc
+module [red, green, blue]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **MODULE NOT FOUND**

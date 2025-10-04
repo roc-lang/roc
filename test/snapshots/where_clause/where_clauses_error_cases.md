@@ -25,6 +25,7 @@ broken_fn3 : a -> b
 WHERE CLAUSE ERROR - where_clauses_error_cases.md:6:5:6:11
 PARSE ERROR - where_clauses_error_cases.md:6:25:6:26
 WHERE CLAUSE ERROR - where_clauses_error_cases.md:10:3:10:8
+MODULE HEADER DEPRECATED - where_clauses_error_cases.md:1:1:1:44
 MALFORMED WHERE CLAUSE - where_clauses_error_cases.md:6:5:6:24
 MALFORMED WHERE CLAUSE - where_clauses_error_cases.md:10:3:10:8
 EXPOSED BUT NOT DEFINED - where_clauses_error_cases.md:1:9:1:19
@@ -65,6 +66,19 @@ For example:
   where
 ```
   ^^^^^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**where_clauses_error_cases.md:1:1:1:44:**
+```roc
+module [broken_fn1, broken_fn2, broken_fn3]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **MALFORMED WHERE CLAUSE**

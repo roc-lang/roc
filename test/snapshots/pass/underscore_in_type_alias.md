@@ -22,6 +22,7 @@ TupleType := (_, U32, _)
 TagType := [Some(_), None]
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - underscore_in_type_alias.md:1:1:1:10
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:7:21:7:21
@@ -33,6 +34,19 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:13:15:13:15
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:15:18:15:18
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**underscore_in_type_alias.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
+
+
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
 

@@ -44,6 +44,7 @@ PARSE ERROR - can_import_nested_modules.md:5:28:5:36
 PARSE ERROR - can_import_nested_modules.md:5:37:5:38
 PARSE ERROR - can_import_nested_modules.md:5:38:5:45
 PARSE ERROR - can_import_nested_modules.md:5:45:5:46
+MODULE HEADER DEPRECATED - can_import_nested_modules.md:1:1:1:10
 MODULE NOT FOUND - can_import_nested_modules.md:3:1:3:19
 MODULE NOT FOUND - can_import_nested_modules.md:4:1:4:19
 MODULE NOT IMPORTED - can_import_nested_modules.md:8:15:8:30
@@ -191,6 +192,19 @@ This is an unexpected parsing error. Please check your syntax.
 import utils.String.Format exposing [padLeft]
 ```
                                             ^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**can_import_nested_modules.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
 
 
 **MODULE NOT FOUND**

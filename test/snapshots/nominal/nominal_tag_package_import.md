@@ -15,8 +15,22 @@ blue : CC.Color
 blue = CC.Color.RGB(0,0,255)
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - nominal_tag_package_import.md:1:1:1:14
 MODULE NOT FOUND - nominal_tag_package_import.md:4:1:4:26
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**nominal_tag_package_import.md:1:1:1:14:**
+```roc
+module [blue]
+```
+^^^^^^^^^^^^^
+
+
 **MODULE NOT FOUND**
 The module `styles.Color` was not found in this Roc project.
 

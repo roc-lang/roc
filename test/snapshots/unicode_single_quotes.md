@@ -46,6 +46,7 @@ UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:16:5:16:11
 UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:17:5:17:9
 UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:20:5:20:7
 PARSE ERROR - unicode_single_quotes.md:23:1:23:3
+MODULE HEADER DEPRECATED - unicode_single_quotes.md:1:1:1:10
 INVALID TUPLE ELEMENT - :0:0:0:0
 INVALID TUPLE ELEMENT - :0:0:0:0
 INVALID TUPLE ELEMENT - :0:0:0:0
@@ -218,6 +219,19 @@ This is an unexpected parsing error. Please check your syntax.
 '\
 ```
 ^^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**unicode_single_quotes.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
 
 
 **INVALID TUPLE ELEMENT**

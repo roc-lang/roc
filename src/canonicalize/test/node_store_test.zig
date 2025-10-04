@@ -596,6 +596,28 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(CIR.Diagnostic{
+        .module_header_deprecated = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .redundant_expose_main_type = .{
+            .type_name = rand_ident_idx(),
+            .module_name = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .invalid_main_type_rename_in_exposing = .{
+            .type_name = rand_ident_idx(),
+            .alias = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
         .unused_variable = .{
             .ident = rand_ident_idx(),
             .region = rand_region(),

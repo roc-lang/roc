@@ -17,6 +17,7 @@ PARSE ERROR - inline_ingested_file.md:3:8:3:9
 PARSE ERROR - inline_ingested_file.md:3:9:3:19
 PARSE ERROR - inline_ingested_file.md:3:19:3:20
 PARSE ERROR - inline_ingested_file.md:3:21:3:23
+MODULE HEADER DEPRECATED - inline_ingested_file.md:1:1:1:13
 MODULE NOT FOUND - inline_ingested_file.md:4:1:4:12
 UNDEFINED VARIABLE - inline_ingested_file.md:6:18:6:22
 # PROBLEMS
@@ -62,6 +63,19 @@ This is an unexpected parsing error. Please check your syntax.
 import "users.json" as data : Str
 ```
                     ^^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**inline_ingested_file.md:1:1:1:13:**
+```roc
+module [foo]
+```
+^^^^^^^^^^^^
 
 
 **MODULE NOT FOUND**

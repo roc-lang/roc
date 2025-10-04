@@ -10,8 +10,22 @@ module []
 { name, age, email } = person
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - statement_record_destructure.md:1:1:1:10
 UNDEFINED VARIABLE - statement_record_destructure.md:3:24:3:30
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**statement_record_destructure.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `person` in this scope.
 Is there an `import` or `exposing` missing up-top?

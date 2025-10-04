@@ -41,6 +41,7 @@ PARSE ERROR - fuzz_crash_025.md:14:48:14:49
 PARSE ERROR - fuzz_crash_025.md:15:1:15:2
 PARSE ERROR - fuzz_crash_025.md:15:3:15:4
 PARSE ERROR - fuzz_crash_025.md:15:4:15:5
+MODULE HEADER DEPRECATED - fuzz_crash_025.md:1:1:1:10
 TYPE MISMATCH - fuzz_crash_025.md:14:5:14:48
 # PROBLEMS
 **PARSE ERROR**
@@ -142,6 +143,19 @@ This is an unexpected parsing error. Please check your syntax.
 f =8
 ```
    ^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**fuzz_crash_025.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
 
 
 **TYPE MISMATCH**

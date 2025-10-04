@@ -12,6 +12,7 @@ var topLevelVar_ = 0
 ~~~
 # EXPECTED
 PARSE ERROR - can_var_scoping_invalid_top_level.md:4:1:4:4
+MODULE HEADER DEPRECATED - can_var_scoping_invalid_top_level.md:1:1:1:10
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `var_only_allowed_in_a_body`
@@ -22,6 +23,19 @@ This is an unexpected parsing error. Please check your syntax.
 var topLevelVar_ = 0
 ```
 ^^^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**can_var_scoping_invalid_top_level.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
 
 
 # TOKENS

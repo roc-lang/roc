@@ -13,8 +13,22 @@ dbg "foo"
 foo = ...
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - dbg_stmt_not_permitted_top_level.md:1:1:1:13
 INVALID STATEMENT - dbg_stmt_not_permitted_top_level.md:4:1:4:10
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**dbg_stmt_not_permitted_top_level.md:1:1:1:13:**
+```roc
+module [foo]
+```
+^^^^^^^^^^^^
+
+
 **INVALID STATEMENT**
 The statement `dbg` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.

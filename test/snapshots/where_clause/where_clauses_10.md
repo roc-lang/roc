@@ -16,9 +16,23 @@ decodeThings # After member name
 				module(a).Decode
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - where_clauses_10.md:1:1:1:16
 MODULE NOT FOUND - where_clauses_10.md:3:1:3:32
 EXPOSED BUT NOT DEFINED - where_clauses_10.md:1:9:1:15
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**where_clauses_10.md:1:1:1:16:**
+```roc
+module [decode]
+```
+^^^^^^^^^^^^^^^
+
+
 **MODULE NOT FOUND**
 The module `Decode` was not found in this Roc project.
 

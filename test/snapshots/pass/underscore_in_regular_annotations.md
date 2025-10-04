@@ -40,6 +40,7 @@ transform = |_, b| b
 # EXPECTED
 PARSE ERROR - underscore_in_regular_annotations.md:30:22:30:24
 PARSE ERROR - underscore_in_regular_annotations.md:30:25:30:27
+MODULE HEADER DEPRECATED - underscore_in_regular_annotations.md:1:1:1:10
 UNUSED VARIABLE - underscore_in_regular_annotations.md:11:12:11:16
 # PROBLEMS
 **PARSE ERROR**
@@ -65,6 +66,19 @@ This is an unexpected parsing error. Please check your syntax.
 transform : _a -> _b -> _b
 ```
                         ^^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**underscore_in_regular_annotations.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
 
 
 **UNUSED VARIABLE**

@@ -11,8 +11,22 @@ Maybe(a) : [Some(a), None]
 Maybe(a) : [Ok(a), Err]
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - type_redeclaration_same_scope.md:1:1:1:15
 TYPE REDECLARED - type_redeclaration_same_scope.md:4:1:4:24
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**type_redeclaration_same_scope.md:1:1:1:15:**
+```roc
+module [Maybe]
+```
+^^^^^^^^^^^^^^
+
+
 **TYPE REDECLARED**
 The type _Maybe_ is being redeclared.
 

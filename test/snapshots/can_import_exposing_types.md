@@ -61,6 +61,7 @@ combineResults = |jsonResult, httpStatus|
     }
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - can_import_exposing_types.md:1:1:1:10
 UNDECLARED TYPE - can_import_exposing_types.md:31:18:31:24
 UNDECLARED TYPE - can_import_exposing_types.md:32:18:32:24
 UNDECLARED TYPE - can_import_exposing_types.md:33:23:33:31
@@ -85,6 +86,19 @@ UNDECLARED TYPE - can_import_exposing_types.md:49:40:49:46
 UNDECLARED TYPE - can_import_exposing_types.md:49:57:49:65
 UNDECLARED TYPE - can_import_exposing_types.md:49:67:49:72
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**can_import_exposing_types.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
+
+
 **UNDECLARED TYPE**
 The type _Config_ is not declared in this scope.
 

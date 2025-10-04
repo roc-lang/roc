@@ -26,6 +26,7 @@ PARSE ERROR - fuzz_crash_032.md:3:44:3:45
 IMPORT MUST BE TOP LEVEL - fuzz_crash_032.md:6:18:6:24
 UNEXPECTED TOKEN IN PATTERN - fuzz_crash_032.md:9:21:9:22
 PARSE ERROR - fuzz_crash_032.md:9:22:9:22
+MODULE HEADER DEPRECATED - fuzz_crash_032.md:1:1:1:15
 UNDECLARED TYPE VARIABLE - fuzz_crash_032.md:3:14:3:17
 UNDECLARED TYPE - fuzz_crash_032.md:3:21:3:24
 NOT IMPLEMENTED - :0:0:0:0
@@ -136,6 +137,19 @@ This is an unexpected parsing error. Please check your syntax.
 Green => LocalStatus-Complete
 ```
                      ^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**fuzz_crash_032.md:1:1:1:15:**
+```roc
+module [tus,r]
+```
+^^^^^^^^^^^^^^
 
 
 **UNDECLARED TYPE VARIABLE**

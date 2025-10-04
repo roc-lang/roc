@@ -24,6 +24,7 @@ PARSE ERROR - fuzz_crash_024.md:1:53:1:53
 PARSE ERROR - fuzz_crash_024.md:4:1:4:4
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:4:8:4:9
 PARSE ERROR - fuzz_crash_024.md:7:1:7:4
+MODULE HEADER DEPRECATED - fuzz_crash_024.md:1:1:1:17
 MALFORMED TYPE - fuzz_crash_024.md:1:24:1:32
 UNRECOGNIZED SYNTAX - fuzz_crash_024.md:4:8:4:9
 DUPLICATE DEFINITION - fuzz_crash_024.md:7:5:7:6
@@ -134,6 +135,19 @@ This is an unexpected parsing error. Please check your syntax.
 var t= 0
 ```
 ^^^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**fuzz_crash_024.md:1:1:1:17:**
+```roc
+module [module ] { pf: platform ".-/main._]where # A
+```
+^^^^^^^^^^^^^^^^
 
 
 **MALFORMED TYPE**

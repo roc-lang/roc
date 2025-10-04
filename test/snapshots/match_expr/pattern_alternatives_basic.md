@@ -16,9 +16,21 @@ kind = |color| match color {
 }
 ~~~
 # EXPECTED
-NIL
+MODULE HEADER DEPRECATED - pattern_alternatives_basic.md:1:1:1:14
 # PROBLEMS
-NIL
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**pattern_alternatives_basic.md:1:1:1:14:**
+```roc
+module [kind]
+```
+^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:13),CloseSquare(1:13-1:14),

@@ -9,6 +9,7 @@ module[]s:b->c where module(a).t:c,u:o...
 ~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_057.md:1:39:1:42
+MODULE HEADER DEPRECATED - fuzz_crash_057.md:1:1:1:9
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
@@ -19,6 +20,19 @@ This is an unexpected parsing error. Please check your syntax.
 module[]s:b->c where module(a).t:c,u:o...
 ```
                                       ^^^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**fuzz_crash_057.md:1:1:1:9:**
+```roc
+module[]s:b->c where module(a).t:c,u:o...
+```
+^^^^^^^^
 
 
 # TOKENS

@@ -15,9 +15,21 @@ extract_age = |person| {
 }
 ~~~
 # EXPECTED
-NIL
+MODULE HEADER DEPRECATED - module_record_destructure.md:1:1:1:21
 # PROBLEMS
-NIL
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**module_record_destructure.md:1:1:1:21:**
+```roc
+module [extract_age]
+```
+^^^^^^^^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:20),CloseSquare(1:20-1:21),

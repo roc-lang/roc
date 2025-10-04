@@ -12,6 +12,7 @@ x }
 ~~~
 # EXPECTED
 EXPRESSION IN ASSOCIATED ITEMS - nominal_associated_with_final_expression.md:4:1:4:2
+MODULE HEADER DEPRECATED - nominal_associated_with_final_expression.md:1:1:1:10
 # PROBLEMS
 **EXPRESSION IN ASSOCIATED ITEMS**
 Associated items (such as types or methods) can only have associated types and values, not plain expressions.
@@ -23,6 +24,19 @@ To fix this, remove the expression at the very end.
 x }
 ```
 ^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**nominal_associated_with_final_expression.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
 
 
 # TOKENS

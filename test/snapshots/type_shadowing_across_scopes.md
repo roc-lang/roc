@@ -23,6 +23,7 @@ PARSE ERROR - type_shadowing_across_scopes.md:11:5:11:11
 PARSE ERROR - type_shadowing_across_scopes.md:11:24:11:31
 PARSE ERROR - type_shadowing_across_scopes.md:11:31:11:32
 PARSE ERROR - type_shadowing_across_scopes.md:12:1:12:2
+MODULE HEADER DEPRECATED - type_shadowing_across_scopes.md:1:1:1:29
 TYPE REDECLARED - type_shadowing_across_scopes.md:3:1:3:31
 MALFORMED TYPE - type_shadowing_across_scopes.md:11:24:11:31
 UNUSED VARIABLE - type_shadowing_across_scopes.md:6:16:6:20
@@ -69,6 +70,19 @@ This is an unexpected parsing error. Please check your syntax.
 }
 ```
 ^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**type_shadowing_across_scopes.md:1:1:1:29:**
+```roc
+module [Result, processData]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **TYPE REDECLARED**

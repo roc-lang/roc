@@ -10,9 +10,21 @@ module [fib]
 fib = |n| if n <= 1 n else fib(n - 1) + fib(n - 2)
 ~~~
 # EXPECTED
-NIL
+MODULE HEADER DEPRECATED - fib_module.md:1:1:1:13
 # PROBLEMS
-NIL
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**fib_module.md:1:1:1:13:**
+```roc
+module [fib]
+```
+^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),

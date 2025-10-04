@@ -11,6 +11,7 @@ C:[0]
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_066.md:3:4:3:5
+MODULE HEADER DEPRECATED - fuzz_crash_066.md:1:1:1:10
 MALFORMED TYPE - fuzz_crash_066.md:3:4:3:5
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -22,6 +23,19 @@ Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 C:[0]
 ```
    ^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**fuzz_crash_066.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
 
 
 **MALFORMED TYPE**

@@ -10,9 +10,21 @@ module [Foo]
 Foo(a,b) : (a,b,Str,U64)
 ~~~
 # EXPECTED
-NIL
+MODULE HEADER DEPRECATED - stmt_type_decl.md:1:1:1:13
 # PROBLEMS
-NIL
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**stmt_type_decl.md:1:1:1:13:**
+```roc
+module [Foo]
+```
+^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:12),CloseSquare(1:12-1:13),

@@ -46,6 +46,7 @@ combineResults = |result1, result2|
     }
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - can_import_type_annotations.md:1:1:1:10
 MODULE NOT FOUND - can_import_type_annotations.md:3:1:3:56
 MODULE NOT FOUND - can_import_type_annotations.md:4:1:4:17
 MODULE NOT FOUND - can_import_type_annotations.md:5:1:5:38
@@ -55,6 +56,19 @@ UNUSED VARIABLE - can_import_type_annotations.md:8:19:8:22
 MODULE NOT IMPORTED - can_import_type_annotations.md:26:18:26:36
 MODULE NOT IMPORTED - can_import_type_annotations.md:26:64:26:81
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**can_import_type_annotations.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
+
+
 **MODULE NOT FOUND**
 The module `http.Client` was not found in this Roc project.
 
@@ -545,9 +559,9 @@ combineResults = |result1, result2|
 		(p-assign @31.1-31.15 (ident "combineResults"))
 		(e-closure @31.18-39.6
 			(captures
-				(capture @36.21-36.24 (ident "err"))
-				(capture @35.20-35.26 (ident "value2"))
 				(capture @38.13-38.16 (ident "err"))
+				(capture @35.20-35.26 (ident "value2"))
+				(capture @36.21-36.24 (ident "err"))
 				(capture @33.12-33.18 (ident "value1")))
 			(e-lambda @31.18-39.6
 				(args

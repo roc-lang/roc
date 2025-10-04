@@ -38,6 +38,7 @@ h = |x, y| {
 }
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - everything.md:1:1:1:10
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:8:1:8:74
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:9:1:9:74
 MODULE NOT FOUND - everything.md:4:1:4:30
@@ -52,6 +53,19 @@ UNUSED VARIABLE - everything.md:21:2:21:4
 UNUSED VARIABLE - everything.md:22:2:22:4
 UNUSED VARIABLE - everything.md:23:2:23:4
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**everything.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
+
+
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
 
@@ -375,10 +389,10 @@ NO CHANGE
 		(p-assign @18.1-18.2 (ident "h"))
 		(e-closure @18.5-31.2
 			(captures
-				(capture @29.7-29.8 (ident "a"))
-				(capture @28.8-28.9 (ident "a"))
 				(capture @26.7-26.8 (ident "a"))
+				(capture @28.8-28.9 (ident "a"))
 				(capture @18.1-18.2 (ident "h"))
+				(capture @29.7-29.8 (ident "a"))
 				(capture @27.6-27.7 (ident "a")))
 			(e-lambda @18.5-31.2
 				(args

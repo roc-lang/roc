@@ -13,8 +13,22 @@ red : Color.RGB
 red = Color.RGB.Red
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - nominal_import_type.md:1:1:1:13
 MODULE NOT FOUND - nominal_import_type.md:3:1:3:13
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**nominal_import_type.md:1:1:1:13:**
+```roc
+module [red]
+```
+^^^^^^^^^^^^
+
+
 **MODULE NOT FOUND**
 The module `Color` was not found in this Roc project.
 

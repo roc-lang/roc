@@ -12,6 +12,7 @@ ASCII CONTROL CHARACTER - :0:0:0:0
 PARSE ERROR - fuzz_crash_073.md:1:9:1:10
 PARSE ERROR - fuzz_crash_073.md:1:10:1:11
 PARSE ERROR - fuzz_crash_073.md:1:12:1:14
+MODULE HEADER DEPRECATED - fuzz_crash_073.md:1:1:1:9
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.
@@ -49,6 +50,19 @@ This is an unexpected parsing error. Please check your syntax.
 module[]!0.t
 ```
            ^^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**fuzz_crash_073.md:1:1:1:9:**
+```roc
+module[]!0.t
+```
+^^^^^^^^
 
 
 # TOKENS

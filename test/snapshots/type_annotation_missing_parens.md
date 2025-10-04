@@ -11,6 +11,7 @@ nums : List U8
 ~~~
 # EXPECTED
 PARSE ERROR - type_annotation_missing_parens.md:4:1:4:1
+MODULE HEADER DEPRECATED - type_annotation_missing_parens.md:1:1:1:14
 EXPOSED BUT NOT DEFINED - type_annotation_missing_parens.md:1:9:1:13
 # PROBLEMS
 **PARSE ERROR**
@@ -34,6 +35,19 @@ Other valid examples:
 
 ```
 ^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**type_annotation_missing_parens.md:1:1:1:14:**
+```roc
+module [nums]
+```
+^^^^^^^^^^^^^
 
 
 **EXPOSED BUT NOT DEFINED**

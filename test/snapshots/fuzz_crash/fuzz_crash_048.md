@@ -17,6 +17,7 @@ tag_tuple : Value((a, b, c))
 ~~~
 # EXPECTED
 ASCII CONTROL CHARACTER - :0:0:0:0
+MODULE HEADER DEPRECATED - fuzz_crash_048.md:1:1:1:10
 UNDECLARED TYPE - fuzz_crash_048.md:4:7:4:12
 UNDECLARED TYPE - fuzz_crash_048.md:8:14:8:20
 UNDECLARED TYPE - fuzz_crash_048.md:9:13:9:18
@@ -24,6 +25,19 @@ UNDECLARED TYPE - fuzz_crash_048.md:9:13:9:18
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.
 
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**fuzz_crash_048.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
 
 
 **UNDECLARED TYPE**

@@ -14,9 +14,23 @@ foo = if 1 A
     }
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - if_then_else_simple_file.md:1:1:1:13
 INVALID IF CONDITION - if_then_else_simple_file.md:3:10:3:10
 INCOMPATIBLE IF BRANCHES - if_then_else_simple_file.md:3:7:3:7
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**if_then_else_simple_file.md:1:1:1:13:**
+```roc
+module [foo]
+```
+^^^^^^^^^^^^
+
+
 **INVALID IF CONDITION**
 This `if` condition needs to be a _Bool_:
 **if_then_else_simple_file.md:3:10:**

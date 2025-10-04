@@ -32,6 +32,7 @@ UNCLOSED STRING - :0:0:0:0
 PARSE ERROR - string.md:15:1:15:2
 PARSE ERROR - string.md:15:2:15:3
 PARSE ERROR - string.md:15:3:15:3
+MODULE HEADER DEPRECATED - string.md:1:1:1:10
 # PROBLEMS
 **INVALID UNICODE ESCAPE SEQUENCE**
 This Unicode escape sequence is not valid.
@@ -127,6 +128,19 @@ This is an unexpected parsing error. Please check your syntax.
 "\
 ```
   ^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**string.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
 
 
 # TOKENS

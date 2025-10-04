@@ -11,6 +11,7 @@ Foo : [A, B, C].{ x = 5 }
 ~~~
 # EXPECTED
 TYPE ALIAS WITH ASSOCIATED ITEMS - type_alias_with_associated.md:3:16:3:17
+MODULE HEADER DEPRECATED - type_alias_with_associated.md:1:1:1:10
 # PROBLEMS
 **TYPE ALIAS WITH ASSOCIATED ITEMS**
 Type aliases cannot have associated items (such as types or methods).
@@ -22,6 +23,19 @@ Only nominal types (defined with **:=**) can have associated items. Type aliases
 Foo : [A, B, C].{ x = 5 }
 ```
                ^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**type_alias_with_associated.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
 
 
 # TOKENS

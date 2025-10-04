@@ -23,8 +23,22 @@ outerFunc = |_| {
 }
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - can_basic_scoping.md:1:1:1:10
 DUPLICATE DEFINITION - can_basic_scoping.md:9:5:9:6
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**can_basic_scoping.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
+
+
 **DUPLICATE DEFINITION**
 The name `x` is being redeclared in this scope.
 

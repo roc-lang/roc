@@ -23,9 +23,23 @@ Decode(a) : a
 		) -> a
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - where_clauses_7.md:1:1:1:14
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_7.md:3:1:10:26
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_7.md:12:1:16:9
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**where_clauses_7.md:1:1:1:14:**
+```roc
+module [Hash]
+```
+^^^^^^^^^^^^^
+
+
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
 

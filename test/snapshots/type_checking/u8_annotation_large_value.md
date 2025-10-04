@@ -11,8 +11,22 @@ x : U8
 x = 500
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - u8_annotation_large_value.md:1:1:1:10
 NUMBER DOES NOT FIT IN TYPE - u8_annotation_large_value.md:4:5:4:8
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**u8_annotation_large_value.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
+
+
 **NUMBER DOES NOT FIT IN TYPE**
 The number **500** does not fit in its inferred type:
 **u8_annotation_large_value.md:4:5:4:8:**

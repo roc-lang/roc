@@ -26,11 +26,25 @@ result = multi_arg_fn(
 )
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - lambda_multi_arg_mismatch.md:1:1:1:10
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:5:25:5:27
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:5:33:5:35
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:5:41:5:43
 TYPE MISMATCH - lambda_multi_arg_mismatch.md:11:5:11:5
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**lambda_multi_arg_mismatch.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
+
+
 **UNUSED VARIABLE**
 Variable `x3` is not used anywhere in your code.
 

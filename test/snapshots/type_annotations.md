@@ -15,10 +15,24 @@ main! : List(String) -> Result({}, _)
 tag_tuple : Value((_a, _b, _c))
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - type_annotations.md:1:1:1:10
 UNDECLARED TYPE - type_annotations.md:4:7:4:12
 UNDECLARED TYPE - type_annotations.md:7:14:7:20
 UNDECLARED TYPE - type_annotations.md:8:13:8:18
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**type_annotations.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
+
+
 **UNDECLARED TYPE**
 The type _Thing_ is not declared in this scope.
 

@@ -18,8 +18,22 @@ foo = |num| {
 }
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - return_stmt_block_example.md:1:1:1:13
 INCOMPATIBLE IF BRANCHES - return_stmt_block_example.md:5:11:5:11
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**return_stmt_block_example.md:1:1:1:13:**
+```roc
+module [foo]
+```
+^^^^^^^^^^^^
+
+
 **INCOMPATIBLE IF BRANCHES**
 This `if` has an `else` branch with a different type from it's `then` branch:
 **return_stmt_block_example.md:5:11:**

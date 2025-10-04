@@ -10,9 +10,21 @@ module []
 x = 0xFF
 ~~~
 # EXPECTED
-NIL
+MODULE HEADER DEPRECATED - can_hex_integer.md:1:1:1:10
 # PROBLEMS
-NIL
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**can_hex_integer.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),

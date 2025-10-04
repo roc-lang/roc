@@ -45,12 +45,26 @@ Complex : {
 }
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - type_comprehensive_scope.md:1:1:1:43
 TYPE REDECLARED - type_comprehensive_scope.md:12:1:12:37
 UNDECLARED TYPE - type_comprehensive_scope.md:15:19:15:23
 TYPE REDECLARED - type_comprehensive_scope.md:24:1:24:13
 UNDECLARED TYPE - type_comprehensive_scope.md:27:11:27:29
 UNDECLARED TYPE - type_comprehensive_scope.md:31:10:31:14
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**type_comprehensive_scope.md:1:1:1:43:**
+```roc
+module [MyU64, Person, Result, Tree, Node]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **TYPE REDECLARED**
 The type _Result_ is being redeclared.
 

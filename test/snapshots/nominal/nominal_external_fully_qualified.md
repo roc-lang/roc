@@ -18,9 +18,23 @@ handleResult = |result| {
 }
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - nominal_external_fully_qualified.md:1:1:1:22
 MODULE NOT FOUND - nominal_external_fully_qualified.md:3:1:3:22
 UNUSED VARIABLE - nominal_external_fully_qualified.md:9:41:9:45
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**nominal_external_fully_qualified.md:1:1:1:22:**
+```roc
+module [handleResult]
+```
+^^^^^^^^^^^^^^^^^^^^^
+
+
 **MODULE NOT FOUND**
 The module `MyResultModule` was not found in this Roc project.
 

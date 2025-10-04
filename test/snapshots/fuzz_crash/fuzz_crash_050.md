@@ -12,6 +12,7 @@ module[]_0={
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_050.md:2:1:2:2
 PARSE ERROR - fuzz_crash_050.md:4:1:4:1
+MODULE HEADER DEPRECATED - fuzz_crash_050.md:1:1:1:9
 UNRECOGNIZED SYNTAX - fuzz_crash_050.md:2:1:2:2
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -34,6 +35,19 @@ This is an unexpected parsing error. Please check your syntax.
 
 ```
 ^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**fuzz_crash_050.md:1:1:1:9:**
+```roc
+module[]_0={
+```
+^^^^^^^^
 
 
 **UNRECOGNIZED SYNTAX**

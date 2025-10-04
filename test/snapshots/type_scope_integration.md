@@ -20,9 +20,23 @@ Bar : SomeUndeclaredType
 Baz : Foo
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - type_scope_integration.md:1:1:1:18
 TYPE REDECLARED - type_scope_integration.md:7:1:7:10
 UNDECLARED TYPE - type_scope_integration.md:10:7:10:25
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**type_scope_integration.md:1:1:1:18:**
+```roc
+module [Foo, Bar]
+```
+^^^^^^^^^^^^^^^^^
+
+
 **TYPE REDECLARED**
 The type _Foo_ is being redeclared.
 

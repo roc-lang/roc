@@ -24,6 +24,7 @@ processColor = |color| {
 ~~~
 # EXPECTED
 IMPORT MUST BE TOP LEVEL - nominal_mixed_scope.md:9:5:9:11
+MODULE HEADER DEPRECATED - nominal_mixed_scope.md:1:1:1:35
 NOT IMPLEMENTED - :0:0:0:0
 UNDECLARED TYPE - nominal_mixed_scope.md:9:12:9:17
 UNDECLARED TYPE - nominal_mixed_scope.md:12:9:12:12
@@ -39,6 +40,19 @@ Move this import to the top of the file, after the module header but before any 
     import Color.RGB
 ```
     ^^^^^^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**nominal_mixed_scope.md:1:1:1:35:**
+```roc
+module [LocalStatus, processColor]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **NOT IMPLEMENTED**

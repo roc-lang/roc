@@ -1174,6 +1174,117 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .module_header_deprecated => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "MODULE HEADER DEPRECATED", .warning);
+
+            try report.document.addReflowingText("The ");
+            try report.document.addInlineCode("module");
+            try report.document.addReflowingText(" header is deprecated.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Remove the ");
+            try report.document.addInlineCode("module");
+            try report.document.addReflowingText(" header and ensure your file defines a type that matches the filename.");
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .warning_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .redundant_expose_main_type => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "REDUNDANT EXPOSE", .warning);
+
+            const type_name_bytes = self.getIdent(data.type_name);
+            const type_name = try report.addOwnedString(type_name_bytes);
+            const module_name_bytes = self.getIdent(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+
+            try report.document.addReflowingText("Redundantly exposing ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(" when importing ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("The type ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(" is automatically exposed when importing a type module.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Remove ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(" from the exposing clause.");
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .warning_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .invalid_main_type_rename_in_exposing => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "INVALID TYPE RENAME", .runtime_error);
+
+            const type_name_bytes = self.getIdent(data.type_name);
+            const type_name = try report.addOwnedString(type_name_bytes);
+            const alias_bytes = self.getIdent(data.alias);
+            const alias = try report.addOwnedString(alias_bytes);
+
+            try report.document.addReflowingText("Cannot rename ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(" to ");
+            try report.document.addInlineCode(alias);
+            try report.document.addReflowingText(" in the exposing clause.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("To rename both the module and its main type, use ");
+            try report.document.addInlineCode("as");
+            try report.document.addReflowingText(" at the module level:");
+            try report.document.addLineBreak();
+
+            const example_msg = try std.fmt.allocPrint(allocator, "import ModuleName as {s}", .{alias_bytes});
+            defer allocator.free(example_msg);
+            const owned_example = try report.addOwnedString(example_msg);
+            try report.document.addInlineCode(owned_example);
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         else => {
             // For unhandled diagnostics, create a generic report
             const diagnostic_name = @tagName(diagnostic);

@@ -31,10 +31,24 @@ mkPairInvalid : a, b -> Pair(a)
 mkPairInvalid = |x, y| Pair.Pair(x, y)
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - annotations.md:1:1:1:10
 TYPE MISMATCH - annotations.md:18:28:18:28
 INVALID NOMINAL TAG - annotations.md:21:22:21:41
 INVALID NOMINAL TAG - annotations.md:24:24:24:39
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**annotations.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
+
+
 **TYPE MISMATCH**
 The first and second arguments to `mkPair` must have compatible types, but they are incompatible in this call:
 **annotations.md:18:28:**

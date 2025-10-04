@@ -18,6 +18,7 @@ PARSE ERROR - nominal_import_long_package.md:3:28:3:36
 PARSE ERROR - nominal_import_long_package.md:3:37:3:38
 PARSE ERROR - nominal_import_long_package.md:3:46:3:48
 PARSE ERROR - nominal_import_long_package.md:3:51:3:52
+MODULE HEADER DEPRECATED - nominal_import_long_package.md:1:1:1:13
 MODULE NOT FOUND - nominal_import_long_package.md:3:1:3:21
 UNDECLARED TYPE - nominal_import_long_package.md:5:7:5:9
 # PROBLEMS
@@ -98,6 +99,19 @@ Other valid examples:
 import design.Styles.Color exposing [Encoder as CE]
 ```
                                                   ^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**nominal_import_long_package.md:1:1:1:13:**
+```roc
+module [red]
+```
+^^^^^^^^^^^^
 
 
 **MODULE NOT FOUND**

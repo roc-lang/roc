@@ -16,9 +16,23 @@ wrong_type_function : I64 -> I64
 wrong_type_function = |x| x * 3.14
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - lambda_annotation_mismatch_error.md:1:1:1:46
 TYPE MISMATCH - lambda_annotation_mismatch_error.md:5:27:5:29
 TYPE MISMATCH - lambda_annotation_mismatch_error.md:9:31:9:35
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**lambda_annotation_mismatch_error.md:1:1:1:46:**
+```roc
+module [string_function, wrong_type_function]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **lambda_annotation_mismatch_error.md:5:27:5:29:**

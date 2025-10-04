@@ -18,6 +18,7 @@ PARSE ERROR - fuzz_crash_072.md:1:15:1:16
 PARSE ERROR - fuzz_crash_072.md:1:16:1:17
 PARSE ERROR - fuzz_crash_072.md:1:17:1:18
 PARSE ERROR - fuzz_crash_072.md:1:18:1:19
+MODULE HEADER DEPRECATED - fuzz_crash_072.md:1:1:1:9
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
@@ -127,6 +128,19 @@ This is an unexpected parsing error. Please check your syntax.
 module[]({})(!{0})
 ```
                  ^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**fuzz_crash_072.md:1:1:1:9:**
+```roc
+module[]({})(!{0})
+```
+^^^^^^^^
 
 
 # TOKENS

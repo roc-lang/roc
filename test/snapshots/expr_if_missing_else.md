@@ -11,6 +11,7 @@ foo = if tru 0
 ~~~
 # EXPECTED
 IF WITHOUT ELSE - expr_if_missing_else.md:3:7:3:9
+MODULE HEADER DEPRECATED - expr_if_missing_else.md:1:1:1:10
 UNRECOGNIZED SYNTAX - expr_if_missing_else.md:3:7:3:15
 # PROBLEMS
 **IF WITHOUT ELSE**
@@ -23,6 +24,19 @@ When `if` is used as an expression (to evaluate to a value), it must have an `el
 foo = if tru 0
 ```
       ^^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**expr_if_missing_else.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
 
 
 **UNRECOGNIZED SYNTAX**

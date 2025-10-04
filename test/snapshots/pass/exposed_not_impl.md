@@ -17,11 +17,25 @@ foo = 42
 MyType : [A, B, C]
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - exposed_not_impl.md:1:1:1:50
 REDUNDANT EXPOSED - exposed_not_impl.md:1:38:1:41
 REDUNDANT EXPOSED - exposed_not_impl.md:1:43:1:49
 EXPOSED BUT NOT DEFINED - exposed_not_impl.md:1:14:1:17
 EXPOSED BUT NOT DEFINED - exposed_not_impl.md:1:27:1:36
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**exposed_not_impl.md:1:1:1:50:**
+```roc
+module [foo, bar, MyType, OtherType, foo, MyType]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **REDUNDANT EXPOSED**
 The identifier `foo` is exposed multiple times in the module header.
 

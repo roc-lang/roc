@@ -10,8 +10,22 @@ module [add2]
 add2 = x +      2
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - add_var_with_spaces.md:1:1:1:14
 UNDEFINED VARIABLE - add_var_with_spaces.md:3:8:3:9
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**add_var_with_spaces.md:1:1:1:14:**
+```roc
+module [add2]
+```
+^^^^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?

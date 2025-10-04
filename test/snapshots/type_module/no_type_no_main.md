@@ -8,17 +8,15 @@ type=file
 x = 5
 ~~~
 # EXPECTED
-TYPE MODULE MISSING MATCHING TYPE - no_type_no_main.md:1:1:1:6
+MISSING MAIN! FUNCTION - no_type_no_main.md:1:1:1:6
 # PROBLEMS
-**TYPE MODULE MISSING MATCHING TYPE**
-Type modules must have a type declaration matching the module name.
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
 
-This file is named `no_type_no_main`.roc, but no top-level type declaration named `no_type_no_main` was found.
+No `main!` function was found.
 
-Add either:
-`no_type_no_main := ...` (nominal type)
-or:
-`no_type_no_main : ...` (type alias)
+Add a main! function like:
+`main! = |arg| { ... }`
 **no_type_no_main.md:1:1:1:6:**
 ```roc
 x = 5

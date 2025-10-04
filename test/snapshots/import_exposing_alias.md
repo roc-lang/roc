@@ -17,8 +17,22 @@ main = {
 }
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - import_exposing_alias.md:1:1:1:14
 MODULE NOT FOUND - import_exposing_alias.md:3:1:3:65
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**import_exposing_alias.md:1:1:1:14:**
+```roc
+module [main]
+```
+^^^^^^^^^^^^^
+
+
 **MODULE NOT FOUND**
 The module `json.Json` was not found in this Roc project.
 

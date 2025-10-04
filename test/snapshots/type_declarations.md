@@ -22,6 +22,7 @@ MyType : U64
 MyType2 : Module.Thingy
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - type_declarations.md:1:1:1:57
 UNDECLARED TYPE - type_declarations.md:5:8:5:11
 UNDECLARED TYPE - type_declarations.md:5:13:5:16
 UNDECLARED TYPE - type_declarations.md:7:19:7:21
@@ -30,6 +31,19 @@ MODULE NOT IMPORTED - type_declarations.md:15:11:15:24
 EXPOSED BUT NOT DEFINED - type_declarations.md:1:51:1:56
 EXPOSED BUT NOT DEFINED - type_declarations.md:1:42:1:49
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**type_declarations.md:1:1:1:57:**
+```roc
+module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **UNDECLARED TYPE**
 The type _Bar_ is not declared in this scope.
 

@@ -13,9 +13,21 @@ empty : ConsList(_a)
 empty = ConsList.Nil
 ~~~
 # EXPECTED
-NIL
+MODULE HEADER DEPRECATED - nominal_tag_recursive_payload.md:1:1:1:25
 # PROBLEMS
-NIL
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**nominal_tag_recursive_payload.md:1:1:1:25:**
+```roc
+module [ConsList, empty]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),Comma(1:17-1:18),LowerIdent(1:19-1:24),CloseSquare(1:24-1:25),

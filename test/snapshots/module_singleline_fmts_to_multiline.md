@@ -8,9 +8,23 @@ type=file
 module [something, SomeType,]
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - module_singleline_fmts_to_multiline.md:1:1:1:30
 EXPOSED BUT NOT DEFINED - module_singleline_fmts_to_multiline.md:1:9:1:18
 EXPOSED BUT NOT DEFINED - module_singleline_fmts_to_multiline.md:1:20:1:28
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**module_singleline_fmts_to_multiline.md:1:1:1:30:**
+```roc
+module [something, SomeType,]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **EXPOSED BUT NOT DEFINED**
 The module header says that `something` is exposed, but it is not defined anywhere in this module.
 

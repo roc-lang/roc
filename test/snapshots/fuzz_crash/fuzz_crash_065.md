@@ -10,6 +10,7 @@ module[]{R}
 # EXPECTED
 PARSE ERROR - fuzz_crash_065.md:1:9:1:10
 PARSE ERROR - fuzz_crash_065.md:1:11:1:12
+MODULE HEADER DEPRECATED - fuzz_crash_065.md:1:1:1:9
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
@@ -43,6 +44,19 @@ Other valid examples:
 module[]{R}
 ```
           ^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**fuzz_crash_065.md:1:1:1:9:**
+```roc
+module[]{R}
+```
+^^^^^^^^
 
 
 # TOKENS

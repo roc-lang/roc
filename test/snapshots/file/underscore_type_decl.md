@@ -36,6 +36,7 @@ PARSE ERROR - underscore_type_decl.md:7:13:7:14
 PARSE ERROR - underscore_type_decl.md:7:20:7:21
 PARSE ERROR - underscore_type_decl.md:7:23:7:24
 PARSE ERROR - underscore_type_decl.md:8:1:8:1
+MODULE HEADER DEPRECATED - underscore_type_decl.md:1:1:1:10
 MODULE NOT FOUND - underscore_type_decl.md:3:1:3:30
 # PROBLEMS
 **PARSE ERROR**
@@ -326,6 +327,19 @@ Other valid examples:
 
 ```
 ^
+
+
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**underscore_type_decl.md:1:1:1:10:**
+```roc
+module []
+```
+^^^^^^^^^
 
 
 **MODULE NOT FOUND**

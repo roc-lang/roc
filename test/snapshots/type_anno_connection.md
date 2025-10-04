@@ -14,9 +14,21 @@ my_number : U64
 my_number = add_one(42)
 ~~~
 # EXPECTED
-NIL
+MODULE HEADER DEPRECATED - type_anno_connection.md:1:1:1:28
 # PROBLEMS
-NIL
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**type_anno_connection.md:1:1:1:28:**
+```roc
+module [add_one, my_number]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:16),Comma(1:16-1:17),LowerIdent(1:18-1:27),CloseSquare(1:27-1:28),

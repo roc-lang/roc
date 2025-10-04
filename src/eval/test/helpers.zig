@@ -300,7 +300,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     // Create czer
     //
     const czer = try allocator.create(Can);
-    czer.* = try Can.init(module_env, parse_ast, null);
+    czer.* = try Can.init(module_env, parse_ast, null, .checking);
 
     // Canonicalize the expression
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);

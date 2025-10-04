@@ -14,8 +14,22 @@ decodeThings : List(List(U8)) -> List(a)
 decodeThings = ...
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - where_clauses_4.md:1:1:1:22
 MODULE NOT FOUND - where_clauses_4.md:3:1:3:32
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**where_clauses_4.md:1:1:1:22:**
+```roc
+module [decodeThings]
+```
+^^^^^^^^^^^^^^^^^^^^^
+
+
 **MODULE NOT FOUND**
 The module `Decode` was not found in this Roc project.
 

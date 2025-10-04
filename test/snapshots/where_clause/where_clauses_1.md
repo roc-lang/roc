@@ -15,9 +15,23 @@ Hash(a, hasher) : a
 Decode(a) : a where module(a).decode : List(U8) -> a
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - where_clauses_1.md:1:1:1:22
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_1.md:3:1:6:24
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_1.md:8:1:8:53
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**where_clauses_1.md:1:1:1:22:**
+```roc
+module [Hash, Decode]
+```
+^^^^^^^^^^^^^^^^^^^^^
+
+
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
 

@@ -11,8 +11,22 @@ hello! = Stdout.line!("Hello")
 world = "World"
 ~~~
 # EXPECTED
+MODULE HEADER DEPRECATED - simple_module_no_blanks.md:1:1:1:23
 MODULE NOT FOUND - simple_module_no_blanks.md:2:1:2:17
 # PROBLEMS
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
+
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**simple_module_no_blanks.md:1:1:1:23:**
+```roc
+module [hello!, world]
+```
+^^^^^^^^^^^^^^^^^^^^^^
+
+
 **MODULE NOT FOUND**
 The module `pf.Stdout` was not found in this Roc project.
 
