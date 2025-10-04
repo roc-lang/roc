@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Headerless module with no type and no main! - treated as default-app, reports missing main!
+description=Headerless module with no type and no main! reports invalid type module
 type=file
 ~~~
 # SOURCE
