@@ -252,6 +252,9 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .where_expected_colon => "WHERE CLAUSE ERROR",
         .where_expected_constraints => "WHERE CLAUSE ERROR",
         .no_else => "IF WITHOUT ELSE",
+        .type_alias_cannot_have_associated => "TYPE ALIAS WITH ASSOCIATED ITEMS",
+        .nominal_associated_cannot_have_final_expression => "EXPRESSION IN ASSOCIATED ITEMS",
+        .where_clause_not_allowed_in_type_declaration => "WHERE CLAUSE IN TYPE DECLARATION",
         else => "PARSE ERROR",
     };
 
@@ -548,6 +551,30 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addKeyword("False");
             try report.document.addReflowingText(".");
         },
+        .type_alias_cannot_have_associated => {
+            try report.document.addText("Type aliases cannot have associated items (such as types or methods).");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Only nominal types (defined with ");
+            try report.document.addAnnotated(":=", .emphasized);
+            try report.document.addReflowingText(") can have associated items. Type aliases (defined with ");
+            try report.document.addAnnotated(":", .emphasized);
+            try report.document.addReflowingText(") only define names for other types.");
+        },
+        .nominal_associated_cannot_have_final_expression => {
+            try report.document.addText("Associated items (such as types or methods) can only have associated types and values, not plain expressions.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addText("To fix this, remove the expression at the very end.");
+        },
+        .where_clause_not_allowed_in_type_declaration => {
+            try report.document.addText("Type declarations cannot include ");
+            try report.document.addKeyword("where");
+            try report.document.addText(" clauses.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Only type annotations (such as annottions for a function or other value) can have them.");
+        },
         else => {
             const tag_name = @tagName(diagnostic.tag);
             const owned_tag = try report.addOwnedString(tag_name);
@@ -676,6 +703,9 @@ pub const Diagnostic = struct {
         expected_expr_close_curly,
         expr_dot_suffix_not_allowed,
         incomplete_import,
+        nominal_associated_cannot_have_final_expression,
+        type_alias_cannot_have_associated,
+        where_clause_not_allowed_in_type_declaration,
     };
 };
 
@@ -834,8 +864,12 @@ pub const Statement = union(enum) {
     type_decl: struct {
         header: TypeHeader.Idx,
         anno: TypeAnno.Idx,
-        where: ?Collection.Idx,
         kind: TypeDeclKind,
+        /// Where clause (invalid in type declarations, but preserved for error recovery/formatting)
+        where: ?Collection.Idx,
+        /// Associated items block for .nominal types
+        /// (e.g. the curly braces in `Foo := [A, B].{ x = 5 }`)
+        associated: ?Associated,
         region: TokenizedRegion,
     },
     type_anno: struct {
@@ -978,17 +1012,6 @@ pub const Statement = union(enum) {
 
                 try ast.store.getTypeAnno(a.anno).pushToSExprTree(gpa, env, ast, tree);
 
-                if (a.where) |where_coll| {
-                    const where_node = tree.beginNode();
-                    try tree.pushStaticAtom("where");
-                    const attrs2 = tree.beginNode();
-                    for (ast.store.whereClauseSlice(.{ .span = ast.store.getCollection(where_coll).span })) |clause_idx| {
-                        const clause_child = ast.store.getWhereClause(clause_idx);
-                        try clause_child.pushToSExprTree(gpa, env, ast, tree);
-                    }
-                    try tree.endNode(where_node, attrs2);
-                }
-
                 try tree.endNode(begin, attrs);
             },
             .crash => |a| {
@@ -1124,6 +1147,15 @@ pub const Block = struct {
 
         try tree.endNode(begin, attrs);
     }
+};
+
+/// Represents associated items for nominal type declarations.
+/// Associated items are the statements in the `.{ }` block after a nominal type,
+/// e.g., `Foo := [A, B].{ x = 5 }`
+pub const Associated = struct {
+    /// The statements in the associated items block
+    statements: Statement.Span,
+    region: TokenizedRegion,
 };
 
 /// Represents a Pattern used in pattern matching.

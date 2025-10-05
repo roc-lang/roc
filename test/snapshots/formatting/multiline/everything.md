@@ -427,38 +427,12 @@ EndOfFile(111:1-111:1),
 			(header @14.1-14.5 (name "A")
 				(args
 					(ty-var @14.3-14.4 (raw "a"))))
-			(ty-var @14.8-14.9 (raw "a"))
-			(where
-				(method @16.3-19.11 (module-of "a") (name "a1")
-					(args
-						(ty-tuple @16.18-19.4
-							(ty-var @17.4-17.5 (raw "a"))
-							(ty-var @18.4-18.5 (raw "a"))))
-					(ty @19.8-19.11 (name "Str")))
-				(method @20.3-23.11 (module-of "a") (name "a2")
-					(args
-						(ty-tuple @20.18-23.4
-							(ty-var @21.4-21.5 (raw "a"))
-							(ty-var @22.4-22.5 (raw "a"))))
-					(ty @23.8-23.11 (name "Str")))))
+			(ty-var @14.8-14.9 (raw "a")))
 		(s-type-decl @24.1-33.11
 			(header @24.1-24.5 (name "B")
 				(args
 					(ty-var @24.3-24.4 (raw "b"))))
-			(ty-var @24.8-24.9 (raw "b"))
-			(where
-				(method @26.3-29.11 (module-of "b") (name "b1")
-					(args
-						(ty-tuple @26.18-29.4
-							(ty-var @27.4-27.5 (raw "b"))
-							(ty-var @28.4-28.5 (raw "b"))))
-					(ty @29.8-29.11 (name "Str")))
-				(method @30.3-33.11 (module-of "b") (name "b2")
-					(args
-						(ty-tuple @30.18-33.4
-							(ty-var @31.4-31.5 (raw "b"))
-							(ty-var @32.4-32.5 (raw "b"))))
-					(ty @33.8-33.11 (name "Str")))))
+			(ty-var @24.8-24.9 (raw "b")))
 		(s-type-decl @35.1-41.2
 			(header @35.1-38.2 (name "C")
 				(args

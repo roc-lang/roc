@@ -65,25 +65,12 @@ EndOfFile(9:1-9:1),
 				(args
 					(ty-var @3.6-3.7 (raw "a"))
 					(ty-var @3.9-3.15 (raw "hasher"))))
-			(ty-var @3.19-3.20 (raw "a"))
-			(where
-				(method @5.3-5.36 (module-of "a") (name "hash")
-					(args
-						(ty-var @5.20-5.26 (raw "hasher")))
-					(ty-var @5.30-5.36 (raw "hasher")))
-				(alias @6.3-6.24 (module-of "hasher") (name "Hasher"))))
+			(ty-var @3.19-3.20 (raw "a")))
 		(s-type-decl @8.1-8.53
 			(header @8.1-8.10 (name "Decode")
 				(args
 					(ty-var @8.8-8.9 (raw "a"))))
-			(ty-var @8.13-8.14 (raw "a"))
-			(where
-				(method @8.21-8.53 (module-of "a") (name "decode")
-					(args
-						(ty-apply @8.40-8.48
-							(ty @8.40-8.44 (name "List"))
-							(ty @8.45-8.47 (name "U8"))))
-					(ty-var @8.52-8.53 (raw "a")))))))
+			(ty-var @8.13-8.14 (raw "a")))))
 ~~~
 # FORMATTED
 ~~~roc

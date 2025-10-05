@@ -249,38 +249,12 @@ EndOfFile(32:1-32:1),
 			(header @8.1-8.5 (name "A")
 				(args
 					(ty-var @8.3-8.4 (raw "a"))))
-			(ty-var @8.8-8.9 (raw "a"))
-			(where
-				(method @8.16-8.44 (module-of "a") (name "a1")
-					(args
-						(ty-tuple @8.31-8.37
-							(ty-var @8.32-8.33 (raw "a"))
-							(ty-var @8.35-8.36 (raw "a"))))
-					(ty @8.41-8.44 (name "Str")))
-				(method @8.46-8.74 (module-of "a") (name "a2")
-					(args
-						(ty-tuple @8.61-8.67
-							(ty-var @8.62-8.63 (raw "a"))
-							(ty-var @8.65-8.66 (raw "a"))))
-					(ty @8.71-8.74 (name "Str")))))
+			(ty-var @8.8-8.9 (raw "a")))
 		(s-type-decl @9.1-9.74
 			(header @9.1-9.5 (name "B")
 				(args
 					(ty-var @9.3-9.4 (raw "b"))))
-			(ty-var @9.8-9.9 (raw "b"))
-			(where
-				(method @9.16-9.44 (module-of "b") (name "b1")
-					(args
-						(ty-tuple @9.31-9.37
-							(ty-var @9.32-9.33 (raw "b"))
-							(ty-var @9.35-9.36 (raw "b"))))
-					(ty @9.41-9.44 (name "Str")))
-				(method @9.46-9.74 (module-of "b") (name "b2")
-					(args
-						(ty-tuple @9.61-9.67
-							(ty-var @9.62-9.63 (raw "b"))
-							(ty-var @9.65-9.66 (raw "b"))))
-					(ty @9.71-9.74 (name "Str")))))
+			(ty-var @9.8-9.9 (raw "b")))
 		(s-type-decl @11.1-11.17
 			(header @11.1-11.8 (name "C")
 				(args
