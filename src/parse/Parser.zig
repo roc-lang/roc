@@ -930,7 +930,7 @@ pub fn parseExposedItem(self: *Parser) Error!AST.ExposedItem.Idx {
     }
 }
 
-const StatementType = enum { top_level, in_body };
+const StatementType = enum { top_level, in_body, in_associated_block };
 
 /// Parse a top level roc statement
 ///
@@ -1170,7 +1170,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
         // Type Annotation (e.g. `Foo a : (a,a)`)
         .UpperIdent => {
             const start = self.pos;
-            if (statementType == .top_level) {
+            if (statementType == .top_level or statementType == .in_associated_block) {
                 const header = try self.parseTypeHeader();
                 if (self.peek() != .OpColon and self.peek() != .OpColonEqual) {
                     // Point to the unexpected token (e.g., "U8" in "List U8")
@@ -2969,7 +2969,7 @@ pub fn parseStatementOnlyBlock(self: *Parser, start: u32) Error!AST.Associated {
 
     while (self.peek() != .EndOfFile and self.peek() != .CloseCurly) {
         const statement_pos = self.pos;
-        const statement = try self.parseStmt();
+        const statement = try self.parseStmtByType(.in_associated_block);
 
         // Check if this is an expression statement (the last statement must not be an expression)
         const stmt = self.store.getStatement(statement);

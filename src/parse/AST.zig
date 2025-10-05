@@ -1014,6 +1014,21 @@ pub const Statement = union(enum) {
 
                 try ast.store.getTypeAnno(a.anno).pushToSExprTree(gpa, env, ast, tree);
 
+                // Add associated block if present
+                if (a.associated) |assoc| {
+                    const assoc_begin = tree.beginNode();
+                    try tree.pushStaticAtom("associated");
+                    try ast.appendRegionInfoToSexprTree(env, tree, assoc.region);
+                    const assoc_attrs = tree.beginNode();
+
+                    for (ast.store.statementSlice(assoc.statements)) |stmt_idx| {
+                        const stmt = ast.store.getStatement(stmt_idx);
+                        try stmt.pushToSExprTree(gpa, env, ast, tree);
+                    }
+
+                    try tree.endNode(assoc_begin, assoc_attrs);
+                }
+
                 try tree.endNode(begin, attrs);
             },
             .crash => |a| {

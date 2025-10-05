@@ -39,7 +39,11 @@ EndOfFile(2:1-2:1),
 				(tags
 					(ty @1.8-1.9 (name "A"))
 					(ty @1.11-1.12 (name "B"))
-					(ty @1.14-1.15 (name "C")))))))
+					(ty @1.14-1.15 (name "C"))))
+			(associated @1.17-1.26
+				(s-decl @1.19-1.24
+					(p-ident @1.19-1.20 (raw "x"))
+					(e-int @1.23-1.24 (raw "5")))))))
 ~~~
 # FORMATTED
 ~~~roc
