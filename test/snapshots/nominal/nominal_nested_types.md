@@ -1,7 +1,7 @@
 # META
 ~~~ini
 description=Nested types in associated blocks
-type=file
+type=file:Foo.roc
 ~~~
 # SOURCE
 ~~~roc
@@ -13,28 +13,9 @@ Foo := [Whatever].{
 }
 ~~~
 # EXPECTED
-TYPE MODULE MISSING MATCHING TYPE - nominal_nested_types.md:1:1:6:2
+NIL
 # PROBLEMS
-**TYPE MODULE MISSING MATCHING TYPE**
-Type modules must have a type declaration matching the module name.
-
-This file is named `nominal_nested_types`.roc, but no top-level type declaration named `nominal_nested_types` was found.
-
-Add either:
-`nominal_nested_types := ...` (nominal type)
-or:
-`nominal_nested_types : ...` (type alias)
-**nominal_nested_types.md:1:1:6:2:**
-```roc
-Foo := [Whatever].{
-    Bar := [Something].{
-        y = 6
-    }
-    x = 5
-}
-```
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:4),OpColonEqual(1:5-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),CloseSquare(1:17-1:18),Dot(1:18-1:19),OpenCurly(1:19-1:20),
