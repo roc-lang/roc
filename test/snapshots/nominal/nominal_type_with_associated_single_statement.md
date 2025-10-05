@@ -32,7 +32,7 @@ EndOfFile(2:1-2:1),
 			(associated @1.18-1.27
 				(s-decl @1.20-1.25
 					(p-ident @1.20-1.21 (raw "x"))
-					(e-int @1.24-1.25 (raw "5")))))))
+					(e-int @1.24-1.25 (raw "5"))))))
 ~~~
 # FORMATTED
 ~~~roc
