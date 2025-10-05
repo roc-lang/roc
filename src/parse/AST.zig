@@ -201,7 +201,9 @@ pub fn tokenizedRegionToRegion(self: *AST, tokenized_region: TokenizedRegion) ba
         safe_end_idx;
 
     const start_region = self.tokens.resolve(safe_start_idx);
-    const end_region = self.tokens.resolve(final_end_idx - 1);
+    // Protect against underflow when final_end_idx is 0
+    const end_idx = if (final_end_idx > 0) final_end_idx - 1 else 0;
+    const end_region = self.tokens.resolve(end_idx);
     return .{
         .start = start_region.start,
         .end = end_region.end,
@@ -1528,6 +1530,15 @@ pub const Header = union(enum) {
         exposes: Collection.Idx,
         region: TokenizedRegion,
     },
+    type_module: struct {
+        region: TokenizedRegion,
+    },
+    default_app: struct {
+        // Stores reference to the main! function
+        // This will be filled in during canonicalization when main! is found
+        main_fn_idx: u32, // Will store CIR Def.Idx
+        region: TokenizedRegion,
+    },
     malformed: struct {
         reason: Diagnostic.Tag,
         region: TokenizedRegion,
@@ -1713,6 +1724,23 @@ pub const Header = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
+            .type_module => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("type-module");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .default_app => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("default-app");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const attrs = tree.beginNode();
+                var buf: [32]u8 = undefined;
+                const idx_str = std.fmt.bufPrint(&buf, "{d}", .{a.main_fn_idx}) catch "(error)";
+                try tree.pushStringPair("main-fn-idx", idx_str);
+                try tree.endNode(begin, attrs);
+            },
             .malformed => |a| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("malformed-header");
@@ -1732,6 +1760,8 @@ pub const Header = union(enum) {
             .package => |p| p.region,
             .platform => |p| p.region,
             .hosted => |h| h.region,
+            .type_module => |t| t.region,
+            .default_app => |d| d.region,
             .malformed => |m| m.region,
         };
     }

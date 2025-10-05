@@ -9,73 +9,10 @@ me = "luc"
 foo = "hello ${namF
 ~~~
 # EXPECTED
-MISSING HEADER - fuzz_crash_017.md:1:1:1:3
-PARSE ERROR - fuzz_crash_017.md:1:4:1:5
-PARSE ERROR - fuzz_crash_017.md:1:6:1:7
-PARSE ERROR - fuzz_crash_017.md:1:7:1:10
-PARSE ERROR - fuzz_crash_017.md:1:10:1:11
 PARSE ERROR - fuzz_crash_017.md:2:7:2:8
+TYPE MODULE MISSING MATCHING TYPE - fuzz_crash_017.md:1:1:2:20
 UNRECOGNIZED SYNTAX - fuzz_crash_017.md:2:7:2:20
 # PROBLEMS
-**MISSING HEADER**
-Roc files must start with a module header.
-
-For example:
-        module [main]
-or for an app:
-        app [main!] { pf: platform "../basic-cli/platform.roc" }
-
-**fuzz_crash_017.md:1:1:1:3:**
-```roc
-me = "luc"
-```
-^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_017.md:1:4:1:5:**
-```roc
-me = "luc"
-```
-   ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_017.md:1:6:1:7:**
-```roc
-me = "luc"
-```
-     ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_017.md:1:7:1:10:**
-```roc
-me = "luc"
-```
-      ^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_017.md:1:10:1:11:**
-```roc
-me = "luc"
-```
-         ^
-
-
 **PARSE ERROR**
 A parsing error occurred: `string_expected_close_interpolation`
 This is an unexpected parsing error. Please check your syntax.
@@ -85,6 +22,22 @@ This is an unexpected parsing error. Please check your syntax.
 foo = "hello ${namF
 ```
       ^
+
+
+**TYPE MODULE MISSING MATCHING TYPE**
+Type modules must have a type declaration matching the module name.
+
+This file is named `fuzz_crash_017`.roc, but no top-level type declaration named `fuzz_crash_017` was found.
+
+Add either:
+`fuzz_crash_017 := ...` (nominal type)
+or:
+`fuzz_crash_017 : ...` (type alias)
+**fuzz_crash_017.md:1:1:2:20:**
+```roc
+me = "luc"
+foo = "hello ${namF
+```
 
 
 **UNRECOGNIZED SYNTAX**
@@ -107,24 +60,28 @@ EndOfFile(3:1-3:1),
 # PARSE
 ~~~clojure
 (file @1.1-2.20
-	(malformed-header @1.1-1.3 (tag "missing_header"))
+	(type-module @1.1-1.3)
 	(statements
-		(s-malformed @1.4-1.5 (tag "statement_unexpected_token"))
-		(s-malformed @1.6-1.7 (tag "statement_unexpected_token"))
-		(s-malformed @1.7-1.10 (tag "statement_unexpected_token"))
-		(s-malformed @1.10-1.11 (tag "statement_unexpected_token"))
+		(s-decl @1.1-1.11
+			(p-ident @1.1-1.3 (raw "me"))
+			(e-string @1.6-1.11
+				(e-string-part @1.7-1.10 (raw "luc"))))
 		(s-decl @2.1-2.20
 			(p-ident @2.1-2.4 (raw "foo"))
 			(e-malformed @2.7-2.20 (reason "string_expected_close_interpolation")))))
 ~~~
 # FORMATTED
 ~~~roc
-
+me = "luc"
 foo = 
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(d-let
+		(p-assign @1.1-1.3 (ident "me"))
+		(e-string @1.6-1.11
+			(e-literal @1.7-1.10 (string "luc"))))
 	(d-let
 		(p-assign @2.1-2.4 (ident "foo"))
 		(e-runtime-error (tag "expr_not_canonicalized"))))
@@ -133,7 +90,9 @@ foo =
 ~~~clojure
 (inferred-types
 	(defs
+		(patt @1.1-1.3 (type "Str"))
 		(patt @2.1-2.4 (type "Error")))
 	(expressions
+		(expr @1.6-1.11 (type "Str"))
 		(expr @2.7-2.20 (type "Error"))))
 ~~~

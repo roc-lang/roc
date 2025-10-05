@@ -106,7 +106,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 46;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 52;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 33;
 /// Count of the statement nodes in the ModuleEnv
@@ -2643,6 +2643,36 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) std.mem.Allocato
             node.tag = .diag_where_clause_not_allowed_in_type_decl;
             region = r.region;
         },
+        .type_module_missing_matching_type => |r| {
+            node.tag = .diag_type_module_missing_matching_type;
+            region = r.region;
+            node.data_1 = @bitCast(r.module_name);
+        },
+        .default_app_missing_main => |r| {
+            node.tag = .diag_default_app_missing_main;
+            region = r.region;
+            node.data_1 = @bitCast(r.module_name);
+        },
+        .default_app_wrong_arity => |r| {
+            node.tag = .diag_default_app_wrong_arity;
+            region = r.region;
+            node.data_1 = r.arity;
+        },
+        .cannot_import_default_app => |r| {
+            node.tag = .diag_cannot_import_default_app;
+            region = r.region;
+            node.data_1 = @bitCast(r.module_name);
+        },
+        .execution_requires_app_or_default_app => |r| {
+            node.tag = .diag_execution_requires_app_or_default_app;
+            region = r.region;
+        },
+        .type_name_case_mismatch => |r| {
+            node.tag = .diag_type_name_case_mismatch;
+            region = r.region;
+            node.data_1 = @bitCast(r.module_name);
+            node.data_2 = @bitCast(r.type_name);
+        },
         .var_across_function_boundary => |r| {
             node.tag = .diag_var_across_function_boundary;
             region = r.region;
@@ -2971,6 +3001,30 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_where_clause_not_allowed_in_type_decl => return CIR.Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_type_module_missing_matching_type => return CIR.Diagnostic{ .type_module_missing_matching_type = .{
+            .module_name = @bitCast(node.data_1),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_default_app_missing_main => return CIR.Diagnostic{ .default_app_missing_main = .{
+            .module_name = @bitCast(node.data_1),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_default_app_wrong_arity => return CIR.Diagnostic{ .default_app_wrong_arity = .{
+            .arity = node.data_1,
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_cannot_import_default_app => return CIR.Diagnostic{ .cannot_import_default_app = .{
+            .module_name = @bitCast(node.data_1),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_execution_requires_app_or_default_app => return CIR.Diagnostic{ .execution_requires_app_or_default_app = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_type_name_case_mismatch => return CIR.Diagnostic{ .type_name_case_mismatch = .{
+            .module_name = @bitCast(node.data_1),
+            .type_name = @bitCast(node.data_2),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_type_alias_redeclared => return CIR.Diagnostic{ .type_alias_redeclared = .{

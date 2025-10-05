@@ -137,6 +137,30 @@ pub const Diagnostic = union(enum) {
     crash_expects_string: struct {
         region: Region,
     },
+    type_module_missing_matching_type: struct {
+        module_name: Ident.Idx,
+        region: Region,
+    },
+    default_app_missing_main: struct {
+        module_name: Ident.Idx,
+        region: Region,
+    },
+    default_app_wrong_arity: struct {
+        arity: u32,
+        region: Region,
+    },
+    cannot_import_default_app: struct {
+        module_name: Ident.Idx,
+        region: Region,
+    },
+    execution_requires_app_or_default_app: struct {
+        region: Region,
+    },
+    type_name_case_mismatch: struct {
+        module_name: Ident.Idx,
+        type_name: Ident.Idx,
+        region: Region,
+    },
     type_alias_redeclared: struct {
         name: Ident.Idx,
         original_region: Region,
@@ -233,6 +257,12 @@ pub const Diagnostic = union(enum) {
             .undeclared_type_var => |d| d.region,
             .type_alias_but_needed_nominal => |d| d.region,
             .crash_expects_string => |d| d.region,
+            .type_module_missing_matching_type => |d| d.region,
+            .default_app_missing_main => |d| d.region,
+            .default_app_wrong_arity => |d| d.region,
+            .cannot_import_default_app => |d| d.region,
+            .execution_requires_app_or_default_app => |d| d.region,
+            .type_name_case_mismatch => |d| d.region,
             .type_alias_redeclared => |d| d.redeclared_region,
             .nominal_type_redeclared => |d| d.redeclared_region,
             .type_shadowed_warning => |d| d.region,

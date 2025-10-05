@@ -1643,6 +1643,8 @@ const Formatter = struct {
                     Formatter.formatRecordField,
                 );
             },
+            .type_module => {},
+            .default_app => {},
             .malformed => {},
         }
     }
