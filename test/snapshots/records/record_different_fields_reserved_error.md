@@ -315,11 +315,6 @@ I don't recognize this syntax.
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: statement type in block
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
 **UNRECOGNIZED SYNTAX**
 I don't recognize this syntax.
 
@@ -506,7 +501,6 @@ EndOfFile(9:1-9:1),
 			(e-literal @4.14-4.28 (string "test assertion"))))
 	(s-expr @4.29-4.30
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-runtime-error (tag "not_implemented"))
 	(s-expr @5.11-5.12
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr @5.13-5.26

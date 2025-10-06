@@ -12,11 +12,7 @@ for x in ["a", "b", "c"] {
 # EXPECTED
 NIL
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: statement type in block
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
+NIL
 # TOKENS
 ~~~zig
 KwFor(1:1-1:4),LowerIdent(1:5-1:6),KwIn(1:7-1:9),OpenSquare(1:10-1:11),StringStart(1:11-1:12),StringPart(1:12-1:13),StringEnd(1:13-1:14),Comma(1:14-1:15),StringStart(1:16-1:17),StringPart(1:17-1:18),StringEnd(1:18-1:19),Comma(1:19-1:20),StringStart(1:21-1:22),StringPart(1:22-1:23),StringEnd(1:23-1:24),CloseSquare(1:24-1:25),OpenCurly(1:26-1:27),
@@ -52,7 +48,25 @@ for x in ["a", "b", "c"] {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-runtime-error (tag "not_implemented")))
+	(s-for @1.1-3.2
+		(p-assign @1.5-1.6 (ident "x"))
+		(e-list @1.10-1.25
+			(elems
+				(e-string @1.11-1.14
+					(e-literal @1.12-1.13 (string "a")))
+				(e-string @1.16-1.19
+					(e-literal @1.17-1.18 (string "b")))
+				(e-string @1.21-1.24
+					(e-literal @1.22-1.23 (string "c")))))
+		(e-block @1.26-3.2
+			(s-let @2.3-2.22
+				(p-assign @2.3-2.9 (ident "result"))
+				(e-binop @2.12-2.22 (op "add")
+					(e-lookup-local @2.12-2.18
+						(p-assign @2.3-2.9 (ident "result")))
+					(e-lookup-local @2.21-2.22
+						(p-assign @1.5-1.6 (ident "x")))))
+			(e-empty_record @1.26-3.2))))
 ~~~
 # TYPES
 ~~~clojure

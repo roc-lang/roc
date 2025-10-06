@@ -597,10 +597,27 @@ Is there an `import` or `exposing` missing up-top?
 		^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: statement type in block
+**UNDEFINED VARIABLE**
+Nothing is named `list` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+**fuzz_crash_020.md:92:11:92:15:**
+```roc
+	for n in list {
+```
+	         ^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `ber` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_020.md:94:3:94:6:**
+```roc
+		ber + n
+```
+		^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `tag` in this scope.
@@ -1634,6 +1651,7 @@ expect {
 		(p-assign @75.1-75.3 (ident "ma"))
 		(e-closure @75.5-111.2
 			(captures
+				(capture @92.6-92.7 (ident "n"))
 				(capture @49.1-49.3 (ident "me")))
 			(e-lambda @75.5-111.2
 				(args
@@ -1679,7 +1697,27 @@ expect {
 										(p-assign @77.2-77.14 (ident "er"))))
 								(e-num @89.16-89.19 (value "456"))
 								(e-num @90.1-90.2 (value "9")))))
-					(s-runtime-error (tag "not_implemented"))
+					(s-for @92.2-95.3
+						(p-assign @92.6-92.7 (ident "n"))
+						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-block @92.16-95.3
+							(s-expr @93.2-93.27
+								(e-call @93.2-93.27
+									(e-lookup-external @93.2-93.7
+										(module-idx "0")
+										(target-node-idx "0"))
+									(e-string @93.8-93.26
+										(e-literal @93.9-93.12 (string "Ag "))
+										(e-lookup-local @93.14-93.15
+											(p-assign @92.6-92.7 (ident "n")))
+										(e-literal @93.16-93.20 (string " to "))
+										(e-lookup-local @93.22-93.24
+											(p-assign @77.2-77.14 (ident "er")))
+										(e-literal @93.25-93.25 (string "")))))
+							(e-binop @94.3-94.10 (op "add")
+								(e-runtime-error (tag "ident_not_in_scope"))
+								(e-lookup-local @94.9-94.10
+									(p-assign @92.6-92.7 (ident "n"))))))
 					(s-let @96.2-96.59
 						(p-assign @96.2-96.4 (ident "rd"))
 						(e-record @96.7-96.59

@@ -23,40 +23,6 @@ const Token = tokenize.Token;
 const DataSpan = base.DataSpan;
 const ModuleEnv = @import("ModuleEnv.zig");
 const Node = @import("Node.zig");
-
-/// Both the canonicalized expression and any free variables
-///
-/// We keep track of the free variables as we go so we can union these
-/// in our Lambda's in a single forward pass during canonicalization.
-pub const CanonicalizedExpr = struct {
-    idx: Expr.Idx,
-    free_vars: ?DataSpan, // This is a span into scratch_free_vars
-
-    pub fn get_idx(self: @This()) Expr.Idx {
-        return self.idx;
-    }
-
-    pub fn maybe_expr_get_idx(self: ?@This()) ?Expr.Idx {
-        if (self != null) {
-            return self.?.idx;
-        } else {
-            return null;
-        }
-    }
-};
-
-const TypeVarProblemKind = enum {
-    unused_type_var,
-    type_var_marked_unused,
-    type_var_ending_in_underscore,
-};
-
-const TypeVarProblem = struct {
-    ident: Ident.Idx,
-    problem: TypeVarProblemKind,
-    ast_anno: AST.TypeAnno.Idx,
-};
-
 env: *ModuleEnv,
 parse_ir: *AST,
 scopes: std.ArrayListUnmanaged(Scope) = .{},
@@ -98,6 +64,8 @@ scratch_seen_record_fields: base.Scratch(SeenRecordField),
 scratch_tags: base.Scratch(types.Tag),
 /// Scratch free variables
 scratch_free_vars: base.Scratch(Pattern.Idx),
+/// Scratch free variables
+scratch_captures: base.Scratch(Pattern.Idx),
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -130,6 +98,39 @@ const RecordField = CIR.RecordField;
 
 /// Struct to track fields that have been seen before during canonicalization
 const SeenRecordField = struct { ident: base.Ident.Idx, region: base.Region };
+
+/// Both the canonicalized expression and any free variables
+///
+/// We keep track of the free variables as we go so we can union these
+/// in our Lambda's in a single forward pass during canonicalization.
+pub const CanonicalizedExpr = struct {
+    idx: Expr.Idx,
+    free_vars: ?DataSpan, // This is a span into scratch_free_vars
+
+    pub fn get_idx(self: @This()) Expr.Idx {
+        return self.idx;
+    }
+
+    pub fn maybe_expr_get_idx(self: ?@This()) ?Expr.Idx {
+        if (self != null) {
+            return self.?.idx;
+        } else {
+            return null;
+        }
+    }
+};
+
+const TypeVarProblemKind = enum {
+    unused_type_var,
+    type_var_marked_unused,
+    type_var_ending_in_underscore,
+};
+
+const TypeVarProblem = struct {
+    ident: Ident.Idx,
+    problem: TypeVarProblemKind,
+    ast_anno: AST.TypeAnno.Idx,
+};
 
 /// The idx of the builtin Bool
 pub const BUILTIN_BOOL: Statement.Idx = @enumFromInt(4);
@@ -168,6 +169,7 @@ pub fn deinit(
     self.import_indices.deinit(gpa);
     self.scratch_tags.deinit(gpa);
     self.scratch_free_vars.deinit(gpa);
+    self.scratch_captures.deinit(gpa);
 }
 
 pub fn init(env: *ModuleEnv, parse_ir: *AST, module_envs: ?*const std.StringHashMap(*const ModuleEnv)) std.mem.Allocator.Error!Self {
@@ -195,6 +197,7 @@ pub fn init(env: *ModuleEnv, parse_ir: *AST, module_envs: ?*const std.StringHash
         .scratch_tags = try base.Scratch(types.Tag).init(gpa),
         .unqualified_nominal_tags = std.StringHashMapUnmanaged(Statement.Idx){},
         .scratch_free_vars = try base.Scratch(Pattern.Idx).init(gpa),
+        .scratch_captures = try base.Scratch(Pattern.Idx).init(gpa),
     };
 
     // Top-level scope is not a function boundary
@@ -1524,9 +1527,8 @@ fn canonicalizeStringLike(
     const expr_idx = try self.env.addExprAndTypeVar(Expr{ .e_str = .{
         .span = can_str_span,
     } }, Content{ .structure = .str }, region);
-
-    const free_vars_slice = self.scratch_free_vars.spanFrom(free_vars_start);
-    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
+    const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
 }
 
 fn canonicalizeSingleQuote(
@@ -1677,8 +1679,8 @@ pub fn canonicalizeExpr(
                 },
             }, .err, region);
 
-            const free_vars_slice = self.scratch_free_vars.spanFrom(free_vars_start);
-            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
+            const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
         },
         .ident => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
@@ -1751,8 +1753,8 @@ pub fn canonicalizeExpr(
 
                         const free_vars_start = self.scratch_free_vars.top();
                         try self.scratch_free_vars.append(self.env.gpa, found_pattern_idx);
-                        const free_vars_slice = self.scratch_free_vars.spanFrom(free_vars_start);
-                        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
+                        const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+                        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
                     },
                     .not_found => {
                         // Check if this identifier is an exposed item from an import
@@ -2125,8 +2127,8 @@ pub fn canonicalizeExpr(
                 .e_list = .{ .elems = elems_span },
             }, .err, region);
 
-            const free_vars_slice = self.scratch_free_vars.spanFrom(free_vars_start);
-            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
+            const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
         },
         .tag => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
@@ -2207,8 +2209,8 @@ pub fn canonicalizeExpr(
                     .tuple = types.Tuple{ .elems = elems_var_range },
                 } }, region);
 
-                const free_vars_slice = self.scratch_free_vars.spanFrom(free_vars_start);
-                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
+                const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
             }
         },
         .record => |e| {
@@ -2322,8 +2324,8 @@ pub fn canonicalizeExpr(
                 },
             }, Content{ .structure = .{ .record_unbound = type_fields_range } }, region);
 
-            const free_vars_slice = self.scratch_free_vars.spanFrom(free_vars_start);
-            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
+            const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
         },
         .lambda => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
@@ -2336,7 +2338,7 @@ pub fn canonicalizeExpr(
             try self.scopeEnter(self.env.gpa, true); // true = is_function_boundary
             defer self.scopeExit(self.env.gpa) catch {};
 
-            // args
+            // Canonicalize the lambda args
             const gpa = self.env.gpa;
             const args_start = self.env.store.scratch_patterns.top();
             for (self.parse_ir.store.patternSlice(e.args)) |arg_pattern_idx| {
@@ -2353,64 +2355,66 @@ pub fn canonicalizeExpr(
             }
             const args_span = try self.env.store.patternSpanFrom(args_start);
 
-            // body (this will detect and record captures)
-            const body_free_vars_start = self.scratch_free_vars.top();
-            const can_body = try self.canonicalizeExpr(e.body) orelse {
-                self.scratch_free_vars.clearFrom(body_free_vars_start);
-                const ast_body = self.parse_ir.store.getExpr(e.body);
-                const body_region = self.parse_ir.tokenizedRegionToRegion(ast_body.to_tokenized_region());
-                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{
-                    .lambda_body_not_canonicalized = .{ .region = body_region },
-                });
-                return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = null };
-            };
+            // Define the set of captures
+            const captures_top = self.scratch_captures.top();
+            defer self.scratch_captures.clearFrom(captures_top);
 
-            // Determine captures: free variables in body minus variables bound by args
-            var bound_vars = std.AutoHashMapUnmanaged(Pattern.Idx, void){};
-            defer bound_vars.deinit(self.env.gpa);
-            for (self.env.store.slicePatterns(args_span)) |arg_pat_idx| {
-                try self.collectBoundVars(arg_pat_idx, &bound_vars);
-            }
+            // Canonicalize the lambda body
+            const body_idx = blk: {
+                const body_free_vars_start = self.scratch_free_vars.top();
+                defer self.scratch_free_vars.clearFrom(body_free_vars_start);
 
-            var captures_set = std.AutoHashMapUnmanaged(Pattern.Idx, void){};
-            defer captures_set.deinit(self.env.gpa);
+                const can_body = try self.canonicalizeExpr(e.body) orelse {
+                    const ast_body = self.parse_ir.store.getExpr(e.body);
+                    const body_region = self.parse_ir.tokenizedRegionToRegion(ast_body.to_tokenized_region());
+                    const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{
+                        .lambda_body_not_canonicalized = .{ .region = body_region },
+                    });
+                    return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = null };
+                };
 
-            const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_body.free_vars orelse DataSpan.empty());
-            for (body_free_vars_slice) |fv| {
-                if (!bound_vars.contains(fv)) {
-                    try captures_set.put(self.env.gpa, fv, {});
+                // Determine captures: free variables in body minus variables bound by args
+                var bound_vars = std.AutoHashMapUnmanaged(Pattern.Idx, void){};
+                defer bound_vars.deinit(self.env.gpa);
+
+                for (self.env.store.slicePatterns(args_span)) |arg_pat_idx| {
+                    try self.collectBoundVars(arg_pat_idx, &bound_vars);
                 }
-            }
 
-            // Now that we have the captures, we can clear the free variables from the body
-            // from the scratch buffer.
-            self.scratch_free_vars.clearFrom(body_free_vars_start);
+                const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_body.free_vars orelse DataSpan.empty());
+                for (body_free_vars_slice) |fv| {
+                    if (!bound_vars.contains(fv)) {
+                        try self.scratch_captures.append(self.env.gpa, fv);
+                    }
+                }
+
+                break :blk can_body.idx;
+            };
 
             // Create the pure lambda expression first
             const lambda_expr = Expr{
                 .e_lambda = .{
                     .args = args_span,
-                    .body = can_body.idx,
+                    .body = body_idx,
                 },
             };
-            const lambda_type_content = try self.env.types.mkFuncUnbound(
-                @ptrCast(self.env.store.slicePatterns(args_span)),
-                ModuleEnv.varFrom(can_body.idx),
-            );
-            const lambda_idx = try self.env.addExprAndTypeVar(lambda_expr, lambda_type_content, region);
+            const lambda_idx = try self.env.addExprAndTypeVar(lambda_expr, .err, region);
+
+            // Get a slice of the captured vars in the body
+            const captures_slice = self.scratch_captures.sliceFromStart(captures_top);
 
             // If there are no captures, this is a pure lambda.
-            // Otherwise, it's a closure.
-            if (captures_set.count() == 0) {
-                // A pure lambda has no free variables.
+            // A pure lambda has no free variables.
+            if (captures_slice.len == 0) {
                 return CanonicalizedExpr{ .idx = lambda_idx, .free_vars = null };
             }
 
+            // Otherwise, it's a closure.
+
+            // Copy the captures into the store
             const capture_info: Expr.Capture.Span = blk: {
                 const scratch_start = self.env.store.scratch_captures.top();
-                var cap_it = captures_set.iterator();
-                while (cap_it.next()) |entry| {
-                    const pattern_idx = entry.key_ptr.*;
+                for (captures_slice) |pattern_idx| {
                     const pattern = self.env.store.getPattern(pattern_idx);
                     const name = switch (pattern) {
                         .assign => |a| a.ident,
@@ -2421,7 +2425,7 @@ pub fn canonicalizeExpr(
                         .pattern_idx = pattern_idx,
                         .scope_depth = 0, // This is now unused, but kept for struct compatibility.
                     };
-                    const capture_idx = try self.env.addCaptureAndTypeVar(capture, types.Content{ .flex_var = null }, region);
+                    const capture_idx = try self.env.addCaptureAndTypeVar(capture, .err, region);
                     try self.env.store.addScratchCapture(capture_idx);
                 }
 
@@ -2435,19 +2439,16 @@ pub fn canonicalizeExpr(
                     .captures = capture_info,
                 },
             };
-
-            // The type of the closure is the same as the type of the pure lambda
-            const expr_idx = try self.env.addExprAndTypeVar(closure_expr, lambda_type_content, region);
+            const expr_idx = try self.env.addExprAndTypeVar(closure_expr, .err, region);
 
             // The free variables of the lambda are its captures.
-            // I need to add them to the global list and return a span.
+            // Copy the contiguous list to the backing array
             const lambda_free_vars_start = self.scratch_free_vars.top();
-            var cap_it = captures_set.iterator();
-            while (cap_it.next()) |entry| {
-                try self.scratch_free_vars.append(self.env.gpa, entry.key_ptr.*);
+            for (captures_slice) |pattern_idx| {
+                try self.scratch_free_vars.append(self.env.gpa, pattern_idx);
             }
-            const free_vars_slice = self.scratch_free_vars.spanFrom(lambda_free_vars_start);
-            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
+            const free_vars_span = self.scratch_free_vars.spanFrom(lambda_free_vars_start);
+            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
         },
         .record_updater => |_| {
             const feature = try self.env.insertString("canonicalize record_updater expression");
@@ -2521,8 +2522,8 @@ pub fn canonicalizeExpr(
                 .e_binop = Expr.Binop.init(op, can_lhs.idx, can_rhs.idx),
             }, Content{ .flex_var = null }, region);
 
-            const free_vars_slice = self.scratch_free_vars.spanFrom(free_vars_start);
-            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
+            const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
         },
         .suffix_single_question => |_| {
             const feature = try self.env.insertString("canonicalize suffix_single_question expression");
@@ -2648,8 +2649,8 @@ pub fn canonicalizeExpr(
             const expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(expr_idx)));
             try self.env.types.setVarRedirect(expr_var, first_branch_type_var);
 
-            const free_vars_slice = self.scratch_free_vars.spanFrom(free_vars_start);
-            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
+            const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
         },
         .match => |m| {
             const region = self.parse_ir.tokenizedRegionToRegion(m.region);
@@ -2785,8 +2786,8 @@ pub fn canonicalizeExpr(
                 try self.env.types.setVarRedirect(expr_var, branch_var);
             }
 
-            const free_vars_slice = self.scratch_free_vars.spanFrom(free_vars_start);
-            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
+            const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
         },
         .dbg => |d| {
             // Debug expression - canonicalize the inner expression
@@ -3035,10 +3036,10 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
             },
         }, .err, region);
 
-        const free_vars_slice = self.scratch_free_vars.spanFrom(free_vars_start);
+        const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
         return CanonicalizedExpr{
             .idx = expr_idx,
-            .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null,
+            .free_vars = if (free_vars_span.len > 0) free_vars_span else null,
         };
     }
 }
@@ -3479,13 +3480,6 @@ fn canonicalizePattern(
                 }
             }
             const args = try self.env.store.patternSpanFrom(patterns_start);
-
-            // Create the pattern type var first
-            const arg_vars: []TypeVar = @ptrCast(self.env.store.slicePatterns(args));
-            // We need to create a temporary pattern idx to get the type var
-            const ext_var = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex_var = null }, region, TypeVar);
-            const tag = try self.env.types.mkTag(tag_name, arg_vars);
-            _ = try self.env.types.mkTagUnion(&[_]Tag{tag}, ext_var);
 
             // Create the pattern node with type var
             const tag_pattern_idx = try self.env.addPatternAndTypeVar(Pattern{
@@ -5286,8 +5280,8 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
     var bound_vars = std.AutoHashMapUnmanaged(Pattern.Idx, void){};
     defer bound_vars.deinit(self.env.gpa);
 
-    var captures = std.AutoHashMapUnmanaged(Pattern.Idx, void){};
-    defer captures.deinit(self.env.gpa);
+    const captures_top = self.scratch_captures.top();
+    defer self.scratch_captures.clearFrom(captures_top);
 
     // Canonicalize all statements in the block
     const ast_stmt_idxs = self.parse_ir.store.statementSlice(e.statements);
@@ -5386,7 +5380,7 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
                 const other_stmt_free_vars_slice = self.scratch_free_vars.sliceFromSpan(other_stmt.free_vars orelse DataSpan.empty());
                 for (other_stmt_free_vars_slice) |fv| {
                     if (!bound_vars.contains(fv)) {
-                        try captures.put(self.env.gpa, fv, {});
+                        try self.scratch_captures.append(self.env.gpa, fv);
                     }
                 }
 
@@ -5410,7 +5404,7 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
                 const stmt_free_vars_slice = self.scratch_free_vars.sliceFromSpan(canonicailzed_stmt.free_vars orelse DataSpan.empty());
                 for (stmt_free_vars_slice) |fv| {
                     if (!bound_vars.contains(fv)) {
-                        try captures.put(self.env.gpa, fv, {});
+                        try self.scratch_captures.append(self.env.gpa, fv);
                     }
                 }
             }
@@ -5431,17 +5425,19 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
     const final_expr_free_vars_slice = self.scratch_free_vars.sliceFromSpan(final_expr.free_vars orelse DataSpan.empty());
     for (final_expr_free_vars_slice) |fv| {
         if (!bound_vars.contains(fv)) {
-            try captures.put(self.env.gpa, fv, {});
+            try self.scratch_captures.append(self.env.gpa, fv);
         }
     }
 
+    // Get a slice of the captured vars in the block
+    const captures_slice = self.scratch_captures.sliceFromStart(captures_top);
+
     // Add the actual free variables (captures) to the parent's scratch space
-    const captures_start = self.scratch_free_vars.top();
-    var cap_it = captures.iterator();
-    while (cap_it.next()) |entry| {
-        try self.scratch_free_vars.append(self.env.gpa, entry.key_ptr.*);
+    const block_captures_start = self.scratch_free_vars.top();
+    for (captures_slice) |ptrn_idx| {
+        try self.scratch_free_vars.append(self.env.gpa, ptrn_idx);
     }
-    const captures_slice = self.scratch_free_vars.spanFrom(captures_start);
+    const block_free_vars = self.scratch_free_vars.spanFrom(block_captures_start);
 
     // Create statement span
     const stmt_span = try self.env.store.statementSpanFrom(stmt_start);
@@ -5459,7 +5455,7 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
     // Set the root block expr to redirect to the final expr var
     try self.env.types.setVarRedirect(block_var, final_expr_var);
 
-    return CanonicalizedExpr{ .idx = block_idx, .free_vars = if (captures_slice.len > 0) captures_slice else null };
+    return CanonicalizedExpr{ .idx = block_idx, .free_vars = if (block_free_vars.len > 0) block_free_vars else null };
 }
 
 const StatementResult = struct {
@@ -5727,10 +5723,23 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             //     ^^^^
             const ptrn = try self.canonicalizePatternOrMalformed(for_stmt.patt);
 
+            // Define the set of captures
+            const captures_top = self.scratch_captures.top();
+            defer self.scratch_captures.clearFrom(captures_top);
+
             // Canoncalize the list expr
             // for item in [1,2,3] {
             //             ^^^^^^^
-            const expr = try self.canonicalizeExprOrMalformed(for_stmt.expr);
+            const expr = blk: {
+                const czerd_expr = try self.canonicalizeExprOrMalformed(for_stmt.expr);
+
+                const free_vars_slice = self.scratch_free_vars.sliceFromSpan(czerd_expr.free_vars orelse DataSpan.empty());
+                for (free_vars_slice) |fv| {
+                    try self.scratch_captures.append(self.env.gpa, fv);
+                }
+
+                break :blk czerd_expr.idx;
+            };
 
             // Canoncalize the body
             // for item in [1,2,3] {
@@ -5742,6 +5751,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             var free_vars: ?DataSpan = null;
             if (expr.free_vars) |expr_free_vars| {
                 if (body.free_vars) |body_free_vars| {
+                    std.debug.print("TWO {} {}\n", .{ expr_free_vars, body_free_vars });
                     std.debug.assert((expr_free_vars.start + expr_free_vars.len) == body_free_vars.start);
                     free_vars = DataSpan{
                         .start = expr_free_vars.start,

@@ -162,11 +162,6 @@ LocalStatus :lue => Loc= [Pending, Complete]
                     ^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: statement type in block
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
 **UNDECLARED TYPE**
 The type _Color_ is not declared in this scope.
 
@@ -328,7 +323,6 @@ olor = |color| {
 			(args
 				(p-assign @6.9-6.14 (ident "color")))
 			(e-block @6.16-12.2
-				(s-runtime-error (tag "not_implemented"))
 				(s-expr @6.25-6.34
 					(e-runtime-error (tag "undeclared_type")))
 				(e-match @8.5-11.6

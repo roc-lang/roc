@@ -41,11 +41,6 @@ Move this import to the top of the file, after the module header but before any 
     ^^^^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: statement type in block
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
 **UNDECLARED TYPE**
 The type _Color_ is not declared in this scope.
 
@@ -175,7 +170,6 @@ processColor = |color| {
 			(args
 				(p-assign @6.17-6.22 (ident "color")))
 			(e-block @6.24-16.2
-				(s-runtime-error (tag "not_implemented"))
 				(s-expr @9.12-9.21
 					(e-runtime-error (tag "undeclared_type")))
 				(e-match @11.5-15.6
