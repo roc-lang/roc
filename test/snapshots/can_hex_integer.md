@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Hexadecimal integer literal type inference
-type=file:CanHexInteger.roc
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-CanHexInteger := {}
-
 x = 0xFF
 ~~~
 # EXPECTED
@@ -15,22 +13,17 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:14),OpColonEqual(1:15-1:17),OpenCurly(1:18-1:19),CloseCurly(1:19-1:20),
-LowerIdent(3:1-3:2),OpAssign(3:3-3:4),Int(3:5-3:9),
-EndOfFile(4:1-4:1),
+LowerIdent(1:1-1:2),OpAssign(1:3-1:4),Int(1:5-1:9),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-3.9
-	(type-module @1.1-1.14)
+(file @1.1-1.9
+	(type-module @1.1-1.2)
 	(statements
-		(s-type-decl @1.1-1.20
-			(header @1.1-1.14 (name "CanHexInteger")
-				(args))
-			(ty-record @1.18-1.20))
-		(s-decl @3.1-3.9
-			(p-ident @3.1-3.2 (raw "x"))
-			(e-int @3.5-3.9 (raw "0xFF")))))
+		(s-decl @1.1-1.9
+			(p-ident @1.1-1.2 (raw "x"))
+			(e-int @1.5-1.9 (raw "0xFF")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -40,20 +33,14 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @3.1-3.2 (ident "x"))
-		(e-num @3.5-3.9 (value "255")))
-	(s-nominal-decl @1.1-1.20
-		(ty-header @1.1-1.14 (name "CanHexInteger"))
-		(ty-record @1.18-1.20)))
+		(p-assign @1.1-1.2 (ident "x"))
+		(e-num @1.5-1.9 (value "255"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.2 (type "Num(Int(_size))")))
-	(type_decls
-		(nominal @1.1-1.20 (type "CanHexInteger")
-			(ty-header @1.1-1.14 (name "CanHexInteger"))))
+		(patt @1.1-1.2 (type "Num(Int(_size))")))
 	(expressions
-		(expr @3.5-3.9 (type "Num(Int(_size))"))))
+		(expr @1.5-1.9 (type "Num(Int(_size))"))))
 ~~~

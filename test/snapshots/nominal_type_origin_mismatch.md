@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Type mismatch showing nominal type origin from different module
-type=file:NominalTypeOriginMismatch.roc
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-NominalTypeOriginMismatch := {}
-
 import Data exposing [Person]
 
 expectsPerson : Person -> Str
@@ -17,15 +15,15 @@ main =
     expectsPerson("not a person")
 ~~~
 # EXPECTED
-MODULE NOT FOUND - nominal_type_origin_mismatch.md:3:1:3:30
-UNDECLARED TYPE - nominal_type_origin_mismatch.md:5:17:5:23
-UNUSED VARIABLE - nominal_type_origin_mismatch.md:6:18:6:19
+MODULE NOT FOUND - nominal_type_origin_mismatch.md:1:1:1:30
+UNDECLARED TYPE - nominal_type_origin_mismatch.md:3:17:3:23
+UNUSED VARIABLE - nominal_type_origin_mismatch.md:4:18:4:19
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `Data` was not found in this Roc project.
 
 You're attempting to use this module here:
-**nominal_type_origin_mismatch.md:3:1:3:30:**
+**nominal_type_origin_mismatch.md:1:1:1:30:**
 ```roc
 import Data exposing [Person]
 ```
@@ -36,7 +34,7 @@ import Data exposing [Person]
 The type _Person_ is not declared in this scope.
 
 This type is referenced here:
-**nominal_type_origin_mismatch.md:5:17:5:23:**
+**nominal_type_origin_mismatch.md:3:17:3:23:**
 ```roc
 expectsPerson : Person -> Str
 ```
@@ -48,7 +46,7 @@ Variable `p` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_p` to suppress this warning.
 The unused variable is declared here:
-**nominal_type_origin_mismatch.md:6:18:6:19:**
+**nominal_type_origin_mismatch.md:4:18:4:19:**
 ```roc
 expectsPerson = |p| "Got a person"
 ```
@@ -57,48 +55,41 @@ expectsPerson = |p| "Got a person"
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:26),OpColonEqual(1:27-1:29),OpenCurly(1:30-1:31),CloseCurly(1:31-1:32),
-KwImport(3:1-3:7),UpperIdent(3:8-3:12),KwExposing(3:13-3:21),OpenSquare(3:22-3:23),UpperIdent(3:23-3:29),CloseSquare(3:29-3:30),
-LowerIdent(5:1-5:14),OpColon(5:15-5:16),UpperIdent(5:17-5:23),OpArrow(5:24-5:26),UpperIdent(5:27-5:30),
-LowerIdent(6:1-6:14),OpAssign(6:15-6:16),OpBar(6:17-6:18),LowerIdent(6:18-6:19),OpBar(6:19-6:20),StringStart(6:21-6:22),StringPart(6:22-6:34),StringEnd(6:34-6:35),
-LowerIdent(8:1-8:5),OpAssign(8:6-8:7),
-LowerIdent(10:5-10:18),NoSpaceOpenRound(10:18-10:19),StringStart(10:19-10:20),StringPart(10:20-10:32),StringEnd(10:32-10:33),CloseRound(10:33-10:34),
-EndOfFile(11:1-11:1),
+KwImport(1:1-1:7),UpperIdent(1:8-1:12),KwExposing(1:13-1:21),OpenSquare(1:22-1:23),UpperIdent(1:23-1:29),CloseSquare(1:29-1:30),
+LowerIdent(3:1-3:14),OpColon(3:15-3:16),UpperIdent(3:17-3:23),OpArrow(3:24-3:26),UpperIdent(3:27-3:30),
+LowerIdent(4:1-4:14),OpAssign(4:15-4:16),OpBar(4:17-4:18),LowerIdent(4:18-4:19),OpBar(4:19-4:20),StringStart(4:21-4:22),StringPart(4:22-4:34),StringEnd(4:34-4:35),
+LowerIdent(6:1-6:5),OpAssign(6:6-6:7),
+LowerIdent(8:5-8:18),NoSpaceOpenRound(8:18-8:19),StringStart(8:19-8:20),StringPart(8:20-8:32),StringEnd(8:32-8:33),CloseRound(8:33-8:34),
+EndOfFile(9:1-9:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-10.34
-	(type-module @1.1-1.26)
+(file @1.1-8.34
+	(type-module @1.1-1.7)
 	(statements
-		(s-type-decl @1.1-1.32
-			(header @1.1-1.26 (name "NominalTypeOriginMismatch")
-				(args))
-			(ty-record @1.30-1.32))
-		(s-import @3.1-3.30 (raw "Data")
+		(s-import @1.1-1.30 (raw "Data")
 			(exposing
-				(exposed-upper-ident @3.23-3.29 (text "Person"))))
-		(s-type-anno @5.1-5.30 (name "expectsPerson")
-			(ty-fn @5.17-5.30
-				(ty @5.17-5.23 (name "Person"))
-				(ty @5.27-5.30 (name "Str"))))
-		(s-decl @6.1-6.35
-			(p-ident @6.1-6.14 (raw "expectsPerson"))
-			(e-lambda @6.17-6.35
+				(exposed-upper-ident @1.23-1.29 (text "Person"))))
+		(s-type-anno @3.1-3.30 (name "expectsPerson")
+			(ty-fn @3.17-3.30
+				(ty @3.17-3.23 (name "Person"))
+				(ty @3.27-3.30 (name "Str"))))
+		(s-decl @4.1-4.35
+			(p-ident @4.1-4.14 (raw "expectsPerson"))
+			(e-lambda @4.17-4.35
 				(args
-					(p-ident @6.18-6.19 (raw "p")))
-				(e-string @6.21-6.35
-					(e-string-part @6.22-6.34 (raw "Got a person")))))
-		(s-decl @8.1-10.34
-			(p-ident @8.1-8.5 (raw "main"))
-			(e-apply @10.5-10.34
-				(e-ident @10.5-10.18 (raw "expectsPerson"))
-				(e-string @10.19-10.33
-					(e-string-part @10.20-10.32 (raw "not a person")))))))
+					(p-ident @4.18-4.19 (raw "p")))
+				(e-string @4.21-4.35
+					(e-string-part @4.22-4.34 (raw "Got a person")))))
+		(s-decl @6.1-8.34
+			(p-ident @6.1-6.5 (raw "main"))
+			(e-apply @8.5-8.34
+				(e-ident @8.5-8.18 (raw "expectsPerson"))
+				(e-string @8.19-8.33
+					(e-string-part @8.20-8.32 (raw "not a person")))))))
 ~~~
 # FORMATTED
 ~~~roc
-NominalTypeOriginMismatch := {}
-
 import Data exposing [Person]
 
 expectsPerson : Person -> Str
@@ -112,28 +103,25 @@ main =
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @6.1-6.14 (ident "expectsPerson"))
-		(e-lambda @6.17-6.35
+		(p-assign @4.1-4.14 (ident "expectsPerson"))
+		(e-lambda @4.17-4.35
 			(args
-				(p-assign @6.18-6.19 (ident "p")))
-			(e-string @6.21-6.35
-				(e-literal @6.22-6.34 (string "Got a person"))))
-		(annotation @6.1-6.14
+				(p-assign @4.18-4.19 (ident "p")))
+			(e-string @4.21-4.35
+				(e-literal @4.22-4.34 (string "Got a person"))))
+		(annotation @4.1-4.14
 			(declared-type
-				(ty-fn @5.17-5.30 (effectful false)
-					(ty-malformed @5.17-5.23)
-					(ty-lookup @5.27-5.30 (name "Str") (builtin))))))
+				(ty-fn @3.17-3.30 (effectful false)
+					(ty-malformed @3.17-3.23)
+					(ty-lookup @3.27-3.30 (name "Str") (builtin))))))
 	(d-let
-		(p-assign @8.1-8.5 (ident "main"))
-		(e-call @10.5-10.34
-			(e-lookup-local @10.5-10.18
-				(p-assign @6.1-6.14 (ident "expectsPerson")))
-			(e-string @10.19-10.33
-				(e-literal @10.20-10.32 (string "not a person")))))
-	(s-nominal-decl @1.1-1.32
-		(ty-header @1.1-1.26 (name "NominalTypeOriginMismatch"))
-		(ty-record @1.30-1.32))
-	(s-import @3.1-3.30 (module "Data")
+		(p-assign @6.1-6.5 (ident "main"))
+		(e-call @8.5-8.34
+			(e-lookup-local @8.5-8.18
+				(p-assign @4.1-4.14 (ident "expectsPerson")))
+			(e-string @8.19-8.33
+				(e-literal @8.20-8.32 (string "not a person")))))
+	(s-import @1.1-1.30 (module "Data")
 		(exposes
 			(exposed (name "Person") (wildcard false)))))
 ~~~
@@ -141,12 +129,9 @@ main =
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.14 (type "Error -> Str"))
-		(patt @8.1-8.5 (type "Str")))
-	(type_decls
-		(nominal @1.1-1.32 (type "NominalTypeOriginMismatch")
-			(ty-header @1.1-1.26 (name "NominalTypeOriginMismatch"))))
+		(patt @4.1-4.14 (type "Error -> Str"))
+		(patt @6.1-6.5 (type "Str")))
 	(expressions
-		(expr @6.17-6.35 (type "Error -> Str"))
-		(expr @10.5-10.34 (type "Str"))))
+		(expr @4.17-4.35 (type "Error -> Str"))
+		(expr @8.5-8.34 (type "Str"))))
 ~~~

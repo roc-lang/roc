@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Nominal type with multi-statement associated items
-type=file:NominalTypeWithAssociatedMultiStatement.roc
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-NominalTypeWithAssociatedMultiStatement := {}
-
 Foo := [A, B, C].{
     x = 5
     y = 10
@@ -19,36 +17,29 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:40),OpColonEqual(1:41-1:43),OpenCurly(1:44-1:45),CloseCurly(1:45-1:46),
-UpperIdent(3:1-3:4),OpColonEqual(3:5-3:7),OpenSquare(3:8-3:9),UpperIdent(3:9-3:10),Comma(3:10-3:11),UpperIdent(3:12-3:13),Comma(3:13-3:14),UpperIdent(3:15-3:16),CloseSquare(3:16-3:17),Dot(3:17-3:18),OpenCurly(3:18-3:19),
-LowerIdent(4:5-4:6),OpAssign(4:7-4:8),Int(4:9-4:10),
-LowerIdent(5:5-5:6),OpAssign(5:7-5:8),Int(5:9-5:11),
-LowerIdent(6:5-6:6),OpAssign(6:7-6:8),Int(6:9-6:11),
-CloseCurly(7:1-7:2),
-EndOfFile(8:1-8:1),
+UpperIdent(1:1-1:4),OpColonEqual(1:5-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:10),Comma(1:10-1:11),UpperIdent(1:12-1:13),Comma(1:13-1:14),UpperIdent(1:15-1:16),CloseSquare(1:16-1:17),Dot(1:17-1:18),OpenCurly(1:18-1:19),
+LowerIdent(2:5-2:6),OpAssign(2:7-2:8),Int(2:9-2:10),
+LowerIdent(3:5-3:6),OpAssign(3:7-3:8),Int(3:9-3:11),
+LowerIdent(4:5-4:6),OpAssign(4:7-4:8),Int(4:9-4:11),
+CloseCurly(5:1-5:2),
+EndOfFile(6:1-6:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-7.2
-	(type-module @1.1-1.40)
+(file @1.1-5.2
+	(type-module @1.1-1.4)
 	(statements
-		(s-type-decl @1.1-1.46
-			(header @1.1-1.40 (name "NominalTypeWithAssociatedMultiStatement")
+		(s-type-decl @1.1-5.2
+			(header @1.1-1.4 (name "Foo")
 				(args))
-			(ty-record @1.44-1.46))
-		(s-type-decl @3.1-7.2
-			(header @3.1-3.4 (name "Foo")
-				(args))
-			(ty-tag-union @3.8-3.17
+			(ty-tag-union @1.8-1.17
 				(tags
-					(ty @3.9-3.10 (name "A"))
-					(ty @3.12-3.13 (name "B"))
-					(ty @3.15-3.16 (name "C")))))))
+					(ty @1.9-1.10 (name "A"))
+					(ty @1.12-1.13 (name "B"))
+					(ty @1.15-1.16 (name "C")))))))
 ~~~
 # FORMATTED
 ~~~roc
-NominalTypeWithAssociatedMultiStatement := {}
-
 Foo := [A, B, C].{
 	x = 5
 	y = 10
@@ -58,24 +49,19 @@ Foo := [A, B, C].{
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-nominal-decl @1.1-1.46
-		(ty-header @1.1-1.40 (name "NominalTypeWithAssociatedMultiStatement"))
-		(ty-record @1.44-1.46))
-	(s-nominal-decl @3.1-7.2
-		(ty-header @3.1-3.4 (name "Foo"))
-		(ty-tag-union @3.8-3.17
-			(ty-tag-name @3.9-3.10 (name "A"))
-			(ty-tag-name @3.12-3.13 (name "B"))
-			(ty-tag-name @3.15-3.16 (name "C")))))
+	(s-nominal-decl @1.1-5.2
+		(ty-header @1.1-1.4 (name "Foo"))
+		(ty-tag-union @1.8-1.17
+			(ty-tag-name @1.9-1.10 (name "A"))
+			(ty-tag-name @1.12-1.13 (name "B"))
+			(ty-tag-name @1.15-1.16 (name "C")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(type_decls
-		(nominal @1.1-1.46 (type "NominalTypeWithAssociatedMultiStatement")
-			(ty-header @1.1-1.40 (name "NominalTypeWithAssociatedMultiStatement")))
-		(nominal @3.1-7.2 (type "Foo")
-			(ty-header @3.1-3.4 (name "Foo"))))
+		(nominal @1.1-5.2 (type "Foo")
+			(ty-header @1.1-1.4 (name "Foo"))))
 	(expressions))
 ~~~

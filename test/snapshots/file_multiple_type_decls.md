@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Multiple unqualified type declarations
-type=file:FileMultipleTypeDecls.roc
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-FileMultipleTypeDecls := {}
-
 FirstType : U64
 SecondType : Str
 ThirdType : List(U8)
@@ -17,35 +15,30 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:22),OpColonEqual(1:23-1:25),OpenCurly(1:26-1:27),CloseCurly(1:27-1:28),
-UpperIdent(3:1-3:10),OpColon(3:11-3:12),UpperIdent(3:13-3:16),
-UpperIdent(4:1-4:11),OpColon(4:12-4:13),UpperIdent(4:14-4:17),
-UpperIdent(5:1-5:10),OpColon(5:11-5:12),UpperIdent(5:13-5:17),NoSpaceOpenRound(5:17-5:18),UpperIdent(5:18-5:20),CloseRound(5:20-5:21),
-EndOfFile(6:1-6:1),
+UpperIdent(1:1-1:10),OpColon(1:11-1:12),UpperIdent(1:13-1:16),
+UpperIdent(2:1-2:11),OpColon(2:12-2:13),UpperIdent(2:14-2:17),
+UpperIdent(3:1-3:10),OpColon(3:11-3:12),UpperIdent(3:13-3:17),NoSpaceOpenRound(3:17-3:18),UpperIdent(3:18-3:20),CloseRound(3:20-3:21),
+EndOfFile(4:1-4:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-5.21
-	(type-module @1.1-1.22)
+(file @1.1-3.21
+	(type-module @1.1-1.10)
 	(statements
-		(s-type-decl @1.1-1.28
-			(header @1.1-1.22 (name "FileMultipleTypeDecls")
+		(s-type-decl @1.1-1.16
+			(header @1.1-1.10 (name "FirstType")
 				(args))
-			(ty-record @1.26-1.28))
-		(s-type-decl @3.1-3.16
-			(header @3.1-3.10 (name "FirstType")
+			(ty @1.13-1.16 (name "U64")))
+		(s-type-decl @2.1-2.17
+			(header @2.1-2.11 (name "SecondType")
 				(args))
-			(ty @3.13-3.16 (name "U64")))
-		(s-type-decl @4.1-4.17
-			(header @4.1-4.11 (name "SecondType")
+			(ty @2.14-2.17 (name "Str")))
+		(s-type-decl @3.1-3.21
+			(header @3.1-3.10 (name "ThirdType")
 				(args))
-			(ty @4.14-4.17 (name "Str")))
-		(s-type-decl @5.1-5.21
-			(header @5.1-5.10 (name "ThirdType")
-				(args))
-			(ty-apply @5.13-5.21
-				(ty @5.13-5.17 (name "List"))
-				(ty @5.18-5.20 (name "U8"))))))
+			(ty-apply @3.13-3.21
+				(ty @3.13-3.17 (name "List"))
+				(ty @3.18-3.20 (name "U8"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -54,32 +47,27 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-nominal-decl @1.1-1.28
-		(ty-header @1.1-1.22 (name "FileMultipleTypeDecls"))
-		(ty-record @1.26-1.28))
-	(s-alias-decl @3.1-3.16
-		(ty-header @3.1-3.10 (name "FirstType"))
-		(ty-lookup @3.13-3.16 (name "U64") (builtin)))
-	(s-alias-decl @4.1-4.17
-		(ty-header @4.1-4.11 (name "SecondType"))
-		(ty-lookup @4.14-4.17 (name "Str") (builtin)))
-	(s-alias-decl @5.1-5.21
-		(ty-header @5.1-5.10 (name "ThirdType"))
-		(ty-apply @5.13-5.21 (name "List") (builtin)
-			(ty-lookup @5.18-5.20 (name "U8") (builtin)))))
+	(s-alias-decl @1.1-1.16
+		(ty-header @1.1-1.10 (name "FirstType"))
+		(ty-lookup @1.13-1.16 (name "U64") (builtin)))
+	(s-alias-decl @2.1-2.17
+		(ty-header @2.1-2.11 (name "SecondType"))
+		(ty-lookup @2.14-2.17 (name "Str") (builtin)))
+	(s-alias-decl @3.1-3.21
+		(ty-header @3.1-3.10 (name "ThirdType"))
+		(ty-apply @3.13-3.21 (name "List") (builtin)
+			(ty-lookup @3.18-3.20 (name "U8") (builtin)))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(type_decls
-		(nominal @1.1-1.28 (type "FileMultipleTypeDecls")
-			(ty-header @1.1-1.22 (name "FileMultipleTypeDecls")))
-		(alias @3.1-3.16 (type "FirstType")
-			(ty-header @3.1-3.10 (name "FirstType")))
-		(alias @4.1-4.17 (type "SecondType")
-			(ty-header @4.1-4.11 (name "SecondType")))
-		(alias @5.1-5.21 (type "ThirdType")
-			(ty-header @5.1-5.10 (name "ThirdType"))))
+		(alias @1.1-1.16 (type "FirstType")
+			(ty-header @1.1-1.10 (name "FirstType")))
+		(alias @2.1-2.17 (type "SecondType")
+			(ty-header @2.1-2.11 (name "SecondType")))
+		(alias @3.1-3.21 (type "ThirdType")
+			(ty-header @3.1-3.10 (name "ThirdType"))))
 	(expressions))
 ~~~

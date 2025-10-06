@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Basic variable scoping behavior
-type=file:CanBasicScoping.roc
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-CanBasicScoping := {}
-
 # Top-level variables
 x = 5
 y = 10
@@ -23,20 +21,20 @@ outerFunc = |_| {
 }
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - can_basic_scoping.md:9:5:9:6
+DUPLICATE DEFINITION - can_basic_scoping.md:7:5:7:6
 # PROBLEMS
 **DUPLICATE DEFINITION**
 The name `x` is being redeclared in this scope.
 
 The redeclaration is here:
-**can_basic_scoping.md:9:5:9:6:**
+**can_basic_scoping.md:7:5:7:6:**
 ```roc
     x = 20  # Should shadow top-level x
 ```
     ^
 
 But `x` was already defined here:
-**can_basic_scoping.md:4:1:4:2:**
+**can_basic_scoping.md:2:1:2:2:**
 ```roc
 x = 5
 ```
@@ -45,62 +43,56 @@ x = 5
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:16),OpColonEqual(1:17-1:19),OpenCurly(1:20-1:21),CloseCurly(1:21-1:22),
-LowerIdent(4:1-4:2),OpAssign(4:3-4:4),Int(4:5-4:6),
-LowerIdent(5:1-5:2),OpAssign(5:3-5:4),Int(5:5-5:7),
-LowerIdent(8:1-8:10),OpAssign(8:11-8:12),OpBar(8:13-8:14),Underscore(8:14-8:15),OpBar(8:15-8:16),OpenCurly(8:17-8:18),
-LowerIdent(9:5-9:6),OpAssign(9:7-9:8),Int(9:9-9:11),
-LowerIdent(10:5-10:16),OpAssign(10:17-10:18),OpenCurly(10:19-10:20),
-LowerIdent(12:9-12:10),OpAssign(12:11-12:12),LowerIdent(12:13-12:14),OpPlus(12:15-12:16),LowerIdent(12:17-12:18),
-LowerIdent(13:9-13:10),OpPlus(13:11-13:12),Int(13:13-13:14),
-CloseCurly(14:5-14:6),
-LowerIdent(15:5-15:16),
-CloseCurly(16:1-16:2),
-EndOfFile(17:1-17:1),
+LowerIdent(2:1-2:2),OpAssign(2:3-2:4),Int(2:5-2:6),
+LowerIdent(3:1-3:2),OpAssign(3:3-3:4),Int(3:5-3:7),
+LowerIdent(6:1-6:10),OpAssign(6:11-6:12),OpBar(6:13-6:14),Underscore(6:14-6:15),OpBar(6:15-6:16),OpenCurly(6:17-6:18),
+LowerIdent(7:5-7:6),OpAssign(7:7-7:8),Int(7:9-7:11),
+LowerIdent(8:5-8:16),OpAssign(8:17-8:18),OpenCurly(8:19-8:20),
+LowerIdent(10:9-10:10),OpAssign(10:11-10:12),LowerIdent(10:13-10:14),OpPlus(10:15-10:16),LowerIdent(10:17-10:18),
+LowerIdent(11:9-11:10),OpPlus(11:11-11:12),Int(11:13-11:14),
+CloseCurly(12:5-12:6),
+LowerIdent(13:5-13:16),
+CloseCurly(14:1-14:2),
+EndOfFile(15:1-15:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-16.2
-	(type-module @1.1-1.16)
+(file @2.1-14.2
+	(type-module @2.1-2.2)
 	(statements
-		(s-type-decl @1.1-1.22
-			(header @1.1-1.16 (name "CanBasicScoping")
-				(args))
-			(ty-record @1.20-1.22))
-		(s-decl @4.1-4.6
-			(p-ident @4.1-4.2 (raw "x"))
-			(e-int @4.5-4.6 (raw "5")))
-		(s-decl @5.1-5.7
-			(p-ident @5.1-5.2 (raw "y"))
-			(e-int @5.5-5.7 (raw "10")))
-		(s-decl @8.1-16.2
-			(p-ident @8.1-8.10 (raw "outerFunc"))
-			(e-lambda @8.13-16.2
+		(s-decl @2.1-2.6
+			(p-ident @2.1-2.2 (raw "x"))
+			(e-int @2.5-2.6 (raw "5")))
+		(s-decl @3.1-3.7
+			(p-ident @3.1-3.2 (raw "y"))
+			(e-int @3.5-3.7 (raw "10")))
+		(s-decl @6.1-14.2
+			(p-ident @6.1-6.10 (raw "outerFunc"))
+			(e-lambda @6.13-14.2
 				(args
 					(p-underscore))
-				(e-block @8.17-16.2
+				(e-block @6.17-14.2
 					(statements
-						(s-decl @9.5-9.11
-							(p-ident @9.5-9.6 (raw "x"))
-							(e-int @9.9-9.11 (raw "20")))
-						(s-decl @10.5-14.6
-							(p-ident @10.5-10.16 (raw "innerResult"))
-							(e-block @10.19-14.6
+						(s-decl @7.5-7.11
+							(p-ident @7.5-7.6 (raw "x"))
+							(e-int @7.9-7.11 (raw "20")))
+						(s-decl @8.5-12.6
+							(p-ident @8.5-8.16 (raw "innerResult"))
+							(e-block @8.19-12.6
 								(statements
-									(s-decl @12.9-12.18
-										(p-ident @12.9-12.10 (raw "z"))
-										(e-binop @12.13-12.18 (op "+")
-											(e-ident @12.13-12.14 (raw "x"))
-											(e-ident @12.17-12.18 (raw "y"))))
-									(e-binop @13.9-13.14 (op "+")
-										(e-ident @13.9-13.10 (raw "z"))
-										(e-int @13.13-13.14 (raw "1"))))))
-						(e-ident @15.5-15.16 (raw "innerResult"))))))))
+									(s-decl @10.9-10.18
+										(p-ident @10.9-10.10 (raw "z"))
+										(e-binop @10.13-10.18 (op "+")
+											(e-ident @10.13-10.14 (raw "x"))
+											(e-ident @10.17-10.18 (raw "y"))))
+									(e-binop @11.9-11.14 (op "+")
+										(e-ident @11.9-11.10 (raw "z"))
+										(e-int @11.13-11.14 (raw "1"))))))
+						(e-ident @13.5-13.16 (raw "innerResult"))))))))
 ~~~
 # FORMATTED
 ~~~roc
-CanBasicScoping := {}
-
+# Top-level variables
 # Top-level variables
 x = 5
 y = 10
@@ -120,55 +112,49 @@ outerFunc = |_| {
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @4.1-4.2 (ident "x"))
-		(e-num @4.5-4.6 (value "5")))
+		(p-assign @2.1-2.2 (ident "x"))
+		(e-num @2.5-2.6 (value "5")))
 	(d-let
-		(p-assign @5.1-5.2 (ident "y"))
-		(e-num @5.5-5.7 (value "10")))
+		(p-assign @3.1-3.2 (ident "y"))
+		(e-num @3.5-3.7 (value "10")))
 	(d-let
-		(p-assign @8.1-8.10 (ident "outerFunc"))
-		(e-closure @8.13-16.2
+		(p-assign @6.1-6.10 (ident "outerFunc"))
+		(e-closure @6.13-14.2
 			(captures
-				(capture @5.1-5.2 (ident "y")))
-			(e-lambda @8.13-16.2
+				(capture @3.1-3.2 (ident "y")))
+			(e-lambda @6.13-14.2
 				(args
-					(p-underscore @8.14-8.15))
-				(e-block @8.17-16.2
-					(s-let @9.5-9.11
-						(p-assign @9.5-9.6 (ident "x"))
-						(e-num @9.9-9.11 (value "20")))
-					(s-let @10.5-14.6
-						(p-assign @10.5-10.16 (ident "innerResult"))
-						(e-block @10.19-14.6
-							(s-let @12.9-12.18
-								(p-assign @12.9-12.10 (ident "z"))
-								(e-binop @12.13-12.18 (op "add")
-									(e-lookup-local @12.13-12.14
-										(p-assign @9.5-9.6 (ident "x")))
-									(e-lookup-local @12.17-12.18
-										(p-assign @5.1-5.2 (ident "y")))))
-							(e-binop @13.9-13.14 (op "add")
-								(e-lookup-local @13.9-13.10
-									(p-assign @12.9-12.10 (ident "z")))
-								(e-num @13.13-13.14 (value "1")))))
-					(e-lookup-local @15.5-15.16
-						(p-assign @10.5-10.16 (ident "innerResult")))))))
-	(s-nominal-decl @1.1-1.22
-		(ty-header @1.1-1.16 (name "CanBasicScoping"))
-		(ty-record @1.20-1.22)))
+					(p-underscore @6.14-6.15))
+				(e-block @6.17-14.2
+					(s-let @7.5-7.11
+						(p-assign @7.5-7.6 (ident "x"))
+						(e-num @7.9-7.11 (value "20")))
+					(s-let @8.5-12.6
+						(p-assign @8.5-8.16 (ident "innerResult"))
+						(e-block @8.19-12.6
+							(s-let @10.9-10.18
+								(p-assign @10.9-10.10 (ident "z"))
+								(e-binop @10.13-10.18 (op "add")
+									(e-lookup-local @10.13-10.14
+										(p-assign @7.5-7.6 (ident "x")))
+									(e-lookup-local @10.17-10.18
+										(p-assign @3.1-3.2 (ident "y")))))
+							(e-binop @11.9-11.14 (op "add")
+								(e-lookup-local @11.9-11.10
+									(p-assign @10.9-10.10 (ident "z")))
+								(e-num @11.13-11.14 (value "1")))))
+					(e-lookup-local @13.5-13.16
+						(p-assign @8.5-8.16 (ident "innerResult"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.2 (type "Num(_size)"))
-		(patt @5.1-5.2 (type "Num(_size)"))
-		(patt @8.1-8.10 (type "_arg -> Num(_size)")))
-	(type_decls
-		(nominal @1.1-1.22 (type "CanBasicScoping")
-			(ty-header @1.1-1.16 (name "CanBasicScoping"))))
+		(patt @2.1-2.2 (type "Num(_size)"))
+		(patt @3.1-3.2 (type "Num(_size)"))
+		(patt @6.1-6.10 (type "_arg -> Num(_size)")))
 	(expressions
-		(expr @4.5-4.6 (type "Num(_size)"))
-		(expr @5.5-5.7 (type "Num(_size)"))
-		(expr @8.13-16.2 (type "_arg -> Num(_size)"))))
+		(expr @2.5-2.6 (type "Num(_size)"))
+		(expr @3.5-3.7 (type "Num(_size)"))
+		(expr @6.13-14.2 (type "_arg -> Num(_size)"))))
 ~~~

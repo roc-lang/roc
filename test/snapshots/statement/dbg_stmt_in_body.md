@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Debug statement in body context
-type=file:DbgStmtInBody.roc
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-DbgStmtInBody := {}
-
 main = {
     x = 42
     dbg x
@@ -19,40 +17,33 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:14),OpColonEqual(1:15-1:17),OpenCurly(1:18-1:19),CloseCurly(1:19-1:20),
-LowerIdent(3:1-3:5),OpAssign(3:6-3:7),OpenCurly(3:8-3:9),
-LowerIdent(4:5-4:6),OpAssign(4:7-4:8),Int(4:9-4:11),
-KwDbg(5:5-5:8),LowerIdent(5:9-5:10),
-LowerIdent(6:5-6:6),OpPlus(6:7-6:8),Int(6:9-6:10),
-CloseCurly(7:1-7:2),
-EndOfFile(8:1-8:1),
+LowerIdent(1:1-1:5),OpAssign(1:6-1:7),OpenCurly(1:8-1:9),
+LowerIdent(2:5-2:6),OpAssign(2:7-2:8),Int(2:9-2:11),
+KwDbg(3:5-3:8),LowerIdent(3:9-3:10),
+LowerIdent(4:5-4:6),OpPlus(4:7-4:8),Int(4:9-4:10),
+CloseCurly(5:1-5:2),
+EndOfFile(6:1-6:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-7.2
-	(type-module @1.1-1.14)
+(file @1.1-5.2
+	(type-module @1.1-1.5)
 	(statements
-		(s-type-decl @1.1-1.20
-			(header @1.1-1.14 (name "DbgStmtInBody")
-				(args))
-			(ty-record @1.18-1.20))
-		(s-decl @3.1-7.2
-			(p-ident @3.1-3.5 (raw "main"))
-			(e-block @3.8-7.2
+		(s-decl @1.1-5.2
+			(p-ident @1.1-1.5 (raw "main"))
+			(e-block @1.8-5.2
 				(statements
-					(s-decl @4.5-4.11
-						(p-ident @4.5-4.6 (raw "x"))
-						(e-int @4.9-4.11 (raw "42")))
-					(s-dbg @5.5-5.10
-						(e-ident @5.9-5.10 (raw "x")))
-					(e-binop @6.5-6.10 (op "+")
-						(e-ident @6.5-6.6 (raw "x"))
-						(e-int @6.9-6.10 (raw "1"))))))))
+					(s-decl @2.5-2.11
+						(p-ident @2.5-2.6 (raw "x"))
+						(e-int @2.9-2.11 (raw "42")))
+					(s-dbg @3.5-3.10
+						(e-ident @3.9-3.10 (raw "x")))
+					(e-binop @4.5-4.10 (op "+")
+						(e-ident @4.5-4.6 (raw "x"))
+						(e-int @4.9-4.10 (raw "1"))))))))
 ~~~
 # FORMATTED
 ~~~roc
-DbgStmtInBody := {}
-
 main = {
 	x = 42
 	dbg x
@@ -63,30 +54,24 @@ main = {
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @3.1-3.5 (ident "main"))
-		(e-block @3.8-7.2
-			(s-let @4.5-4.11
-				(p-assign @4.5-4.6 (ident "x"))
-				(e-num @4.9-4.11 (value "42")))
-			(s-dbg @5.5-5.10
-				(e-lookup-local @5.9-5.10
-					(p-assign @4.5-4.6 (ident "x"))))
-			(e-binop @6.5-6.10 (op "add")
-				(e-lookup-local @6.5-6.6
-					(p-assign @4.5-4.6 (ident "x")))
-				(e-num @6.9-6.10 (value "1")))))
-	(s-nominal-decl @1.1-1.20
-		(ty-header @1.1-1.14 (name "DbgStmtInBody"))
-		(ty-record @1.18-1.20)))
+		(p-assign @1.1-1.5 (ident "main"))
+		(e-block @1.8-5.2
+			(s-let @2.5-2.11
+				(p-assign @2.5-2.6 (ident "x"))
+				(e-num @2.9-2.11 (value "42")))
+			(s-dbg @3.5-3.10
+				(e-lookup-local @3.9-3.10
+					(p-assign @2.5-2.6 (ident "x"))))
+			(e-binop @4.5-4.10 (op "add")
+				(e-lookup-local @4.5-4.6
+					(p-assign @2.5-2.6 (ident "x")))
+				(e-num @4.9-4.10 (value "1"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.5 (type "Num(_size)")))
-	(type_decls
-		(nominal @1.1-1.20 (type "DbgStmtInBody")
-			(ty-header @1.1-1.14 (name "DbgStmtInBody"))))
+		(patt @1.1-1.5 (type "Num(_size)")))
 	(expressions
-		(expr @3.8-7.2 (type "Num(_size)"))))
+		(expr @1.8-5.2 (type "Num(_size)"))))
 ~~~

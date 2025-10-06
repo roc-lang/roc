@@ -1,29 +1,27 @@
 # META
 ~~~ini
 description=An empty module with multiline exposes and comments
-type=file:ModuleMultilineWithComments.roc
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-ModuleMultilineWithComments := {}
-
 	[ # Comment After exposes open
 		something, # Comment after exposed item
 		SomeType, # Comment after final exposed item
 	]
 ~~~
 # EXPECTED
-PARSE ERROR - module_multiline_with_comments.md:3:2:3:3
-PARSE ERROR - module_multiline_with_comments.md:4:3:4:12
-PARSE ERROR - module_multiline_with_comments.md:4:12:4:13
-PARSE ERROR - module_multiline_with_comments.md:5:11:5:12
-PARSE ERROR - module_multiline_with_comments.md:6:2:6:3
+PARSE ERROR - module_multiline_with_comments.md:1:2:1:3
+PARSE ERROR - module_multiline_with_comments.md:2:3:2:12
+PARSE ERROR - module_multiline_with_comments.md:2:12:2:13
+PARSE ERROR - module_multiline_with_comments.md:3:11:3:12
+PARSE ERROR - module_multiline_with_comments.md:4:2:4:3
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**module_multiline_with_comments.md:3:2:3:3:**
+**module_multiline_with_comments.md:1:2:1:3:**
 ```roc
 	[ # Comment After exposes open
 ```
@@ -34,7 +32,7 @@ This is an unexpected parsing error. Please check your syntax.
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**module_multiline_with_comments.md:4:3:4:12:**
+**module_multiline_with_comments.md:2:3:2:12:**
 ```roc
 		something, # Comment after exposed item
 ```
@@ -45,7 +43,7 @@ This is an unexpected parsing error. Please check your syntax.
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**module_multiline_with_comments.md:4:12:4:13:**
+**module_multiline_with_comments.md:2:12:2:13:**
 ```roc
 		something, # Comment after exposed item
 ```
@@ -68,7 +66,7 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-**module_multiline_with_comments.md:5:11:5:12:**
+**module_multiline_with_comments.md:3:11:3:12:**
 ```roc
 		SomeType, # Comment after final exposed item
 ```
@@ -79,7 +77,7 @@ Other valid examples:
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**module_multiline_with_comments.md:6:2:6:3:**
+**module_multiline_with_comments.md:4:2:4:3:**
 ```roc
 	]
 ```
@@ -88,48 +86,35 @@ This is an unexpected parsing error. Please check your syntax.
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:28),OpColonEqual(1:29-1:31),OpenCurly(1:32-1:33),CloseCurly(1:33-1:34),
-OpenSquare(3:2-3:3),
-LowerIdent(4:3-4:12),Comma(4:12-4:13),
-UpperIdent(5:3-5:11),Comma(5:11-5:12),
-CloseSquare(6:2-6:3),
-EndOfFile(7:1-7:1),
+OpenSquare(1:2-1:3),
+LowerIdent(2:3-2:12),Comma(2:12-2:13),
+UpperIdent(3:3-3:11),Comma(3:11-3:12),
+CloseSquare(4:2-4:3),
+EndOfFile(5:1-5:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-6.3
-	(type-module @1.1-1.28)
+(file @1.2-4.3
+	(type-module @1.2-1.3)
 	(statements
-		(s-type-decl @1.1-1.34
-			(header @1.1-1.28 (name "ModuleMultilineWithComments")
-				(args))
-			(ty-record @1.32-1.34))
-		(s-malformed @3.2-3.3 (tag "statement_unexpected_token"))
-		(s-malformed @4.3-4.12 (tag "statement_unexpected_token"))
-		(s-malformed @4.12-4.13 (tag "statement_unexpected_token"))
-		(s-malformed @5.11-5.12 (tag "expected_colon_after_type_annotation"))
-		(s-malformed @6.2-6.3 (tag "statement_unexpected_token"))))
+		(s-malformed @1.2-1.3 (tag "statement_unexpected_token"))
+		(s-malformed @2.3-2.12 (tag "statement_unexpected_token"))
+		(s-malformed @2.12-2.13 (tag "statement_unexpected_token"))
+		(s-malformed @3.11-3.12 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @4.2-4.3 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-ModuleMultilineWithComments := {}
-
 # Comment After exposes open
 # Comment after final exposed item
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(s-nominal-decl @1.1-1.34
-		(ty-header @1.1-1.28 (name "ModuleMultilineWithComments"))
-		(ty-record @1.32-1.34)))
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
-	(type_decls
-		(nominal @1.1-1.34 (type "ModuleMultilineWithComments")
-			(ty-header @1.1-1.28 (name "ModuleMultilineWithComments"))))
 	(expressions))
 ~~~

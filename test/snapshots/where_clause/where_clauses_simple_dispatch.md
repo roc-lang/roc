@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Simple where clause with single constraint
-type=file:WhereClausesSimpleDispatch.roc
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-WhereClausesSimpleDispatch := {}
-
 stringify : a -> Str where module(a).to_str : a -> Str
 stringify = |value| value.to_str()
 ~~~
@@ -16,38 +14,33 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:27),OpColonEqual(1:28-1:30),OpenCurly(1:31-1:32),CloseCurly(1:32-1:33),
-LowerIdent(3:1-3:10),OpColon(3:11-3:12),LowerIdent(3:13-3:14),OpArrow(3:15-3:17),UpperIdent(3:18-3:21),KwWhere(3:22-3:27),KwModule(3:28-3:34),NoSpaceOpenRound(3:34-3:35),LowerIdent(3:35-3:36),CloseRound(3:36-3:37),NoSpaceDotLowerIdent(3:37-3:44),OpColon(3:45-3:46),LowerIdent(3:47-3:48),OpArrow(3:49-3:51),UpperIdent(3:52-3:55),
-LowerIdent(4:1-4:10),OpAssign(4:11-4:12),OpBar(4:13-4:14),LowerIdent(4:14-4:19),OpBar(4:19-4:20),LowerIdent(4:21-4:26),NoSpaceDotLowerIdent(4:26-4:33),NoSpaceOpenRound(4:33-4:34),CloseRound(4:34-4:35),
-EndOfFile(5:1-5:1),
+LowerIdent(1:1-1:10),OpColon(1:11-1:12),LowerIdent(1:13-1:14),OpArrow(1:15-1:17),UpperIdent(1:18-1:21),KwWhere(1:22-1:27),KwModule(1:28-1:34),NoSpaceOpenRound(1:34-1:35),LowerIdent(1:35-1:36),CloseRound(1:36-1:37),NoSpaceDotLowerIdent(1:37-1:44),OpColon(1:45-1:46),LowerIdent(1:47-1:48),OpArrow(1:49-1:51),UpperIdent(1:52-1:55),
+LowerIdent(2:1-2:10),OpAssign(2:11-2:12),OpBar(2:13-2:14),LowerIdent(2:14-2:19),OpBar(2:19-2:20),LowerIdent(2:21-2:26),NoSpaceDotLowerIdent(2:26-2:33),NoSpaceOpenRound(2:33-2:34),CloseRound(2:34-2:35),
+EndOfFile(3:1-3:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-4.35
-	(type-module @1.1-1.27)
+(file @1.1-2.35
+	(type-module @1.1-1.10)
 	(statements
-		(s-type-decl @1.1-1.33
-			(header @1.1-1.27 (name "WhereClausesSimpleDispatch")
-				(args))
-			(ty-record @1.31-1.33))
-		(s-type-anno @3.1-3.55 (name "stringify")
-			(ty-fn @3.13-3.21
-				(ty-var @3.13-3.14 (raw "a"))
-				(ty @3.18-3.21 (name "Str")))
+		(s-type-anno @1.1-1.55 (name "stringify")
+			(ty-fn @1.13-1.21
+				(ty-var @1.13-1.14 (raw "a"))
+				(ty @1.18-1.21 (name "Str")))
 			(where
-				(method @3.28-3.55 (module-of "a") (name "to_str")
+				(method @1.28-1.55 (module-of "a") (name "to_str")
 					(args
-						(ty-var @3.47-3.48 (raw "a")))
-					(ty @3.52-3.55 (name "Str")))))
-		(s-decl @4.1-4.35
-			(p-ident @4.1-4.10 (raw "stringify"))
-			(e-lambda @4.13-4.35
+						(ty-var @1.47-1.48 (raw "a")))
+					(ty @1.52-1.55 (name "Str")))))
+		(s-decl @2.1-2.35
+			(p-ident @2.1-2.10 (raw "stringify"))
+			(e-lambda @2.13-2.35
 				(args
-					(p-ident @4.14-4.19 (raw "value")))
-				(e-field-access @4.21-4.35
-					(e-ident @4.21-4.26 (raw "value"))
-					(e-apply @4.26-4.35
-						(e-ident @4.26-4.33 (raw "to_str"))))))))
+					(p-ident @2.14-2.19 (raw "value")))
+				(e-field-access @2.21-2.35
+					(e-ident @2.21-2.26 (raw "value"))
+					(e-apply @2.26-2.35
+						(e-ident @2.26-2.33 (raw "to_str"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -57,42 +50,36 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @4.1-4.10 (ident "stringify"))
-		(e-lambda @4.13-4.35
+		(p-assign @2.1-2.10 (ident "stringify"))
+		(e-lambda @2.13-2.35
 			(args
-				(p-assign @4.14-4.19 (ident "value")))
-			(e-dot-access @4.21-4.35 (field "to_str")
+				(p-assign @2.14-2.19 (ident "value")))
+			(e-dot-access @2.21-2.35 (field "to_str")
 				(receiver
-					(e-lookup-local @4.21-4.26
-						(p-assign @4.14-4.19 (ident "value"))))
+					(e-lookup-local @2.21-2.26
+						(p-assign @2.14-2.19 (ident "value"))))
 				(args)))
-		(annotation @4.1-4.10
+		(annotation @2.1-2.10
 			(declared-type
-				(ty-fn @3.13-3.21 (effectful false)
-					(ty-rigid-var @3.13-3.14 (name "a"))
-					(ty-lookup @3.18-3.21 (name "Str") (builtin))))))
-	(s-nominal-decl @1.1-1.33
-		(ty-header @1.1-1.27 (name "WhereClausesSimpleDispatch"))
-		(ty-record @1.31-1.33))
-	(s-type-anno @3.1-3.55 (name "stringify")
-		(ty-fn @3.13-3.21 (effectful false)
-			(ty-rigid-var @3.13-3.14 (name "a"))
-			(ty-lookup @3.18-3.21 (name "Str") (builtin)))
+				(ty-fn @1.13-1.21 (effectful false)
+					(ty-rigid-var @1.13-1.14 (name "a"))
+					(ty-lookup @1.18-1.21 (name "Str") (builtin))))))
+	(s-type-anno @1.1-1.55 (name "stringify")
+		(ty-fn @1.13-1.21 (effectful false)
+			(ty-rigid-var @1.13-1.14 (name "a"))
+			(ty-lookup @1.18-1.21 (name "Str") (builtin)))
 		(where
-			(method @3.28-3.55 (module-of "a") (ident "to_str")
+			(method @1.28-1.55 (module-of "a") (ident "to_str")
 				(args
-					(ty-rigid-var-lookup (ty-rigid-var @3.13-3.14 (name "a"))))
-				(ty-lookup @3.52-3.55 (name "Str") (builtin)))))
-	(ext-decl @3.28-3.55 (ident "module(a).to_str") (kind "value")))
+					(ty-rigid-var-lookup (ty-rigid-var @1.13-1.14 (name "a"))))
+				(ty-lookup @1.52-1.55 (name "Str") (builtin)))))
+	(ext-decl @1.28-1.55 (ident "module(a).to_str") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.10 (type "a -> Str")))
-	(type_decls
-		(nominal @1.1-1.33 (type "WhereClausesSimpleDispatch")
-			(ty-header @1.1-1.27 (name "WhereClausesSimpleDispatch"))))
+		(patt @2.1-2.10 (type "a -> Str")))
 	(expressions
-		(expr @4.13-4.35 (type "a -> Str"))))
+		(expr @2.13-2.35 (type "a -> Str"))))
 ~~~

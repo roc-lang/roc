@@ -1,17 +1,15 @@
 # META
 ~~~ini
 description=fuzz crash
-type=file:FuzzCrash052.roc
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-FuzzCrash052 := {}
-
 S
 0
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_052.md:4:1:4:2
+PARSE ERROR - fuzz_crash_052.md:2:1:2:2
 # PROBLEMS
 **PARSE ERROR**
 Type applications require parentheses around their type arguments.
@@ -29,7 +27,7 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-**fuzz_crash_052.md:4:1:4:2:**
+**fuzz_crash_052.md:2:1:2:2:**
 ```roc
 0
 ```
@@ -38,39 +36,28 @@ Other valid examples:
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:13),OpColonEqual(1:14-1:16),OpenCurly(1:17-1:18),CloseCurly(1:18-1:19),
-UpperIdent(3:1-3:2),
-Int(4:1-4:2),
-EndOfFile(5:1-5:1),
+UpperIdent(1:1-1:2),
+Int(2:1-2:2),
+EndOfFile(3:1-3:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-4.2
-	(type-module @1.1-1.13)
+(file @1.1-2.2
+	(type-module @1.1-1.2)
 	(statements
-		(s-type-decl @1.1-1.19
-			(header @1.1-1.13 (name "FuzzCrash052")
-				(args))
-			(ty-record @1.17-1.19))
-		(s-malformed @4.1-4.2 (tag "expected_colon_after_type_annotation"))))
+		(s-malformed @2.1-2.2 (tag "expected_colon_after_type_annotation"))))
 ~~~
 # FORMATTED
 ~~~roc
-FuzzCrash052 := {}
+
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(s-nominal-decl @1.1-1.19
-		(ty-header @1.1-1.13 (name "FuzzCrash052"))
-		(ty-record @1.17-1.19)))
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
-	(type_decls
-		(nominal @1.1-1.19 (type "FuzzCrash052")
-			(ty-header @1.1-1.13 (name "FuzzCrash052"))))
 	(expressions))
 ~~~

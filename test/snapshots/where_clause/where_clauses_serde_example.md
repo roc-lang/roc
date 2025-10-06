@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Module dispatch in where clause
-type=file:WhereClausesSerdeExample.roc
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-WhereClausesSerdeExample := {}
-
 deserialize : List(U8) -> Result(a, [DecodeErr])
 	where module(a).decode : List(U8) -> Result(a, [DecodeErr])
 deserialize = |_| ...
@@ -17,47 +15,42 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:25),OpColonEqual(1:26-1:28),OpenCurly(1:29-1:30),CloseCurly(1:30-1:31),
-LowerIdent(3:1-3:12),OpColon(3:13-3:14),UpperIdent(3:15-3:19),NoSpaceOpenRound(3:19-3:20),UpperIdent(3:20-3:22),CloseRound(3:22-3:23),OpArrow(3:24-3:26),UpperIdent(3:27-3:33),NoSpaceOpenRound(3:33-3:34),LowerIdent(3:34-3:35),Comma(3:35-3:36),OpenSquare(3:37-3:38),UpperIdent(3:38-3:47),CloseSquare(3:47-3:48),CloseRound(3:48-3:49),
-KwWhere(4:2-4:7),KwModule(4:8-4:14),NoSpaceOpenRound(4:14-4:15),LowerIdent(4:15-4:16),CloseRound(4:16-4:17),NoSpaceDotLowerIdent(4:17-4:24),OpColon(4:25-4:26),UpperIdent(4:27-4:31),NoSpaceOpenRound(4:31-4:32),UpperIdent(4:32-4:34),CloseRound(4:34-4:35),OpArrow(4:36-4:38),UpperIdent(4:39-4:45),NoSpaceOpenRound(4:45-4:46),LowerIdent(4:46-4:47),Comma(4:47-4:48),OpenSquare(4:49-4:50),UpperIdent(4:50-4:59),CloseSquare(4:59-4:60),CloseRound(4:60-4:61),
-LowerIdent(5:1-5:12),OpAssign(5:13-5:14),OpBar(5:15-5:16),Underscore(5:16-5:17),OpBar(5:17-5:18),TripleDot(5:19-5:22),
-EndOfFile(6:1-6:1),
+LowerIdent(1:1-1:12),OpColon(1:13-1:14),UpperIdent(1:15-1:19),NoSpaceOpenRound(1:19-1:20),UpperIdent(1:20-1:22),CloseRound(1:22-1:23),OpArrow(1:24-1:26),UpperIdent(1:27-1:33),NoSpaceOpenRound(1:33-1:34),LowerIdent(1:34-1:35),Comma(1:35-1:36),OpenSquare(1:37-1:38),UpperIdent(1:38-1:47),CloseSquare(1:47-1:48),CloseRound(1:48-1:49),
+KwWhere(2:2-2:7),KwModule(2:8-2:14),NoSpaceOpenRound(2:14-2:15),LowerIdent(2:15-2:16),CloseRound(2:16-2:17),NoSpaceDotLowerIdent(2:17-2:24),OpColon(2:25-2:26),UpperIdent(2:27-2:31),NoSpaceOpenRound(2:31-2:32),UpperIdent(2:32-2:34),CloseRound(2:34-2:35),OpArrow(2:36-2:38),UpperIdent(2:39-2:45),NoSpaceOpenRound(2:45-2:46),LowerIdent(2:46-2:47),Comma(2:47-2:48),OpenSquare(2:49-2:50),UpperIdent(2:50-2:59),CloseSquare(2:59-2:60),CloseRound(2:60-2:61),
+LowerIdent(3:1-3:12),OpAssign(3:13-3:14),OpBar(3:15-3:16),Underscore(3:16-3:17),OpBar(3:17-3:18),TripleDot(3:19-3:22),
+EndOfFile(4:1-4:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-5.22
-	(type-module @1.1-1.25)
+(file @1.1-3.22
+	(type-module @1.1-1.12)
 	(statements
-		(s-type-decl @1.1-1.31
-			(header @1.1-1.25 (name "WhereClausesSerdeExample")
-				(args))
-			(ty-record @1.29-1.31))
-		(s-type-anno @3.1-4.61 (name "deserialize")
-			(ty-fn @3.15-3.49
-				(ty-apply @3.15-3.23
-					(ty @3.15-3.19 (name "List"))
-					(ty @3.20-3.22 (name "U8")))
-				(ty-apply @3.27-3.49
-					(ty @3.27-3.33 (name "Result"))
-					(ty-var @3.34-3.35 (raw "a"))
-					(ty-tag-union @3.37-3.48
+		(s-type-anno @1.1-2.61 (name "deserialize")
+			(ty-fn @1.15-1.49
+				(ty-apply @1.15-1.23
+					(ty @1.15-1.19 (name "List"))
+					(ty @1.20-1.22 (name "U8")))
+				(ty-apply @1.27-1.49
+					(ty @1.27-1.33 (name "Result"))
+					(ty-var @1.34-1.35 (raw "a"))
+					(ty-tag-union @1.37-1.48
 						(tags
-							(ty @3.38-3.47 (name "DecodeErr"))))))
+							(ty @1.38-1.47 (name "DecodeErr"))))))
 			(where
-				(method @4.8-4.61 (module-of "a") (name "decode")
+				(method @2.8-2.61 (module-of "a") (name "decode")
 					(args
-						(ty-apply @4.27-4.35
-							(ty @4.27-4.31 (name "List"))
-							(ty @4.32-4.34 (name "U8"))))
-					(ty-apply @4.39-4.61
-						(ty @4.39-4.45 (name "Result"))
-						(ty-var @4.46-4.47 (raw "a"))
-						(ty-tag-union @4.49-4.60
+						(ty-apply @2.27-2.35
+							(ty @2.27-2.31 (name "List"))
+							(ty @2.32-2.34 (name "U8"))))
+					(ty-apply @2.39-2.61
+						(ty @2.39-2.45 (name "Result"))
+						(ty-var @2.46-2.47 (raw "a"))
+						(ty-tag-union @2.49-2.60
 							(tags
-								(ty @4.50-4.59 (name "DecodeErr"))))))))
-		(s-decl @5.1-5.22
-			(p-ident @5.1-5.12 (raw "deserialize"))
-			(e-lambda @5.15-5.22
+								(ty @2.50-2.59 (name "DecodeErr"))))))))
+		(s-decl @3.1-3.22
+			(p-ident @3.1-3.12 (raw "deserialize"))
+			(e-lambda @3.15-3.22
 				(args
 					(p-underscore))
 				(e-ellipsis)))))
@@ -70,50 +63,44 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @5.1-5.12 (ident "deserialize"))
-		(e-lambda @5.15-5.22
+		(p-assign @3.1-3.12 (ident "deserialize"))
+		(e-lambda @3.15-3.22
 			(args
-				(p-underscore @5.16-5.17))
+				(p-underscore @3.16-3.17))
 			(e-not-implemented @1.1-1.1))
-		(annotation @5.1-5.12
+		(annotation @3.1-3.12
 			(declared-type
-				(ty-fn @3.15-3.49 (effectful false)
-					(ty-apply @3.15-3.23 (name "List") (builtin)
-						(ty-lookup @3.20-3.22 (name "U8") (builtin)))
-					(ty-apply @3.27-3.49 (name "Result") (local)
-						(ty-rigid-var @3.27-3.49 (name "a"))
-						(ty-tag-union @3.27-3.49
-							(ty-tag-name @3.38-3.47 (name "DecodeErr"))))))))
-	(s-nominal-decl @1.1-1.31
-		(ty-header @1.1-1.25 (name "WhereClausesSerdeExample"))
-		(ty-record @1.29-1.31))
-	(s-type-anno @3.1-4.61 (name "deserialize")
-		(ty-fn @3.15-3.49 (effectful false)
-			(ty-apply @3.15-3.23 (name "List") (builtin)
-				(ty-lookup @3.20-3.22 (name "U8") (builtin)))
-			(ty-apply @3.27-3.49 (name "Result") (local)
-				(ty-rigid-var @3.27-3.49 (name "a"))
-				(ty-tag-union @3.27-3.49
-					(ty-tag-name @3.38-3.47 (name "DecodeErr")))))
+				(ty-fn @1.15-1.49 (effectful false)
+					(ty-apply @1.15-1.23 (name "List") (builtin)
+						(ty-lookup @1.20-1.22 (name "U8") (builtin)))
+					(ty-apply @1.27-1.49 (name "Result") (local)
+						(ty-rigid-var @1.27-1.49 (name "a"))
+						(ty-tag-union @1.27-1.49
+							(ty-tag-name @1.38-1.47 (name "DecodeErr"))))))))
+	(s-type-anno @1.1-2.61 (name "deserialize")
+		(ty-fn @1.15-1.49 (effectful false)
+			(ty-apply @1.15-1.23 (name "List") (builtin)
+				(ty-lookup @1.20-1.22 (name "U8") (builtin)))
+			(ty-apply @1.27-1.49 (name "Result") (local)
+				(ty-rigid-var @1.27-1.49 (name "a"))
+				(ty-tag-union @1.27-1.49
+					(ty-tag-name @1.38-1.47 (name "DecodeErr")))))
 		(where
-			(method @4.8-4.61 (module-of "a") (ident "decode")
+			(method @2.8-2.61 (module-of "a") (ident "decode")
 				(args
-					(ty-apply @4.27-4.35 (name "List") (builtin)
-						(ty-lookup @4.32-4.34 (name "U8") (builtin))))
-				(ty-apply @4.39-4.61 (name "Result") (local)
-					(ty-rigid-var-lookup (ty-rigid-var @3.27-3.49 (name "a")))
-					(ty-tag-union @4.49-4.60
-						(ty-tag-name @4.50-4.59 (name "DecodeErr")))))))
-	(ext-decl @4.8-4.61 (ident "module(a).decode") (kind "value")))
+					(ty-apply @2.27-2.35 (name "List") (builtin)
+						(ty-lookup @2.32-2.34 (name "U8") (builtin))))
+				(ty-apply @2.39-2.61 (name "Result") (local)
+					(ty-rigid-var-lookup (ty-rigid-var @1.27-1.49 (name "a")))
+					(ty-tag-union @2.49-2.60
+						(ty-tag-name @2.50-2.59 (name "DecodeErr")))))))
+	(ext-decl @2.8-2.61 (ident "module(a).decode") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.12 (type "List(Num(Int(Unsigned8))) -> Result(a, [DecodeErr])")))
-	(type_decls
-		(nominal @1.1-1.31 (type "WhereClausesSerdeExample")
-			(ty-header @1.1-1.25 (name "WhereClausesSerdeExample"))))
+		(patt @3.1-3.12 (type "List(Num(Int(Unsigned8))) -> Result(a, [DecodeErr])")))
 	(expressions
-		(expr @5.15-5.22 (type "List(Num(Int(Unsigned8))) -> Result(a, [DecodeErr])"))))
+		(expr @3.15-3.22 (type "List(Num(Int(Unsigned8))) -> Result(a, [DecodeErr])"))))
 ~~~

@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Basic record updater with field override
-type=file:RecordUpdaterBasic.roc
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-RecordUpdaterBasic := {}
-
 person = { name: "Alice", age: 30 }
 updated = { ..person, age: 31 }
 ~~~
@@ -16,35 +14,30 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:19),OpColonEqual(1:20-1:22),OpenCurly(1:23-1:24),CloseCurly(1:24-1:25),
-LowerIdent(3:1-3:7),OpAssign(3:8-3:9),OpenCurly(3:10-3:11),LowerIdent(3:12-3:16),OpColon(3:16-3:17),StringStart(3:18-3:19),StringPart(3:19-3:24),StringEnd(3:24-3:25),Comma(3:25-3:26),LowerIdent(3:27-3:30),OpColon(3:30-3:31),Int(3:32-3:34),CloseCurly(3:35-3:36),
-LowerIdent(4:1-4:8),OpAssign(4:9-4:10),OpenCurly(4:11-4:12),DoubleDot(4:13-4:15),LowerIdent(4:15-4:21),Comma(4:21-4:22),LowerIdent(4:23-4:26),OpColon(4:26-4:27),Int(4:28-4:30),CloseCurly(4:31-4:32),
-EndOfFile(5:1-5:1),
+LowerIdent(1:1-1:7),OpAssign(1:8-1:9),OpenCurly(1:10-1:11),LowerIdent(1:12-1:16),OpColon(1:16-1:17),StringStart(1:18-1:19),StringPart(1:19-1:24),StringEnd(1:24-1:25),Comma(1:25-1:26),LowerIdent(1:27-1:30),OpColon(1:30-1:31),Int(1:32-1:34),CloseCurly(1:35-1:36),
+LowerIdent(2:1-2:8),OpAssign(2:9-2:10),OpenCurly(2:11-2:12),DoubleDot(2:13-2:15),LowerIdent(2:15-2:21),Comma(2:21-2:22),LowerIdent(2:23-2:26),OpColon(2:26-2:27),Int(2:28-2:30),CloseCurly(2:31-2:32),
+EndOfFile(3:1-3:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-4.32
-	(type-module @1.1-1.19)
+(file @1.1-2.32
+	(type-module @1.1-1.7)
 	(statements
-		(s-type-decl @1.1-1.25
-			(header @1.1-1.19 (name "RecordUpdaterBasic")
-				(args))
-			(ty-record @1.23-1.25))
-		(s-decl @3.1-3.36
-			(p-ident @3.1-3.7 (raw "person"))
-			(e-record @3.10-3.36
+		(s-decl @1.1-1.36
+			(p-ident @1.1-1.7 (raw "person"))
+			(e-record @1.10-1.36
 				(field (field "name")
-					(e-string @3.18-3.25
-						(e-string-part @3.19-3.24 (raw "Alice"))))
+					(e-string @1.18-1.25
+						(e-string-part @1.19-1.24 (raw "Alice"))))
 				(field (field "age")
-					(e-int @3.32-3.34 (raw "30")))))
-		(s-decl @4.1-4.32
-			(p-ident @4.1-4.8 (raw "updated"))
-			(e-record @4.11-4.32
+					(e-int @1.32-1.34 (raw "30")))))
+		(s-decl @2.1-2.32
+			(p-ident @2.1-2.8 (raw "updated"))
+			(e-record @2.11-2.32
 				(ext
-					(e-ident @4.15-4.21 (raw "person")))
+					(e-ident @2.15-2.21 (raw "person")))
 				(field (field "age")
-					(e-int @4.28-4.30 (raw "31")))))))
+					(e-int @2.28-2.30 (raw "31")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -54,37 +47,31 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @3.1-3.7 (ident "person"))
-		(e-record @3.10-3.36
+		(p-assign @1.1-1.7 (ident "person"))
+		(e-record @1.10-1.36
 			(fields
 				(field (name "name")
-					(e-string @3.18-3.25
-						(e-literal @3.19-3.24 (string "Alice"))))
+					(e-string @1.18-1.25
+						(e-literal @1.19-1.24 (string "Alice"))))
 				(field (name "age")
-					(e-num @3.32-3.34 (value "30"))))))
+					(e-num @1.32-1.34 (value "30"))))))
 	(d-let
-		(p-assign @4.1-4.8 (ident "updated"))
-		(e-record @4.11-4.32
+		(p-assign @2.1-2.8 (ident "updated"))
+		(e-record @2.11-2.32
 			(ext
-				(e-lookup-local @4.15-4.21
-					(p-assign @3.1-3.7 (ident "person"))))
+				(e-lookup-local @2.15-2.21
+					(p-assign @1.1-1.7 (ident "person"))))
 			(fields
 				(field (name "age")
-					(e-num @4.28-4.30 (value "31"))))))
-	(s-nominal-decl @1.1-1.25
-		(ty-header @1.1-1.19 (name "RecordUpdaterBasic"))
-		(ty-record @1.23-1.25)))
+					(e-num @2.28-2.30 (value "31")))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.7 (type "{ age: Num(_size), name: Str }"))
-		(patt @4.1-4.8 (type "{ age: Num(_size), { age: Num(_size2), name: Str } }")))
-	(type_decls
-		(nominal @1.1-1.25 (type "RecordUpdaterBasic")
-			(ty-header @1.1-1.19 (name "RecordUpdaterBasic"))))
+		(patt @1.1-1.7 (type "{ age: Num(_size), name: Str }"))
+		(patt @2.1-2.8 (type "{ age: Num(_size), { age: Num(_size2), name: Str } }")))
 	(expressions
-		(expr @3.10-3.36 (type "{ age: Num(_size), name: Str }"))
-		(expr @4.11-4.32 (type "{ age: Num(_size), { age: Num(_size2), name: Str } }"))))
+		(expr @1.10-1.36 (type "{ age: Num(_size), name: Str }"))
+		(expr @2.11-2.32 (type "{ age: Num(_size), { age: Num(_size2), name: Str } }"))))
 ~~~

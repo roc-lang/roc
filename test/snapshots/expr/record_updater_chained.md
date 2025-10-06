@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Chained record updater expressions
-type=file:RecordUpdaterChained.roc
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-RecordUpdaterChained := {}
-
 person = { name: "Alice", age: 30, city: "Boston" }
 updated_one = { ..person, age: 31 }
 updated2 = { ..updated_one, city: "New York" }
@@ -18,58 +16,53 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:21),OpColonEqual(1:22-1:24),OpenCurly(1:25-1:26),CloseCurly(1:26-1:27),
-LowerIdent(3:1-3:7),OpAssign(3:8-3:9),OpenCurly(3:10-3:11),LowerIdent(3:12-3:16),OpColon(3:16-3:17),StringStart(3:18-3:19),StringPart(3:19-3:24),StringEnd(3:24-3:25),Comma(3:25-3:26),LowerIdent(3:27-3:30),OpColon(3:30-3:31),Int(3:32-3:34),Comma(3:34-3:35),LowerIdent(3:36-3:40),OpColon(3:40-3:41),StringStart(3:42-3:43),StringPart(3:43-3:49),StringEnd(3:49-3:50),CloseCurly(3:51-3:52),
-LowerIdent(4:1-4:12),OpAssign(4:13-4:14),OpenCurly(4:15-4:16),DoubleDot(4:17-4:19),LowerIdent(4:19-4:25),Comma(4:25-4:26),LowerIdent(4:27-4:30),OpColon(4:30-4:31),Int(4:32-4:34),CloseCurly(4:35-4:36),
-LowerIdent(5:1-5:9),OpAssign(5:10-5:11),OpenCurly(5:12-5:13),DoubleDot(5:14-5:16),LowerIdent(5:16-5:27),Comma(5:27-5:28),LowerIdent(5:29-5:33),OpColon(5:33-5:34),StringStart(5:35-5:36),StringPart(5:36-5:44),StringEnd(5:44-5:45),CloseCurly(5:46-5:47),
-LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpenCurly(6:9-6:10),DoubleDot(6:11-6:13),LowerIdent(6:13-6:21),Comma(6:21-6:22),LowerIdent(6:23-6:27),OpColon(6:27-6:28),StringStart(6:29-6:30),StringPart(6:30-6:41),StringEnd(6:41-6:42),Comma(6:42-6:43),LowerIdent(6:44-6:47),OpColon(6:47-6:48),Int(6:49-6:51),CloseCurly(6:52-6:53),
-EndOfFile(7:1-7:1),
+LowerIdent(1:1-1:7),OpAssign(1:8-1:9),OpenCurly(1:10-1:11),LowerIdent(1:12-1:16),OpColon(1:16-1:17),StringStart(1:18-1:19),StringPart(1:19-1:24),StringEnd(1:24-1:25),Comma(1:25-1:26),LowerIdent(1:27-1:30),OpColon(1:30-1:31),Int(1:32-1:34),Comma(1:34-1:35),LowerIdent(1:36-1:40),OpColon(1:40-1:41),StringStart(1:42-1:43),StringPart(1:43-1:49),StringEnd(1:49-1:50),CloseCurly(1:51-1:52),
+LowerIdent(2:1-2:12),OpAssign(2:13-2:14),OpenCurly(2:15-2:16),DoubleDot(2:17-2:19),LowerIdent(2:19-2:25),Comma(2:25-2:26),LowerIdent(2:27-2:30),OpColon(2:30-2:31),Int(2:32-2:34),CloseCurly(2:35-2:36),
+LowerIdent(3:1-3:9),OpAssign(3:10-3:11),OpenCurly(3:12-3:13),DoubleDot(3:14-3:16),LowerIdent(3:16-3:27),Comma(3:27-3:28),LowerIdent(3:29-3:33),OpColon(3:33-3:34),StringStart(3:35-3:36),StringPart(3:36-3:44),StringEnd(3:44-3:45),CloseCurly(3:46-3:47),
+LowerIdent(4:1-4:6),OpAssign(4:7-4:8),OpenCurly(4:9-4:10),DoubleDot(4:11-4:13),LowerIdent(4:13-4:21),Comma(4:21-4:22),LowerIdent(4:23-4:27),OpColon(4:27-4:28),StringStart(4:29-4:30),StringPart(4:30-4:41),StringEnd(4:41-4:42),Comma(4:42-4:43),LowerIdent(4:44-4:47),OpColon(4:47-4:48),Int(4:49-4:51),CloseCurly(4:52-4:53),
+EndOfFile(5:1-5:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-6.53
-	(type-module @1.1-1.21)
+(file @1.1-4.53
+	(type-module @1.1-1.7)
 	(statements
-		(s-type-decl @1.1-1.27
-			(header @1.1-1.21 (name "RecordUpdaterChained")
-				(args))
-			(ty-record @1.25-1.27))
-		(s-decl @3.1-3.52
-			(p-ident @3.1-3.7 (raw "person"))
-			(e-record @3.10-3.52
+		(s-decl @1.1-1.52
+			(p-ident @1.1-1.7 (raw "person"))
+			(e-record @1.10-1.52
 				(field (field "name")
-					(e-string @3.18-3.25
-						(e-string-part @3.19-3.24 (raw "Alice"))))
+					(e-string @1.18-1.25
+						(e-string-part @1.19-1.24 (raw "Alice"))))
 				(field (field "age")
-					(e-int @3.32-3.34 (raw "30")))
+					(e-int @1.32-1.34 (raw "30")))
 				(field (field "city")
-					(e-string @3.42-3.50
-						(e-string-part @3.43-3.49 (raw "Boston"))))))
-		(s-decl @4.1-4.36
-			(p-ident @4.1-4.12 (raw "updated_one"))
-			(e-record @4.15-4.36
+					(e-string @1.42-1.50
+						(e-string-part @1.43-1.49 (raw "Boston"))))))
+		(s-decl @2.1-2.36
+			(p-ident @2.1-2.12 (raw "updated_one"))
+			(e-record @2.15-2.36
 				(ext
-					(e-ident @4.19-4.25 (raw "person")))
+					(e-ident @2.19-2.25 (raw "person")))
 				(field (field "age")
-					(e-int @4.32-4.34 (raw "31")))))
-		(s-decl @5.1-5.47
-			(p-ident @5.1-5.9 (raw "updated2"))
-			(e-record @5.12-5.47
+					(e-int @2.32-2.34 (raw "31")))))
+		(s-decl @3.1-3.47
+			(p-ident @3.1-3.9 (raw "updated2"))
+			(e-record @3.12-3.47
 				(ext
-					(e-ident @5.16-5.27 (raw "updated_one")))
+					(e-ident @3.16-3.27 (raw "updated_one")))
 				(field (field "city")
-					(e-string @5.35-5.45
-						(e-string-part @5.36-5.44 (raw "New York"))))))
-		(s-decl @6.1-6.53
-			(p-ident @6.1-6.6 (raw "final"))
-			(e-record @6.9-6.53
+					(e-string @3.35-3.45
+						(e-string-part @3.36-3.44 (raw "New York"))))))
+		(s-decl @4.1-4.53
+			(p-ident @4.1-4.6 (raw "final"))
+			(e-record @4.9-4.53
 				(ext
-					(e-ident @6.13-6.21 (raw "updated2")))
+					(e-ident @4.13-4.21 (raw "updated2")))
 				(field (field "name")
-					(e-string @6.29-6.42
-						(e-string-part @6.30-6.41 (raw "Alice Smith"))))
+					(e-string @4.29-4.42
+						(e-string-part @4.30-4.41 (raw "Alice Smith"))))
 				(field (field "age")
-					(e-int @6.49-6.51 (raw "32")))))))
+					(e-int @4.49-4.51 (raw "32")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -79,66 +72,60 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @3.1-3.7 (ident "person"))
-		(e-record @3.10-3.52
+		(p-assign @1.1-1.7 (ident "person"))
+		(e-record @1.10-1.52
 			(fields
 				(field (name "name")
-					(e-string @3.18-3.25
-						(e-literal @3.19-3.24 (string "Alice"))))
+					(e-string @1.18-1.25
+						(e-literal @1.19-1.24 (string "Alice"))))
 				(field (name "age")
-					(e-num @3.32-3.34 (value "30")))
+					(e-num @1.32-1.34 (value "30")))
 				(field (name "city")
-					(e-string @3.42-3.50
-						(e-literal @3.43-3.49 (string "Boston")))))))
+					(e-string @1.42-1.50
+						(e-literal @1.43-1.49 (string "Boston")))))))
 	(d-let
-		(p-assign @4.1-4.12 (ident "updated_one"))
-		(e-record @4.15-4.36
+		(p-assign @2.1-2.12 (ident "updated_one"))
+		(e-record @2.15-2.36
 			(ext
-				(e-lookup-local @4.19-4.25
-					(p-assign @3.1-3.7 (ident "person"))))
+				(e-lookup-local @2.19-2.25
+					(p-assign @1.1-1.7 (ident "person"))))
 			(fields
 				(field (name "age")
-					(e-num @4.32-4.34 (value "31"))))))
+					(e-num @2.32-2.34 (value "31"))))))
 	(d-let
-		(p-assign @5.1-5.9 (ident "updated2"))
-		(e-record @5.12-5.47
+		(p-assign @3.1-3.9 (ident "updated2"))
+		(e-record @3.12-3.47
 			(ext
-				(e-lookup-local @5.16-5.27
-					(p-assign @4.1-4.12 (ident "updated_one"))))
+				(e-lookup-local @3.16-3.27
+					(p-assign @2.1-2.12 (ident "updated_one"))))
 			(fields
 				(field (name "city")
-					(e-string @5.35-5.45
-						(e-literal @5.36-5.44 (string "New York")))))))
+					(e-string @3.35-3.45
+						(e-literal @3.36-3.44 (string "New York")))))))
 	(d-let
-		(p-assign @6.1-6.6 (ident "final"))
-		(e-record @6.9-6.53
+		(p-assign @4.1-4.6 (ident "final"))
+		(e-record @4.9-4.53
 			(ext
-				(e-lookup-local @6.13-6.21
-					(p-assign @5.1-5.9 (ident "updated2"))))
+				(e-lookup-local @4.13-4.21
+					(p-assign @3.1-3.9 (ident "updated2"))))
 			(fields
 				(field (name "name")
-					(e-string @6.29-6.42
-						(e-literal @6.30-6.41 (string "Alice Smith"))))
+					(e-string @4.29-4.42
+						(e-literal @4.30-4.41 (string "Alice Smith"))))
 				(field (name "age")
-					(e-num @6.49-6.51 (value "32"))))))
-	(s-nominal-decl @1.1-1.27
-		(ty-header @1.1-1.21 (name "RecordUpdaterChained"))
-		(ty-record @1.25-1.27)))
+					(e-num @4.49-4.51 (value "32")))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.7 (type "{ age: Num(_size), city: Str, name: Str }"))
-		(patt @4.1-4.12 (type "{ age: Num(_size), { age: Num(_size2), city: Str, name: Str } }"))
-		(patt @5.1-5.9 (type "{ city: Str, age: Num(_size), { age: Num(_size2), city: Str, name: Str } }"))
-		(patt @6.1-6.6 (type "{ age: Num(_size), name: Str, city: Str, age: Num(_size2), { age: Num(_size3), city: Str, name: Str } }")))
-	(type_decls
-		(nominal @1.1-1.27 (type "RecordUpdaterChained")
-			(ty-header @1.1-1.21 (name "RecordUpdaterChained"))))
+		(patt @1.1-1.7 (type "{ age: Num(_size), city: Str, name: Str }"))
+		(patt @2.1-2.12 (type "{ age: Num(_size), { age: Num(_size2), city: Str, name: Str } }"))
+		(patt @3.1-3.9 (type "{ city: Str, age: Num(_size), { age: Num(_size2), city: Str, name: Str } }"))
+		(patt @4.1-4.6 (type "{ age: Num(_size), name: Str, city: Str, age: Num(_size2), { age: Num(_size3), city: Str, name: Str } }")))
 	(expressions
-		(expr @3.10-3.52 (type "{ age: Num(_size), city: Str, name: Str }"))
-		(expr @4.15-4.36 (type "{ age: Num(_size), { age: Num(_size2), city: Str, name: Str } }"))
-		(expr @5.12-5.47 (type "{ city: Str, age: Num(_size), { age: Num(_size2), city: Str, name: Str } }"))
-		(expr @6.9-6.53 (type "{ age: Num(_size), name: Str, city: Str, age: Num(_size2), { age: Num(_size3), city: Str, name: Str } }"))))
+		(expr @1.10-1.52 (type "{ age: Num(_size), city: Str, name: Str }"))
+		(expr @2.15-2.36 (type "{ age: Num(_size), { age: Num(_size2), city: Str, name: Str } }"))
+		(expr @3.12-3.47 (type "{ city: Str, age: Num(_size), { age: Num(_size2), city: Str, name: Str } }"))
+		(expr @4.9-4.53 (type "{ age: Num(_size), name: Str, city: Str, age: Num(_size2), { age: Num(_size3), city: Str, name: Str } }"))))
 ~~~

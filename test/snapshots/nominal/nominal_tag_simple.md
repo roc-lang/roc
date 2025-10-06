@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Example of a simple nominal tag union
-type=file:NominalTagSimple.roc
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-NominalTagSimple := {}
-
 Color := [Red, Green, Blue]
 
 blue : Color
@@ -16,11 +14,11 @@ yellow : Color
 yellow = Color.Yellow
 ~~~
 # EXPECTED
-INVALID NOMINAL TAG - nominal_tag_simple.md:9:10:9:22
+INVALID NOMINAL TAG - nominal_tag_simple.md:7:10:7:22
 # PROBLEMS
 **INVALID NOMINAL TAG**
 I'm having trouble with this nominal tag:
-**nominal_tag_simple.md:9:10:9:22:**
+**nominal_tag_simple.md:7:10:7:22:**
 ```roc
 yellow = Color.Yellow
 ```
@@ -34,41 +32,36 @@ But the nominal type needs it to one of:
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:17),OpColonEqual(1:18-1:20),OpenCurly(1:21-1:22),CloseCurly(1:22-1:23),
-UpperIdent(3:1-3:6),OpColonEqual(3:7-3:9),OpenSquare(3:10-3:11),UpperIdent(3:11-3:14),Comma(3:14-3:15),UpperIdent(3:16-3:21),Comma(3:21-3:22),UpperIdent(3:23-3:27),CloseSquare(3:27-3:28),
-LowerIdent(5:1-5:5),OpColon(5:6-5:7),UpperIdent(5:8-5:13),
-LowerIdent(6:1-6:5),OpAssign(6:6-6:7),UpperIdent(6:8-6:13),NoSpaceDotUpperIdent(6:13-6:18),
-LowerIdent(8:1-8:7),OpColon(8:8-8:9),UpperIdent(8:10-8:15),
-LowerIdent(9:1-9:7),OpAssign(9:8-9:9),UpperIdent(9:10-9:15),NoSpaceDotUpperIdent(9:15-9:22),
-EndOfFile(10:1-10:1),
+UpperIdent(1:1-1:6),OpColonEqual(1:7-1:9),OpenSquare(1:10-1:11),UpperIdent(1:11-1:14),Comma(1:14-1:15),UpperIdent(1:16-1:21),Comma(1:21-1:22),UpperIdent(1:23-1:27),CloseSquare(1:27-1:28),
+LowerIdent(3:1-3:5),OpColon(3:6-3:7),UpperIdent(3:8-3:13),
+LowerIdent(4:1-4:5),OpAssign(4:6-4:7),UpperIdent(4:8-4:13),NoSpaceDotUpperIdent(4:13-4:18),
+LowerIdent(6:1-6:7),OpColon(6:8-6:9),UpperIdent(6:10-6:15),
+LowerIdent(7:1-7:7),OpAssign(7:8-7:9),UpperIdent(7:10-7:15),NoSpaceDotUpperIdent(7:15-7:22),
+EndOfFile(8:1-8:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-9.22
-	(type-module @1.1-1.17)
+(file @1.1-7.22
+	(type-module @1.1-1.6)
 	(statements
-		(s-type-decl @1.1-1.23
-			(header @1.1-1.17 (name "NominalTagSimple")
+		(s-type-decl @1.1-1.28
+			(header @1.1-1.6 (name "Color")
 				(args))
-			(ty-record @1.21-1.23))
-		(s-type-decl @3.1-3.28
-			(header @3.1-3.6 (name "Color")
-				(args))
-			(ty-tag-union @3.10-3.28
+			(ty-tag-union @1.10-1.28
 				(tags
-					(ty @3.11-3.14 (name "Red"))
-					(ty @3.16-3.21 (name "Green"))
-					(ty @3.23-3.27 (name "Blue")))))
-		(s-type-anno @5.1-5.13 (name "blue")
-			(ty @5.8-5.13 (name "Color")))
-		(s-decl @6.1-6.18
-			(p-ident @6.1-6.5 (raw "blue"))
-			(e-tag @6.8-6.18 (raw "Color.Blue")))
-		(s-type-anno @8.1-8.15 (name "yellow")
-			(ty @8.10-8.15 (name "Color")))
-		(s-decl @9.1-9.22
-			(p-ident @9.1-9.7 (raw "yellow"))
-			(e-tag @9.10-9.22 (raw "Color.Yellow")))))
+					(ty @1.11-1.14 (name "Red"))
+					(ty @1.16-1.21 (name "Green"))
+					(ty @1.23-1.27 (name "Blue")))))
+		(s-type-anno @3.1-3.13 (name "blue")
+			(ty @3.8-3.13 (name "Color")))
+		(s-decl @4.1-4.18
+			(p-ident @4.1-4.5 (raw "blue"))
+			(e-tag @4.8-4.18 (raw "Color.Blue")))
+		(s-type-anno @6.1-6.15 (name "yellow")
+			(ty @6.10-6.15 (name "Color")))
+		(s-decl @7.1-7.22
+			(p-ident @7.1-7.7 (raw "yellow"))
+			(e-tag @7.10-7.22 (raw "Color.Yellow")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -78,41 +71,36 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @6.1-6.5 (ident "blue"))
-		(e-nominal @6.8-6.18 (nominal "Color")
-			(e-tag @6.8-6.18 (name "Blue")))
-		(annotation @6.1-6.5
+		(p-assign @4.1-4.5 (ident "blue"))
+		(e-nominal @4.8-4.18 (nominal "Color")
+			(e-tag @4.8-4.18 (name "Blue")))
+		(annotation @4.1-4.5
 			(declared-type
-				(ty-lookup @5.8-5.13 (name "Color") (local)))))
+				(ty-lookup @3.8-3.13 (name "Color") (local)))))
 	(d-let
-		(p-assign @9.1-9.7 (ident "yellow"))
-		(e-nominal @9.10-9.22 (nominal "Color")
-			(e-tag @9.10-9.22 (name "Yellow")))
-		(annotation @9.1-9.7
+		(p-assign @7.1-7.7 (ident "yellow"))
+		(e-nominal @7.10-7.22 (nominal "Color")
+			(e-tag @7.10-7.22 (name "Yellow")))
+		(annotation @7.1-7.7
 			(declared-type
-				(ty-lookup @8.10-8.15 (name "Color") (local)))))
-	(s-nominal-decl @1.1-1.23
-		(ty-header @1.1-1.17 (name "NominalTagSimple"))
-		(ty-record @1.21-1.23))
-	(s-nominal-decl @3.1-3.28
-		(ty-header @3.1-3.6 (name "Color"))
-		(ty-tag-union @3.10-3.28
-			(ty-tag-name @3.11-3.14 (name "Red"))
-			(ty-tag-name @3.16-3.21 (name "Green"))
-			(ty-tag-name @3.23-3.27 (name "Blue")))))
+				(ty-lookup @6.10-6.15 (name "Color") (local)))))
+	(s-nominal-decl @1.1-1.28
+		(ty-header @1.1-1.6 (name "Color"))
+		(ty-tag-union @1.10-1.28
+			(ty-tag-name @1.11-1.14 (name "Red"))
+			(ty-tag-name @1.16-1.21 (name "Green"))
+			(ty-tag-name @1.23-1.27 (name "Blue")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.5 (type "Color"))
-		(patt @9.1-9.7 (type "Error")))
+		(patt @4.1-4.5 (type "Color"))
+		(patt @7.1-7.7 (type "Error")))
 	(type_decls
-		(nominal @1.1-1.23 (type "NominalTagSimple")
-			(ty-header @1.1-1.17 (name "NominalTagSimple")))
-		(nominal @3.1-3.28 (type "Color")
-			(ty-header @3.1-3.6 (name "Color"))))
+		(nominal @1.1-1.28 (type "Color")
+			(ty-header @1.1-1.6 (name "Color"))))
 	(expressions
-		(expr @6.8-6.18 (type "Color"))
-		(expr @9.10-9.22 (type "Error"))))
+		(expr @4.8-4.18 (type "Color"))
+		(expr @7.10-7.22 (type "Error"))))
 ~~~

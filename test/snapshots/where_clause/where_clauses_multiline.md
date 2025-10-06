@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Where clause with multiline constraints
-type=file:WhereClausesMultiline.roc
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-WhereClausesMultiline := {}
-
 process : a, b -> c
 	where
 		module(a).convert : a -> c,
@@ -19,39 +17,34 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:22),OpColonEqual(1:23-1:25),OpenCurly(1:26-1:27),CloseCurly(1:27-1:28),
-LowerIdent(3:1-3:8),OpColon(3:9-3:10),LowerIdent(3:11-3:12),Comma(3:12-3:13),LowerIdent(3:14-3:15),OpArrow(3:16-3:18),LowerIdent(3:19-3:20),
-KwWhere(4:2-4:7),
-KwModule(5:3-5:9),NoSpaceOpenRound(5:9-5:10),LowerIdent(5:10-5:11),CloseRound(5:11-5:12),NoSpaceDotLowerIdent(5:12-5:20),OpColon(5:21-5:22),LowerIdent(5:23-5:24),OpArrow(5:25-5:27),LowerIdent(5:28-5:29),Comma(5:29-5:30),
-KwModule(6:3-6:9),NoSpaceOpenRound(6:9-6:10),LowerIdent(6:10-6:11),CloseRound(6:11-6:12),NoSpaceDotLowerIdent(6:12-6:22),OpColon(6:23-6:24),LowerIdent(6:25-6:26),OpArrow(6:27-6:29),LowerIdent(6:30-6:31),
-LowerIdent(7:1-7:8),OpAssign(7:9-7:10),TripleDot(7:11-7:14),
-EndOfFile(8:1-8:1),
+LowerIdent(1:1-1:8),OpColon(1:9-1:10),LowerIdent(1:11-1:12),Comma(1:12-1:13),LowerIdent(1:14-1:15),OpArrow(1:16-1:18),LowerIdent(1:19-1:20),
+KwWhere(2:2-2:7),
+KwModule(3:3-3:9),NoSpaceOpenRound(3:9-3:10),LowerIdent(3:10-3:11),CloseRound(3:11-3:12),NoSpaceDotLowerIdent(3:12-3:20),OpColon(3:21-3:22),LowerIdent(3:23-3:24),OpArrow(3:25-3:27),LowerIdent(3:28-3:29),Comma(3:29-3:30),
+KwModule(4:3-4:9),NoSpaceOpenRound(4:9-4:10),LowerIdent(4:10-4:11),CloseRound(4:11-4:12),NoSpaceDotLowerIdent(4:12-4:22),OpColon(4:23-4:24),LowerIdent(4:25-4:26),OpArrow(4:27-4:29),LowerIdent(4:30-4:31),
+LowerIdent(5:1-5:8),OpAssign(5:9-5:10),TripleDot(5:11-5:14),
+EndOfFile(6:1-6:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-7.14
-	(type-module @1.1-1.22)
+(file @1.1-5.14
+	(type-module @1.1-1.8)
 	(statements
-		(s-type-decl @1.1-1.28
-			(header @1.1-1.22 (name "WhereClausesMultiline")
-				(args))
-			(ty-record @1.26-1.28))
-		(s-type-anno @3.1-6.31 (name "process")
-			(ty-fn @3.11-3.20
-				(ty-var @3.11-3.12 (raw "a"))
-				(ty-var @3.14-3.15 (raw "b"))
-				(ty-var @3.19-3.20 (raw "c")))
+		(s-type-anno @1.1-4.31 (name "process")
+			(ty-fn @1.11-1.20
+				(ty-var @1.11-1.12 (raw "a"))
+				(ty-var @1.14-1.15 (raw "b"))
+				(ty-var @1.19-1.20 (raw "c")))
 			(where
-				(method @5.3-5.29 (module-of "a") (name "convert")
+				(method @3.3-3.29 (module-of "a") (name "convert")
 					(args
-						(ty-var @5.23-5.24 (raw "a")))
-					(ty-var @5.28-5.29 (raw "c")))
-				(method @6.3-6.31 (module-of "b") (name "transform")
+						(ty-var @3.23-3.24 (raw "a")))
+					(ty-var @3.28-3.29 (raw "c")))
+				(method @4.3-4.31 (module-of "b") (name "transform")
 					(args
-						(ty-var @6.25-6.26 (raw "b")))
-					(ty-var @6.30-6.31 (raw "c")))))
-		(s-decl @7.1-7.14
-			(p-ident @7.1-7.8 (raw "process"))
+						(ty-var @4.25-4.26 (raw "b")))
+					(ty-var @4.30-4.31 (raw "c")))))
+		(s-decl @5.1-5.14
+			(p-ident @5.1-5.8 (raw "process"))
 			(e-ellipsis))))
 ~~~
 # FORMATTED
@@ -62,42 +55,36 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @7.1-7.8 (ident "process"))
+		(p-assign @5.1-5.8 (ident "process"))
 		(e-not-implemented @1.1-1.1)
-		(annotation @7.1-7.8
+		(annotation @5.1-5.8
 			(declared-type
-				(ty-fn @3.11-3.20 (effectful false)
-					(ty-rigid-var @3.11-3.12 (name "a"))
-					(ty-rigid-var @3.14-3.15 (name "b"))
-					(ty-rigid-var @3.19-3.20 (name "c"))))))
-	(s-nominal-decl @1.1-1.28
-		(ty-header @1.1-1.22 (name "WhereClausesMultiline"))
-		(ty-record @1.26-1.28))
-	(s-type-anno @3.1-6.31 (name "process")
-		(ty-fn @3.11-3.20 (effectful false)
-			(ty-rigid-var @3.11-3.12 (name "a"))
-			(ty-rigid-var @3.14-3.15 (name "b"))
-			(ty-rigid-var @3.19-3.20 (name "c")))
+				(ty-fn @1.11-1.20 (effectful false)
+					(ty-rigid-var @1.11-1.12 (name "a"))
+					(ty-rigid-var @1.14-1.15 (name "b"))
+					(ty-rigid-var @1.19-1.20 (name "c"))))))
+	(s-type-anno @1.1-4.31 (name "process")
+		(ty-fn @1.11-1.20 (effectful false)
+			(ty-rigid-var @1.11-1.12 (name "a"))
+			(ty-rigid-var @1.14-1.15 (name "b"))
+			(ty-rigid-var @1.19-1.20 (name "c")))
 		(where
-			(method @5.3-5.29 (module-of "a") (ident "convert")
+			(method @3.3-3.29 (module-of "a") (ident "convert")
 				(args
-					(ty-rigid-var-lookup (ty-rigid-var @3.11-3.12 (name "a"))))
-				(ty-rigid-var-lookup (ty-rigid-var @3.19-3.20 (name "c"))))
-			(method @6.3-6.31 (module-of "b") (ident "transform")
+					(ty-rigid-var-lookup (ty-rigid-var @1.11-1.12 (name "a"))))
+				(ty-rigid-var-lookup (ty-rigid-var @1.19-1.20 (name "c"))))
+			(method @4.3-4.31 (module-of "b") (ident "transform")
 				(args
-					(ty-rigid-var-lookup (ty-rigid-var @3.14-3.15 (name "b"))))
-				(ty-rigid-var-lookup (ty-rigid-var @3.19-3.20 (name "c"))))))
-	(ext-decl @5.3-5.29 (ident "module(a).convert") (kind "value"))
-	(ext-decl @6.3-6.31 (ident "module(b).transform") (kind "value")))
+					(ty-rigid-var-lookup (ty-rigid-var @1.14-1.15 (name "b"))))
+				(ty-rigid-var-lookup (ty-rigid-var @1.19-1.20 (name "c"))))))
+	(ext-decl @3.3-3.29 (ident "module(a).convert") (kind "value"))
+	(ext-decl @4.3-4.31 (ident "module(b).transform") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @7.1-7.8 (type "a, b -> c")))
-	(type_decls
-		(nominal @1.1-1.28 (type "WhereClausesMultiline")
-			(ty-header @1.1-1.22 (name "WhereClausesMultiline"))))
+		(patt @5.1-5.8 (type "a, b -> c")))
 	(expressions
 		(expr @1.1-1.1 (type "a, b -> c"))))
 ~~~

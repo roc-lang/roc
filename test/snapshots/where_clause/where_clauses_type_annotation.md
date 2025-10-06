@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Simple type annotation with where clause
-type=file:WhereClausesTypeAnnotation.roc
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-WhereClausesTypeAnnotation := {}
-
 convert : a -> b where module(a).to_b : a -> b
 convert = |a| a.to_b()
 ~~~
@@ -16,38 +14,33 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:27),OpColonEqual(1:28-1:30),OpenCurly(1:31-1:32),CloseCurly(1:32-1:33),
-LowerIdent(3:1-3:8),OpColon(3:9-3:10),LowerIdent(3:11-3:12),OpArrow(3:13-3:15),LowerIdent(3:16-3:17),KwWhere(3:18-3:23),KwModule(3:24-3:30),NoSpaceOpenRound(3:30-3:31),LowerIdent(3:31-3:32),CloseRound(3:32-3:33),NoSpaceDotLowerIdent(3:33-3:38),OpColon(3:39-3:40),LowerIdent(3:41-3:42),OpArrow(3:43-3:45),LowerIdent(3:46-3:47),
-LowerIdent(4:1-4:8),OpAssign(4:9-4:10),OpBar(4:11-4:12),LowerIdent(4:12-4:13),OpBar(4:13-4:14),LowerIdent(4:15-4:16),NoSpaceDotLowerIdent(4:16-4:21),NoSpaceOpenRound(4:21-4:22),CloseRound(4:22-4:23),
-EndOfFile(5:1-5:1),
+LowerIdent(1:1-1:8),OpColon(1:9-1:10),LowerIdent(1:11-1:12),OpArrow(1:13-1:15),LowerIdent(1:16-1:17),KwWhere(1:18-1:23),KwModule(1:24-1:30),NoSpaceOpenRound(1:30-1:31),LowerIdent(1:31-1:32),CloseRound(1:32-1:33),NoSpaceDotLowerIdent(1:33-1:38),OpColon(1:39-1:40),LowerIdent(1:41-1:42),OpArrow(1:43-1:45),LowerIdent(1:46-1:47),
+LowerIdent(2:1-2:8),OpAssign(2:9-2:10),OpBar(2:11-2:12),LowerIdent(2:12-2:13),OpBar(2:13-2:14),LowerIdent(2:15-2:16),NoSpaceDotLowerIdent(2:16-2:21),NoSpaceOpenRound(2:21-2:22),CloseRound(2:22-2:23),
+EndOfFile(3:1-3:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-4.23
-	(type-module @1.1-1.27)
+(file @1.1-2.23
+	(type-module @1.1-1.8)
 	(statements
-		(s-type-decl @1.1-1.33
-			(header @1.1-1.27 (name "WhereClausesTypeAnnotation")
-				(args))
-			(ty-record @1.31-1.33))
-		(s-type-anno @3.1-3.47 (name "convert")
-			(ty-fn @3.11-3.17
-				(ty-var @3.11-3.12 (raw "a"))
-				(ty-var @3.16-3.17 (raw "b")))
+		(s-type-anno @1.1-1.47 (name "convert")
+			(ty-fn @1.11-1.17
+				(ty-var @1.11-1.12 (raw "a"))
+				(ty-var @1.16-1.17 (raw "b")))
 			(where
-				(method @3.24-3.47 (module-of "a") (name "to_b")
+				(method @1.24-1.47 (module-of "a") (name "to_b")
 					(args
-						(ty-var @3.41-3.42 (raw "a")))
-					(ty-var @3.46-3.47 (raw "b")))))
-		(s-decl @4.1-4.23
-			(p-ident @4.1-4.8 (raw "convert"))
-			(e-lambda @4.11-4.23
+						(ty-var @1.41-1.42 (raw "a")))
+					(ty-var @1.46-1.47 (raw "b")))))
+		(s-decl @2.1-2.23
+			(p-ident @2.1-2.8 (raw "convert"))
+			(e-lambda @2.11-2.23
 				(args
-					(p-ident @4.12-4.13 (raw "a")))
-				(e-field-access @4.15-4.23
-					(e-ident @4.15-4.16 (raw "a"))
-					(e-apply @4.16-4.23
-						(e-ident @4.16-4.21 (raw "to_b"))))))))
+					(p-ident @2.12-2.13 (raw "a")))
+				(e-field-access @2.15-2.23
+					(e-ident @2.15-2.16 (raw "a"))
+					(e-apply @2.16-2.23
+						(e-ident @2.16-2.21 (raw "to_b"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -57,42 +50,36 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @4.1-4.8 (ident "convert"))
-		(e-lambda @4.11-4.23
+		(p-assign @2.1-2.8 (ident "convert"))
+		(e-lambda @2.11-2.23
 			(args
-				(p-assign @4.12-4.13 (ident "a")))
-			(e-dot-access @4.15-4.23 (field "to_b")
+				(p-assign @2.12-2.13 (ident "a")))
+			(e-dot-access @2.15-2.23 (field "to_b")
 				(receiver
-					(e-lookup-local @4.15-4.16
-						(p-assign @4.12-4.13 (ident "a"))))
+					(e-lookup-local @2.15-2.16
+						(p-assign @2.12-2.13 (ident "a"))))
 				(args)))
-		(annotation @4.1-4.8
+		(annotation @2.1-2.8
 			(declared-type
-				(ty-fn @3.11-3.17 (effectful false)
-					(ty-rigid-var @3.11-3.12 (name "a"))
-					(ty-rigid-var @3.16-3.17 (name "b"))))))
-	(s-nominal-decl @1.1-1.33
-		(ty-header @1.1-1.27 (name "WhereClausesTypeAnnotation"))
-		(ty-record @1.31-1.33))
-	(s-type-anno @3.1-3.47 (name "convert")
-		(ty-fn @3.11-3.17 (effectful false)
-			(ty-rigid-var @3.11-3.12 (name "a"))
-			(ty-rigid-var @3.16-3.17 (name "b")))
+				(ty-fn @1.11-1.17 (effectful false)
+					(ty-rigid-var @1.11-1.12 (name "a"))
+					(ty-rigid-var @1.16-1.17 (name "b"))))))
+	(s-type-anno @1.1-1.47 (name "convert")
+		(ty-fn @1.11-1.17 (effectful false)
+			(ty-rigid-var @1.11-1.12 (name "a"))
+			(ty-rigid-var @1.16-1.17 (name "b")))
 		(where
-			(method @3.24-3.47 (module-of "a") (ident "to_b")
+			(method @1.24-1.47 (module-of "a") (ident "to_b")
 				(args
-					(ty-rigid-var-lookup (ty-rigid-var @3.11-3.12 (name "a"))))
-				(ty-rigid-var-lookup (ty-rigid-var @3.16-3.17 (name "b"))))))
-	(ext-decl @3.24-3.47 (ident "module(a).to_b") (kind "value")))
+					(ty-rigid-var-lookup (ty-rigid-var @1.11-1.12 (name "a"))))
+				(ty-rigid-var-lookup (ty-rigid-var @1.16-1.17 (name "b"))))))
+	(ext-decl @1.24-1.47 (ident "module(a).to_b") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.8 (type "a -> b")))
-	(type_decls
-		(nominal @1.1-1.33 (type "WhereClausesTypeAnnotation")
-			(ty-header @1.1-1.27 (name "WhereClausesTypeAnnotation"))))
+		(patt @2.1-2.8 (type "a -> b")))
 	(expressions
-		(expr @4.11-4.23 (type "a -> b"))))
+		(expr @2.11-2.23 (type "a -> b"))))
 ~~~

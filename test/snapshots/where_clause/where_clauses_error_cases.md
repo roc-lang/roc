@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Error cases for where clauses
-type=file:WhereClausesErrorCases.roc
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-WhereClausesErrorCases := {}
-
 # Missing colon in constraint
 broken_fn1 : a -> b
   where
@@ -22,18 +20,18 @@ broken_fn3 : a -> b
     module(c).method : c -> d
 ~~~
 # EXPECTED
-WHERE CLAUSE ERROR - where_clauses_error_cases.md:6:5:6:11
-PARSE ERROR - where_clauses_error_cases.md:6:25:6:26
-WHERE CLAUSE ERROR - where_clauses_error_cases.md:10:3:10:8
-MALFORMED WHERE CLAUSE - where_clauses_error_cases.md:6:5:6:24
-MALFORMED WHERE CLAUSE - where_clauses_error_cases.md:10:3:10:8
+WHERE CLAUSE ERROR - where_clauses_error_cases.md:4:5:4:11
+PARSE ERROR - where_clauses_error_cases.md:4:25:4:26
+WHERE CLAUSE ERROR - where_clauses_error_cases.md:8:3:8:8
+MALFORMED WHERE CLAUSE - where_clauses_error_cases.md:4:5:4:24
+MALFORMED WHERE CLAUSE - where_clauses_error_cases.md:8:3:8:8
 # PROBLEMS
 **WHERE CLAUSE ERROR**
 Expected a colon **:** after the method name in this where clause constraint.
 Method constraints require a colon to separate the method name from its type.
 For example:     module(a).method : a -> b
 
-**where_clauses_error_cases.md:6:5:6:11:**
+**where_clauses_error_cases.md:4:5:4:11:**
 ```roc
     module(a).method -> b
 ```
@@ -44,7 +42,7 @@ For example:     module(a).method : a -> b
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**where_clauses_error_cases.md:6:25:6:26:**
+**where_clauses_error_cases.md:4:25:4:26:**
 ```roc
     module(a).method -> b
 ```
@@ -57,7 +55,7 @@ Where clauses must contain at least one constraint.
 For example:
         module(a).method : a -> b
 
-**where_clauses_error_cases.md:10:3:10:8:**
+**where_clauses_error_cases.md:8:3:8:8:**
 ```roc
   where
 ```
@@ -67,7 +65,7 @@ For example:
 **MALFORMED WHERE CLAUSE**
 This where clause could not be parsed correctly.
 
-**where_clauses_error_cases.md:6:5:6:24:**
+**where_clauses_error_cases.md:4:5:4:24:**
 ```roc
     module(a).method -> b
 ```
@@ -78,7 +76,7 @@ Check the syntax of your where clause.
 **MALFORMED WHERE CLAUSE**
 This where clause could not be parsed correctly.
 
-**where_clauses_error_cases.md:10:3:10:8:**
+**where_clauses_error_cases.md:8:3:8:8:**
 ```roc
   where
 ```
@@ -88,53 +86,47 @@ Check the syntax of your where clause.
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:23),OpColonEqual(1:24-1:26),OpenCurly(1:27-1:28),CloseCurly(1:28-1:29),
-LowerIdent(4:1-4:11),OpColon(4:12-4:13),LowerIdent(4:14-4:15),OpArrow(4:16-4:18),LowerIdent(4:19-4:20),
-KwWhere(5:3-5:8),
-KwModule(6:5-6:11),NoSpaceOpenRound(6:11-6:12),LowerIdent(6:12-6:13),CloseRound(6:13-6:14),NoSpaceDotLowerIdent(6:14-6:21),OpArrow(6:22-6:24),LowerIdent(6:25-6:26),
-LowerIdent(9:1-9:11),OpColon(9:12-9:13),LowerIdent(9:14-9:15),OpArrow(9:16-9:18),LowerIdent(9:19-9:20),
-KwWhere(10:3-10:8),
-LowerIdent(13:1-13:11),OpColon(13:12-13:13),LowerIdent(13:14-13:15),OpArrow(13:16-13:18),LowerIdent(13:19-13:20),
-KwWhere(14:3-14:8),
-KwModule(15:5-15:11),NoSpaceOpenRound(15:11-15:12),LowerIdent(15:12-15:13),CloseRound(15:13-15:14),NoSpaceDotLowerIdent(15:14-15:21),OpColon(15:22-15:23),LowerIdent(15:24-15:25),OpArrow(15:26-15:28),LowerIdent(15:29-15:30),
-EndOfFile(16:1-16:1),
+LowerIdent(2:1-2:11),OpColon(2:12-2:13),LowerIdent(2:14-2:15),OpArrow(2:16-2:18),LowerIdent(2:19-2:20),
+KwWhere(3:3-3:8),
+KwModule(4:5-4:11),NoSpaceOpenRound(4:11-4:12),LowerIdent(4:12-4:13),CloseRound(4:13-4:14),NoSpaceDotLowerIdent(4:14-4:21),OpArrow(4:22-4:24),LowerIdent(4:25-4:26),
+LowerIdent(7:1-7:11),OpColon(7:12-7:13),LowerIdent(7:14-7:15),OpArrow(7:16-7:18),LowerIdent(7:19-7:20),
+KwWhere(8:3-8:8),
+LowerIdent(11:1-11:11),OpColon(11:12-11:13),LowerIdent(11:14-11:15),OpArrow(11:16-11:18),LowerIdent(11:19-11:20),
+KwWhere(12:3-12:8),
+KwModule(13:5-13:11),NoSpaceOpenRound(13:11-13:12),LowerIdent(13:12-13:13),CloseRound(13:13-13:14),NoSpaceDotLowerIdent(13:14-13:21),OpColon(13:22-13:23),LowerIdent(13:24-13:25),OpArrow(13:26-13:28),LowerIdent(13:29-13:30),
+EndOfFile(14:1-14:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-15.30
-	(type-module @1.1-1.23)
+(file @2.1-13.30
+	(type-module @2.1-2.11)
 	(statements
-		(s-type-decl @1.1-1.29
-			(header @1.1-1.23 (name "WhereClausesErrorCases")
-				(args))
-			(ty-record @1.27-1.29))
-		(s-type-anno @4.1-6.24 (name "broken_fn1")
-			(ty-fn @4.14-4.20
-				(ty-var @4.14-4.15 (raw "a"))
-				(ty-var @4.19-4.20 (raw "b")))
+		(s-type-anno @2.1-4.24 (name "broken_fn1")
+			(ty-fn @2.14-2.20
+				(ty-var @2.14-2.15 (raw "a"))
+				(ty-var @2.19-2.20 (raw "b")))
 			(where
-				(malformed @6.5-6.24 (reason "where_expected_colon"))))
-		(s-malformed @6.25-6.26 (tag "statement_unexpected_token"))
-		(s-type-anno @9.1-10.8 (name "broken_fn2")
-			(ty-fn @9.14-9.20
-				(ty-var @9.14-9.15 (raw "a"))
-				(ty-var @9.19-9.20 (raw "b")))
+				(malformed @4.5-4.24 (reason "where_expected_colon"))))
+		(s-malformed @4.25-4.26 (tag "statement_unexpected_token"))
+		(s-type-anno @7.1-8.8 (name "broken_fn2")
+			(ty-fn @7.14-7.20
+				(ty-var @7.14-7.15 (raw "a"))
+				(ty-var @7.19-7.20 (raw "b")))
 			(where
-				(malformed @10.3-10.8 (reason "where_expected_constraints"))))
-		(s-type-anno @13.1-15.30 (name "broken_fn3")
-			(ty-fn @13.14-13.20
-				(ty-var @13.14-13.15 (raw "a"))
-				(ty-var @13.19-13.20 (raw "b")))
+				(malformed @8.3-8.8 (reason "where_expected_constraints"))))
+		(s-type-anno @11.1-13.30 (name "broken_fn3")
+			(ty-fn @11.14-11.20
+				(ty-var @11.14-11.15 (raw "a"))
+				(ty-var @11.19-11.20 (raw "b")))
 			(where
-				(method @15.5-15.30 (module-of "c") (name "method")
+				(method @13.5-13.30 (module-of "c") (name "method")
 					(args
-						(ty-var @15.24-15.25 (raw "c")))
-					(ty-var @15.29-15.30 (raw "d")))))))
+						(ty-var @13.24-13.25 (raw "c")))
+					(ty-var @13.29-13.30 (raw "d")))))))
 ~~~
 # FORMATTED
 ~~~roc
-WhereClausesErrorCases := {}
-
+# Missing colon in constraint
 # Missing colon in constraint
 broken_fn1 : a -> b
 	where
@@ -152,38 +144,32 @@ broken_fn3 : a -> b
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-nominal-decl @1.1-1.29
-		(ty-header @1.1-1.23 (name "WhereClausesErrorCases"))
-		(ty-record @1.27-1.29))
-	(s-type-anno @4.1-6.24 (name "broken_fn1")
-		(ty-fn @4.14-4.20 (effectful false)
-			(ty-rigid-var @4.14-4.15 (name "a"))
-			(ty-rigid-var @4.19-4.20 (name "b")))
+	(s-type-anno @2.1-4.24 (name "broken_fn1")
+		(ty-fn @2.14-2.20 (effectful false)
+			(ty-rigid-var @2.14-2.15 (name "a"))
+			(ty-rigid-var @2.19-2.20 (name "b")))
 		(where
-			(malformed @6.5-6.24)))
-	(s-type-anno @9.1-10.8 (name "broken_fn2")
-		(ty-fn @9.14-9.20 (effectful false)
-			(ty-rigid-var @9.14-9.15 (name "a"))
-			(ty-rigid-var @9.19-9.20 (name "b")))
+			(malformed @4.5-4.24)))
+	(s-type-anno @7.1-8.8 (name "broken_fn2")
+		(ty-fn @7.14-7.20 (effectful false)
+			(ty-rigid-var @7.14-7.15 (name "a"))
+			(ty-rigid-var @7.19-7.20 (name "b")))
 		(where
-			(malformed @10.3-10.8)))
-	(s-type-anno @13.1-15.30 (name "broken_fn3")
-		(ty-fn @13.14-13.20 (effectful false)
-			(ty-rigid-var @13.14-13.15 (name "a"))
-			(ty-rigid-var @13.19-13.20 (name "b")))
+			(malformed @8.3-8.8)))
+	(s-type-anno @11.1-13.30 (name "broken_fn3")
+		(ty-fn @11.14-11.20 (effectful false)
+			(ty-rigid-var @11.14-11.15 (name "a"))
+			(ty-rigid-var @11.19-11.20 (name "b")))
 		(where
-			(method @15.5-15.30 (module-of "c") (ident "method")
+			(method @13.5-13.30 (module-of "c") (ident "method")
 				(args
-					(ty-rigid-var @15.24-15.25 (name "c")))
-				(ty-rigid-var @15.29-15.30 (name "d")))))
-	(ext-decl @15.5-15.30 (ident "module(c).method") (kind "value")))
+					(ty-rigid-var @13.24-13.25 (name "c")))
+				(ty-rigid-var @13.29-13.30 (name "d")))))
+	(ext-decl @13.5-13.30 (ident "module(c).method") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
-	(type_decls
-		(nominal @1.1-1.29 (type "WhereClausesErrorCases")
-			(ty-header @1.1-1.23 (name "WhereClausesErrorCases"))))
 	(expressions))
 ~~~

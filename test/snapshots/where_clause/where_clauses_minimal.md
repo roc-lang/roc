@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Minimal where clause test
-type=file:WhereClausesMinimal.roc
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-WhereClausesMinimal := {}
-
 convert_me : a -> b
 	where
 		module(a).convert : a -> b
@@ -18,33 +16,28 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:20),OpColonEqual(1:21-1:23),OpenCurly(1:24-1:25),CloseCurly(1:25-1:26),
-LowerIdent(3:1-3:11),OpColon(3:12-3:13),LowerIdent(3:14-3:15),OpArrow(3:16-3:18),LowerIdent(3:19-3:20),
-KwWhere(4:2-4:7),
-KwModule(5:3-5:9),NoSpaceOpenRound(5:9-5:10),LowerIdent(5:10-5:11),CloseRound(5:11-5:12),NoSpaceDotLowerIdent(5:12-5:20),OpColon(5:21-5:22),LowerIdent(5:23-5:24),OpArrow(5:25-5:27),LowerIdent(5:28-5:29),
-LowerIdent(6:1-6:11),OpAssign(6:12-6:13),TripleDot(6:14-6:17),
-EndOfFile(7:1-7:1),
+LowerIdent(1:1-1:11),OpColon(1:12-1:13),LowerIdent(1:14-1:15),OpArrow(1:16-1:18),LowerIdent(1:19-1:20),
+KwWhere(2:2-2:7),
+KwModule(3:3-3:9),NoSpaceOpenRound(3:9-3:10),LowerIdent(3:10-3:11),CloseRound(3:11-3:12),NoSpaceDotLowerIdent(3:12-3:20),OpColon(3:21-3:22),LowerIdent(3:23-3:24),OpArrow(3:25-3:27),LowerIdent(3:28-3:29),
+LowerIdent(4:1-4:11),OpAssign(4:12-4:13),TripleDot(4:14-4:17),
+EndOfFile(5:1-5:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-6.17
-	(type-module @1.1-1.20)
+(file @1.1-4.17
+	(type-module @1.1-1.11)
 	(statements
-		(s-type-decl @1.1-1.26
-			(header @1.1-1.20 (name "WhereClausesMinimal")
-				(args))
-			(ty-record @1.24-1.26))
-		(s-type-anno @3.1-5.29 (name "convert_me")
-			(ty-fn @3.14-3.20
-				(ty-var @3.14-3.15 (raw "a"))
-				(ty-var @3.19-3.20 (raw "b")))
+		(s-type-anno @1.1-3.29 (name "convert_me")
+			(ty-fn @1.14-1.20
+				(ty-var @1.14-1.15 (raw "a"))
+				(ty-var @1.19-1.20 (raw "b")))
 			(where
-				(method @5.3-5.29 (module-of "a") (name "convert")
+				(method @3.3-3.29 (module-of "a") (name "convert")
 					(args
-						(ty-var @5.23-5.24 (raw "a")))
-					(ty-var @5.28-5.29 (raw "b")))))
-		(s-decl @6.1-6.17
-			(p-ident @6.1-6.11 (raw "convert_me"))
+						(ty-var @3.23-3.24 (raw "a")))
+					(ty-var @3.28-3.29 (raw "b")))))
+		(s-decl @4.1-4.17
+			(p-ident @4.1-4.11 (raw "convert_me"))
 			(e-ellipsis))))
 ~~~
 # FORMATTED
@@ -55,35 +48,29 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @6.1-6.11 (ident "convert_me"))
+		(p-assign @4.1-4.11 (ident "convert_me"))
 		(e-not-implemented @1.1-1.1)
-		(annotation @6.1-6.11
+		(annotation @4.1-4.11
 			(declared-type
-				(ty-fn @3.14-3.20 (effectful false)
-					(ty-rigid-var @3.14-3.15 (name "a"))
-					(ty-rigid-var @3.19-3.20 (name "b"))))))
-	(s-nominal-decl @1.1-1.26
-		(ty-header @1.1-1.20 (name "WhereClausesMinimal"))
-		(ty-record @1.24-1.26))
-	(s-type-anno @3.1-5.29 (name "convert_me")
-		(ty-fn @3.14-3.20 (effectful false)
-			(ty-rigid-var @3.14-3.15 (name "a"))
-			(ty-rigid-var @3.19-3.20 (name "b")))
+				(ty-fn @1.14-1.20 (effectful false)
+					(ty-rigid-var @1.14-1.15 (name "a"))
+					(ty-rigid-var @1.19-1.20 (name "b"))))))
+	(s-type-anno @1.1-3.29 (name "convert_me")
+		(ty-fn @1.14-1.20 (effectful false)
+			(ty-rigid-var @1.14-1.15 (name "a"))
+			(ty-rigid-var @1.19-1.20 (name "b")))
 		(where
-			(method @5.3-5.29 (module-of "a") (ident "convert")
+			(method @3.3-3.29 (module-of "a") (ident "convert")
 				(args
-					(ty-rigid-var-lookup (ty-rigid-var @3.14-3.15 (name "a"))))
-				(ty-rigid-var-lookup (ty-rigid-var @3.19-3.20 (name "b"))))))
-	(ext-decl @5.3-5.29 (ident "module(a).convert") (kind "value")))
+					(ty-rigid-var-lookup (ty-rigid-var @1.14-1.15 (name "a"))))
+				(ty-rigid-var-lookup (ty-rigid-var @1.19-1.20 (name "b"))))))
+	(ext-decl @3.3-3.29 (ident "module(a).convert") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.11 (type "a -> b")))
-	(type_decls
-		(nominal @1.1-1.26 (type "WhereClausesMinimal")
-			(ty-header @1.1-1.20 (name "WhereClausesMinimal"))))
+		(patt @4.1-4.11 (type "a -> b")))
 	(expressions
 		(expr @1.1-1.1 (type "a -> b"))))
 ~~~
