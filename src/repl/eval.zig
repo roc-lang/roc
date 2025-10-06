@@ -369,10 +369,11 @@ pub const Repl = struct {
         };
 
         // Create canonicalizer
-        var czer = Can.init(cir, &parse_ast, null, .repl) catch |err| {
+        var czer = Can.init(cir, &parse_ast, null) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err});
         };
         defer czer.deinit();
+        // Note: REPL expressions don't need validation (no module structure to validate)
 
         // Since we're always parsing as expressions now, handle them the same way
         const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);

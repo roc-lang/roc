@@ -511,8 +511,9 @@ pub const PackageEnv = struct {
 
         // canonicalize using the AST
         const canon_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        var czer = try Can.init(&env, &parse_ast, null, .executing);
+        var czer = try Can.init(&env, &parse_ast, null);
         try czer.canonicalizeFile();
+        try czer.validateForExecution();
         czer.deinit();
         const canon_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         if (@import("builtin").target.cpu.arch != .wasm32) {

@@ -203,7 +203,7 @@ test "Repl - minimal interpreter integration" {
     };
 
     // Step 4: Canonicalize
-    var can = try Canon.init(cir, &parse_ast, null, .repl);
+    var can = try Canon.init(cir, &parse_ast, null);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);

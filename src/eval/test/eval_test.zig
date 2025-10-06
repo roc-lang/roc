@@ -705,7 +705,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     };
 
     // Create canonicalizer
-    var czer = try Can.init(&original_env, &parse_ast, null, .checking);
+    var czer = try Can.init(&original_env, &parse_ast, null);
     defer czer.deinit();
 
     // Canonicalize the expression

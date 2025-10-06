@@ -26,8 +26,8 @@ PARSE ERROR - fuzz_crash_002.md:1:20:1:21
 PARSE ERROR - fuzz_crash_002.md:1:21:1:23
 PARSE ERROR - fuzz_crash_002.md:1:23:1:24
 PARSE ERROR - fuzz_crash_002.md:1:24:1:25
-MISSING MAIN! FUNCTION - fuzz_crash_002.md:1:1:1:25
 MALFORMED TYPE - fuzz_crash_002.md:1:6:1:7
+MISSING MAIN! FUNCTION - fuzz_crash_002.md:1:1:1:25
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
 The token **;** is not expected in a type annotation.
@@ -227,6 +227,16 @@ modu:;::::::::::::::le[%
                        ^
 
 
+**MALFORMED TYPE**
+This type annotation is malformed or contains invalid syntax.
+
+**fuzz_crash_002.md:1:6:1:7:**
+```roc
+modu:;::::::::::::::le[%
+```
+     ^
+
+
 **MISSING MAIN! FUNCTION**
 Default app modules must have a `main!` function.
 
@@ -239,16 +249,6 @@ Add a main! function like:
 modu:;::::::::::::::le[%
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**fuzz_crash_002.md:1:6:1:7:**
-```roc
-modu:;::::::::::::::le[%
-```
-     ^
 
 
 # TOKENS

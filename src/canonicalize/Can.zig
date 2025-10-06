@@ -57,18 +57,6 @@ const TypeVarProblem = struct {
     ast_anno: AST.TypeAnno.Idx,
 };
 
-/// Context for module validation - determines what kinds of modules are valid
-pub const ValidationContext = enum {
-    /// roc check - infer whether type module or default-app, allow both
-    checking,
-    /// roc foo.roc or roc build - require app or default-app only
-    executing,
-    /// File is being imported - require proper type module only
-    importing,
-    /// REPL - no module validation needed (evaluating expressions, not files)
-    repl,
-};
-
 env: *ModuleEnv,
 parse_ir: *AST,
 scopes: std.ArrayListUnmanaged(Scope) = .{},
@@ -94,8 +82,6 @@ used_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 module_envs: ?*const std.StringHashMap(*const ModuleEnv),
 /// Map from module name string to Import.Idx for tracking unique imports
 import_indices: std.StringHashMapUnmanaged(Import.Idx),
-/// Context for validation - determines what module types are valid
-validation_context: ValidationContext,
 /// Scratch type variables
 scratch_vars: base.Scratch(TypeVar),
 /// Scratch ident
@@ -188,7 +174,6 @@ pub fn init(
     env: *ModuleEnv,
     parse_ir: *AST,
     module_envs: ?*const std.StringHashMap(*const ModuleEnv),
-    validation_context: ValidationContext,
 ) std.mem.Allocator.Error!Self {
     const gpa = env.gpa;
 
@@ -203,7 +188,6 @@ pub fn init(
         .used_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .module_envs = module_envs,
         .import_indices = std.StringHashMapUnmanaged(Import.Idx){},
-        .validation_context = validation_context,
         .scratch_vars = try base.Scratch(TypeVar).init(gpa),
         .scratch_idents = try base.Scratch(Ident.Idx).init(gpa),
         .scratch_type_var_validation = try base.Scratch(Ident.Idx).init(gpa),
@@ -546,57 +530,8 @@ pub fn canonicalizeFile(
         }
     }
 
-    // After processing all type declarations, handle type module validation
-    // Validation rules depend on the context (checking, executing, or importing)
-    if (header == .type_module) {
-        switch (self.validation_context) {
-            .checking => {
-                // INFER mode - smart error messages, accept both type modules and default-app
-                const main_result = try self.findMainFunction();
-                const has_matching_type_decl = self.hasMatchingType();
-
-                if (main_result == .valid) {
-                    // Valid default-app module
-                    _ = main_result.valid; // Suppress unused warning
-                } else if (main_result == .wrong_arity) {
-                    // Report wrong arity error for default-app
-                    // Error already reported in findMainFunction
-                } else if (has_matching_type_decl) {
-                    // Valid type module
-                } else {
-                    // Neither valid - use heuristics for helpful error
-                    try self.reportTypeModuleOrDefaultAppError();
-                }
-            },
-            .executing => {
-                // EXECUTION mode - require default-app (app header checked elsewhere)
-                const main_result = try self.findMainFunction();
-                if (main_result == .valid) {
-                    // Valid default-app
-                    _ = main_result.valid; // Suppress unused warning
-                } else if (main_result == .wrong_arity) {
-                    // Error already reported in findMainFunction
-                } else {
-                    // No main! - error, can't execute type module
-                    try self.reportExecutionRequiresAppOrDefaultApp();
-                }
-            },
-            .importing => {
-                // IMPORT mode - require type module ONLY, no default-app
-                const main_result = try self.findMainFunction();
-                if (main_result != .not_found) {
-                    // Has main! - can't import default-app
-                    try self.reportCannotImportDefaultApp(main_result);
-                } else {
-                    // Validate as type module
-                    try self.validateTypeModuleName();
-                }
-            },
-            .repl => {
-                // REPL mode - no module validation needed, just evaluating expressions
-            },
-        }
-    }
+    // Type module validation has been moved to public methods that callers can invoke after canonicalization.
+    // See validateForChecking() and validateForExecution()
 
     // Second pass: Process all other statements
     const ast_stmt_idxs = self.parse_ir.store.statementSlice(file.statements);
@@ -790,8 +725,68 @@ pub fn canonicalizeFile(
     // Assert that everything is in-sync
     self.env.debugAssertArraysInSync();
 
-    // Freeze the interners after canonicalization is complete
-    self.env.freezeInterners();
+    // Note: Interners are NOT frozen here. Callers should call freezeInterners() on the ModuleEnv
+    // after calling any validation functions (validateForChecking/validateForExecution).
+}
+
+/// Validate a type module for use in checking mode (roc check).
+/// This accepts both type modules and default-app modules, providing helpful
+/// error messages when neither is valid.
+pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const file = self.parse_ir.store.getFile();
+    const header = self.parse_ir.store.getHeader(file.header);
+
+    if (header != .type_module) {
+        // Only type_module headers need validation
+        return;
+    }
+
+    // INFER mode - smart error messages, accept both type modules and default-app
+    const main_result = try self.findMainFunction();
+    const has_matching_type_decl = self.hasMatchingType();
+
+    if (main_result == .valid) {
+        // Valid default-app module
+        _ = main_result.valid; // Suppress unused warning
+    } else if (main_result == .wrong_arity) {
+        // Report wrong arity error for default-app
+        // Error already reported in findMainFunction
+    } else if (has_matching_type_decl) {
+        // Valid type module
+    } else {
+        // Neither valid - use heuristics for helpful error
+        try self.reportTypeModuleOrDefaultAppError();
+    }
+}
+
+/// Validate a module for use in execution mode (roc run, roc build).
+/// This requires a valid default-app with a main! function.
+pub fn validateForExecution(self: *Self) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const file = self.parse_ir.store.getFile();
+    const header = self.parse_ir.store.getHeader(file.header);
+
+    if (header != .type_module) {
+        // Only type_module headers need validation (app headers are checked elsewhere)
+        return;
+    }
+
+    // EXECUTION mode - require default-app (app header checked elsewhere)
+    const main_result = try self.findMainFunction();
+    if (main_result == .valid) {
+        // Valid default-app
+        _ = main_result.valid; // Suppress unused warning
+    } else if (main_result == .wrong_arity) {
+        // Error already reported in findMainFunction
+    } else {
+        // No main! - error, can't execute type module
+        try self.reportExecutionRequiresAppOrDefaultApp();
+    }
 }
 
 fn canonicalizeStmtDecl(self: *Self, decl: AST.Statement.Decl, mb_last_anno: ?TypeAnnoIdent) std.mem.Allocator.Error!void {

@@ -1086,13 +1086,16 @@ fn processSnapshotContent(
         .box = try can_ir.insertIdent(base.Ident.for_text("Box")),
     };
 
-    var czer = try Can.init(can_ir, &parse_ast, null, .checking);
+    var czer = try Can.init(can_ir, &parse_ast, null);
     defer czer.deinit();
 
     var maybe_expr_idx: ?Can.CanonicalizedExpr = null;
 
     switch (content.meta.node_type) {
-        .file => try czer.canonicalizeFile(),
+        .file => {
+            try czer.canonicalizeFile();
+            try czer.validateForChecking();
+        },
         .header => {
             // TODO: implement canonicalize_header when available
         },

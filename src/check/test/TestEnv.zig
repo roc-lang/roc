@@ -76,10 +76,11 @@ pub fn initWithImport(source: []const u8, other_module_name: []const u8, other_m
 
     // Canonicalize
     try module_env.initCIRFields(gpa, "test");
-    can.* = try Can.init(module_env, parse_ast, &module_envs, .checking);
+    can.* = try Can.init(module_env, parse_ast, &module_envs);
     errdefer can.deinit();
 
     try can.canonicalizeFile();
+    try can.validateForChecking();
 
     // Pull out the imported index
     std.debug.assert(can.import_indices.size == 1);
@@ -150,10 +151,11 @@ pub fn init(source: []const u8) !TestEnv {
 
     // Canonicalize
     try module_env.initCIRFields(gpa, "test");
-    can.* = try Can.init(module_env, parse_ast, null, .checking);
+    can.* = try Can.init(module_env, parse_ast, null);
     errdefer can.deinit();
 
     try can.canonicalizeFile();
+    try can.validateForChecking();
 
     // Type Check
     var checker = try Check.init(gpa, &module_env.types, module_env, &.{}, &module_env.store.regions, module_common_idents);

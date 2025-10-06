@@ -1366,10 +1366,11 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
     };
 
     // Create canonicalizer
-    var canonicalizer = try Can.init(&env, &parse_ast, null, .executing);
+    var canonicalizer = try Can.init(&env, &parse_ast, null);
 
     // Canonicalize the entire module
     try canonicalizer.canonicalizeFile();
+    try canonicalizer.validateForExecution();
 
     // Validation check - ensure exports were populated during canonicalization
     if (env.exports.span.len == 0) {
@@ -2426,7 +2427,7 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
     try env.initCIRFields(gpa, module_name);
 
     // Create canonicalizer
-    var canonicalizer = Can.init(&env, &parse_ast, null, .checking) catch |err| {
+    var canonicalizer = Can.init(&env, &parse_ast, null) catch |err| {
         try stderr.print("Failed to initialize canonicalizer: {}", .{err});
         std.process.exit(1);
     };
@@ -2435,6 +2436,12 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
     // Canonicalize the entire module
     canonicalizer.canonicalizeFile() catch |err| {
         try stderr.print("Failed to canonicalize file: {}", .{err});
+        std.process.exit(1);
+    };
+
+    // Validate for checking mode
+    canonicalizer.validateForChecking() catch |err| {
+        try stderr.print("Failed to validate module: {}", .{err});
         std.process.exit(1);
     };
 

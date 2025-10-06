@@ -10,8 +10,8 @@ foo = "hello ${namF
 ~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_017.md:2:7:2:8
-MISSING MAIN! FUNCTION - fuzz_crash_017.md:1:1:2:20
 UNRECOGNIZED SYNTAX - fuzz_crash_017.md:2:7:2:20
+MISSING MAIN! FUNCTION - fuzz_crash_017.md:1:1:2:20
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `string_expected_close_interpolation`
@@ -23,6 +23,17 @@ foo = "hello ${namF
 ```
       ^
 
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**fuzz_crash_017.md:2:7:2:20:**
+```roc
+foo = "hello ${namF
+```
+      ^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
 
 **MISSING MAIN! FUNCTION**
 Default app modules must have a `main!` function.
@@ -37,17 +48,6 @@ me = "luc"
 foo = "hello ${namF
 ```
 
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**fuzz_crash_017.md:2:7:2:20:**
-```roc
-foo = "hello ${namF
-```
-      ^^^^^^^^^^^^^
-
-This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig

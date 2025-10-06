@@ -892,7 +892,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
     };
 
-    var czer = try Can.init(env, &result.parse_ast.?, null, .checking);
+    var czer = try Can.init(env, &result.parse_ast.?, null);
     defer czer.deinit();
 
     czer.canonicalizeFile() catch |err| {
@@ -900,6 +900,13 @@ fn compileSource(source: []const u8) !CompilerStageData {
         if (err == error.OutOfMemory) {
             // If we're out of memory here, the state is likely unstable.
             // Propagate this error up to halt compilation gracefully.
+            return err;
+        }
+    };
+
+    czer.validateForChecking() catch |err| {
+        logDebug("compileSource: validateForChecking failed: {}\n", .{err});
+        if (err == error.OutOfMemory) {
             return err;
         }
     };

@@ -26,7 +26,7 @@ const ScopeTestContext = struct {
         try module_env.initCIRFields(gpa, "test");
 
         return ScopeTestContext{
-            .self = try Can.init(module_env, undefined, null, .checking),
+            .self = try Can.init(module_env, undefined, null),
             .module_env = module_env,
             .gpa = gpa,
         };

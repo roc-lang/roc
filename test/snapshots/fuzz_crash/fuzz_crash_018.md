@@ -11,8 +11,8 @@ type=file
 # EXPECTED
 PARSE ERROR - fuzz_crash_018.md:1:1:1:2
 PARSE ERROR - fuzz_crash_018.md:2:1:2:3
-MISSING MAIN! FUNCTION - fuzz_crash_018.md:1:1:2:3
 UNDECLARED TYPE - fuzz_crash_018.md:1:5:1:6
+MISSING MAIN! FUNCTION - fuzz_crash_018.md:1:1:2:3
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
@@ -36,6 +36,17 @@ This is an unexpected parsing error. Please check your syntax.
 ^^
 
 
+**UNDECLARED TYPE**
+The type _S_ is not declared in this scope.
+
+This type is referenced here:
+**fuzz_crash_018.md:1:5:1:6:**
+```roc
+0 b:S
+```
+    ^
+
+
 **MISSING MAIN! FUNCTION**
 Default app modules must have a `main!` function.
 
@@ -48,17 +59,6 @@ Add a main! function like:
 0 b:S
 .R
 ```
-
-
-**UNDECLARED TYPE**
-The type _S_ is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_018.md:1:5:1:6:**
-```roc
-0 b:S
-```
-    ^
 
 
 # TOKENS
