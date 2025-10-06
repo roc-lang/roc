@@ -389,7 +389,6 @@ const Self = @This();
 /// - Eliminates syntax sugar (for example, renaming `+` to the function call `add`).
 ///
 /// The canonicalization occurs on a single module (file) in isolation. This allows for this work to be easily parallelized and also cached. So where the source code for a module has not changed, the CanIR can simply be loaded from disk and used immediately.
-
 /// First pass helper: Process a type declaration and introduce it into scope
 /// If parent_name is provided, creates a qualified name (e.g., "Foo.Bar")
 fn processTypeDeclFirstPass(
