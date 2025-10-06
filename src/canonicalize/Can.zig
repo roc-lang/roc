@@ -754,6 +754,8 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
             // Store the matching type ident in module_kind if found
             if (matching_type_ident) |type_ident| {
                 main_type_ident.* = type_ident;
+                // Auto-expose the main type for type modules
+                try self.env.addExposedById(type_ident);
             }
 
             // Valid if either we have a valid main! or a matching type declaration
@@ -1251,36 +1253,12 @@ fn canonicalizeImportStatement(
     // Process type imports from this module
     try self.processTypeImports(module_name, alias);
 
-    // 5. Convert exposed items
+    // 5. Convert exposed items to CIR
     const scratch_start = self.env.store.scratchExposedItemTop();
-
-    // Auto-inject main type if this is a type module
-    if (self.module_envs) |envs_map| {
-        if (envs_map.get(module_name_text)) |target_env| {
-            switch (target_env.module_kind) {
-                .type_module => |type_ident| {
-                    // Check if this type is exposed
-                    if (target_env.containsExposedById(type_ident)) {
-                        const cir_exposed = CIR.ExposedItem{
-                            .name = alias, // Use the module alias as the type name
-                            .alias = null,
-                            .is_wildcard = false,
-                        };
-                        const cir_exposed_idx = try self.env.addExposedItemAndTypeVar(cir_exposed, .{ .flex_var = null }, Region.zero());
-                        try self.env.store.addScratchExposedItem(cir_exposed_idx);
-                    }
-                },
-                else => {},
-            }
-        }
-    }
-
-    // Convert AST exposed items to CIR
     try self.convertASTExposesToCIR(import_stmt.exposes);
-
     const cir_exposes = try self.env.store.exposedItemSpanFrom(scratch_start);
     const import_region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
-    try self.introduceExposedItemsIntoScope(cir_exposes, module_name, import_region);
+    try self.introduceExposedItemsIntoScope(cir_exposes, module_name, alias, import_region);
 
     // 6. Store the mapping from module name to Import.Idx
     try self.import_indices.put(self.env.gpa, module_name_text, module_import_idx);
@@ -1438,6 +1416,7 @@ fn introduceExposedItemsIntoScope(
     self: *Self,
     exposed_items_span: CIR.ExposedItem.Span,
     module_name: Ident.Idx,
+    module_alias: Ident.Idx,
     import_region: Region,
 ) std.mem.Allocator.Error!void {
     const exposed_items_slice = self.env.store.sliceExposedItems(exposed_items_span);
@@ -1455,6 +1434,20 @@ fn introduceExposedItemsIntoScope(
 
         // Get the module's exposed_items
         const module_env = envs_map.get(module_name_text).?;
+
+        // For type modules, auto-introduce the main type with the alias name
+        switch (module_env.module_kind) {
+            .type_module => |main_type_ident| {
+                if (module_env.containsExposedById(main_type_ident)) {
+                    const item_info = Scope.ExposedItemInfo{
+                        .module_name = module_name,
+                        .original_name = main_type_ident,
+                    };
+                    try self.scopeIntroduceExposedItem(module_alias, item_info);
+                }
+            },
+            else => {},
+        }
 
         // Validate each exposed item
         for (exposed_items_slice) |exposed_item_idx| {
