@@ -1601,17 +1601,11 @@ fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx, rank: types_mod.Rank,
                     .num_unbound => {
                         const int_reqs = num.value.toIntRequirements();
                         const frac_reqs = num.value.toFracRequirements();
-                        break :blk Num{ .num_unbound = .{ .int_requirements = .{
-                            .sign_needed = int_reqs.sign_needed,
-                            .bits_needed = @intCast(@intFromEnum(int_reqs.bits_needed)),
-                        }, .frac_requirements = frac_reqs } };
+                        break :blk Num{ .num_unbound = .{ .int_requirements = int_reqs, .frac_requirements = frac_reqs } };
                     },
                     .int_unbound => {
                         const int_reqs = num.value.toIntRequirements();
-                        const int_var = try self.freshFromContent(.{ .structure = .{ .num = .{ .int_unbound = .{
-                            .sign_needed = int_reqs.sign_needed,
-                            .bits_needed = @intCast(@intFromEnum(int_reqs.bits_needed)),
-                        } } } }, rank, pattern_region);
+                        const int_var = try self.freshFromContent(.{ .structure = .{ .num = .{ .int_unbound = int_reqs } } }, rank, pattern_region);
                         try self.var_pool.addVarToRank(int_var, rank);
                         break :blk Num{ .num_poly = int_var };
                     },
@@ -1744,17 +1738,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                     .num_unbound => {
                         const int_reqs = num.value.toIntRequirements();
                         const frac_reqs = num.value.toFracRequirements();
-                        break :blk Num{ .num_unbound = .{ .int_requirements = .{
-                            .sign_needed = int_reqs.sign_needed,
-                            .bits_needed = @intCast(@intFromEnum(int_reqs.bits_needed)),
-                        }, .frac_requirements = frac_reqs } };
+                        break :blk Num{ .num_unbound = .{ .int_requirements = int_reqs, .frac_requirements = frac_reqs } };
                     },
                     .int_unbound => {
                         const int_reqs = num.value.toIntRequirements();
-                        const int_var = try self.freshFromContent(.{ .structure = .{ .num = .{ .int_unbound = .{
-                            .sign_needed = int_reqs.sign_needed,
-                            .bits_needed = @intCast(@intFromEnum(int_reqs.bits_needed)),
-                        } } } }, rank, expr_region);
+                        const int_var = try self.freshFromContent(.{ .structure = .{ .num = .{ .int_unbound = int_reqs } } }, rank, expr_region);
                         try self.var_pool.addVarToRank(int_var, rank);
                         break :blk Num{ .num_poly = int_var };
                     },

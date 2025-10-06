@@ -352,8 +352,17 @@ pub const Num = union(enum) {
         // The lowest number of bits that can represent the decimal value of the Int literal  *excluding* its sign.
         bits_needed: u8,
 
+        // True if the literal is an exact power of two (e.g., 1, 2, 4, ..., 2^k) on a boundary of a signed int.
+        // This is crucial to allow the single negative boundary value −2^(N−1) when bits_needed == N.
+        // When unifying multiple literals, we AND this flag to remain conservative.
+        is_minimum_signed: bool,
+
         pub fn init() @This() {
-            return .{ .sign_needed = false, .bits_needed = 0 };
+            return .{
+                .sign_needed = false,
+                .bits_needed = 0,
+                .is_minimum_signed = false,
+            };
         }
 
         /// Unifies two IntRequirements, returning the most restrictive combination
@@ -361,6 +370,30 @@ pub const Num = union(enum) {
             return IntRequirements{
                 .sign_needed = self.sign_needed or other.sign_needed,
                 .bits_needed = @max(self.bits_needed, other.bits_needed),
+                .is_minimum_signed = self.is_minimum_signed and other.is_minimum_signed,
+            };
+        }
+
+        /// Create Requirements from a u128 value and whether it's negated
+        pub fn fromIntLiteral(val: u128, is_negated: bool) IntRequirements {
+            const bits_need = Int.BitsNeeded.fromValue(val);
+            return IntRequirements{
+                .sign_needed = is_negated,
+                .bits_needed = bits_need.toBits(),
+                .is_minimum_signed = is_negated and IntRequirements.isMinimumSigned(val),
+            };
+        }
+
+        /// Check if a value is a minimum signed value.
+        /// These need special consideration
+        pub fn isMinimumSigned(val: u128) bool {
+            return switch (val) {
+                @as(u128, @intCast(std.math.maxInt(i8))) + 1 => true,
+                @as(u128, @intCast(std.math.maxInt(i16))) + 1 => true,
+                @as(u128, @intCast(std.math.maxInt(i32))) + 1 => true,
+                @as(u128, @intCast(std.math.maxInt(i64))) + 1 => true,
+                @as(u128, @intCast(std.math.maxInt(i128))) + 1 => true,
+                else => false,
             };
         }
     };

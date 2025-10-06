@@ -1034,7 +1034,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                             self.merge(vars, vars.a.desc.content);
                         },
                         .int_unbound => |b_reqs| {
-                            const a_num_resolved = self.resolvePolyNum(a_poly_var);
+                            const a_num_resolved = self.resolvePolyNum(a_poly_var, .inside_int);
                             switch (a_num_resolved) {
                                 .int_resolved => |a_prec| {
                                     const result = self.checkIntPrecisionRequirements(a_prec, b_reqs);
@@ -1057,7 +1057,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                 .int_unbound => |a_reqs| {
                     switch (b_num) {
                         .int_poly => |b_poly_var| {
-                            const b_num_resolved = self.resolvePolyNum(b_poly_var);
+                            const b_num_resolved = self.resolvePolyNum(b_poly_var, .inside_int);
                             switch (b_num_resolved) {
                                 .int_resolved => |b_prec| {
                                     const result = self.checkIntPrecisionRequirements(b_prec, a_reqs);
@@ -1092,7 +1092,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                             self.merge(vars, vars.a.desc.content);
                         },
                         .frac_unbound => |b_reqs| {
-                            const a_num_resolved = self.resolvePolyNum(a_poly_var);
+                            const a_num_resolved = self.resolvePolyNum(a_poly_var, .inside_frac);
                             switch (a_num_resolved) {
                                 .frac_resolved => |a_prec| {
                                     const does_fit = self.checkFracPrecisionRequirements(a_prec, b_reqs);
@@ -1113,7 +1113,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                 .frac_unbound => |a_reqs| {
                     switch (b_num) {
                         .frac_poly => |b_poly_var| {
-                            const b_num_resolved = self.resolvePolyNum(b_poly_var);
+                            const b_num_resolved = self.resolvePolyNum(b_poly_var, .inside_frac);
                             switch (b_num_resolved) {
                                 .frac_resolved => |b_prec| {
                                     const does_fit = self.checkFracPrecisionRequirements(b_prec, a_reqs);
@@ -1201,7 +1201,7 @@ fn Unifier(comptime StoreTypeB: type) type {
             a_num_var: Var,
             b_reqs: Num.NumRequirements,
         ) Error!void {
-            const a_num_resolved = self.resolvePolyNum(a_num_var);
+            const a_num_resolved = self.resolvePolyNum(a_num_var, .inside_num);
             switch (a_num_resolved) {
                 // If the variable inside a was flex, then b wins
                 .num_flex => self.merge(vars, vars.b.desc.content),
@@ -1278,7 +1278,7 @@ fn Unifier(comptime StoreTypeB: type) type {
             a_reqs: Num.NumRequirements,
             b_num_var: Var,
         ) Error!void {
-            const b_num_resolved = self.resolvePolyNum(b_num_var);
+            const b_num_resolved = self.resolvePolyNum(b_num_var, .inside_num);
             switch (b_num_resolved) {
                 // If the variable inside a was flex, then b wins
                 .num_flex => self.merge(vars, vars.a.desc.content),
@@ -1355,7 +1355,7 @@ fn Unifier(comptime StoreTypeB: type) type {
             a_num: NumCompact,
             b_num_var: Var,
         ) Error!void {
-            const b_num_resolved = self.resolvePolyNum(b_num_var);
+            const b_num_resolved = self.resolvePolyNum(b_num_var, .inside_num);
             switch (a_num) {
                 .int => |a_int| {
                     switch (b_num_resolved) {
@@ -1462,7 +1462,7 @@ fn Unifier(comptime StoreTypeB: type) type {
             a_num_var: Var,
             b_num: NumCompact,
         ) Error!void {
-            const a_num_resolved = self.resolvePolyNum(a_num_var);
+            const a_num_resolved = self.resolvePolyNum(a_num_var, .inside_num);
             switch (a_num_resolved) {
                 // If the variable inside a was flex, then b wins
                 .num_flex => self.merge(vars, vars.b.desc.content),
@@ -1641,23 +1641,31 @@ fn Unifier(comptime StoreTypeB: type) type {
             too_large,
         };
 
-        /// Checks if the int precision satisfies the requirements
-        fn checkIntPrecisionRequirements(self: *Self, prec: Num.Int.Precision, requirements: Num.IntRequirements) IntPrecisionCheckResult {
+        /// Checks whether a chosen integer precision can satisfy unified IntRequirements
+        /// under two’s-complement semantics, using only sign_needed, bits_needed, and is_minimum_signed.
+        ///
+        /// Rules:
+        /// - Unsigned N-bit: accept if bits_needed ≤ N.
+        /// - Signed N-bit:
+        ///    * Positive: accept if bits_needed ≤ N−1.
+        ///    * Negative: accept if (bits_needed ≤ N−1)
+        ///                OR (bits_needed == N AND is_minimum_signed),
+        ///      where the latter covers the single boundary value −2^(N−1).
+        ///
+        /// TODO: Review, claude generated
+        fn checkIntPrecisionRequirements(self: *Self, prec: Num.Int.Precision, reqs: Num.IntRequirements) IntPrecisionCheckResult {
             _ = self;
 
-            // Check sign requirement
             const is_signed = switch (prec) {
                 .i8, .i16, .i32, .i64, .i128 => true,
                 .u8, .u16, .u32, .u64, .u128 => false,
             };
 
-            // If we need signed values but have unsigned type, it's a negative literal error
-            if (requirements.sign_needed and !is_signed) {
+            if (reqs.sign_needed and !is_signed) {
                 return .negative_unsigned;
             }
 
-            // Check bits requirement
-            const available_bits: u8 = switch (prec) {
+            const n: u8 = switch (prec) {
                 .i8, .u8 => 8,
                 .i16, .u16 => 16,
                 .i32, .u32 => 32,
@@ -1665,29 +1673,19 @@ fn Unifier(comptime StoreTypeB: type) type {
                 .i128, .u128 => 128,
             };
 
-            // Map requirements.bits_needed to actual bit count
-            const required_bits: u8 = switch (@as(Num.Int.BitsNeeded, @enumFromInt(requirements.bits_needed))) {
-                .@"7" => 7,
-                .@"8" => 8,
-                .@"9_to_15" => 15,
-                .@"16" => 16,
-                .@"17_to_31" => 31,
-                .@"32" => 32,
-                .@"33_to_63" => 63,
-                .@"64" => 64,
-                .@"65_to_127" => 127,
-                .@"128" => 128,
-            };
+            const k: u8 = reqs.bits_needed;
 
-            // For unsigned types, we need exactly the required bits
             if (!is_signed) {
-                return if (available_bits >= required_bits) .ok else .too_large;
+                return if (k <= n) .ok else .too_large;
             }
 
-            // For signed types, we lose one bit to the sign
-            const usable_bits = if (is_signed) available_bits - 1 else available_bits;
-
-            return if (usable_bits >= required_bits) .ok else .too_large;
+            if (reqs.sign_needed) {
+                const fits_regular_neg = (k <= n - 1);
+                const fits_boundary_neg = (k == n) and reqs.is_minimum_signed; // only allow −2^(N−1)
+                return if (fits_regular_neg or fits_boundary_neg) .ok else .too_large;
+            } else {
+                return if (k <= n - 1) .ok else .too_large;
+            }
         }
 
         /// Checks if the frac precision satisfies the requirements
@@ -1719,6 +1717,12 @@ fn Unifier(comptime StoreTypeB: type) type {
             err: Var,
         };
 
+        const ResolvePolyNumCtx = enum {
+            inside_num,
+            inside_int,
+            inside_frac,
+        };
+
         /// Attempts to resolve a polymorphic number variable to a concrete precision.
         ///
         /// This function recursively follows the structure of a number type,
@@ -1739,13 +1743,10 @@ fn Unifier(comptime StoreTypeB: type) type {
         /// Note that this function will work on the "tail" of a polymorphic number.
         /// That is, if you pass in `Frac(Dec)` (without the outer `Num`), this
         /// function will still resolve successfully.
-        fn resolvePolyNum(
-            self: *Self,
-            initial_num_var: Var,
-        ) ResolvedNum {
+        fn resolvePolyNum(self: *Self, initial_num_var: Var, initial_ctx: ResolvePolyNumCtx) ResolvedNum {
             var num_var = initial_num_var;
-            var seen_int = false;
-            var seen_frac = false;
+            var seen_int = initial_ctx == .inside_int;
+            var seen_frac = initial_ctx == .inside_frac;
             while (true) {
                 const resolved = self.types_store.resolveVar(num_var);
                 switch (resolved.desc.content) {

@@ -401,7 +401,7 @@ pub const IntValue = struct {
 
     /// Calculate the int requirements of an IntValue
     /// TODO: Review, claude generated
-    pub fn toIntRequirements(self: IntValue) types_mod.Num.Int.Requirements {
+    pub fn toIntRequirements(self: IntValue) types_mod.Num.IntRequirements {
         var is_negated = false;
         var u128_val: u128 = undefined;
 
@@ -436,9 +436,10 @@ pub const IntValue = struct {
         // This makes the bit calculation work correctly with the "n-1 bits for magnitude" rule
         const adjusted_val = if (is_minimum_signed) u128_val - 1 else u128_val;
         const bits_needed = types_mod.Num.Int.BitsNeeded.fromValue(adjusted_val);
-        return types_mod.Num.Int.Requirements{
+        return types_mod.Num.IntRequirements{
             .sign_needed = is_negated and u128_val != 0, // -0 doesn't need a sign
-            .bits_needed = bits_needed,
+            .bits_needed = bits_needed.toBits(),
+            .is_minimum_signed = is_minimum_signed,
         };
     }
 

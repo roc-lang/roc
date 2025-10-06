@@ -2771,279 +2771,701 @@ test "unify - succeeds on nominal, tag union recursion" {
     try std.testing.expectEqual(.ok, result_tag_union);
 }
 
-// number requirements - num //
+// numbers //
+//
+// Numbers are fairly complicated in roc. We have:
+// * Polymorphic nums
+// * Compacted nums
+// * Unbounded nums
+//
+// Most type systems only have polymorphic numbers, but we have concepts of
+// * Comapcted nums, which are fully concrete numbers
+// * Unbound nums, which are polymorphic flex var numbers
+//
+// To the user though, they just see regular numbers like U8 or I64.
+//
+// Each of these have to be able to unify with each other. So we have
+// sophisticated  test infra to test various combinations of these.
 
-test "unify - num literal 255 fits in U8" {
+/// Specification for an unbound number type (literal)
+const NumTypeUnbound = union(enum) {
+    /// Just int requirements (will be wrapped in Num(Int(_)))
+    int: Num.IntRequirements,
+    /// Just frac requirements (will be wrapped in Num(Frac(_)))
+    frac: Num.FracRequirements,
+    /// Both int and frac requirements (Num(_))
+    num: Num.NumRequirements,
+
+    /// Helper constructors
+    pub fn intLiteral(value: u128, is_negative: bool) NumTypeUnbound {
+        return .{
+            .int = Num.IntRequirements.fromIntLiteral(value, is_negative),
+        };
+    }
+
+    pub fn fracLiteral(fits_f32: bool, fits_dec: bool) NumTypeUnbound {
+        return .{ .frac = .{ .fits_in_f32 = fits_f32, .fits_in_dec = fits_dec } };
+    }
+
+    pub fn numLiteral(int_value: u128, is_negative: bool, fits_f32: bool, fits_dec: bool) NumTypeUnbound {
+        return .{ .num = .{
+            .int_requirements = Num.IntRequirements.fromIntLiteral(int_value, is_negative),
+            .frac_requirements = .{ .fits_in_f32 = fits_f32, .fits_in_dec = fits_dec },
+        } };
+    }
+};
+
+/// Specification for a concrete/polymorphic number type
+const NumTypeBound = enum {
+    // Concrete integer types (these are Num(Int(U8)), etc.)
+    u8,
+    i8,
+    u16,
+    i16,
+    u32,
+    i32,
+    u64,
+    i64,
+    u128,
+    i128,
+
+    // Concrete float types (these are Num(Frac(Dec)), etc.)
+    f32,
+    f64,
+    dec,
+
+    // Polymorphic types
+    num_poly_flex, // Num(flex_var)
+    int_poly_flex, // Num(Int(flex_var))
+    frac_poly_flex, // Num(Frac(flex_var))
+};
+
+const NumTestCase = struct {
+    env: *TestEnv,
+    a_spec: NumSpec,
+    b_spec: NumSpec,
+
+    const Self = @This();
+
+    const NumSpec = union(enum) {
+        unbound: NumTypeUnbound,
+        bound: NumTypeBound,
+    };
+
+    /// Initialize with an unbound literal and a bound type
+    fn init(env: *TestEnv, unbound: NumTypeUnbound, bound: NumTypeBound) !Self {
+        return .{
+            .env = env,
+            .a_spec = .{ .unbound = unbound },
+            .b_spec = .{ .bound = bound },
+        };
+    }
+
+    /// Initialize with two bound types (for polymorphic × polymorphic tests)
+    fn initBothBound(env: *TestEnv, a: NumTypeBound, b: NumTypeBound) !Self {
+        return .{
+            .env = env,
+            .a_spec = .{ .bound = a },
+            .b_spec = .{ .bound = b },
+        };
+    }
+
+    /// Initialize with two unbound types (for requirement merging tests)
+    fn initBothUnbound(env: *TestEnv, a: NumTypeUnbound, b: NumTypeUnbound) !Self {
+        return .{
+            .env = env,
+            .a_spec = .{ .unbound = a },
+            .b_spec = .{ .unbound = b },
+        };
+    }
+
+    /// Create fresh variables from the specs
+    fn makeVars(self: Self) !struct { a: Var, b: Var } {
+        const a = switch (self.a_spec) {
+            .unbound => |spec| try makeUnboundVar(self.env, spec),
+            .bound => |spec| try makeBoundVar(self.env, spec),
+        };
+        const b = switch (self.b_spec) {
+            .unbound => |spec| try makeUnboundVar(self.env, spec),
+            .bound => |spec| try makeBoundVar(self.env, spec),
+        };
+        return .{ .a = a, .b = b };
+    }
+
+    fn expectOk(self: Self) !void {
+        const vars = try self.makeVars();
+        const result = try self.env.unify(vars.a, vars.b);
+        try std.testing.expect(result == .ok);
+    }
+
+    fn expectProblem(self: Self) !void {
+        const vars = try self.makeVars();
+        const result = try self.env.unify(vars.a, vars.b);
+        try std.testing.expect(result == .problem);
+    }
+
+    fn expectBothOrders(self: Self, comptime expectFn: fn (Self) anyerror!void) !void {
+        // Test a → b
+        try expectFn(self);
+
+        // Test b → a (swap the specs, not the vars)
+        const swapped = Self{
+            .env = self.env,
+            .a_spec = self.b_spec,
+            .b_spec = self.a_spec,
+        };
+        try expectFn(swapped);
+    }
+
+    /// For tests that need to inspect the unified result
+    fn unifyAndGetResult(self: Self) !struct { result: unify_mod.Result, a: Var, b: Var } {
+        const vars = try self.makeVars();
+        const result = try self.env.unify(vars.a, vars.b);
+        return .{ .result = result, .a = vars.a, .b = vars.b };
+    }
+
+    fn makeUnboundVar(env: *TestEnv, spec: NumTypeUnbound) !Var {
+        return switch (spec) {
+            // int_unbound needs to be wrapped: Num(Int(unbound))
+            .int => |reqs| blk: {
+                const int_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_unbound = reqs } } });
+                break :blk try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_var } } });
+            },
+            // frac_unbound needs to be wrapped: Num(Frac(unbound))
+            .frac => |reqs| blk: {
+                const frac_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_unbound = reqs } } });
+                break :blk try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = frac_var } } });
+            },
+            // num_unbound is already at the top level: Num(unbound)
+            .num => |reqs| try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = reqs } } }),
+        };
+    }
+
+    fn makeBoundVar(env: *TestEnv, spec: NumTypeBound) !Var {
+        return switch (spec) {
+            // These are already num_compact which is the full Num(Int(U8)) structure
+            .u8 => try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u8 } }),
+            .i8 => try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i8 } }),
+            .u16 => try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u16 } }),
+            .i16 => try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i16 } }),
+            .u32 => try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u32 } }),
+            .i32 => try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } }),
+            .u64 => try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u64 } }),
+            .i64 => try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i64 } }),
+            .u128 => try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u128 } }),
+            .i128 => try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i128 } }),
+
+            // These use mkFracPoly which builds: Num(Frac(precision))
+            .f32 => try env.mkFracPoly(Num.Frac.Precision.f32),
+            .f64 => try env.mkFracPoly(Num.Frac.Precision.f64),
+            .dec => try env.mkFracPoly(Num.Frac.Precision.dec),
+
+            // These are already properly wrapped by the mk functions
+            .num_poly_flex => try env.mkNumPolyFlex(), // Num(flex_var)
+            .int_poly_flex => try env.mkIntPolyFlex(), // Num(Int(flex_var))
+            .frac_poly_flex => try env.mkFracPolyFlex(), // Num(Frac(flex_var))
+        };
+    }
+};
+
+// num basic test cases //
+
+test "unify - 255 fits in U8" {
     const gpa = std.testing.allocator;
-
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    // Create a literal with value 255 (8 bits unsigned)
-    const unbound_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = .{
-        .int_requirements = Num.IntRequirements{
-            .sign_needed = false,
-            .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"8"),
-        },
-        .frac_requirements = Num.FracRequirements.init(),
-    } } } });
-
-    // Create U8 type
-    const u8_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u8 } });
-
-    // They should unify successfully
-    const result = try env.unify(unbound_var, u8_var);
-    try std.testing.expect(result == .ok);
+    const case = try NumTestCase.init(&env, NumTypeUnbound.intLiteral(255, false), .u8);
+    try case.expectBothOrders(NumTestCase.expectOk);
 }
 
-test "unify - num literal 256 does not fit fits in U8" {
+test "unify - 256 does not fit in U8" {
     const gpa = std.testing.allocator;
-
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    // Create a literal with value 256 (9 bits, no sign)
-    const unbound_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = .{
-        .int_requirements = Num.IntRequirements{
-            .sign_needed = false,
-            .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"9_to_15"),
-        },
-        .frac_requirements = Num.FracRequirements.init(),
-    } } } });
-
-    // Create U8 type
-    const u8_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u8 } });
-
-    // They should NOT unify - type mismatch expected
-    const result = try env.unify(unbound_var, u8_var);
-    try std.testing.expect(result == .problem);
+    const case = try NumTestCase.init(&env, NumTypeUnbound.intLiteral(256, false), .u8);
+    try case.expectBothOrders(NumTestCase.expectProblem);
 }
 
-test "integer literal -128 fits in I8" {
+test "unify - 127 fits in I8" {
     const gpa = std.testing.allocator;
-
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    // Create a literal with value 255 (8 bits unsigned)
-    const unbound_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = .{
-        .int_requirements = Num.IntRequirements{
-            .sign_needed = true,
-            .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"7"),
-        },
-        .frac_requirements = Num.FracRequirements.init(),
-    } } } });
-
-    // Create i8 type
-    const i8_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i8 } });
-
-    // They should unify successfully
-    const result = try env.unify(unbound_var, i8_var);
-    try std.testing.expect(result == .ok);
+    const case = try NumTestCase.init(&env, NumTypeUnbound.intLiteral(127, false), .i8);
+    try case.expectBothOrders(NumTestCase.expectOk);
 }
 
-test "unify - num literal fits in frac" {
+test "unify - 128 does not fit in I8" {
     const gpa = std.testing.allocator;
-
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    // Create a literal with value 255 (8 bits unsigned)
-    const unbound_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = .{
-        .int_requirements = Num.IntRequirements.init(),
-        .frac_requirements = Num.FracRequirements{
-            .fits_in_f32 = true,
-            .fits_in_dec = true,
-        },
-    } } } });
-
-    // Create Frac type
-    const frac_var = try env.mkFracPolyFlex();
-
-    // They should unify successfully
-    const result = try env.unify(unbound_var, frac_var);
-    try std.testing.expect(result == .ok);
+    const case = try NumTestCase.init(&env, NumTypeUnbound.intLiteral(128, false), .i8);
+    try case.expectBothOrders(NumTestCase.expectProblem);
 }
 
-test "unify - unbound bigger than dec does not fit in dec" {
+test "unify - -128 fits in I8" {
     const gpa = std.testing.allocator;
-
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const unbound_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = .{
-        .int_requirements = Num.IntRequirements.init(),
-        .frac_requirements = Num.FracRequirements{
-            .fits_in_f32 = true,
-            .fits_in_dec = false,
-        },
-    } } } });
-
-    const dec_var = try env.mkFracPoly(Num.Frac.Precision.dec);
-
-    const result = try env.unify(unbound_var, dec_var);
-    try std.testing.expect(result == .problem);
+    const case = try NumTestCase.init(&env, NumTypeUnbound.intLiteral(128, true), .i8);
+    try case.expectBothOrders(NumTestCase.expectOk);
 }
 
-test "unify - two unbound nums take the more restrictive reqs" {
+test "unify - -129 does not fit in I8" {
     const gpa = std.testing.allocator;
-
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const a = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = .{
-        .int_requirements = Num.IntRequirements{
-            .sign_needed = false,
-            .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"9_to_15"),
-        },
-        .frac_requirements = Num.FracRequirements{
-            .fits_in_f32 = true,
-            .fits_in_dec = false,
-        },
-    } } } });
-
-    const b = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = .{
-        .int_requirements = Num.IntRequirements{
-            .sign_needed = true,
-            .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"8"),
-        },
-        .frac_requirements = Num.FracRequirements{
-            .fits_in_f32 = false,
-            .fits_in_dec = true,
-        },
-    } } } });
-
-    const result = try env.unify(a, b);
-    try std.testing.expect(result == .ok);
-
-    // Assert that the more restrictive parts (ie the falses) of each unbound
-    // appear in the unified type
-    const resolved = env.module_env.types.resolveVar(a).desc.content;
-    try std.testing.expect(.structure == resolved);
-    try std.testing.expect(.num == resolved.structure);
-    try std.testing.expect(.num_unbound == resolved.structure.num);
-
-    try std.testing.expectEqual(true, resolved.structure.num.num_unbound.int_requirements.sign_needed);
-    try std.testing.expectEqual(@intFromEnum(Num.Int.BitsNeeded.@"9_to_15"), resolved.structure.num.num_unbound.int_requirements.bits_needed);
-
-    try std.testing.expectEqual(false, resolved.structure.num.num_unbound.frac_requirements.fits_in_f32);
-    try std.testing.expectEqual(false, resolved.structure.num.num_unbound.frac_requirements.fits_in_dec);
+    const case = try NumTestCase.init(&env, NumTypeUnbound.intLiteral(129, true), .i8);
+    try case.expectBothOrders(NumTestCase.expectProblem);
 }
 
-// number requirements - int //
-
-test "unify - int literal 255 fits in U8" {
+test "unify - two unbound nums merge requirements" {
     const gpa = std.testing.allocator;
-
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    // Create a literal with value 255 (8 bits unsigned)
-    const int_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_unbound = Num.IntRequirements{
-        .sign_needed = false,
-        .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"8"),
-    } } } });
-    const unbound_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_var } } });
+    const case = try NumTestCase.initBothUnbound(
+        &env,
+        NumTypeUnbound.numLiteral(256, false, true, false),
+        NumTypeUnbound.numLiteral(100, true, false, true),
+    );
 
-    // Create U8 type
-    const u8_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u8 } });
+    const unified = try case.unifyAndGetResult();
+    try std.testing.expect(unified.result == .ok);
 
-    // They should unify successfully
-    const result = try env.unify(unbound_var, u8_var);
-    try std.testing.expect(result == .ok);
+    // Verify merged requirements on the unified type
+    const resolved = env.module_env.types.resolveVar(unified.a).desc.content.structure.num.num_unbound;
+    try std.testing.expectEqual(true, resolved.int_requirements.sign_needed);
+    try std.testing.expectEqual((Num.Int.BitsNeeded.@"9_to_15").toBits(), resolved.int_requirements.bits_needed);
+    try std.testing.expectEqual(false, resolved.frac_requirements.fits_in_f32);
+    try std.testing.expectEqual(false, resolved.frac_requirements.fits_in_dec);
 }
 
-test "unify - int literal 256 does not fit fits in U8" {
+test "unify - int_poly_flex unifies with num_unbound" {
     const gpa = std.testing.allocator;
-
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    // Create a literal with value 256 (9 bits, no sign)
-    const int_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_unbound = Num.IntRequirements{
-        .sign_needed = false,
-        .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"9_to_15"),
-    } } } });
-    const unbound_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_var } } });
-
-    // Create U8 type
-    const u8_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u8 } });
-
-    // They should NOT unify - type mismatch expected
-    const result = try env.unify(unbound_var, u8_var);
-    try std.testing.expect(result == .problem);
+    const case = try NumTestCase.initBothBound(&env, .int_poly_flex, .num_poly_flex);
+    try case.expectBothOrders(NumTestCase.expectOk);
 }
 
-test "unify - two unbound ints take the more restrictive reqs" {
+test "unify - literal vs concrete - exhaustive boundary tests" {
     const gpa = std.testing.allocator;
-
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const a_int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_unbound = Num.IntRequirements{
-        .sign_needed = false,
-        .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"9_to_15"),
-    } } } });
-    const a = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = a_int } } });
+    const TestCase = struct {
+        value: u128,
+        is_negative: bool,
+        target: NumTypeBound,
+        should_succeed: bool,
+    };
 
-    const b_int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_unbound = Num.IntRequirements{
-        .sign_needed = true,
-        .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"8"),
-    } } } });
-    const b = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = b_int } } });
+    const cases = [_]TestCase{
+        // U8 boundaries (0-255)
+        .{ .value = 0, .is_negative = false, .target = .u8, .should_succeed = true },
+        .{ .value = 127, .is_negative = false, .target = .u8, .should_succeed = true },
+        .{ .value = 255, .is_negative = false, .target = .u8, .should_succeed = true },
+        .{ .value = 256, .is_negative = false, .target = .u8, .should_succeed = false },
+        .{ .value = 1, .is_negative = true, .target = .u8, .should_succeed = false },
 
-    const result = try env.unify(a, b);
-    try std.testing.expect(result == .ok);
+        // I8 boundaries (-128 to 127)
+        .{ .value = 0, .is_negative = false, .target = .i8, .should_succeed = true },
+        .{ .value = 127, .is_negative = false, .target = .i8, .should_succeed = true },
+        .{ .value = 128, .is_negative = false, .target = .i8, .should_succeed = false },
+        .{ .value = 1, .is_negative = true, .target = .i8, .should_succeed = true },
+        .{ .value = 128, .is_negative = true, .target = .i8, .should_succeed = true }, // -128
+        .{ .value = 129, .is_negative = true, .target = .i8, .should_succeed = false },
 
-    // Assert that the more restrictive parts of each unbound appear in the
-    // unified type
-    const resolved = env.module_env.types.resolveVar(a).desc.content;
-    try std.testing.expect(.structure == resolved);
-    try std.testing.expect(.num == resolved.structure);
-    try std.testing.expect(.num_poly == resolved.structure.num);
+        // U16 boundaries (0-65535)
+        .{ .value = 255, .is_negative = false, .target = .u16, .should_succeed = true },
+        .{ .value = 256, .is_negative = false, .target = .u16, .should_succeed = true },
+        .{ .value = 65535, .is_negative = false, .target = .u16, .should_succeed = true },
+        .{ .value = 65536, .is_negative = false, .target = .u16, .should_succeed = false },
+        .{ .value = 1, .is_negative = true, .target = .u16, .should_succeed = false },
 
-    const resolved_int = env.module_env.types.resolveVar(resolved.structure.num.num_poly).desc.content;
-    try std.testing.expect(.structure == resolved_int);
-    try std.testing.expect(.num == resolved_int.structure);
-    try std.testing.expect(.int_unbound == resolved_int.structure.num);
-    try std.testing.expectEqual(true, resolved_int.structure.num.int_unbound.sign_needed);
-    try std.testing.expectEqual(@intFromEnum(Num.Int.BitsNeeded.@"9_to_15"), resolved_int.structure.num.int_unbound.bits_needed);
+        // I16 boundaries (-32768 to 32767)
+        .{ .value = 32767, .is_negative = false, .target = .i16, .should_succeed = true },
+        .{ .value = 32768, .is_negative = false, .target = .i16, .should_succeed = false },
+        .{ .value = 32768, .is_negative = true, .target = .i16, .should_succeed = true }, // -32768
+        .{ .value = 32769, .is_negative = true, .target = .i16, .should_succeed = false },
+
+        // U32 boundaries
+        .{ .value = 65535, .is_negative = false, .target = .u32, .should_succeed = true },
+        .{ .value = 65536, .is_negative = false, .target = .u32, .should_succeed = true },
+        .{ .value = 4294967295, .is_negative = false, .target = .u32, .should_succeed = true },
+        .{ .value = 4294967296, .is_negative = false, .target = .u32, .should_succeed = false },
+
+        // I32 boundaries (-2147483648 to 2147483647)
+        .{ .value = 2147483647, .is_negative = false, .target = .i32, .should_succeed = true },
+        .{ .value = 2147483648, .is_negative = false, .target = .i32, .should_succeed = false },
+        .{ .value = 2147483648, .is_negative = true, .target = .i32, .should_succeed = true },
+        .{ .value = 2147483649, .is_negative = true, .target = .i32, .should_succeed = false },
+
+        // U64 boundaries
+        .{ .value = 4294967295, .is_negative = false, .target = .u64, .should_succeed = true },
+        .{ .value = 18446744073709551615, .is_negative = false, .target = .u64, .should_succeed = true },
+
+        // I64 boundaries
+        .{ .value = 9223372036854775807, .is_negative = false, .target = .i64, .should_succeed = true },
+        .{ .value = 9223372036854775808, .is_negative = false, .target = .i64, .should_succeed = false },
+        .{ .value = 9223372036854775808, .is_negative = true, .target = .i64, .should_succeed = true },
+
+        // U128 - always succeeds for positive
+        .{ .value = 18446744073709551615, .is_negative = false, .target = .u128, .should_succeed = true },
+        .{ .value = 1, .is_negative = true, .target = .u128, .should_succeed = false },
+
+        // I128 - succeeds for all values we can represent
+        .{ .value = 18446744073709551615, .is_negative = false, .target = .i128, .should_succeed = true },
+        .{ .value = 18446744073709551615, .is_negative = true, .target = .i128, .should_succeed = true },
+    };
+
+    for (cases) |tc| {
+        const case = try NumTestCase.init(&env, NumTypeUnbound.intLiteral(tc.value, tc.is_negative), tc.target);
+
+        if (tc.should_succeed) {
+            try case.expectBothOrders(NumTestCase.expectOk);
+        } else {
+            try case.expectBothOrders(NumTestCase.expectProblem);
+        }
+    }
 }
 
-// number requirements - frac //
-
-test "unify - two unbound fracs take the more restrictive reqs" {
+test "unify - frac literal vs concrete - boundary tests" {
     const gpa = std.testing.allocator;
-
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const a_frac = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_unbound = Num.FracRequirements{
-        .fits_in_f32 = true,
-        .fits_in_dec = false,
-    } } } });
-    const a = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = a_frac } } });
+    const TestCase = struct {
+        fits_f32: bool,
+        fits_dec: bool,
+        target: NumTypeBound,
+        should_succeed: bool,
+    };
 
-    const b_frac = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_unbound = Num.FracRequirements{
-        .fits_in_f32 = false,
-        .fits_in_dec = true,
-    } } } });
-    const b = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = b_frac } } });
+    const cases = [_]TestCase{
+        // Fits in both
+        .{ .fits_f32 = true, .fits_dec = true, .target = .f32, .should_succeed = true },
+        .{ .fits_f32 = true, .fits_dec = true, .target = .f64, .should_succeed = true },
+        .{ .fits_f32 = true, .fits_dec = true, .target = .dec, .should_succeed = true },
 
-    const result = try env.unify(a, b);
-    try std.testing.expect(result == .ok);
+        // Only fits in f32 (and therefore f64)
+        .{ .fits_f32 = true, .fits_dec = false, .target = .f32, .should_succeed = true },
+        .{ .fits_f32 = true, .fits_dec = false, .target = .f64, .should_succeed = true },
+        .{ .fits_f32 = true, .fits_dec = false, .target = .dec, .should_succeed = false },
 
-    // Assert that the more restrictive parts of each unbound appear in the
-    // unified type
-    const resolved = env.module_env.types.resolveVar(a).desc.content;
-    try std.testing.expect(.structure == resolved);
-    try std.testing.expect(.num == resolved.structure);
-    try std.testing.expect(.num_poly == resolved.structure.num);
+        // Only fits in dec
+        .{ .fits_f32 = false, .fits_dec = true, .target = .f32, .should_succeed = false },
+        .{ .fits_f32 = false, .fits_dec = true, .target = .f64, .should_succeed = true },
+        .{ .fits_f32 = false, .fits_dec = true, .target = .dec, .should_succeed = true },
 
-    const resolved_frac = env.module_env.types.resolveVar(resolved.structure.num.num_poly).desc.content;
-    try std.testing.expect(.structure == resolved_frac);
-    try std.testing.expect(.num == resolved_frac.structure);
-    try std.testing.expect(.frac_unbound == resolved_frac.structure.num);
-    try std.testing.expectEqual(false, resolved_frac.structure.num.frac_unbound.fits_in_f32);
-    try std.testing.expectEqual(false, resolved_frac.structure.num.frac_unbound.fits_in_dec);
+        // Only fits in f64
+        .{ .fits_f32 = false, .fits_dec = false, .target = .f32, .should_succeed = false },
+        .{ .fits_f32 = false, .fits_dec = false, .target = .f64, .should_succeed = true },
+        .{ .fits_f32 = false, .fits_dec = false, .target = .dec, .should_succeed = false },
+    };
+
+    for (cases) |tc| {
+        const case = try NumTestCase.init(&env, NumTypeUnbound.fracLiteral(tc.fits_f32, tc.fits_dec), tc.target);
+
+        if (tc.should_succeed) {
+            try case.expectBothOrders(NumTestCase.expectOk);
+        } else {
+            try case.expectBothOrders(NumTestCase.expectProblem);
+        }
+    }
+}
+
+test "unify - unbound vs polymorphic - full matrix" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const UnboundKind = enum { int, frac, num };
+    const PolyKind = enum { int_poly_flex, frac_poly_flex, num_poly_flex };
+
+    // Matrix: should unbound × poly unify?
+    const ShouldUnify = enum { yes, no };
+    const should_unify = std.EnumArray(UnboundKind, std.EnumArray(PolyKind, ShouldUnify)).init(.{
+        .int = std.EnumArray(PolyKind, ShouldUnify).init(.{
+            .int_poly_flex = .yes, // Num(Int(a)) × Num(Int(b)) → yes
+            .frac_poly_flex = .no, // Num(Int(a)) × Num(Frac(b)) → NO!
+            .num_poly_flex = .yes, // Num(Int(a)) × Num(b) → yes
+        }),
+        .frac = std.EnumArray(PolyKind, ShouldUnify).init(.{
+            .int_poly_flex = .no, // Num(Frac(a)) × Num(Int(b)) → NO!
+            .frac_poly_flex = .yes, // Num(Frac(a)) × Num(Frac(b)) → yes
+            .num_poly_flex = .yes, // Num(Frac(a)) × Num(b) → yes
+        }),
+        .num = std.EnumArray(PolyKind, ShouldUnify).init(.{
+            .int_poly_flex = .yes, // Num(a) × Num(Int(b)) → yes
+            .frac_poly_flex = .yes, // Num(a) × Num(Frac(b)) → yes
+            .num_poly_flex = .yes, // Num(a) × Num(b) → yes
+        }),
+    });
+
+    const unbound_specs = std.EnumArray(UnboundKind, NumTypeUnbound).init(.{
+        .int = NumTypeUnbound.intLiteral(100, false),
+        .frac = NumTypeUnbound.fracLiteral(true, true),
+        .num = NumTypeUnbound.numLiteral(100, false, true, true),
+    });
+
+    const poly_specs = std.EnumArray(PolyKind, NumTypeBound).init(.{
+        .int_poly_flex = .int_poly_flex,
+        .frac_poly_flex = .frac_poly_flex,
+        .num_poly_flex = .num_poly_flex,
+    });
+
+    inline for (std.meta.fields(UnboundKind)) |unbound_field| {
+        inline for (std.meta.fields(PolyKind)) |poly_field| {
+            const unbound_kind = @field(UnboundKind, unbound_field.name);
+            const poly_kind = @field(PolyKind, poly_field.name);
+
+            const case = try NumTestCase.init(&env, unbound_specs.get(unbound_kind), poly_specs.get(poly_kind));
+
+            const expected = should_unify.get(unbound_kind).get(poly_kind);
+
+            // Add context on failure
+            if (expected == .yes) {
+                case.expectBothOrders(NumTestCase.expectOk) catch |err| {
+                    std.debug.print("FAILED: {s} × {s} (expected to unify)\n", .{ @tagName(unbound_kind), @tagName(poly_kind) });
+                    return err;
+                };
+            } else {
+                case.expectBothOrders(NumTestCase.expectProblem) catch |err| {
+                    std.debug.print("FAILED: {s} × {s} (expected NOT to unify)\n", .{ @tagName(unbound_kind), @tagName(poly_kind) });
+                    return err;
+                };
+            }
+        }
+    }
+}
+
+test "unify - polymorphic vs polymorphic - full matrix" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const PolyKind = enum { num_poly_flex, int_poly_flex, frac_poly_flex };
+
+    // Matrix: should poly × poly unify?
+    const ShouldUnify = enum { yes, no };
+    const should_unify = std.EnumArray(PolyKind, std.EnumArray(PolyKind, ShouldUnify)).init(.{
+        .num_poly_flex = std.EnumArray(PolyKind, ShouldUnify).init(.{
+            .num_poly_flex = .yes, // Num(a) × Num(b) → yes
+            .int_poly_flex = .yes, // Num(a) × Num(Int(b)) → yes
+            .frac_poly_flex = .yes, // Num(a) × Num(Frac(b)) → yes
+        }),
+        .int_poly_flex = std.EnumArray(PolyKind, ShouldUnify).init(.{
+            .num_poly_flex = .yes, // Num(Int(a)) × Num(b) → yes
+            .int_poly_flex = .yes, // Num(Int(a)) × Num(Int(b)) → yes
+            .frac_poly_flex = .no, // Num(Int(a)) × Num(Frac(b)) → NO!
+        }),
+        .frac_poly_flex = std.EnumArray(PolyKind, ShouldUnify).init(.{
+            .num_poly_flex = .yes, // Num(Frac(a)) × Num(b) → yes
+            .int_poly_flex = .no, // Num(Frac(a)) × Num(Int(b)) → NO!
+            .frac_poly_flex = .yes, // Num(Frac(a)) × Num(Frac(b)) → yes
+        }),
+    });
+
+    const poly_specs = std.EnumArray(PolyKind, NumTypeBound).init(.{
+        .num_poly_flex = .num_poly_flex,
+        .int_poly_flex = .int_poly_flex,
+        .frac_poly_flex = .frac_poly_flex,
+    });
+
+    inline for (std.meta.fields(PolyKind)) |a_field| {
+        inline for (std.meta.fields(PolyKind)) |b_field| {
+            const a_kind = @field(PolyKind, a_field.name);
+            const b_kind = @field(PolyKind, b_field.name);
+
+            const case = try NumTestCase.initBothBound(&env, poly_specs.get(a_kind), poly_specs.get(b_kind));
+
+            const expected = should_unify.get(a_kind).get(b_kind);
+
+            if (expected == .yes) {
+                case.expectBothOrders(NumTestCase.expectOk) catch |err| {
+                    std.debug.print("FAILED: {s} × {s} (expected to unify)\n", .{ @tagName(a_kind), @tagName(b_kind) });
+                    return err;
+                };
+            } else {
+                case.expectBothOrders(NumTestCase.expectProblem) catch |err| {
+                    std.debug.print("FAILED: {s} × {s} (expected NOT to unify)\n", .{ @tagName(a_kind), @tagName(b_kind) });
+                    return err;
+                };
+            }
+        }
+    }
+}
+
+test "unify - unbound vs unbound - requirement merging" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Test that int requirements are merged correctly
+    {
+        const case = try NumTestCase.initBothUnbound(&env, NumTypeUnbound.intLiteral(256, false), // needs 9 bits, unsigned
+            NumTypeUnbound.intLiteral(100, true) // needs 7 bits, signed
+        );
+
+        const unified = try case.unifyAndGetResult();
+        try std.testing.expect(unified.result == .ok);
+
+        // Should take max bits (9) and OR the sign (true)
+        const resolved = env.module_env.types.resolveVar(unified.a).desc.content;
+        const int_poly = resolved.structure.num.num_poly;
+        const int_unbound = env.module_env.types.resolveVar(int_poly).desc.content.structure.num.int_unbound;
+
+        try std.testing.expectEqual(true, int_unbound.sign_needed);
+        try std.testing.expectEqual(Num.Int.BitsNeeded.@"9_to_15".toBits(), int_unbound.bits_needed);
+    }
+
+    // Test that frac requirements are merged correctly
+    {
+        const case = try NumTestCase.initBothUnbound(&env, NumTypeUnbound.fracLiteral(true, false), // fits f32 only
+            NumTypeUnbound.fracLiteral(false, true) // fits dec only
+        );
+
+        const unified = try case.unifyAndGetResult();
+        try std.testing.expect(unified.result == .ok);
+
+        // Should take AND of capabilities (both false)
+        const resolved = env.module_env.types.resolveVar(unified.a).desc.content;
+        const frac_poly = resolved.structure.num.num_poly;
+        const frac_unbound = env.module_env.types.resolveVar(frac_poly).desc.content.structure.num.frac_unbound;
+
+        try std.testing.expectEqual(false, frac_unbound.fits_in_f32);
+        try std.testing.expectEqual(false, frac_unbound.fits_in_dec);
+    }
+
+    // Test that num requirements merge both int and frac (Num(num_unbound))
+    {
+        const case = try NumTestCase.initBothUnbound(&env, NumTypeUnbound.numLiteral(256, false, true, false), NumTypeUnbound.numLiteral(100, true, false, true));
+
+        const unified = try case.unifyAndGetResult();
+        try std.testing.expect(unified.result == .ok);
+
+        const resolved = env.module_env.types.resolveVar(unified.a).desc.content.structure.num.num_unbound;
+
+        try std.testing.expectEqual(true, resolved.int_requirements.sign_needed);
+        try std.testing.expectEqual(Num.Int.BitsNeeded.@"9_to_15".toBits(), resolved.int_requirements.bits_needed);
+        try std.testing.expectEqual(false, resolved.frac_requirements.fits_in_f32);
+        try std.testing.expectEqual(false, resolved.frac_requirements.fits_in_dec);
+    }
+
+    // Test that Num(int_unbound) × Num(frac_unbound) doesn't unify
+    {
+        const case = try NumTestCase.initBothUnbound(&env, NumTypeUnbound.intLiteral(100, false), NumTypeUnbound.fracLiteral(true, true));
+
+        try case.expectProblem();
+    }
+
+    // Test that Num(num_unbound) × Num(Int(int_unbound)) unifies and merges int requirements
+    {
+        const case = try NumTestCase.initBothUnbound(&env, NumTypeUnbound.numLiteral(256, false, true, false), // Num(num_unbound)
+            NumTypeUnbound.intLiteral(100, true) // Num(Int(int_unbound))
+        );
+
+        const unified = try case.unifyAndGetResult();
+        try std.testing.expect(unified.result == .ok);
+
+        // Result should be Num(Int(int_unbound)) with merged requirements
+        const resolved = env.module_env.types.resolveVar(unified.a).desc.content;
+        const int_poly = resolved.structure.num.num_poly;
+        const int_unbound = env.module_env.types.resolveVar(int_poly).desc.content.structure.num.int_unbound;
+
+        try std.testing.expectEqual(true, int_unbound.sign_needed);
+        try std.testing.expectEqual(Num.Int.BitsNeeded.@"9_to_15".toBits(), int_unbound.bits_needed);
+    }
+
+    // Test that Num(num_unbound) × Num(Frac(frac_unbound)) unifies and merges frac requirements
+    {
+        const case = try NumTestCase.initBothUnbound(&env, NumTypeUnbound.numLiteral(100, false, true, false), // Num(num_unbound)
+            NumTypeUnbound.fracLiteral(false, true) // Num(Frac(frac_unbound))
+        );
+
+        const unified = try case.unifyAndGetResult();
+        try std.testing.expect(unified.result == .ok);
+
+        // Result should be Num(Frac(frac_unbound)) with merged requirements
+        const resolved = env.module_env.types.resolveVar(unified.a).desc.content;
+        const frac_poly = resolved.structure.num.num_poly;
+        const frac_unbound = env.module_env.types.resolveVar(frac_poly).desc.content.structure.num.frac_unbound;
+
+        try std.testing.expectEqual(false, frac_unbound.fits_in_f32);
+        try std.testing.expectEqual(false, frac_unbound.fits_in_dec);
+    }
+}
+
+test "unify - compact vs unbound - both orders" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Compact should win after checking requirements
+    const case = try NumTestCase.init(&env, NumTypeUnbound.intLiteral(100, false), .u8);
+
+    // Test both orders and verify compact wins
+    {
+        const unified = try case.unifyAndGetResult();
+        try std.testing.expect(unified.result == .ok);
+
+        const resolved = env.module_env.types.resolveVar(unified.a).desc.content.structure.num;
+        try std.testing.expect(resolved == .num_compact);
+        try std.testing.expectEqual(Num.Int.Precision.u8, resolved.num_compact.int);
+    }
+
+    // Swapped order should also have compact win
+    {
+        const swapped_case = NumTestCase{
+            .env = case.env,
+            .a_spec = case.b_spec,
+            .b_spec = case.a_spec,
+        };
+        const unified = try swapped_case.unifyAndGetResult();
+        try std.testing.expect(unified.result == .ok);
+
+        const resolved = env.module_env.types.resolveVar(unified.a).desc.content.structure.num;
+        try std.testing.expect(resolved == .num_compact);
+        try std.testing.expectEqual(Num.Int.Precision.u8, resolved.num_compact.int);
+    }
+}
+
+test "unify - compact vs compact - same type succeeds" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const int_types = [_]NumTypeBound{ .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 };
+    const frac_types = [_]NumTypeBound{ .f32, .f64, .dec };
+
+    // Same int types should unify
+    for (int_types) |t| {
+        const case = try NumTestCase.initBothBound(&env, t, t);
+        try case.expectBothOrders(NumTestCase.expectOk);
+    }
+
+    // Same frac types should unify
+    for (frac_types) |t| {
+        const case = try NumTestCase.initBothBound(&env, t, t);
+        try case.expectBothOrders(NumTestCase.expectOk);
+    }
+
+    // Different int types should NOT unify
+    const case_u8_i8 = try NumTestCase.initBothBound(&env, .u8, .i8);
+    try case_u8_i8.expectBothOrders(NumTestCase.expectProblem);
+
+    const case_u8_u16 = try NumTestCase.initBothBound(&env, .u8, .u16);
+    try case_u8_u16.expectBothOrders(NumTestCase.expectProblem);
+
+    // Int vs frac should NOT unify
+    const case_u8_f32 = try NumTestCase.initBothBound(&env, .u8, .f32);
+    try case_u8_f32.expectBothOrders(NumTestCase.expectProblem);
 }
