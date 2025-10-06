@@ -23,12 +23,22 @@ const RocOps = builtins.host_abi.RocOps;
 
 const Repl = @This();
 
+/// Information about a type declaration
+const TypeDeclInfo = struct {
+    /// Name of the type (e.g., "Foo")
+    type_name: []const u8,
+    /// Whether it has associated items
+    has_associated_items: bool,
+};
+
 /// Type of definition stored in the REPL history
 const DefKind = union(enum) {
     /// An assignment with an identifier
     assignment: []const u8,
     /// An import statement
     import,
+    /// A type declaration
+    type_decl: TypeDeclInfo,
 };
 
 /// Represents a past definition in the REPL session
@@ -43,6 +53,7 @@ const PastDef = struct {
         switch (self.kind) {
             .assignment => |ident| allocator.free(ident),
             .import => {},
+            .type_decl => |info| allocator.free(info.type_name),
         }
     }
 };
@@ -119,31 +130,21 @@ fn processInput(self: *Repl, input: []const u8) ![]const u8 {
 
     switch (parse_result) {
         .assignment => |info| {
+            // Make a copy of the identifier to keep (will be stored in past_defs)
+            const ident_for_past_defs = try self.allocator.dupe(u8, info.ident);
+            errdefer self.allocator.free(ident_for_past_defs);
             defer self.allocator.free(info.ident);
 
-            // Add to past definitions (allows redefinition)
+            // Evaluate the assignment and return the value of the identifier
+            const result = try self.evaluateDefinition(input, ident_for_past_defs);
+
+            // Add to past definitions after successful evaluation (allows redefinition)
             try self.past_defs.append(.{
                 .source = try self.allocator.dupe(u8, input),
-                .kind = .{ .assignment = try self.allocator.dupe(u8, info.ident) },
+                .kind = .{ .assignment = ident_for_past_defs },
             });
 
-            // For assignments, evaluate the RHS directly
-            // Extract the RHS from the assignment
-            if (std.mem.indexOf(u8, input, "=")) |eq_pos| {
-                const rhs = std.mem.trim(u8, input[eq_pos + 1 ..], " \t\n");
-
-                // If the RHS is a simple literal, evaluate it directly
-                if (std.fmt.parseInt(i64, rhs, 10)) |num| {
-                    return try std.fmt.allocPrint(self.allocator, "{d}", .{num});
-                } else |_| {}
-
-                // Otherwise, evaluate with context
-                const full_source = try self.buildFullSource(rhs);
-                defer self.allocator.free(full_source);
-                return try self.evaluateSource(full_source);
-            }
-
-            return try self.allocator.dupe(u8, "");
+            return result;
         },
         .import => {
             // Add import to past definitions
@@ -156,14 +157,24 @@ fn processInput(self: *Repl, input: []const u8) ![]const u8 {
         },
         .expression => {
             // Evaluate expression with all past definitions
-            const full_source = try self.buildFullSource(input);
-            defer self.allocator.free(full_source);
-
-            return try self.evaluateSource(full_source);
+            return try self.evaluateSource(input);
         },
-        .type_decl => {
-            // Type declarations can't be evaluated
-            return try self.allocator.dupe(u8, "");
+        .type_decl => |info| {
+            const type_name_copy = try self.allocator.dupe(u8, info.type_name);
+            defer self.allocator.free(info.type_name);
+
+            // For now, just store it without evaluation
+            // TODO: In the future, we might want to evaluate associated items here
+            try self.past_defs.append(.{
+                .source = try self.allocator.dupe(u8, input),
+                .kind = .{ .type_decl = .{
+                    .type_name = try self.allocator.dupe(u8, type_name_copy),
+                    .has_associated_items = info.has_associated_items,
+                } },
+            });
+
+            // Output the type name to indicate it was defined
+            return try std.fmt.allocPrint(self.allocator, "{s}", .{type_name_copy});
         },
         .parse_error => |msg| {
             defer self.allocator.free(msg);
@@ -176,7 +187,10 @@ const ParseResult = union(enum) {
     assignment: struct { ident: []const u8 }, // This ident must be allocator.dupe'd
     import,
     expression,
-    type_decl,
+    type_decl: struct {
+        type_name: []const u8, // This must be allocator.dupe'd
+        has_associated_items: bool,
+    },
     parse_error: []const u8, // This must be allocator.dupe'd
 };
 
@@ -208,7 +222,17 @@ fn tryParseStatement(self: *Repl, input: []const u8) !ParseResult {
                     return ParseResult.expression;
                 },
                 .import => return ParseResult.import,
-                .type_decl => return ParseResult.type_decl,
+                .type_decl => |decl| {
+                    const header = try ast.store.getTypeHeader(decl.header);
+                    const type_name_tok = header.name;
+                    const token_region = ast.tokens.resolve(type_name_tok);
+                    const type_name = ast.env.source[token_region.start.offset..token_region.end.offset];
+
+                    return ParseResult{ .type_decl = .{
+                        .type_name = try self.allocator.dupe(u8, type_name),
+                        .has_associated_items = decl.associated != null,
+                    } };
+                },
                 else => return ParseResult.expression,
             }
         }
@@ -227,7 +251,8 @@ fn tryParseStatement(self: *Repl, input: []const u8) !ParseResult {
 }
 
 /// Build full source including all past definitions
-fn buildFullSource(self: *Repl, current_expr: []const u8) ![]const u8 {
+/// If `def_ident` is provided, the current_expr is a definition and we add an expression to evaluate def_ident
+fn buildFullSource(self: *Repl, current_expr: []const u8, def_ident: ?[]const u8) ![]const u8 {
     var buffer = std.ArrayList(u8).init(self.allocator);
     defer buffer.deinit();
 
@@ -237,39 +262,68 @@ fn buildFullSource(self: *Repl, current_expr: []const u8) ![]const u8 {
         try buffer.append('\n');
     }
 
-    // Add current expression
-    try buffer.appendSlice(current_expr);
+    // If we have past_defs OR a def_ident, we need to wrap/structure the source
+    if (self.past_defs.items.len > 0 or def_ident != null) {
+        // Don't add a header - we'll parse as a headerless file (type module or default-app)
+        // The REPL validation_context will skip module validation
+
+        if (def_ident) |ident| {
+            // Current input is a definition - add it as-is, then add an expression to evaluate the identifier
+            try buffer.appendSlice(current_expr);
+            try buffer.append('\n');
+            try buffer.appendSlice("main! = |_| ");
+            try buffer.appendSlice(ident);
+        } else {
+            // Current input is an expression - wrap it in main!
+            try buffer.appendSlice("main! = |_| ");
+            try buffer.appendSlice(current_expr);
+        }
+    } else {
+        try buffer.appendSlice(current_expr);
+    }
 
     return try buffer.toOwnedSlice();
 }
 
 /// Evaluate source code
 fn evaluateSource(self: *Repl, source: []const u8) ![]const u8 {
-    return try self.evaluatePureExpression(source);
+    return try self.evaluatePureExpression(source, null);
+}
+
+/// Evaluate source code for a definition and return the value of the assigned identifier
+fn evaluateDefinition(self: *Repl, source: []const u8, ident: []const u8) ![]const u8 {
+    return try self.evaluatePureExpression(source, ident);
 }
 
 /// Evaluate a pure expression
-fn evaluatePureExpression(self: *Repl, expr_source: []const u8) ![]const u8 {
-    // If we have past definitions and the expression might reference them,
-    // we need context-aware evaluation (not yet implemented)
-    if (self.past_defs.items.len > 0) {
-        // Check if it's a simple literal that doesn't need context
-        if (std.fmt.parseInt(i64, std.mem.trim(u8, expr_source, " \t\n"), 10)) |num| {
-            return try std.fmt.allocPrint(self.allocator, "{d}", .{num});
-        } else |_| {}
-
-        // Context-aware evaluation not yet implemented
-        return try std.fmt.allocPrint(self.allocator, "<needs context>", .{});
-    }
+/// If `def_ident` is provided, the expr_source is treated as a definition and we return the value of def_ident
+fn evaluatePureExpression(self: *Repl, expr_source: []const u8, def_ident: ?[]const u8) ![]const u8 {
+    // Build the full source including past definitions
+    // We need to build full source if we have past_defs OR if this is a definition (def_ident != null)
+    const need_full_source = self.past_defs.items.len > 0 or def_ident != null;
+    const full_source = if (need_full_source)
+        try self.buildFullSource(expr_source, def_ident)
+    else
+        expr_source;
+    defer if (need_full_source) self.allocator.free(full_source);
 
     // Create module environment for the expression
-    var module_env = try ModuleEnv.init(self.allocator, expr_source);
+    var module_env = try ModuleEnv.init(self.allocator, full_source);
     defer module_env.deinit();
 
-    // Parse as expression
-    var parse_ast = parse.parseExpr(&module_env.common, self.allocator) catch |err| {
-        return try std.fmt.allocPrint(self.allocator, "Parse error: {}", .{err});
-    };
+    // Parse based on context:
+    // - If we have past_defs OR a def_ident (i.e., current input is a definition), parse as file
+    // - Otherwise, parse as expression
+    const need_file_parse = self.past_defs.items.len > 0 or def_ident != null;
+
+    var parse_ast = if (need_file_parse)
+        parse.parse(&module_env.common, self.allocator) catch |err| {
+            return try std.fmt.allocPrint(self.allocator, "Parse error: {}", .{err});
+        }
+    else
+        parse.parseExpr(&module_env.common, self.allocator) catch |err| {
+            return try std.fmt.allocPrint(self.allocator, "Parse error: {}", .{err});
+        };
     defer parse_ast.deinit(self.allocator);
 
     // Empty scratch space
@@ -293,12 +347,67 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8) ![]const u8 {
     };
     defer czer.deinit();
 
-    // Canonicalize the expression
-    const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-    const canonical_expr_idx = czer.canonicalizeExpr(expr_idx) catch |err| {
-        return try std.fmt.allocPrint(self.allocator, "Canonicalize expr error: {}", .{err});
-    } orelse {
-        return try self.allocator.dupe(u8, "Failed to canonicalize expression");
+    // Canonicalize based on whether we have past definitions or a def_ident
+    const canonical_expr_idx: can.CIR.Expr.Idx = if (self.past_defs.items.len > 0 or def_ident != null) blk: {
+        // Canonicalize the whole file (which includes type declarations and statements)
+        czer.canonicalizeFile() catch |err| {
+            return try std.fmt.allocPrint(self.allocator, "Canonicalize file error: {}", .{err});
+        };
+
+        // Get all the defs that were created during canonicalization from the all_defs span
+        // (scratch_defs is cleared by defSpanFrom, so we need to use the span)
+        const defs_slice = cir.store.sliceDefs(czer.env.all_defs);
+
+        if (defs_slice.len == 0) {
+            return try self.allocator.dupe(u8, "No definitions created during canonicalization");
+        }
+
+        // The last def should be our main! definition
+        // Find it by looking for the pattern that matches "main!"
+        var main_def_idx: ?can.CIR.Def.Idx = null;
+        for (defs_slice) |def_idx| {
+            const def = cir.store.getDef(def_idx);
+            const pattern = cir.store.getPattern(def.pattern);
+            if (pattern == .assign) {
+                const ident_idx = pattern.assign.ident;
+                const ident_text = cir.getIdent(ident_idx);
+                if (std.mem.eql(u8, ident_text, "main!")) {
+                    main_def_idx = def_idx;
+                    break;
+                }
+            }
+        }
+
+        if (main_def_idx) |def_idx| {
+            const def = cir.store.getDef(def_idx);
+            const expr = cir.store.getExpr(def.expr);
+            // main! is a lambda |_| <body>, so we need to extract the body
+            // It could be either e_lambda (no captures) or e_closure (with captures)
+            if (expr == .e_lambda) {
+                break :blk expr.e_lambda.body;
+            } else if (expr == .e_closure) {
+                // e_closure wraps an e_lambda, so we need to get the lambda first
+                const lambda_expr = cir.store.getExpr(expr.e_closure.lambda_idx);
+                if (lambda_expr == .e_lambda) {
+                    break :blk lambda_expr.e_lambda.body;
+                } else {
+                    return try self.allocator.dupe(u8, "main! closure does not contain a lambda");
+                }
+            } else {
+                return try std.fmt.allocPrint(self.allocator, "main! is not a lambda as expected, got: {s}", .{@tagName(expr)});
+            }
+        } else {
+            return try self.allocator.dupe(u8, "Could not find main! definition");
+        }
+    } else blk: {
+        // Canonicalize just the expression (no past definitions)
+        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+        const result = czer.canonicalizeExpr(expr_idx) catch |err| {
+            return try std.fmt.allocPrint(self.allocator, "Canonicalize expr error: {}", .{err});
+        } orelse {
+            return try self.allocator.dupe(u8, "Failed to canonicalize expression");
+        };
+        break :blk result.get_idx();
     };
 
     // Type check
@@ -307,15 +416,102 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8) ![]const u8 {
     };
     defer checker.deinit();
 
-    _ = checker.checkExprRepl(canonical_expr_idx.get_idx()) catch |err| {
-        return try std.fmt.allocPrint(self.allocator, "Type check error: {}", .{err});
-    };
+    // If we have file-level defs, use checkFile to type-check everything
+    // Otherwise, just check the single expression
+    if (self.past_defs.items.len > 0 or def_ident != null) {
+        checker.checkFile() catch |err| {
+            return try std.fmt.allocPrint(self.allocator, "Type check error: {}", .{err});
+        };
+    } else {
+        _ = checker.checkExprRepl(canonical_expr_idx) catch |err| {
+            return try std.fmt.allocPrint(self.allocator, "Type check error: {}", .{err});
+        };
+    }
 
     // Create interpreter
     var interpreter = eval.Interpreter.init(self.allocator, cir) catch |err| {
         return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
     };
     defer interpreter.deinit();
+
+    // If we have past definitions or a def_ident, we need to evaluate all the defs (except main!)
+    // to populate bindings for associated items
+    if (self.past_defs.items.len > 0 or def_ident != null) {
+        const defs_slice = cir.store.sliceDefs(czer.env.all_defs);
+
+        // Evaluate all defs except main! and the current def (if there are past defs)
+        for (defs_slice) |def_idx| {
+            const def = cir.store.getDef(def_idx);
+            const pattern = cir.store.getPattern(def.pattern);
+
+            // Skip main! since we extract its body separately
+            // Skip the current def ONLY if it's a NEW definition (not a redefinition)
+            if (pattern == .assign) {
+                const ident_idx = pattern.assign.ident;
+                const ident_text = cir.getIdent(ident_idx);
+                if (std.mem.eql(u8, ident_text, "main!")) {
+                    continue;
+                }
+                // Skip the current def only if it's a NEW definition
+                if (self.past_defs.items.len > 0 and def_ident != null) {
+                    if (std.mem.eql(u8, ident_text, def_ident.?)) {
+                        // Check if this is a redefinition
+                        var is_redefinition = false;
+                        for (self.past_defs.items) |past_def| {
+                            if (past_def.kind == .assignment) {
+                                if (std.mem.eql(u8, past_def.kind.assignment, ident_text)) {
+                                    is_redefinition = true;
+                                    break;
+                                }
+                            }
+                        }
+                        // Only skip if it's a NEW definition
+                        if (!is_redefinition) {
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            // Evaluate the def's expression
+            const value = interpreter.evalMinimal(def.expr, self.roc_ops) catch |err| {
+                return try std.fmt.allocPrint(self.allocator, "Error evaluating definition: {}", .{err});
+            };
+            // Don't defer value.decref here because we're storing it in bindings
+
+            // Create a binding for this pattern
+            try interpreter.bindings.append(.{
+                .pattern_idx = def.pattern,
+                .value = value,
+            });
+        }
+    }
+
+    // If we have past defs, check if we can evaluate the expression
+    if (self.past_defs.items.len > 0) {
+        if (def_ident) |current_ident| {
+            // We have a definition - check if it's a redefinition
+            var is_redefinition = false;
+            for (self.past_defs.items) |past_def| {
+                switch (past_def.kind) {
+                    .assignment => |ident| {
+                        if (std.mem.eql(u8, ident, current_ident)) {
+                            is_redefinition = true;
+                            break;
+                        }
+                    },
+                    .import, .type_decl => {},
+                }
+            }
+            if (!is_redefinition) {
+                // New definition that might reference past defs - can't evaluate without context
+                return try self.allocator.dupe(u8, "<needs context>");
+            }
+        } else {
+            // Just evaluating an expression (not a definition) with past defs - can't do context-aware evaluation
+            return try self.allocator.dupe(u8, "<needs context>");
+        }
+    }
 
     // Evaluate the expression
     if (self.trace_writer) |trace_writer| {
@@ -326,7 +522,7 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8) ![]const u8 {
         ctx.reset();
     }
 
-    const result = interpreter.evalMinimal(canonical_expr_idx.get_idx(), self.roc_ops) catch |err| {
+    const result = interpreter.evalMinimal(canonical_expr_idx, self.roc_ops) catch |err| {
         if (self.trace_writer) |_| {
             interpreter.endTrace();
         }
@@ -347,7 +543,7 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8) ![]const u8 {
         interpreter.endTrace();
     }
 
-    const expr_ct_var = can.ModuleEnv.varFrom(canonical_expr_idx.get_idx());
+    const expr_ct_var = can.ModuleEnv.varFrom(canonical_expr_idx);
     const output = blk: {
         const expr_rt_var = interpreter.translateTypeVar(cir, expr_ct_var) catch {
             break :blk try interpreter.renderValueRoc(result);
@@ -477,14 +673,14 @@ test "Repl - build full source with redefinitions" {
     });
 
     // Build full source for evaluating y
-    const full_source = try repl.buildFullSource("y");
+    const full_source = try repl.buildFullSource("y", null);
     defer std.testing.allocator.free(full_source);
 
     const expected =
         \\x = 5
         \\y = x + 1
         \\x = 6
-        \\y
+        \\main! = |_| y
     ;
     try testing.expectEqualStrings(expected, full_source);
 }
@@ -519,14 +715,14 @@ test "Repl - past def ordering" {
     try testing.expectEqualStrings("x = 3", repl.past_defs.items[2].source);
 
     // Build source shows all definitions
-    const full_source = try repl.buildFullSource("x");
+    const full_source = try repl.buildFullSource("x", null);
     defer std.testing.allocator.free(full_source);
 
     const expected =
         \\x = 1
         \\x = 2
         \\x = 3
-        \\x
+        \\main! = |_| x
     ;
     try testing.expectEqualStrings(expected, full_source);
 }
