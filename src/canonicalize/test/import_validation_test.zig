@@ -200,6 +200,9 @@ test "import validation - no module_envs provided" {
             .module_not_found => {
                 // expected this error message, ignore
             },
+            .module_header_deprecated => {
+                // expected deprecation warning, ignore
+            },
             else => {
                 // these errors are not expected
                 try testing.expect(false);

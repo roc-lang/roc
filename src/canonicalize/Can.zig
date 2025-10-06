@@ -170,7 +170,11 @@ pub fn deinit(
     self.scratch_free_vars.deinit(gpa);
 }
 
-pub fn init(env: *ModuleEnv, parse_ir: *AST, module_envs: ?*const std.StringHashMap(*const ModuleEnv)) std.mem.Allocator.Error!Self {
+pub fn init(
+    env: *ModuleEnv,
+    parse_ir: *AST,
+    module_envs: ?*const std.StringHashMap(*const ModuleEnv),
+) std.mem.Allocator.Error!Self {
     const gpa = env.gpa;
 
     // Create the canonicalizer with scopes
@@ -398,27 +402,52 @@ pub fn canonicalizeFile(
 
     // canonicalize_header_packages();
 
-    // First, process the header to create exposed_scope
+    // First, process the header to create exposed_scope and set module_kind
     const header = self.parse_ir.store.getHeader(file.header);
     switch (header) {
-        .module => |h| try self.createExposedScope(h.exposes),
-        .package => |h| try self.createExposedScope(h.exposes),
-        .platform => |h| try self.createExposedScope(h.exposes),
-        .hosted => |h| try self.createExposedScope(h.exposes),
+        .module => |h| {
+            self.env.module_kind = .deprecated_module;
+            // Emit deprecation warning
+            const header_region = self.parse_ir.tokenizedRegionToRegion(h.region);
+            try self.env.pushDiagnostic(.{
+                .module_header_deprecated = .{
+                    .region = header_region,
+                },
+            });
+            try self.createExposedScope(h.exposes);
+        },
+        .package => |h| {
+            self.env.module_kind = .package;
+            try self.createExposedScope(h.exposes);
+        },
+        .platform => |h| {
+            self.env.module_kind = .platform;
+            try self.createExposedScope(h.exposes);
+        },
+        .hosted => |h| {
+            self.env.module_kind = .hosted;
+            try self.createExposedScope(h.exposes);
+        },
         .app => |h| {
+            self.env.module_kind = .app;
             // App headers have 'provides' instead of 'exposes'
             // but we need to track the provided functions for export
             try self.createExposedScope(h.provides);
         },
         .type_module => {
+            // Set to undefined placeholder - will be properly set during validation
+            // when we find the matching type declaration
+            self.env.module_kind = .{ .type_module = undefined };
             // Type modules don't have an exposes list
             // We'll validate the type name matches the module name after processing types
         },
         .default_app => {
+            self.env.module_kind = .default_app;
             // Default app modules don't have an exposes list
             // They have a main! function that will be validated
         },
         .malformed => {
+            self.env.module_kind = .malformed;
             // Skip malformed headers
         },
     }
@@ -515,29 +544,6 @@ pub fn canonicalizeFile(
                 // Skip non-type-declaration statements in first pass
             },
         }
-    }
-
-    // After processing all type declarations, validate type module constraints
-    switch (header) {
-        .type_module => {
-            // First check if there's a main! function (for default_app modules)
-            const main_result = try self.findMainFunction();
-            switch (main_result) {
-                .valid => |main_info| {
-                    // This is actually a default_app module - main! was found with correct arity
-                    // Store the main function index in the header
-                    _ = main_info; // TODO: update header with main_fn_idx
-                },
-                .wrong_arity => {
-                    // main! was found but with wrong arity - error already reported
-                },
-                .not_found => {
-                    // No main! found, so validate as a regular type module
-                    try self.validateTypeModuleName();
-                },
-            }
-        },
-        else => {},
     }
 
     // Second pass: Process all other statements
@@ -731,9 +737,55 @@ pub fn canonicalizeFile(
 
     // Assert that everything is in-sync
     self.env.debugAssertArraysInSync();
+}
 
-    // Freeze the interners after canonicalization is complete
-    self.env.freezeInterners();
+/// Validate a type module for use in checking mode (roc check).
+/// This accepts both type modules and default-app modules, providing helpful
+/// error messages when neither is valid.
+pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    switch (self.env.module_kind) {
+        .type_module => |*main_type_ident| {
+            const main_status = try self.checkMainFunction();
+            const matching_type_ident = self.findMatchingTypeIdent();
+
+            // Store the matching type ident in module_kind if found
+            if (matching_type_ident) |type_ident| {
+                main_type_ident.* = type_ident;
+                // Auto-expose the main type for type modules
+                try self.env.addExposedById(type_ident);
+            }
+
+            // Valid if either we have a valid main! or a matching type declaration
+            const is_valid = (main_status == .valid) or (matching_type_ident != null);
+
+            if (!is_valid and main_status == .not_found) {
+                // Neither valid main! nor matching type - report helpful error
+                try self.reportTypeModuleOrDefaultAppError();
+            }
+        },
+        .default_app, .app, .package, .platform, .hosted, .deprecated_module, .malformed => {
+            // No validation needed for these module kinds in checking mode
+        },
+    }
+}
+
+/// Validate a module for use in execution mode (e.g. `roc main.roc` or `roc build`).
+/// Requires a valid main! function for type_module headers.
+pub fn validateForExecution(self: *Self) std.mem.Allocator.Error!void {
+    switch (self.env.module_kind) {
+        .type_module => {
+            const main_status = try self.checkMainFunction();
+            if (main_status == .not_found) {
+                try self.reportExecutionRequiresAppOrDefaultApp();
+            }
+        },
+        .default_app, .app, .package, .platform, .hosted, .deprecated_module, .malformed => {
+            // No validation needed for these module kinds in execution mode
+        },
+    }
 }
 
 fn canonicalizeStmtDecl(self: *Self, decl: AST.Statement.Decl, mb_last_anno: ?TypeAnnoIdent) std.mem.Allocator.Error!void {
@@ -1201,10 +1253,12 @@ fn canonicalizeImportStatement(
     // Process type imports from this module
     try self.processTypeImports(module_name, alias);
 
-    // 5. Convert exposed items and introduce them into scope
-    const cir_exposes = try self.convertASTExposesToCIR(import_stmt.exposes);
+    // 5. Convert exposed items to CIR
+    const scratch_start = self.env.store.scratchExposedItemTop();
+    try self.convertASTExposesToCIR(import_stmt.exposes);
+    const cir_exposes = try self.env.store.exposedItemSpanFrom(scratch_start);
     const import_region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
-    try self.introduceExposedItemsIntoScope(cir_exposes, module_name, import_region);
+    try self.introduceExposedItemsIntoScope(cir_exposes, module_name, alias, import_region);
 
     // 6. Store the mapping from module name to Import.Idx
     try self.import_indices.put(self.env.gpa, module_name_text, module_import_idx);
@@ -1300,12 +1354,11 @@ fn createExternalDeclaration(
 }
 
 /// Convert AST exposed items to CIR exposed items
+/// If main_type_name is provided, auto-inject it as an exposed item
 fn convertASTExposesToCIR(
     self: *Self,
     ast_exposes: AST.ExposedItem.Span,
-) std.mem.Allocator.Error!CIR.ExposedItem.Span {
-    const scratch_start = self.env.store.scratchExposedItemTop();
-
+) std.mem.Allocator.Error!void {
     const ast_exposed_slice = self.parse_ir.store.exposedItemSlice(ast_exposes);
     for (ast_exposed_slice) |ast_exposed_idx| {
         const ast_exposed = self.parse_ir.store.getExposedItem(ast_exposed_idx);
@@ -1356,8 +1409,6 @@ fn convertASTExposesToCIR(
         const cir_exposed_idx = try self.env.addExposedItemAndTypeVar(cir_exposed, .{ .flex_var = null }, region);
         try self.env.store.addScratchExposedItem(cir_exposed_idx);
     }
-
-    return try self.env.store.exposedItemSpanFrom(scratch_start);
 }
 
 /// Introduce converted exposed items into scope for identifier resolution
@@ -1365,6 +1416,7 @@ fn introduceExposedItemsIntoScope(
     self: *Self,
     exposed_items_span: CIR.ExposedItem.Span,
     module_name: Ident.Idx,
+    module_alias: Ident.Idx,
     import_region: Region,
 ) std.mem.Allocator.Error!void {
     const exposed_items_slice = self.env.store.sliceExposedItems(exposed_items_span);
@@ -1382,6 +1434,20 @@ fn introduceExposedItemsIntoScope(
 
         // Get the module's exposed_items
         const module_env = envs_map.get(module_name_text).?;
+
+        // For type modules, auto-introduce the main type with the alias name
+        switch (module_env.module_kind) {
+            .type_module => |main_type_ident| {
+                if (module_env.containsExposedById(main_type_ident)) {
+                    const item_info = Scope.ExposedItemInfo{
+                        .module_name = module_name,
+                        .original_name = main_type_ident,
+                    };
+                    try self.scopeIntroduceExposedItem(module_alias, item_info);
+                }
+            },
+            else => {},
+        }
 
         // Validate each exposed item
         for (exposed_items_slice) |exposed_item_idx| {
@@ -6982,23 +7048,17 @@ fn createUnknownIdent(self: *Self) std.mem.Allocator.Error!Ident.Idx {
     return try self.env.insertIdent(base.Ident.for_text("unknown"));
 }
 
-/// Check if this module has a main! function suitable for default_app
-/// Returns the def index if found and valid, null otherwise
-const MainFunctionResult = union(enum) {
-    valid: struct { def_idx: CIR.Def.Idx, region: Region },
-    wrong_arity: struct { arity: u32, region: Region },
-    not_found,
-};
+const MainFunctionStatus = enum { valid, invalid, not_found };
 
-fn findMainFunction(self: *Self) std.mem.Allocator.Error!MainFunctionResult {
+/// Check if this module has a valid main! function (1 argument lambda).
+/// Reports an error if main! exists but has the wrong arity.
+fn checkMainFunction(self: *Self) std.mem.Allocator.Error!MainFunctionStatus {
     const file = self.parse_ir.store.getFile();
 
-    // Look through all statements for a definition of main!
     for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
         const stmt = self.parse_ir.store.getStatement(stmt_id);
         if (stmt == .decl) {
             const decl = stmt.decl;
-            // Check if this is a definition with name "main!"
             const pattern = self.parse_ir.store.getPattern(decl.pattern);
             if (pattern == .ident) {
                 const ident_token = pattern.ident.ident_tok;
@@ -7007,23 +7067,20 @@ fn findMainFunction(self: *Self) std.mem.Allocator.Error!MainFunctionResult {
 
                 if (std.mem.eql(u8, ident_text, "main!")) {
                     const region = self.parse_ir.tokenizedRegionToRegion(decl.region);
-
-                    // Found main! - now check if it's a lambda with exactly 1 parameter
                     const expr = self.parse_ir.store.getExpr(decl.body);
+
                     if (expr == .lambda) {
                         const lambda = expr.lambda;
                         const params = self.parse_ir.store.patternSlice(lambda.args);
 
                         if (params.len == 1) {
-                            // Valid main! function found
-                            return .{ .valid = .{ .def_idx = @enumFromInt(0), .region = region } }; // TODO: get actual CIR def idx
+                            return .valid;
                         } else {
-                            // main! found but with wrong arity
                             try self.env.pushDiagnostic(Diagnostic{ .default_app_wrong_arity = .{
                                 .arity = @intCast(params.len),
                                 .region = region,
                             } });
-                            return .{ .wrong_arity = .{ .arity = @intCast(params.len), .region = region } };
+                            return .invalid;
                         }
                     }
                 }
@@ -7034,15 +7091,11 @@ fn findMainFunction(self: *Self) std.mem.Allocator.Error!MainFunctionResult {
     return .not_found;
 }
 
-/// Validate that a type module has a type declaration matching the module name.
-/// For example, if the module is named "Foo", there must be a `Foo := ...` or `Foo : ...` at the top level.
-fn validateTypeModuleName(self: *Self) std.mem.Allocator.Error!void {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
+/// Check if there's a type declaration matching the module name
+/// Find the type declaration matching the module name and return its ident
+fn findMatchingTypeIdent(self: *Self) ?Ident.Idx {
     const file = self.parse_ir.store.getFile();
     const module_name_text = self.env.module_name;
-    const module_name_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
 
     // Look through all statements for a type declaration matching the module name
     for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
@@ -7055,17 +7108,62 @@ fn validateTypeModuleName(self: *Self) std.mem.Allocator.Error!void {
             const type_name_text = self.env.getIdent(type_name_ident);
 
             if (std.mem.eql(u8, type_name_text, module_name_text)) {
-                // Found a matching type declaration!
-                return;
+                return type_name_ident;
             }
         }
     }
 
-    // No matching type declaration found - report error
+    return null;
+}
+
+/// Check if any type declarations exist in the file
+fn hasAnyTypeDeclarations(self: *Self) bool {
+    const file = self.parse_ir.store.getFile();
+
+    for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
+        const stmt = self.parse_ir.store.getStatement(stmt_id);
+        if (stmt == .type_decl) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/// Report smart error when neither type module nor default-app is valid (checking mode)
+fn reportTypeModuleOrDefaultAppError(self: *Self) std.mem.Allocator.Error!void {
+    const file = self.parse_ir.store.getFile();
+    const module_name_text = self.env.module_name;
+    const module_name_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
     const file_region = self.parse_ir.tokenizedRegionToRegion(file.region);
-    try self.env.pushDiagnostic(Diagnostic{
-        .type_module_missing_matching_type = .{
-            .module_name = module_name_ident,
+
+    // Use heuristic: if there are types declared, assume type module, else assume default-app
+    if (self.hasAnyTypeDeclarations()) {
+        // Assume user wanted type module
+        try self.env.pushDiagnostic(.{
+            .type_module_missing_matching_type = .{
+                .module_name = module_name_ident,
+                .region = file_region,
+            },
+        });
+    } else {
+        // Assume user wanted default-app
+        try self.env.pushDiagnostic(.{
+            .default_app_missing_main = .{
+                .module_name = module_name_ident,
+                .region = file_region,
+            },
+        });
+    }
+}
+
+/// Report error when trying to execute a plain type module
+fn reportExecutionRequiresAppOrDefaultApp(self: *Self) std.mem.Allocator.Error!void {
+    const file = self.parse_ir.store.getFile();
+    const file_region = self.parse_ir.tokenizedRegionToRegion(file.region);
+
+    try self.env.pushDiagnostic(.{
+        .execution_requires_app_or_default_app = .{
             .region = file_region,
         },
     });

@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Comprehensive type scope validation - built-ins, user types, redeclaration, forward refs
-type=file
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-module [MyU64, Person, Result, Tree, Node]
-
 # Built-in types should work
 MyU64 : U64
 MyString : Str
@@ -45,17 +43,17 @@ Complex : {
 }
 ~~~
 # EXPECTED
-TYPE REDECLARED - type_comprehensive_scope.md:12:1:12:37
-UNDECLARED TYPE - type_comprehensive_scope.md:15:19:15:23
-TYPE REDECLARED - type_comprehensive_scope.md:24:1:24:13
-UNDECLARED TYPE - type_comprehensive_scope.md:27:11:27:29
-UNDECLARED TYPE - type_comprehensive_scope.md:31:10:31:14
+TYPE REDECLARED - type_comprehensive_scope.md:10:1:10:37
+UNDECLARED TYPE - type_comprehensive_scope.md:13:19:13:23
+TYPE REDECLARED - type_comprehensive_scope.md:22:1:22:13
+UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
+UNDECLARED TYPE - type_comprehensive_scope.md:29:10:29:14
 # PROBLEMS
 **TYPE REDECLARED**
 The type _Result_ is being redeclared.
 
 The redeclaration is here:
-**type_comprehensive_scope.md:12:1:12:37:**
+**type_comprehensive_scope.md:10:1:10:37:**
 ```roc
 Result(ok, err) : [Ok(ok), Err(err)]
 ```
@@ -64,7 +62,7 @@ Result(ok, err) : [Ok(ok), Err(err)]
 But _Result_ was already declared here:
 **type_comprehensive_scope.md:1:1:1:1:**
 ```roc
-module [MyU64, Person, Result, Tree, Node]
+# Built-in types should work
 ```
 ^
 
@@ -73,7 +71,7 @@ module [MyU64, Person, Result, Tree, Node]
 The type _Node_ is not declared in this scope.
 
 This type is referenced here:
-**type_comprehensive_scope.md:15:19:15:23:**
+**type_comprehensive_scope.md:13:19:13:23:**
 ```roc
 Tree(a) : [Branch(Node(a)), Leaf(a)]
 ```
@@ -84,14 +82,14 @@ Tree(a) : [Branch(Node(a)), Leaf(a)]
 The type _Person_ is being redeclared.
 
 The redeclaration is here:
-**type_comprehensive_scope.md:24:1:24:13:**
+**type_comprehensive_scope.md:22:1:22:13:**
 ```roc
 Person : U64
 ```
 ^^^^^^^^^^^^
 
 But _Person_ was already declared here:
-**type_comprehensive_scope.md:9:1:9:33:**
+**type_comprehensive_scope.md:7:1:7:33:**
 ```roc
 Person : { name: Str, age: U64 }
 ```
@@ -102,7 +100,7 @@ Person : { name: Str, age: U64 }
 The type _SomeUndeclaredType_ is not declared in this scope.
 
 This type is referenced here:
-**type_comprehensive_scope.md:27:11:27:29:**
+**type_comprehensive_scope.md:25:11:25:29:**
 ```roc
 BadType : SomeUndeclaredType
 ```
@@ -113,7 +111,7 @@ BadType : SomeUndeclaredType
 The type _Dict_ is not declared in this scope.
 
 This type is referenced here:
-**type_comprehensive_scope.md:31:10:31:14:**
+**type_comprehensive_scope.md:29:10:29:14:**
 ```roc
 MyDict : Dict(Str, U64)
 ```
@@ -122,145 +120,137 @@ MyDict : Dict(Str, U64)
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:14),Comma(1:14-1:15),UpperIdent(1:16-1:22),Comma(1:22-1:23),UpperIdent(1:24-1:30),Comma(1:30-1:31),UpperIdent(1:32-1:36),Comma(1:36-1:37),UpperIdent(1:38-1:42),CloseSquare(1:42-1:43),
-UpperIdent(4:1-4:6),OpColon(4:7-4:8),UpperIdent(4:9-4:12),
-UpperIdent(5:1-5:9),OpColon(5:10-5:11),UpperIdent(5:12-5:15),
-UpperIdent(6:1-6:7),OpColon(6:8-6:9),UpperIdent(6:10-6:14),
-UpperIdent(9:1-9:7),OpColon(9:8-9:9),OpenCurly(9:10-9:11),LowerIdent(9:12-9:16),OpColon(9:16-9:17),UpperIdent(9:18-9:21),Comma(9:21-9:22),LowerIdent(9:23-9:26),OpColon(9:26-9:27),UpperIdent(9:28-9:31),CloseCurly(9:32-9:33),
-UpperIdent(12:1-12:7),NoSpaceOpenRound(12:7-12:8),LowerIdent(12:8-12:10),Comma(12:10-12:11),LowerIdent(12:12-12:15),CloseRound(12:15-12:16),OpColon(12:17-12:18),OpenSquare(12:19-12:20),UpperIdent(12:20-12:22),NoSpaceOpenRound(12:22-12:23),LowerIdent(12:23-12:25),CloseRound(12:25-12:26),Comma(12:26-12:27),UpperIdent(12:28-12:31),NoSpaceOpenRound(12:31-12:32),LowerIdent(12:32-12:35),CloseRound(12:35-12:36),CloseSquare(12:36-12:37),
-UpperIdent(15:1-15:5),NoSpaceOpenRound(15:5-15:6),LowerIdent(15:6-15:7),CloseRound(15:7-15:8),OpColon(15:9-15:10),OpenSquare(15:11-15:12),UpperIdent(15:12-15:18),NoSpaceOpenRound(15:18-15:19),UpperIdent(15:19-15:23),NoSpaceOpenRound(15:23-15:24),LowerIdent(15:24-15:25),CloseRound(15:25-15:26),CloseRound(15:26-15:27),Comma(15:27-15:28),UpperIdent(15:29-15:33),NoSpaceOpenRound(15:33-15:34),LowerIdent(15:34-15:35),CloseRound(15:35-15:36),CloseSquare(15:36-15:37),
-UpperIdent(18:1-18:5),NoSpaceOpenRound(18:5-18:6),LowerIdent(18:6-18:7),CloseRound(18:7-18:8),OpColon(18:9-18:10),OpenCurly(18:11-18:12),LowerIdent(18:13-18:18),OpColon(18:18-18:19),LowerIdent(18:20-18:21),Comma(18:21-18:22),LowerIdent(18:23-18:31),OpColon(18:31-18:32),UpperIdent(18:33-18:37),NoSpaceOpenRound(18:37-18:38),UpperIdent(18:38-18:42),NoSpaceOpenRound(18:42-18:43),LowerIdent(18:43-18:44),CloseRound(18:44-18:45),CloseRound(18:45-18:46),CloseCurly(18:47-18:48),
-UpperIdent(21:1-21:9),OpColon(21:10-21:11),UpperIdent(21:12-21:18),NoSpaceOpenRound(21:18-21:19),UpperIdent(21:19-21:22),Comma(21:22-21:23),UpperIdent(21:24-21:27),CloseRound(21:27-21:28),
-UpperIdent(24:1-24:7),OpColon(24:8-24:9),UpperIdent(24:10-24:13),
-UpperIdent(27:1-27:8),OpColon(27:9-27:10),UpperIdent(27:11-27:29),
-UpperIdent(30:1-30:7),OpColon(30:8-30:9),UpperIdent(30:10-30:14),NoSpaceOpenRound(30:14-30:15),UpperIdent(30:15-30:18),CloseRound(30:18-30:19),
-UpperIdent(31:1-31:7),OpColon(31:8-31:9),UpperIdent(31:10-31:14),NoSpaceOpenRound(31:14-31:15),UpperIdent(31:15-31:18),Comma(31:18-31:19),UpperIdent(31:20-31:23),CloseRound(31:23-31:24),
-UpperIdent(34:1-34:8),OpColon(34:9-34:10),OpenCurly(34:11-34:12),
-LowerIdent(35:5-35:11),OpColon(35:11-35:12),UpperIdent(35:13-35:19),Comma(35:19-35:20),
-LowerIdent(36:5-36:11),OpColon(36:11-36:12),UpperIdent(36:13-36:19),NoSpaceOpenRound(36:19-36:20),UpperIdent(36:20-36:24),Comma(36:24-36:25),UpperIdent(36:26-36:29),CloseRound(36:29-36:30),Comma(36:30-36:31),
-LowerIdent(37:5-37:9),OpColon(37:9-37:10),UpperIdent(37:11-37:15),NoSpaceOpenRound(37:15-37:16),UpperIdent(37:16-37:19),CloseRound(37:19-37:20),
-CloseCurly(38:1-38:2),
-EndOfFile(39:1-39:1),
+UpperIdent(2:1-2:6),OpColon(2:7-2:8),UpperIdent(2:9-2:12),
+UpperIdent(3:1-3:9),OpColon(3:10-3:11),UpperIdent(3:12-3:15),
+UpperIdent(4:1-4:7),OpColon(4:8-4:9),UpperIdent(4:10-4:14),
+UpperIdent(7:1-7:7),OpColon(7:8-7:9),OpenCurly(7:10-7:11),LowerIdent(7:12-7:16),OpColon(7:16-7:17),UpperIdent(7:18-7:21),Comma(7:21-7:22),LowerIdent(7:23-7:26),OpColon(7:26-7:27),UpperIdent(7:28-7:31),CloseCurly(7:32-7:33),
+UpperIdent(10:1-10:7),NoSpaceOpenRound(10:7-10:8),LowerIdent(10:8-10:10),Comma(10:10-10:11),LowerIdent(10:12-10:15),CloseRound(10:15-10:16),OpColon(10:17-10:18),OpenSquare(10:19-10:20),UpperIdent(10:20-10:22),NoSpaceOpenRound(10:22-10:23),LowerIdent(10:23-10:25),CloseRound(10:25-10:26),Comma(10:26-10:27),UpperIdent(10:28-10:31),NoSpaceOpenRound(10:31-10:32),LowerIdent(10:32-10:35),CloseRound(10:35-10:36),CloseSquare(10:36-10:37),
+UpperIdent(13:1-13:5),NoSpaceOpenRound(13:5-13:6),LowerIdent(13:6-13:7),CloseRound(13:7-13:8),OpColon(13:9-13:10),OpenSquare(13:11-13:12),UpperIdent(13:12-13:18),NoSpaceOpenRound(13:18-13:19),UpperIdent(13:19-13:23),NoSpaceOpenRound(13:23-13:24),LowerIdent(13:24-13:25),CloseRound(13:25-13:26),CloseRound(13:26-13:27),Comma(13:27-13:28),UpperIdent(13:29-13:33),NoSpaceOpenRound(13:33-13:34),LowerIdent(13:34-13:35),CloseRound(13:35-13:36),CloseSquare(13:36-13:37),
+UpperIdent(16:1-16:5),NoSpaceOpenRound(16:5-16:6),LowerIdent(16:6-16:7),CloseRound(16:7-16:8),OpColon(16:9-16:10),OpenCurly(16:11-16:12),LowerIdent(16:13-16:18),OpColon(16:18-16:19),LowerIdent(16:20-16:21),Comma(16:21-16:22),LowerIdent(16:23-16:31),OpColon(16:31-16:32),UpperIdent(16:33-16:37),NoSpaceOpenRound(16:37-16:38),UpperIdent(16:38-16:42),NoSpaceOpenRound(16:42-16:43),LowerIdent(16:43-16:44),CloseRound(16:44-16:45),CloseRound(16:45-16:46),CloseCurly(16:47-16:48),
+UpperIdent(19:1-19:9),OpColon(19:10-19:11),UpperIdent(19:12-19:18),NoSpaceOpenRound(19:18-19:19),UpperIdent(19:19-19:22),Comma(19:22-19:23),UpperIdent(19:24-19:27),CloseRound(19:27-19:28),
+UpperIdent(22:1-22:7),OpColon(22:8-22:9),UpperIdent(22:10-22:13),
+UpperIdent(25:1-25:8),OpColon(25:9-25:10),UpperIdent(25:11-25:29),
+UpperIdent(28:1-28:7),OpColon(28:8-28:9),UpperIdent(28:10-28:14),NoSpaceOpenRound(28:14-28:15),UpperIdent(28:15-28:18),CloseRound(28:18-28:19),
+UpperIdent(29:1-29:7),OpColon(29:8-29:9),UpperIdent(29:10-29:14),NoSpaceOpenRound(29:14-29:15),UpperIdent(29:15-29:18),Comma(29:18-29:19),UpperIdent(29:20-29:23),CloseRound(29:23-29:24),
+UpperIdent(32:1-32:8),OpColon(32:9-32:10),OpenCurly(32:11-32:12),
+LowerIdent(33:5-33:11),OpColon(33:11-33:12),UpperIdent(33:13-33:19),Comma(33:19-33:20),
+LowerIdent(34:5-34:11),OpColon(34:11-34:12),UpperIdent(34:13-34:19),NoSpaceOpenRound(34:19-34:20),UpperIdent(34:20-34:24),Comma(34:24-34:25),UpperIdent(34:26-34:29),CloseRound(34:29-34:30),Comma(34:30-34:31),
+LowerIdent(35:5-35:9),OpColon(35:9-35:10),UpperIdent(35:11-35:15),NoSpaceOpenRound(35:15-35:16),UpperIdent(35:16-35:19),CloseRound(35:19-35:20),
+CloseCurly(36:1-36:2),
+EndOfFile(37:1-37:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-38.2
-	(module @1.1-1.43
-		(exposes @1.8-1.43
-			(exposed-upper-ident @1.9-1.14 (text "MyU64"))
-			(exposed-upper-ident @1.16-1.22 (text "Person"))
-			(exposed-upper-ident @1.24-1.30 (text "Result"))
-			(exposed-upper-ident @1.32-1.36 (text "Tree"))
-			(exposed-upper-ident @1.38-1.42 (text "Node"))))
+(file @2.1-36.2
+	(type-module @2.1-2.6)
 	(statements
-		(s-type-decl @4.1-4.12
-			(header @4.1-4.6 (name "MyU64")
+		(s-type-decl @2.1-2.12
+			(header @2.1-2.6 (name "MyU64")
 				(args))
-			(ty @4.9-4.12 (name "U64")))
-		(s-type-decl @5.1-5.15
-			(header @5.1-5.9 (name "MyString")
+			(ty @2.9-2.12 (name "U64")))
+		(s-type-decl @3.1-3.15
+			(header @3.1-3.9 (name "MyString")
 				(args))
-			(ty @5.12-5.15 (name "Str")))
-		(s-type-decl @6.1-6.14
-			(header @6.1-6.7 (name "MyBool")
+			(ty @3.12-3.15 (name "Str")))
+		(s-type-decl @4.1-4.14
+			(header @4.1-4.7 (name "MyBool")
 				(args))
-			(ty @6.10-6.14 (name "Bool")))
-		(s-type-decl @9.1-9.33
-			(header @9.1-9.7 (name "Person")
+			(ty @4.10-4.14 (name "Bool")))
+		(s-type-decl @7.1-7.33
+			(header @7.1-7.7 (name "Person")
 				(args))
-			(ty-record @9.10-9.33
-				(anno-record-field @9.12-9.21 (name "name")
-					(ty @9.18-9.21 (name "Str")))
-				(anno-record-field @9.23-9.31 (name "age")
-					(ty @9.28-9.31 (name "U64")))))
-		(s-type-decl @12.1-12.37
-			(header @12.1-12.16 (name "Result")
+			(ty-record @7.10-7.33
+				(anno-record-field @7.12-7.21 (name "name")
+					(ty @7.18-7.21 (name "Str")))
+				(anno-record-field @7.23-7.31 (name "age")
+					(ty @7.28-7.31 (name "U64")))))
+		(s-type-decl @10.1-10.37
+			(header @10.1-10.16 (name "Result")
 				(args
-					(ty-var @12.8-12.10 (raw "ok"))
-					(ty-var @12.12-12.15 (raw "err"))))
-			(ty-tag-union @12.19-12.37
+					(ty-var @10.8-10.10 (raw "ok"))
+					(ty-var @10.12-10.15 (raw "err"))))
+			(ty-tag-union @10.19-10.37
 				(tags
-					(ty-apply @12.20-12.26
-						(ty @12.20-12.22 (name "Ok"))
-						(ty-var @12.23-12.25 (raw "ok")))
-					(ty-apply @12.28-12.36
-						(ty @12.28-12.31 (name "Err"))
-						(ty-var @12.32-12.35 (raw "err"))))))
-		(s-type-decl @15.1-15.37
-			(header @15.1-15.8 (name "Tree")
+					(ty-apply @10.20-10.26
+						(ty @10.20-10.22 (name "Ok"))
+						(ty-var @10.23-10.25 (raw "ok")))
+					(ty-apply @10.28-10.36
+						(ty @10.28-10.31 (name "Err"))
+						(ty-var @10.32-10.35 (raw "err"))))))
+		(s-type-decl @13.1-13.37
+			(header @13.1-13.8 (name "Tree")
 				(args
-					(ty-var @15.6-15.7 (raw "a"))))
-			(ty-tag-union @15.11-15.37
+					(ty-var @13.6-13.7 (raw "a"))))
+			(ty-tag-union @13.11-13.37
 				(tags
-					(ty-apply @15.12-15.27
-						(ty @15.12-15.18 (name "Branch"))
-						(ty-apply @15.19-15.26
-							(ty @15.19-15.23 (name "Node"))
-							(ty-var @15.24-15.25 (raw "a"))))
-					(ty-apply @15.29-15.36
-						(ty @15.29-15.33 (name "Leaf"))
-						(ty-var @15.34-15.35 (raw "a"))))))
-		(s-type-decl @18.1-18.48
-			(header @18.1-18.8 (name "Node")
+					(ty-apply @13.12-13.27
+						(ty @13.12-13.18 (name "Branch"))
+						(ty-apply @13.19-13.26
+							(ty @13.19-13.23 (name "Node"))
+							(ty-var @13.24-13.25 (raw "a"))))
+					(ty-apply @13.29-13.36
+						(ty @13.29-13.33 (name "Leaf"))
+						(ty-var @13.34-13.35 (raw "a"))))))
+		(s-type-decl @16.1-16.48
+			(header @16.1-16.8 (name "Node")
 				(args
-					(ty-var @18.6-18.7 (raw "a"))))
-			(ty-record @18.11-18.48
-				(anno-record-field @18.13-18.21 (name "value")
-					(ty-var @18.20-18.21 (raw "a")))
-				(anno-record-field @18.23-18.46 (name "children")
-					(ty-apply @18.33-18.46
-						(ty @18.33-18.37 (name "List"))
-						(ty-apply @18.38-18.45
-							(ty @18.38-18.42 (name "Tree"))
-							(ty-var @18.43-18.44 (raw "a")))))))
-		(s-type-decl @21.1-21.28
-			(header @21.1-21.9 (name "MyResult")
+					(ty-var @16.6-16.7 (raw "a"))))
+			(ty-record @16.11-16.48
+				(anno-record-field @16.13-16.21 (name "value")
+					(ty-var @16.20-16.21 (raw "a")))
+				(anno-record-field @16.23-16.46 (name "children")
+					(ty-apply @16.33-16.46
+						(ty @16.33-16.37 (name "List"))
+						(ty-apply @16.38-16.45
+							(ty @16.38-16.42 (name "Tree"))
+							(ty-var @16.43-16.44 (raw "a")))))))
+		(s-type-decl @19.1-19.28
+			(header @19.1-19.9 (name "MyResult")
 				(args))
-			(ty-apply @21.12-21.28
-				(ty @21.12-21.18 (name "Result"))
-				(ty @21.19-21.22 (name "Str"))
-				(ty @21.24-21.27 (name "U64"))))
-		(s-type-decl @24.1-24.13
-			(header @24.1-24.7 (name "Person")
+			(ty-apply @19.12-19.28
+				(ty @19.12-19.18 (name "Result"))
+				(ty @19.19-19.22 (name "Str"))
+				(ty @19.24-19.27 (name "U64"))))
+		(s-type-decl @22.1-22.13
+			(header @22.1-22.7 (name "Person")
 				(args))
-			(ty @24.10-24.13 (name "U64")))
-		(s-type-decl @27.1-27.29
-			(header @27.1-27.8 (name "BadType")
+			(ty @22.10-22.13 (name "U64")))
+		(s-type-decl @25.1-25.29
+			(header @25.1-25.8 (name "BadType")
 				(args))
-			(ty @27.11-27.29 (name "SomeUndeclaredType")))
-		(s-type-decl @30.1-30.19
-			(header @30.1-30.7 (name "MyList")
+			(ty @25.11-25.29 (name "SomeUndeclaredType")))
+		(s-type-decl @28.1-28.19
+			(header @28.1-28.7 (name "MyList")
 				(args))
-			(ty-apply @30.10-30.19
-				(ty @30.10-30.14 (name "List"))
-				(ty @30.15-30.18 (name "Str"))))
-		(s-type-decl @31.1-31.24
-			(header @31.1-31.7 (name "MyDict")
+			(ty-apply @28.10-28.19
+				(ty @28.10-28.14 (name "List"))
+				(ty @28.15-28.18 (name "Str"))))
+		(s-type-decl @29.1-29.24
+			(header @29.1-29.7 (name "MyDict")
 				(args))
-			(ty-apply @31.10-31.24
-				(ty @31.10-31.14 (name "Dict"))
-				(ty @31.15-31.18 (name "Str"))
-				(ty @31.20-31.23 (name "U64"))))
-		(s-type-decl @34.1-38.2
-			(header @34.1-34.8 (name "Complex")
+			(ty-apply @29.10-29.24
+				(ty @29.10-29.14 (name "Dict"))
+				(ty @29.15-29.18 (name "Str"))
+				(ty @29.20-29.23 (name "U64"))))
+		(s-type-decl @32.1-36.2
+			(header @32.1-32.8 (name "Complex")
 				(args))
-			(ty-record @34.11-38.2
-				(anno-record-field @35.5-35.19 (name "person")
-					(ty @35.13-35.19 (name "Person")))
-				(anno-record-field @36.5-36.30 (name "result")
-					(ty-apply @36.13-36.30
-						(ty @36.13-36.19 (name "Result"))
-						(ty @36.20-36.24 (name "Bool"))
-						(ty @36.26-36.29 (name "Str"))))
-				(anno-record-field @37.5-37.20 (name "tree")
-					(ty-apply @37.11-37.20
-						(ty @37.11-37.15 (name "Tree"))
-						(ty @37.16-37.19 (name "U64"))))))))
+			(ty-record @32.11-36.2
+				(anno-record-field @33.5-33.19 (name "person")
+					(ty @33.13-33.19 (name "Person")))
+				(anno-record-field @34.5-34.30 (name "result")
+					(ty-apply @34.13-34.30
+						(ty @34.13-34.19 (name "Result"))
+						(ty @34.20-34.24 (name "Bool"))
+						(ty @34.26-34.29 (name "Str"))))
+				(anno-record-field @35.5-35.20 (name "tree")
+					(ty-apply @35.11-35.20
+						(ty @35.11-35.15 (name "Tree"))
+						(ty @35.16-35.19 (name "U64"))))))))
 ~~~
 # FORMATTED
 ~~~roc
-module [MyU64, Person, Result, Tree, Node]
-
+# Built-in types should work
 # Built-in types should work
 MyU64 : U64
 MyString : Str
@@ -301,120 +291,120 @@ Complex : {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-alias-decl @4.1-4.12
-		(ty-header @4.1-4.6 (name "MyU64"))
-		(ty-lookup @4.9-4.12 (name "U64") (builtin)))
-	(s-alias-decl @5.1-5.15
-		(ty-header @5.1-5.9 (name "MyString"))
-		(ty-lookup @5.12-5.15 (name "Str") (builtin)))
-	(s-alias-decl @6.1-6.14
-		(ty-header @6.1-6.7 (name "MyBool"))
-		(ty-lookup @6.10-6.14 (name "Bool") (local)))
-	(s-alias-decl @9.1-9.33
-		(ty-header @9.1-9.7 (name "Person"))
-		(ty-record @9.10-9.33
+	(s-alias-decl @2.1-2.12
+		(ty-header @2.1-2.6 (name "MyU64"))
+		(ty-lookup @2.9-2.12 (name "U64") (builtin)))
+	(s-alias-decl @3.1-3.15
+		(ty-header @3.1-3.9 (name "MyString"))
+		(ty-lookup @3.12-3.15 (name "Str") (builtin)))
+	(s-alias-decl @4.1-4.14
+		(ty-header @4.1-4.7 (name "MyBool"))
+		(ty-lookup @4.10-4.14 (name "Bool") (local)))
+	(s-alias-decl @7.1-7.33
+		(ty-header @7.1-7.7 (name "Person"))
+		(ty-record @7.10-7.33
 			(field (field "name")
-				(ty-lookup @9.18-9.21 (name "Str") (builtin)))
+				(ty-lookup @7.18-7.21 (name "Str") (builtin)))
 			(field (field "age")
-				(ty-lookup @9.28-9.31 (name "U64") (builtin)))))
-	(s-alias-decl @12.1-12.37
-		(ty-header @12.1-12.16 (name "Result")
+				(ty-lookup @7.28-7.31 (name "U64") (builtin)))))
+	(s-alias-decl @10.1-10.37
+		(ty-header @10.1-10.16 (name "Result")
 			(ty-args
-				(ty-rigid-var @12.8-12.10 (name "ok"))
-				(ty-rigid-var @12.12-12.15 (name "err"))))
-		(ty-tag-union @12.19-12.37
-			(ty-tag-name @12.20-12.26 (name "Ok")
-				(ty-rigid-var-lookup (ty-rigid-var @12.8-12.10 (name "ok"))))
-			(ty-tag-name @12.28-12.36 (name "Err")
-				(ty-rigid-var-lookup (ty-rigid-var @12.12-12.15 (name "err"))))))
-	(s-alias-decl @15.1-15.37
-		(ty-header @15.1-15.8 (name "Tree")
+				(ty-rigid-var @10.8-10.10 (name "ok"))
+				(ty-rigid-var @10.12-10.15 (name "err"))))
+		(ty-tag-union @10.19-10.37
+			(ty-tag-name @10.20-10.26 (name "Ok")
+				(ty-rigid-var-lookup (ty-rigid-var @10.8-10.10 (name "ok"))))
+			(ty-tag-name @10.28-10.36 (name "Err")
+				(ty-rigid-var-lookup (ty-rigid-var @10.12-10.15 (name "err"))))))
+	(s-alias-decl @13.1-13.37
+		(ty-header @13.1-13.8 (name "Tree")
 			(ty-args
-				(ty-rigid-var @15.6-15.7 (name "a"))))
-		(ty-tag-union @15.11-15.37
-			(ty-tag-name @15.12-15.27 (name "Branch")
-				(ty-malformed @15.19-15.23))
-			(ty-tag-name @15.29-15.36 (name "Leaf")
-				(ty-rigid-var-lookup (ty-rigid-var @15.6-15.7 (name "a"))))))
-	(s-alias-decl @18.1-18.48
-		(ty-header @18.1-18.8 (name "Node")
+				(ty-rigid-var @13.6-13.7 (name "a"))))
+		(ty-tag-union @13.11-13.37
+			(ty-tag-name @13.12-13.27 (name "Branch")
+				(ty-malformed @13.19-13.23))
+			(ty-tag-name @13.29-13.36 (name "Leaf")
+				(ty-rigid-var-lookup (ty-rigid-var @13.6-13.7 (name "a"))))))
+	(s-alias-decl @16.1-16.48
+		(ty-header @16.1-16.8 (name "Node")
 			(ty-args
-				(ty-rigid-var @18.6-18.7 (name "a"))))
-		(ty-record @18.11-18.48
+				(ty-rigid-var @16.6-16.7 (name "a"))))
+		(ty-record @16.11-16.48
 			(field (field "value")
-				(ty-rigid-var-lookup (ty-rigid-var @18.6-18.7 (name "a"))))
+				(ty-rigid-var-lookup (ty-rigid-var @16.6-16.7 (name "a"))))
 			(field (field "children")
-				(ty-apply @18.33-18.46 (name "List") (builtin)
-					(ty-apply @18.38-18.45 (name "Tree") (local)
-						(ty-rigid-var-lookup (ty-rigid-var @18.6-18.7 (name "a"))))))))
-	(s-alias-decl @21.1-21.28
-		(ty-header @21.1-21.9 (name "MyResult"))
-		(ty-apply @21.12-21.28 (name "Result") (local)
-			(ty-lookup @21.12-21.28 (name "Str") (builtin))
-			(ty-lookup @21.12-21.28 (name "U64") (builtin))))
-	(s-alias-decl @24.1-24.13
-		(ty-header @24.1-24.7 (name "Person"))
-		(ty-lookup @24.10-24.13 (name "U64") (builtin)))
-	(s-alias-decl @27.1-27.29
-		(ty-header @27.1-27.8 (name "BadType"))
-		(ty-malformed @27.11-27.29))
-	(s-alias-decl @30.1-30.19
-		(ty-header @30.1-30.7 (name "MyList"))
-		(ty-apply @30.10-30.19 (name "List") (builtin)
-			(ty-lookup @30.15-30.18 (name "Str") (builtin))))
-	(s-alias-decl @31.1-31.24
-		(ty-header @31.1-31.7 (name "MyDict"))
-		(ty-malformed @31.10-31.14))
-	(s-alias-decl @34.1-38.2
-		(ty-header @34.1-34.8 (name "Complex"))
-		(ty-record @34.11-38.2
+				(ty-apply @16.33-16.46 (name "List") (builtin)
+					(ty-apply @16.38-16.45 (name "Tree") (local)
+						(ty-rigid-var-lookup (ty-rigid-var @16.6-16.7 (name "a"))))))))
+	(s-alias-decl @19.1-19.28
+		(ty-header @19.1-19.9 (name "MyResult"))
+		(ty-apply @19.12-19.28 (name "Result") (local)
+			(ty-lookup @19.12-19.28 (name "Str") (builtin))
+			(ty-lookup @19.12-19.28 (name "U64") (builtin))))
+	(s-alias-decl @22.1-22.13
+		(ty-header @22.1-22.7 (name "Person"))
+		(ty-lookup @22.10-22.13 (name "U64") (builtin)))
+	(s-alias-decl @25.1-25.29
+		(ty-header @25.1-25.8 (name "BadType"))
+		(ty-malformed @25.11-25.29))
+	(s-alias-decl @28.1-28.19
+		(ty-header @28.1-28.7 (name "MyList"))
+		(ty-apply @28.10-28.19 (name "List") (builtin)
+			(ty-lookup @28.15-28.18 (name "Str") (builtin))))
+	(s-alias-decl @29.1-29.24
+		(ty-header @29.1-29.7 (name "MyDict"))
+		(ty-malformed @29.10-29.14))
+	(s-alias-decl @32.1-36.2
+		(ty-header @32.1-32.8 (name "Complex"))
+		(ty-record @32.11-36.2
 			(field (field "person")
-				(ty-lookup @35.13-35.19 (name "Person") (local)))
+				(ty-lookup @33.13-33.19 (name "Person") (local)))
 			(field (field "result")
-				(ty-apply @36.13-36.30 (name "Result") (local)
-					(ty-lookup @36.13-36.30 (name "Bool") (local))
-					(ty-lookup @36.13-36.30 (name "Str") (builtin))))
+				(ty-apply @34.13-34.30 (name "Result") (local)
+					(ty-lookup @34.13-34.30 (name "Bool") (local))
+					(ty-lookup @34.13-34.30 (name "Str") (builtin))))
 			(field (field "tree")
-				(ty-apply @37.11-37.20 (name "Tree") (local)
-					(ty-lookup @37.11-37.20 (name "U64") (builtin)))))))
+				(ty-apply @35.11-35.20 (name "Tree") (local)
+					(ty-lookup @35.11-35.20 (name "U64") (builtin)))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @4.1-4.12 (type "MyU64")
-			(ty-header @4.1-4.6 (name "MyU64")))
-		(alias @5.1-5.15 (type "MyString")
-			(ty-header @5.1-5.9 (name "MyString")))
-		(alias @6.1-6.14 (type "MyBool")
-			(ty-header @6.1-6.7 (name "MyBool")))
-		(alias @9.1-9.33 (type "Person")
-			(ty-header @9.1-9.7 (name "Person")))
-		(alias @12.1-12.37 (type "Result(ok, err)")
-			(ty-header @12.1-12.16 (name "Result")
+		(alias @2.1-2.12 (type "MyU64")
+			(ty-header @2.1-2.6 (name "MyU64")))
+		(alias @3.1-3.15 (type "MyString")
+			(ty-header @3.1-3.9 (name "MyString")))
+		(alias @4.1-4.14 (type "MyBool")
+			(ty-header @4.1-4.7 (name "MyBool")))
+		(alias @7.1-7.33 (type "Person")
+			(ty-header @7.1-7.7 (name "Person")))
+		(alias @10.1-10.37 (type "Result(ok, err)")
+			(ty-header @10.1-10.16 (name "Result")
 				(ty-args
-					(ty-rigid-var @12.8-12.10 (name "ok"))
-					(ty-rigid-var @12.12-12.15 (name "err")))))
-		(alias @15.1-15.37 (type "Tree(a)")
-			(ty-header @15.1-15.8 (name "Tree")
+					(ty-rigid-var @10.8-10.10 (name "ok"))
+					(ty-rigid-var @10.12-10.15 (name "err")))))
+		(alias @13.1-13.37 (type "Tree(a)")
+			(ty-header @13.1-13.8 (name "Tree")
 				(ty-args
-					(ty-rigid-var @15.6-15.7 (name "a")))))
-		(alias @18.1-18.48 (type "Node(a)")
-			(ty-header @18.1-18.8 (name "Node")
+					(ty-rigid-var @13.6-13.7 (name "a")))))
+		(alias @16.1-16.48 (type "Node(a)")
+			(ty-header @16.1-16.8 (name "Node")
 				(ty-args
-					(ty-rigid-var @18.6-18.7 (name "a")))))
-		(alias @21.1-21.28 (type "MyResult")
-			(ty-header @21.1-21.9 (name "MyResult")))
-		(alias @24.1-24.13 (type "Person")
-			(ty-header @24.1-24.7 (name "Person")))
-		(alias @27.1-27.29 (type "BadType")
-			(ty-header @27.1-27.8 (name "BadType")))
-		(alias @30.1-30.19 (type "MyList")
-			(ty-header @30.1-30.7 (name "MyList")))
-		(alias @31.1-31.24 (type "MyDict")
-			(ty-header @31.1-31.7 (name "MyDict")))
-		(alias @34.1-38.2 (type "Complex")
-			(ty-header @34.1-34.8 (name "Complex"))))
+					(ty-rigid-var @16.6-16.7 (name "a")))))
+		(alias @19.1-19.28 (type "MyResult")
+			(ty-header @19.1-19.9 (name "MyResult")))
+		(alias @22.1-22.13 (type "Person")
+			(ty-header @22.1-22.7 (name "Person")))
+		(alias @25.1-25.29 (type "BadType")
+			(ty-header @25.1-25.8 (name "BadType")))
+		(alias @28.1-28.19 (type "MyList")
+			(ty-header @28.1-28.7 (name "MyList")))
+		(alias @29.1-29.24 (type "MyDict")
+			(ty-header @29.1-29.7 (name "MyDict")))
+		(alias @32.1-36.2 (type "Complex")
+			(ty-header @32.1-32.8 (name "Complex"))))
 	(expressions))
 ~~~

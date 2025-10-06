@@ -80,6 +80,7 @@ pub fn initWithImport(source: []const u8, other_module_name: []const u8, other_m
     errdefer can.deinit();
 
     try can.canonicalizeFile();
+    try can.validateForChecking();
 
     // Pull out the imported index
     std.debug.assert(can.import_indices.size == 1);
@@ -154,6 +155,7 @@ pub fn init(source: []const u8) !TestEnv {
     errdefer can.deinit();
 
     try can.canonicalizeFile();
+    try can.validateForChecking();
 
     // Type Check
     var checker = try Check.init(gpa, &module_env.types, module_env, &.{}, &module_env.store.regions, module_common_idents);

@@ -26,8 +26,8 @@ PARSE ERROR - fuzz_crash_002.md:1:20:1:21
 PARSE ERROR - fuzz_crash_002.md:1:21:1:23
 PARSE ERROR - fuzz_crash_002.md:1:23:1:24
 PARSE ERROR - fuzz_crash_002.md:1:24:1:25
-TYPE MODULE MISSING MATCHING TYPE - fuzz_crash_002.md:1:1:1:25
 MALFORMED TYPE - fuzz_crash_002.md:1:6:1:7
+MISSING MAIN! FUNCTION - fuzz_crash_002.md:1:1:1:25
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
 The token **;** is not expected in a type annotation.
@@ -227,22 +227,6 @@ modu:;::::::::::::::le[%
                        ^
 
 
-**TYPE MODULE MISSING MATCHING TYPE**
-Type modules must have a type declaration matching the module name.
-
-This file is named `fuzz_crash_002`.roc, but no top-level type declaration named `fuzz_crash_002` was found.
-
-Add either:
-`fuzz_crash_002 := ...` (nominal type)
-or:
-`fuzz_crash_002 : ...` (type alias)
-**fuzz_crash_002.md:1:1:1:25:**
-```roc
-modu:;::::::::::::::le[%
-```
-^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
@@ -251,6 +235,20 @@ This type annotation is malformed or contains invalid syntax.
 modu:;::::::::::::::le[%
 ```
      ^
+
+
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
+
+No `main!` function was found.
+
+Add a main! function like:
+`main! = |arg| { ... }`
+**fuzz_crash_002.md:1:1:1:25:**
+```roc
+modu:;::::::::::::::le[%
+```
+^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 # TOKENS

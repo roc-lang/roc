@@ -1066,17 +1066,25 @@ fn processSnapshotContent(
         .platform => try parse.parse(&module_env.common, allocator),
         .app => try parse.parse(&module_env.common, allocator),
         .repl => unreachable, // Handled above
+        .snippet => try parse.parse(&module_env.common, allocator),
     };
     defer parse_ast.deinit(allocator);
 
     parse_ast.store.emptyScratch();
 
-    // Extract module name from output path
-    const basename = std.fs.path.basename(output_path);
-    const module_name = if (std.mem.lastIndexOfScalar(u8, basename, '.')) |dot_idx|
-        basename[0..dot_idx]
-    else
-        basename;
+    // Extract module name from meta filename or output path
+    const module_name = if (content.meta.filename) |fname|
+        if (std.mem.lastIndexOfScalar(u8, fname, '.')) |dot_idx|
+            fname[0..dot_idx]
+        else
+            fname
+    else blk: {
+        const basename = std.fs.path.basename(output_path);
+        break :blk if (std.mem.lastIndexOfScalar(u8, basename, '.')) |dot_idx|
+            basename[0..dot_idx]
+        else
+            basename;
+    };
     var can_ir = &module_env; // ModuleEnv contains the canonical IR
     try can_ir.initCIRFields(allocator, module_name);
 
@@ -1092,7 +1100,10 @@ fn processSnapshotContent(
     var maybe_expr_idx: ?Can.CanonicalizedExpr = null;
 
     switch (content.meta.node_type) {
-        .file => try czer.canonicalizeFile(),
+        .file => {
+            try czer.canonicalizeFile();
+            try czer.validateForChecking();
+        },
         .header => {
             // TODO: implement canonicalize_header when available
         },
@@ -1114,6 +1125,10 @@ fn processSnapshotContent(
         .platform => try czer.canonicalizeFile(),
         .app => try czer.canonicalizeFile(),
         .repl => unreachable, // Handled above
+        .snippet => {
+            // Snippet - just canonicalize without validation
+            try czer.canonicalizeFile();
+        },
     }
 
     // Assert that everything is in-sync
@@ -1491,6 +1506,7 @@ pub const NodeType = enum {
     platform,
     app,
     repl,
+    snippet,
 
     pub const HEADER = "header";
     pub const EXPR = "expr";
@@ -1500,6 +1516,7 @@ pub const NodeType = enum {
     pub const PLATFORM = "platform";
     pub const APP = "app";
     pub const REPL = "repl";
+    pub const SNIPPET = "snippet";
 
     fn fromString(str: []const u8) !NodeType {
         if (std.mem.eql(u8, str, HEADER)) return .header;
@@ -1510,6 +1527,7 @@ pub const NodeType = enum {
         if (std.mem.eql(u8, str, PLATFORM)) return .platform;
         if (std.mem.eql(u8, str, APP)) return .app;
         if (std.mem.eql(u8, str, REPL)) return .repl;
+        if (std.mem.eql(u8, str, SNIPPET)) return .snippet;
         return Error.InvalidNodeType;
     }
 
@@ -1523,6 +1541,7 @@ pub const NodeType = enum {
             .platform => "platform",
             .app => "app",
             .repl => "repl",
+            .snippet => "snippet",
         };
     }
 };
@@ -1530,6 +1549,7 @@ pub const NodeType = enum {
 const Meta = struct {
     description: []const u8,
     node_type: NodeType,
+    filename: ?[]const u8 = null,
 
     const DESC_START: []const u8 = "description=";
     const TYPE_START: []const u8 = "type=";
@@ -1538,19 +1558,28 @@ const Meta = struct {
         var lines = std.mem.splitScalar(u8, text, '\n');
         var desc: []const u8 = "";
         var node_type: NodeType = .file;
+        var filename: ?[]const u8 = null;
         while (true) {
             var line = lines.next() orelse break;
             if (std.mem.startsWith(u8, line, DESC_START)) {
                 desc = line[(DESC_START.len)..];
             } else if (std.mem.startsWith(u8, line, TYPE_START)) {
                 const ty = line[(TYPE_START.len)..];
-                node_type = try NodeType.fromString(ty);
+                // Check for type=file:Filename.roc format
+                if (std.mem.indexOf(u8, ty, ":")) |colon_idx| {
+                    const type_part = ty[0..colon_idx];
+                    filename = ty[colon_idx + 1 ..];
+                    node_type = try NodeType.fromString(type_part);
+                } else {
+                    node_type = try NodeType.fromString(ty);
+                }
             }
         }
 
         return .{
             .description = desc,
             .node_type = node_type,
+            .filename = filename,
         };
     }
 
@@ -1560,6 +1589,10 @@ const Meta = struct {
         try writer.writeAll("\n");
         try writer.writeAll(TYPE_START);
         try writer.writeAll(self.node_type.toString());
+        if (self.filename) |fname| {
+            try writer.writeAll(":");
+            try writer.writeAll(fname);
+        }
     }
 
     test "Meta.fromString - only description" {
@@ -2010,6 +2043,10 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
             // REPL doesn't use parse trees
             return;
         },
+        .snippet => {
+            const file = parse_ast.store.getFile();
+            try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
+        },
     }
 
     // Only generate section if we have content on the stack
@@ -2072,6 +2109,9 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
         .repl => {
             // REPL doesn't use formatting
             return;
+        },
+        .snippet => {
+            try fmt.formatAst(parse_ast.*, formatted.writer().any());
         },
     }
 

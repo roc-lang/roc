@@ -29,6 +29,18 @@ const TypeStore = types_mod.Store;
 
 const Self = @This();
 
+/// The kind of module being canonicalized, set during header processing
+pub const ModuleKind = union(enum) {
+    type_module: Ident.Idx, // Holds the main type identifier for type modules
+    default_app,
+    app,
+    package,
+    platform,
+    hosted,
+    deprecated_module,
+    malformed,
+};
+
 gpa: std.mem.Allocator,
 
 common: CommonEnv,
@@ -37,6 +49,8 @@ types: TypeStore,
 // ===== Module compilation fields =====
 // NOTE: These fields are populated during canonicalization and preserved for later use
 
+/// The kind of module (type_module, app, etc.) - set during canonicalization
+module_kind: ModuleKind,
 /// All the definitions in the module (populated by canonicalization)
 all_defs: CIR.Def.Span,
 /// All the top-level statements in the module (populated by canonicalization)
@@ -61,6 +75,7 @@ store: NodeStore,
 /// Initialize the compilation fields in an existing ModuleEnv
 pub fn initCIRFields(self: *Self, gpa: std.mem.Allocator, module_name: []const u8) !void {
     _ = gpa; // unused since we don't create new allocations
+    self.module_kind = undefined; // Set during canonicalization
     self.all_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.all_statements = .{ .span = .{ .start = 0, .len = 0 } };
     self.exports = .{ .span = .{ .start = 0, .len = 0 } };
@@ -85,6 +100,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .gpa = gpa,
         .common = try CommonEnv.init(gpa, source),
         .types = try TypeStore.initCapacity(gpa, 2048, 512),
+        .module_kind = undefined, // Set during canonicalization
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .exports = .{ .span = .{ .start = 0, .len = 0 } },
@@ -1174,6 +1190,117 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .module_header_deprecated => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "MODULE HEADER DEPRECATED", .warning);
+
+            try report.document.addReflowingText("The ");
+            try report.document.addInlineCode("module");
+            try report.document.addReflowingText(" header is deprecated.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Remove the ");
+            try report.document.addInlineCode("module");
+            try report.document.addReflowingText(" header and ensure your file defines a type that matches the filename.");
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .warning_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .redundant_expose_main_type => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "REDUNDANT EXPOSE", .warning);
+
+            const type_name_bytes = self.getIdent(data.type_name);
+            const type_name = try report.addOwnedString(type_name_bytes);
+            const module_name_bytes = self.getIdent(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+
+            try report.document.addReflowingText("Redundantly exposing ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(" when importing ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("The type ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(" is automatically exposed when importing a type module.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Remove ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(" from the exposing clause.");
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .warning_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .invalid_main_type_rename_in_exposing => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "INVALID TYPE RENAME", .runtime_error);
+
+            const type_name_bytes = self.getIdent(data.type_name);
+            const type_name = try report.addOwnedString(type_name_bytes);
+            const alias_bytes = self.getIdent(data.alias);
+            const alias = try report.addOwnedString(alias_bytes);
+
+            try report.document.addReflowingText("Cannot rename ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(" to ");
+            try report.document.addInlineCode(alias);
+            try report.document.addReflowingText(" in the exposing clause.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("To rename both the module and its main type, use ");
+            try report.document.addInlineCode("as");
+            try report.document.addReflowingText(" at the module level:");
+            try report.document.addLineBreak();
+
+            const example_msg = try std.fmt.allocPrint(allocator, "import ModuleName as {s}", .{alias_bytes});
+            defer allocator.free(example_msg);
+            const owned_example = try report.addOwnedString(example_msg);
+            try report.document.addInlineCode(owned_example);
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         else => {
             // For unhandled diagnostics, create a generic report
             const diagnostic_name = @tagName(diagnostic);
@@ -1236,6 +1363,7 @@ pub fn serialize(
         .gpa = undefined, // Will be set when deserializing
         .common = (try self.common.serialize(allocator, writer)).*,
         .types = (try self.types.serialize(allocator, writer)).*,
+        .module_kind = self.module_kind,
         .all_defs = self.all_defs,
         .all_statements = self.all_statements,
         .exports = self.exports,
@@ -1288,6 +1416,7 @@ pub const Serialized = struct {
     module_name: []const u8, // Serialized as zeros, provided during deserialization
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
+    module_kind: ModuleKind,
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -1339,6 +1468,7 @@ pub const Serialized = struct {
             .gpa = gpa,
             .common = self.common.deserialize(offset, source).*,
             .types = self.types.deserialize(offset).*,
+            .module_kind = self.module_kind,
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
             .exports = self.exports,

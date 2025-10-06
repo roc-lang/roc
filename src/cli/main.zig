@@ -1370,6 +1370,7 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
 
     // Canonicalize the entire module
     try canonicalizer.canonicalizeFile();
+    try canonicalizer.validateForExecution();
 
     // Validation check - ensure exports were populated during canonicalization
     if (env.exports.span.len == 0) {
@@ -2435,6 +2436,12 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
     // Canonicalize the entire module
     canonicalizer.canonicalizeFile() catch |err| {
         try stderr.print("Failed to canonicalize file: {}", .{err});
+        std.process.exit(1);
+    };
+
+    // Validate for checking mode
+    canonicalizer.validateForChecking() catch |err| {
+        try stderr.print("Failed to validate module: {}", .{err});
         std.process.exit(1);
     };
 

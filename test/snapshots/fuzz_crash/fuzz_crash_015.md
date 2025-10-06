@@ -18,7 +18,7 @@ PARSE ERROR - fuzz_crash_015.md:2:1:2:4
 PARSE ERROR - fuzz_crash_015.md:3:1:3:4
 PARSE ERROR - fuzz_crash_015.md:3:4:3:6
 PARSE ERROR - fuzz_crash_015.md:4:1:4:3
-TYPE MODULE MISSING MATCHING TYPE - fuzz_crash_015.md:1:1:4:3
+MISSING MAIN! FUNCTION - fuzz_crash_015.md:1:1:4:3
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.
@@ -91,15 +91,13 @@ This is an unexpected parsing error. Please check your syntax.
 ^^
 
 
-**TYPE MODULE MISSING MATCHING TYPE**
-Type modules must have a type declaration matching the module name.
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
 
-This file is named `fuzz_crash_015`.roc, but no top-level type declaration named `fuzz_crash_015` was found.
+No `main!` function was found.
 
-Add either:
-`fuzz_crash_015 := ...` (nominal type)
-or:
-`fuzz_crash_015 : ...` (type alias)
+Add a main! function like:
+`main! = |arg| { ... }`
 **fuzz_crash_015.md:1:1:4:3:**
 ```roc
 0o0.0

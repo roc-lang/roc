@@ -9,7 +9,7 @@ modu
 ~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_005.md:1:1:1:5
-TYPE MODULE MISSING MATCHING TYPE - fuzz_crash_005.md:1:1:1:5
+MISSING MAIN! FUNCTION - fuzz_crash_005.md:1:1:1:5
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
@@ -22,15 +22,13 @@ modu
 ^^^^
 
 
-**TYPE MODULE MISSING MATCHING TYPE**
-Type modules must have a type declaration matching the module name.
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
 
-This file is named `fuzz_crash_005`.roc, but no top-level type declaration named `fuzz_crash_005` was found.
+No `main!` function was found.
 
-Add either:
-`fuzz_crash_005 := ...` (nominal type)
-or:
-`fuzz_crash_005 : ...` (type alias)
+Add a main! function like:
+`main! = |arg| { ... }`
 **fuzz_crash_005.md:1:1:1:5:**
 ```roc
 modu

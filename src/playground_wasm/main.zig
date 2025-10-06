@@ -904,6 +904,13 @@ fn compileSource(source: []const u8) !CompilerStageData {
         }
     };
 
+    czer.validateForChecking() catch |err| {
+        logDebug("compileSource: validateForChecking failed: {}\n", .{err});
+        if (err == error.OutOfMemory) {
+            return err;
+        }
+    };
+
     // Copy the modified AST back into the main result to ensure state consistency
     result.parse_ast = parse_ast;
 

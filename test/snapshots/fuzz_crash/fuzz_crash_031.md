@@ -16,8 +16,8 @@ PARSE ERROR - fuzz_crash_031.md:1:6:1:7
 PARSE ERROR - fuzz_crash_031.md:1:7:1:8
 PARSE ERROR - fuzz_crash_031.md:4:1:4:6
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_031.md:4:10:4:11
-TYPE MODULE MISSING MATCHING TYPE - fuzz_crash_031.md:1:1:4:11
 UNRECOGNIZED SYNTAX - fuzz_crash_031.md:4:10:4:11
+MISSING MAIN! FUNCTION - fuzz_crash_031.md:1:1:4:11
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
@@ -74,24 +74,6 @@ vavar t= '
          ^
 
 
-**TYPE MODULE MISSING MATCHING TYPE**
-Type modules must have a type declaration matching the module name.
-
-This file is named `fuzz_crash_031`.roc, but no top-level type declaration named `fuzz_crash_031` was found.
-
-Add either:
-`fuzz_crash_031 := ...` (nominal type)
-or:
-`fuzz_crash_031 : ...` (type alias)
-**fuzz_crash_031.md:1:1:4:11:**
-```roc
-mule []
-
-#el
-vavar t= '
-```
-
-
 **UNRECOGNIZED SYNTAX**
 I don't recognize this syntax.
 
@@ -102,6 +84,22 @@ vavar t= '
          ^
 
 This might be a syntax error, an unsupported language feature, or a typo.
+
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
+
+No `main!` function was found.
+
+Add a main! function like:
+`main! = |arg| { ... }`
+**fuzz_crash_031.md:1:1:4:11:**
+```roc
+mule []
+
+#el
+vavar t= '
+```
+
 
 # TOKENS
 ~~~zig

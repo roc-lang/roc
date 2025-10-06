@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Example of a nominal tag union with a payload
-type=file
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-module []
-
 Pair(a) := [Pair(a, a)]
 
 pairU64 : Pair(U64)
@@ -31,13 +29,13 @@ mkPairInvalid : a, b -> Pair(a)
 mkPairInvalid = |x, y| Pair.Pair(x, y)
 ~~~
 # EXPECTED
-TYPE MISMATCH - annotations.md:18:28:18:28
-INVALID NOMINAL TAG - annotations.md:21:22:21:41
-INVALID NOMINAL TAG - annotations.md:24:24:24:39
+TYPE MISMATCH - annotations.md:16:28:16:28
+INVALID NOMINAL TAG - annotations.md:19:22:19:41
+INVALID NOMINAL TAG - annotations.md:22:24:22:39
 # PROBLEMS
 **TYPE MISMATCH**
 The first and second arguments to `mkPair` must have compatible types, but they are incompatible in this call:
-**annotations.md:18:28:**
+**annotations.md:16:28:**
 ```roc
 failPairDiffTypes = mkPair("1", 2)
 ```
@@ -53,7 +51,7 @@ But the second argument has the type:
 
 **INVALID NOMINAL TAG**
 I'm having trouble with this nominal tag:
-**annotations.md:21:22:21:41:**
+**annotations.md:19:22:19:41:**
 ```roc
 failPairDiffTypes2 = Pair.Pair(1, "str")
 ```
@@ -67,7 +65,7 @@ But the nominal type needs it to be:
 
 **INVALID NOMINAL TAG**
 I'm having trouble with this nominal tag:
-**annotations.md:24:24:24:39:**
+**annotations.md:22:24:22:39:**
 ```roc
 mkPairInvalid = |x, y| Pair.Pair(x, y)
 ```
@@ -81,128 +79,126 @@ But the nominal type needs it to be:
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
-UpperIdent(3:1-3:5),NoSpaceOpenRound(3:5-3:6),LowerIdent(3:6-3:7),CloseRound(3:7-3:8),OpColonEqual(3:9-3:11),OpenSquare(3:12-3:13),UpperIdent(3:13-3:17),NoSpaceOpenRound(3:17-3:18),LowerIdent(3:18-3:19),Comma(3:19-3:20),LowerIdent(3:21-3:22),CloseRound(3:22-3:23),CloseSquare(3:23-3:24),
-LowerIdent(5:1-5:8),OpColon(5:9-5:10),UpperIdent(5:11-5:15),NoSpaceOpenRound(5:15-5:16),UpperIdent(5:16-5:19),CloseRound(5:19-5:20),
-LowerIdent(6:1-6:8),OpAssign(6:9-6:10),UpperIdent(6:11-6:15),NoSpaceDotUpperIdent(6:15-6:20),NoSpaceOpenRound(6:20-6:21),Int(6:21-6:22),Comma(6:22-6:23),Int(6:24-6:25),CloseRound(6:25-6:26),
-LowerIdent(8:1-8:8),OpColon(8:9-8:10),UpperIdent(8:11-8:15),NoSpaceOpenRound(8:15-8:16),UpperIdent(8:16-8:19),CloseRound(8:19-8:20),
-LowerIdent(9:1-9:8),OpAssign(9:9-9:10),UpperIdent(9:11-9:15),NoSpaceDotUpperIdent(9:15-9:20),NoSpaceOpenRound(9:20-9:21),StringStart(9:21-9:22),StringPart(9:22-9:27),StringEnd(9:27-9:28),Comma(9:28-9:29),StringStart(9:30-9:31),StringPart(9:31-9:36),StringEnd(9:36-9:37),CloseRound(9:37-9:38),
-LowerIdent(11:1-11:7),OpColon(11:8-11:9),LowerIdent(11:10-11:11),Comma(11:11-11:12),LowerIdent(11:13-11:14),OpArrow(11:15-11:17),UpperIdent(11:18-11:22),NoSpaceOpenRound(11:22-11:23),LowerIdent(11:23-11:24),CloseRound(11:24-11:25),
-LowerIdent(12:1-12:7),OpAssign(12:8-12:9),OpBar(12:10-12:11),LowerIdent(12:11-12:12),Comma(12:12-12:13),LowerIdent(12:14-12:15),OpBar(12:15-12:16),UpperIdent(12:17-12:21),NoSpaceDotUpperIdent(12:21-12:26),NoSpaceOpenRound(12:26-12:27),LowerIdent(12:27-12:28),Comma(12:28-12:29),LowerIdent(12:30-12:31),CloseRound(12:31-12:32),
-LowerIdent(14:1-14:20),OpColon(14:21-14:22),UpperIdent(14:23-14:27),NoSpaceOpenRound(14:27-14:28),UpperIdent(14:28-14:30),CloseRound(14:30-14:31),
-LowerIdent(15:1-15:20),OpAssign(15:21-15:22),LowerIdent(15:23-15:29),NoSpaceOpenRound(15:29-15:30),Int(15:30-15:31),Comma(15:31-15:32),Int(15:33-15:34),CloseRound(15:34-15:35),
-LowerIdent(17:1-17:18),OpColon(17:19-17:20),UpperIdent(17:21-17:25),NoSpaceOpenRound(17:25-17:26),UpperIdent(17:26-17:28),CloseRound(17:28-17:29),
-LowerIdent(18:1-18:18),OpAssign(18:19-18:20),LowerIdent(18:21-18:27),NoSpaceOpenRound(18:27-18:28),StringStart(18:28-18:29),StringPart(18:29-18:30),StringEnd(18:30-18:31),Comma(18:31-18:32),Int(18:33-18:34),CloseRound(18:34-18:35),
-LowerIdent(20:1-20:19),OpColon(20:20-20:21),UpperIdent(20:22-20:26),NoSpaceOpenRound(20:26-20:27),UpperIdent(20:27-20:30),CloseRound(20:30-20:31),
-LowerIdent(21:1-21:19),OpAssign(21:20-21:21),UpperIdent(21:22-21:26),NoSpaceDotUpperIdent(21:26-21:31),NoSpaceOpenRound(21:31-21:32),Int(21:32-21:33),Comma(21:33-21:34),StringStart(21:35-21:36),StringPart(21:36-21:39),StringEnd(21:39-21:40),CloseRound(21:40-21:41),
-LowerIdent(23:1-23:14),OpColon(23:15-23:16),LowerIdent(23:17-23:18),Comma(23:18-23:19),LowerIdent(23:20-23:21),OpArrow(23:22-23:24),UpperIdent(23:25-23:29),NoSpaceOpenRound(23:29-23:30),LowerIdent(23:30-23:31),CloseRound(23:31-23:32),
-LowerIdent(24:1-24:14),OpAssign(24:15-24:16),OpBar(24:17-24:18),LowerIdent(24:18-24:19),Comma(24:19-24:20),LowerIdent(24:21-24:22),OpBar(24:22-24:23),UpperIdent(24:24-24:28),NoSpaceDotUpperIdent(24:28-24:33),NoSpaceOpenRound(24:33-24:34),LowerIdent(24:34-24:35),Comma(24:35-24:36),LowerIdent(24:37-24:38),CloseRound(24:38-24:39),
-EndOfFile(25:1-25:1),
+UpperIdent(1:1-1:5),NoSpaceOpenRound(1:5-1:6),LowerIdent(1:6-1:7),CloseRound(1:7-1:8),OpColonEqual(1:9-1:11),OpenSquare(1:12-1:13),UpperIdent(1:13-1:17),NoSpaceOpenRound(1:17-1:18),LowerIdent(1:18-1:19),Comma(1:19-1:20),LowerIdent(1:21-1:22),CloseRound(1:22-1:23),CloseSquare(1:23-1:24),
+LowerIdent(3:1-3:8),OpColon(3:9-3:10),UpperIdent(3:11-3:15),NoSpaceOpenRound(3:15-3:16),UpperIdent(3:16-3:19),CloseRound(3:19-3:20),
+LowerIdent(4:1-4:8),OpAssign(4:9-4:10),UpperIdent(4:11-4:15),NoSpaceDotUpperIdent(4:15-4:20),NoSpaceOpenRound(4:20-4:21),Int(4:21-4:22),Comma(4:22-4:23),Int(4:24-4:25),CloseRound(4:25-4:26),
+LowerIdent(6:1-6:8),OpColon(6:9-6:10),UpperIdent(6:11-6:15),NoSpaceOpenRound(6:15-6:16),UpperIdent(6:16-6:19),CloseRound(6:19-6:20),
+LowerIdent(7:1-7:8),OpAssign(7:9-7:10),UpperIdent(7:11-7:15),NoSpaceDotUpperIdent(7:15-7:20),NoSpaceOpenRound(7:20-7:21),StringStart(7:21-7:22),StringPart(7:22-7:27),StringEnd(7:27-7:28),Comma(7:28-7:29),StringStart(7:30-7:31),StringPart(7:31-7:36),StringEnd(7:36-7:37),CloseRound(7:37-7:38),
+LowerIdent(9:1-9:7),OpColon(9:8-9:9),LowerIdent(9:10-9:11),Comma(9:11-9:12),LowerIdent(9:13-9:14),OpArrow(9:15-9:17),UpperIdent(9:18-9:22),NoSpaceOpenRound(9:22-9:23),LowerIdent(9:23-9:24),CloseRound(9:24-9:25),
+LowerIdent(10:1-10:7),OpAssign(10:8-10:9),OpBar(10:10-10:11),LowerIdent(10:11-10:12),Comma(10:12-10:13),LowerIdent(10:14-10:15),OpBar(10:15-10:16),UpperIdent(10:17-10:21),NoSpaceDotUpperIdent(10:21-10:26),NoSpaceOpenRound(10:26-10:27),LowerIdent(10:27-10:28),Comma(10:28-10:29),LowerIdent(10:30-10:31),CloseRound(10:31-10:32),
+LowerIdent(12:1-12:20),OpColon(12:21-12:22),UpperIdent(12:23-12:27),NoSpaceOpenRound(12:27-12:28),UpperIdent(12:28-12:30),CloseRound(12:30-12:31),
+LowerIdent(13:1-13:20),OpAssign(13:21-13:22),LowerIdent(13:23-13:29),NoSpaceOpenRound(13:29-13:30),Int(13:30-13:31),Comma(13:31-13:32),Int(13:33-13:34),CloseRound(13:34-13:35),
+LowerIdent(15:1-15:18),OpColon(15:19-15:20),UpperIdent(15:21-15:25),NoSpaceOpenRound(15:25-15:26),UpperIdent(15:26-15:28),CloseRound(15:28-15:29),
+LowerIdent(16:1-16:18),OpAssign(16:19-16:20),LowerIdent(16:21-16:27),NoSpaceOpenRound(16:27-16:28),StringStart(16:28-16:29),StringPart(16:29-16:30),StringEnd(16:30-16:31),Comma(16:31-16:32),Int(16:33-16:34),CloseRound(16:34-16:35),
+LowerIdent(18:1-18:19),OpColon(18:20-18:21),UpperIdent(18:22-18:26),NoSpaceOpenRound(18:26-18:27),UpperIdent(18:27-18:30),CloseRound(18:30-18:31),
+LowerIdent(19:1-19:19),OpAssign(19:20-19:21),UpperIdent(19:22-19:26),NoSpaceDotUpperIdent(19:26-19:31),NoSpaceOpenRound(19:31-19:32),Int(19:32-19:33),Comma(19:33-19:34),StringStart(19:35-19:36),StringPart(19:36-19:39),StringEnd(19:39-19:40),CloseRound(19:40-19:41),
+LowerIdent(21:1-21:14),OpColon(21:15-21:16),LowerIdent(21:17-21:18),Comma(21:18-21:19),LowerIdent(21:20-21:21),OpArrow(21:22-21:24),UpperIdent(21:25-21:29),NoSpaceOpenRound(21:29-21:30),LowerIdent(21:30-21:31),CloseRound(21:31-21:32),
+LowerIdent(22:1-22:14),OpAssign(22:15-22:16),OpBar(22:17-22:18),LowerIdent(22:18-22:19),Comma(22:19-22:20),LowerIdent(22:21-22:22),OpBar(22:22-22:23),UpperIdent(22:24-22:28),NoSpaceDotUpperIdent(22:28-22:33),NoSpaceOpenRound(22:33-22:34),LowerIdent(22:34-22:35),Comma(22:35-22:36),LowerIdent(22:37-22:38),CloseRound(22:38-22:39),
+EndOfFile(23:1-23:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-24.39
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+(file @1.1-22.39
+	(type-module @1.1-1.5)
 	(statements
-		(s-type-decl @3.1-3.24
-			(header @3.1-3.8 (name "Pair")
+		(s-type-decl @1.1-1.24
+			(header @1.1-1.8 (name "Pair")
 				(args
-					(ty-var @3.6-3.7 (raw "a"))))
-			(ty-tag-union @3.12-3.24
+					(ty-var @1.6-1.7 (raw "a"))))
+			(ty-tag-union @1.12-1.24
 				(tags
-					(ty-apply @3.13-3.23
-						(ty @3.13-3.17 (name "Pair"))
-						(ty-var @3.18-3.19 (raw "a"))
-						(ty-var @3.21-3.22 (raw "a"))))))
-		(s-type-anno @5.1-5.20 (name "pairU64")
-			(ty-apply @5.11-5.20
-				(ty @5.11-5.15 (name "Pair"))
-				(ty @5.16-5.19 (name "U64"))))
-		(s-decl @6.1-6.26
-			(p-ident @6.1-6.8 (raw "pairU64"))
-			(e-apply @6.11-6.26
-				(e-tag @6.11-6.20 (raw "Pair.Pair"))
-				(e-int @6.21-6.22 (raw "1"))
-				(e-int @6.24-6.25 (raw "2"))))
-		(s-type-anno @8.1-8.20 (name "pairStr")
-			(ty-apply @8.11-8.20
-				(ty @8.11-8.15 (name "Pair"))
-				(ty @8.16-8.19 (name "Str"))))
-		(s-decl @9.1-9.38
-			(p-ident @9.1-9.8 (raw "pairStr"))
-			(e-apply @9.11-9.38
-				(e-tag @9.11-9.20 (raw "Pair.Pair"))
-				(e-string @9.21-9.28
-					(e-string-part @9.22-9.27 (raw "hello")))
-				(e-string @9.30-9.37
-					(e-string-part @9.31-9.36 (raw "world")))))
-		(s-type-anno @11.1-11.25 (name "mkPair")
-			(ty-fn @11.10-11.25
-				(ty-var @11.10-11.11 (raw "a"))
-				(ty-var @11.13-11.14 (raw "a"))
-				(ty-apply @11.18-11.25
-					(ty @11.18-11.22 (name "Pair"))
-					(ty-var @11.23-11.24 (raw "a")))))
-		(s-decl @12.1-12.32
-			(p-ident @12.1-12.7 (raw "mkPair"))
-			(e-lambda @12.10-12.32
+					(ty-apply @1.13-1.23
+						(ty @1.13-1.17 (name "Pair"))
+						(ty-var @1.18-1.19 (raw "a"))
+						(ty-var @1.21-1.22 (raw "a"))))))
+		(s-type-anno @3.1-3.20 (name "pairU64")
+			(ty-apply @3.11-3.20
+				(ty @3.11-3.15 (name "Pair"))
+				(ty @3.16-3.19 (name "U64"))))
+		(s-decl @4.1-4.26
+			(p-ident @4.1-4.8 (raw "pairU64"))
+			(e-apply @4.11-4.26
+				(e-tag @4.11-4.20 (raw "Pair.Pair"))
+				(e-int @4.21-4.22 (raw "1"))
+				(e-int @4.24-4.25 (raw "2"))))
+		(s-type-anno @6.1-6.20 (name "pairStr")
+			(ty-apply @6.11-6.20
+				(ty @6.11-6.15 (name "Pair"))
+				(ty @6.16-6.19 (name "Str"))))
+		(s-decl @7.1-7.38
+			(p-ident @7.1-7.8 (raw "pairStr"))
+			(e-apply @7.11-7.38
+				(e-tag @7.11-7.20 (raw "Pair.Pair"))
+				(e-string @7.21-7.28
+					(e-string-part @7.22-7.27 (raw "hello")))
+				(e-string @7.30-7.37
+					(e-string-part @7.31-7.36 (raw "world")))))
+		(s-type-anno @9.1-9.25 (name "mkPair")
+			(ty-fn @9.10-9.25
+				(ty-var @9.10-9.11 (raw "a"))
+				(ty-var @9.13-9.14 (raw "a"))
+				(ty-apply @9.18-9.25
+					(ty @9.18-9.22 (name "Pair"))
+					(ty-var @9.23-9.24 (raw "a")))))
+		(s-decl @10.1-10.32
+			(p-ident @10.1-10.7 (raw "mkPair"))
+			(e-lambda @10.10-10.32
 				(args
-					(p-ident @12.11-12.12 (raw "x"))
-					(p-ident @12.14-12.15 (raw "y")))
-				(e-apply @12.17-12.32
-					(e-tag @12.17-12.26 (raw "Pair.Pair"))
-					(e-ident @12.27-12.28 (raw "x"))
-					(e-ident @12.30-12.31 (raw "y")))))
-		(s-type-anno @14.1-14.31 (name "succeedPairSameType")
-			(ty-apply @14.23-14.31
-				(ty @14.23-14.27 (name "Pair"))
-				(ty @14.28-14.30 (name "U8"))))
-		(s-decl @15.1-15.35
-			(p-ident @15.1-15.20 (raw "succeedPairSameType"))
-			(e-apply @15.23-15.35
-				(e-ident @15.23-15.29 (raw "mkPair"))
-				(e-int @15.30-15.31 (raw "1"))
-				(e-int @15.33-15.34 (raw "2"))))
-		(s-type-anno @17.1-17.29 (name "failPairDiffTypes")
-			(ty-apply @17.21-17.29
-				(ty @17.21-17.25 (name "Pair"))
-				(ty @17.26-17.28 (name "U8"))))
-		(s-decl @18.1-18.35
-			(p-ident @18.1-18.18 (raw "failPairDiffTypes"))
-			(e-apply @18.21-18.35
-				(e-ident @18.21-18.27 (raw "mkPair"))
-				(e-string @18.28-18.31
-					(e-string-part @18.29-18.30 (raw "1")))
-				(e-int @18.33-18.34 (raw "2"))))
-		(s-type-anno @20.1-20.31 (name "failPairDiffTypes2")
-			(ty-apply @20.22-20.31
-				(ty @20.22-20.26 (name "Pair"))
-				(ty @20.27-20.30 (name "U64"))))
-		(s-decl @21.1-21.41
-			(p-ident @21.1-21.19 (raw "failPairDiffTypes2"))
-			(e-apply @21.22-21.41
-				(e-tag @21.22-21.31 (raw "Pair.Pair"))
-				(e-int @21.32-21.33 (raw "1"))
-				(e-string @21.35-21.40
-					(e-string-part @21.36-21.39 (raw "str")))))
-		(s-type-anno @23.1-23.32 (name "mkPairInvalid")
-			(ty-fn @23.17-23.32
-				(ty-var @23.17-23.18 (raw "a"))
-				(ty-var @23.20-23.21 (raw "b"))
-				(ty-apply @23.25-23.32
-					(ty @23.25-23.29 (name "Pair"))
-					(ty-var @23.30-23.31 (raw "a")))))
-		(s-decl @24.1-24.39
-			(p-ident @24.1-24.14 (raw "mkPairInvalid"))
-			(e-lambda @24.17-24.39
+					(p-ident @10.11-10.12 (raw "x"))
+					(p-ident @10.14-10.15 (raw "y")))
+				(e-apply @10.17-10.32
+					(e-tag @10.17-10.26 (raw "Pair.Pair"))
+					(e-ident @10.27-10.28 (raw "x"))
+					(e-ident @10.30-10.31 (raw "y")))))
+		(s-type-anno @12.1-12.31 (name "succeedPairSameType")
+			(ty-apply @12.23-12.31
+				(ty @12.23-12.27 (name "Pair"))
+				(ty @12.28-12.30 (name "U8"))))
+		(s-decl @13.1-13.35
+			(p-ident @13.1-13.20 (raw "succeedPairSameType"))
+			(e-apply @13.23-13.35
+				(e-ident @13.23-13.29 (raw "mkPair"))
+				(e-int @13.30-13.31 (raw "1"))
+				(e-int @13.33-13.34 (raw "2"))))
+		(s-type-anno @15.1-15.29 (name "failPairDiffTypes")
+			(ty-apply @15.21-15.29
+				(ty @15.21-15.25 (name "Pair"))
+				(ty @15.26-15.28 (name "U8"))))
+		(s-decl @16.1-16.35
+			(p-ident @16.1-16.18 (raw "failPairDiffTypes"))
+			(e-apply @16.21-16.35
+				(e-ident @16.21-16.27 (raw "mkPair"))
+				(e-string @16.28-16.31
+					(e-string-part @16.29-16.30 (raw "1")))
+				(e-int @16.33-16.34 (raw "2"))))
+		(s-type-anno @18.1-18.31 (name "failPairDiffTypes2")
+			(ty-apply @18.22-18.31
+				(ty @18.22-18.26 (name "Pair"))
+				(ty @18.27-18.30 (name "U64"))))
+		(s-decl @19.1-19.41
+			(p-ident @19.1-19.19 (raw "failPairDiffTypes2"))
+			(e-apply @19.22-19.41
+				(e-tag @19.22-19.31 (raw "Pair.Pair"))
+				(e-int @19.32-19.33 (raw "1"))
+				(e-string @19.35-19.40
+					(e-string-part @19.36-19.39 (raw "str")))))
+		(s-type-anno @21.1-21.32 (name "mkPairInvalid")
+			(ty-fn @21.17-21.32
+				(ty-var @21.17-21.18 (raw "a"))
+				(ty-var @21.20-21.21 (raw "b"))
+				(ty-apply @21.25-21.32
+					(ty @21.25-21.29 (name "Pair"))
+					(ty-var @21.30-21.31 (raw "a")))))
+		(s-decl @22.1-22.39
+			(p-ident @22.1-22.14 (raw "mkPairInvalid"))
+			(e-lambda @22.17-22.39
 				(args
-					(p-ident @24.18-24.19 (raw "x"))
-					(p-ident @24.21-24.22 (raw "y")))
-				(e-apply @24.24-24.39
-					(e-tag @24.24-24.33 (raw "Pair.Pair"))
-					(e-ident @24.34-24.35 (raw "x"))
-					(e-ident @24.37-24.38 (raw "y")))))))
+					(p-ident @22.18-22.19 (raw "x"))
+					(p-ident @22.21-22.22 (raw "y")))
+				(e-apply @22.24-22.39
+					(e-tag @22.24-22.33 (raw "Pair.Pair"))
+					(e-ident @22.34-22.35 (raw "x"))
+					(e-ident @22.37-22.38 (raw "y")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -212,135 +208,135 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @6.1-6.8 (ident "pairU64"))
-		(e-nominal @6.11-6.26 (nominal "Pair")
-			(e-tag @6.11-6.26 (name "Pair")
+		(p-assign @4.1-4.8 (ident "pairU64"))
+		(e-nominal @4.11-4.26 (nominal "Pair")
+			(e-tag @4.11-4.26 (name "Pair")
 				(args
-					(e-num @6.21-6.22 (value "1"))
-					(e-num @6.24-6.25 (value "2")))))
-		(annotation @6.1-6.8
+					(e-num @4.21-4.22 (value "1"))
+					(e-num @4.24-4.25 (value "2")))))
+		(annotation @4.1-4.8
 			(declared-type
-				(ty-apply @5.11-5.20 (name "Pair") (local)
-					(ty-lookup @5.11-5.20 (name "U64") (builtin))))))
+				(ty-apply @3.11-3.20 (name "Pair") (local)
+					(ty-lookup @3.11-3.20 (name "U64") (builtin))))))
 	(d-let
-		(p-assign @9.1-9.8 (ident "pairStr"))
-		(e-nominal @9.11-9.38 (nominal "Pair")
-			(e-tag @9.11-9.38 (name "Pair")
+		(p-assign @7.1-7.8 (ident "pairStr"))
+		(e-nominal @7.11-7.38 (nominal "Pair")
+			(e-tag @7.11-7.38 (name "Pair")
 				(args
-					(e-string @9.21-9.28
-						(e-literal @9.22-9.27 (string "hello")))
-					(e-string @9.30-9.37
-						(e-literal @9.31-9.36 (string "world"))))))
-		(annotation @9.1-9.8
+					(e-string @7.21-7.28
+						(e-literal @7.22-7.27 (string "hello")))
+					(e-string @7.30-7.37
+						(e-literal @7.31-7.36 (string "world"))))))
+		(annotation @7.1-7.8
 			(declared-type
-				(ty-apply @8.11-8.20 (name "Pair") (local)
-					(ty-lookup @8.11-8.20 (name "Str") (builtin))))))
+				(ty-apply @6.11-6.20 (name "Pair") (local)
+					(ty-lookup @6.11-6.20 (name "Str") (builtin))))))
 	(d-let
-		(p-assign @12.1-12.7 (ident "mkPair"))
-		(e-lambda @12.10-12.32
+		(p-assign @10.1-10.7 (ident "mkPair"))
+		(e-lambda @10.10-10.32
 			(args
-				(p-assign @12.11-12.12 (ident "x"))
-				(p-assign @12.14-12.15 (ident "y")))
-			(e-nominal @12.17-12.32 (nominal "Pair")
-				(e-tag @12.17-12.32 (name "Pair")
+				(p-assign @10.11-10.12 (ident "x"))
+				(p-assign @10.14-10.15 (ident "y")))
+			(e-nominal @10.17-10.32 (nominal "Pair")
+				(e-tag @10.17-10.32 (name "Pair")
 					(args
-						(e-lookup-local @12.27-12.28
-							(p-assign @12.11-12.12 (ident "x")))
-						(e-lookup-local @12.30-12.31
-							(p-assign @12.14-12.15 (ident "y")))))))
-		(annotation @12.1-12.7
+						(e-lookup-local @10.27-10.28
+							(p-assign @10.11-10.12 (ident "x")))
+						(e-lookup-local @10.30-10.31
+							(p-assign @10.14-10.15 (ident "y")))))))
+		(annotation @10.1-10.7
 			(declared-type
-				(ty-fn @11.10-11.25 (effectful false)
-					(ty-rigid-var @11.10-11.11 (name "a"))
-					(ty-rigid-var-lookup (ty-rigid-var @11.10-11.11 (name "a")))
-					(ty-apply @11.18-11.25 (name "Pair") (local)
-						(ty-rigid-var-lookup (ty-rigid-var @11.10-11.11 (name "a"))))))))
+				(ty-fn @9.10-9.25 (effectful false)
+					(ty-rigid-var @9.10-9.11 (name "a"))
+					(ty-rigid-var-lookup (ty-rigid-var @9.10-9.11 (name "a")))
+					(ty-apply @9.18-9.25 (name "Pair") (local)
+						(ty-rigid-var-lookup (ty-rigid-var @9.10-9.11 (name "a"))))))))
 	(d-let
-		(p-assign @15.1-15.20 (ident "succeedPairSameType"))
-		(e-call @15.23-15.35
-			(e-lookup-local @15.23-15.29
-				(p-assign @12.1-12.7 (ident "mkPair")))
-			(e-num @15.30-15.31 (value "1"))
-			(e-num @15.33-15.34 (value "2")))
-		(annotation @15.1-15.20
+		(p-assign @13.1-13.20 (ident "succeedPairSameType"))
+		(e-call @13.23-13.35
+			(e-lookup-local @13.23-13.29
+				(p-assign @10.1-10.7 (ident "mkPair")))
+			(e-num @13.30-13.31 (value "1"))
+			(e-num @13.33-13.34 (value "2")))
+		(annotation @13.1-13.20
 			(declared-type
-				(ty-apply @14.23-14.31 (name "Pair") (local)
-					(ty-lookup @14.23-14.31 (name "U8") (builtin))))))
+				(ty-apply @12.23-12.31 (name "Pair") (local)
+					(ty-lookup @12.23-12.31 (name "U8") (builtin))))))
 	(d-let
-		(p-assign @18.1-18.18 (ident "failPairDiffTypes"))
-		(e-call @18.21-18.35
-			(e-lookup-local @18.21-18.27
-				(p-assign @12.1-12.7 (ident "mkPair")))
-			(e-string @18.28-18.31
-				(e-literal @18.29-18.30 (string "1")))
-			(e-num @18.33-18.34 (value "2")))
-		(annotation @18.1-18.18
+		(p-assign @16.1-16.18 (ident "failPairDiffTypes"))
+		(e-call @16.21-16.35
+			(e-lookup-local @16.21-16.27
+				(p-assign @10.1-10.7 (ident "mkPair")))
+			(e-string @16.28-16.31
+				(e-literal @16.29-16.30 (string "1")))
+			(e-num @16.33-16.34 (value "2")))
+		(annotation @16.1-16.18
 			(declared-type
-				(ty-apply @17.21-17.29 (name "Pair") (local)
-					(ty-lookup @17.21-17.29 (name "U8") (builtin))))))
+				(ty-apply @15.21-15.29 (name "Pair") (local)
+					(ty-lookup @15.21-15.29 (name "U8") (builtin))))))
 	(d-let
-		(p-assign @21.1-21.19 (ident "failPairDiffTypes2"))
-		(e-nominal @21.22-21.41 (nominal "Pair")
-			(e-tag @21.22-21.41 (name "Pair")
+		(p-assign @19.1-19.19 (ident "failPairDiffTypes2"))
+		(e-nominal @19.22-19.41 (nominal "Pair")
+			(e-tag @19.22-19.41 (name "Pair")
 				(args
-					(e-num @21.32-21.33 (value "1"))
-					(e-string @21.35-21.40
-						(e-literal @21.36-21.39 (string "str"))))))
-		(annotation @21.1-21.19
+					(e-num @19.32-19.33 (value "1"))
+					(e-string @19.35-19.40
+						(e-literal @19.36-19.39 (string "str"))))))
+		(annotation @19.1-19.19
 			(declared-type
-				(ty-apply @20.22-20.31 (name "Pair") (local)
-					(ty-lookup @20.22-20.31 (name "U64") (builtin))))))
+				(ty-apply @18.22-18.31 (name "Pair") (local)
+					(ty-lookup @18.22-18.31 (name "U64") (builtin))))))
 	(d-let
-		(p-assign @24.1-24.14 (ident "mkPairInvalid"))
-		(e-lambda @24.17-24.39
+		(p-assign @22.1-22.14 (ident "mkPairInvalid"))
+		(e-lambda @22.17-22.39
 			(args
-				(p-assign @24.18-24.19 (ident "x"))
-				(p-assign @24.21-24.22 (ident "y")))
-			(e-nominal @24.24-24.39 (nominal "Pair")
-				(e-tag @24.24-24.39 (name "Pair")
+				(p-assign @22.18-22.19 (ident "x"))
+				(p-assign @22.21-22.22 (ident "y")))
+			(e-nominal @22.24-22.39 (nominal "Pair")
+				(e-tag @22.24-22.39 (name "Pair")
 					(args
-						(e-lookup-local @24.34-24.35
-							(p-assign @24.18-24.19 (ident "x")))
-						(e-lookup-local @24.37-24.38
-							(p-assign @24.21-24.22 (ident "y")))))))
-		(annotation @24.1-24.14
+						(e-lookup-local @22.34-22.35
+							(p-assign @22.18-22.19 (ident "x")))
+						(e-lookup-local @22.37-22.38
+							(p-assign @22.21-22.22 (ident "y")))))))
+		(annotation @22.1-22.14
 			(declared-type
-				(ty-fn @23.17-23.32 (effectful false)
-					(ty-rigid-var @23.17-23.18 (name "a"))
-					(ty-rigid-var @23.20-23.21 (name "b"))
-					(ty-apply @23.25-23.32 (name "Pair") (local)
-						(ty-rigid-var-lookup (ty-rigid-var @23.17-23.18 (name "a"))))))))
-	(s-nominal-decl @3.1-3.24
-		(ty-header @3.1-3.8 (name "Pair")
+				(ty-fn @21.17-21.32 (effectful false)
+					(ty-rigid-var @21.17-21.18 (name "a"))
+					(ty-rigid-var @21.20-21.21 (name "b"))
+					(ty-apply @21.25-21.32 (name "Pair") (local)
+						(ty-rigid-var-lookup (ty-rigid-var @21.17-21.18 (name "a"))))))))
+	(s-nominal-decl @1.1-1.24
+		(ty-header @1.1-1.8 (name "Pair")
 			(ty-args
-				(ty-rigid-var @3.6-3.7 (name "a"))))
-		(ty-tag-union @3.12-3.24
-			(ty-tag-name @3.13-3.23 (name "Pair")
-				(ty-rigid-var-lookup (ty-rigid-var @3.6-3.7 (name "a")))
-				(ty-rigid-var-lookup (ty-rigid-var @3.6-3.7 (name "a")))))))
+				(ty-rigid-var @1.6-1.7 (name "a"))))
+		(ty-tag-union @1.12-1.24
+			(ty-tag-name @1.13-1.23 (name "Pair")
+				(ty-rigid-var-lookup (ty-rigid-var @1.6-1.7 (name "a")))
+				(ty-rigid-var-lookup (ty-rigid-var @1.6-1.7 (name "a")))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.8 (type "Pair(Num(Int(Unsigned64)))"))
-		(patt @9.1-9.8 (type "Pair(Str)"))
-		(patt @12.1-12.7 (type "a, a -> Pair(a)"))
-		(patt @15.1-15.20 (type "Pair(Num(Int(Unsigned8)))"))
-		(patt @18.1-18.18 (type "Error"))
-		(patt @21.1-21.19 (type "Error"))
-		(patt @24.1-24.14 (type "a, b -> Error")))
+		(patt @4.1-4.8 (type "Pair(Num(Int(Unsigned64)))"))
+		(patt @7.1-7.8 (type "Pair(Str)"))
+		(patt @10.1-10.7 (type "a, a -> Pair(a)"))
+		(patt @13.1-13.20 (type "Pair(Num(Int(Unsigned8)))"))
+		(patt @16.1-16.18 (type "Error"))
+		(patt @19.1-19.19 (type "Error"))
+		(patt @22.1-22.14 (type "a, b -> Error")))
 	(type_decls
-		(nominal @3.1-3.24 (type "Pair(a)")
-			(ty-header @3.1-3.8 (name "Pair")
+		(nominal @1.1-1.24 (type "Pair(a)")
+			(ty-header @1.1-1.8 (name "Pair")
 				(ty-args
-					(ty-rigid-var @3.6-3.7 (name "a"))))))
+					(ty-rigid-var @1.6-1.7 (name "a"))))))
 	(expressions
-		(expr @6.11-6.26 (type "Pair(Num(Int(Unsigned64)))"))
-		(expr @9.11-9.38 (type "Pair(Str)"))
-		(expr @12.10-12.32 (type "a, a -> Pair(a)"))
-		(expr @15.23-15.35 (type "Pair(Num(Int(Unsigned8)))"))
-		(expr @18.21-18.35 (type "Error"))
-		(expr @21.22-21.41 (type "Error"))
-		(expr @24.17-24.39 (type "a, b -> Error"))))
+		(expr @4.11-4.26 (type "Pair(Num(Int(Unsigned64)))"))
+		(expr @7.11-7.38 (type "Pair(Str)"))
+		(expr @10.10-10.32 (type "a, a -> Pair(a)"))
+		(expr @13.23-13.35 (type "Pair(Num(Int(Unsigned8)))"))
+		(expr @16.21-16.35 (type "Error"))
+		(expr @19.22-19.41 (type "Error"))
+		(expr @22.17-22.39 (type "a, b -> Error"))))
 ~~~

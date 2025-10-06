@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Type declaration scope integration - redeclaration and undeclared type errors
-type=file
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-module [Foo, Bar]
-
 # First declare a type
 Foo : U64
 
@@ -20,21 +18,21 @@ Bar : SomeUndeclaredType
 Baz : Foo
 ~~~
 # EXPECTED
-TYPE REDECLARED - type_scope_integration.md:7:1:7:10
-UNDECLARED TYPE - type_scope_integration.md:10:7:10:25
+TYPE REDECLARED - type_scope_integration.md:5:1:5:10
+UNDECLARED TYPE - type_scope_integration.md:8:7:8:25
 # PROBLEMS
 **TYPE REDECLARED**
 The type _Foo_ is being redeclared.
 
 The redeclaration is here:
-**type_scope_integration.md:7:1:7:10:**
+**type_scope_integration.md:5:1:5:10:**
 ```roc
 Foo : Str
 ```
 ^^^^^^^^^
 
 But _Foo_ was already declared here:
-**type_scope_integration.md:4:1:4:10:**
+**type_scope_integration.md:2:1:2:10:**
 ```roc
 Foo : U64
 ```
@@ -45,7 +43,7 @@ Foo : U64
 The type _SomeUndeclaredType_ is not declared in this scope.
 
 This type is referenced here:
-**type_scope_integration.md:10:7:10:25:**
+**type_scope_integration.md:8:7:8:25:**
 ```roc
 Bar : SomeUndeclaredType
 ```
@@ -54,70 +52,77 @@ Bar : SomeUndeclaredType
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:12),Comma(1:12-1:13),UpperIdent(1:14-1:17),CloseSquare(1:17-1:18),
-UpperIdent(4:1-4:4),OpColon(4:5-4:6),UpperIdent(4:7-4:10),
-UpperIdent(7:1-7:4),OpColon(7:5-7:6),UpperIdent(7:7-7:10),
-UpperIdent(10:1-10:4),OpColon(10:5-10:6),UpperIdent(10:7-10:25),
-UpperIdent(13:1-13:4),OpColon(13:5-13:6),UpperIdent(13:7-13:10),
-EndOfFile(14:1-14:1),
+UpperIdent(2:1-2:4),OpColon(2:5-2:6),UpperIdent(2:7-2:10),
+UpperIdent(5:1-5:4),OpColon(5:5-5:6),UpperIdent(5:7-5:10),
+UpperIdent(8:1-8:4),OpColon(8:5-8:6),UpperIdent(8:7-8:25),
+UpperIdent(11:1-11:4),OpColon(11:5-11:6),UpperIdent(11:7-11:10),
+EndOfFile(12:1-12:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-13.10
-	(module @1.1-1.18
-		(exposes @1.8-1.18
-			(exposed-upper-ident @1.9-1.12 (text "Foo"))
-			(exposed-upper-ident @1.14-1.17 (text "Bar"))))
+(file @2.1-11.10
+	(type-module @2.1-2.4)
 	(statements
-		(s-type-decl @4.1-4.10
-			(header @4.1-4.4 (name "Foo")
+		(s-type-decl @2.1-2.10
+			(header @2.1-2.4 (name "Foo")
 				(args))
-			(ty @4.7-4.10 (name "U64")))
-		(s-type-decl @7.1-7.10
-			(header @7.1-7.4 (name "Foo")
+			(ty @2.7-2.10 (name "U64")))
+		(s-type-decl @5.1-5.10
+			(header @5.1-5.4 (name "Foo")
 				(args))
-			(ty @7.7-7.10 (name "Str")))
-		(s-type-decl @10.1-10.25
-			(header @10.1-10.4 (name "Bar")
+			(ty @5.7-5.10 (name "Str")))
+		(s-type-decl @8.1-8.25
+			(header @8.1-8.4 (name "Bar")
 				(args))
-			(ty @10.7-10.25 (name "SomeUndeclaredType")))
-		(s-type-decl @13.1-13.10
-			(header @13.1-13.4 (name "Baz")
+			(ty @8.7-8.25 (name "SomeUndeclaredType")))
+		(s-type-decl @11.1-11.10
+			(header @11.1-11.4 (name "Baz")
 				(args))
-			(ty @13.7-13.10 (name "Foo")))))
+			(ty @11.7-11.10 (name "Foo")))))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+# First declare a type
+# First declare a type
+Foo : U64
+
+# Try to redeclare the same type (should error)
+Foo : Str
+
+# Declare another type that uses an undeclared type
+Bar : SomeUndeclaredType
+
+# Declare a type that properly uses a declared type
+Baz : Foo
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-alias-decl @4.1-4.10
-		(ty-header @4.1-4.4 (name "Foo"))
-		(ty-lookup @4.7-4.10 (name "U64") (builtin)))
-	(s-alias-decl @7.1-7.10
-		(ty-header @7.1-7.4 (name "Foo"))
-		(ty-lookup @7.7-7.10 (name "Str") (builtin)))
-	(s-alias-decl @10.1-10.25
-		(ty-header @10.1-10.4 (name "Bar"))
-		(ty-malformed @10.7-10.25))
-	(s-alias-decl @13.1-13.10
-		(ty-header @13.1-13.4 (name "Baz"))
-		(ty-lookup @13.7-13.10 (name "Foo") (local))))
+	(s-alias-decl @2.1-2.10
+		(ty-header @2.1-2.4 (name "Foo"))
+		(ty-lookup @2.7-2.10 (name "U64") (builtin)))
+	(s-alias-decl @5.1-5.10
+		(ty-header @5.1-5.4 (name "Foo"))
+		(ty-lookup @5.7-5.10 (name "Str") (builtin)))
+	(s-alias-decl @8.1-8.25
+		(ty-header @8.1-8.4 (name "Bar"))
+		(ty-malformed @8.7-8.25))
+	(s-alias-decl @11.1-11.10
+		(ty-header @11.1-11.4 (name "Baz"))
+		(ty-lookup @11.7-11.10 (name "Foo") (local))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @4.1-4.10 (type "Foo")
-			(ty-header @4.1-4.4 (name "Foo")))
-		(alias @7.1-7.10 (type "Foo")
-			(ty-header @7.1-7.4 (name "Foo")))
-		(alias @10.1-10.25 (type "Bar")
-			(ty-header @10.1-10.4 (name "Bar")))
-		(alias @13.1-13.10 (type "Baz")
-			(ty-header @13.1-13.4 (name "Baz"))))
+		(alias @2.1-2.10 (type "Foo")
+			(ty-header @2.1-2.4 (name "Foo")))
+		(alias @5.1-5.10 (type "Foo")
+			(ty-header @5.1-5.4 (name "Foo")))
+		(alias @8.1-8.25 (type "Bar")
+			(ty-header @8.1-8.4 (name "Bar")))
+		(alias @11.1-11.10 (type "Baz")
+			(ty-header @11.1-11.4 (name "Baz"))))
 	(expressions))
 ~~~

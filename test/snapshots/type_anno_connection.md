@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Type annotation connection to definitions
-type=file
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-module [add_one, my_number]
-
 add_one : U64 -> U64
 add_one = |x| x + 1
 
@@ -19,42 +17,36 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:16),Comma(1:16-1:17),LowerIdent(1:18-1:27),CloseSquare(1:27-1:28),
-LowerIdent(3:1-3:8),OpColon(3:9-3:10),UpperIdent(3:11-3:14),OpArrow(3:15-3:17),UpperIdent(3:18-3:21),
-LowerIdent(4:1-4:8),OpAssign(4:9-4:10),OpBar(4:11-4:12),LowerIdent(4:12-4:13),OpBar(4:13-4:14),LowerIdent(4:15-4:16),OpPlus(4:17-4:18),Int(4:19-4:20),
-LowerIdent(6:1-6:10),OpColon(6:11-6:12),UpperIdent(6:13-6:16),
-LowerIdent(7:1-7:10),OpAssign(7:11-7:12),LowerIdent(7:13-7:20),NoSpaceOpenRound(7:20-7:21),Int(7:21-7:23),CloseRound(7:23-7:24),
-EndOfFile(8:1-8:1),
+LowerIdent(1:1-1:8),OpColon(1:9-1:10),UpperIdent(1:11-1:14),OpArrow(1:15-1:17),UpperIdent(1:18-1:21),
+LowerIdent(2:1-2:8),OpAssign(2:9-2:10),OpBar(2:11-2:12),LowerIdent(2:12-2:13),OpBar(2:13-2:14),LowerIdent(2:15-2:16),OpPlus(2:17-2:18),Int(2:19-2:20),
+LowerIdent(4:1-4:10),OpColon(4:11-4:12),UpperIdent(4:13-4:16),
+LowerIdent(5:1-5:10),OpAssign(5:11-5:12),LowerIdent(5:13-5:20),NoSpaceOpenRound(5:20-5:21),Int(5:21-5:23),CloseRound(5:23-5:24),
+EndOfFile(6:1-6:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-7.24
-	(module @1.1-1.28
-		(exposes @1.8-1.28
-			(exposed-lower-ident @1.9-1.16
-				(text "add_one"))
-			(exposed-lower-ident @1.18-1.27
-				(text "my_number"))))
+(file @1.1-5.24
+	(type-module @1.1-1.8)
 	(statements
-		(s-type-anno @3.1-3.21 (name "add_one")
-			(ty-fn @3.11-3.21
-				(ty @3.11-3.14 (name "U64"))
-				(ty @3.18-3.21 (name "U64"))))
-		(s-decl @4.1-4.20
-			(p-ident @4.1-4.8 (raw "add_one"))
-			(e-lambda @4.11-4.20
+		(s-type-anno @1.1-1.21 (name "add_one")
+			(ty-fn @1.11-1.21
+				(ty @1.11-1.14 (name "U64"))
+				(ty @1.18-1.21 (name "U64"))))
+		(s-decl @2.1-2.20
+			(p-ident @2.1-2.8 (raw "add_one"))
+			(e-lambda @2.11-2.20
 				(args
-					(p-ident @4.12-4.13 (raw "x")))
-				(e-binop @4.15-4.20 (op "+")
-					(e-ident @4.15-4.16 (raw "x"))
-					(e-int @4.19-4.20 (raw "1")))))
-		(s-type-anno @6.1-6.16 (name "my_number")
-			(ty @6.13-6.16 (name "U64")))
-		(s-decl @7.1-7.24
-			(p-ident @7.1-7.10 (raw "my_number"))
-			(e-apply @7.13-7.24
-				(e-ident @7.13-7.20 (raw "add_one"))
-				(e-int @7.21-7.23 (raw "42"))))))
+					(p-ident @2.12-2.13 (raw "x")))
+				(e-binop @2.15-2.20 (op "+")
+					(e-ident @2.15-2.16 (raw "x"))
+					(e-int @2.19-2.20 (raw "1")))))
+		(s-type-anno @4.1-4.16 (name "my_number")
+			(ty @4.13-4.16 (name "U64")))
+		(s-decl @5.1-5.24
+			(p-ident @5.1-5.10 (raw "my_number"))
+			(e-apply @5.13-5.24
+				(e-ident @5.13-5.20 (raw "add_one"))
+				(e-int @5.21-5.23 (raw "42"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -64,36 +56,36 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @4.1-4.8 (ident "add_one"))
-		(e-lambda @4.11-4.20
+		(p-assign @2.1-2.8 (ident "add_one"))
+		(e-lambda @2.11-2.20
 			(args
-				(p-assign @4.12-4.13 (ident "x")))
-			(e-binop @4.15-4.20 (op "add")
-				(e-lookup-local @4.15-4.16
-					(p-assign @4.12-4.13 (ident "x")))
-				(e-num @4.19-4.20 (value "1"))))
-		(annotation @4.1-4.8
+				(p-assign @2.12-2.13 (ident "x")))
+			(e-binop @2.15-2.20 (op "add")
+				(e-lookup-local @2.15-2.16
+					(p-assign @2.12-2.13 (ident "x")))
+				(e-num @2.19-2.20 (value "1"))))
+		(annotation @2.1-2.8
 			(declared-type
-				(ty-fn @3.11-3.21 (effectful false)
-					(ty-lookup @3.11-3.14 (name "U64") (builtin))
-					(ty-lookup @3.18-3.21 (name "U64") (builtin))))))
+				(ty-fn @1.11-1.21 (effectful false)
+					(ty-lookup @1.11-1.14 (name "U64") (builtin))
+					(ty-lookup @1.18-1.21 (name "U64") (builtin))))))
 	(d-let
-		(p-assign @7.1-7.10 (ident "my_number"))
-		(e-call @7.13-7.24
-			(e-lookup-local @7.13-7.20
-				(p-assign @4.1-4.8 (ident "add_one")))
-			(e-num @7.21-7.23 (value "42")))
-		(annotation @7.1-7.10
+		(p-assign @5.1-5.10 (ident "my_number"))
+		(e-call @5.13-5.24
+			(e-lookup-local @5.13-5.20
+				(p-assign @2.1-2.8 (ident "add_one")))
+			(e-num @5.21-5.23 (value "42")))
+		(annotation @5.1-5.10
 			(declared-type
-				(ty-lookup @6.13-6.16 (name "U64") (builtin))))))
+				(ty-lookup @4.13-4.16 (name "U64") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.8 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
-		(patt @7.1-7.10 (type "Num(Int(Unsigned64))")))
+		(patt @2.1-2.8 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(patt @5.1-5.10 (type "Num(Int(Unsigned64))")))
 	(expressions
-		(expr @4.11-4.20 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
-		(expr @7.13-7.24 (type "Num(Int(Unsigned64))"))))
+		(expr @2.11-2.20 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(expr @5.13-5.24 (type "Num(Int(Unsigned64))"))))
 ~~~

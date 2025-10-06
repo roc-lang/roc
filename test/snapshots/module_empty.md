@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=An empty module with no exposes
-type=file
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-module []
+
 ~~~
 # EXPECTED
 NIL
@@ -13,14 +13,12 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
 EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.10
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+(file @2.1-2.1
+	(type-module @2.1-2.1)
 	(statements))
 ~~~
 # FORMATTED

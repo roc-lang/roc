@@ -1,11 +1,10 @@
 # META
 ~~~ini
 description=A primitive
-type=file
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-module [foo]
 foo = 12.34
 ~~~
 # EXPECTED
@@ -14,21 +13,17 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),
-LowerIdent(2:1-2:4),OpAssign(2:5-2:6),Float(2:7-2:12),
-EndOfFile(3:1-3:1),
+LowerIdent(1:1-1:4),OpAssign(1:5-1:6),Float(1:7-1:12),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-2.12
-	(module @1.1-1.13
-		(exposes @1.8-1.13
-			(exposed-lower-ident @1.9-1.12
-				(text "foo"))))
+(file @1.1-1.12
+	(type-module @1.1-1.4)
 	(statements
-		(s-decl @2.1-2.12
-			(p-ident @2.1-2.4 (raw "foo"))
-			(e-frac @2.7-2.12 (raw "12.34")))))
+		(s-decl @1.1-1.12
+			(p-ident @1.1-1.4 (raw "foo"))
+			(e-frac @1.7-1.12 (raw "12.34")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -38,14 +33,14 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @2.1-2.4 (ident "foo"))
-		(e-dec-small @2.7-2.12 (numerator "1234") (denominator-power-of-ten "2") (value "12.34"))))
+		(p-assign @1.1-1.4 (ident "foo"))
+		(e-dec-small @1.7-1.12 (numerator "1234") (denominator-power-of-ten "2") (value "12.34"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @2.1-2.4 (type "Num(Frac(_size))")))
+		(patt @1.1-1.4 (type "Num(Frac(_size))")))
 	(expressions
-		(expr @2.7-2.12 (type "Num(Frac(_size))"))))
+		(expr @1.7-1.12 (type "Num(Frac(_size))"))))
 ~~~

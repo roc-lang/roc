@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Hexadecimal integer literal type inference
-type=file
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-module []
-
 x = 0xFF
 ~~~
 # EXPECTED
@@ -15,19 +13,17 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
-LowerIdent(3:1-3:2),OpAssign(3:3-3:4),Int(3:5-3:9),
-EndOfFile(4:1-4:1),
+LowerIdent(1:1-1:2),OpAssign(1:3-1:4),Int(1:5-1:9),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-3.9
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+(file @1.1-1.9
+	(type-module @1.1-1.2)
 	(statements
-		(s-decl @3.1-3.9
-			(p-ident @3.1-3.2 (raw "x"))
-			(e-int @3.5-3.9 (raw "0xFF")))))
+		(s-decl @1.1-1.9
+			(p-ident @1.1-1.2 (raw "x"))
+			(e-int @1.5-1.9 (raw "0xFF")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -37,14 +33,14 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @3.1-3.2 (ident "x"))
-		(e-num @3.5-3.9 (value "255"))))
+		(p-assign @1.1-1.2 (ident "x"))
+		(e-num @1.5-1.9 (value "255"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.2 (type "Num(Int(_size))")))
+		(patt @1.1-1.2 (type "Num(Int(_size))")))
 	(expressions
-		(expr @3.5-3.9 (type "Num(Int(_size))"))))
+		(expr @1.5-1.9 (type "Num(Int(_size))"))))
 ~~~
