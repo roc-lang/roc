@@ -1097,9 +1097,17 @@ pub fn getAnnotation(store: *const NodeStore, annotation: CIR.Annotation.Idx) CI
 
     std.debug.assert(node.tag == .annotation);
 
+    const where_span: ?CIR.WhereClause.Span = if (node.data_3 != 0) blk: {
+        const extra_data = store.extra_data.items.items;
+        const start = extra_data[node.data_3];
+        const len = extra_data[node.data_3 + 1];
+        break :blk CIR.WhereClause.Span{ .span = .{ .start = start, .len = len } };
+    } else null;
+
     return CIR.Annotation{
         .type_anno = @enumFromInt(node.data_2),
         .signature = @enumFromInt(node.data_1),
+        .where = where_span,
     };
 }
 
@@ -2025,10 +2033,17 @@ pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.Recor
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base.Region) std.mem.Allocator.Error!CIR.Annotation.Idx {
+    const where_extra_idx: u32 = if (annotation.where) |where_span| blk: {
+        const idx: u32 = @intCast(store.extra_data.items.items.len);
+        _ = try store.extra_data.append(store.gpa, where_span.span.start);
+        _ = try store.extra_data.append(store.gpa, where_span.span.len);
+        break :blk idx;
+    } else 0;
+
     const node = Node{
         .data_1 = @intFromEnum(annotation.signature),
         .data_2 = @intFromEnum(annotation.type_anno),
-        .data_3 = 0,
+        .data_3 = where_extra_idx,
         .tag = .annotation,
     };
 

@@ -43,6 +43,7 @@ pub const Problem = union(enum) {
     invalid_number_type: VarProblem1,
     invalid_record_ext: VarProblem1,
     invalid_tag_union_ext: VarProblem1,
+    where_clause_conflict: WhereClauseConflict,
     bug: Bug,
 
     pub const Idx = enum(u32) { _ };
@@ -67,6 +68,17 @@ pub const NumberDoesNotFit = struct {
 pub const NegativeUnsignedInt = struct {
     literal_var: Var,
     expected_type: SnapshotContentIdx,
+};
+
+// where clause problems //
+
+/// Two where clauses have conflicting constraints for the same method
+pub const WhereClauseConflict = struct {
+    var_a: Var,
+    var_b: Var,
+    ident_a: Ident.Idx,
+    ident_b: Ident.Idx,
+    method_name: Ident.Idx,
 };
 
 // type mismatch //
@@ -304,6 +316,9 @@ pub const ReportBuilder = struct {
             .invalid_number_type => |_| return self.buildUnimplementedReport("invalid_number_type"),
             .invalid_record_ext => |_| return self.buildUnimplementedReport("invalid_record_ext"),
             .invalid_tag_union_ext => |_| return self.buildUnimplementedReport("invalid_tag_union_ext"),
+            .where_clause_conflict => |data| {
+                return self.buildWhereClauseConflictReport(data);
+            },
             .bug => |_| return self.buildUnimplementedReport("bug"),
         }
     }
@@ -1718,6 +1733,27 @@ pub const ReportBuilder = struct {
         try report.document.addText("    ");
         try report.document.addAnnotated(actual_type, .type_variable);
         try report.document.addLineBreak();
+
+        return report;
+    }
+
+    /// Build a report for where clause conflict
+    fn buildWhereClauseConflictReport(self: *Self, data: WhereClauseConflict) !Report {
+        var report = Report.init(self.gpa, "WHERE CLAUSE CONFLICT", .runtime_error);
+        errdefer report.deinit();
+
+        const ident_a_str = self.can_ir.getIdent(data.ident_a);
+        const ident_b_str = self.can_ir.getIdent(data.ident_b);
+        const method_name_str = self.can_ir.getIdent(data.method_name);
+
+        try report.document.addText("The rigid type variables `");
+        try report.document.addText(ident_a_str);
+        try report.document.addText("` and `");
+        try report.document.addText(ident_b_str);
+        try report.document.addText("` have conflicting where clause constraints for method `");
+        try report.document.addText(method_name_str);
+        try report.document.addText("`.\n\n");
+        try report.document.addText("These two type variables require the same method to have different type signatures, which is impossible.");
 
         return report;
     }

@@ -80,7 +80,9 @@ NO CHANGE
 						(ty-apply @5.21-5.29 (name "List") (builtin)
 							(ty-lookup @5.26-5.28 (name "U8") (builtin))))
 					(ty-apply @5.34-5.41 (name "List") (builtin)
-						(ty-rigid-var @5.39-5.40 (name "a")))))))
+						(ty-rigid-var @5.39-5.40 (name "a")))))
+			(where
+				(alias @6.8-6.24 (module-of "a") (ident "Decode")))))
 	(s-import @3.1-3.32 (module "Decode")
 		(exposes
 			(exposed (name "Decode") (wildcard false))))

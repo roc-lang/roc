@@ -77,6 +77,8 @@ scratch_record_fields: base.Scratch(types_mod.RecordField),
 import_cache: ImportCache,
 /// Maps variables to the expressions that constrained them (for better error regions)
 constraint_origins: std.AutoHashMap(Var, Var),
+/// Maps type variables to their where clause constraints
+where_constraints: std.AutoHashMapUnmanaged(Var, CIR.WhereClause.Span),
 
 /// A map of rigid variables that we build up during a branch of type checking
 const FreeVar = struct { ident: base.Ident.Idx, var_: Var };
@@ -121,6 +123,7 @@ pub fn init(
         .scratch_record_fields = try base.Scratch(types_mod.RecordField).init(gpa),
         .import_cache = ImportCache{},
         .constraint_origins = std.AutoHashMap(Var, Var).init(gpa),
+        .where_constraints = std.AutoHashMapUnmanaged(Var, CIR.WhereClause.Span){},
     };
 }
 
@@ -142,6 +145,7 @@ pub fn deinit(self: *Self) void {
     self.scratch_record_fields.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
     self.constraint_origins.deinit();
+    self.where_constraints.deinit(self.gpa);
 }
 
 /// Assert that type vars and regions in sync
@@ -207,6 +211,9 @@ pub fn unify(self: *Self, a: Var, b: Var, rank: Rank) std.mem.Allocator.Error!un
     const b_origin = self.constraint_origins.get(b);
     const constraint_origin_var = a_origin orelse b_origin;
 
+    // Check for where clause constraint conflicts before unifying
+    try self.checkWhereClauseConstraints(a, b);
+
     const result = try unifier.unifyWithConstraintOrigin(
         self.cir,
         self.types,
@@ -220,13 +227,22 @@ pub fn unify(self: *Self, a: Var, b: Var, rank: Rank) std.mem.Allocator.Error!un
         constraint_origin_var,
     );
 
-    // After successful unification, propagate constraint origins to both variables
+    // After successful unification, propagate constraint origins and where clause constraints
     if (result == .ok) {
         if (a_origin) |origin| {
             try self.constraint_origins.put(b, origin);
         }
         if (b_origin) |origin| {
             try self.constraint_origins.put(a, origin);
+        }
+
+        // Propagate where clause constraints
+        const a_where = self.where_constraints.get(a);
+        const b_where = self.where_constraints.get(b);
+        if (a_where != null and b_where == null) {
+            try self.where_constraints.put(self.gpa, b, a_where.?);
+        } else if (b_where != null and a_where == null) {
+            try self.where_constraints.put(self.gpa, a, b_where.?);
         }
     }
 
@@ -235,6 +251,193 @@ pub fn unify(self: *Self, a: Var, b: Var, rank: Rank) std.mem.Allocator.Error!un
     }
 
     return result;
+}
+
+/// Check if two variables have conflicting where clause constraints
+fn checkWhereClauseConstraints(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    // Look up constraints for both variables
+    const a_constraints = self.where_constraints.get(a);
+    const b_constraints = self.where_constraints.get(b);
+
+    // If both have constraints, check for conflicts
+    if (a_constraints != null and b_constraints != null) {
+        // Get the rigid variable identifiers for error reporting
+        const a_resolved = self.types.resolveVar(a);
+        const b_resolved = self.types.resolveVar(b);
+
+        const a_ident = switch (a_resolved.desc.content) {
+            .rigid_var => |ident| ident,
+            else => blk: {
+                // Try to find the ident from free vars
+                for (self.anno_free_vars.items.items) |free_var| {
+                    if (@intFromEnum(free_var.var_) == @intFromEnum(a)) {
+                        break :blk free_var.ident;
+                    }
+                }
+                return; // Can't find ident, skip check
+            },
+        };
+
+        const b_ident = switch (b_resolved.desc.content) {
+            .rigid_var => |ident| ident,
+            else => blk: {
+                // Try to find the ident from free vars
+                for (self.anno_free_vars.items.items) |free_var| {
+                    if (@intFromEnum(free_var.var_) == @intFromEnum(b)) {
+                        break :blk free_var.ident;
+                    }
+                }
+                return; // Can't find ident, skip check
+            },
+        };
+
+        try self.checkConstraintCompatibility(
+            a_ident,
+            a_constraints.?,
+            b_ident,
+            b_constraints.?,
+            a,
+            b,
+        );
+    }
+}
+
+/// Check if two sets of constraints are compatible
+fn checkConstraintCompatibility(
+    self: *Self,
+    a_ident: Ident.Idx,
+    a_constraints: CIR.WhereClause.Span,
+    b_ident: Ident.Idx,
+    b_constraints: CIR.WhereClause.Span,
+    a_var: Var,
+    b_var: Var,
+) std.mem.Allocator.Error!void {
+    const a_clauses = self.cir.store.sliceWhereClauses(a_constraints);
+    const b_clauses = self.cir.store.sliceWhereClauses(b_constraints);
+
+    // Build a map of method names to their constraints for variable a
+    var a_method_constraints = std.AutoHashMap(Ident.Idx, CIR.WhereClause).init(self.gpa);
+    defer a_method_constraints.deinit();
+
+    for (a_clauses) |clause_idx| {
+        const clause = self.cir.store.getWhereClause(clause_idx);
+        switch (clause) {
+            .mod_method => |method| {
+                try a_method_constraints.put(method.method_name, clause);
+            },
+            .mod_alias => |alias| {
+                try a_method_constraints.put(alias.alias_name, clause);
+            },
+            .malformed => {},
+        }
+    }
+
+    // Check each constraint from variable b against a's constraints
+    for (b_clauses) |clause_idx| {
+        const b_clause = self.cir.store.getWhereClause(clause_idx);
+        switch (b_clause) {
+            .mod_method => |b_method| {
+                if (a_method_constraints.get(b_method.method_name)) |a_clause| {
+                    // Found matching method name - check if signatures match
+                    const a_method = a_clause.mod_method;
+
+                    // Check if the method signatures are compatible
+                    const compatible = try self.checkMethodSignaturesCompatible(
+                        a_method.args,
+                        a_method.ret_anno,
+                        b_method.args,
+                        b_method.ret_anno,
+                    );
+
+                    if (!compatible) {
+                        // Report constraint conflict
+                        _ = try self.problems.appendProblem(self.gpa, .{ .where_clause_conflict = .{
+                            .var_a = a_var,
+                            .var_b = b_var,
+                            .ident_a = a_ident,
+                            .ident_b = b_ident,
+                            .method_name = b_method.method_name,
+                        } });
+                    }
+                }
+            },
+            .mod_alias => |b_alias| {
+                if (a_method_constraints.get(b_alias.alias_name)) |a_clause| {
+                    // Found matching alias name - check if they're the same kind
+                    switch (a_clause) {
+                        .mod_alias => {
+                            // Both are aliases with the same name - compatible
+                        },
+                        else => {
+                            // One is method, one is alias - incompatible
+                            _ = try self.problems.appendProblem(self.gpa, .{ .where_clause_conflict = .{
+                                .var_a = a_var,
+                                .var_b = b_var,
+                                .ident_a = a_ident,
+                                .ident_b = b_ident,
+                                .method_name = b_alias.alias_name,
+                            } });
+                        },
+                    }
+                }
+            },
+            .malformed => {},
+        }
+    }
+}
+
+/// Check if two method signatures are compatible
+fn checkMethodSignaturesCompatible(
+    self: *Self,
+    a_args: CIR.TypeAnno.Span,
+    a_ret: CIR.TypeAnno.Idx,
+    b_args: CIR.TypeAnno.Span,
+    b_ret: CIR.TypeAnno.Idx,
+) std.mem.Allocator.Error!bool {
+    const a_args_slice = self.cir.store.sliceTypeAnnos(a_args);
+    const b_args_slice = self.cir.store.sliceTypeAnnos(b_args);
+
+    // Different number of arguments - incompatible
+    if (a_args_slice.len != b_args_slice.len) {
+        return false;
+    }
+
+    // For now, we'll do a structural comparison of the type annotations
+    // This is a simplified check - a full implementation would need to
+    // unify the types or check them more carefully
+
+    // Check argument types
+    for (a_args_slice, b_args_slice) |a_arg, b_arg| {
+        const compatible = try self.checkTypeAnnosEqual(a_arg, b_arg);
+        if (!compatible) {
+            return false;
+        }
+    }
+
+    // Check return types
+    return try self.checkTypeAnnosEqual(a_ret, b_ret);
+}
+
+/// Check if two type annotations are structurally equal
+fn checkTypeAnnosEqual(
+    self: *Self,
+    a_idx: CIR.TypeAnno.Idx,
+    b_idx: CIR.TypeAnno.Idx,
+) std.mem.Allocator.Error!bool {
+    // For a first implementation, we'll use a simple structural equality check
+    const a_anno = self.cir.store.getTypeAnno(a_idx);
+    const b_anno = self.cir.store.getTypeAnno(b_idx);
+
+    // If both are the same index, they're equal
+    if (@intFromEnum(a_idx) == @intFromEnum(b_idx)) {
+        return true;
+    }
+
+    // Check if they're structurally the same type
+    return std.meta.eql(a_anno, b_anno);
 }
 
 /// Find constraint origins for variables, checking resolved forms
@@ -587,8 +790,40 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
     if (def.annotation) |anno_idx| {
         const annotation = self.cir.store.getAnnotation(anno_idx);
 
+        // Process where clause constraints if present
+        // We'll store them after generating the type, so we have the actual Var
+        const where_clauses_opt = annotation.where;
+
         self.anno_free_vars.items.clearRetainingCapacity();
         try self.generateAnnoTypeInPlace(annotation.type_anno, .annotation);
+
+        // Now associate where clauses with the rigid variables
+        if (where_clauses_opt) |where_span| {
+            // Build a map from rigid variable names to their where clauses
+            var ident_to_clauses = std.AutoHashMap(Ident.Idx, CIR.WhereClause.Span).init(self.gpa);
+            defer ident_to_clauses.deinit();
+
+            const where_clauses = self.cir.store.sliceWhereClauses(where_span);
+            for (where_clauses) |where_idx| {
+                const where_clause = self.cir.store.getWhereClause(where_idx);
+                switch (where_clause) {
+                    .mod_method => |method| {
+                        try ident_to_clauses.put(method.var_name, where_span);
+                    },
+                    .mod_alias => |alias| {
+                        try ident_to_clauses.put(alias.var_name, where_span);
+                    },
+                    .malformed => {},
+                }
+            }
+
+            // Associate constraints with the actual rigid variable Vars
+            for (self.anno_free_vars.items.items) |free_var| {
+                if (ident_to_clauses.get(free_var.ident)) |clause_span| {
+                    try self.where_constraints.put(self.gpa, free_var.var_, clause_span);
+                }
+            }
+        }
 
         // TODO: Duplicate anno var so if the body results in type mismatch, the
         // annotation isn't corrupted

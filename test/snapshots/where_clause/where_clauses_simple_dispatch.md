@@ -69,7 +69,12 @@ NO CHANGE
 			(declared-type
 				(ty-fn @3.13-3.21 (effectful false)
 					(ty-rigid-var @3.13-3.14 (name "a"))
-					(ty-lookup @3.18-3.21 (name "Str") (builtin))))))
+					(ty-lookup @3.18-3.21 (name "Str") (builtin))))
+			(where
+				(method @3.28-3.55 (module-of "a") (ident "to_str")
+					(args
+						(ty-rigid-var-lookup (ty-rigid-var @3.13-3.14 (name "a"))))
+					(ty-lookup @3.52-3.55 (name "Str") (builtin))))))
 	(s-type-anno @3.1-3.55 (name "stringify")
 		(ty-fn @3.13-3.21 (effectful false)
 			(ty-rigid-var @3.13-3.14 (name "a"))

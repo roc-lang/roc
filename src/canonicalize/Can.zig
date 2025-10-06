@@ -704,6 +704,7 @@ pub fn canonicalizeFile(
                             _ = try self.canonicalizeStmtDecl(decl, TypeAnnoIdent{
                                 .name = name_ident,
                                 .anno_idx = type_anno_idx,
+                                .where_clauses = where_clauses,
                             });
                         },
                         else => {
@@ -747,7 +748,7 @@ fn canonicalizeStmtDecl(self: *Self, decl: AST.Statement.Decl, mb_last_anno: ?Ty
                 if (anno_info.name.idx == decl_ident.idx) {
                     // This declaration matches the type annotation
                     const pattern_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.to_tokenized_region());
-                    mb_validated_anno = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, pattern_region);
+                    mb_validated_anno = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, anno_info.where_clauses, pattern_region);
                 }
             } else {
                 // TODO: Diagnostic
@@ -789,6 +790,7 @@ const AnnotationAndScope = struct {
 const TypeAnnoIdent = struct {
     name: base.Ident.Idx,
     anno_idx: TypeAnno.Idx,
+    where_clauses: ?WhereClause.Span,
 };
 
 fn collectBoundVars(self: *Self, pattern_idx: Pattern.Idx, bound_vars: *std.AutoHashMapUnmanaged(Pattern.Idx, void)) !void {
@@ -5734,6 +5736,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                         mb_second_canonicalized_stmt = try self.canonicalizeBlockDecl(decl, TypeAnnoIdent{
                             .name = name_ident,
                             .anno_idx = type_anno_idx,
+                            .where_clauses = where_clauses,
                         });
                     },
                     else => {},
@@ -5824,7 +5827,7 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
                 if (anno_info.name.idx == decl_ident.idx) {
                     // This declaration matches the type annotation
                     const pattern_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.to_tokenized_region());
-                    mb_validated_anno = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, pattern_region);
+                    mb_validated_anno = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, anno_info.where_clauses, pattern_region);
                 }
             } else {
                 // TODO: Diagnostic
@@ -6769,16 +6772,16 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
 
 /// Handle module-qualified types like Json.Decoder
 /// Create an annotation from a type annotation
-fn createAnnotationFromTypeAnno(self: *Self, type_anno_idx: TypeAnno.Idx, region: Region) std.mem.Allocator.Error!Annotation.Idx {
+fn createAnnotationFromTypeAnno(self: *Self, type_anno_idx: TypeAnno.Idx, where_clauses: ?WhereClause.Span, region: Region) std.mem.Allocator.Error!Annotation.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // Create the annotation structure
     // TODO: Remove signature field from Annotation
-    // TODO: Capture where clauses
     const annotation = CIR.Annotation{
         .type_anno = type_anno_idx,
         .signature = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .err, region, TypeVar),
+        .where = where_clauses,
     };
 
     // Add to NodeStore and return the index

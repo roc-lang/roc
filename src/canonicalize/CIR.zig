@@ -218,6 +218,7 @@ pub const Annotation = struct {
 
     type_anno: TypeAnno.Idx,
     signature: TypeVar,
+    where: ?WhereClause.Span,
 
     pub fn pushToSExprTree(self: *const Annotation, cir: anytype, tree: anytype, idx: Annotation.Idx) !void {
         const begin = tree.beginNode();
@@ -235,6 +236,21 @@ pub const Annotation = struct {
         const type_anno_attrs = tree.beginNode();
         try cir.store.getTypeAnno(self.type_anno).pushToSExprTree(cir, tree, self.type_anno);
         try tree.endNode(type_anno_begin, type_anno_attrs);
+
+        // Include where clauses if present
+        if (self.where) |where_span| {
+            const where_clauses = cir.store.sliceWhereClauses(where_span);
+            if (where_clauses.len > 0) {
+                const where_begin = tree.beginNode();
+                try tree.pushStaticAtom("where");
+                const where_attrs = tree.beginNode();
+                for (where_clauses) |where_idx| {
+                    const where_clause = cir.store.getWhereClause(where_idx);
+                    try where_clause.pushToSExprTree(cir, tree, where_idx);
+                }
+                try tree.endNode(where_begin, where_attrs);
+            }
+        }
 
         try tree.endNode(begin, attrs);
     }

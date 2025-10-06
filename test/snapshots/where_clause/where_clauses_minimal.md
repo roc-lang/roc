@@ -60,7 +60,12 @@ NO CHANGE
 			(declared-type
 				(ty-fn @3.14-3.20 (effectful false)
 					(ty-rigid-var @3.14-3.15 (name "a"))
-					(ty-rigid-var @3.19-3.20 (name "b"))))))
+					(ty-rigid-var @3.19-3.20 (name "b"))))
+			(where
+				(method @5.3-5.29 (module-of "a") (ident "convert")
+					(args
+						(ty-rigid-var-lookup (ty-rigid-var @3.14-3.15 (name "a"))))
+					(ty-rigid-var-lookup (ty-rigid-var @3.19-3.20 (name "b")))))))
 	(s-type-anno @3.1-5.29 (name "convert_me")
 		(ty-fn @3.14-3.20 (effectful false)
 			(ty-rigid-var @3.14-3.15 (name "a"))
