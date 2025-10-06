@@ -402,10 +402,11 @@ pub fn canonicalizeFile(
 
     // canonicalize_header_packages();
 
-    // First, process the header to create exposed_scope
+    // First, process the header to create exposed_scope and set module_kind
     const header = self.parse_ir.store.getHeader(file.header);
     switch (header) {
         .module => |h| {
+            self.env.module_kind = .deprecated_module;
             // Emit deprecation warning
             const header_region = self.parse_ir.tokenizedRegionToRegion(h.region);
             try self.env.pushDiagnostic(.{
@@ -415,23 +416,36 @@ pub fn canonicalizeFile(
             });
             try self.createExposedScope(h.exposes);
         },
-        .package => |h| try self.createExposedScope(h.exposes),
-        .platform => |h| try self.createExposedScope(h.exposes),
-        .hosted => |h| try self.createExposedScope(h.exposes),
+        .package => |h| {
+            self.env.module_kind = .package;
+            try self.createExposedScope(h.exposes);
+        },
+        .platform => |h| {
+            self.env.module_kind = .platform;
+            try self.createExposedScope(h.exposes);
+        },
+        .hosted => |h| {
+            self.env.module_kind = .hosted;
+            try self.createExposedScope(h.exposes);
+        },
         .app => |h| {
+            self.env.module_kind = .app;
             // App headers have 'provides' instead of 'exposes'
             // but we need to track the provided functions for export
             try self.createExposedScope(h.provides);
         },
         .type_module => {
+            self.env.module_kind = .type_module;
             // Type modules don't have an exposes list
             // We'll validate the type name matches the module name after processing types
         },
         .default_app => {
+            self.env.module_kind = .default_app;
             // Default app modules don't have an exposes list
             // They have a main! function that will be validated
         },
         .malformed => {
+            self.env.module_kind = .malformed;
             // Skip malformed headers
         },
     }
@@ -730,38 +744,38 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const file = self.parse_ir.store.getFile();
-    const header = self.parse_ir.store.getHeader(file.header);
+    switch (self.env.module_kind) {
+        .type_module => {
+            const main_status = try self.checkMainFunction();
+            const has_matching_type = self.hasMatchingType();
 
-    if (header != .type_module) {
-        return;
-    }
+            // Valid if either we have a valid main! or a matching type declaration
+            const is_valid = (main_status == .valid) or has_matching_type;
 
-    const main_status = try self.checkMainFunction();
-    const has_matching_type = self.hasMatchingType();
-
-    // Valid if either we have a valid main! or a matching type declaration
-    const is_valid = (main_status == .valid) or has_matching_type;
-
-    if (!is_valid and main_status == .not_found) {
-        // Neither valid main! nor matching type - report helpful error
-        try self.reportTypeModuleOrDefaultAppError();
+            if (!is_valid and main_status == .not_found) {
+                // Neither valid main! nor matching type - report helpful error
+                try self.reportTypeModuleOrDefaultAppError();
+            }
+        },
+        .default_app, .app, .package, .platform, .hosted, .deprecated_module, .malformed => {
+            // No validation needed for these module kinds in checking mode
+        },
     }
 }
 
 /// Validate a module for use in execution mode (e.g. `roc main.roc` or `roc build`).
 /// Requires a valid main! function for type_module headers.
 pub fn validateForExecution(self: *Self) std.mem.Allocator.Error!void {
-    const file = self.parse_ir.store.getFile();
-    const header = self.parse_ir.store.getHeader(file.header);
-
-    if (header != .type_module) {
-        return;
-    }
-
-    const main_status = try self.checkMainFunction();
-    if (main_status == .not_found) {
-        try self.reportExecutionRequiresAppOrDefaultApp();
+    switch (self.env.module_kind) {
+        .type_module => {
+            const main_status = try self.checkMainFunction();
+            if (main_status == .not_found) {
+                try self.reportExecutionRequiresAppOrDefaultApp();
+            }
+        },
+        .default_app, .app, .package, .platform, .hosted, .deprecated_module, .malformed => {
+            // No validation needed for these module kinds in execution mode
+        },
     }
 }
 
@@ -1230,24 +1244,24 @@ fn canonicalizeImportStatement(
     // Process type imports from this module
     try self.processTypeImports(module_name, alias);
 
-    // 4.5. Check if this is a type module and auto-expose main type
-    // A module is a type module if it exports a type with the same name as the module
+    // Check if this is a type module and auto-expose main type
     const main_type_name = blk: {
         if (self.module_envs) |envs_map| {
             if (envs_map.get(module_name_text)) |target_env| {
-                // Check if module exports a type with the same name (indicating type module)
-                // Extract the expected type name from the module name
-                const expected_type_text = if (std.mem.lastIndexOf(u8, module_name_text, ".")) |last_dot|
-                    module_name_text[last_dot + 1 ..]
-                else
-                    module_name_text;
+                // Only auto-expose for type modules
+                if (target_env.module_kind == .type_module) {
+                    // Extract the expected type name from the module name
+                    const expected_type_text = if (std.mem.lastIndexOf(u8, module_name_text, ".")) |last_dot|
+                        module_name_text[last_dot + 1 ..]
+                    else
+                        module_name_text;
 
-                // Look for this type name in the module's exports
-                const target_ident = target_env.common.findIdent(expected_type_text);
-                if (target_ident) |type_ident| {
-                    if (target_env.containsExposedById(type_ident)) {
-                        // This is a type module - use alias for the auto-exposed type
-                        break :blk alias;
+                    // Check if this type is exposed
+                    const target_ident = target_env.common.findIdent(expected_type_text);
+                    if (target_ident) |type_ident| {
+                        if (target_env.containsExposedById(type_ident)) {
+                            break :blk alias;
+                        }
                     }
                 }
             }

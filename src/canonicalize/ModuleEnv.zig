@@ -29,6 +29,18 @@ const TypeStore = types_mod.Store;
 
 const Self = @This();
 
+/// The kind of module being canonicalized, set during header processing
+pub const ModuleKind = enum {
+    type_module,
+    default_app,
+    app,
+    package,
+    platform,
+    hosted,
+    deprecated_module,
+    malformed,
+};
+
 gpa: std.mem.Allocator,
 
 common: CommonEnv,
@@ -37,6 +49,8 @@ types: TypeStore,
 // ===== Module compilation fields =====
 // NOTE: These fields are populated during canonicalization and preserved for later use
 
+/// The kind of module (type_module, app, etc.) - set during canonicalization
+module_kind: ModuleKind,
 /// All the definitions in the module (populated by canonicalization)
 all_defs: CIR.Def.Span,
 /// All the top-level statements in the module (populated by canonicalization)
@@ -61,6 +75,7 @@ store: NodeStore,
 /// Initialize the compilation fields in an existing ModuleEnv
 pub fn initCIRFields(self: *Self, gpa: std.mem.Allocator, module_name: []const u8) !void {
     _ = gpa; // unused since we don't create new allocations
+    self.module_kind = undefined; // Set during canonicalization
     self.all_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.all_statements = .{ .span = .{ .start = 0, .len = 0 } };
     self.exports = .{ .span = .{ .start = 0, .len = 0 } };
@@ -85,6 +100,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .gpa = gpa,
         .common = try CommonEnv.init(gpa, source),
         .types = try TypeStore.initCapacity(gpa, 2048, 512),
+        .module_kind = undefined, // Set during canonicalization
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .exports = .{ .span = .{ .start = 0, .len = 0 } },
@@ -1347,6 +1363,7 @@ pub fn serialize(
         .gpa = undefined, // Will be set when deserializing
         .common = (try self.common.serialize(allocator, writer)).*,
         .types = (try self.types.serialize(allocator, writer)).*,
+        .module_kind = self.module_kind,
         .all_defs = self.all_defs,
         .all_statements = self.all_statements,
         .exports = self.exports,
@@ -1399,6 +1416,7 @@ pub const Serialized = struct {
     module_name: []const u8, // Serialized as zeros, provided during deserialization
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
+    module_kind: ModuleKind,
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -1450,6 +1468,7 @@ pub const Serialized = struct {
             .gpa = gpa,
             .common = self.common.deserialize(offset, source).*,
             .types = self.types.deserialize(offset).*,
+            .module_kind = self.module_kind,
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
             .exports = self.exports,
