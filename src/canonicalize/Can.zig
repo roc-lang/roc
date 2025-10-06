@@ -530,9 +530,6 @@ pub fn canonicalizeFile(
         }
     }
 
-    // Type module validation has been moved to public methods that callers can invoke after canonicalization.
-    // See validateForChecking() and validateForExecution()
-
     // Second pass: Process all other statements
     const ast_stmt_idxs = self.parse_ir.store.statementSlice(file.statements);
     var i: usize = 0;
@@ -724,9 +721,6 @@ pub fn canonicalizeFile(
 
     // Assert that everything is in-sync
     self.env.debugAssertArraysInSync();
-
-    // Note: Interners are NOT frozen here. Callers should call freezeInterners() on the ModuleEnv
-    // after calling any validation functions (validateForChecking/validateForExecution).
 }
 
 /// Validate a type module for use in checking mode (roc check).
