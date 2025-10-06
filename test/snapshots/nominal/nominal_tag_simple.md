@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Example of a simple nominal tag union
-type=file
+type=file:NominalTagSimple.roc
 ~~~
 # SOURCE
 ~~~roc
-module [Color, blue]
+NominalTagSimple := {}
 
 Color := [Red, Green, Blue]
 
@@ -16,22 +16,8 @@ yellow : Color
 yellow = Color.Yellow
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - nominal_tag_simple.md:1:1:1:21
 INVALID NOMINAL TAG - nominal_tag_simple.md:9:10:9:22
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**nominal_tag_simple.md:1:1:1:21:**
-```roc
-module [Color, blue]
-```
-^^^^^^^^^^^^^^^^^^^^
-
-
 **INVALID NOMINAL TAG**
 I'm having trouble with this nominal tag:
 **nominal_tag_simple.md:9:10:9:22:**
@@ -48,7 +34,7 @@ But the nominal type needs it to one of:
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:14),Comma(1:14-1:15),LowerIdent(1:16-1:20),CloseSquare(1:20-1:21),
+UpperIdent(1:1-1:17),OpColonEqual(1:18-1:20),OpenCurly(1:21-1:22),CloseCurly(1:22-1:23),
 UpperIdent(3:1-3:6),OpColonEqual(3:7-3:9),OpenSquare(3:10-3:11),UpperIdent(3:11-3:14),Comma(3:14-3:15),UpperIdent(3:16-3:21),Comma(3:21-3:22),UpperIdent(3:23-3:27),CloseSquare(3:27-3:28),
 LowerIdent(5:1-5:5),OpColon(5:6-5:7),UpperIdent(5:8-5:13),
 LowerIdent(6:1-6:5),OpAssign(6:6-6:7),UpperIdent(6:8-6:13),NoSpaceDotUpperIdent(6:13-6:18),
@@ -59,12 +45,12 @@ EndOfFile(10:1-10:1),
 # PARSE
 ~~~clojure
 (file @1.1-9.22
-	(module @1.1-1.21
-		(exposes @1.8-1.21
-			(exposed-upper-ident @1.9-1.14 (text "Color"))
-			(exposed-lower-ident @1.16-1.20
-				(text "blue"))))
+	(type-module @1.1-1.17)
 	(statements
+		(s-type-decl @1.1-1.23
+			(header @1.1-1.17 (name "NominalTagSimple")
+				(args))
+			(ty-record @1.21-1.23))
 		(s-type-decl @3.1-3.28
 			(header @3.1-3.6 (name "Color")
 				(args))
@@ -105,6 +91,9 @@ NO CHANGE
 		(annotation @9.1-9.7
 			(declared-type
 				(ty-lookup @8.10-8.15 (name "Color") (local)))))
+	(s-nominal-decl @1.1-1.23
+		(ty-header @1.1-1.17 (name "NominalTagSimple"))
+		(ty-record @1.21-1.23))
 	(s-nominal-decl @3.1-3.28
 		(ty-header @3.1-3.6 (name "Color"))
 		(ty-tag-union @3.10-3.28
@@ -119,6 +108,8 @@ NO CHANGE
 		(patt @6.1-6.5 (type "Color"))
 		(patt @9.1-9.7 (type "Error")))
 	(type_decls
+		(nominal @1.1-1.23 (type "NominalTagSimple")
+			(ty-header @1.1-1.17 (name "NominalTagSimple")))
 		(nominal @3.1-3.28 (type "Color")
 			(ty-header @3.1-3.6 (name "Color"))))
 	(expressions

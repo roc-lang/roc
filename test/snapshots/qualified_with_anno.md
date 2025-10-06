@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Test qualified tag with type annotation
-type=file
+type=file:QualifiedWithAnno.roc
 ~~~
 # SOURCE
 ~~~roc
-module [value]
+QualifiedWithAnno := {}
 
 MyType := [TagA, TagB]
 
@@ -13,24 +13,12 @@ value : MyType
 value = MyType.TagA
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - qualified_with_anno.md:1:1:1:15
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**qualified_with_anno.md:1:1:1:15:**
-```roc
-module [value]
-```
-^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:14),CloseSquare(1:14-1:15),
+UpperIdent(1:1-1:18),OpColonEqual(1:19-1:21),OpenCurly(1:22-1:23),CloseCurly(1:23-1:24),
 UpperIdent(3:1-3:7),OpColonEqual(3:8-3:10),OpenSquare(3:11-3:12),UpperIdent(3:12-3:16),Comma(3:16-3:17),UpperIdent(3:18-3:22),CloseSquare(3:22-3:23),
 LowerIdent(5:1-5:6),OpColon(5:7-5:8),UpperIdent(5:9-5:15),
 LowerIdent(6:1-6:6),OpAssign(6:7-6:8),UpperIdent(6:9-6:15),NoSpaceDotUpperIdent(6:15-6:20),
@@ -39,11 +27,12 @@ EndOfFile(7:1-7:1),
 # PARSE
 ~~~clojure
 (file @1.1-6.20
-	(module @1.1-1.15
-		(exposes @1.8-1.15
-			(exposed-lower-ident @1.9-1.14
-				(text "value"))))
+	(type-module @1.1-1.18)
 	(statements
+		(s-type-decl @1.1-1.24
+			(header @1.1-1.18 (name "QualifiedWithAnno")
+				(args))
+			(ty-record @1.22-1.24))
 		(s-type-decl @3.1-3.23
 			(header @3.1-3.7 (name "MyType")
 				(args))
@@ -71,6 +60,9 @@ NO CHANGE
 		(annotation @6.1-6.6
 			(declared-type
 				(ty-lookup @5.9-5.15 (name "MyType") (local)))))
+	(s-nominal-decl @1.1-1.24
+		(ty-header @1.1-1.18 (name "QualifiedWithAnno"))
+		(ty-record @1.22-1.24))
 	(s-nominal-decl @3.1-3.23
 		(ty-header @3.1-3.7 (name "MyType"))
 		(ty-tag-union @3.11-3.23
@@ -83,6 +75,8 @@ NO CHANGE
 	(defs
 		(patt @6.1-6.6 (type "MyType")))
 	(type_decls
+		(nominal @1.1-1.24 (type "QualifiedWithAnno")
+			(ty-header @1.1-1.18 (name "QualifiedWithAnno")))
 		(nominal @3.1-3.23 (type "MyType")
 			(ty-header @3.1-3.7 (name "MyType"))))
 	(expressions

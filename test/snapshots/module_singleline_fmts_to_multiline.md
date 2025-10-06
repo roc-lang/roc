@@ -1,79 +1,49 @@
 # META
 ~~~ini
 description=An empty module with a singleline exposes with trailing comma
-type=file
+type=file:ModuleSinglelineFmtsToMultiline.roc
 ~~~
 # SOURCE
 ~~~roc
-module [something, SomeType,]
+ModuleSinglelineFmtsToMultiline := {}
+
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - module_singleline_fmts_to_multiline.md:1:1:1:30
-EXPOSED BUT NOT DEFINED - module_singleline_fmts_to_multiline.md:1:9:1:18
-EXPOSED BUT NOT DEFINED - module_singleline_fmts_to_multiline.md:1:20:1:28
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**module_singleline_fmts_to_multiline.md:1:1:1:30:**
-```roc
-module [something, SomeType,]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `something` is exposed, but it is not defined anywhere in this module.
-
-**module_singleline_fmts_to_multiline.md:1:9:1:18:**
-```roc
-module [something, SomeType,]
-```
-        ^^^^^^^^^
-You can fix this by either defining `something` in this module, or by removing it from the list of exposed values.
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `SomeType` is exposed, but it is not defined anywhere in this module.
-
-**module_singleline_fmts_to_multiline.md:1:20:1:28:**
-```roc
-module [something, SomeType,]
-```
-                   ^^^^^^^^
-You can fix this by either defining `SomeType` in this module, or by removing it from the list of exposed values.
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:18),Comma(1:18-1:19),UpperIdent(1:20-1:28),Comma(1:28-1:29),CloseSquare(1:29-1:30),
-EndOfFile(2:1-2:1),
+UpperIdent(1:1-1:32),OpColonEqual(1:33-1:35),OpenCurly(1:36-1:37),CloseCurly(1:37-1:38),
+EndOfFile(3:1-3:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.30
-	(module @1.1-1.30
-		(exposes @1.8-1.30
-			(exposed-lower-ident @1.9-1.18
-				(text "something"))
-			(exposed-upper-ident @1.20-1.28 (text "SomeType"))))
-	(statements))
+(file @1.1-1.38
+	(type-module @1.1-1.32)
+	(statements
+		(s-type-decl @1.1-1.38
+			(header @1.1-1.32 (name "ModuleSinglelineFmtsToMultiline")
+				(args))
+			(ty-record @1.36-1.38))))
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	something,
-	SomeType,
-]
+ModuleSinglelineFmtsToMultiline := {}
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(s-nominal-decl @1.1-1.38
+		(ty-header @1.1-1.32 (name "ModuleSinglelineFmtsToMultiline"))
+		(ty-record @1.36-1.38)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
+	(type_decls
+		(nominal @1.1-1.38 (type "ModuleSinglelineFmtsToMultiline")
+			(ty-header @1.1-1.32 (name "ModuleSinglelineFmtsToMultiline"))))
 	(expressions))
 ~~~

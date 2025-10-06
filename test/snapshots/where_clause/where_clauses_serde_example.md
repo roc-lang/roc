@@ -1,35 +1,23 @@
 # META
 ~~~ini
 description=Module dispatch in where clause
-type=file
+type=file:WhereClausesSerdeExample.roc
 ~~~
 # SOURCE
 ~~~roc
-module [deserialize]
+WhereClausesSerdeExample := {}
 
 deserialize : List(U8) -> Result(a, [DecodeErr])
 	where module(a).decode : List(U8) -> Result(a, [DecodeErr])
 deserialize = |_| ...
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - where_clauses_serde_example.md:1:1:1:21
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**where_clauses_serde_example.md:1:1:1:21:**
-```roc
-module [deserialize]
-```
-^^^^^^^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:20),CloseSquare(1:20-1:21),
+UpperIdent(1:1-1:25),OpColonEqual(1:26-1:28),OpenCurly(1:29-1:30),CloseCurly(1:30-1:31),
 LowerIdent(3:1-3:12),OpColon(3:13-3:14),UpperIdent(3:15-3:19),NoSpaceOpenRound(3:19-3:20),UpperIdent(3:20-3:22),CloseRound(3:22-3:23),OpArrow(3:24-3:26),UpperIdent(3:27-3:33),NoSpaceOpenRound(3:33-3:34),LowerIdent(3:34-3:35),Comma(3:35-3:36),OpenSquare(3:37-3:38),UpperIdent(3:38-3:47),CloseSquare(3:47-3:48),CloseRound(3:48-3:49),
 KwWhere(4:2-4:7),KwModule(4:8-4:14),NoSpaceOpenRound(4:14-4:15),LowerIdent(4:15-4:16),CloseRound(4:16-4:17),NoSpaceDotLowerIdent(4:17-4:24),OpColon(4:25-4:26),UpperIdent(4:27-4:31),NoSpaceOpenRound(4:31-4:32),UpperIdent(4:32-4:34),CloseRound(4:34-4:35),OpArrow(4:36-4:38),UpperIdent(4:39-4:45),NoSpaceOpenRound(4:45-4:46),LowerIdent(4:46-4:47),Comma(4:47-4:48),OpenSquare(4:49-4:50),UpperIdent(4:50-4:59),CloseSquare(4:59-4:60),CloseRound(4:60-4:61),
 LowerIdent(5:1-5:12),OpAssign(5:13-5:14),OpBar(5:15-5:16),Underscore(5:16-5:17),OpBar(5:17-5:18),TripleDot(5:19-5:22),
@@ -38,11 +26,12 @@ EndOfFile(6:1-6:1),
 # PARSE
 ~~~clojure
 (file @1.1-5.22
-	(module @1.1-1.21
-		(exposes @1.8-1.21
-			(exposed-lower-ident @1.9-1.20
-				(text "deserialize"))))
+	(type-module @1.1-1.25)
 	(statements
+		(s-type-decl @1.1-1.31
+			(header @1.1-1.25 (name "WhereClausesSerdeExample")
+				(args))
+			(ty-record @1.29-1.31))
 		(s-type-anno @3.1-4.61 (name "deserialize")
 			(ty-fn @3.15-3.49
 				(ty-apply @3.15-3.23
@@ -95,6 +84,9 @@ NO CHANGE
 						(ty-rigid-var @3.27-3.49 (name "a"))
 						(ty-tag-union @3.27-3.49
 							(ty-tag-name @3.38-3.47 (name "DecodeErr"))))))))
+	(s-nominal-decl @1.1-1.31
+		(ty-header @1.1-1.25 (name "WhereClausesSerdeExample"))
+		(ty-record @1.29-1.31))
 	(s-type-anno @3.1-4.61 (name "deserialize")
 		(ty-fn @3.15-3.49 (effectful false)
 			(ty-apply @3.15-3.23 (name "List") (builtin)
@@ -119,6 +111,9 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @5.1-5.12 (type "List(Num(Int(Unsigned8))) -> Result(a, [DecodeErr])")))
+	(type_decls
+		(nominal @1.1-1.31 (type "WhereClausesSerdeExample")
+			(ty-header @1.1-1.25 (name "WhereClausesSerdeExample"))))
 	(expressions
 		(expr @5.15-5.22 (type "List(Num(Int(Unsigned8))) -> Result(a, [DecodeErr])"))))
 ~~~

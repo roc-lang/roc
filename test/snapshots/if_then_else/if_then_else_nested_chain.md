@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Nested if-then-else chain demonstrating flattening
-type=file
+type=file:IfThenElseNestedChain.roc
 ~~~
 # SOURCE
 ~~~roc
-module [checkNumber]
+IfThenElseNestedChain := {}
 
 checkNumber = |num| {
 	if num < 0 {
@@ -20,24 +20,12 @@ checkNumber = |num| {
 }
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - if_then_else_nested_chain.md:1:1:1:21
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**if_then_else_nested_chain.md:1:1:1:21:**
-```roc
-module [checkNumber]
-```
-^^^^^^^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:20),CloseSquare(1:20-1:21),
+UpperIdent(1:1-1:22),OpColonEqual(1:23-1:25),OpenCurly(1:26-1:27),CloseCurly(1:27-1:28),
 LowerIdent(3:1-3:12),OpAssign(3:13-3:14),OpBar(3:15-3:16),LowerIdent(3:16-3:19),OpBar(3:19-3:20),OpenCurly(3:21-3:22),
 KwIf(4:2-4:4),LowerIdent(4:5-4:8),OpLessThan(4:9-4:10),Int(4:11-4:12),OpenCurly(4:13-4:14),
 StringStart(5:3-5:4),StringPart(5:4-5:12),StringEnd(5:12-5:13),
@@ -54,11 +42,12 @@ EndOfFile(14:1-14:1),
 # PARSE
 ~~~clojure
 (file @1.1-13.2
-	(module @1.1-1.21
-		(exposes @1.8-1.21
-			(exposed-lower-ident @1.9-1.20
-				(text "checkNumber"))))
+	(type-module @1.1-1.22)
 	(statements
+		(s-type-decl @1.1-1.28
+			(header @1.1-1.22 (name "IfThenElseNestedChain")
+				(args))
+			(ty-record @1.26-1.28))
 		(s-decl @3.1-13.2
 			(p-ident @3.1-3.12 (raw "checkNumber"))
 			(e-lambda @3.15-13.2
@@ -137,13 +126,19 @@ NO CHANGE
 					(if-else
 						(e-block @10.9-12.3
 							(e-string @11.3-11.13
-								(e-literal @11.4-11.12 (string "positive"))))))))))
+								(e-literal @11.4-11.12 (string "positive")))))))))
+	(s-nominal-decl @1.1-1.28
+		(ty-header @1.1-1.22 (name "IfThenElseNestedChain"))
+		(ty-record @1.26-1.28)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @3.1-3.12 (type "Num(_size) -> Str")))
+	(type_decls
+		(nominal @1.1-1.28 (type "IfThenElseNestedChain")
+			(ty-header @1.1-1.22 (name "IfThenElseNestedChain"))))
 	(expressions
 		(expr @3.15-13.2 (type "Num(_size) -> Str"))))
 ~~~

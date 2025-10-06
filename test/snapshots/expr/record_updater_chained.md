@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Chained record updater expressions
-type=file
+type=file:RecordUpdaterChained.roc
 ~~~
 # SOURCE
 ~~~roc
-module [person, final]
+RecordUpdaterChained := {}
 
 person = { name: "Alice", age: 30, city: "Boston" }
 updated_one = { ..person, age: 31 }
@@ -13,24 +13,12 @@ updated2 = { ..updated_one, city: "New York" }
 final = { ..updated2, name: "Alice Smith", age: 32 }
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - record_updater_chained.md:1:1:1:23
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**record_updater_chained.md:1:1:1:23:**
-```roc
-module [person, final]
-```
-^^^^^^^^^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:15),Comma(1:15-1:16),LowerIdent(1:17-1:22),CloseSquare(1:22-1:23),
+UpperIdent(1:1-1:21),OpColonEqual(1:22-1:24),OpenCurly(1:25-1:26),CloseCurly(1:26-1:27),
 LowerIdent(3:1-3:7),OpAssign(3:8-3:9),OpenCurly(3:10-3:11),LowerIdent(3:12-3:16),OpColon(3:16-3:17),StringStart(3:18-3:19),StringPart(3:19-3:24),StringEnd(3:24-3:25),Comma(3:25-3:26),LowerIdent(3:27-3:30),OpColon(3:30-3:31),Int(3:32-3:34),Comma(3:34-3:35),LowerIdent(3:36-3:40),OpColon(3:40-3:41),StringStart(3:42-3:43),StringPart(3:43-3:49),StringEnd(3:49-3:50),CloseCurly(3:51-3:52),
 LowerIdent(4:1-4:12),OpAssign(4:13-4:14),OpenCurly(4:15-4:16),DoubleDot(4:17-4:19),LowerIdent(4:19-4:25),Comma(4:25-4:26),LowerIdent(4:27-4:30),OpColon(4:30-4:31),Int(4:32-4:34),CloseCurly(4:35-4:36),
 LowerIdent(5:1-5:9),OpAssign(5:10-5:11),OpenCurly(5:12-5:13),DoubleDot(5:14-5:16),LowerIdent(5:16-5:27),Comma(5:27-5:28),LowerIdent(5:29-5:33),OpColon(5:33-5:34),StringStart(5:35-5:36),StringPart(5:36-5:44),StringEnd(5:44-5:45),CloseCurly(5:46-5:47),
@@ -40,13 +28,12 @@ EndOfFile(7:1-7:1),
 # PARSE
 ~~~clojure
 (file @1.1-6.53
-	(module @1.1-1.23
-		(exposes @1.8-1.23
-			(exposed-lower-ident @1.9-1.15
-				(text "person"))
-			(exposed-lower-ident @1.17-1.22
-				(text "final"))))
+	(type-module @1.1-1.21)
 	(statements
+		(s-type-decl @1.1-1.27
+			(header @1.1-1.21 (name "RecordUpdaterChained")
+				(args))
+			(ty-record @1.25-1.27))
 		(s-decl @3.1-3.52
 			(p-ident @3.1-3.7 (raw "person"))
 			(e-record @3.10-3.52
@@ -133,7 +120,10 @@ NO CHANGE
 					(e-string @6.29-6.42
 						(e-literal @6.30-6.41 (string "Alice Smith"))))
 				(field (name "age")
-					(e-num @6.49-6.51 (value "32")))))))
+					(e-num @6.49-6.51 (value "32"))))))
+	(s-nominal-decl @1.1-1.27
+		(ty-header @1.1-1.21 (name "RecordUpdaterChained"))
+		(ty-record @1.25-1.27)))
 ~~~
 # TYPES
 ~~~clojure
@@ -143,6 +133,9 @@ NO CHANGE
 		(patt @4.1-4.12 (type "{ age: Num(_size), { age: Num(_size2), city: Str, name: Str } }"))
 		(patt @5.1-5.9 (type "{ city: Str, age: Num(_size), { age: Num(_size2), city: Str, name: Str } }"))
 		(patt @6.1-6.6 (type "{ age: Num(_size), name: Str, city: Str, age: Num(_size2), { age: Num(_size3), city: Str, name: Str } }")))
+	(type_decls
+		(nominal @1.1-1.27 (type "RecordUpdaterChained")
+			(ty-header @1.1-1.21 (name "RecordUpdaterChained"))))
 	(expressions
 		(expr @3.10-3.52 (type "{ age: Num(_size), city: Str, name: Str }"))
 		(expr @4.15-4.36 (type "{ age: Num(_size), { age: Num(_size2), city: Str, name: Str } }"))

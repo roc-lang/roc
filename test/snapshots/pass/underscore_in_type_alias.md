@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Type aliases should not contain underscores (_) as they represent 'I don't care' types, which doesn't make sense when declaring a type.
-type=file
+type=file:UnderscoreInTypeAlias.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+UnderscoreInTypeAlias := {}
 
 MyType : _
 
@@ -22,7 +22,6 @@ TupleType := (_, U32, _)
 TagType := [Some(_), None]
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - underscore_in_type_alias.md:1:1:1:10
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:7:21:7:21
@@ -34,25 +33,12 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:13:15:13:15
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:15:18:15:18
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**underscore_in_type_alias.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
 
 **underscore_in_type_alias.md:1:1:1:1:**
 ```roc
-module []
+UnderscoreInTypeAlias := {}
 ```
 ^
 
@@ -63,7 +49,7 @@ Underscores are not allowed in type alias declarations.
 
 **underscore_in_type_alias.md:1:1:1:1:**
 ```roc
-module []
+UnderscoreInTypeAlias := {}
 ```
 ^
 
@@ -96,7 +82,7 @@ Underscores are not allowed in type alias declarations.
 
 **underscore_in_type_alias.md:1:1:1:1:**
 ```roc
-module []
+UnderscoreInTypeAlias := {}
 ```
 ^
 
@@ -107,7 +93,7 @@ Underscores are not allowed in type alias declarations.
 
 **underscore_in_type_alias.md:1:1:1:1:**
 ```roc
-module []
+UnderscoreInTypeAlias := {}
 ```
 ^
 
@@ -118,7 +104,7 @@ Underscores are not allowed in type alias declarations.
 
 **underscore_in_type_alias.md:1:1:1:1:**
 ```roc
-module []
+UnderscoreInTypeAlias := {}
 ```
 ^
 
@@ -140,7 +126,7 @@ Underscores are not allowed in type alias declarations.
 
 **underscore_in_type_alias.md:1:1:1:1:**
 ```roc
-module []
+UnderscoreInTypeAlias := {}
 ```
 ^
 
@@ -159,7 +145,7 @@ Underscores in type annotations mean "I don't care about this type", which doesn
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:22),OpColonEqual(1:23-1:25),OpenCurly(1:26-1:27),CloseCurly(1:27-1:28),
 UpperIdent(3:1-3:7),OpColon(3:8-3:9),Underscore(3:10-3:11),
 UpperIdent(5:1-5:10),OpColonEqual(5:11-5:13),Underscore(5:14-5:15),
 UpperIdent(7:1-7:12),OpColonEqual(7:13-7:15),UpperIdent(7:16-7:20),NoSpaceOpenRound(7:20-7:21),Underscore(7:21-7:22),CloseRound(7:22-7:23),
@@ -172,9 +158,12 @@ EndOfFile(16:1-16:1),
 # PARSE
 ~~~clojure
 (file @1.1-15.27
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.22)
 	(statements
+		(s-type-decl @1.1-1.28
+			(header @1.1-1.22 (name "UnderscoreInTypeAlias")
+				(args))
+			(ty-record @1.26-1.28))
 		(s-type-decl @3.1-3.11
 			(header @3.1-3.7 (name "MyType")
 				(args))
@@ -222,7 +211,7 @@ EndOfFile(16:1-16:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
+UnderscoreInTypeAlias := {}
 
 MyType : _
 
@@ -241,6 +230,9 @@ TagType := [Some(_), None]
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(s-nominal-decl @1.1-1.28
+		(ty-header @1.1-1.22 (name "UnderscoreInTypeAlias"))
+		(ty-record @1.26-1.28))
 	(s-alias-decl @3.1-3.11
 		(ty-header @3.1-3.7 (name "MyType"))
 		(ty-underscore @1.1-1.1))
@@ -281,6 +273,8 @@ TagType := [Some(_), None]
 (inferred-types
 	(defs)
 	(type_decls
+		(nominal @1.1-1.28 (type "UnderscoreInTypeAlias")
+			(ty-header @1.1-1.22 (name "UnderscoreInTypeAlias")))
 		(alias @3.1-3.11 (type "MyType")
 			(ty-header @3.1-3.7 (name "MyType")))
 		(nominal @5.1-5.15 (type "OtherType")

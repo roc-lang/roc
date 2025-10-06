@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Example of a nominal tag union with a payload
-type=file
+type=file:Annotations.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+Annotations := {}
 
 Pair(a) := [Pair(a, a)]
 
@@ -31,24 +31,10 @@ mkPairInvalid : a, b -> Pair(a)
 mkPairInvalid = |x, y| Pair.Pair(x, y)
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - annotations.md:1:1:1:10
 TYPE MISMATCH - annotations.md:18:28:18:28
 INVALID NOMINAL TAG - annotations.md:21:22:21:41
 INVALID NOMINAL TAG - annotations.md:24:24:24:39
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**annotations.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **TYPE MISMATCH**
 The first and second arguments to `mkPair` must have compatible types, but they are incompatible in this call:
 **annotations.md:18:28:**
@@ -95,7 +81,7 @@ But the nominal type needs it to be:
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:12),OpColonEqual(1:13-1:15),OpenCurly(1:16-1:17),CloseCurly(1:17-1:18),
 UpperIdent(3:1-3:5),NoSpaceOpenRound(3:5-3:6),LowerIdent(3:6-3:7),CloseRound(3:7-3:8),OpColonEqual(3:9-3:11),OpenSquare(3:12-3:13),UpperIdent(3:13-3:17),NoSpaceOpenRound(3:17-3:18),LowerIdent(3:18-3:19),Comma(3:19-3:20),LowerIdent(3:21-3:22),CloseRound(3:22-3:23),CloseSquare(3:23-3:24),
 LowerIdent(5:1-5:8),OpColon(5:9-5:10),UpperIdent(5:11-5:15),NoSpaceOpenRound(5:15-5:16),UpperIdent(5:16-5:19),CloseRound(5:19-5:20),
 LowerIdent(6:1-6:8),OpAssign(6:9-6:10),UpperIdent(6:11-6:15),NoSpaceDotUpperIdent(6:15-6:20),NoSpaceOpenRound(6:20-6:21),Int(6:21-6:22),Comma(6:22-6:23),Int(6:24-6:25),CloseRound(6:25-6:26),
@@ -116,9 +102,12 @@ EndOfFile(25:1-25:1),
 # PARSE
 ~~~clojure
 (file @1.1-24.39
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.12)
 	(statements
+		(s-type-decl @1.1-1.18
+			(header @1.1-1.12 (name "Annotations")
+				(args))
+			(ty-record @1.16-1.18))
 		(s-type-decl @3.1-3.24
 			(header @3.1-3.8 (name "Pair")
 				(args
@@ -324,6 +313,9 @@ NO CHANGE
 					(ty-rigid-var @23.20-23.21 (name "b"))
 					(ty-apply @23.25-23.32 (name "Pair") (local)
 						(ty-rigid-var-lookup (ty-rigid-var @23.17-23.18 (name "a"))))))))
+	(s-nominal-decl @1.1-1.18
+		(ty-header @1.1-1.12 (name "Annotations"))
+		(ty-record @1.16-1.18))
 	(s-nominal-decl @3.1-3.24
 		(ty-header @3.1-3.8 (name "Pair")
 			(ty-args
@@ -345,6 +337,8 @@ NO CHANGE
 		(patt @21.1-21.19 (type "Error"))
 		(patt @24.1-24.14 (type "a, b -> Error")))
 	(type_decls
+		(nominal @1.1-1.18 (type "Annotations")
+			(ty-header @1.1-1.12 (name "Annotations")))
 		(nominal @3.1-3.24 (type "Pair(a)")
 			(ty-header @3.1-3.8 (name "Pair")
 				(ty-args

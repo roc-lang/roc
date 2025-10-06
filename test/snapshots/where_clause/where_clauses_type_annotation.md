@@ -1,34 +1,22 @@
 # META
 ~~~ini
 description=Simple type annotation with where clause
-type=file
+type=file:WhereClausesTypeAnnotation.roc
 ~~~
 # SOURCE
 ~~~roc
-module [convert]
+WhereClausesTypeAnnotation := {}
 
 convert : a -> b where module(a).to_b : a -> b
 convert = |a| a.to_b()
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - where_clauses_type_annotation.md:1:1:1:17
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**where_clauses_type_annotation.md:1:1:1:17:**
-```roc
-module [convert]
-```
-^^^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:16),CloseSquare(1:16-1:17),
+UpperIdent(1:1-1:27),OpColonEqual(1:28-1:30),OpenCurly(1:31-1:32),CloseCurly(1:32-1:33),
 LowerIdent(3:1-3:8),OpColon(3:9-3:10),LowerIdent(3:11-3:12),OpArrow(3:13-3:15),LowerIdent(3:16-3:17),KwWhere(3:18-3:23),KwModule(3:24-3:30),NoSpaceOpenRound(3:30-3:31),LowerIdent(3:31-3:32),CloseRound(3:32-3:33),NoSpaceDotLowerIdent(3:33-3:38),OpColon(3:39-3:40),LowerIdent(3:41-3:42),OpArrow(3:43-3:45),LowerIdent(3:46-3:47),
 LowerIdent(4:1-4:8),OpAssign(4:9-4:10),OpBar(4:11-4:12),LowerIdent(4:12-4:13),OpBar(4:13-4:14),LowerIdent(4:15-4:16),NoSpaceDotLowerIdent(4:16-4:21),NoSpaceOpenRound(4:21-4:22),CloseRound(4:22-4:23),
 EndOfFile(5:1-5:1),
@@ -36,11 +24,12 @@ EndOfFile(5:1-5:1),
 # PARSE
 ~~~clojure
 (file @1.1-4.23
-	(module @1.1-1.17
-		(exposes @1.8-1.17
-			(exposed-lower-ident @1.9-1.16
-				(text "convert"))))
+	(type-module @1.1-1.27)
 	(statements
+		(s-type-decl @1.1-1.33
+			(header @1.1-1.27 (name "WhereClausesTypeAnnotation")
+				(args))
+			(ty-record @1.31-1.33))
 		(s-type-anno @3.1-3.47 (name "convert")
 			(ty-fn @3.11-3.17
 				(ty-var @3.11-3.12 (raw "a"))
@@ -82,6 +71,9 @@ NO CHANGE
 				(ty-fn @3.11-3.17 (effectful false)
 					(ty-rigid-var @3.11-3.12 (name "a"))
 					(ty-rigid-var @3.16-3.17 (name "b"))))))
+	(s-nominal-decl @1.1-1.33
+		(ty-header @1.1-1.27 (name "WhereClausesTypeAnnotation"))
+		(ty-record @1.31-1.33))
 	(s-type-anno @3.1-3.47 (name "convert")
 		(ty-fn @3.11-3.17 (effectful false)
 			(ty-rigid-var @3.11-3.12 (name "a"))
@@ -98,6 +90,9 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @4.1-4.8 (type "a -> b")))
+	(type_decls
+		(nominal @1.1-1.33 (type "WhereClausesTypeAnnotation")
+			(ty-header @1.1-1.27 (name "WhereClausesTypeAnnotation"))))
 	(expressions
 		(expr @4.11-4.23 (type "a -> b"))))
 ~~~

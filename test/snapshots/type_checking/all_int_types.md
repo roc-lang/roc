@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=All integer type annotations
-type=file
+type=file:AllIntTypes.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+AllIntTypes := {}
 
 a : U8
 a = 255
@@ -38,24 +38,12 @@ j : I128
 j = -170141183460469231731687303715884105728
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - all_int_types.md:1:1:1:10
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**all_int_types.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:12),OpColonEqual(1:13-1:15),OpenCurly(1:16-1:17),CloseCurly(1:17-1:18),
 LowerIdent(3:1-3:2),OpColon(3:3-3:4),UpperIdent(3:5-3:7),
 LowerIdent(4:1-4:2),OpAssign(4:3-4:4),Int(4:5-4:8),
 LowerIdent(6:1-6:2),OpColon(6:3-6:4),UpperIdent(6:5-6:8),
@@ -81,9 +69,12 @@ EndOfFile(32:1-32:1),
 # PARSE
 ~~~clojure
 (file @1.1-31.45
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.12)
 	(statements
+		(s-type-decl @1.1-1.18
+			(header @1.1-1.12 (name "AllIntTypes")
+				(args))
+			(ty-record @1.16-1.18))
 		(s-type-anno @3.1-3.7 (name "a")
 			(ty @3.5-3.7 (name "U8")))
 		(s-decl @4.1-4.8
@@ -201,7 +192,10 @@ NO CHANGE
 		(e-num @31.5-31.45 (value "-170141183460469231731687303715884105728"))
 		(annotation @31.1-31.2
 			(declared-type
-				(ty-lookup @30.5-30.9 (name "I128") (builtin))))))
+				(ty-lookup @30.5-30.9 (name "I128") (builtin)))))
+	(s-nominal-decl @1.1-1.18
+		(ty-header @1.1-1.12 (name "AllIntTypes"))
+		(ty-record @1.16-1.18)))
 ~~~
 # TYPES
 ~~~clojure
@@ -217,6 +211,9 @@ NO CHANGE
 		(patt @25.1-25.2 (type "Num(Int(Signed32))"))
 		(patt @28.1-28.2 (type "Num(Int(Signed64))"))
 		(patt @31.1-31.2 (type "Num(Int(Signed128))")))
+	(type_decls
+		(nominal @1.1-1.18 (type "AllIntTypes")
+			(ty-header @1.1-1.12 (name "AllIntTypes"))))
 	(expressions
 		(expr @4.5-4.8 (type "Num(Int(Unsigned8))"))
 		(expr @7.5-7.10 (type "Num(Int(Unsigned16))"))

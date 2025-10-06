@@ -1,46 +1,36 @@
 # META
 ~~~ini
 description=A primitive
-type=file
+type=file:ExprTag.roc
 ~~~
 # SOURCE
 ~~~roc
-module [foo]
+ExprTag := {}
+
 foo = FortyTwo
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - expr_tag.md:1:1:1:13
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**expr_tag.md:1:1:1:13:**
-```roc
-module [foo]
-```
-^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),
-LowerIdent(2:1-2:4),OpAssign(2:5-2:6),UpperIdent(2:7-2:15),
-EndOfFile(3:1-3:1),
+UpperIdent(1:1-1:8),OpColonEqual(1:9-1:11),OpenCurly(1:12-1:13),CloseCurly(1:13-1:14),
+LowerIdent(3:1-3:4),OpAssign(3:5-3:6),UpperIdent(3:7-3:15),
+EndOfFile(4:1-4:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-2.15
-	(module @1.1-1.13
-		(exposes @1.8-1.13
-			(exposed-lower-ident @1.9-1.12
-				(text "foo"))))
+(file @1.1-3.15
+	(type-module @1.1-1.8)
 	(statements
-		(s-decl @2.1-2.15
-			(p-ident @2.1-2.4 (raw "foo"))
-			(e-tag @2.7-2.15 (raw "FortyTwo")))))
+		(s-type-decl @1.1-1.14
+			(header @1.1-1.8 (name "ExprTag")
+				(args))
+			(ty-record @1.12-1.14))
+		(s-decl @3.1-3.15
+			(p-ident @3.1-3.4 (raw "foo"))
+			(e-tag @3.7-3.15 (raw "FortyTwo")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -50,14 +40,20 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @2.1-2.4 (ident "foo"))
-		(e-tag @2.7-2.15 (name "FortyTwo"))))
+		(p-assign @3.1-3.4 (ident "foo"))
+		(e-tag @3.7-3.15 (name "FortyTwo")))
+	(s-nominal-decl @1.1-1.14
+		(ty-header @1.1-1.8 (name "ExprTag"))
+		(ty-record @1.12-1.14)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @2.1-2.4 (type "[FortyTwo]_others")))
+		(patt @3.1-3.4 (type "[FortyTwo]_others")))
+	(type_decls
+		(nominal @1.1-1.14 (type "ExprTag")
+			(ty-header @1.1-1.8 (name "ExprTag"))))
 	(expressions
-		(expr @2.7-2.15 (type "[FortyTwo]_others"))))
+		(expr @3.7-3.15 (type "[FortyTwo]_others"))))
 ~~~

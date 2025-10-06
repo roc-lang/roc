@@ -1,34 +1,22 @@
 # META
 ~~~ini
 description=Singleline with comma formatting module
-type=file
+type=file:Module.roc
 ~~~
 # SOURCE
 ~~~roc
-module [a, b,]
+Module := {}
 
 a = 'a'
 b = 'a'
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - module.md:1:1:1:15
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**module.md:1:1:1:15:**
-```roc
-module [a, b,]
-```
-^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:10),Comma(1:10-1:11),LowerIdent(1:12-1:13),Comma(1:13-1:14),CloseSquare(1:14-1:15),
+UpperIdent(1:1-1:7),OpColonEqual(1:8-1:10),OpenCurly(1:11-1:12),CloseCurly(1:12-1:13),
 LowerIdent(3:1-3:2),OpAssign(3:3-3:4),SingleQuote(3:5-3:8),
 LowerIdent(4:1-4:2),OpAssign(4:3-4:4),SingleQuote(4:5-4:8),
 EndOfFile(5:1-5:1),
@@ -36,13 +24,12 @@ EndOfFile(5:1-5:1),
 # PARSE
 ~~~clojure
 (file @1.1-4.8
-	(module @1.1-1.15
-		(exposes @1.8-1.15
-			(exposed-lower-ident @1.9-1.10
-				(text "a"))
-			(exposed-lower-ident @1.12-1.13
-				(text "b"))))
+	(type-module @1.1-1.7)
 	(statements
+		(s-type-decl @1.1-1.13
+			(header @1.1-1.7 (name "Module")
+				(args))
+			(ty-record @1.11-1.13))
 		(s-decl @3.1-3.8
 			(p-ident @3.1-3.2 (raw "a"))
 			(e-single-quote @3.5-3.8 (raw "'a'")))
@@ -52,13 +39,7 @@ EndOfFile(5:1-5:1),
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	a,
-	b,
-]
-
-a = 'a'
-b = 'a'
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -68,7 +49,10 @@ b = 'a'
 		(e-num @3.5-3.8 (value "97")))
 	(d-let
 		(p-assign @4.1-4.2 (ident "b"))
-		(e-num @4.5-4.8 (value "97"))))
+		(e-num @4.5-4.8 (value "97")))
+	(s-nominal-decl @1.1-1.13
+		(ty-header @1.1-1.7 (name "Module"))
+		(ty-record @1.11-1.13)))
 ~~~
 # TYPES
 ~~~clojure
@@ -76,6 +60,9 @@ b = 'a'
 	(defs
 		(patt @3.1-3.2 (type "Num(Int(_size))"))
 		(patt @4.1-4.2 (type "Num(Int(_size))")))
+	(type_decls
+		(nominal @1.1-1.13 (type "Module")
+			(ty-header @1.1-1.7 (name "Module"))))
 	(expressions
 		(expr @3.5-3.8 (type "Num(Int(_size))"))
 		(expr @4.5-4.8 (type "Num(Int(_size))"))))

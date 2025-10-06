@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Import with exposing clause and usage of exposed items
-type=file
+type=file:ImportExposingBasic.roc
 ~~~
 # SOURCE
 ~~~roc
-module [main]
+ImportExposingBasic := {}
 
 import json.Json exposing [decode, encode]
 
@@ -17,22 +17,8 @@ main = {
 }
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - import_exposing_basic.md:1:1:1:14
 MODULE NOT FOUND - import_exposing_basic.md:3:1:3:43
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**import_exposing_basic.md:1:1:1:14:**
-```roc
-module [main]
-```
-^^^^^^^^^^^^^
-
-
 **MODULE NOT FOUND**
 The module `json.Json` was not found in this Roc project.
 
@@ -46,7 +32,7 @@ import json.Json exposing [decode, encode]
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:13),CloseSquare(1:13-1:14),
+UpperIdent(1:1-1:20),OpColonEqual(1:21-1:23),OpenCurly(1:24-1:25),CloseCurly(1:25-1:26),
 KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:17),KwExposing(3:18-3:26),OpenSquare(3:27-3:28),LowerIdent(3:28-3:34),Comma(3:34-3:35),LowerIdent(3:36-3:42),CloseSquare(3:42-3:43),
 LowerIdent(5:1-5:5),OpAssign(5:6-5:7),OpenCurly(5:8-5:9),
 LowerIdent(6:5-6:9),OpAssign(6:10-6:11),OpenCurly(6:12-6:13),LowerIdent(6:14-6:18),OpColon(6:18-6:19),StringStart(6:20-6:21),StringPart(6:21-6:26),StringEnd(6:26-6:27),Comma(6:27-6:28),LowerIdent(6:29-6:32),OpColon(6:32-6:33),Int(6:34-6:36),CloseCurly(6:37-6:38),
@@ -59,11 +45,12 @@ EndOfFile(11:1-11:1),
 # PARSE
 ~~~clojure
 (file @1.1-10.2
-	(module @1.1-1.14
-		(exposes @1.8-1.14
-			(exposed-lower-ident @1.9-1.13
-				(text "main"))))
+	(type-module @1.1-1.20)
 	(statements
+		(s-type-decl @1.1-1.26
+			(header @1.1-1.20 (name "ImportExposingBasic")
+				(args))
+			(ty-record @1.24-1.26))
 		(s-import @3.1-3.43 (raw "json.Json")
 			(exposing
 				(exposed-lower-ident @3.28-3.34
@@ -96,7 +83,7 @@ EndOfFile(11:1-11:1),
 ~~~
 # FORMATTED
 ~~~roc
-module [main]
+ImportExposingBasic := {}
 
 import json.Json exposing [decode, encode]
 
@@ -140,6 +127,9 @@ main = {
 						(p-assign @7.5-7.12 (ident "encoded")))))
 			(e-lookup-local @9.5-9.12
 				(p-assign @8.5-8.12 (ident "decoded")))))
+	(s-nominal-decl @1.1-1.26
+		(ty-header @1.1-1.20 (name "ImportExposingBasic"))
+		(ty-record @1.24-1.26))
 	(s-import @3.1-3.43 (module "json.Json") (qualifier "json")
 		(exposes
 			(exposed (name "decode") (wildcard false))
@@ -150,6 +140,9 @@ main = {
 (inferred-types
 	(defs
 		(patt @5.1-5.5 (type "_a")))
+	(type_decls
+		(nominal @1.1-1.26 (type "ImportExposingBasic")
+			(ty-header @1.1-1.20 (name "ImportExposingBasic"))))
 	(expressions
 		(expr @5.8-10.2 (type "_a"))))
 ~~~

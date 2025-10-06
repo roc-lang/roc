@@ -435,7 +435,9 @@ pub fn canonicalizeFile(
             try self.createExposedScope(h.provides);
         },
         .type_module => {
-            self.env.module_kind = .type_module;
+            // Set to undefined placeholder - will be properly set during validation
+            // when we find the matching type declaration
+            self.env.module_kind = .{ .type_module = undefined };
             // Type modules don't have an exposes list
             // We'll validate the type name matches the module name after processing types
         },
@@ -745,12 +747,17 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
     defer trace.end();
 
     switch (self.env.module_kind) {
-        .type_module => {
+        .type_module => |*main_type_ident| {
             const main_status = try self.checkMainFunction();
-            const has_matching_type = self.hasMatchingType();
+            const matching_type_ident = self.findMatchingTypeIdent();
+
+            // Store the matching type ident in module_kind if found
+            if (matching_type_ident) |type_ident| {
+                main_type_ident.* = type_ident;
+            }
 
             // Valid if either we have a valid main! or a matching type declaration
-            const is_valid = (main_status == .valid) or has_matching_type;
+            const is_valid = (main_status == .valid) or (matching_type_ident != null);
 
             if (!is_valid and main_status == .not_found) {
                 // Neither valid main! nor matching type - report helpful error
@@ -1244,33 +1251,34 @@ fn canonicalizeImportStatement(
     // Process type imports from this module
     try self.processTypeImports(module_name, alias);
 
-    // Check if this is a type module and auto-expose main type
-    const main_type_name = blk: {
-        if (self.module_envs) |envs_map| {
-            if (envs_map.get(module_name_text)) |target_env| {
-                // Only auto-expose for type modules
-                if (target_env.module_kind == .type_module) {
-                    // Extract the expected type name from the module name
-                    const expected_type_text = if (std.mem.lastIndexOf(u8, module_name_text, ".")) |last_dot|
-                        module_name_text[last_dot + 1 ..]
-                    else
-                        module_name_text;
+    // 5. Convert exposed items
+    const scratch_start = self.env.store.scratchExposedItemTop();
 
+    // Auto-inject main type if this is a type module
+    if (self.module_envs) |envs_map| {
+        if (envs_map.get(module_name_text)) |target_env| {
+            switch (target_env.module_kind) {
+                .type_module => |type_ident| {
                     // Check if this type is exposed
-                    const target_ident = target_env.common.findIdent(expected_type_text);
-                    if (target_ident) |type_ident| {
-                        if (target_env.containsExposedById(type_ident)) {
-                            break :blk alias;
-                        }
+                    if (target_env.containsExposedById(type_ident)) {
+                        const cir_exposed = CIR.ExposedItem{
+                            .name = alias, // Use the module alias as the type name
+                            .alias = null,
+                            .is_wildcard = false,
+                        };
+                        const cir_exposed_idx = try self.env.addExposedItemAndTypeVar(cir_exposed, .{ .flex_var = null }, Region.zero());
+                        try self.env.store.addScratchExposedItem(cir_exposed_idx);
                     }
-                }
+                },
+                else => {},
             }
         }
-        break :blk null;
-    };
+    }
 
-    // 5. Convert exposed items and introduce them into scope
-    const cir_exposes = try self.convertASTExposesToCIR(import_stmt.exposes, main_type_name, module_name);
+    // Convert AST exposed items to CIR
+    try self.convertASTExposesToCIR(import_stmt.exposes);
+
+    const cir_exposes = try self.env.store.exposedItemSpanFrom(scratch_start);
     const import_region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
     try self.introduceExposedItemsIntoScope(cir_exposes, module_name, import_region);
 
@@ -1372,22 +1380,7 @@ fn createExternalDeclaration(
 fn convertASTExposesToCIR(
     self: *Self,
     ast_exposes: AST.ExposedItem.Span,
-    main_type_name: ?Ident.Idx,
-    module_name: Ident.Idx,
-) std.mem.Allocator.Error!CIR.ExposedItem.Span {
-    const scratch_start = self.env.store.scratchExposedItemTop();
-
-    // Auto-inject main type if this is a type module import
-    if (main_type_name) |type_name| {
-        const cir_exposed = CIR.ExposedItem{
-            .name = type_name,
-            .alias = null,
-            .is_wildcard = false,
-        };
-        const cir_exposed_idx = try self.env.addExposedItemAndTypeVar(cir_exposed, .{ .flex_var = null }, Region.zero());
-        try self.env.store.addScratchExposedItem(cir_exposed_idx);
-    }
-
+) std.mem.Allocator.Error!void {
     const ast_exposed_slice = self.parse_ir.store.exposedItemSlice(ast_exposes);
     for (ast_exposed_slice) |ast_exposed_idx| {
         const ast_exposed = self.parse_ir.store.getExposedItem(ast_exposed_idx);
@@ -1424,46 +1417,6 @@ fn convertASTExposesToCIR(
                 }
             };
 
-            // Check for redundant expose or invalid rename of main type
-            if (main_type_name) |type_name| {
-                const type_name_text = self.env.getIdent(type_name);
-                const item_name_text = self.env.getIdent(name);
-
-                if (std.mem.eql(u8, type_name_text, item_name_text)) {
-                    const tokenized_region = switch (ast_exposed) {
-                        inline else => |payload| payload.region,
-                    };
-                    const region = self.parse_ir.tokenizedRegionToRegion(tokenized_region);
-
-                    // Check for invalid rename
-                    if (alias_token != null) {
-                        const alias_val = if (self.parse_ir.tokens.resolveIdentifier(alias_token.?)) |resolved|
-                            resolved
-                        else
-                            try self.env.insertIdent(base.Ident.for_text("unknown"));
-
-                        try self.env.pushDiagnostic(.{
-                            .invalid_main_type_rename_in_exposing = .{
-                                .type_name = name,
-                                .alias = alias_val,
-                                .region = region,
-                            },
-                        });
-                        continue; // Skip adding this to exposed items
-                    }
-
-                    // Redundant expose - warn and skip adding duplicate
-                    try self.env.pushDiagnostic(.{
-                        .redundant_expose_main_type = .{
-                            .type_name = name,
-                            .module_name = module_name,
-                            .region = region,
-                        },
-                    });
-                    continue; // Skip adding duplicate
-                }
-            }
-
             break :convert_item CIR.ExposedItem{
                 .name = name,
                 .alias = alias,
@@ -1478,8 +1431,6 @@ fn convertASTExposesToCIR(
         const cir_exposed_idx = try self.env.addExposedItemAndTypeVar(cir_exposed, .{ .flex_var = null }, region);
         try self.env.store.addScratchExposedItem(cir_exposed_idx);
     }
-
-    return try self.env.store.exposedItemSpanFrom(scratch_start);
 }
 
 /// Introduce converted exposed items into scope for identifier resolution
@@ -7148,7 +7099,8 @@ fn checkMainFunction(self: *Self) std.mem.Allocator.Error!MainFunctionStatus {
 }
 
 /// Check if there's a type declaration matching the module name
-fn hasMatchingType(self: *Self) bool {
+/// Find the type declaration matching the module name and return its ident
+fn findMatchingTypeIdent(self: *Self) ?Ident.Idx {
     const file = self.parse_ir.store.getFile();
     const module_name_text = self.env.module_name;
 
@@ -7163,12 +7115,12 @@ fn hasMatchingType(self: *Self) bool {
             const type_name_text = self.env.getIdent(type_name_ident);
 
             if (std.mem.eql(u8, type_name_text, module_name_text)) {
-                return true;
+                return type_name_ident;
             }
         }
     }
 
-    return false;
+    return null;
 }
 
 /// Check if any type declarations exist in the file
@@ -7185,85 +7137,12 @@ fn hasAnyTypeDeclarations(self: *Self) bool {
     return false;
 }
 
-/// Check if there's a type with a case-insensitive match to the module name
-fn hasCaseInsensitiveMatch(self: *Self) bool {
-    const file = self.parse_ir.store.getFile();
-    const module_name_text = self.env.module_name;
-
-    for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
-        const stmt = self.parse_ir.store.getStatement(stmt_id);
-        if (stmt == .type_decl) {
-            const type_decl = stmt.type_decl;
-            const header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
-            const type_name_ident = self.parse_ir.tokens.resolveIdentifier(header.name) orelse continue;
-            const type_name_text = self.env.getIdent(type_name_ident);
-
-            // Check for case-insensitive match (but not exact match, since that's checked elsewhere)
-            if (!std.mem.eql(u8, type_name_text, module_name_text) and
-                std.ascii.eqlIgnoreCase(type_name_text, module_name_text))
-            {
-                return true;
-            }
-        }
-    }
-
-    return false;
-}
-
-/// Validate that a type module has a type declaration matching the module name.
-/// For example, if the module is named "Foo", there must be a `Foo := ...` or `Foo : ...` at the top level.
-fn validateTypeModuleName(self: *Self) std.mem.Allocator.Error!void {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    if (self.hasMatchingType()) {
-        return;
-    }
-
-    // No matching type declaration found - report error
-    const file = self.parse_ir.store.getFile();
-    const module_name_text = self.env.module_name;
-    const module_name_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
-    const file_region = self.parse_ir.tokenizedRegionToRegion(file.region);
-    try self.env.pushDiagnostic(Diagnostic{
-        .type_module_missing_matching_type = .{
-            .module_name = module_name_ident,
-            .region = file_region,
-        },
-    });
-}
-
 /// Report smart error when neither type module nor default-app is valid (checking mode)
 fn reportTypeModuleOrDefaultAppError(self: *Self) std.mem.Allocator.Error!void {
     const file = self.parse_ir.store.getFile();
     const module_name_text = self.env.module_name;
     const module_name_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
     const file_region = self.parse_ir.tokenizedRegionToRegion(file.region);
-
-    // Check for case mismatch
-    if (self.hasCaseInsensitiveMatch()) {
-        // Find the mismatched type name
-        for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
-            const stmt = self.parse_ir.store.getStatement(stmt_id);
-            if (stmt == .type_decl) {
-                const type_decl = stmt.type_decl;
-                const header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
-                const type_name_ident = self.parse_ir.tokens.resolveIdentifier(header.name) orelse continue;
-                const type_name_text = self.env.getIdent(type_name_ident);
-
-                if (std.ascii.eqlIgnoreCase(type_name_text, module_name_text)) {
-                    try self.env.pushDiagnostic(.{
-                        .type_name_case_mismatch = .{
-                            .module_name = module_name_ident,
-                            .type_name = type_name_ident,
-                            .region = file_region,
-                        },
-                    });
-                    return;
-                }
-            }
-        }
-    }
 
     // Use heuristic: if there are types declared, assume type module, else assume default-app
     if (self.hasAnyTypeDeclarations()) {

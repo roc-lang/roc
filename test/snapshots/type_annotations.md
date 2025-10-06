@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Various type annotations
-type=file
+type=file:TypeAnnotations.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+TypeAnnotations := {}
 
 foo : U64
 bar : Thing(_a, _b, _)
@@ -15,24 +15,10 @@ main! : List(String) -> Result({}, _)
 tag_tuple : Value((_a, _b, _c))
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - type_annotations.md:1:1:1:10
 UNDECLARED TYPE - type_annotations.md:4:7:4:12
 UNDECLARED TYPE - type_annotations.md:7:14:7:20
 UNDECLARED TYPE - type_annotations.md:8:13:8:18
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**type_annotations.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **UNDECLARED TYPE**
 The type _Thing_ is not declared in this scope.
 
@@ -68,7 +54,7 @@ tag_tuple : Value((_a, _b, _c))
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:16),OpColonEqual(1:17-1:19),OpenCurly(1:20-1:21),CloseCurly(1:21-1:22),
 LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:10),
 LowerIdent(4:1-4:4),OpColon(4:5-4:6),UpperIdent(4:7-4:12),NoSpaceOpenRound(4:12-4:13),NamedUnderscore(4:13-4:15),Comma(4:15-4:16),NamedUnderscore(4:17-4:19),Comma(4:19-4:20),Underscore(4:21-4:22),CloseRound(4:22-4:23),
 LowerIdent(5:1-5:4),OpColon(5:5-5:6),OpenRound(5:7-5:8),NamedUnderscore(5:8-5:10),Comma(5:10-5:11),NamedUnderscore(5:12-5:14),Comma(5:14-5:15),NamedUnderscore(5:16-5:18),CloseRound(5:18-5:19),
@@ -80,9 +66,12 @@ EndOfFile(9:1-9:1),
 # PARSE
 ~~~clojure
 (file @1.1-8.32
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.16)
 	(statements
+		(s-type-decl @1.1-1.22
+			(header @1.1-1.16 (name "TypeAnnotations")
+				(args))
+			(ty-record @1.20-1.22))
 		(s-type-anno @3.1-3.10 (name "foo")
 			(ty @3.7-3.10 (name "U64")))
 		(s-type-anno @4.1-4.23 (name "bar")
@@ -124,11 +113,17 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(s-nominal-decl @1.1-1.22
+		(ty-header @1.1-1.16 (name "TypeAnnotations"))
+		(ty-record @1.20-1.22)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
+	(type_decls
+		(nominal @1.1-1.22 (type "TypeAnnotations")
+			(ty-header @1.1-1.16 (name "TypeAnnotations"))))
 	(expressions))
 ~~~

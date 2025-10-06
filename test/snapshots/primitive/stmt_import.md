@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=A primitive
-type=file
+type=file:StmtImport.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+StmtImport := {}
 
 import json.Json [foo, BAR]
 ~~~
@@ -14,7 +14,6 @@ PARSE ERROR - stmt_import.md:3:18:3:19
 PARSE ERROR - stmt_import.md:3:19:3:22
 PARSE ERROR - stmt_import.md:3:22:3:23
 PARSE ERROR - stmt_import.md:3:27:3:28
-MODULE HEADER DEPRECATED - stmt_import.md:1:1:1:10
 MODULE NOT FOUND - stmt_import.md:3:1:3:17
 # PROBLEMS
 **PARSE ERROR**
@@ -73,19 +72,6 @@ import json.Json [foo, BAR]
                           ^
 
 
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**stmt_import.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **MODULE NOT FOUND**
 The module `json.Json` was not found in this Roc project.
 
@@ -99,16 +85,19 @@ import json.Json [foo, BAR]
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:11),OpColonEqual(1:12-1:14),OpenCurly(1:15-1:16),CloseCurly(1:16-1:17),
 KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:17),OpenSquare(3:18-3:19),LowerIdent(3:19-3:22),Comma(3:22-3:23),UpperIdent(3:24-3:27),CloseSquare(3:27-3:28),
 EndOfFile(4:1-4:1),
 ~~~
 # PARSE
 ~~~clojure
 (file @1.1-3.28
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.11)
 	(statements
+		(s-type-decl @1.1-1.17
+			(header @1.1-1.11 (name "StmtImport")
+				(args))
+			(ty-record @1.15-1.17))
 		(s-import @3.1-3.17 (raw "json.Json"))
 		(s-malformed @3.18-3.19 (tag "statement_unexpected_token"))
 		(s-malformed @3.19-3.22 (tag "statement_unexpected_token"))
@@ -117,13 +106,16 @@ EndOfFile(4:1-4:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
+StmtImport := {}
 
 import json.Json
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(s-nominal-decl @1.1-1.17
+		(ty-header @1.1-1.11 (name "StmtImport"))
+		(ty-record @1.15-1.17))
 	(s-import @3.1-3.17 (module "json.Json") (qualifier "json")
 		(exposes)))
 ~~~
@@ -131,5 +123,8 @@ import json.Json
 ~~~clojure
 (inferred-types
 	(defs)
+	(type_decls
+		(nominal @1.1-1.17 (type "StmtImport")
+			(ty-header @1.1-1.11 (name "StmtImport"))))
 	(expressions))
 ~~~

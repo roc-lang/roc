@@ -1,77 +1,49 @@
 # META
 ~~~ini
 description=fuzz crash
-type=file
+type=file:FuzzCrash034.roc
 ~~~
 # SOURCE
 ~~~roc
-module[]0 f
+FuzzCrash034 := {}
+
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_034.md:1:9:1:10
-PARSE ERROR - fuzz_crash_034.md:1:11:1:12
-MODULE HEADER DEPRECATED - fuzz_crash_034.md:1:1:1:9
+NIL
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_034.md:1:9:1:10:**
-```roc
-module[]0 f
-```
-        ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_034.md:1:11:1:12:**
-```roc
-module[]0 f
-```
-          ^
-
-
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**fuzz_crash_034.md:1:1:1:9:**
-```roc
-module[]0 f
-```
-^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),Int(1:9-1:10),LowerIdent(1:11-1:12),
-EndOfFile(2:1-2:1),
+UpperIdent(1:1-1:13),OpColonEqual(1:14-1:16),OpenCurly(1:17-1:18),CloseCurly(1:18-1:19),
+EndOfFile(3:1-3:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.12
-	(module @1.1-1.9
-		(exposes @1.7-1.9))
+(file @1.1-1.19
+	(type-module @1.1-1.13)
 	(statements
-		(s-malformed @1.9-1.10 (tag "statement_unexpected_token"))
-		(s-malformed @1.11-1.12 (tag "statement_unexpected_token"))))
+		(s-type-decl @1.1-1.19
+			(header @1.1-1.13 (name "FuzzCrash034")
+				(args))
+			(ty-record @1.17-1.19))))
 ~~~
 # FORMATTED
 ~~~roc
-module []
+FuzzCrash034 := {}
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(s-nominal-decl @1.1-1.19
+		(ty-header @1.1-1.13 (name "FuzzCrash034"))
+		(ty-record @1.17-1.19)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
+	(type_decls
+		(nominal @1.1-1.19 (type "FuzzCrash034")
+			(ty-header @1.1-1.13 (name "FuzzCrash034"))))
 	(expressions))
 ~~~

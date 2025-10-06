@@ -1,64 +1,30 @@
 # META
 ~~~ini
 description=An empty module with singleline exposes
-type=file
+type=file:ModuleNonemptySingle.roc
 ~~~
 # SOURCE
 ~~~roc
-module [something, SomeType]
+ModuleNonemptySingle := {}
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - module_nonempty_single.md:1:1:1:29
-EXPOSED BUT NOT DEFINED - module_nonempty_single.md:1:9:1:18
-EXPOSED BUT NOT DEFINED - module_nonempty_single.md:1:20:1:28
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**module_nonempty_single.md:1:1:1:29:**
-```roc
-module [something, SomeType]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `something` is exposed, but it is not defined anywhere in this module.
-
-**module_nonempty_single.md:1:9:1:18:**
-```roc
-module [something, SomeType]
-```
-        ^^^^^^^^^
-You can fix this by either defining `something` in this module, or by removing it from the list of exposed values.
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `SomeType` is exposed, but it is not defined anywhere in this module.
-
-**module_nonempty_single.md:1:20:1:28:**
-```roc
-module [something, SomeType]
-```
-                   ^^^^^^^^
-You can fix this by either defining `SomeType` in this module, or by removing it from the list of exposed values.
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:18),Comma(1:18-1:19),UpperIdent(1:20-1:28),CloseSquare(1:28-1:29),
+UpperIdent(1:1-1:21),OpColonEqual(1:22-1:24),OpenCurly(1:25-1:26),CloseCurly(1:26-1:27),
 EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.29
-	(module @1.1-1.29
-		(exposes @1.8-1.29
-			(exposed-lower-ident @1.9-1.18
-				(text "something"))
-			(exposed-upper-ident @1.20-1.28 (text "SomeType"))))
-	(statements))
+(file @1.1-1.27
+	(type-module @1.1-1.21)
+	(statements
+		(s-type-decl @1.1-1.27
+			(header @1.1-1.21 (name "ModuleNonemptySingle")
+				(args))
+			(ty-record @1.25-1.27))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -66,11 +32,17 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(s-nominal-decl @1.1-1.27
+		(ty-header @1.1-1.21 (name "ModuleNonemptySingle"))
+		(ty-record @1.25-1.27)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
+	(type_decls
+		(nominal @1.1-1.27 (type "ModuleNonemptySingle")
+			(ty-header @1.1-1.21 (name "ModuleNonemptySingle"))))
 	(expressions))
 ~~~

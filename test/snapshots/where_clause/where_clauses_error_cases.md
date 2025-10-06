@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Error cases for where clauses
-type=file
+type=file:WhereClausesErrorCases.roc
 ~~~
 # SOURCE
 ~~~roc
-module [broken_fn1, broken_fn2, broken_fn3]
+WhereClausesErrorCases := {}
 
 # Missing colon in constraint
 broken_fn1 : a -> b
@@ -25,12 +25,8 @@ broken_fn3 : a -> b
 WHERE CLAUSE ERROR - where_clauses_error_cases.md:6:5:6:11
 PARSE ERROR - where_clauses_error_cases.md:6:25:6:26
 WHERE CLAUSE ERROR - where_clauses_error_cases.md:10:3:10:8
-MODULE HEADER DEPRECATED - where_clauses_error_cases.md:1:1:1:44
 MALFORMED WHERE CLAUSE - where_clauses_error_cases.md:6:5:6:24
 MALFORMED WHERE CLAUSE - where_clauses_error_cases.md:10:3:10:8
-EXPOSED BUT NOT DEFINED - where_clauses_error_cases.md:1:9:1:19
-EXPOSED BUT NOT DEFINED - where_clauses_error_cases.md:1:21:1:31
-EXPOSED BUT NOT DEFINED - where_clauses_error_cases.md:1:33:1:43
 # PROBLEMS
 **WHERE CLAUSE ERROR**
 Expected a colon **:** after the method name in this where clause constraint.
@@ -68,19 +64,6 @@ For example:
   ^^^^^
 
 
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**where_clauses_error_cases.md:1:1:1:44:**
-```roc
-module [broken_fn1, broken_fn2, broken_fn3]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 **MALFORMED WHERE CLAUSE**
 This where clause could not be parsed correctly.
 
@@ -103,39 +86,9 @@ This where clause could not be parsed correctly.
 
 Check the syntax of your where clause.
 
-**EXPOSED BUT NOT DEFINED**
-The module header says that `broken_fn1` is exposed, but it is not defined anywhere in this module.
-
-**where_clauses_error_cases.md:1:9:1:19:**
-```roc
-module [broken_fn1, broken_fn2, broken_fn3]
-```
-        ^^^^^^^^^^
-You can fix this by either defining `broken_fn1` in this module, or by removing it from the list of exposed values.
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `broken_fn2` is exposed, but it is not defined anywhere in this module.
-
-**where_clauses_error_cases.md:1:21:1:31:**
-```roc
-module [broken_fn1, broken_fn2, broken_fn3]
-```
-                    ^^^^^^^^^^
-You can fix this by either defining `broken_fn2` in this module, or by removing it from the list of exposed values.
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `broken_fn3` is exposed, but it is not defined anywhere in this module.
-
-**where_clauses_error_cases.md:1:33:1:43:**
-```roc
-module [broken_fn1, broken_fn2, broken_fn3]
-```
-                                ^^^^^^^^^^
-You can fix this by either defining `broken_fn3` in this module, or by removing it from the list of exposed values.
-
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:19),Comma(1:19-1:20),LowerIdent(1:21-1:31),Comma(1:31-1:32),LowerIdent(1:33-1:43),CloseSquare(1:43-1:44),
+UpperIdent(1:1-1:23),OpColonEqual(1:24-1:26),OpenCurly(1:27-1:28),CloseCurly(1:28-1:29),
 LowerIdent(4:1-4:11),OpColon(4:12-4:13),LowerIdent(4:14-4:15),OpArrow(4:16-4:18),LowerIdent(4:19-4:20),
 KwWhere(5:3-5:8),
 KwModule(6:5-6:11),NoSpaceOpenRound(6:11-6:12),LowerIdent(6:12-6:13),CloseRound(6:13-6:14),NoSpaceDotLowerIdent(6:14-6:21),OpArrow(6:22-6:24),LowerIdent(6:25-6:26),
@@ -149,15 +102,12 @@ EndOfFile(16:1-16:1),
 # PARSE
 ~~~clojure
 (file @1.1-15.30
-	(module @1.1-1.44
-		(exposes @1.8-1.44
-			(exposed-lower-ident @1.9-1.19
-				(text "broken_fn1"))
-			(exposed-lower-ident @1.21-1.31
-				(text "broken_fn2"))
-			(exposed-lower-ident @1.33-1.43
-				(text "broken_fn3"))))
+	(type-module @1.1-1.23)
 	(statements
+		(s-type-decl @1.1-1.29
+			(header @1.1-1.23 (name "WhereClausesErrorCases")
+				(args))
+			(ty-record @1.27-1.29))
 		(s-type-anno @4.1-6.24 (name "broken_fn1")
 			(ty-fn @4.14-4.20
 				(ty-var @4.14-4.15 (raw "a"))
@@ -183,7 +133,7 @@ EndOfFile(16:1-16:1),
 ~~~
 # FORMATTED
 ~~~roc
-module [broken_fn1, broken_fn2, broken_fn3]
+WhereClausesErrorCases := {}
 
 # Missing colon in constraint
 broken_fn1 : a -> b
@@ -202,6 +152,9 @@ broken_fn3 : a -> b
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(s-nominal-decl @1.1-1.29
+		(ty-header @1.1-1.23 (name "WhereClausesErrorCases"))
+		(ty-record @1.27-1.29))
 	(s-type-anno @4.1-6.24 (name "broken_fn1")
 		(ty-fn @4.14-4.20 (effectful false)
 			(ty-rigid-var @4.14-4.15 (name "a"))
@@ -229,5 +182,8 @@ broken_fn3 : a -> b
 ~~~clojure
 (inferred-types
 	(defs)
+	(type_decls
+		(nominal @1.1-1.29 (type "WhereClausesErrorCases")
+			(ty-header @1.1-1.23 (name "WhereClausesErrorCases"))))
 	(expressions))
 ~~~

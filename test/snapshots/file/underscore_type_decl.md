@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=underscore_in_assignment_pattern
-type=file
+type=file:UnderscoreTypeDecl.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+UnderscoreTypeDecl := {}
 
 import Module exposing [Pair]
 
@@ -36,7 +36,6 @@ PARSE ERROR - underscore_type_decl.md:7:13:7:14
 PARSE ERROR - underscore_type_decl.md:7:20:7:21
 PARSE ERROR - underscore_type_decl.md:7:23:7:24
 PARSE ERROR - underscore_type_decl.md:8:1:8:1
-MODULE HEADER DEPRECATED - underscore_type_decl.md:1:1:1:10
 MODULE NOT FOUND - underscore_type_decl.md:3:1:3:30
 # PROBLEMS
 **PARSE ERROR**
@@ -329,19 +328,6 @@ Other valid examples:
 ^
 
 
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**underscore_type_decl.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **MODULE NOT FOUND**
 The module `Module` was not found in this Roc project.
 
@@ -355,7 +341,7 @@ import Module exposing [Pair]
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:19),OpColonEqual(1:20-1:22),OpenCurly(1:23-1:24),CloseCurly(1:24-1:25),
 KwImport(3:1-3:7),UpperIdent(3:8-3:14),KwExposing(3:15-3:23),OpenSquare(3:24-3:25),UpperIdent(3:25-3:29),CloseSquare(3:29-3:30),
 UpperIdent(5:1-5:6),NoSpaceOpenRound(5:6-5:7),LowerIdent(5:7-5:8),Comma(5:8-5:9),Underscore(5:10-5:11),CloseRound(5:11-5:12),OpAssign(5:13-5:14),UpperIdent(5:15-5:19),NoSpaceOpenRound(5:19-5:20),Int(5:20-5:21),Comma(5:21-5:22),Int(5:23-5:24),CloseRound(5:24-5:25),
 UpperIdent(6:1-6:6),NoSpaceOpenRound(6:6-6:7),Underscore(6:7-6:8),Comma(6:8-6:9),LowerIdent(6:10-6:11),CloseRound(6:11-6:12),OpAssign(6:13-6:14),UpperIdent(6:15-6:19),NoSpaceOpenRound(6:19-6:20),Int(6:20-6:21),Comma(6:21-6:22),Int(6:23-6:24),CloseRound(6:24-6:25),
@@ -365,9 +351,12 @@ EndOfFile(8:1-8:1),
 # PARSE
 ~~~clojure
 (file @1.1-7.25
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.19)
 	(statements
+		(s-type-decl @1.1-1.25
+			(header @1.1-1.19 (name "UnderscoreTypeDecl")
+				(args))
+			(ty-record @1.23-1.25))
 		(s-import @3.1-3.30 (raw "Module")
 			(exposing
 				(exposed-upper-ident @3.25-3.29 (text "Pair"))))
@@ -390,7 +379,7 @@ EndOfFile(8:1-8:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
+UnderscoreTypeDecl := {}
 
 import Module exposing [Pair]
 
@@ -400,6 +389,9 @@ import Module exposing [Pair]
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(s-nominal-decl @1.1-1.25
+		(ty-header @1.1-1.19 (name "UnderscoreTypeDecl"))
+		(ty-record @1.23-1.25))
 	(s-import @3.1-3.30 (module "Module")
 		(exposes
 			(exposed (name "Pair") (wildcard false)))))
@@ -408,5 +400,8 @@ import Module exposing [Pair]
 ~~~clojure
 (inferred-types
 	(defs)
+	(type_decls
+		(nominal @1.1-1.25 (type "UnderscoreTypeDecl")
+			(ty-header @1.1-1.19 (name "UnderscoreTypeDecl"))))
 	(expressions))
 ~~~

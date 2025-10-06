@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Variable scoping with var keyword
-type=file
+type=file:CanVarScopingVarIdents.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+CanVarScopingVarIdents := {}
 
 # Function showing var vs regular identifier independence
 testFunc = |input| {
@@ -17,24 +17,12 @@ testFunc = |input| {
 }
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - can_var_scoping_var_idents.md:1:1:1:10
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**can_var_scoping_var_idents.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:23),OpColonEqual(1:24-1:26),OpenCurly(1:27-1:28),CloseCurly(1:28-1:29),
 LowerIdent(4:1-4:9),OpAssign(4:10-4:11),OpBar(4:12-4:13),LowerIdent(4:13-4:18),OpBar(4:18-4:19),OpenCurly(4:20-4:21),
 LowerIdent(5:2-5:5),OpAssign(5:6-5:7),LowerIdent(5:8-5:13),
 KwVar(6:2-6:5),LowerIdent(6:6-6:10),OpAssign(6:11-6:12),LowerIdent(6:13-6:18),OpStar(6:19-6:20),Int(6:21-6:22),
@@ -46,9 +34,12 @@ EndOfFile(11:1-11:1),
 # PARSE
 ~~~clojure
 (file @1.1-10.2
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.23)
 	(statements
+		(s-type-decl @1.1-1.29
+			(header @1.1-1.23 (name "CanVarScopingVarIdents")
+				(args))
+			(ty-record @1.27-1.29))
 		(s-decl @4.1-10.2
 			(p-ident @4.1-4.9 (raw "testFunc"))
 			(e-lambda @4.12-10.2
@@ -106,13 +97,19 @@ NO CHANGE
 					(e-lookup-local @9.2-9.5
 						(p-assign @5.2-5.5 (ident "sum")))
 					(e-lookup-local @9.8-9.12
-						(p-assign @6.2-6.22 (ident "sum_"))))))))
+						(p-assign @6.2-6.22 (ident "sum_")))))))
+	(s-nominal-decl @1.1-1.29
+		(ty-header @1.1-1.23 (name "CanVarScopingVarIdents"))
+		(ty-record @1.27-1.29)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @4.1-4.9 (type "Num(_size) -> Num(_size2)")))
+	(type_decls
+		(nominal @1.1-1.29 (type "CanVarScopingVarIdents")
+			(ty-header @1.1-1.23 (name "CanVarScopingVarIdents"))))
 	(expressions
 		(expr @4.12-10.2 (type "Num(_size) -> Num(_size2)"))))
 ~~~

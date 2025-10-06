@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=fuzz crash, unterminated single quote
-type=file
+type=file:FuzzCrash032.roc
 ~~~
 # SOURCE
 ~~~roc
-module [tus,r]
+FuzzCrash032 := {}
 
 LocalStatus :lue => Loc= [Pending, Complete]
 
@@ -26,7 +26,6 @@ PARSE ERROR - fuzz_crash_032.md:3:44:3:45
 IMPORT MUST BE TOP LEVEL - fuzz_crash_032.md:6:18:6:24
 UNEXPECTED TOKEN IN PATTERN - fuzz_crash_032.md:9:21:9:22
 PARSE ERROR - fuzz_crash_032.md:9:22:9:22
-MODULE HEADER DEPRECATED - fuzz_crash_032.md:1:1:1:15
 UNDECLARED TYPE VARIABLE - fuzz_crash_032.md:3:14:3:17
 UNDECLARED TYPE - fuzz_crash_032.md:3:21:3:24
 NOT IMPLEMENTED - :0:0:0:0
@@ -35,8 +34,6 @@ EXPECTED NOMINAL TYPE - fuzz_crash_032.md:8:26:8:37
 INVALID PATTERN - :0:0:0:0
 UNDECLARED TYPE - fuzz_crash_032.md:10:3:10:4
 EXPECTED NOMINAL TYPE - fuzz_crash_032.md:10:13:10:24
-EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:13:1:14
-EXPOSED BUT NOT DEFINED - fuzz_crash_032.md:1:9:1:12
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
@@ -139,19 +136,6 @@ Green => LocalStatus-Complete
                      ^
 
 
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**fuzz_crash_032.md:1:1:1:15:**
-```roc
-module [tus,r]
-```
-^^^^^^^^^^^^^^
-
-
 **UNDECLARED TYPE VARIABLE**
 The type variable _lue_ is not declared in this scope.
 
@@ -232,29 +216,9 @@ This type is referenced here:
 
 **Hint:** You can declare this type with `:=` to make it nominal.
 
-**EXPOSED BUT NOT DEFINED**
-The module header says that `r` is exposed, but it is not defined anywhere in this module.
-
-**fuzz_crash_032.md:1:13:1:14:**
-```roc
-module [tus,r]
-```
-            ^
-You can fix this by either defining `r` in this module, or by removing it from the list of exposed values.
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `tus` is exposed, but it is not defined anywhere in this module.
-
-**fuzz_crash_032.md:1:9:1:12:**
-```roc
-module [tus,r]
-```
-        ^^^
-You can fix this by either defining `tus` in this module, or by removing it from the list of exposed values.
-
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),Comma(1:12-1:13),LowerIdent(1:13-1:14),CloseSquare(1:14-1:15),
+UpperIdent(1:1-1:13),OpColonEqual(1:14-1:16),OpenCurly(1:17-1:18),CloseCurly(1:18-1:19),
 UpperIdent(3:1-3:12),OpColon(3:13-3:14),LowerIdent(3:14-3:17),OpFatArrow(3:18-3:20),UpperIdent(3:21-3:24),OpAssign(3:24-3:25),OpenSquare(3:26-3:27),UpperIdent(3:27-3:34),Comma(3:34-3:35),UpperIdent(3:36-3:44),CloseSquare(3:44-3:45),
 LowerIdent(5:1-5:5),OpColon(5:6-5:7),Underscore(5:8-5:9),OpArrow(5:10-5:12),LowerIdent(5:13-5:16),
 LowerIdent(6:1-6:5),OpAssign(6:6-6:7),OpBar(6:8-6:9),LowerIdent(6:9-6:14),OpBar(6:14-6:15),OpenCurly(6:16-6:17),KwImport(6:18-6:24),UpperIdent(6:25-6:30),NoSpaceDotUpperIdent(6:30-6:34),
@@ -268,13 +232,12 @@ EndOfFile(13:1-13:1),
 # PARSE
 ~~~clojure
 (file @1.1-12.2
-	(module @1.1-1.15
-		(exposes @1.8-1.15
-			(exposed-lower-ident @1.9-1.12
-				(text "tus"))
-			(exposed-lower-ident @1.13-1.14
-				(text "r"))))
+	(type-module @1.1-1.13)
 	(statements
+		(s-type-decl @1.1-1.19
+			(header @1.1-1.13 (name "FuzzCrash032")
+				(args))
+			(ty-record @1.17-1.19))
 		(s-type-decl @3.1-3.24
 			(header @3.1-3.12 (name "LocalStatus")
 				(args))
@@ -316,7 +279,7 @@ EndOfFile(13:1-13:1),
 ~~~
 # FORMATTED
 ~~~roc
-module [tus, r]
+FuzzCrash032 := {}
 
 LocalStatus : lue => Loc
 
@@ -380,6 +343,9 @@ olor = |color| {
 				(ty-fn @5.8-5.16 (effectful false)
 					(ty-underscore @1.1-1.1)
 					(ty-rigid-var @5.13-5.16 (name "tus"))))))
+	(s-nominal-decl @1.1-1.19
+		(ty-header @1.1-1.13 (name "FuzzCrash032"))
+		(ty-record @1.17-1.19))
 	(s-alias-decl @3.1-3.24
 		(ty-header @3.1-3.12 (name "LocalStatus"))
 		(ty-fn @3.14-3.24 (effectful true)
@@ -392,6 +358,8 @@ olor = |color| {
 	(defs
 		(patt @6.1-6.5 (type "_arg -> Error")))
 	(type_decls
+		(nominal @1.1-1.19 (type "FuzzCrash032")
+			(ty-header @1.1-1.13 (name "FuzzCrash032")))
 		(alias @3.1-3.24 (type "LocalStatus")
 			(ty-header @3.1-3.12 (name "LocalStatus"))))
 	(expressions

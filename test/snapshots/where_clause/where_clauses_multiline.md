@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Where clause with multiline constraints
-type=file
+type=file:WhereClausesMultiline.roc
 ~~~
 # SOURCE
 ~~~roc
-module [process]
+WhereClausesMultiline := {}
 
 process : a, b -> c
 	where
@@ -14,24 +14,12 @@ process : a, b -> c
 process = ...
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - where_clauses_multiline.md:1:1:1:17
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**where_clauses_multiline.md:1:1:1:17:**
-```roc
-module [process]
-```
-^^^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:16),CloseSquare(1:16-1:17),
+UpperIdent(1:1-1:22),OpColonEqual(1:23-1:25),OpenCurly(1:26-1:27),CloseCurly(1:27-1:28),
 LowerIdent(3:1-3:8),OpColon(3:9-3:10),LowerIdent(3:11-3:12),Comma(3:12-3:13),LowerIdent(3:14-3:15),OpArrow(3:16-3:18),LowerIdent(3:19-3:20),
 KwWhere(4:2-4:7),
 KwModule(5:3-5:9),NoSpaceOpenRound(5:9-5:10),LowerIdent(5:10-5:11),CloseRound(5:11-5:12),NoSpaceDotLowerIdent(5:12-5:20),OpColon(5:21-5:22),LowerIdent(5:23-5:24),OpArrow(5:25-5:27),LowerIdent(5:28-5:29),Comma(5:29-5:30),
@@ -42,11 +30,12 @@ EndOfFile(8:1-8:1),
 # PARSE
 ~~~clojure
 (file @1.1-7.14
-	(module @1.1-1.17
-		(exposes @1.8-1.17
-			(exposed-lower-ident @1.9-1.16
-				(text "process"))))
+	(type-module @1.1-1.22)
 	(statements
+		(s-type-decl @1.1-1.28
+			(header @1.1-1.22 (name "WhereClausesMultiline")
+				(args))
+			(ty-record @1.26-1.28))
 		(s-type-anno @3.1-6.31 (name "process")
 			(ty-fn @3.11-3.20
 				(ty-var @3.11-3.12 (raw "a"))
@@ -81,6 +70,9 @@ NO CHANGE
 					(ty-rigid-var @3.11-3.12 (name "a"))
 					(ty-rigid-var @3.14-3.15 (name "b"))
 					(ty-rigid-var @3.19-3.20 (name "c"))))))
+	(s-nominal-decl @1.1-1.28
+		(ty-header @1.1-1.22 (name "WhereClausesMultiline"))
+		(ty-record @1.26-1.28))
 	(s-type-anno @3.1-6.31 (name "process")
 		(ty-fn @3.11-3.20 (effectful false)
 			(ty-rigid-var @3.11-3.12 (name "a"))
@@ -103,6 +95,9 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @7.1-7.8 (type "a, b -> c")))
+	(type_decls
+		(nominal @1.1-1.28 (type "WhereClausesMultiline")
+			(ty-header @1.1-1.22 (name "WhereClausesMultiline"))))
 	(expressions
 		(expr @1.1-1.1 (type "a, b -> c"))))
 ~~~

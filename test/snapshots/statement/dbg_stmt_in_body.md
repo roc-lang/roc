@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Debug statement in body context
-type=file
+type=file:DbgStmtInBody.roc
 ~~~
 # SOURCE
 ~~~roc
-module [main]
+DbgStmtInBody := {}
 
 main = {
     x = 42
@@ -14,24 +14,12 @@ main = {
 }
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - dbg_stmt_in_body.md:1:1:1:14
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**dbg_stmt_in_body.md:1:1:1:14:**
-```roc
-module [main]
-```
-^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:13),CloseSquare(1:13-1:14),
+UpperIdent(1:1-1:14),OpColonEqual(1:15-1:17),OpenCurly(1:18-1:19),CloseCurly(1:19-1:20),
 LowerIdent(3:1-3:5),OpAssign(3:6-3:7),OpenCurly(3:8-3:9),
 LowerIdent(4:5-4:6),OpAssign(4:7-4:8),Int(4:9-4:11),
 KwDbg(5:5-5:8),LowerIdent(5:9-5:10),
@@ -42,11 +30,12 @@ EndOfFile(8:1-8:1),
 # PARSE
 ~~~clojure
 (file @1.1-7.2
-	(module @1.1-1.14
-		(exposes @1.8-1.14
-			(exposed-lower-ident @1.9-1.13
-				(text "main"))))
+	(type-module @1.1-1.14)
 	(statements
+		(s-type-decl @1.1-1.20
+			(header @1.1-1.14 (name "DbgStmtInBody")
+				(args))
+			(ty-record @1.18-1.20))
 		(s-decl @3.1-7.2
 			(p-ident @3.1-3.5 (raw "main"))
 			(e-block @3.8-7.2
@@ -62,7 +51,7 @@ EndOfFile(8:1-8:1),
 ~~~
 # FORMATTED
 ~~~roc
-module [main]
+DbgStmtInBody := {}
 
 main = {
 	x = 42
@@ -85,13 +74,19 @@ main = {
 			(e-binop @6.5-6.10 (op "add")
 				(e-lookup-local @6.5-6.6
 					(p-assign @4.5-4.6 (ident "x")))
-				(e-num @6.9-6.10 (value "1"))))))
+				(e-num @6.9-6.10 (value "1")))))
+	(s-nominal-decl @1.1-1.20
+		(ty-header @1.1-1.14 (name "DbgStmtInBody"))
+		(ty-record @1.18-1.20)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @3.1-3.5 (type "Num(_size)")))
+	(type_decls
+		(nominal @1.1-1.20 (type "DbgStmtInBody")
+			(ty-header @1.1-1.14 (name "DbgStmtInBody"))))
 	(expressions
 		(expr @3.8-7.2 (type "Num(_size)"))))
 ~~~

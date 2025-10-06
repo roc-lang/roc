@@ -1,17 +1,16 @@
 # META
 ~~~ini
 description=fuzz crash
-type=file
+type=file:FuzzCrash066.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+FuzzCrash066 := {}
 
 C:[0]
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_066.md:3:4:3:5
-MODULE HEADER DEPRECATED - fuzz_crash_066.md:1:1:1:10
 MALFORMED TYPE - fuzz_crash_066.md:3:4:3:5
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -23,19 +22,6 @@ Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 C:[0]
 ```
    ^
-
-
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**fuzz_crash_066.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
 
 
 **MALFORMED TYPE**
@@ -50,16 +36,19 @@ C:[0]
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:13),OpColonEqual(1:14-1:16),OpenCurly(1:17-1:18),CloseCurly(1:18-1:19),
 UpperIdent(3:1-3:2),OpColon(3:2-3:3),OpenSquare(3:3-3:4),Int(3:4-3:5),CloseSquare(3:5-3:6),
 EndOfFile(4:1-4:1),
 ~~~
 # PARSE
 ~~~clojure
 (file @1.1-3.6
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.13)
 	(statements
+		(s-type-decl @1.1-1.19
+			(header @1.1-1.13 (name "FuzzCrash066")
+				(args))
+			(ty-record @1.17-1.19))
 		(s-type-decl @3.1-3.6
 			(header @3.1-3.2 (name "C")
 				(args))
@@ -69,13 +58,16 @@ EndOfFile(4:1-4:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
+FuzzCrash066 := {}
 
 C : []
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(s-nominal-decl @1.1-1.19
+		(ty-header @1.1-1.13 (name "FuzzCrash066"))
+		(ty-record @1.17-1.19))
 	(s-alias-decl @3.1-3.6
 		(ty-header @3.1-3.2 (name "C"))
 		(ty-tag-union @3.3-3.6
@@ -86,6 +78,8 @@ C : []
 (inferred-types
 	(defs)
 	(type_decls
+		(nominal @1.1-1.19 (type "FuzzCrash066")
+			(ty-header @1.1-1.13 (name "FuzzCrash066")))
 		(alias @3.1-3.6 (type "C")
 			(ty-header @3.1-3.2 (name "C"))))
 	(expressions))

@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Lambda currying with polymorphic function constraints - tests if numeric literals in curried functions get properly constrained
-type=file
+type=file:LambdaCurryingConstraint.roc
 ~~~
 # SOURCE
 ~~~roc
-module [makeAdder, curriedAdd, applyTwice]
+LambdaCurryingConstraint := {}
 
 # Function that returns a function with polymorphic type
 makeAdder : a -> (a -> a)
@@ -24,24 +24,12 @@ addThreeTwice : I64 -> I64
 addThreeTwice = |n| applyTwice(|x| x + 3, n)
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - lambda_currying_constraint.md:1:1:1:43
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**lambda_currying_constraint.md:1:1:1:43:**
-```roc
-module [makeAdder, curriedAdd, applyTwice]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:18),Comma(1:18-1:19),LowerIdent(1:20-1:30),Comma(1:30-1:31),LowerIdent(1:32-1:42),CloseSquare(1:42-1:43),
+UpperIdent(1:1-1:25),OpColonEqual(1:26-1:28),OpenCurly(1:29-1:30),CloseCurly(1:30-1:31),
 LowerIdent(4:1-4:10),OpColon(4:11-4:12),LowerIdent(4:13-4:14),OpArrow(4:15-4:17),OpenRound(4:18-4:19),LowerIdent(4:19-4:20),OpArrow(4:21-4:23),LowerIdent(4:24-4:25),CloseRound(4:25-4:26),
 LowerIdent(5:1-5:10),OpAssign(5:11-5:12),OpBar(5:13-5:14),LowerIdent(5:14-5:15),OpBar(5:15-5:16),OpBar(5:17-5:18),LowerIdent(5:18-5:19),OpBar(5:19-5:20),LowerIdent(5:21-5:22),OpPlus(5:23-5:24),LowerIdent(5:25-5:26),
 LowerIdent(8:1-8:11),OpColon(8:12-8:13),UpperIdent(8:14-8:17),OpArrow(8:18-8:20),UpperIdent(8:21-8:24),
@@ -55,15 +43,12 @@ EndOfFile(18:1-18:1),
 # PARSE
 ~~~clojure
 (file @1.1-17.45
-	(module @1.1-1.43
-		(exposes @1.8-1.43
-			(exposed-lower-ident @1.9-1.18
-				(text "makeAdder"))
-			(exposed-lower-ident @1.20-1.30
-				(text "curriedAdd"))
-			(exposed-lower-ident @1.32-1.42
-				(text "applyTwice"))))
+	(type-module @1.1-1.25)
 	(statements
+		(s-type-decl @1.1-1.31
+			(header @1.1-1.25 (name "LambdaCurryingConstraint")
+				(args))
+			(ty-record @1.29-1.31))
 		(s-type-anno @4.1-4.26 (name "makeAdder")
 			(ty-fn @4.13-4.26
 				(ty-var @4.13-4.14 (raw "a"))
@@ -216,7 +201,10 @@ NO CHANGE
 			(declared-type
 				(ty-fn @16.17-16.27 (effectful false)
 					(ty-lookup @16.17-16.20 (name "I64") (builtin))
-					(ty-lookup @16.24-16.27 (name "I64") (builtin)))))))
+					(ty-lookup @16.24-16.27 (name "I64") (builtin))))))
+	(s-nominal-decl @1.1-1.31
+		(ty-header @1.1-1.25 (name "LambdaCurryingConstraint"))
+		(ty-record @1.29-1.31)))
 ~~~
 # TYPES
 ~~~clojure
@@ -226,6 +214,9 @@ NO CHANGE
 		(patt @9.1-9.11 (type "Num(Int(Signed64)) -> Num(Int(Signed64))"))
 		(patt @13.1-13.11 (type "a -> a, a -> a"))
 		(patt @17.1-17.14 (type "Num(Int(Signed64)) -> Num(Int(Signed64))")))
+	(type_decls
+		(nominal @1.1-1.31 (type "LambdaCurryingConstraint")
+			(ty-header @1.1-1.25 (name "LambdaCurryingConstraint"))))
 	(expressions
 		(expr @5.13-5.26 (type "a -> a -> a"))
 		(expr @9.14-9.26 (type "Num(Int(Signed64)) -> Num(Int(Signed64))"))

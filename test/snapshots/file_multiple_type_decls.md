@@ -1,35 +1,23 @@
 # META
 ~~~ini
 description=Multiple unqualified type declarations
-type=file
+type=file:FileMultipleTypeDecls.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+FileMultipleTypeDecls := {}
 
 FirstType : U64
 SecondType : Str
 ThirdType : List(U8)
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - file_multiple_type_decls.md:1:1:1:10
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**file_multiple_type_decls.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:22),OpColonEqual(1:23-1:25),OpenCurly(1:26-1:27),CloseCurly(1:27-1:28),
 UpperIdent(3:1-3:10),OpColon(3:11-3:12),UpperIdent(3:13-3:16),
 UpperIdent(4:1-4:11),OpColon(4:12-4:13),UpperIdent(4:14-4:17),
 UpperIdent(5:1-5:10),OpColon(5:11-5:12),UpperIdent(5:13-5:17),NoSpaceOpenRound(5:17-5:18),UpperIdent(5:18-5:20),CloseRound(5:20-5:21),
@@ -38,9 +26,12 @@ EndOfFile(6:1-6:1),
 # PARSE
 ~~~clojure
 (file @1.1-5.21
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.22)
 	(statements
+		(s-type-decl @1.1-1.28
+			(header @1.1-1.22 (name "FileMultipleTypeDecls")
+				(args))
+			(ty-record @1.26-1.28))
 		(s-type-decl @3.1-3.16
 			(header @3.1-3.10 (name "FirstType")
 				(args))
@@ -63,6 +54,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(s-nominal-decl @1.1-1.28
+		(ty-header @1.1-1.22 (name "FileMultipleTypeDecls"))
+		(ty-record @1.26-1.28))
 	(s-alias-decl @3.1-3.16
 		(ty-header @3.1-3.10 (name "FirstType"))
 		(ty-lookup @3.13-3.16 (name "U64") (builtin)))
@@ -79,6 +73,8 @@ NO CHANGE
 (inferred-types
 	(defs)
 	(type_decls
+		(nominal @1.1-1.28 (type "FileMultipleTypeDecls")
+			(ty-header @1.1-1.22 (name "FileMultipleTypeDecls")))
 		(alias @3.1-3.16 (type "FirstType")
 			(ty-header @3.1-3.10 (name "FirstType")))
 		(alias @4.1-4.17 (type "SecondType")

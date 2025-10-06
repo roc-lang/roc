@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Comprehensive type scope validation - built-ins, user types, redeclaration, forward refs
-type=file
+type=file:TypeComprehensiveScope.roc
 ~~~
 # SOURCE
 ~~~roc
-module [MyU64, Person, Result, Tree, Node]
+TypeComprehensiveScope := {}
 
 # Built-in types should work
 MyU64 : U64
@@ -45,26 +45,12 @@ Complex : {
 }
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - type_comprehensive_scope.md:1:1:1:43
 TYPE REDECLARED - type_comprehensive_scope.md:12:1:12:37
 UNDECLARED TYPE - type_comprehensive_scope.md:15:19:15:23
 TYPE REDECLARED - type_comprehensive_scope.md:24:1:24:13
 UNDECLARED TYPE - type_comprehensive_scope.md:27:11:27:29
 UNDECLARED TYPE - type_comprehensive_scope.md:31:10:31:14
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**type_comprehensive_scope.md:1:1:1:43:**
-```roc
-module [MyU64, Person, Result, Tree, Node]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 **TYPE REDECLARED**
 The type _Result_ is being redeclared.
 
@@ -78,7 +64,7 @@ Result(ok, err) : [Ok(ok), Err(err)]
 But _Result_ was already declared here:
 **type_comprehensive_scope.md:1:1:1:1:**
 ```roc
-module [MyU64, Person, Result, Tree, Node]
+TypeComprehensiveScope := {}
 ```
 ^
 
@@ -136,7 +122,7 @@ MyDict : Dict(Str, U64)
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:14),Comma(1:14-1:15),UpperIdent(1:16-1:22),Comma(1:22-1:23),UpperIdent(1:24-1:30),Comma(1:30-1:31),UpperIdent(1:32-1:36),Comma(1:36-1:37),UpperIdent(1:38-1:42),CloseSquare(1:42-1:43),
+UpperIdent(1:1-1:23),OpColonEqual(1:24-1:26),OpenCurly(1:27-1:28),CloseCurly(1:28-1:29),
 UpperIdent(4:1-4:6),OpColon(4:7-4:8),UpperIdent(4:9-4:12),
 UpperIdent(5:1-5:9),OpColon(5:10-5:11),UpperIdent(5:12-5:15),
 UpperIdent(6:1-6:7),OpColon(6:8-6:9),UpperIdent(6:10-6:14),
@@ -159,14 +145,12 @@ EndOfFile(39:1-39:1),
 # PARSE
 ~~~clojure
 (file @1.1-38.2
-	(module @1.1-1.43
-		(exposes @1.8-1.43
-			(exposed-upper-ident @1.9-1.14 (text "MyU64"))
-			(exposed-upper-ident @1.16-1.22 (text "Person"))
-			(exposed-upper-ident @1.24-1.30 (text "Result"))
-			(exposed-upper-ident @1.32-1.36 (text "Tree"))
-			(exposed-upper-ident @1.38-1.42 (text "Node"))))
+	(type-module @1.1-1.23)
 	(statements
+		(s-type-decl @1.1-1.29
+			(header @1.1-1.23 (name "TypeComprehensiveScope")
+				(args))
+			(ty-record @1.27-1.29))
 		(s-type-decl @4.1-4.12
 			(header @4.1-4.6 (name "MyU64")
 				(args))
@@ -273,7 +257,7 @@ EndOfFile(39:1-39:1),
 ~~~
 # FORMATTED
 ~~~roc
-module [MyU64, Person, Result, Tree, Node]
+TypeComprehensiveScope := {}
 
 # Built-in types should work
 MyU64 : U64
@@ -315,6 +299,9 @@ Complex : {
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(s-nominal-decl @1.1-1.29
+		(ty-header @1.1-1.23 (name "TypeComprehensiveScope"))
+		(ty-record @1.27-1.29))
 	(s-alias-decl @4.1-4.12
 		(ty-header @4.1-4.6 (name "MyU64"))
 		(ty-lookup @4.9-4.12 (name "U64") (builtin)))
@@ -397,6 +384,8 @@ Complex : {
 (inferred-types
 	(defs)
 	(type_decls
+		(nominal @1.1-1.29 (type "TypeComprehensiveScope")
+			(ty-header @1.1-1.23 (name "TypeComprehensiveScope")))
 		(alias @4.1-4.12 (type "MyU64")
 			(ty-header @4.1-4.6 (name "MyU64")))
 		(alias @5.1-5.15 (type "MyString")

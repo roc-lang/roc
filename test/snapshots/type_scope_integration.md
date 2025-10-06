@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Type declaration scope integration - redeclaration and undeclared type errors
-type=file
+type=file:TypeScopeIntegration.roc
 ~~~
 # SOURCE
 ~~~roc
-module [Foo, Bar]
+TypeScopeIntegration := {}
 
 # First declare a type
 Foo : U64
@@ -20,23 +20,9 @@ Bar : SomeUndeclaredType
 Baz : Foo
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - type_scope_integration.md:1:1:1:18
 TYPE REDECLARED - type_scope_integration.md:7:1:7:10
 UNDECLARED TYPE - type_scope_integration.md:10:7:10:25
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**type_scope_integration.md:1:1:1:18:**
-```roc
-module [Foo, Bar]
-```
-^^^^^^^^^^^^^^^^^
-
-
 **TYPE REDECLARED**
 The type _Foo_ is being redeclared.
 
@@ -68,7 +54,7 @@ Bar : SomeUndeclaredType
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:12),Comma(1:12-1:13),UpperIdent(1:14-1:17),CloseSquare(1:17-1:18),
+UpperIdent(1:1-1:21),OpColonEqual(1:22-1:24),OpenCurly(1:25-1:26),CloseCurly(1:26-1:27),
 UpperIdent(4:1-4:4),OpColon(4:5-4:6),UpperIdent(4:7-4:10),
 UpperIdent(7:1-7:4),OpColon(7:5-7:6),UpperIdent(7:7-7:10),
 UpperIdent(10:1-10:4),OpColon(10:5-10:6),UpperIdent(10:7-10:25),
@@ -78,11 +64,12 @@ EndOfFile(14:1-14:1),
 # PARSE
 ~~~clojure
 (file @1.1-13.10
-	(module @1.1-1.18
-		(exposes @1.8-1.18
-			(exposed-upper-ident @1.9-1.12 (text "Foo"))
-			(exposed-upper-ident @1.14-1.17 (text "Bar"))))
+	(type-module @1.1-1.21)
 	(statements
+		(s-type-decl @1.1-1.27
+			(header @1.1-1.21 (name "TypeScopeIntegration")
+				(args))
+			(ty-record @1.25-1.27))
 		(s-type-decl @4.1-4.10
 			(header @4.1-4.4 (name "Foo")
 				(args))
@@ -107,6 +94,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(s-nominal-decl @1.1-1.27
+		(ty-header @1.1-1.21 (name "TypeScopeIntegration"))
+		(ty-record @1.25-1.27))
 	(s-alias-decl @4.1-4.10
 		(ty-header @4.1-4.4 (name "Foo"))
 		(ty-lookup @4.7-4.10 (name "U64") (builtin)))
@@ -125,6 +115,8 @@ NO CHANGE
 (inferred-types
 	(defs)
 	(type_decls
+		(nominal @1.1-1.27 (type "TypeScopeIntegration")
+			(ty-header @1.1-1.21 (name "TypeScopeIntegration")))
 		(alias @4.1-4.10 (type "Foo")
 			(ty-header @4.1-4.4 (name "Foo")))
 		(alias @7.1-7.10 (type "Foo")

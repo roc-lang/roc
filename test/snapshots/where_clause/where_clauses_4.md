@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=where_clauses (4)
-type=file
+type=file:WhereClauses4.roc
 ~~~
 # SOURCE
 ~~~roc
-module [decodeThings]
+WhereClauses4 := {}
 
 import Decode exposing [Decode]
 
@@ -14,22 +14,8 @@ decodeThings : List(List(U8)) -> List(a)
 decodeThings = ...
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - where_clauses_4.md:1:1:1:22
 MODULE NOT FOUND - where_clauses_4.md:3:1:3:32
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**where_clauses_4.md:1:1:1:22:**
-```roc
-module [decodeThings]
-```
-^^^^^^^^^^^^^^^^^^^^^
-
-
 **MODULE NOT FOUND**
 The module `Decode` was not found in this Roc project.
 
@@ -43,7 +29,7 @@ import Decode exposing [Decode]
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:21),CloseSquare(1:21-1:22),
+UpperIdent(1:1-1:14),OpColonEqual(1:15-1:17),OpenCurly(1:18-1:19),CloseCurly(1:19-1:20),
 KwImport(3:1-3:7),UpperIdent(3:8-3:14),KwExposing(3:15-3:23),OpenSquare(3:24-3:25),UpperIdent(3:25-3:31),CloseSquare(3:31-3:32),
 LowerIdent(5:1-5:13),OpColon(5:14-5:15),UpperIdent(5:16-5:20),NoSpaceOpenRound(5:20-5:21),UpperIdent(5:21-5:25),NoSpaceOpenRound(5:25-5:26),UpperIdent(5:26-5:28),CloseRound(5:28-5:29),CloseRound(5:29-5:30),OpArrow(5:31-5:33),UpperIdent(5:34-5:38),NoSpaceOpenRound(5:38-5:39),LowerIdent(5:39-5:40),CloseRound(5:40-5:41),
 KwWhere(6:2-6:7),KwModule(6:8-6:14),NoSpaceOpenRound(6:14-6:15),LowerIdent(6:15-6:16),CloseRound(6:16-6:17),NoSpaceDotUpperIdent(6:17-6:24),
@@ -53,11 +39,12 @@ EndOfFile(8:1-8:1),
 # PARSE
 ~~~clojure
 (file @1.1-7.19
-	(module @1.1-1.22
-		(exposes @1.8-1.22
-			(exposed-lower-ident @1.9-1.21
-				(text "decodeThings"))))
+	(type-module @1.1-1.14)
 	(statements
+		(s-type-decl @1.1-1.20
+			(header @1.1-1.14 (name "WhereClauses4")
+				(args))
+			(ty-record @1.18-1.20))
 		(s-import @3.1-3.32 (raw "Decode")
 			(exposing
 				(exposed-upper-ident @3.25-3.31 (text "Decode"))))
@@ -95,6 +82,9 @@ NO CHANGE
 							(ty-lookup @5.26-5.28 (name "U8") (builtin))))
 					(ty-apply @5.34-5.41 (name "List") (builtin)
 						(ty-rigid-var @5.39-5.40 (name "a")))))))
+	(s-nominal-decl @1.1-1.20
+		(ty-header @1.1-1.14 (name "WhereClauses4"))
+		(ty-record @1.18-1.20))
 	(s-import @3.1-3.32 (module "Decode")
 		(exposes
 			(exposed (name "Decode") (wildcard false))))
@@ -114,6 +104,9 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @7.1-7.13 (type "List(List(Num(Int(Unsigned8)))) -> List(a)")))
+	(type_decls
+		(nominal @1.1-1.20 (type "WhereClauses4")
+			(ty-header @1.1-1.14 (name "WhereClauses4"))))
 	(expressions
 		(expr @1.1-1.1 (type "List(List(Num(Int(Unsigned8)))) -> List(a)"))))
 ~~~

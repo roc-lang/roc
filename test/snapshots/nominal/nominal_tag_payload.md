@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Example of a nominal tag union with a payload
-type=file
+type=file:NominalTagPayload.roc
 ~~~
 # SOURCE
 ~~~roc
-module [Maybe, some1, none1, some2, none2]
+NominalTagPayload := {}
 
 Maybe(a) := [Some(a), None]
 
@@ -20,24 +20,12 @@ some2 = |a| Maybe.Some(a)
 none2 = Maybe.None
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - nominal_tag_payload.md:1:1:1:43
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**nominal_tag_payload.md:1:1:1:43:**
-```roc
-module [Maybe, some1, none1, some2, none2]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:14),Comma(1:14-1:15),LowerIdent(1:16-1:21),Comma(1:21-1:22),LowerIdent(1:23-1:28),Comma(1:28-1:29),LowerIdent(1:30-1:35),Comma(1:35-1:36),LowerIdent(1:37-1:42),CloseSquare(1:42-1:43),
+UpperIdent(1:1-1:18),OpColonEqual(1:19-1:21),OpenCurly(1:22-1:23),CloseCurly(1:23-1:24),
 UpperIdent(3:1-3:6),NoSpaceOpenRound(3:6-3:7),LowerIdent(3:7-3:8),CloseRound(3:8-3:9),OpColonEqual(3:10-3:12),OpenSquare(3:13-3:14),UpperIdent(3:14-3:18),NoSpaceOpenRound(3:18-3:19),LowerIdent(3:19-3:20),CloseRound(3:20-3:21),Comma(3:21-3:22),UpperIdent(3:23-3:27),CloseSquare(3:27-3:28),
 LowerIdent(5:1-5:6),OpColon(5:7-5:8),LowerIdent(5:9-5:10),OpArrow(5:11-5:13),UpperIdent(5:14-5:19),NoSpaceOpenRound(5:19-5:20),LowerIdent(5:20-5:21),CloseRound(5:21-5:22),
 LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),LowerIdent(6:10-6:11),OpBar(6:11-6:12),UpperIdent(6:13-6:18),NoSpaceDotUpperIdent(6:18-6:23),NoSpaceOpenRound(6:23-6:24),LowerIdent(6:24-6:25),CloseRound(6:25-6:26),
@@ -50,18 +38,12 @@ EndOfFile(14:1-14:1),
 # PARSE
 ~~~clojure
 (file @1.1-13.19
-	(module @1.1-1.43
-		(exposes @1.8-1.43
-			(exposed-upper-ident @1.9-1.14 (text "Maybe"))
-			(exposed-lower-ident @1.16-1.21
-				(text "some1"))
-			(exposed-lower-ident @1.23-1.28
-				(text "none1"))
-			(exposed-lower-ident @1.30-1.35
-				(text "some2"))
-			(exposed-lower-ident @1.37-1.42
-				(text "none2"))))
+	(type-module @1.1-1.18)
 	(statements
+		(s-type-decl @1.1-1.24
+			(header @1.1-1.18 (name "NominalTagPayload")
+				(args))
+			(ty-record @1.22-1.24))
 		(s-type-decl @3.1-3.28
 			(header @3.1-3.9 (name "Maybe")
 				(args
@@ -150,6 +132,9 @@ NO CHANGE
 		(p-assign @13.1-13.6 (ident "none2"))
 		(e-nominal @13.9-13.19 (nominal "Maybe")
 			(e-tag @13.9-13.19 (name "None"))))
+	(s-nominal-decl @1.1-1.24
+		(ty-header @1.1-1.18 (name "NominalTagPayload"))
+		(ty-record @1.22-1.24))
 	(s-nominal-decl @3.1-3.28
 		(ty-header @3.1-3.9 (name "Maybe")
 			(ty-args
@@ -168,6 +153,8 @@ NO CHANGE
 		(patt @11.1-11.6 (type "a -> Maybe(a)"))
 		(patt @13.1-13.6 (type "Maybe(a)")))
 	(type_decls
+		(nominal @1.1-1.24 (type "NominalTagPayload")
+			(ty-header @1.1-1.18 (name "NominalTagPayload")))
 		(nominal @3.1-3.28 (type "Maybe(a)")
 			(ty-header @3.1-3.9 (name "Maybe")
 				(ty-args

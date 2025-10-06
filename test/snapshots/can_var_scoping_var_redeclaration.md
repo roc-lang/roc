@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Variable scoping with var keyword
-type=file
+type=file:CanVarScopingVarRedeclaration.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+CanVarScopingVarRedeclaration := {}
 
 # Test var redeclaration (should produce shadowing warning)
 redeclareTest = |_| {
@@ -18,22 +18,8 @@ redeclareTest = |_| {
 result = redeclareTest({})
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - can_var_scoping_var_redeclaration.md:1:1:1:10
 DUPLICATE DEFINITION - can_var_scoping_var_redeclaration.md:6:2:6:13
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**can_var_scoping_var_redeclaration.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **DUPLICATE DEFINITION**
 The name `x_` is being redeclared in this scope.
 
@@ -54,7 +40,7 @@ But `x_` was already defined here:
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:30),OpColonEqual(1:31-1:33),OpenCurly(1:34-1:35),CloseCurly(1:35-1:36),
 LowerIdent(4:1-4:14),OpAssign(4:15-4:16),OpBar(4:17-4:18),Underscore(4:18-4:19),OpBar(4:19-4:20),OpenCurly(4:21-4:22),
 KwVar(5:2-5:5),LowerIdent(5:6-5:8),OpAssign(5:9-5:10),Int(5:11-5:12),
 KwVar(6:2-6:5),LowerIdent(6:6-6:8),OpAssign(6:9-6:10),Int(6:11-6:13),
@@ -67,9 +53,12 @@ EndOfFile(12:1-12:1),
 # PARSE
 ~~~clojure
 (file @1.1-11.27
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.30)
 	(statements
+		(s-type-decl @1.1-1.36
+			(header @1.1-1.30 (name "CanVarScopingVarRedeclaration")
+				(args))
+			(ty-record @1.34-1.36))
 		(s-decl @4.1-9.2
 			(p-ident @4.1-4.14 (raw "redeclareTest"))
 			(e-lambda @4.17-9.2
@@ -120,7 +109,10 @@ NO CHANGE
 		(e-call @11.10-11.27
 			(e-lookup-local @11.10-11.23
 				(p-assign @4.1-4.14 (ident "redeclareTest")))
-			(e-empty_record @11.24-11.26))))
+			(e-empty_record @11.24-11.26)))
+	(s-nominal-decl @1.1-1.36
+		(ty-header @1.1-1.30 (name "CanVarScopingVarRedeclaration"))
+		(ty-record @1.34-1.36)))
 ~~~
 # TYPES
 ~~~clojure
@@ -128,6 +120,9 @@ NO CHANGE
 	(defs
 		(patt @4.1-4.14 (type "_arg -> Num(_size)"))
 		(patt @11.1-11.7 (type "Num(_size)")))
+	(type_decls
+		(nominal @1.1-1.36 (type "CanVarScopingVarRedeclaration")
+			(ty-header @1.1-1.30 (name "CanVarScopingVarRedeclaration"))))
 	(expressions
 		(expr @4.17-9.2 (type "_arg -> Num(_size)"))
 		(expr @11.10-11.27 (type "Num(_size)"))))

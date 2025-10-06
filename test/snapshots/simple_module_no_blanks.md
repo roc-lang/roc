@@ -1,32 +1,18 @@
 # META
 ~~~ini
 description=A simple module with no blanks
-type=file
+type=file:SimpleModuleNoBlanks.roc
 ~~~
 # SOURCE
 ~~~roc
-module [hello!, world]
+SimpleModuleNoBlanks := {}
 import pf.Stdout
 hello! = Stdout.line!("Hello")
 world = "World"
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - simple_module_no_blanks.md:1:1:1:23
 MODULE NOT FOUND - simple_module_no_blanks.md:2:1:2:17
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**simple_module_no_blanks.md:1:1:1:23:**
-```roc
-module [hello!, world]
-```
-^^^^^^^^^^^^^^^^^^^^^^
-
-
 **MODULE NOT FOUND**
 The module `pf.Stdout` was not found in this Roc project.
 
@@ -40,7 +26,7 @@ import pf.Stdout
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:15),Comma(1:15-1:16),LowerIdent(1:17-1:22),CloseSquare(1:22-1:23),
+UpperIdent(1:1-1:21),OpColonEqual(1:22-1:24),OpenCurly(1:25-1:26),CloseCurly(1:26-1:27),
 KwImport(2:1-2:7),LowerIdent(2:8-2:10),NoSpaceDotUpperIdent(2:10-2:17),
 LowerIdent(3:1-3:7),OpAssign(3:8-3:9),UpperIdent(3:10-3:16),NoSpaceDotLowerIdent(3:16-3:22),NoSpaceOpenRound(3:22-3:23),StringStart(3:23-3:24),StringPart(3:24-3:29),StringEnd(3:29-3:30),CloseRound(3:30-3:31),
 LowerIdent(4:1-4:6),OpAssign(4:7-4:8),StringStart(4:9-4:10),StringPart(4:10-4:15),StringEnd(4:15-4:16),
@@ -49,13 +35,12 @@ EndOfFile(5:1-5:1),
 # PARSE
 ~~~clojure
 (file @1.1-4.16
-	(module @1.1-1.23
-		(exposes @1.8-1.23
-			(exposed-lower-ident @1.9-1.15
-				(text "hello!"))
-			(exposed-lower-ident @1.17-1.22
-				(text "world"))))
+	(type-module @1.1-1.21)
 	(statements
+		(s-type-decl @1.1-1.27
+			(header @1.1-1.21 (name "SimpleModuleNoBlanks")
+				(args))
+			(ty-record @1.25-1.27))
 		(s-import @2.1-2.17 (raw "pf.Stdout"))
 		(s-decl @3.1-3.31
 			(p-ident @3.1-3.7 (raw "hello!"))
@@ -87,6 +72,9 @@ NO CHANGE
 		(p-assign @4.1-4.6 (ident "world"))
 		(e-string @4.9-4.16
 			(e-literal @4.10-4.15 (string "World"))))
+	(s-nominal-decl @1.1-1.27
+		(ty-header @1.1-1.21 (name "SimpleModuleNoBlanks"))
+		(ty-record @1.25-1.27))
 	(s-import @2.1-2.17 (module "pf.Stdout") (qualifier "pf")
 		(exposes)))
 ~~~
@@ -96,6 +84,9 @@ NO CHANGE
 	(defs
 		(patt @3.1-3.7 (type "_a"))
 		(patt @4.1-4.6 (type "Str")))
+	(type_decls
+		(nominal @1.1-1.27 (type "SimpleModuleNoBlanks")
+			(ty-header @1.1-1.21 (name "SimpleModuleNoBlanks"))))
 	(expressions
 		(expr @3.10-3.31 (type "_a"))
 		(expr @4.9-4.16 (type "Str"))))

@@ -1,32 +1,18 @@
 # META
 ~~~ini
 description=Type redeclaration in same scope should produce error
-type=file
+type=file:TypeRedeclarationSameScope.roc
 ~~~
 # SOURCE
 ~~~roc
-module [Maybe]
+TypeRedeclarationSameScope := {}
 
 Maybe(a) : [Some(a), None]
 Maybe(a) : [Ok(a), Err]
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - type_redeclaration_same_scope.md:1:1:1:15
 TYPE REDECLARED - type_redeclaration_same_scope.md:4:1:4:24
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**type_redeclaration_same_scope.md:1:1:1:15:**
-```roc
-module [Maybe]
-```
-^^^^^^^^^^^^^^
-
-
 **TYPE REDECLARED**
 The type _Maybe_ is being redeclared.
 
@@ -47,7 +33,7 @@ Maybe(a) : [Some(a), None]
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:14),CloseSquare(1:14-1:15),
+UpperIdent(1:1-1:27),OpColonEqual(1:28-1:30),OpenCurly(1:31-1:32),CloseCurly(1:32-1:33),
 UpperIdent(3:1-3:6),NoSpaceOpenRound(3:6-3:7),LowerIdent(3:7-3:8),CloseRound(3:8-3:9),OpColon(3:10-3:11),OpenSquare(3:12-3:13),UpperIdent(3:13-3:17),NoSpaceOpenRound(3:17-3:18),LowerIdent(3:18-3:19),CloseRound(3:19-3:20),Comma(3:20-3:21),UpperIdent(3:22-3:26),CloseSquare(3:26-3:27),
 UpperIdent(4:1-4:6),NoSpaceOpenRound(4:6-4:7),LowerIdent(4:7-4:8),CloseRound(4:8-4:9),OpColon(4:10-4:11),OpenSquare(4:12-4:13),UpperIdent(4:13-4:15),NoSpaceOpenRound(4:15-4:16),LowerIdent(4:16-4:17),CloseRound(4:17-4:18),Comma(4:18-4:19),UpperIdent(4:20-4:23),CloseSquare(4:23-4:24),
 EndOfFile(5:1-5:1),
@@ -55,10 +41,12 @@ EndOfFile(5:1-5:1),
 # PARSE
 ~~~clojure
 (file @1.1-4.24
-	(module @1.1-1.15
-		(exposes @1.8-1.15
-			(exposed-upper-ident @1.9-1.14 (text "Maybe"))))
+	(type-module @1.1-1.27)
 	(statements
+		(s-type-decl @1.1-1.33
+			(header @1.1-1.27 (name "TypeRedeclarationSameScope")
+				(args))
+			(ty-record @1.31-1.33))
 		(s-type-decl @3.1-3.27
 			(header @3.1-3.9 (name "Maybe")
 				(args
@@ -87,6 +75,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(s-nominal-decl @1.1-1.33
+		(ty-header @1.1-1.27 (name "TypeRedeclarationSameScope"))
+		(ty-record @1.31-1.33))
 	(s-alias-decl @3.1-3.27
 		(ty-header @3.1-3.9 (name "Maybe")
 			(ty-args
@@ -109,6 +100,8 @@ NO CHANGE
 (inferred-types
 	(defs)
 	(type_decls
+		(nominal @1.1-1.33 (type "TypeRedeclarationSameScope")
+			(ty-header @1.1-1.27 (name "TypeRedeclarationSameScope")))
 		(alias @3.1-3.27 (type "Maybe(a)")
 			(ty-header @3.1-3.9 (name "Maybe")
 				(ty-args

@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Nested module qualification
-type=file
+type=file:CanImportNestedModules.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+CanImportNestedModules := {}
 
 import json.Parser.Config
 import http.Client.Auth as HttpAuth
@@ -44,7 +44,6 @@ PARSE ERROR - can_import_nested_modules.md:5:28:5:36
 PARSE ERROR - can_import_nested_modules.md:5:37:5:38
 PARSE ERROR - can_import_nested_modules.md:5:38:5:45
 PARSE ERROR - can_import_nested_modules.md:5:45:5:46
-MODULE HEADER DEPRECATED - can_import_nested_modules.md:1:1:1:10
 MODULE NOT FOUND - can_import_nested_modules.md:3:1:3:19
 MODULE NOT FOUND - can_import_nested_modules.md:4:1:4:19
 MODULE NOT IMPORTED - can_import_nested_modules.md:8:15:8:30
@@ -194,19 +193,6 @@ import utils.String.Format exposing [padLeft]
                                             ^
 
 
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**can_import_nested_modules.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **MODULE NOT FOUND**
 The module `json.Parser` was not found in this Roc project.
 
@@ -274,7 +260,7 @@ authenticate = |user, pass| HttpAuth.login(user, pass)
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `module []
+There is no module with the name `CanImportNestedModules := {}
 
 import json.Parser.Config
 import http.Client.Auth as HttpAuth
@@ -300,7 +286,7 @@ processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `module []
+There is no module with the name `CanImportNestedModules := {}
 
 import json.Parser.Config
 import http.Client.Auth as HttpAuth
@@ -404,7 +390,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:23),OpColonEqual(1:24-1:26),OpenCurly(1:27-1:28),CloseCurly(1:28-1:29),
 KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:19),NoSpaceDotUpperIdent(3:19-3:26),
 KwImport(4:1-4:7),LowerIdent(4:8-4:12),NoSpaceDotUpperIdent(4:12-4:19),NoSpaceDotUpperIdent(4:19-4:24),KwAs(4:25-4:27),UpperIdent(4:28-4:36),
 KwImport(5:1-5:7),LowerIdent(5:8-5:13),NoSpaceDotUpperIdent(5:13-5:20),NoSpaceDotUpperIdent(5:20-5:27),KwExposing(5:28-5:36),OpenSquare(5:37-5:38),LowerIdent(5:38-5:45),CloseSquare(5:45-5:46),
@@ -424,9 +410,12 @@ EndOfFile(27:1-27:1),
 # PARSE
 ~~~clojure
 (file @1.1-26.48
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.23)
 	(statements
+		(s-type-decl @1.1-1.29
+			(header @1.1-1.23 (name "CanImportNestedModules")
+				(args))
+			(ty-record @1.27-1.29))
 		(s-import @3.1-3.19 (raw "json.Parser"))
 		(s-malformed @3.19-3.26 (tag "statement_unexpected_token"))
 		(s-import @4.1-4.19 (raw "http.Client"))
@@ -516,7 +505,7 @@ EndOfFile(27:1-27:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
+CanImportNestedModules := {}
 
 import json.Parser
 
@@ -631,6 +620,9 @@ validateAuth = |creds| HttpAuth.validate(creds)
 					(ty-apply @25.40-25.78 (name "Result") (local)
 						(ty-malformed @25.40-25.78)
 						(ty-malformed @25.40-25.78))))))
+	(s-nominal-decl @1.1-1.29
+		(ty-header @1.1-1.23 (name "CanImportNestedModules"))
+		(ty-record @1.27-1.29))
 	(s-import @3.1-3.19 (module "json.Parser") (qualifier "json")
 		(exposes))
 	(s-import @4.1-4.19 (module "http.Client") (qualifier "http")
@@ -645,6 +637,9 @@ validateAuth = |creds| HttpAuth.validate(creds)
 		(patt @17.1-17.12 (type "Error, Str -> Result(Str, Error)"))
 		(patt @22.1-22.13 (type "Str -> Str"))
 		(patt @26.1-26.13 (type "Error -> Result(Error, Error)")))
+	(type_decls
+		(nominal @1.1-1.29 (type "CanImportNestedModules")
+			(ty-header @1.1-1.23 (name "CanImportNestedModules"))))
 	(expressions
 		(expr @9.15-9.51 (type "Error -> Str"))
 		(expr @13.16-13.55 (type "Str, Str -> Error"))

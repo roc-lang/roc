@@ -1,34 +1,22 @@
 # META
 ~~~ini
 description=Simple test for built-in types in scope
-type=file
+type=file:TypeBuiltin.roc
 ~~~
 # SOURCE
 ~~~roc
-module [MyNumber, MyString]
+TypeBuiltin := {}
 
 MyNumber : U64
 MyString : Str
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - type_builtin.md:1:1:1:28
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**type_builtin.md:1:1:1:28:**
-```roc
-module [MyNumber, MyString]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),Comma(1:17-1:18),UpperIdent(1:19-1:27),CloseSquare(1:27-1:28),
+UpperIdent(1:1-1:12),OpColonEqual(1:13-1:15),OpenCurly(1:16-1:17),CloseCurly(1:17-1:18),
 UpperIdent(3:1-3:9),OpColon(3:10-3:11),UpperIdent(3:12-3:15),
 UpperIdent(4:1-4:9),OpColon(4:10-4:11),UpperIdent(4:12-4:15),
 EndOfFile(5:1-5:1),
@@ -36,11 +24,12 @@ EndOfFile(5:1-5:1),
 # PARSE
 ~~~clojure
 (file @1.1-4.15
-	(module @1.1-1.28
-		(exposes @1.8-1.28
-			(exposed-upper-ident @1.9-1.17 (text "MyNumber"))
-			(exposed-upper-ident @1.19-1.27 (text "MyString"))))
+	(type-module @1.1-1.12)
 	(statements
+		(s-type-decl @1.1-1.18
+			(header @1.1-1.12 (name "TypeBuiltin")
+				(args))
+			(ty-record @1.16-1.18))
 		(s-type-decl @3.1-3.15
 			(header @3.1-3.9 (name "MyNumber")
 				(args))
@@ -57,6 +46,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(s-nominal-decl @1.1-1.18
+		(ty-header @1.1-1.12 (name "TypeBuiltin"))
+		(ty-record @1.16-1.18))
 	(s-alias-decl @3.1-3.15
 		(ty-header @3.1-3.9 (name "MyNumber"))
 		(ty-lookup @3.12-3.15 (name "U64") (builtin)))
@@ -69,6 +61,8 @@ NO CHANGE
 (inferred-types
 	(defs)
 	(type_decls
+		(nominal @1.1-1.18 (type "TypeBuiltin")
+			(ty-header @1.1-1.12 (name "TypeBuiltin")))
 		(alias @3.1-3.15 (type "MyNumber")
 			(ty-header @3.1-3.9 (name "MyNumber")))
 		(alias @4.1-4.15 (type "MyString")

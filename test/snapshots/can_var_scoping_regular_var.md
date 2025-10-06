@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Variable scoping with var keyword
-type=file
+type=file:CanVarScopingRegularVar.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+CanVarScopingRegularVar := {}
 
 # Regular function with var usage
 processItems = |items| {
@@ -28,24 +28,10 @@ processItems = |items| {
 }
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - can_var_scoping_regular_var.md:1:1:1:10
 VAR REASSIGNMENT ERROR - :0:0:0:0
 VAR REASSIGNMENT ERROR - :0:0:0:0
 UNUSED VARIABLE - can_var_scoping_regular_var.md:4:17:4:22
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**can_var_scoping_regular_var.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **VAR REASSIGNMENT ERROR**
 Cannot reassign a `var` from outside the function where it was declared.
 Variables declared with `var` can only be reassigned within the same function scope.
@@ -68,7 +54,7 @@ processItems = |items| {
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:24),OpColonEqual(1:25-1:27),OpenCurly(1:28-1:29),CloseCurly(1:29-1:30),
 LowerIdent(4:1-4:13),OpAssign(4:14-4:15),OpBar(4:16-4:17),LowerIdent(4:17-4:22),OpBar(4:22-4:23),OpenCurly(4:24-4:25),
 KwVar(5:2-5:5),LowerIdent(5:6-5:12),OpAssign(5:13-5:14),Int(5:15-5:16),
 KwVar(6:2-6:5),LowerIdent(6:6-6:12),OpAssign(6:13-6:14),Int(6:15-6:16),
@@ -87,9 +73,12 @@ EndOfFile(22:1-22:1),
 # PARSE
 ~~~clojure
 (file @1.1-21.2
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.24)
 	(statements
+		(s-type-decl @1.1-1.30
+			(header @1.1-1.24 (name "CanVarScopingRegularVar")
+				(args))
+			(ty-record @1.28-1.30))
 		(s-decl @4.1-21.2
 			(p-ident @4.1-4.13 (raw "processItems"))
 			(e-lambda @4.16-21.2
@@ -196,13 +185,19 @@ NO CHANGE
 					(e-lookup-local @20.2-20.8
 						(p-assign @6.2-6.16 (ident "total_")))
 					(e-lookup-local @20.11-20.17
-						(p-assign @19.2-19.8 (ident "result"))))))))
+						(p-assign @19.2-19.8 (ident "result")))))))
+	(s-nominal-decl @1.1-1.30
+		(ty-header @1.1-1.24 (name "CanVarScopingRegularVar"))
+		(ty-record @1.28-1.30)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @4.1-4.13 (type "_arg -> Error")))
+	(type_decls
+		(nominal @1.1-1.30 (type "CanVarScopingRegularVar")
+			(ty-header @1.1-1.24 (name "CanVarScopingRegularVar"))))
 	(expressions
 		(expr @4.16-21.2 (type "_arg -> Error"))))
 ~~~

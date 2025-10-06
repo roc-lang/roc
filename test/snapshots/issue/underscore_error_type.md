@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Type declarations with underscores should become error types that fail unification
-type=file
+type=file:UnderscoreErrorType.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+UnderscoreErrorType := {}
 
 BadType := _
 
@@ -33,7 +33,6 @@ quux : BadTuple
 quux = ("hello", 42)
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - underscore_error_type.md:1:1:1:10
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:8:17:8:17
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:8:12:8:16
@@ -47,25 +46,12 @@ TYPE MISMATCH - underscore_error_type.md:16:7:16:32
 TYPE MISMATCH - underscore_error_type.md:21:7:21:12
 TYPE MISMATCH - underscore_error_type.md:26:8:26:21
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**underscore_error_type.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
 
 **underscore_error_type.md:1:1:1:1:**
 ```roc
-module []
+UnderscoreErrorType := {}
 ```
 ^
 
@@ -98,7 +84,7 @@ Underscores are not allowed in type alias declarations.
 
 **underscore_error_type.md:1:1:1:1:**
 ```roc
-module []
+UnderscoreErrorType := {}
 ```
 ^
 
@@ -109,7 +95,7 @@ Underscores are not allowed in type alias declarations.
 
 **underscore_error_type.md:1:1:1:1:**
 ```roc
-module []
+UnderscoreErrorType := {}
 ```
 ^
 
@@ -120,7 +106,7 @@ Underscores are not allowed in type alias declarations.
 
 **underscore_error_type.md:1:1:1:1:**
 ```roc
-module []
+UnderscoreErrorType := {}
 ```
 ^
 
@@ -209,7 +195,7 @@ But the type annotation says it should have the type:
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:20),OpColonEqual(1:21-1:23),OpenCurly(1:24-1:25),CloseCurly(1:25-1:26),
 UpperIdent(3:1-3:8),OpColonEqual(3:9-3:11),Underscore(3:12-3:13),
 LowerIdent(5:1-5:4),OpColon(5:5-5:6),UpperIdent(5:7-5:14),
 LowerIdent(6:1-6:4),OpAssign(6:5-6:6),Int(6:7-6:9),
@@ -230,9 +216,12 @@ EndOfFile(27:1-27:1),
 # PARSE
 ~~~clojure
 (file @1.1-26.21
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.20)
 	(statements
+		(s-type-decl @1.1-1.26
+			(header @1.1-1.20 (name "UnderscoreErrorType")
+				(args))
+			(ty-record @1.24-1.26))
 		(s-type-decl @3.1-3.13
 			(header @3.1-3.8 (name "BadType")
 				(args))
@@ -305,7 +294,7 @@ EndOfFile(27:1-27:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
+UnderscoreErrorType := {}
 
 BadType := _
 
@@ -383,6 +372,9 @@ quux = ("hello", 42)
 		(annotation @26.1-26.5
 			(declared-type
 				(ty-lookup @25.8-25.16 (name "BadTuple") (local)))))
+	(s-nominal-decl @1.1-1.26
+		(ty-header @1.1-1.20 (name "UnderscoreErrorType"))
+		(ty-record @1.24-1.26))
 	(s-nominal-decl @3.1-3.13
 		(ty-header @3.1-3.8 (name "BadType"))
 		(ty-underscore @1.1-1.1))
@@ -418,6 +410,8 @@ quux = ("hello", 42)
 		(patt @21.1-21.4 (type "Error"))
 		(patt @26.1-26.5 (type "Error")))
 	(type_decls
+		(nominal @1.1-1.26 (type "UnderscoreErrorType")
+			(ty-header @1.1-1.20 (name "UnderscoreErrorType")))
 		(nominal @3.1-3.13 (type "BadType")
 			(ty-header @3.1-3.8 (name "BadType")))
 		(nominal @8.1-8.19 (type "BadList")

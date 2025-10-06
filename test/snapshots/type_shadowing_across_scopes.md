@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Type shadowing across scopes should produce warning
-type=file
+type=file:TypeShadowingAcrossScopes.roc
 ~~~
 # SOURCE
 ~~~roc
-module [Result, processData]
+TypeShadowingAcrossScopes := {}
 
 Result(a, b) : [Ok(a), Err(b)]
 
@@ -23,7 +23,6 @@ PARSE ERROR - type_shadowing_across_scopes.md:11:5:11:11
 PARSE ERROR - type_shadowing_across_scopes.md:11:24:11:31
 PARSE ERROR - type_shadowing_across_scopes.md:11:31:11:32
 PARSE ERROR - type_shadowing_across_scopes.md:12:1:12:2
-MODULE HEADER DEPRECATED - type_shadowing_across_scopes.md:1:1:1:29
 TYPE REDECLARED - type_shadowing_across_scopes.md:3:1:3:31
 MALFORMED TYPE - type_shadowing_across_scopes.md:11:24:11:31
 UNUSED VARIABLE - type_shadowing_across_scopes.md:6:16:6:20
@@ -72,19 +71,6 @@ This is an unexpected parsing error. Please check your syntax.
 ^
 
 
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**type_shadowing_across_scopes.md:1:1:1:29:**
-```roc
-module [Result, processData]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 **TYPE REDECLARED**
 The type _Result_ is being redeclared.
 
@@ -98,7 +84,7 @@ Result(a, b) : [Ok(a), Err(b)]
 But _Result_ was already declared here:
 **type_shadowing_across_scopes.md:1:1:1:1:**
 ```roc
-module [Result, processData]
+TypeShadowingAcrossScopes := {}
 ```
 ^
 
@@ -127,7 +113,7 @@ processData = |data|
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:15),Comma(1:15-1:16),LowerIdent(1:17-1:28),CloseSquare(1:28-1:29),
+UpperIdent(1:1-1:26),OpColonEqual(1:27-1:29),OpenCurly(1:30-1:31),CloseCurly(1:31-1:32),
 UpperIdent(3:1-3:7),NoSpaceOpenRound(3:7-3:8),LowerIdent(3:8-3:9),Comma(3:9-3:10),LowerIdent(3:11-3:12),CloseRound(3:12-3:13),OpColon(3:14-3:15),OpenSquare(3:16-3:17),UpperIdent(3:17-3:19),NoSpaceOpenRound(3:19-3:20),LowerIdent(3:20-3:21),CloseRound(3:21-3:22),Comma(3:22-3:23),UpperIdent(3:24-3:27),NoSpaceOpenRound(3:27-3:28),LowerIdent(3:28-3:29),CloseRound(3:29-3:30),CloseSquare(3:30-3:31),
 LowerIdent(5:1-5:12),OpColon(5:13-5:14),UpperIdent(5:15-5:18),OpArrow(5:19-5:21),UpperIdent(5:22-5:25),
 LowerIdent(6:1-6:12),OpAssign(6:13-6:14),OpBar(6:15-6:16),LowerIdent(6:16-6:20),OpBar(6:20-6:21),
@@ -140,12 +126,12 @@ EndOfFile(13:1-13:1),
 # PARSE
 ~~~clojure
 (file @1.1-12.2
-	(module @1.1-1.29
-		(exposes @1.8-1.29
-			(exposed-upper-ident @1.9-1.15 (text "Result"))
-			(exposed-lower-ident @1.17-1.28
-				(text "processData"))))
+	(type-module @1.1-1.26)
 	(statements
+		(s-type-decl @1.1-1.32
+			(header @1.1-1.26 (name "TypeShadowingAcrossScopes")
+				(args))
+			(ty-record @1.30-1.32))
 		(s-type-decl @3.1-3.31
 			(header @3.1-3.13 (name "Result")
 				(args
@@ -179,7 +165,7 @@ EndOfFile(13:1-13:1),
 ~~~
 # FORMATTED
 ~~~roc
-module [Result, processData]
+TypeShadowingAcrossScopes := {}
 
 Result(a, b) : [Ok(a), Err(b)]
 
@@ -206,6 +192,9 @@ InnerModule :
 				(ty-fn @5.15-5.25 (effectful false)
 					(ty-lookup @5.15-5.18 (name "Str") (builtin))
 					(ty-lookup @5.22-5.25 (name "Str") (builtin))))))
+	(s-nominal-decl @1.1-1.32
+		(ty-header @1.1-1.26 (name "TypeShadowingAcrossScopes"))
+		(ty-record @1.30-1.32))
 	(s-alias-decl @3.1-3.31
 		(ty-header @3.1-3.13 (name "Result")
 			(ty-args
@@ -226,6 +215,8 @@ InnerModule :
 	(defs
 		(patt @6.1-6.12 (type "Str -> Str")))
 	(type_decls
+		(nominal @1.1-1.32 (type "TypeShadowingAcrossScopes")
+			(ty-header @1.1-1.26 (name "TypeShadowingAcrossScopes")))
 		(alias @3.1-3.31 (type "Result(a, b)")
 			(ty-header @3.1-3.13 (name "Result")
 				(ty-args

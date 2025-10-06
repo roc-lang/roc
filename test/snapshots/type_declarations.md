@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Various type declarations
-type=file
+type=file:TypeDeclarations.roc
 ~~~
 # SOURCE
 ~~~roc
-module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
+TypeDeclarations := {}
 
 Map(a, b) : List(a), (a -> b) -> List(b)
 
@@ -22,28 +22,12 @@ MyType : U64
 MyType2 : Module.Thingy
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - type_declarations.md:1:1:1:57
 UNDECLARED TYPE - type_declarations.md:5:8:5:11
 UNDECLARED TYPE - type_declarations.md:5:13:5:16
 UNDECLARED TYPE - type_declarations.md:7:19:7:21
 UNDECLARED TYPE - type_declarations.md:7:32:7:41
 MODULE NOT IMPORTED - type_declarations.md:15:11:15:24
-EXPOSED BUT NOT DEFINED - type_declarations.md:1:51:1:56
-EXPOSED BUT NOT DEFINED - type_declarations.md:1:42:1:49
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**type_declarations.md:1:1:1:57:**
-```roc
-module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 **UNDECLARED TYPE**
 The type _Bar_ is not declared in this scope.
 
@@ -99,29 +83,9 @@ MyType2 : Module.Thingy
           ^^^^^^^^^^^^^
 
 
-**EXPOSED BUT NOT DEFINED**
-The module header says that `main!` is exposed, but it is not defined anywhere in this module.
-
-**type_declarations.md:1:51:1:56:**
-```roc
-module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
-```
-                                                  ^^^^^
-You can fix this by either defining `main!` in this module, or by removing it from the list of exposed values.
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `add_one` is exposed, but it is not defined anywhere in this module.
-
-**type_declarations.md:1:42:1:49:**
-```roc
-module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
-```
-                                         ^^^^^^^
-You can fix this by either defining `add_one` in this module, or by removing it from the list of exposed values.
-
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:12),Comma(1:12-1:13),UpperIdent(1:14-1:17),Comma(1:17-1:18),UpperIdent(1:19-1:23),Comma(1:23-1:24),UpperIdent(1:25-1:30),Comma(1:30-1:31),UpperIdent(1:32-1:40),Comma(1:40-1:41),LowerIdent(1:42-1:49),Comma(1:49-1:50),LowerIdent(1:51-1:56),CloseSquare(1:56-1:57),
+UpperIdent(1:1-1:17),OpColonEqual(1:18-1:20),OpenCurly(1:21-1:22),CloseCurly(1:22-1:23),
 UpperIdent(3:1-3:4),NoSpaceOpenRound(3:4-3:5),LowerIdent(3:5-3:6),Comma(3:6-3:7),LowerIdent(3:8-3:9),CloseRound(3:9-3:10),OpColon(3:11-3:12),UpperIdent(3:13-3:17),NoSpaceOpenRound(3:17-3:18),LowerIdent(3:18-3:19),CloseRound(3:19-3:20),Comma(3:20-3:21),OpenRound(3:22-3:23),LowerIdent(3:23-3:24),OpArrow(3:25-3:27),LowerIdent(3:28-3:29),CloseRound(3:29-3:30),OpArrow(3:31-3:33),UpperIdent(3:34-3:38),NoSpaceOpenRound(3:38-3:39),LowerIdent(3:39-3:40),CloseRound(3:40-3:41),
 UpperIdent(5:1-5:4),OpColon(5:5-5:6),OpenRound(5:7-5:8),UpperIdent(5:8-5:11),Comma(5:11-5:12),UpperIdent(5:13-5:16),CloseRound(5:16-5:17),
 UpperIdent(7:1-7:5),NoSpaceOpenRound(7:5-7:6),LowerIdent(7:6-7:7),CloseRound(7:7-7:8),OpColon(7:9-7:10),OpenCurly(7:11-7:12),LowerIdent(7:13-7:16),OpColon(7:17-7:18),UpperIdent(7:19-7:21),NoSpaceOpenRound(7:21-7:22),LowerIdent(7:22-7:23),CloseRound(7:23-7:24),Comma(7:24-7:25),LowerIdent(7:26-7:29),OpColon(7:30-7:31),UpperIdent(7:32-7:41),CloseCurly(7:42-7:43),
@@ -134,18 +98,12 @@ EndOfFile(16:1-16:1),
 # PARSE
 ~~~clojure
 (file @1.1-15.24
-	(module @1.1-1.57
-		(exposes @1.8-1.57
-			(exposed-upper-ident @1.9-1.12 (text "Map"))
-			(exposed-upper-ident @1.14-1.17 (text "Foo"))
-			(exposed-upper-ident @1.19-1.23 (text "Some"))
-			(exposed-upper-ident @1.25-1.30 (text "Maybe"))
-			(exposed-upper-ident @1.32-1.40 (text "SomeFunc"))
-			(exposed-lower-ident @1.42-1.49
-				(text "add_one"))
-			(exposed-lower-ident @1.51-1.56
-				(text "main!"))))
+	(type-module @1.1-1.17)
 	(statements
+		(s-type-decl @1.1-1.23
+			(header @1.1-1.17 (name "TypeDeclarations")
+				(args))
+			(ty-record @1.21-1.23))
 		(s-type-decl @3.1-3.41
 			(header @3.1-3.10 (name "Map")
 				(args
@@ -216,6 +174,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(s-nominal-decl @1.1-1.23
+		(ty-header @1.1-1.17 (name "TypeDeclarations"))
+		(ty-record @1.21-1.23))
 	(s-alias-decl @3.1-3.41
 		(ty-header @3.1-3.10 (name "Map")
 			(ty-args
@@ -274,6 +235,8 @@ NO CHANGE
 (inferred-types
 	(defs)
 	(type_decls
+		(nominal @1.1-1.23 (type "TypeDeclarations")
+			(ty-header @1.1-1.17 (name "TypeDeclarations")))
 		(alias @3.1-3.41 (type "Map(a, b)")
 			(ty-header @3.1-3.10 (name "Map")
 				(ty-args

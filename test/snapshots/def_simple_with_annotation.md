@@ -1,34 +1,22 @@
 # META
 ~~~ini
 description=Simple definition with type annotation
-type=file
+type=file:DefSimpleWithAnnotation.roc
 ~~~
 # SOURCE
 ~~~roc
-module [foo]
+DefSimpleWithAnnotation := {}
 
 foo : Str
 foo = "one"
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - def_simple_with_annotation.md:1:1:1:13
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**def_simple_with_annotation.md:1:1:1:13:**
-```roc
-module [foo]
-```
-^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),
+UpperIdent(1:1-1:24),OpColonEqual(1:25-1:27),OpenCurly(1:28-1:29),CloseCurly(1:29-1:30),
 LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:10),
 LowerIdent(4:1-4:4),OpAssign(4:5-4:6),StringStart(4:7-4:8),StringPart(4:8-4:11),StringEnd(4:11-4:12),
 EndOfFile(5:1-5:1),
@@ -36,11 +24,12 @@ EndOfFile(5:1-5:1),
 # PARSE
 ~~~clojure
 (file @1.1-4.12
-	(module @1.1-1.13
-		(exposes @1.8-1.13
-			(exposed-lower-ident @1.9-1.12
-				(text "foo"))))
+	(type-module @1.1-1.24)
 	(statements
+		(s-type-decl @1.1-1.30
+			(header @1.1-1.24 (name "DefSimpleWithAnnotation")
+				(args))
+			(ty-record @1.28-1.30))
 		(s-type-anno @3.1-3.10 (name "foo")
 			(ty @3.7-3.10 (name "Str")))
 		(s-decl @4.1-4.12
@@ -61,13 +50,19 @@ NO CHANGE
 			(e-literal @4.8-4.11 (string "one")))
 		(annotation @4.1-4.4
 			(declared-type
-				(ty-lookup @3.7-3.10 (name "Str") (builtin))))))
+				(ty-lookup @3.7-3.10 (name "Str") (builtin)))))
+	(s-nominal-decl @1.1-1.30
+		(ty-header @1.1-1.24 (name "DefSimpleWithAnnotation"))
+		(ty-record @1.28-1.30)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @4.1-4.4 (type "Str")))
+	(type_decls
+		(nominal @1.1-1.30 (type "DefSimpleWithAnnotation")
+			(ty-header @1.1-1.24 (name "DefSimpleWithAnnotation"))))
 	(expressions
 		(expr @4.7-4.12 (type "Str"))))
 ~~~

@@ -1,35 +1,23 @@
 # META
 ~~~ini
 description=Float literal type inference
-type=file
+type=file:CanFracLiteral.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+CanFracLiteral := {}
 
 x = 3.14
 y = 1.23e45
 z = 0.5
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - can_frac_literal.md:1:1:1:10
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**can_frac_literal.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:15),OpColonEqual(1:16-1:18),OpenCurly(1:19-1:20),CloseCurly(1:20-1:21),
 LowerIdent(3:1-3:2),OpAssign(3:3-3:4),Float(3:5-3:9),
 LowerIdent(4:1-4:2),OpAssign(4:3-4:4),Float(4:5-4:12),
 LowerIdent(5:1-5:2),OpAssign(5:3-5:4),Float(5:5-5:8),
@@ -38,9 +26,12 @@ EndOfFile(6:1-6:1),
 # PARSE
 ~~~clojure
 (file @1.1-5.8
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.15)
 	(statements
+		(s-type-decl @1.1-1.21
+			(header @1.1-1.15 (name "CanFracLiteral")
+				(args))
+			(ty-record @1.19-1.21))
 		(s-decl @3.1-3.9
 			(p-ident @3.1-3.2 (raw "x"))
 			(e-frac @3.5-3.9 (raw "3.14")))
@@ -66,7 +57,10 @@ NO CHANGE
 		(e-frac-f64 @4.5-4.12 (value "1.23e45")))
 	(d-let
 		(p-assign @5.1-5.2 (ident "z"))
-		(e-dec-small @5.5-5.8 (numerator "5") (denominator-power-of-ten "1") (value "0.5"))))
+		(e-dec-small @5.5-5.8 (numerator "5") (denominator-power-of-ten "1") (value "0.5")))
+	(s-nominal-decl @1.1-1.21
+		(ty-header @1.1-1.15 (name "CanFracLiteral"))
+		(ty-record @1.19-1.21)))
 ~~~
 # TYPES
 ~~~clojure
@@ -75,6 +69,9 @@ NO CHANGE
 		(patt @3.1-3.2 (type "Num(Frac(_size))"))
 		(patt @4.1-4.2 (type "Num(Frac(_size))"))
 		(patt @5.1-5.2 (type "Num(Frac(_size))")))
+	(type_decls
+		(nominal @1.1-1.21 (type "CanFracLiteral")
+			(ty-header @1.1-1.15 (name "CanFracLiteral"))))
 	(expressions
 		(expr @3.5-3.9 (type "Num(Frac(_size))"))
 		(expr @4.5-4.12 (type "Num(Frac(_size))"))

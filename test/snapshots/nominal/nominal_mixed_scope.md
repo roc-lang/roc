@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Example of mixed local and external nominal types in same scope
-type=file
+type=file:NominalMixedScope.roc
 ~~~
 # SOURCE
 ~~~roc
-module [LocalStatus, processColor]
+NominalMixedScope := {}
 
 LocalStatus := [Pending, Complete]
 
@@ -24,7 +24,6 @@ processColor = |color| {
 ~~~
 # EXPECTED
 IMPORT MUST BE TOP LEVEL - nominal_mixed_scope.md:9:5:9:11
-MODULE HEADER DEPRECATED - nominal_mixed_scope.md:1:1:1:35
 NOT IMPLEMENTED - :0:0:0:0
 UNDECLARED TYPE - nominal_mixed_scope.md:9:12:9:17
 UNDECLARED TYPE - nominal_mixed_scope.md:12:9:12:12
@@ -40,19 +39,6 @@ Move this import to the top of the file, after the module header but before any 
     import Color.RGB
 ```
     ^^^^^^
-
-
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**nominal_mixed_scope.md:1:1:1:35:**
-```roc
-module [LocalStatus, processColor]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **NOT IMPLEMENTED**
@@ -106,7 +92,7 @@ This type is referenced here:
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:20),Comma(1:20-1:21),LowerIdent(1:22-1:34),CloseSquare(1:34-1:35),
+UpperIdent(1:1-1:18),OpColonEqual(1:19-1:21),OpenCurly(1:22-1:23),CloseCurly(1:23-1:24),
 UpperIdent(3:1-3:12),OpColonEqual(3:13-3:15),OpenSquare(3:16-3:17),UpperIdent(3:17-3:24),Comma(3:24-3:25),UpperIdent(3:26-3:34),CloseSquare(3:34-3:35),
 LowerIdent(5:1-5:13),OpColon(5:14-5:15),Underscore(5:16-5:17),OpArrow(5:18-5:20),UpperIdent(5:21-5:32),
 LowerIdent(6:1-6:13),OpAssign(6:14-6:15),OpBar(6:16-6:17),LowerIdent(6:17-6:22),OpBar(6:22-6:23),OpenCurly(6:24-6:25),
@@ -122,12 +108,12 @@ EndOfFile(17:1-17:1),
 # PARSE
 ~~~clojure
 (file @1.1-16.2
-	(module @1.1-1.35
-		(exposes @1.8-1.35
-			(exposed-upper-ident @1.9-1.20 (text "LocalStatus"))
-			(exposed-lower-ident @1.22-1.34
-				(text "processColor"))))
+	(type-module @1.1-1.18)
 	(statements
+		(s-type-decl @1.1-1.24
+			(header @1.1-1.18 (name "NominalMixedScope")
+				(args))
+			(ty-record @1.22-1.24))
 		(s-type-decl @3.1-3.35
 			(header @3.1-3.12 (name "LocalStatus")
 				(args))
@@ -163,7 +149,7 @@ EndOfFile(17:1-17:1),
 ~~~
 # FORMATTED
 ~~~roc
-module [LocalStatus, processColor]
+NominalMixedScope := {}
 
 LocalStatus := [Pending, Complete]
 
@@ -224,6 +210,9 @@ processColor = |color| {
 				(ty-fn @5.16-5.32 (effectful false)
 					(ty-underscore @1.1-1.1)
 					(ty-lookup @5.21-5.32 (name "LocalStatus") (local))))))
+	(s-nominal-decl @1.1-1.24
+		(ty-header @1.1-1.18 (name "NominalMixedScope"))
+		(ty-record @1.22-1.24))
 	(s-nominal-decl @3.1-3.35
 		(ty-header @3.1-3.12 (name "LocalStatus"))
 		(ty-tag-union @3.16-3.35
@@ -236,6 +225,8 @@ processColor = |color| {
 	(defs
 		(patt @6.1-6.13 (type "_arg -> LocalStatus")))
 	(type_decls
+		(nominal @1.1-1.24 (type "NominalMixedScope")
+			(ty-header @1.1-1.18 (name "NominalMixedScope")))
 		(nominal @3.1-3.35 (type "LocalStatus")
 			(ty-header @3.1-3.12 (name "LocalStatus"))))
 	(expressions

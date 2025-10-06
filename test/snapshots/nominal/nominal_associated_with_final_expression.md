@@ -1,18 +1,17 @@
 # META
 ~~~ini
 description=Nominal type associated items with final expression produces error
-type=file
+type=file:NominalAssociatedWithFinalExpression.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+NominalAssociatedWithFinalExpression := {}
 
 Foo := [A, B, C].{ x = 5
 x }
 ~~~
 # EXPECTED
 EXPRESSION IN ASSOCIATED ITEMS - nominal_associated_with_final_expression.md:4:1:4:2
-MODULE HEADER DEPRECATED - nominal_associated_with_final_expression.md:1:1:1:10
 # PROBLEMS
 **EXPRESSION IN ASSOCIATED ITEMS**
 Associated items (such as types or methods) can only have associated types and values, not plain expressions.
@@ -26,22 +25,9 @@ x }
 ^
 
 
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**nominal_associated_with_final_expression.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:37),OpColonEqual(1:38-1:40),OpenCurly(1:41-1:42),CloseCurly(1:42-1:43),
 UpperIdent(3:1-3:4),OpColonEqual(3:5-3:7),OpenSquare(3:8-3:9),UpperIdent(3:9-3:10),Comma(3:10-3:11),UpperIdent(3:12-3:13),Comma(3:13-3:14),UpperIdent(3:15-3:16),CloseSquare(3:16-3:17),Dot(3:17-3:18),OpenCurly(3:18-3:19),LowerIdent(3:20-3:21),OpAssign(3:22-3:23),Int(3:24-3:25),
 LowerIdent(4:1-4:2),CloseCurly(4:3-4:4),
 EndOfFile(5:1-5:1),
@@ -49,9 +35,12 @@ EndOfFile(5:1-5:1),
 # PARSE
 ~~~clojure
 (file @1.1-4.4
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.37)
 	(statements
+		(s-type-decl @1.1-1.43
+			(header @1.1-1.37 (name "NominalAssociatedWithFinalExpression")
+				(args))
+			(ty-record @1.41-1.43))
 		(s-type-decl @3.1-4.4
 			(header @3.1-3.4 (name "Foo")
 				(args))
@@ -63,7 +52,7 @@ EndOfFile(5:1-5:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
+NominalAssociatedWithFinalExpression := {}
 
 Foo := [A, B, C].{
 	x = 5
@@ -73,6 +62,9 @@ Foo := [A, B, C].{
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(s-nominal-decl @1.1-1.43
+		(ty-header @1.1-1.37 (name "NominalAssociatedWithFinalExpression"))
+		(ty-record @1.41-1.43))
 	(s-nominal-decl @3.1-4.4
 		(ty-header @3.1-3.4 (name "Foo"))
 		(ty-tag-union @3.8-3.17
@@ -85,6 +77,8 @@ Foo := [A, B, C].{
 (inferred-types
 	(defs)
 	(type_decls
+		(nominal @1.1-1.43 (type "NominalAssociatedWithFinalExpression")
+			(ty-header @1.1-1.37 (name "NominalAssociatedWithFinalExpression")))
 		(nominal @3.1-4.4 (type "Foo")
 			(ty-header @3.1-3.4 (name "Foo"))))
 	(expressions))

@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Test multi-level qualified imports and type annotations
-type=file
+type=file:MultiQualifiedImport.roc
 ~~~
 # SOURCE
 ~~~roc
-module [json_encoder]
+MultiQualifiedImport := {}
 
 import json.Core.Utf8 exposing [Encoder]
 
@@ -33,7 +33,6 @@ PARSE ERROR - multi_qualified_import.md:14:30:14:31
 PARSE ERROR - multi_qualified_import.md:14:31:14:36
 PARSE ERROR - multi_qualified_import.md:14:36:14:37
 PARSE ERROR - multi_qualified_import.md:14:37:14:38
-MODULE HEADER DEPRECATED - multi_qualified_import.md:1:1:1:22
 MODULE NOT FOUND - multi_qualified_import.md:3:1:3:17
 UNDECLARED TYPE - multi_qualified_import.md:5:16:5:23
 UNDEFINED VARIABLE - multi_qualified_import.md:6:16:6:45
@@ -186,19 +185,6 @@ data = json.Core.Utf8.encode("hello")
                                     ^
 
 
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**multi_qualified_import.md:1:1:1:22:**
-```roc
-module [json_encoder]
-```
-^^^^^^^^^^^^^^^^^^^^^
-
-
 **MODULE NOT FOUND**
 The module `json.Core` was not found in this Roc project.
 
@@ -233,7 +219,7 @@ json_encoder = Json.Core.Utf8.defaultEncoder
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `module [json_encoder]
+There is no module with the name `MultiQualifiedImport := {}
 
 import json.Core.Utf8 exposing [Encoder]
 
@@ -264,7 +250,7 @@ process = |encoder| "processing"
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `module [json_encoder]
+There is no module with the name `MultiQualifiedImport := {}
 
 import json.Core.Utf8 exposing [Encoder]
 
@@ -299,7 +285,7 @@ data = json.Core.Utf8.encode("hello")
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:21),CloseSquare(1:21-1:22),
+UpperIdent(1:1-1:21),OpColonEqual(1:22-1:24),OpenCurly(1:25-1:26),CloseCurly(1:26-1:27),
 KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:17),NoSpaceDotUpperIdent(3:17-3:22),KwExposing(3:23-3:31),OpenSquare(3:32-3:33),UpperIdent(3:33-3:40),CloseSquare(3:40-3:41),
 LowerIdent(5:1-5:13),OpColon(5:14-5:15),UpperIdent(5:16-5:23),
 LowerIdent(6:1-6:13),OpAssign(6:14-6:15),UpperIdent(6:16-6:20),NoSpaceDotUpperIdent(6:20-6:25),NoSpaceDotUpperIdent(6:25-6:30),NoSpaceDotLowerIdent(6:30-6:45),
@@ -312,11 +298,12 @@ EndOfFile(15:1-15:1),
 # PARSE
 ~~~clojure
 (file @1.1-14.38
-	(module @1.1-1.22
-		(exposes @1.8-1.22
-			(exposed-lower-ident @1.9-1.21
-				(text "json_encoder"))))
+	(type-module @1.1-1.21)
 	(statements
+		(s-type-decl @1.1-1.27
+			(header @1.1-1.21 (name "MultiQualifiedImport")
+				(args))
+			(ty-record @1.25-1.27))
 		(s-import @3.1-3.17 (raw "json.Core"))
 		(s-malformed @3.17-3.22 (tag "statement_unexpected_token"))
 		(s-malformed @3.23-3.31 (tag "statement_unexpected_token"))
@@ -354,7 +341,7 @@ EndOfFile(15:1-15:1),
 ~~~
 # FORMATTED
 ~~~roc
-module [json_encoder]
+MultiQualifiedImport := {}
 
 import json.Core
 
@@ -397,6 +384,9 @@ data = json
 		(annotation @14.1-14.5
 			(declared-type
 				(ty-malformed @13.8-13.34))))
+	(s-nominal-decl @1.1-1.27
+		(ty-header @1.1-1.21 (name "MultiQualifiedImport"))
+		(ty-record @1.25-1.27))
 	(s-import @3.1-3.17 (module "json.Core") (qualifier "json")
 		(exposes)))
 ~~~
@@ -407,6 +397,9 @@ data = json
 		(patt @6.1-6.13 (type "Error"))
 		(patt @10.1-10.8 (type "Error -> Str"))
 		(patt @14.1-14.5 (type "Error")))
+	(type_decls
+		(nominal @1.1-1.27 (type "MultiQualifiedImport")
+			(ty-header @1.1-1.21 (name "MultiQualifiedImport"))))
 	(expressions
 		(expr @6.16-6.45 (type "Error"))
 		(expr @10.11-10.33 (type "Error -> Str"))

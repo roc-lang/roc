@@ -1,46 +1,36 @@
 # META
 ~~~ini
 description=A primitive
-type=file
+type=file:ExprFloat.roc
 ~~~
 # SOURCE
 ~~~roc
-module [foo]
+ExprFloat := {}
+
 foo = 12.34
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - expr_float.md:1:1:1:13
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**expr_float.md:1:1:1:13:**
-```roc
-module [foo]
-```
-^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),
-LowerIdent(2:1-2:4),OpAssign(2:5-2:6),Float(2:7-2:12),
-EndOfFile(3:1-3:1),
+UpperIdent(1:1-1:10),OpColonEqual(1:11-1:13),OpenCurly(1:14-1:15),CloseCurly(1:15-1:16),
+LowerIdent(3:1-3:4),OpAssign(3:5-3:6),Float(3:7-3:12),
+EndOfFile(4:1-4:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-2.12
-	(module @1.1-1.13
-		(exposes @1.8-1.13
-			(exposed-lower-ident @1.9-1.12
-				(text "foo"))))
+(file @1.1-3.12
+	(type-module @1.1-1.10)
 	(statements
-		(s-decl @2.1-2.12
-			(p-ident @2.1-2.4 (raw "foo"))
-			(e-frac @2.7-2.12 (raw "12.34")))))
+		(s-type-decl @1.1-1.16
+			(header @1.1-1.10 (name "ExprFloat")
+				(args))
+			(ty-record @1.14-1.16))
+		(s-decl @3.1-3.12
+			(p-ident @3.1-3.4 (raw "foo"))
+			(e-frac @3.7-3.12 (raw "12.34")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -50,14 +40,20 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @2.1-2.4 (ident "foo"))
-		(e-dec-small @2.7-2.12 (numerator "1234") (denominator-power-of-ten "2") (value "12.34"))))
+		(p-assign @3.1-3.4 (ident "foo"))
+		(e-dec-small @3.7-3.12 (numerator "1234") (denominator-power-of-ten "2") (value "12.34")))
+	(s-nominal-decl @1.1-1.16
+		(ty-header @1.1-1.10 (name "ExprFloat"))
+		(ty-record @1.14-1.16)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @2.1-2.4 (type "Num(Frac(_size))")))
+		(patt @3.1-3.4 (type "Num(Frac(_size))")))
+	(type_decls
+		(nominal @1.1-1.16 (type "ExprFloat")
+			(ty-header @1.1-1.10 (name "ExprFloat"))))
 	(expressions
-		(expr @2.7-2.12 (type "Num(Frac(_size))"))))
+		(expr @3.7-3.12 (type "Num(Frac(_size))"))))
 ~~~

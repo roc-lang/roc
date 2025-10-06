@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Test error propagation - aliases that reference error types should not propagate errors
-type=file
+type=file:TestErrorPropagation.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+TestErrorPropagation := {}
 
 BadBase := _
 
@@ -15,29 +15,15 @@ value : GoodAlias
 value = "test"
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - test_error_propagation.md:1:1:1:10
 UNDERSCORE IN TYPE ALIAS - test_error_propagation.md:1:1:1:1
 TYPE MISMATCH - test_error_propagation.md:8:9:8:15
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**test_error_propagation.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
 
 **test_error_propagation.md:1:1:1:1:**
 ```roc
-module []
+TestErrorPropagation := {}
 ```
 ^
 
@@ -59,7 +45,7 @@ But the type annotation says it should have the type:
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:21),OpColonEqual(1:22-1:24),OpenCurly(1:25-1:26),CloseCurly(1:26-1:27),
 UpperIdent(3:1-3:8),OpColonEqual(3:9-3:11),Underscore(3:12-3:13),
 UpperIdent(5:1-5:10),OpColonEqual(5:11-5:13),UpperIdent(5:14-5:21),
 LowerIdent(7:1-7:6),OpColon(7:7-7:8),UpperIdent(7:9-7:18),
@@ -69,9 +55,12 @@ EndOfFile(9:1-9:1),
 # PARSE
 ~~~clojure
 (file @1.1-8.15
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.21)
 	(statements
+		(s-type-decl @1.1-1.27
+			(header @1.1-1.21 (name "TestErrorPropagation")
+				(args))
+			(ty-record @1.25-1.27))
 		(s-type-decl @3.1-3.13
 			(header @3.1-3.8 (name "BadBase")
 				(args))
@@ -101,6 +90,9 @@ NO CHANGE
 		(annotation @8.1-8.6
 			(declared-type
 				(ty-lookup @7.9-7.18 (name "GoodAlias") (local)))))
+	(s-nominal-decl @1.1-1.27
+		(ty-header @1.1-1.21 (name "TestErrorPropagation"))
+		(ty-record @1.25-1.27))
 	(s-nominal-decl @3.1-3.13
 		(ty-header @3.1-3.8 (name "BadBase"))
 		(ty-underscore @1.1-1.1))
@@ -114,6 +106,8 @@ NO CHANGE
 	(defs
 		(patt @8.1-8.6 (type "Error")))
 	(type_decls
+		(nominal @1.1-1.27 (type "TestErrorPropagation")
+			(ty-header @1.1-1.21 (name "TestErrorPropagation")))
 		(nominal @3.1-3.13 (type "BadBase")
 			(ty-header @3.1-3.8 (name "BadBase")))
 		(nominal @5.1-5.21 (type "GoodAlias")

@@ -1,33 +1,19 @@
 # META
 ~~~ini
 description=Import with explicit alias
-type=file
+type=file:CanImportWithAlias.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+CanImportWithAlias := {}
 
 import json.Json as MyJson
 
 main = MyJson.decode
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - can_import_with_alias.md:1:1:1:10
 MODULE NOT FOUND - can_import_with_alias.md:3:1:3:27
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**can_import_with_alias.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **MODULE NOT FOUND**
 The module `json.Json` was not found in this Roc project.
 
@@ -41,7 +27,7 @@ import json.Json as MyJson
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:19),OpColonEqual(1:20-1:22),OpenCurly(1:23-1:24),CloseCurly(1:24-1:25),
 KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:17),KwAs(3:18-3:20),UpperIdent(3:21-3:27),
 LowerIdent(5:1-5:5),OpAssign(5:6-5:7),UpperIdent(5:8-5:14),NoSpaceDotLowerIdent(5:14-5:21),
 EndOfFile(6:1-6:1),
@@ -49,9 +35,12 @@ EndOfFile(6:1-6:1),
 # PARSE
 ~~~clojure
 (file @1.1-5.21
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.19)
 	(statements
+		(s-type-decl @1.1-1.25
+			(header @1.1-1.19 (name "CanImportWithAlias")
+				(args))
+			(ty-record @1.23-1.25))
 		(s-import @3.1-3.27 (raw "json.Json") (alias "MyJson"))
 		(s-decl @5.1-5.21
 			(p-ident @5.1-5.5 (raw "main"))
@@ -69,6 +58,9 @@ NO CHANGE
 		(e-lookup-external @5.8-5.21
 			(module-idx "0")
 			(target-node-idx "0")))
+	(s-nominal-decl @1.1-1.25
+		(ty-header @1.1-1.19 (name "CanImportWithAlias"))
+		(ty-record @1.23-1.25))
 	(s-import @3.1-3.27 (module "json.Json") (qualifier "json") (alias "MyJson")
 		(exposes)))
 ~~~
@@ -77,6 +69,9 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @5.1-5.5 (type "Error")))
+	(type_decls
+		(nominal @1.1-1.25 (type "CanImportWithAlias")
+			(ty-header @1.1-1.19 (name "CanImportWithAlias"))))
 	(expressions
 		(expr @5.8-5.21 (type "Error"))))
 ~~~

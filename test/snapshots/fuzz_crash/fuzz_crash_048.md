@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=fuzz crash
-type=file
+type=file:FuzzCrash048.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+FuzzCrash048 := {}
 
 foo : U64
 bar : Thing(a, b, _)
@@ -17,7 +17,6 @@ tag_tuple : Value((a, b, c))
 ~~~
 # EXPECTED
 ASCII CONTROL CHARACTER - :0:0:0:0
-MODULE HEADER DEPRECATED - fuzz_crash_048.md:1:1:1:10
 UNDECLARED TYPE - fuzz_crash_048.md:4:7:4:12
 UNDECLARED TYPE - fuzz_crash_048.md:8:14:8:20
 UNDECLARED TYPE - fuzz_crash_048.md:9:13:9:18
@@ -25,19 +24,6 @@ UNDECLARED TYPE - fuzz_crash_048.md:9:13:9:18
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.
 
-
-
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**fuzz_crash_048.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -75,7 +61,7 @@ tag_tuple : Value((a, b, c))
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:13),OpColonEqual(1:14-1:16),OpenCurly(1:17-1:18),CloseCurly(1:18-1:19),
 LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:10),
 LowerIdent(4:1-4:4),OpColon(4:5-4:6),UpperIdent(4:7-4:12),NoSpaceOpenRound(4:12-4:13),LowerIdent(4:13-4:14),Comma(4:14-4:15),LowerIdent(4:16-4:17),Comma(4:17-4:18),Underscore(4:19-4:20),CloseRound(4:20-4:21),
 LowerIdent(5:1-5:4),OpColon(5:5-5:6),OpenRound(5:7-5:8),LowerIdent(5:8-5:9),Comma(5:9-5:10),LowerIdent(5:11-5:12),Comma(5:12-5:13),LowerIdent(5:14-5:15),CloseRound(5:15-5:16),
@@ -88,9 +74,12 @@ EndOfFile(10:1-10:1),
 # PARSE
 ~~~clojure
 (file @1.1-9.29
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.13)
 	(statements
+		(s-type-decl @1.1-1.19
+			(header @1.1-1.13 (name "FuzzCrash048")
+				(args))
+			(ty-record @1.17-1.19))
 		(s-type-anno @3.1-3.10 (name "foo")
 			(ty @3.7-3.10 (name "U64")))
 		(s-type-anno @4.1-4.21 (name "bar")
@@ -128,7 +117,7 @@ EndOfFile(10:1-10:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
+FuzzCrash048 := {}
 
 foo : U64
 bar : Thing(a, b, _)
@@ -140,11 +129,17 @@ tag_tuple : Value((a, b, c))
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(s-nominal-decl @1.1-1.19
+		(ty-header @1.1-1.13 (name "FuzzCrash048"))
+		(ty-record @1.17-1.19)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
+	(type_decls
+		(nominal @1.1-1.19 (type "FuzzCrash048")
+			(ty-header @1.1-1.13 (name "FuzzCrash048"))))
 	(expressions))
 ~~~

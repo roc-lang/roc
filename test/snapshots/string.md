@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=two strings
-type=file
+type=file:String.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+String := {}
 
 x = (
 	"one",
@@ -32,7 +32,6 @@ UNCLOSED STRING - :0:0:0:0
 PARSE ERROR - string.md:15:1:15:2
 PARSE ERROR - string.md:15:2:15:3
 PARSE ERROR - string.md:15:3:15:3
-MODULE HEADER DEPRECATED - string.md:1:1:1:10
 # PROBLEMS
 **INVALID UNICODE ESCAPE SEQUENCE**
 This Unicode escape sequence is not valid.
@@ -130,22 +129,9 @@ This is an unexpected parsing error. Please check your syntax.
   ^
 
 
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**string.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:7),OpColonEqual(1:8-1:10),OpenCurly(1:11-1:12),CloseCurly(1:12-1:13),
 LowerIdent(3:1-3:2),OpAssign(3:3-3:4),OpenRound(3:5-3:6),
 StringStart(4:2-4:3),StringPart(4:3-4:6),StringEnd(4:6-4:7),Comma(4:7-4:8),
 StringStart(5:2-5:3),StringPart(5:3-5:6),StringEnd(5:6-5:7),Comma(5:7-5:8),
@@ -162,9 +148,12 @@ EndOfFile(16:1-16:1),
 # PARSE
 ~~~clojure
 (file @1.1-15.3
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.7)
 	(statements
+		(s-type-decl @1.1-1.13
+			(header @1.1-1.7 (name "String")
+				(args))
+			(ty-record @1.11-1.13))
 		(s-decl @3.1-12.2
 			(p-ident @3.1-3.2 (raw "x"))
 			(e-tuple @3.5-12.2
@@ -185,7 +174,7 @@ EndOfFile(16:1-16:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
+String := {}
 
 x = (
 	"one",
@@ -217,13 +206,19 @@ x = (
 				(e-string @9.2-9.8)
 				(e-string @10.2-10.9)
 				(e-string @11.2-11.13
-					(e-literal @11.3-11.12 (string "\u(1F680)")))))))
+					(e-literal @11.3-11.12 (string "\u(1F680)"))))))
+	(s-nominal-decl @1.1-1.13
+		(ty-header @1.1-1.7 (name "String"))
+		(ty-record @1.11-1.13)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @3.1-3.2 (type "(Str, Str, Str, Str, Str, Str, Str, Str)")))
+	(type_decls
+		(nominal @1.1-1.13 (type "String")
+			(ty-header @1.1-1.7 (name "String"))))
 	(expressions
 		(expr @3.5-12.2 (type "(Str, Str, Str, Str, Str, Str, Str, Str)"))))
 ~~~

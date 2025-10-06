@@ -30,8 +30,8 @@ const TypeStore = types_mod.Store;
 const Self = @This();
 
 /// The kind of module being canonicalized, set during header processing
-pub const ModuleKind = enum {
-    type_module,
+pub const ModuleKind = union(enum) {
+    type_module: Ident.Idx, // Holds the main type identifier for type modules
     default_app,
     app,
     package,

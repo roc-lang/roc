@@ -1,18 +1,17 @@
 # META
 ~~~ini
 description=Variable scoping with var keyword
-type=file
+type=file:CanVarScopingInvalidTopLevel.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+CanVarScopingInvalidTopLevel := {}
 
 # This should cause an error - var not allowed at top level
 var topLevelVar_ = 0
 ~~~
 # EXPECTED
 PARSE ERROR - can_var_scoping_invalid_top_level.md:4:1:4:4
-MODULE HEADER DEPRECATED - can_var_scoping_invalid_top_level.md:1:1:1:10
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `var_only_allowed_in_a_body`
@@ -25,31 +24,21 @@ var topLevelVar_ = 0
 ^^^
 
 
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**can_var_scoping_invalid_top_level.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:29),OpColonEqual(1:30-1:32),OpenCurly(1:33-1:34),CloseCurly(1:34-1:35),
 KwVar(4:1-4:4),LowerIdent(4:5-4:17),OpAssign(4:18-4:19),Int(4:20-4:21),
 EndOfFile(5:1-5:1),
 ~~~
 # PARSE
 ~~~clojure
 (file @1.1-4.21
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.29)
 	(statements
+		(s-type-decl @1.1-1.35
+			(header @1.1-1.29 (name "CanVarScopingInvalidTopLevel")
+				(args))
+			(ty-record @1.33-1.35))
 		(s-malformed @4.1-4.4 (tag "var_only_allowed_in_a_body"))
 		(s-decl @4.5-4.21
 			(p-ident @4.5-4.17 (raw "topLevelVar_"))
@@ -57,7 +46,7 @@ EndOfFile(5:1-5:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
+CanVarScopingInvalidTopLevel := {}
 
 # This should cause an error - var not allowed at top level
 topLevelVar_ = 0
@@ -67,13 +56,19 @@ topLevelVar_ = 0
 (can-ir
 	(d-let
 		(p-assign @4.5-4.17 (ident "topLevelVar_"))
-		(e-num @4.20-4.21 (value "0"))))
+		(e-num @4.20-4.21 (value "0")))
+	(s-nominal-decl @1.1-1.35
+		(ty-header @1.1-1.29 (name "CanVarScopingInvalidTopLevel"))
+		(ty-record @1.33-1.35)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @4.5-4.17 (type "Num(_size)")))
+	(type_decls
+		(nominal @1.1-1.35 (type "CanVarScopingInvalidTopLevel")
+			(ty-header @1.1-1.29 (name "CanVarScopingInvalidTopLevel"))))
 	(expressions
 		(expr @4.20-4.21 (type "Num(_size)"))))
 ~~~

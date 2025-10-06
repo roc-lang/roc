@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Lambda with multiple non-consecutive argument type mismatches
-type=file
+type=file:LambdaMultiArgMismatch.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+LambdaMultiArgMismatch := {}
 
 # Function with 8 arguments where several types must match (a appears in positions 1, 3, 5, 7)
 multi_arg_fn : a, b, a, c, a, d, a, e -> (a, b, c, d, e)
@@ -26,25 +26,11 @@ result = multi_arg_fn(
 )
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - lambda_multi_arg_mismatch.md:1:1:1:10
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:5:25:5:27
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:5:33:5:35
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:5:41:5:43
 TYPE MISMATCH - lambda_multi_arg_mismatch.md:11:5:11:5
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**lambda_multi_arg_mismatch.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **UNUSED VARIABLE**
 Variable `x3` is not used anywhere in your code.
 
@@ -102,7 +88,7 @@ But the third argument has the type:
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:23),OpColonEqual(1:24-1:26),OpenCurly(1:27-1:28),CloseCurly(1:28-1:29),
 LowerIdent(4:1-4:13),OpColon(4:14-4:15),LowerIdent(4:16-4:17),Comma(4:17-4:18),LowerIdent(4:19-4:20),Comma(4:20-4:21),LowerIdent(4:22-4:23),Comma(4:23-4:24),LowerIdent(4:25-4:26),Comma(4:26-4:27),LowerIdent(4:28-4:29),Comma(4:29-4:30),LowerIdent(4:31-4:32),Comma(4:32-4:33),LowerIdent(4:34-4:35),Comma(4:35-4:36),LowerIdent(4:37-4:38),OpArrow(4:39-4:41),OpenRound(4:42-4:43),LowerIdent(4:43-4:44),Comma(4:44-4:45),LowerIdent(4:46-4:47),Comma(4:47-4:48),LowerIdent(4:49-4:50),Comma(4:50-4:51),LowerIdent(4:52-4:53),Comma(4:53-4:54),LowerIdent(4:55-4:56),CloseRound(4:56-4:57),
 LowerIdent(5:1-5:13),OpAssign(5:14-5:15),OpBar(5:16-5:17),LowerIdent(5:17-5:19),Comma(5:19-5:20),LowerIdent(5:21-5:23),Comma(5:23-5:24),LowerIdent(5:25-5:27),Comma(5:27-5:28),LowerIdent(5:29-5:31),Comma(5:31-5:32),LowerIdent(5:33-5:35),Comma(5:35-5:36),LowerIdent(5:37-5:39),Comma(5:39-5:40),LowerIdent(5:41-5:43),Comma(5:43-5:44),LowerIdent(5:45-5:47),OpBar(5:47-5:48),
 OpenRound(6:5-6:6),LowerIdent(6:6-6:8),Comma(6:8-6:9),LowerIdent(6:10-6:12),Comma(6:12-6:13),LowerIdent(6:14-6:16),Comma(6:16-6:17),LowerIdent(6:18-6:20),Comma(6:20-6:21),LowerIdent(6:22-6:24),CloseRound(6:24-6:25),
@@ -121,9 +107,12 @@ EndOfFile(20:1-20:1),
 # PARSE
 ~~~clojure
 (file @1.1-19.2
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.23)
 	(statements
+		(s-type-decl @1.1-1.29
+			(header @1.1-1.23 (name "LambdaMultiArgMismatch")
+				(args))
+			(ty-record @1.27-1.29))
 		(s-type-anno @4.1-4.57 (name "multi_arg_fn")
 			(ty-fn @4.16-4.57
 				(ty-var @4.16-4.17 (raw "a"))
@@ -178,7 +167,7 @@ EndOfFile(20:1-20:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
+LambdaMultiArgMismatch := {}
 
 # Function with 8 arguments where several types must match (a appears in positions 1, 3, 5, 7)
 multi_arg_fn : a, b, a, c, a, d, a, e -> (a, b, c, d, e)
@@ -261,7 +250,10 @@ result = multi_arg_fn(
 			(e-nominal @17.5-17.9 (nominal "Bool")
 				(e-tag @17.5-17.9 (name "True")))
 			(e-string @18.5-18.11
-				(e-literal @18.6-18.10 (string "done"))))))
+				(e-literal @18.6-18.10 (string "done")))))
+	(s-nominal-decl @1.1-1.29
+		(ty-header @1.1-1.23 (name "LambdaMultiArgMismatch"))
+		(ty-record @1.27-1.29)))
 ~~~
 # TYPES
 ~~~clojure
@@ -269,6 +261,9 @@ result = multi_arg_fn(
 	(defs
 		(patt @5.1-5.13 (type "a, b, a, c, a, d, a, e -> (a, b, c, d, e)"))
 		(patt @10.1-10.7 (type "Error")))
+	(type_decls
+		(nominal @1.1-1.29 (type "LambdaMultiArgMismatch")
+			(ty-header @1.1-1.23 (name "LambdaMultiArgMismatch"))))
 	(expressions
 		(expr @5.16-6.25 (type "a, b, a, c, a, d, a, e -> (a, b, c, d, e)"))
 		(expr @10.10-19.2 (type "Error"))))

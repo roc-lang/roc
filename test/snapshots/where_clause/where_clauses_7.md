@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=where_clauses (7)
-type=file
+type=file:WhereClauses7.roc
 ~~~
 # SOURCE
 ~~~roc
-module [Hash]
+WhereClauses7 := {}
 
 Hash(a, hasher) # After header
 	: # After colon
@@ -23,23 +23,9 @@ Decode(a) : a
 		) -> a
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - where_clauses_7.md:1:1:1:14
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_7.md:3:1:10:26
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_7.md:12:1:16:9
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**where_clauses_7.md:1:1:1:14:**
-```roc
-module [Hash]
-```
-^^^^^^^^^^^^^
-
-
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
 
@@ -73,7 +59,7 @@ Decode(a) : a
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:13),CloseSquare(1:13-1:14),
+UpperIdent(1:1-1:14),OpColonEqual(1:15-1:17),OpenCurly(1:18-1:19),CloseCurly(1:19-1:20),
 UpperIdent(3:1-3:5),NoSpaceOpenRound(3:5-3:6),LowerIdent(3:6-3:7),Comma(3:7-3:8),LowerIdent(3:9-3:15),CloseRound(3:15-3:16),
 OpColon(4:2-4:3),
 LowerIdent(5:3-5:4),
@@ -92,10 +78,12 @@ EndOfFile(17:1-17:1),
 # PARSE
 ~~~clojure
 (file @1.1-16.9
-	(module @1.1-1.14
-		(exposes @1.8-1.14
-			(exposed-upper-ident @1.9-1.13 (text "Hash"))))
+	(type-module @1.1-1.14)
 	(statements
+		(s-type-decl @1.1-1.20
+			(header @1.1-1.14 (name "WhereClauses7")
+				(args))
+			(ty-record @1.18-1.20))
 		(s-type-decl @3.1-10.26
 			(header @3.1-3.16 (name "Hash")
 				(args
@@ -110,7 +98,7 @@ EndOfFile(17:1-17:1),
 ~~~
 # FORMATTED
 ~~~roc
-module [Hash]
+WhereClauses7 := {}
 
 Hash(a, hasher) # After header
 	: # After colon
@@ -128,6 +116,9 @@ Decode(a) : a
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(s-nominal-decl @1.1-1.20
+		(ty-header @1.1-1.14 (name "WhereClauses7"))
+		(ty-record @1.18-1.20))
 	(s-alias-decl @3.1-10.26
 		(ty-header @3.1-3.16 (name "Hash")
 			(ty-args
@@ -145,6 +136,8 @@ Decode(a) : a
 (inferred-types
 	(defs)
 	(type_decls
+		(nominal @1.1-1.20 (type "WhereClauses7")
+			(ty-header @1.1-1.14 (name "WhereClauses7")))
 		(alias @3.1-10.26 (type "Hash(a, hasher)")
 			(ty-header @3.1-3.16 (name "Hash")
 				(ty-args

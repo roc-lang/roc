@@ -1,77 +1,64 @@
 # META
 ~~~ini
 description=fuzz crash
-type=file
+type=file:FuzzCrash078.roc
 ~~~
 # SOURCE
 ~~~roc
-module[]e="""
+FuzzCrash078 := {}
+
 import#\
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_078.md:3:1:3:1
-MODULE HEADER DEPRECATED - fuzz_crash_078.md:1:1:1:9
+PARSE ERROR - fuzz_crash_078.md:4:1:4:1
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `incomplete_import`
 This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_078.md:3:1:3:1:**
+**fuzz_crash_078.md:4:1:4:1:**
 ```roc
 
 ```
 ^
 
 
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**fuzz_crash_078.md:1:1:1:9:**
-```roc
-module[]e="""
-```
-^^^^^^^^
-
-
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),LowerIdent(1:9-1:10),OpAssign(1:10-1:11),MultilineStringStart(1:11-1:14),StringPart(1:14-1:14),
-KwImport(2:1-2:7),
-EndOfFile(3:1-3:1),
+UpperIdent(1:1-1:13),OpColonEqual(1:14-1:16),OpenCurly(1:17-1:18),CloseCurly(1:18-1:19),
+KwImport(3:1-3:7),
+EndOfFile(4:1-4:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-2.7
-	(module @1.1-1.9
-		(exposes @1.7-1.9))
+(file @1.1-3.7
+	(type-module @1.1-1.13)
 	(statements
-		(s-decl @1.9-1.14
-			(p-ident @1.9-1.10 (raw "e"))
-			(e-multiline-string @1.11-1.14
-				(e-string-part @1.14-1.14 (raw ""))))
-		(s-malformed @2.1-2.7 (tag "incomplete_import"))))
+		(s-type-decl @1.1-1.19
+			(header @1.1-1.13 (name "FuzzCrash078")
+				(args))
+			(ty-record @1.17-1.19))
+		(s-malformed @3.1-3.7 (tag "incomplete_import"))))
 ~~~
 # FORMATTED
 ~~~roc
-module []
-e = """
+FuzzCrash078 := {}
+
 # \
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @1.9-1.10 (ident "e"))
-		(e-string @1.11-1.14)))
+	(s-nominal-decl @1.1-1.19
+		(ty-header @1.1-1.13 (name "FuzzCrash078"))
+		(ty-record @1.17-1.19)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs
-		(patt @1.9-1.10 (type "Str")))
-	(expressions
-		(expr @1.11-1.14 (type "Str"))))
+	(defs)
+	(type_decls
+		(nominal @1.1-1.19 (type "FuzzCrash078")
+			(ty-header @1.1-1.13 (name "FuzzCrash078"))))
+	(expressions))
 ~~~

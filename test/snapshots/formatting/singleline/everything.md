@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Singleline formatting everything
-type=file
+type=file:Everything.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+Everything := {}
 
 # Import exposing
 import I1 exposing [I11, I12]
@@ -38,7 +38,6 @@ h = |x, y| {
 }
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - everything.md:1:1:1:10
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:8:1:8:74
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:9:1:9:74
 MODULE NOT FOUND - everything.md:4:1:4:30
@@ -53,19 +52,6 @@ UNUSED VARIABLE - everything.md:21:2:21:4
 UNUSED VARIABLE - everything.md:22:2:22:4
 UNUSED VARIABLE - everything.md:23:2:23:4
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**everything.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
 
@@ -220,7 +206,7 @@ The unused variable is declared here:
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:11),OpColonEqual(1:12-1:14),OpenCurly(1:15-1:16),CloseCurly(1:16-1:17),
 KwImport(4:1-4:7),UpperIdent(4:8-4:10),KwExposing(4:11-4:19),OpenSquare(4:20-4:21),UpperIdent(4:21-4:24),Comma(4:24-4:25),UpperIdent(4:26-4:29),CloseSquare(4:29-4:30),
 KwImport(5:1-5:7),UpperIdent(5:8-5:10),KwExposing(5:11-5:19),OpenSquare(5:20-5:21),UpperIdent(5:21-5:24),KwAs(5:25-5:27),UpperIdent(5:28-5:32),Comma(5:32-5:33),UpperIdent(5:34-5:37),KwAs(5:38-5:40),UpperIdent(5:41-5:45),CloseSquare(5:45-5:46),
 UpperIdent(8:1-8:2),NoSpaceOpenRound(8:2-8:3),LowerIdent(8:3-8:4),CloseRound(8:4-8:5),OpColon(8:6-8:7),LowerIdent(8:8-8:9),KwWhere(8:10-8:15),KwModule(8:16-8:22),NoSpaceOpenRound(8:22-8:23),LowerIdent(8:23-8:24),CloseRound(8:24-8:25),NoSpaceDotLowerIdent(8:25-8:28),OpColon(8:29-8:30),OpenRound(8:31-8:32),LowerIdent(8:32-8:33),Comma(8:33-8:34),LowerIdent(8:35-8:36),CloseRound(8:36-8:37),OpArrow(8:38-8:40),UpperIdent(8:41-8:44),Comma(8:44-8:45),KwModule(8:46-8:52),NoSpaceOpenRound(8:52-8:53),LowerIdent(8:53-8:54),CloseRound(8:54-8:55),NoSpaceDotLowerIdent(8:55-8:58),OpColon(8:59-8:60),OpenRound(8:61-8:62),LowerIdent(8:62-8:63),Comma(8:63-8:64),LowerIdent(8:65-8:66),CloseRound(8:66-8:67),OpArrow(8:68-8:70),UpperIdent(8:71-8:74),
@@ -248,9 +234,12 @@ EndOfFile(32:1-32:1),
 # PARSE
 ~~~clojure
 (file @1.1-31.2
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.11)
 	(statements
+		(s-type-decl @1.1-1.17
+			(header @1.1-1.11 (name "Everything")
+				(args))
+			(ty-record @1.15-1.17))
 		(s-import @4.1-4.30 (raw "I1")
 			(exposing
 				(exposed-upper-ident @4.21-4.24 (text "I11"))
@@ -389,11 +378,11 @@ NO CHANGE
 		(p-assign @18.1-18.2 (ident "h"))
 		(e-closure @18.5-31.2
 			(captures
-				(capture @26.7-26.8 (ident "a"))
+				(capture @27.6-27.7 (ident "a"))
 				(capture @28.8-28.9 (ident "a"))
-				(capture @18.1-18.2 (ident "h"))
 				(capture @29.7-29.8 (ident "a"))
-				(capture @27.6-27.7 (ident "a")))
+				(capture @18.1-18.2 (ident "h"))
+				(capture @26.7-26.8 (ident "a")))
 			(e-lambda @18.5-31.2
 				(args
 					(p-assign @18.6-18.7 (ident "x"))
@@ -485,6 +474,9 @@ NO CHANGE
 									(value
 										(e-lookup-local @29.17-29.18
 											(p-assign @29.7-29.8 (ident "a"))))))))))))
+	(s-nominal-decl @1.1-1.17
+		(ty-header @1.1-1.11 (name "Everything"))
+		(ty-record @1.15-1.17))
 	(s-alias-decl @8.1-8.74
 		(ty-header @8.1-8.5 (name "A")
 			(ty-args
@@ -547,6 +539,8 @@ NO CHANGE
 	(defs
 		(patt @18.1-18.2 (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j, [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j -> c")))
 	(type_decls
+		(nominal @1.1-1.17 (type "Everything")
+			(ty-header @1.1-1.11 (name "Everything")))
 		(alias @8.1-8.74 (type "A(a)")
 			(ty-header @8.1-8.5 (name "A")
 				(ty-args

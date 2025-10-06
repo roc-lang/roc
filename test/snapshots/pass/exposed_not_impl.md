@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Module exposes values that are not implemented
-type=file
+type=file:ExposedNotImpl.roc
 ~~~
 # SOURCE
 ~~~roc
-module [foo, bar, MyType, OtherType, foo, MyType]
+ExposedNotImpl := {}
 
 # This module exposes foo, bar, MyType, and OtherType
 # but only implements foo and MyType
@@ -17,68 +17,12 @@ foo = 42
 MyType : [A, B, C]
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - exposed_not_impl.md:1:1:1:50
-REDUNDANT EXPOSED - exposed_not_impl.md:1:38:1:41
-REDUNDANT EXPOSED - exposed_not_impl.md:1:43:1:49
-EXPOSED BUT NOT DEFINED - exposed_not_impl.md:1:14:1:17
-EXPOSED BUT NOT DEFINED - exposed_not_impl.md:1:27:1:36
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**exposed_not_impl.md:1:1:1:50:**
-```roc
-module [foo, bar, MyType, OtherType, foo, MyType]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**REDUNDANT EXPOSED**
-The identifier `foo` is exposed multiple times in the module header.
-
-**exposed_not_impl.md:1:38:1:41:**
-```roc
-module [foo, bar, MyType, OtherType, foo, MyType]
-```
-                                     ^^^
-You can remove the duplicate entry to fix this warning.
-
-**REDUNDANT EXPOSED**
-The identifier `MyType` is exposed multiple times in the module header.
-
-**exposed_not_impl.md:1:43:1:49:**
-```roc
-module [foo, bar, MyType, OtherType, foo, MyType]
-```
-                                          ^^^^^^
-You can remove the duplicate entry to fix this warning.
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `bar` is exposed, but it is not defined anywhere in this module.
-
-**exposed_not_impl.md:1:14:1:17:**
-```roc
-module [foo, bar, MyType, OtherType, foo, MyType]
-```
-             ^^^
-You can fix this by either defining `bar` in this module, or by removing it from the list of exposed values.
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `OtherType` is exposed, but it is not defined anywhere in this module.
-
-**exposed_not_impl.md:1:27:1:36:**
-```roc
-module [foo, bar, MyType, OtherType, foo, MyType]
-```
-                          ^^^^^^^^^
-You can fix this by either defining `OtherType` in this module, or by removing it from the list of exposed values.
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),Comma(1:12-1:13),LowerIdent(1:14-1:17),Comma(1:17-1:18),UpperIdent(1:19-1:25),Comma(1:25-1:26),UpperIdent(1:27-1:36),Comma(1:36-1:37),LowerIdent(1:38-1:41),Comma(1:41-1:42),UpperIdent(1:43-1:49),CloseSquare(1:49-1:50),
+UpperIdent(1:1-1:15),OpColonEqual(1:16-1:18),OpenCurly(1:19-1:20),CloseCurly(1:20-1:21),
 LowerIdent(8:1-8:4),OpAssign(8:5-8:6),Int(8:7-8:9),
 UpperIdent(10:1-10:7),OpColon(10:8-10:9),OpenSquare(10:10-10:11),UpperIdent(10:11-10:12),Comma(10:12-10:13),UpperIdent(10:14-10:15),Comma(10:15-10:16),UpperIdent(10:17-10:18),CloseSquare(10:18-10:19),
 EndOfFile(11:1-11:1),
@@ -86,18 +30,12 @@ EndOfFile(11:1-11:1),
 # PARSE
 ~~~clojure
 (file @1.1-10.19
-	(module @1.1-1.50
-		(exposes @1.8-1.50
-			(exposed-lower-ident @1.9-1.12
-				(text "foo"))
-			(exposed-lower-ident @1.14-1.17
-				(text "bar"))
-			(exposed-upper-ident @1.19-1.25 (text "MyType"))
-			(exposed-upper-ident @1.27-1.36 (text "OtherType"))
-			(exposed-lower-ident @1.38-1.41
-				(text "foo"))
-			(exposed-upper-ident @1.43-1.49 (text "MyType"))))
+	(type-module @1.1-1.15)
 	(statements
+		(s-type-decl @1.1-1.21
+			(header @1.1-1.15 (name "ExposedNotImpl")
+				(args))
+			(ty-record @1.19-1.21))
 		(s-decl @8.1-8.9
 			(p-ident @8.1-8.4 (raw "foo"))
 			(e-int @8.7-8.9 (raw "42")))
@@ -120,6 +58,9 @@ NO CHANGE
 	(d-let
 		(p-assign @8.1-8.4 (ident "foo"))
 		(e-num @8.7-8.9 (value "42")))
+	(s-nominal-decl @1.1-1.21
+		(ty-header @1.1-1.15 (name "ExposedNotImpl"))
+		(ty-record @1.19-1.21))
 	(s-alias-decl @10.1-10.19
 		(ty-header @10.1-10.7 (name "MyType"))
 		(ty-tag-union @10.10-10.19
@@ -133,6 +74,8 @@ NO CHANGE
 	(defs
 		(patt @8.1-8.4 (type "Num(_size)")))
 	(type_decls
+		(nominal @1.1-1.21 (type "ExposedNotImpl")
+			(ty-header @1.1-1.15 (name "ExposedNotImpl")))
 		(alias @10.1-10.19 (type "MyType")
 			(ty-header @10.1-10.7 (name "MyType"))))
 	(expressions

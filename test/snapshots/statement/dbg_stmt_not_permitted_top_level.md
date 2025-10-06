@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Debug expression not permitted at the top level
-type=file
+type=file:DbgStmtNotPermittedTopLevel.roc
 ~~~
 # SOURCE
 ~~~roc
-module [foo]
+DbgStmtNotPermittedTopLevel := {}
 
 # not permitted
 dbg "foo"
@@ -13,22 +13,8 @@ dbg "foo"
 foo = ...
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - dbg_stmt_not_permitted_top_level.md:1:1:1:13
 INVALID STATEMENT - dbg_stmt_not_permitted_top_level.md:4:1:4:10
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**dbg_stmt_not_permitted_top_level.md:1:1:1:13:**
-```roc
-module [foo]
-```
-^^^^^^^^^^^^
-
-
 **INVALID STATEMENT**
 The statement `dbg` is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -42,7 +28,7 @@ dbg "foo"
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),
+UpperIdent(1:1-1:28),OpColonEqual(1:29-1:31),OpenCurly(1:32-1:33),CloseCurly(1:33-1:34),
 KwDbg(4:1-4:4),StringStart(4:5-4:6),StringPart(4:6-4:9),StringEnd(4:9-4:10),
 LowerIdent(6:1-6:4),OpAssign(6:5-6:6),TripleDot(6:7-6:10),
 EndOfFile(7:1-7:1),
@@ -50,11 +36,12 @@ EndOfFile(7:1-7:1),
 # PARSE
 ~~~clojure
 (file @1.1-6.10
-	(module @1.1-1.13
-		(exposes @1.8-1.13
-			(exposed-lower-ident @1.9-1.12
-				(text "foo"))))
+	(type-module @1.1-1.28)
 	(statements
+		(s-type-decl @1.1-1.34
+			(header @1.1-1.28 (name "DbgStmtNotPermittedTopLevel")
+				(args))
+			(ty-record @1.32-1.34))
 		(s-dbg @4.1-4.10
 			(e-string @4.5-4.10
 				(e-string-part @4.6-4.9 (raw "foo"))))
@@ -71,13 +58,19 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @6.1-6.4 (ident "foo"))
-		(e-not-implemented @1.1-1.1)))
+		(e-not-implemented @1.1-1.1))
+	(s-nominal-decl @1.1-1.34
+		(ty-header @1.1-1.28 (name "DbgStmtNotPermittedTopLevel"))
+		(ty-record @1.32-1.34)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @6.1-6.4 (type "_a")))
+	(type_decls
+		(nominal @1.1-1.34 (type "DbgStmtNotPermittedTopLevel")
+			(ty-header @1.1-1.28 (name "DbgStmtNotPermittedTopLevel"))))
 	(expressions
 		(expr @1.1-1.1 (type "_a"))))
 ~~~

@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Debug expression in a block context both statement and expression versions
-type=file
+type=file:DbgStmtBlockExample.roc
 ~~~
 # SOURCE
 ~~~roc
-module [foo]
+DbgStmtBlockExample := {}
 
 foo = |num| {
     # statement - prints out the value of num convertert to a string
@@ -16,24 +16,12 @@ foo = |num| {
 }
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - dbg_stmt_block_example.md:1:1:1:13
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**dbg_stmt_block_example.md:1:1:1:13:**
-```roc
-module [foo]
-```
-^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),
+UpperIdent(1:1-1:20),OpColonEqual(1:21-1:23),OpenCurly(1:24-1:25),CloseCurly(1:25-1:26),
 LowerIdent(3:1-3:4),OpAssign(3:5-3:6),OpBar(3:7-3:8),LowerIdent(3:8-3:11),OpBar(3:11-3:12),OpenCurly(3:13-3:14),
 KwDbg(5:5-5:8),LowerIdent(5:9-5:12),NoSpaceDotLowerIdent(5:12-5:19),NoSpaceOpenRound(5:19-5:20),CloseRound(5:20-5:21),
 KwDbg(8:5-8:8),NoSpaceOpenRound(8:8-8:9),LowerIdent(8:9-8:12),CloseRound(8:12-8:13),
@@ -43,11 +31,12 @@ EndOfFile(10:1-10:1),
 # PARSE
 ~~~clojure
 (file @1.1-9.2
-	(module @1.1-1.13
-		(exposes @1.8-1.13
-			(exposed-lower-ident @1.9-1.12
-				(text "foo"))))
+	(type-module @1.1-1.20)
 	(statements
+		(s-type-decl @1.1-1.26
+			(header @1.1-1.20 (name "DbgStmtBlockExample")
+				(args))
+			(ty-record @1.24-1.26))
 		(s-decl @3.1-9.2
 			(p-ident @3.1-3.4 (raw "foo"))
 			(e-lambda @3.7-9.2
@@ -66,7 +55,7 @@ EndOfFile(10:1-10:1),
 ~~~
 # FORMATTED
 ~~~roc
-module [foo]
+DbgStmtBlockExample := {}
 
 foo = |num| {
 	# statement - prints out the value of num convertert to a string
@@ -93,13 +82,19 @@ foo = |num| {
 						(args)))
 				(e-dbg @8.5-8.13
 					(e-lookup-local @8.9-8.12
-						(p-assign @3.8-3.11 (ident "num"))))))))
+						(p-assign @3.8-3.11 (ident "num")))))))
+	(s-nominal-decl @1.1-1.26
+		(ty-header @1.1-1.20 (name "DbgStmtBlockExample"))
+		(ty-record @1.24-1.26)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @3.1-3.4 (type "a -> a")))
+	(type_decls
+		(nominal @1.1-1.26 (type "DbgStmtBlockExample")
+			(ty-header @1.1-1.20 (name "DbgStmtBlockExample"))))
 	(expressions
 		(expr @3.7-9.2 (type "a -> a"))))
 ~~~

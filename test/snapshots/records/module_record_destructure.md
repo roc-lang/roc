@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Record destructuring in assignment statement
-type=file
+type=file:ModuleRecordDestructure.roc
 ~~~
 # SOURCE
 ~~~roc
-module [extract_age]
+ModuleRecordDestructure := {}
 
 extract_age : { age : U64 } -> U64
 extract_age = |person| {
@@ -15,24 +15,12 @@ extract_age = |person| {
 }
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - module_record_destructure.md:1:1:1:21
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**module_record_destructure.md:1:1:1:21:**
-```roc
-module [extract_age]
-```
-^^^^^^^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:20),CloseSquare(1:20-1:21),
+UpperIdent(1:1-1:24),OpColonEqual(1:25-1:27),OpenCurly(1:28-1:29),CloseCurly(1:29-1:30),
 LowerIdent(3:1-3:12),OpColon(3:13-3:14),OpenCurly(3:15-3:16),LowerIdent(3:17-3:20),OpColon(3:21-3:22),UpperIdent(3:23-3:26),CloseCurly(3:27-3:28),OpArrow(3:29-3:31),UpperIdent(3:32-3:35),
 LowerIdent(4:1-4:12),OpAssign(4:13-4:14),OpBar(4:15-4:16),LowerIdent(4:16-4:22),OpBar(4:22-4:23),OpenCurly(4:24-4:25),
 OpenCurly(5:5-5:6),LowerIdent(5:7-5:10),CloseCurly(5:11-5:12),OpAssign(5:13-5:14),LowerIdent(5:15-5:21),
@@ -43,11 +31,12 @@ EndOfFile(9:1-9:1),
 # PARSE
 ~~~clojure
 (file @1.1-8.2
-	(module @1.1-1.21
-		(exposes @1.8-1.21
-			(exposed-lower-ident @1.9-1.20
-				(text "extract_age"))))
+	(type-module @1.1-1.24)
 	(statements
+		(s-type-decl @1.1-1.30
+			(header @1.1-1.24 (name "ModuleRecordDestructure")
+				(args))
+			(ty-record @1.28-1.30))
 		(s-type-anno @3.1-3.35 (name "extract_age")
 			(ty-fn @3.15-3.35
 				(ty-record @3.15-3.28
@@ -81,7 +70,7 @@ EndOfFile(9:1-9:1),
 ~~~
 # FORMATTED
 ~~~roc
-module [extract_age]
+ModuleRecordDestructure := {}
 
 extract_age : { age : U64 } -> U64
 extract_age = |person| {
@@ -129,13 +118,19 @@ extract_age = |person| {
 					(ty-record @3.15-3.28
 						(field (field "age")
 							(ty-lookup @3.23-3.26 (name "U64") (builtin))))
-					(ty-lookup @3.32-3.35 (name "U64") (builtin)))))))
+					(ty-lookup @3.32-3.35 (name "U64") (builtin))))))
+	(s-nominal-decl @1.1-1.30
+		(ty-header @1.1-1.24 (name "ModuleRecordDestructure"))
+		(ty-record @1.28-1.30)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @4.1-4.12 (type "{ age: Num(Int(Unsigned64)) } -> Num(Int(Unsigned64))")))
+	(type_decls
+		(nominal @1.1-1.30 (type "ModuleRecordDestructure")
+			(ty-header @1.1-1.24 (name "ModuleRecordDestructure"))))
 	(expressions
 		(expr @4.15-8.2 (type "{ age: Num(Int(Unsigned64)) } -> Num(Int(Unsigned64))"))))
 ~~~

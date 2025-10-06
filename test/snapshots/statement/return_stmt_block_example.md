@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Return statement in a block context
-type=file
+type=file:ReturnStmtBlockExample.roc
 ~~~
 # SOURCE
 ~~~roc
-module [foo]
+ReturnStmtBlockExample := {}
 
 foo : U64 -> Result(Str, [TooBig])
 foo = |num| {
@@ -18,22 +18,8 @@ foo = |num| {
 }
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - return_stmt_block_example.md:1:1:1:13
 INCOMPATIBLE IF BRANCHES - return_stmt_block_example.md:5:11:5:11
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**return_stmt_block_example.md:1:1:1:13:**
-```roc
-module [foo]
-```
-^^^^^^^^^^^^
-
-
 **INCOMPATIBLE IF BRANCHES**
 This `if` has an `else` branch with a different type from it's `then` branch:
 **return_stmt_block_example.md:5:11:**
@@ -59,7 +45,7 @@ To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),
+UpperIdent(1:1-1:23),OpColonEqual(1:24-1:26),OpenCurly(1:27-1:28),CloseCurly(1:28-1:29),
 LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:10),OpArrow(3:11-3:13),UpperIdent(3:14-3:20),NoSpaceOpenRound(3:20-3:21),UpperIdent(3:21-3:24),Comma(3:24-3:25),OpenSquare(3:26-3:27),UpperIdent(3:27-3:33),CloseSquare(3:33-3:34),CloseRound(3:34-3:35),
 LowerIdent(4:1-4:4),OpAssign(4:5-4:6),OpBar(4:7-4:8),LowerIdent(4:8-4:11),OpBar(4:11-4:12),OpenCurly(4:13-4:14),
 LowerIdent(5:5-5:8),OpAssign(5:9-5:10),KwIf(5:11-5:13),OpenRound(5:14-5:15),LowerIdent(5:15-5:18),OpGreaterThan(5:19-5:20),Int(5:21-5:23),CloseRound(5:23-5:24),OpenCurly(5:25-5:26),
@@ -74,11 +60,12 @@ EndOfFile(12:1-12:1),
 # PARSE
 ~~~clojure
 (file @1.1-11.2
-	(module @1.1-1.13
-		(exposes @1.8-1.13
-			(exposed-lower-ident @1.9-1.12
-				(text "foo"))))
+	(type-module @1.1-1.23)
 	(statements
+		(s-type-decl @1.1-1.29
+			(header @1.1-1.23 (name "ReturnStmtBlockExample")
+				(args))
+			(ty-record @1.27-1.29))
 		(s-type-anno @3.1-3.35 (name "foo")
 			(ty-fn @3.7-3.35
 				(ty @3.7-3.10 (name "U64"))
@@ -118,7 +105,7 @@ EndOfFile(12:1-12:1),
 ~~~
 # FORMATTED
 ~~~roc
-module [foo]
+ReturnStmtBlockExample := {}
 
 foo : U64 -> Result(Str, [TooBig])
 foo = |num| {
@@ -169,13 +156,19 @@ foo = |num| {
 					(ty-apply @3.14-3.35 (name "Result") (local)
 						(ty-lookup @3.14-3.35 (name "Str") (builtin))
 						(ty-tag-union @3.14-3.35
-							(ty-tag-name @3.27-3.33 (name "TooBig")))))))))
+							(ty-tag-name @3.27-3.33 (name "TooBig"))))))))
+	(s-nominal-decl @1.1-1.29
+		(ty-header @1.1-1.23 (name "ReturnStmtBlockExample"))
+		(ty-record @1.27-1.29)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @4.1-4.4 (type "Num(Int(Unsigned64)) -> Result(Error, [TooBig])")))
+	(type_decls
+		(nominal @1.1-1.29 (type "ReturnStmtBlockExample")
+			(ty-header @1.1-1.23 (name "ReturnStmtBlockExample"))))
 	(expressions
 		(expr @4.7-11.2 (type "Num(Int(Unsigned64)) -> Result(Error, [TooBig])"))))
 ~~~

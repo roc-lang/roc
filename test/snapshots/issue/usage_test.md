@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Test if usage affects error type conversion
-type=file
+type=file:UsageTest.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+UsageTest := {}
 
 UnusedType := _
 
@@ -15,30 +15,16 @@ value : UsedType
 value = 42
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - usage_test.md:1:1:1:10
 UNDERSCORE IN TYPE ALIAS - usage_test.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - usage_test.md:1:1:1:1
 TYPE MISMATCH - usage_test.md:8:9:8:11
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**usage_test.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
 
 **usage_test.md:1:1:1:1:**
 ```roc
-module []
+UsageTest := {}
 ```
 ^
 
@@ -49,7 +35,7 @@ Underscores are not allowed in type alias declarations.
 
 **usage_test.md:1:1:1:1:**
 ```roc
-module []
+UsageTest := {}
 ```
 ^
 
@@ -71,7 +57,7 @@ But the type annotation says it should have the type:
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:10),OpColonEqual(1:11-1:13),OpenCurly(1:14-1:15),CloseCurly(1:15-1:16),
 UpperIdent(3:1-3:11),OpColonEqual(3:12-3:14),Underscore(3:15-3:16),
 UpperIdent(5:1-5:9),OpColonEqual(5:10-5:12),Underscore(5:13-5:14),
 LowerIdent(7:1-7:6),OpColon(7:7-7:8),UpperIdent(7:9-7:17),
@@ -81,9 +67,12 @@ EndOfFile(9:1-9:1),
 # PARSE
 ~~~clojure
 (file @1.1-8.11
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.10)
 	(statements
+		(s-type-decl @1.1-1.16
+			(header @1.1-1.10 (name "UsageTest")
+				(args))
+			(ty-record @1.14-1.16))
 		(s-type-decl @3.1-3.16
 			(header @3.1-3.11 (name "UnusedType")
 				(args))
@@ -111,6 +100,9 @@ NO CHANGE
 		(annotation @8.1-8.6
 			(declared-type
 				(ty-lookup @7.9-7.17 (name "UsedType") (local)))))
+	(s-nominal-decl @1.1-1.16
+		(ty-header @1.1-1.10 (name "UsageTest"))
+		(ty-record @1.14-1.16))
 	(s-nominal-decl @3.1-3.16
 		(ty-header @3.1-3.11 (name "UnusedType"))
 		(ty-underscore @1.1-1.1))
@@ -124,6 +116,8 @@ NO CHANGE
 	(defs
 		(patt @8.1-8.6 (type "Error")))
 	(type_decls
+		(nominal @1.1-1.16 (type "UsageTest")
+			(ty-header @1.1-1.10 (name "UsageTest")))
 		(nominal @3.1-3.16 (type "UnusedType")
 			(ty-header @3.1-3.11 (name "UnusedType")))
 		(nominal @5.1-5.14 (type "UsedType")

@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Type parameters should not contain underscores (_) as they represent 'I don't care' types, which doesn't make sense when declaring a type.
-type=file
+type=file:UnderscoreInTypeParameters.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+UnderscoreInTypeParameters := {}
 
 # Type with underscore in parameter position
 MyType(_) : Str
@@ -23,7 +23,6 @@ ComplexType(_, b) : { field: b }
 MultiType(_, _, c) : c
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - underscore_in_type_parameters.md:1:1:1:10
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:4:8:4:9
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:7:9:7:10
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:10:12:10:13
@@ -31,19 +30,6 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:13:13:13:14
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:16:11:16:12
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:16:14:16:15
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**underscore_in_type_parameters.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
 
@@ -112,7 +98,7 @@ Underscores in type annotations mean "I don't care about this type", which doesn
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:27),OpColonEqual(1:28-1:30),OpenCurly(1:31-1:32),CloseCurly(1:32-1:33),
 UpperIdent(4:1-4:7),NoSpaceOpenRound(4:7-4:8),Underscore(4:8-4:9),CloseRound(4:9-4:10),OpColon(4:11-4:12),UpperIdent(4:13-4:16),
 UpperIdent(7:1-7:8),NoSpaceOpenRound(7:8-7:9),Underscore(7:9-7:10),Comma(7:10-7:11),LowerIdent(7:12-7:13),CloseRound(7:13-7:14),OpColon(7:15-7:16),LowerIdent(7:17-7:18),
 UpperIdent(10:1-10:8),NoSpaceOpenRound(10:8-10:9),LowerIdent(10:9-10:10),Comma(10:10-10:11),Underscore(10:12-10:13),CloseRound(10:13-10:14),OpColon(10:15-10:16),LowerIdent(10:17-10:18),
@@ -123,9 +109,12 @@ EndOfFile(17:1-17:1),
 # PARSE
 ~~~clojure
 (file @1.1-16.23
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.27)
 	(statements
+		(s-type-decl @1.1-1.33
+			(header @1.1-1.27 (name "UnderscoreInTypeParameters")
+				(args))
+			(ty-record @1.31-1.33))
 		(s-type-decl @4.1-4.16
 			(header @4.1-4.10 (name "MyType")
 				(args
@@ -161,7 +150,7 @@ EndOfFile(17:1-17:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
+UnderscoreInTypeParameters := {}
 
 # Type with underscore in parameter position
 MyType(_) : Str
@@ -181,6 +170,9 @@ MultiType(_, _, c) : c
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(s-nominal-decl @1.1-1.33
+		(ty-header @1.1-1.27 (name "UnderscoreInTypeParameters"))
+		(ty-record @1.31-1.33))
 	(s-alias-decl @4.1-4.16
 		(ty-header @4.1-4.10 (name "MyType")
 			(ty-args
@@ -219,6 +211,8 @@ MultiType(_, _, c) : c
 (inferred-types
 	(defs)
 	(type_decls
+		(nominal @1.1-1.33 (type "UnderscoreInTypeParameters")
+			(ty-header @1.1-1.27 (name "UnderscoreInTypeParameters")))
 		(alias @4.1-4.16 (type "MyType(Error)")
 			(ty-header @4.1-4.10 (name "MyType")
 				(ty-args

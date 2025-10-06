@@ -1,34 +1,22 @@
 # META
 ~~~ini
 description=Dec type annotation
-type=file
+type=file:DecAnnotation.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+DecAnnotation := {}
 
 x : Dec
 x = 123.456
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - dec_annotation.md:1:1:1:10
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**dec_annotation.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:14),OpColonEqual(1:15-1:17),OpenCurly(1:18-1:19),CloseCurly(1:19-1:20),
 LowerIdent(3:1-3:2),OpColon(3:3-3:4),UpperIdent(3:5-3:8),
 LowerIdent(4:1-4:2),OpAssign(4:3-4:4),Float(4:5-4:12),
 EndOfFile(5:1-5:1),
@@ -36,9 +24,12 @@ EndOfFile(5:1-5:1),
 # PARSE
 ~~~clojure
 (file @1.1-4.12
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.14)
 	(statements
+		(s-type-decl @1.1-1.20
+			(header @1.1-1.14 (name "DecAnnotation")
+				(args))
+			(ty-record @1.18-1.20))
 		(s-type-anno @3.1-3.8 (name "x")
 			(ty @3.5-3.8 (name "Dec")))
 		(s-decl @4.1-4.12
@@ -57,13 +48,19 @@ NO CHANGE
 		(e-frac-dec @4.5-4.12 (value "123.456"))
 		(annotation @4.1-4.2
 			(declared-type
-				(ty-lookup @3.5-3.8 (name "Dec") (builtin))))))
+				(ty-lookup @3.5-3.8 (name "Dec") (builtin)))))
+	(s-nominal-decl @1.1-1.20
+		(ty-header @1.1-1.14 (name "DecAnnotation"))
+		(ty-record @1.18-1.20)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @4.1-4.2 (type "Num(Frac(Decimal))")))
+	(type_decls
+		(nominal @1.1-1.20 (type "DecAnnotation")
+			(ty-header @1.1-1.14 (name "DecAnnotation"))))
 	(expressions
 		(expr @4.5-4.12 (type "Num(Frac(Decimal))"))))
 ~~~

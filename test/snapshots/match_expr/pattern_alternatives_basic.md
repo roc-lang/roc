@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Basic pattern alternatives with multiple tag patterns
-type=file
+type=file:PatternAlternativesBasic.roc
 ~~~
 # SOURCE
 ~~~roc
-module [kind]
+PatternAlternativesBasic := {}
 
 Color : [Red, Green, Blue, Yellow, Orange, Purple]
 
@@ -16,24 +16,12 @@ kind = |color| match color {
 }
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - pattern_alternatives_basic.md:1:1:1:14
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**pattern_alternatives_basic.md:1:1:1:14:**
-```roc
-module [kind]
-```
-^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:13),CloseSquare(1:13-1:14),
+UpperIdent(1:1-1:25),OpColonEqual(1:26-1:28),OpenCurly(1:29-1:30),CloseCurly(1:30-1:31),
 UpperIdent(3:1-3:6),OpColon(3:7-3:8),OpenSquare(3:9-3:10),UpperIdent(3:10-3:13),Comma(3:13-3:14),UpperIdent(3:15-3:20),Comma(3:20-3:21),UpperIdent(3:22-3:26),Comma(3:26-3:27),UpperIdent(3:28-3:34),Comma(3:34-3:35),UpperIdent(3:36-3:42),Comma(3:42-3:43),UpperIdent(3:44-3:50),CloseSquare(3:50-3:51),
 LowerIdent(5:1-5:5),OpColon(5:6-5:7),UpperIdent(5:8-5:13),OpArrow(5:14-5:16),UpperIdent(5:17-5:20),
 LowerIdent(6:1-6:5),OpAssign(6:6-6:7),OpBar(6:8-6:9),LowerIdent(6:9-6:14),OpBar(6:14-6:15),KwMatch(6:16-6:21),LowerIdent(6:22-6:27),OpenCurly(6:28-6:29),
@@ -45,11 +33,12 @@ EndOfFile(10:1-10:1),
 # PARSE
 ~~~clojure
 (file @1.1-9.2
-	(module @1.1-1.14
-		(exposes @1.8-1.14
-			(exposed-lower-ident @1.9-1.13
-				(text "kind"))))
+	(type-module @1.1-1.25)
 	(statements
+		(s-type-decl @1.1-1.31
+			(header @1.1-1.25 (name "PatternAlternativesBasic")
+				(args))
+			(ty-record @1.29-1.31))
 		(s-type-decl @3.1-3.51
 			(header @3.1-3.6 (name "Color")
 				(args))
@@ -90,7 +79,7 @@ EndOfFile(10:1-10:1),
 ~~~
 # FORMATTED
 ~~~roc
-module [kind]
+PatternAlternativesBasic := {}
 
 Color : [Red, Green, Blue, Yellow, Orange, Purple]
 
@@ -141,6 +130,9 @@ kind = |color| match color {
 				(ty-fn @5.8-5.20 (effectful false)
 					(ty-lookup @5.8-5.13 (name "Color") (local))
 					(ty-lookup @5.17-5.20 (name "Str") (builtin))))))
+	(s-nominal-decl @1.1-1.31
+		(ty-header @1.1-1.25 (name "PatternAlternativesBasic"))
+		(ty-record @1.29-1.31))
 	(s-alias-decl @3.1-3.51
 		(ty-header @3.1-3.6 (name "Color"))
 		(ty-tag-union @3.9-3.51
@@ -157,6 +149,8 @@ kind = |color| match color {
 	(defs
 		(patt @6.1-6.5 (type "Color -> Str")))
 	(type_decls
+		(nominal @1.1-1.31 (type "PatternAlternativesBasic")
+			(ty-header @1.1-1.25 (name "PatternAlternativesBasic")))
 		(alias @3.1-3.51 (type "Color")
 			(ty-header @3.1-3.6 (name "Color"))))
 	(expressions

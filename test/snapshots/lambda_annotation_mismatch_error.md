@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Lambda annotation mismatch error message test - verifies error messages assume annotation is correct and implementation is wrong
-type=file
+type=file:LambdaAnnotationMismatchError.roc
 ~~~
 # SOURCE
 ~~~roc
-module [string_function, wrong_type_function]
+LambdaAnnotationMismatchError := {}
 
 # Annotation says it takes and returns strings, but implementation uses number addition
 string_function : Str -> Str
@@ -16,23 +16,9 @@ wrong_type_function : I64 -> I64
 wrong_type_function = |x| x * 3.14
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - lambda_annotation_mismatch_error.md:1:1:1:46
 TYPE MISMATCH - lambda_annotation_mismatch_error.md:5:27:5:29
 TYPE MISMATCH - lambda_annotation_mismatch_error.md:9:31:9:35
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**lambda_annotation_mismatch_error.md:1:1:1:46:**
-```roc
-module [string_function, wrong_type_function]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **lambda_annotation_mismatch_error.md:5:27:5:29:**
@@ -65,7 +51,7 @@ But the type annotation says it should have the type:
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:24),Comma(1:24-1:25),LowerIdent(1:26-1:45),CloseSquare(1:45-1:46),
+UpperIdent(1:1-1:30),OpColonEqual(1:31-1:33),OpenCurly(1:34-1:35),CloseCurly(1:35-1:36),
 LowerIdent(4:1-4:16),OpColon(4:17-4:18),UpperIdent(4:19-4:22),OpArrow(4:23-4:25),UpperIdent(4:26-4:29),
 LowerIdent(5:1-5:16),OpAssign(5:17-5:18),OpBar(5:19-5:20),LowerIdent(5:20-5:21),OpBar(5:21-5:22),LowerIdent(5:23-5:24),OpPlus(5:25-5:26),Int(5:27-5:29),
 LowerIdent(8:1-8:20),OpColon(8:21-8:22),UpperIdent(8:23-8:26),OpArrow(8:27-8:29),UpperIdent(8:30-8:33),
@@ -75,13 +61,12 @@ EndOfFile(10:1-10:1),
 # PARSE
 ~~~clojure
 (file @1.1-9.35
-	(module @1.1-1.46
-		(exposes @1.8-1.46
-			(exposed-lower-ident @1.9-1.24
-				(text "string_function"))
-			(exposed-lower-ident @1.26-1.45
-				(text "wrong_type_function"))))
+	(type-module @1.1-1.30)
 	(statements
+		(s-type-decl @1.1-1.36
+			(header @1.1-1.30 (name "LambdaAnnotationMismatchError")
+				(args))
+			(ty-record @1.34-1.36))
 		(s-type-anno @4.1-4.29 (name "string_function")
 			(ty-fn @4.19-4.29
 				(ty @4.19-4.22 (name "Str"))
@@ -141,7 +126,10 @@ NO CHANGE
 			(declared-type
 				(ty-fn @8.23-8.33 (effectful false)
 					(ty-lookup @8.23-8.26 (name "I64") (builtin))
-					(ty-lookup @8.30-8.33 (name "I64") (builtin)))))))
+					(ty-lookup @8.30-8.33 (name "I64") (builtin))))))
+	(s-nominal-decl @1.1-1.36
+		(ty-header @1.1-1.30 (name "LambdaAnnotationMismatchError"))
+		(ty-record @1.34-1.36)))
 ~~~
 # TYPES
 ~~~clojure
@@ -149,6 +137,9 @@ NO CHANGE
 	(defs
 		(patt @5.1-5.16 (type "Str -> Error"))
 		(patt @9.1-9.20 (type "Num(Int(Signed64)) -> Error")))
+	(type_decls
+		(nominal @1.1-1.36 (type "LambdaAnnotationMismatchError")
+			(ty-header @1.1-1.30 (name "LambdaAnnotationMismatchError"))))
 	(expressions
 		(expr @5.19-5.29 (type "Str -> Error"))
 		(expr @9.23-9.35 (type "Num(Int(Signed64)) -> Error"))))

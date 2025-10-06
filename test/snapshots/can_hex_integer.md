@@ -1,42 +1,33 @@
 # META
 ~~~ini
 description=Hexadecimal integer literal type inference
-type=file
+type=file:CanHexInteger.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+CanHexInteger := {}
 
 x = 0xFF
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - can_hex_integer.md:1:1:1:10
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**can_hex_integer.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:14),OpColonEqual(1:15-1:17),OpenCurly(1:18-1:19),CloseCurly(1:19-1:20),
 LowerIdent(3:1-3:2),OpAssign(3:3-3:4),Int(3:5-3:9),
 EndOfFile(4:1-4:1),
 ~~~
 # PARSE
 ~~~clojure
 (file @1.1-3.9
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.14)
 	(statements
+		(s-type-decl @1.1-1.20
+			(header @1.1-1.14 (name "CanHexInteger")
+				(args))
+			(ty-record @1.18-1.20))
 		(s-decl @3.1-3.9
 			(p-ident @3.1-3.2 (raw "x"))
 			(e-int @3.5-3.9 (raw "0xFF")))))
@@ -50,13 +41,19 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @3.1-3.2 (ident "x"))
-		(e-num @3.5-3.9 (value "255"))))
+		(e-num @3.5-3.9 (value "255")))
+	(s-nominal-decl @1.1-1.20
+		(ty-header @1.1-1.14 (name "CanHexInteger"))
+		(ty-record @1.18-1.20)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @3.1-3.2 (type "Num(Int(_size))")))
+	(type_decls
+		(nominal @1.1-1.20 (type "CanHexInteger")
+			(ty-header @1.1-1.14 (name "CanHexInteger"))))
 	(expressions
 		(expr @3.5-3.9 (type "Num(Int(_size))"))))
 ~~~

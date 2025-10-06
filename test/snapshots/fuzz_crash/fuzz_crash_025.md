@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=fuzz crash
-type=file
+type=file:FuzzCrash025.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+FuzzCrash025 := {}
 
 a : U8
 a = 255
@@ -41,7 +41,6 @@ PARSE ERROR - fuzz_crash_025.md:14:48:14:49
 PARSE ERROR - fuzz_crash_025.md:15:1:15:2
 PARSE ERROR - fuzz_crash_025.md:15:3:15:4
 PARSE ERROR - fuzz_crash_025.md:15:4:15:5
-MODULE HEADER DEPRECATED - fuzz_crash_025.md:1:1:1:10
 TYPE MISMATCH - fuzz_crash_025.md:14:5:14:48
 # PROBLEMS
 **PARSE ERROR**
@@ -145,19 +144,6 @@ f =8
    ^
 
 
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**fuzz_crash_025.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **fuzz_crash_025.md:14:5:14:48:**
@@ -176,7 +162,7 @@ But the type annotation says it should have the type:
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:13),OpColonEqual(1:14-1:16),OpenCurly(1:17-1:18),CloseCurly(1:18-1:19),
 LowerIdent(3:1-3:2),OpColon(3:3-3:4),UpperIdent(3:5-3:7),
 LowerIdent(4:1-4:2),OpAssign(4:3-4:4),Int(4:5-4:8),
 LowerIdent(6:1-6:2),OpColon(6:3-6:4),UpperIdent(6:5-6:8),
@@ -200,9 +186,12 @@ EndOfFile(28:1-28:1),
 # PARSE
 ~~~clojure
 (file @1.1-27.29
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.13)
 	(statements
+		(s-type-decl @1.1-1.19
+			(header @1.1-1.13 (name "FuzzCrash025")
+				(args))
+			(ty-record @1.17-1.19))
 		(s-type-anno @3.1-3.7 (name "a")
 			(ty @3.5-3.7 (name "U8")))
 		(s-decl @4.1-4.8
@@ -253,7 +242,7 @@ EndOfFile(28:1-28:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
+FuzzCrash025 := {}
 
 a : U8
 a = 255
@@ -332,7 +321,10 @@ j = -17011687303715884105728
 		(e-num @27.5-27.29 (value "-17011687303715884105728"))
 		(annotation @27.1-27.2
 			(declared-type
-				(ty-lookup @26.5-26.9 (name "I128") (builtin))))))
+				(ty-lookup @26.5-26.9 (name "I128") (builtin)))))
+	(s-nominal-decl @1.1-1.19
+		(ty-header @1.1-1.13 (name "FuzzCrash025"))
+		(ty-record @1.17-1.19)))
 ~~~
 # TYPES
 ~~~clojure
@@ -346,6 +338,9 @@ j = -17011687303715884105728
 		(patt @21.1-21.2 (type "Num(Int(Signed32))"))
 		(patt @24.1-24.2 (type "Num(Int(Signed64))"))
 		(patt @27.1-27.2 (type "Num(Int(Signed128))")))
+	(type_decls
+		(nominal @1.1-1.19 (type "FuzzCrash025")
+			(ty-header @1.1-1.13 (name "FuzzCrash025"))))
 	(expressions
 		(expr @4.5-4.8 (type "Num(Int(Unsigned8))"))
 		(expr @7.5-7.10 (type "Num(Int(Unsigned16))"))

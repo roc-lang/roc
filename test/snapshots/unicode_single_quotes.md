@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Unicode single quotes
-type=file
+type=file:UnicodeSingleQuotes.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+UnicodeSingleQuotes := {}
 
 x = (
     'a',
@@ -46,7 +46,6 @@ UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:16:5:16:11
 UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:17:5:17:9
 UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:20:5:20:7
 PARSE ERROR - unicode_single_quotes.md:23:1:23:3
-MODULE HEADER DEPRECATED - unicode_single_quotes.md:1:1:1:10
 INVALID TUPLE ELEMENT - :0:0:0:0
 INVALID TUPLE ELEMENT - :0:0:0:0
 INVALID TUPLE ELEMENT - :0:0:0:0
@@ -221,19 +220,6 @@ This is an unexpected parsing error. Please check your syntax.
 ^^
 
 
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**unicode_single_quotes.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **INVALID TUPLE ELEMENT**
 This tuple element is malformed or contains invalid syntax.
 
@@ -271,7 +257,7 @@ This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:20),OpColonEqual(1:21-1:23),OpenCurly(1:24-1:25),CloseCurly(1:25-1:26),
 LowerIdent(3:1-3:2),OpAssign(3:3-3:4),OpenRound(3:5-3:6),
 SingleQuote(4:5-4:8),Comma(4:8-4:9),
 SingleQuote(5:5-5:9),Comma(5:9-5:10),
@@ -295,9 +281,12 @@ EndOfFile(24:1-24:1),
 # PARSE
 ~~~clojure
 (file @1.1-23.3
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.20)
 	(statements
+		(s-type-decl @1.1-1.26
+			(header @1.1-1.20 (name "UnicodeSingleQuotes")
+				(args))
+			(ty-record @1.24-1.26))
 		(s-decl @3.1-18.2
 			(p-ident @3.1-3.2 (raw "x"))
 			(e-tuple @3.5-18.2
@@ -322,7 +311,7 @@ EndOfFile(24:1-24:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
+UnicodeSingleQuotes := {}
 
 x = (
 	'a',
@@ -368,7 +357,10 @@ y =
 				(e-runtime-error (tag "tuple_elem_not_canonicalized")))))
 	(d-let
 		(p-assign @20.1-20.2 (ident "y"))
-		(e-runtime-error (tag "expr_not_canonicalized"))))
+		(e-runtime-error (tag "expr_not_canonicalized")))
+	(s-nominal-decl @1.1-1.26
+		(ty-header @1.1-1.20 (name "UnicodeSingleQuotes"))
+		(ty-record @1.24-1.26)))
 ~~~
 # TYPES
 ~~~clojure
@@ -376,6 +368,9 @@ y =
 	(defs
 		(patt @3.1-3.2 (type "(Num(Int(_size)), Num(Int(_size2)), Num(Int(_size3)), Error, Error, Error, Error, Num(Int(_size4)), Error, Num(Int(_size5)), Num(Int(_size6)), Error, Error, Error)"))
 		(patt @20.1-20.2 (type "Error")))
+	(type_decls
+		(nominal @1.1-1.26 (type "UnicodeSingleQuotes")
+			(ty-header @1.1-1.20 (name "UnicodeSingleQuotes"))))
 	(expressions
 		(expr @3.5-18.2 (type "(Num(Int(_size)), Num(Int(_size2)), Num(Int(_size3)), Error, Error, Error, Error, Num(Int(_size4)), Error, Num(Int(_size5)), Num(Int(_size6)), Error, Error, Error)"))
 		(expr @20.5-20.7 (type "Error"))))

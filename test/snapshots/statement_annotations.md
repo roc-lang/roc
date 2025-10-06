@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Inline annotation for statements
-type=file
+type=file:StatementAnnotations.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+StatementAnnotations := {}
 
 scopedTypeVarInternal : val -> val
 scopedTypeVarInternal = |a| {
@@ -21,24 +21,12 @@ scopedTypeVarInternal = |a| {
 }
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - statement_annotations.md:1:1:1:10
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**statement_annotations.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:21),OpColonEqual(1:22-1:24),OpenCurly(1:25-1:26),CloseCurly(1:26-1:27),
 LowerIdent(3:1-3:22),OpColon(3:23-3:24),LowerIdent(3:25-3:28),OpArrow(3:29-3:31),LowerIdent(3:32-3:35),
 LowerIdent(4:1-4:22),OpAssign(4:23-4:24),OpBar(4:25-4:26),LowerIdent(4:26-4:27),OpBar(4:27-4:28),OpenCurly(4:29-4:30),
 LowerIdent(5:2-5:3),OpColon(5:4-5:5),LowerIdent(5:6-5:15),OpArrow(5:16-5:18),LowerIdent(5:19-5:28),
@@ -54,9 +42,12 @@ EndOfFile(15:1-15:1),
 # PARSE
 ~~~clojure
 (file @1.1-14.2
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.21)
 	(statements
+		(s-type-decl @1.1-1.27
+			(header @1.1-1.21 (name "StatementAnnotations")
+				(args))
+			(ty-record @1.25-1.27))
 		(s-type-anno @3.1-3.35 (name "scopedTypeVarInternal")
 			(ty-fn @3.25-3.35
 				(ty-var @3.25-3.28 (raw "val"))
@@ -123,13 +114,19 @@ NO CHANGE
 			(declared-type
 				(ty-fn @3.25-3.35 (effectful false)
 					(ty-rigid-var @3.25-3.28 (name "val"))
-					(ty-rigid-var-lookup (ty-rigid-var @3.25-3.28 (name "val"))))))))
+					(ty-rigid-var-lookup (ty-rigid-var @3.25-3.28 (name "val")))))))
+	(s-nominal-decl @1.1-1.27
+		(ty-header @1.1-1.21 (name "StatementAnnotations"))
+		(ty-record @1.25-1.27)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @4.1-4.22 (type "val -> val")))
+	(type_decls
+		(nominal @1.1-1.27 (type "StatementAnnotations")
+			(ty-header @1.1-1.21 (name "StatementAnnotations"))))
 	(expressions
 		(expr @4.25-14.2 (type "val -> val"))))
 ~~~

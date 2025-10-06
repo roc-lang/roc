@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Basic variable scoping behavior
-type=file
+type=file:CanBasicScoping.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+CanBasicScoping := {}
 
 # Top-level variables
 x = 5
@@ -23,22 +23,8 @@ outerFunc = |_| {
 }
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - can_basic_scoping.md:1:1:1:10
 DUPLICATE DEFINITION - can_basic_scoping.md:9:5:9:6
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**can_basic_scoping.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **DUPLICATE DEFINITION**
 The name `x` is being redeclared in this scope.
 
@@ -59,7 +45,7 @@ x = 5
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:16),OpColonEqual(1:17-1:19),OpenCurly(1:20-1:21),CloseCurly(1:21-1:22),
 LowerIdent(4:1-4:2),OpAssign(4:3-4:4),Int(4:5-4:6),
 LowerIdent(5:1-5:2),OpAssign(5:3-5:4),Int(5:5-5:7),
 LowerIdent(8:1-8:10),OpAssign(8:11-8:12),OpBar(8:13-8:14),Underscore(8:14-8:15),OpBar(8:15-8:16),OpenCurly(8:17-8:18),
@@ -75,9 +61,12 @@ EndOfFile(17:1-17:1),
 # PARSE
 ~~~clojure
 (file @1.1-16.2
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.16)
 	(statements
+		(s-type-decl @1.1-1.22
+			(header @1.1-1.16 (name "CanBasicScoping")
+				(args))
+			(ty-record @1.20-1.22))
 		(s-decl @4.1-4.6
 			(p-ident @4.1-4.2 (raw "x"))
 			(e-int @4.5-4.6 (raw "5")))
@@ -110,7 +99,7 @@ EndOfFile(17:1-17:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
+CanBasicScoping := {}
 
 # Top-level variables
 x = 5
@@ -163,7 +152,10 @@ outerFunc = |_| {
 									(p-assign @12.9-12.10 (ident "z")))
 								(e-num @13.13-13.14 (value "1")))))
 					(e-lookup-local @15.5-15.16
-						(p-assign @10.5-10.16 (ident "innerResult"))))))))
+						(p-assign @10.5-10.16 (ident "innerResult")))))))
+	(s-nominal-decl @1.1-1.22
+		(ty-header @1.1-1.16 (name "CanBasicScoping"))
+		(ty-record @1.20-1.22)))
 ~~~
 # TYPES
 ~~~clojure
@@ -172,6 +164,9 @@ outerFunc = |_| {
 		(patt @4.1-4.2 (type "Num(_size)"))
 		(patt @5.1-5.2 (type "Num(_size)"))
 		(patt @8.1-8.10 (type "_arg -> Num(_size)")))
+	(type_decls
+		(nominal @1.1-1.22 (type "CanBasicScoping")
+			(ty-header @1.1-1.16 (name "CanBasicScoping"))))
 	(expressions
 		(expr @4.5-4.6 (type "Num(_size)"))
 		(expr @5.5-5.7 (type "Num(_size)"))

@@ -1,31 +1,17 @@
 # META
 ~~~ini
 description=Add a variable with spaces
-type=file
+type=file:AddVarWithSpaces.roc
 ~~~
 # SOURCE
 ~~~roc
-module [add2]
+AddVarWithSpaces := {}
 
 add2 = x +      2
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - add_var_with_spaces.md:1:1:1:14
 UNDEFINED VARIABLE - add_var_with_spaces.md:3:8:3:9
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**add_var_with_spaces.md:1:1:1:14:**
-```roc
-module [add2]
-```
-^^^^^^^^^^^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -39,18 +25,19 @@ add2 = x +      2
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:13),CloseSquare(1:13-1:14),
+UpperIdent(1:1-1:17),OpColonEqual(1:18-1:20),OpenCurly(1:21-1:22),CloseCurly(1:22-1:23),
 LowerIdent(3:1-3:5),OpAssign(3:6-3:7),LowerIdent(3:8-3:9),OpPlus(3:10-3:11),Int(3:17-3:18),
 EndOfFile(4:1-4:1),
 ~~~
 # PARSE
 ~~~clojure
 (file @1.1-3.18
-	(module @1.1-1.14
-		(exposes @1.8-1.14
-			(exposed-lower-ident @1.9-1.13
-				(text "add2"))))
+	(type-module @1.1-1.17)
 	(statements
+		(s-type-decl @1.1-1.23
+			(header @1.1-1.17 (name "AddVarWithSpaces")
+				(args))
+			(ty-record @1.21-1.23))
 		(s-decl @3.1-3.18
 			(p-ident @3.1-3.5 (raw "add2"))
 			(e-binop @3.8-3.18 (op "+")
@@ -59,7 +46,7 @@ EndOfFile(4:1-4:1),
 ~~~
 # FORMATTED
 ~~~roc
-module [add2]
+AddVarWithSpaces := {}
 
 add2 = x + 2
 ~~~
@@ -70,13 +57,19 @@ add2 = x + 2
 		(p-assign @3.1-3.5 (ident "add2"))
 		(e-binop @3.8-3.18 (op "add")
 			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-num @3.17-3.18 (value "2")))))
+			(e-num @3.17-3.18 (value "2"))))
+	(s-nominal-decl @1.1-1.23
+		(ty-header @1.1-1.17 (name "AddVarWithSpaces"))
+		(ty-record @1.21-1.23)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @3.1-3.5 (type "Error")))
+	(type_decls
+		(nominal @1.1-1.23 (type "AddVarWithSpaces")
+			(ty-header @1.1-1.17 (name "AddVarWithSpaces"))))
 	(expressions
 		(expr @3.8-3.18 (type "Error"))))
 ~~~

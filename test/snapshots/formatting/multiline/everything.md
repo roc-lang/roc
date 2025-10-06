@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Multiline formatting everything
-type=file
+type=file:Everything.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+Everything := {}
 
 # Import exposing
 import I1 exposing [
@@ -117,7 +117,6 @@ h = |x, y| {
 }
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - everything.md:1:1:1:10
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:14:1:23:11
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:24:1:33:11
 MODULE NOT FOUND - everything.md:4:1:7:2
@@ -132,19 +131,6 @@ UNUSED VARIABLE - everything.md:73:2:73:4
 UNUSED VARIABLE - everything.md:77:2:77:4
 UNUSED VARIABLE - everything.md:81:2:81:4
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**everything.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
 
@@ -319,7 +305,7 @@ The unused variable is declared here:
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:11),OpColonEqual(1:12-1:14),OpenCurly(1:15-1:16),CloseCurly(1:16-1:17),
 KwImport(4:1-4:7),UpperIdent(4:8-4:10),KwExposing(4:11-4:19),OpenSquare(4:20-4:21),
 UpperIdent(5:2-5:5),Comma(5:5-5:6),
 UpperIdent(6:2-6:5),Comma(6:5-6:6),
@@ -426,9 +412,12 @@ EndOfFile(111:1-111:1),
 # PARSE
 ~~~clojure
 (file @1.1-110.2
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.11)
 	(statements
+		(s-type-decl @1.1-1.17
+			(header @1.1-1.11 (name "Everything")
+				(args))
+			(ty-record @1.15-1.17))
 		(s-import @4.1-7.2 (raw "I1")
 			(exposing
 				(exposed-upper-ident @5.2-5.5 (text "I11"))
@@ -567,11 +556,11 @@ NO CHANGE
 		(p-assign @60.1-60.2 (ident "h"))
 		(e-closure @60.5-110.2
 			(captures
-				(capture @89.5-89.6 (ident "a"))
+				(capture @94.4-94.5 (ident "a"))
 				(capture @99.5-99.6 (ident "a"))
-				(capture @60.1-60.2 (ident "h"))
 				(capture @105.5-105.6 (ident "a"))
-				(capture @94.4-94.5 (ident "a")))
+				(capture @60.1-60.2 (ident "h"))
+				(capture @89.5-89.6 (ident "a")))
 			(e-lambda @60.5-110.2
 				(args
 					(p-assign @60.6-60.7 (ident "x"))
@@ -663,6 +652,9 @@ NO CHANGE
 									(value
 										(e-lookup-local @108.8-108.9
 											(p-assign @105.5-105.6 (ident "a"))))))))))))
+	(s-nominal-decl @1.1-1.17
+		(ty-header @1.1-1.11 (name "Everything"))
+		(ty-record @1.15-1.17))
 	(s-alias-decl @14.1-23.11
 		(ty-header @14.1-14.5 (name "A")
 			(ty-args
@@ -725,6 +717,8 @@ NO CHANGE
 	(defs
 		(patt @60.1-60.2 (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j, [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j -> c")))
 	(type_decls
+		(nominal @1.1-1.17 (type "Everything")
+			(ty-header @1.1-1.11 (name "Everything")))
 		(alias @14.1-23.11 (type "A(a)")
 			(ty-header @14.1-14.5 (name "A")
 				(ty-args

@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Simple test for single underscore type becoming error type
-type=file
+type=file:SimpleUnderscoreError.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+SimpleUnderscoreError := {}
 
 BadType := _
 
@@ -13,29 +13,15 @@ foo : BadType
 foo = 42
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - simple_underscore_error.md:1:1:1:10
 UNDERSCORE IN TYPE ALIAS - simple_underscore_error.md:1:1:1:1
 TYPE MISMATCH - simple_underscore_error.md:6:7:6:9
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**simple_underscore_error.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
 
 **simple_underscore_error.md:1:1:1:1:**
 ```roc
-module []
+SimpleUnderscoreError := {}
 ```
 ^
 
@@ -57,7 +43,7 @@ But the type annotation says it should have the type:
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:22),OpColonEqual(1:23-1:25),OpenCurly(1:26-1:27),CloseCurly(1:27-1:28),
 UpperIdent(3:1-3:8),OpColonEqual(3:9-3:11),Underscore(3:12-3:13),
 LowerIdent(5:1-5:4),OpColon(5:5-5:6),UpperIdent(5:7-5:14),
 LowerIdent(6:1-6:4),OpAssign(6:5-6:6),Int(6:7-6:9),
@@ -66,9 +52,12 @@ EndOfFile(7:1-7:1),
 # PARSE
 ~~~clojure
 (file @1.1-6.9
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.22)
 	(statements
+		(s-type-decl @1.1-1.28
+			(header @1.1-1.22 (name "SimpleUnderscoreError")
+				(args))
+			(ty-record @1.26-1.28))
 		(s-type-decl @3.1-3.13
 			(header @3.1-3.8 (name "BadType")
 				(args))
@@ -92,6 +81,9 @@ NO CHANGE
 		(annotation @6.1-6.4
 			(declared-type
 				(ty-lookup @5.7-5.14 (name "BadType") (local)))))
+	(s-nominal-decl @1.1-1.28
+		(ty-header @1.1-1.22 (name "SimpleUnderscoreError"))
+		(ty-record @1.26-1.28))
 	(s-nominal-decl @3.1-3.13
 		(ty-header @3.1-3.8 (name "BadType"))
 		(ty-underscore @1.1-1.1)))
@@ -102,6 +94,8 @@ NO CHANGE
 	(defs
 		(patt @6.1-6.4 (type "Error")))
 	(type_decls
+		(nominal @1.1-1.28 (type "SimpleUnderscoreError")
+			(ty-header @1.1-1.22 (name "SimpleUnderscoreError")))
 		(nominal @3.1-3.13 (type "BadType")
 			(ty-header @3.1-3.8 (name "BadType"))))
 	(expressions

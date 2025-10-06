@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Example of importing constructors with wildcard from a nominal tag union
-type=file
+type=file:NominalImportWildcard.roc
 ~~~
 # SOURCE
 ~~~roc
-module [red, green, blue]
+NominalImportWildcard := {}
 
 import Color.*
 
@@ -20,7 +20,6 @@ green = Green
 ~~~
 # EXPECTED
 PARSE ERROR - nominal_import_wildcard.md:3:13:3:15
-MODULE HEADER DEPRECATED - nominal_import_wildcard.md:1:1:1:26
 MODULE NOT FOUND - nominal_import_wildcard.md:3:1:3:13
 UNDECLARED TYPE - nominal_import_wildcard.md:5:7:5:12
 UNDECLARED TYPE - nominal_import_wildcard.md:8:8:8:13
@@ -35,19 +34,6 @@ This is an unexpected parsing error. Please check your syntax.
 import Color.*
 ```
             ^^
-
-
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**nominal_import_wildcard.md:1:1:1:26:**
-```roc
-module [red, green, blue]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **MODULE NOT FOUND**
@@ -96,7 +82,7 @@ green : Color
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),Comma(1:12-1:13),LowerIdent(1:14-1:19),Comma(1:19-1:20),LowerIdent(1:21-1:25),CloseSquare(1:25-1:26),
+UpperIdent(1:1-1:22),OpColonEqual(1:23-1:25),OpenCurly(1:26-1:27),CloseCurly(1:27-1:28),
 KwImport(3:1-3:7),UpperIdent(3:8-3:13),DotStar(3:13-3:15),
 LowerIdent(5:1-5:4),OpColon(5:5-5:6),UpperIdent(5:7-5:12),
 LowerIdent(6:1-6:4),OpAssign(6:5-6:6),UpperIdent(6:7-6:10),
@@ -109,15 +95,12 @@ EndOfFile(13:1-13:1),
 # PARSE
 ~~~clojure
 (file @1.1-12.14
-	(module @1.1-1.26
-		(exposes @1.8-1.26
-			(exposed-lower-ident @1.9-1.12
-				(text "red"))
-			(exposed-lower-ident @1.14-1.19
-				(text "green"))
-			(exposed-lower-ident @1.21-1.25
-				(text "blue"))))
+	(type-module @1.1-1.22)
 	(statements
+		(s-type-decl @1.1-1.28
+			(header @1.1-1.22 (name "NominalImportWildcard")
+				(args))
+			(ty-record @1.26-1.28))
 		(s-import @3.1-3.13 (raw "Color"))
 		(s-malformed @3.13-3.15 (tag "statement_unexpected_token"))
 		(s-type-anno @5.1-5.12 (name "red")
@@ -138,7 +121,7 @@ EndOfFile(13:1-13:1),
 ~~~
 # FORMATTED
 ~~~roc
-module [red, green, blue]
+NominalImportWildcard := {}
 
 import Color
 
@@ -173,6 +156,9 @@ green = Green
 		(annotation @12.1-12.6
 			(declared-type
 				(ty-malformed @11.9-11.14))))
+	(s-nominal-decl @1.1-1.28
+		(ty-header @1.1-1.22 (name "NominalImportWildcard"))
+		(ty-record @1.26-1.28))
 	(s-import @3.1-3.13 (module "Color")
 		(exposes)))
 ~~~
@@ -183,6 +169,9 @@ green = Green
 		(patt @6.1-6.4 (type "Error"))
 		(patt @9.1-9.5 (type "Error"))
 		(patt @12.1-12.6 (type "Error")))
+	(type_decls
+		(nominal @1.1-1.28 (type "NominalImportWildcard")
+			(ty-header @1.1-1.22 (name "NominalImportWildcard"))))
 	(expressions
 		(expr @6.7-6.10 (type "Error"))
 		(expr @9.8-9.12 (type "Error"))

@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Type mismatch showing nominal type origin from different module
-type=file
+type=file:NominalTypeOriginMismatch.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+NominalTypeOriginMismatch := {}
 
 import Data exposing [Person]
 
@@ -17,24 +17,10 @@ main =
     expectsPerson("not a person")
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - nominal_type_origin_mismatch.md:1:1:1:10
 MODULE NOT FOUND - nominal_type_origin_mismatch.md:3:1:3:30
 UNDECLARED TYPE - nominal_type_origin_mismatch.md:5:17:5:23
 UNUSED VARIABLE - nominal_type_origin_mismatch.md:6:18:6:19
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**nominal_type_origin_mismatch.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **MODULE NOT FOUND**
 The module `Data` was not found in this Roc project.
 
@@ -71,7 +57,7 @@ expectsPerson = |p| "Got a person"
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:26),OpColonEqual(1:27-1:29),OpenCurly(1:30-1:31),CloseCurly(1:31-1:32),
 KwImport(3:1-3:7),UpperIdent(3:8-3:12),KwExposing(3:13-3:21),OpenSquare(3:22-3:23),UpperIdent(3:23-3:29),CloseSquare(3:29-3:30),
 LowerIdent(5:1-5:14),OpColon(5:15-5:16),UpperIdent(5:17-5:23),OpArrow(5:24-5:26),UpperIdent(5:27-5:30),
 LowerIdent(6:1-6:14),OpAssign(6:15-6:16),OpBar(6:17-6:18),LowerIdent(6:18-6:19),OpBar(6:19-6:20),StringStart(6:21-6:22),StringPart(6:22-6:34),StringEnd(6:34-6:35),
@@ -82,9 +68,12 @@ EndOfFile(11:1-11:1),
 # PARSE
 ~~~clojure
 (file @1.1-10.34
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.26)
 	(statements
+		(s-type-decl @1.1-1.32
+			(header @1.1-1.26 (name "NominalTypeOriginMismatch")
+				(args))
+			(ty-record @1.30-1.32))
 		(s-import @3.1-3.30 (raw "Data")
 			(exposing
 				(exposed-upper-ident @3.23-3.29 (text "Person"))))
@@ -108,7 +97,7 @@ EndOfFile(11:1-11:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
+NominalTypeOriginMismatch := {}
 
 import Data exposing [Person]
 
@@ -141,6 +130,9 @@ main =
 				(p-assign @6.1-6.14 (ident "expectsPerson")))
 			(e-string @10.19-10.33
 				(e-literal @10.20-10.32 (string "not a person")))))
+	(s-nominal-decl @1.1-1.32
+		(ty-header @1.1-1.26 (name "NominalTypeOriginMismatch"))
+		(ty-record @1.30-1.32))
 	(s-import @3.1-3.30 (module "Data")
 		(exposes
 			(exposed (name "Person") (wildcard false)))))
@@ -151,6 +143,9 @@ main =
 	(defs
 		(patt @6.1-6.14 (type "Error -> Str"))
 		(patt @8.1-8.5 (type "Str")))
+	(type_decls
+		(nominal @1.1-1.32 (type "NominalTypeOriginMismatch")
+			(ty-header @1.1-1.26 (name "NominalTypeOriginMismatch"))))
 	(expressions
 		(expr @6.17-6.35 (type "Error -> Str"))
 		(expr @10.5-10.34 (type "Str"))))

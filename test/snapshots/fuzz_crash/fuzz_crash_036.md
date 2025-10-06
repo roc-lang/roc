@@ -1,90 +1,49 @@
 # META
 ~~~ini
 description=fuzz crash
-type=file
+type=file:FuzzCrash036.roc
 ~~~
 # SOURCE
 ~~~roc
-module[]{B
+FuzzCrash036 := {}
+
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_036.md:1:9:1:10
-PARSE ERROR - fuzz_crash_036.md:2:1:2:1
-MODULE HEADER DEPRECATED - fuzz_crash_036.md:1:1:1:9
+NIL
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_036.md:1:9:1:10:**
-```roc
-module[]{B
-```
-        ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Result(a, Str)`
-    `Maybe(List(U64))`
-
-**fuzz_crash_036.md:2:1:2:1:**
-```roc
-
-```
-^
-
-
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**fuzz_crash_036.md:1:1:1:9:**
-```roc
-module[]{B
-```
-^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),OpenCurly(1:9-1:10),UpperIdent(1:10-1:11),
-EndOfFile(2:1-2:1),
+UpperIdent(1:1-1:13),OpColonEqual(1:14-1:16),OpenCurly(1:17-1:18),CloseCurly(1:18-1:19),
+EndOfFile(3:1-3:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.11
-	(module @1.1-1.9
-		(exposes @1.7-1.9))
+(file @1.1-1.19
+	(type-module @1.1-1.13)
 	(statements
-		(s-malformed @1.9-1.10 (tag "statement_unexpected_token"))
-		(s-malformed @1.1-1.1 (tag "expected_colon_after_type_annotation"))))
+		(s-type-decl @1.1-1.19
+			(header @1.1-1.13 (name "FuzzCrash036")
+				(args))
+			(ty-record @1.17-1.19))))
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
+FuzzCrash036 := {}
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(s-nominal-decl @1.1-1.19
+		(ty-header @1.1-1.13 (name "FuzzCrash036"))
+		(ty-record @1.17-1.19)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
+	(type_decls
+		(nominal @1.1-1.19 (type "FuzzCrash036")
+			(ty-header @1.1-1.13 (name "FuzzCrash036"))))
 	(expressions))
 ~~~

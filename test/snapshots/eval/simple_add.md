@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Simple addition function with expect statement
-type=file
+type=file:SimpleAdd.roc
 ~~~
 # SOURCE
 ~~~roc
-module [addU8]
+SimpleAdd := {}
 
 addU8 : U8, U8 -> U8
 addU8 = |a, b| a + b
@@ -14,24 +14,12 @@ expect addU8(1, 2) == 3
 expect addU8(0, 10) == 10
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - simple_add.md:1:1:1:15
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**simple_add.md:1:1:1:15:**
-```roc
-module [addU8]
-```
-^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:14),CloseSquare(1:14-1:15),
+UpperIdent(1:1-1:10),OpColonEqual(1:11-1:13),OpenCurly(1:14-1:15),CloseCurly(1:15-1:16),
 LowerIdent(3:1-3:6),OpColon(3:7-3:8),UpperIdent(3:9-3:11),Comma(3:11-3:12),UpperIdent(3:13-3:15),OpArrow(3:16-3:18),UpperIdent(3:19-3:21),
 LowerIdent(4:1-4:6),OpAssign(4:7-4:8),OpBar(4:9-4:10),LowerIdent(4:10-4:11),Comma(4:11-4:12),LowerIdent(4:13-4:14),OpBar(4:14-4:15),LowerIdent(4:16-4:17),OpPlus(4:18-4:19),LowerIdent(4:20-4:21),
 KwExpect(6:1-6:7),LowerIdent(6:8-6:13),NoSpaceOpenRound(6:13-6:14),Int(6:14-6:15),Comma(6:15-6:16),Int(6:17-6:18),CloseRound(6:18-6:19),OpEquals(6:20-6:22),Int(6:23-6:24),
@@ -41,11 +29,12 @@ EndOfFile(8:1-8:1),
 # PARSE
 ~~~clojure
 (file @1.1-7.26
-	(module @1.1-1.15
-		(exposes @1.8-1.15
-			(exposed-lower-ident @1.9-1.14
-				(text "addU8"))))
+	(type-module @1.1-1.10)
 	(statements
+		(s-type-decl @1.1-1.16
+			(header @1.1-1.10 (name "SimpleAdd")
+				(args))
+			(ty-record @1.14-1.16))
 		(s-type-anno @3.1-3.21 (name "addU8")
 			(ty-fn @3.9-3.21
 				(ty @3.9-3.11 (name "U8"))
@@ -99,6 +88,9 @@ NO CHANGE
 					(ty-lookup @3.9-3.11 (name "U8") (builtin))
 					(ty-lookup @3.13-3.15 (name "U8") (builtin))
 					(ty-lookup @3.19-3.21 (name "U8") (builtin))))))
+	(s-nominal-decl @1.1-1.16
+		(ty-header @1.1-1.10 (name "SimpleAdd"))
+		(ty-record @1.14-1.16))
 	(s-expect @6.1-6.24
 		(e-binop @6.8-6.24 (op "eq")
 			(e-call @6.8-6.19
@@ -121,6 +113,9 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @4.1-4.6 (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Num(Int(Unsigned8))")))
+	(type_decls
+		(nominal @1.1-1.16 (type "SimpleAdd")
+			(ty-header @1.1-1.10 (name "SimpleAdd"))))
 	(expressions
 		(expr @4.9-4.21 (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Num(Int(Unsigned8))"))))
 ~~~

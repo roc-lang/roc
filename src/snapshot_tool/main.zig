@@ -1071,12 +1071,19 @@ fn processSnapshotContent(
 
     parse_ast.store.emptyScratch();
 
-    // Extract module name from output path
-    const basename = std.fs.path.basename(output_path);
-    const module_name = if (std.mem.lastIndexOfScalar(u8, basename, '.')) |dot_idx|
-        basename[0..dot_idx]
-    else
-        basename;
+    // Extract module name from meta filename or output path
+    const module_name = if (content.meta.filename) |fname|
+        if (std.mem.lastIndexOfScalar(u8, fname, '.')) |dot_idx|
+            fname[0..dot_idx]
+        else
+            fname
+    else blk: {
+        const basename = std.fs.path.basename(output_path);
+        break :blk if (std.mem.lastIndexOfScalar(u8, basename, '.')) |dot_idx|
+            basename[0..dot_idx]
+        else
+            basename;
+    };
     var can_ir = &module_env; // ModuleEnv contains the canonical IR
     try can_ir.initCIRFields(allocator, module_name);
 
@@ -1533,6 +1540,7 @@ pub const NodeType = enum {
 const Meta = struct {
     description: []const u8,
     node_type: NodeType,
+    filename: ?[]const u8 = null,
 
     const DESC_START: []const u8 = "description=";
     const TYPE_START: []const u8 = "type=";
@@ -1541,19 +1549,28 @@ const Meta = struct {
         var lines = std.mem.splitScalar(u8, text, '\n');
         var desc: []const u8 = "";
         var node_type: NodeType = .file;
+        var filename: ?[]const u8 = null;
         while (true) {
             var line = lines.next() orelse break;
             if (std.mem.startsWith(u8, line, DESC_START)) {
                 desc = line[(DESC_START.len)..];
             } else if (std.mem.startsWith(u8, line, TYPE_START)) {
                 const ty = line[(TYPE_START.len)..];
-                node_type = try NodeType.fromString(ty);
+                // Check for type=file:Filename.roc format
+                if (std.mem.indexOf(u8, ty, ":")) |colon_idx| {
+                    const type_part = ty[0..colon_idx];
+                    filename = ty[colon_idx + 1 ..];
+                    node_type = try NodeType.fromString(type_part);
+                } else {
+                    node_type = try NodeType.fromString(ty);
+                }
             }
         }
 
         return .{
             .description = desc,
             .node_type = node_type,
+            .filename = filename,
         };
     }
 
@@ -1563,6 +1580,10 @@ const Meta = struct {
         try writer.writeAll("\n");
         try writer.writeAll(TYPE_START);
         try writer.writeAll(self.node_type.toString());
+        if (self.filename) |fname| {
+            try writer.writeAll(":");
+            try writer.writeAll(fname);
+        }
     }
 
     test "Meta.fromString - only description" {

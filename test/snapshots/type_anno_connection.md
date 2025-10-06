@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Type annotation connection to definitions
-type=file
+type=file:TypeAnnoConnection.roc
 ~~~
 # SOURCE
 ~~~roc
-module [add_one, my_number]
+TypeAnnoConnection := {}
 
 add_one : U64 -> U64
 add_one = |x| x + 1
@@ -14,24 +14,12 @@ my_number : U64
 my_number = add_one(42)
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - type_anno_connection.md:1:1:1:28
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**type_anno_connection.md:1:1:1:28:**
-```roc
-module [add_one, my_number]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:16),Comma(1:16-1:17),LowerIdent(1:18-1:27),CloseSquare(1:27-1:28),
+UpperIdent(1:1-1:19),OpColonEqual(1:20-1:22),OpenCurly(1:23-1:24),CloseCurly(1:24-1:25),
 LowerIdent(3:1-3:8),OpColon(3:9-3:10),UpperIdent(3:11-3:14),OpArrow(3:15-3:17),UpperIdent(3:18-3:21),
 LowerIdent(4:1-4:8),OpAssign(4:9-4:10),OpBar(4:11-4:12),LowerIdent(4:12-4:13),OpBar(4:13-4:14),LowerIdent(4:15-4:16),OpPlus(4:17-4:18),Int(4:19-4:20),
 LowerIdent(6:1-6:10),OpColon(6:11-6:12),UpperIdent(6:13-6:16),
@@ -41,13 +29,12 @@ EndOfFile(8:1-8:1),
 # PARSE
 ~~~clojure
 (file @1.1-7.24
-	(module @1.1-1.28
-		(exposes @1.8-1.28
-			(exposed-lower-ident @1.9-1.16
-				(text "add_one"))
-			(exposed-lower-ident @1.18-1.27
-				(text "my_number"))))
+	(type-module @1.1-1.19)
 	(statements
+		(s-type-decl @1.1-1.25
+			(header @1.1-1.19 (name "TypeAnnoConnection")
+				(args))
+			(ty-record @1.23-1.25))
 		(s-type-anno @3.1-3.21 (name "add_one")
 			(ty-fn @3.11-3.21
 				(ty @3.11-3.14 (name "U64"))
@@ -97,7 +84,10 @@ NO CHANGE
 			(e-num @7.21-7.23 (value "42")))
 		(annotation @7.1-7.10
 			(declared-type
-				(ty-lookup @6.13-6.16 (name "U64") (builtin))))))
+				(ty-lookup @6.13-6.16 (name "U64") (builtin)))))
+	(s-nominal-decl @1.1-1.25
+		(ty-header @1.1-1.19 (name "TypeAnnoConnection"))
+		(ty-record @1.23-1.25)))
 ~~~
 # TYPES
 ~~~clojure
@@ -105,6 +95,9 @@ NO CHANGE
 	(defs
 		(patt @4.1-4.8 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(patt @7.1-7.10 (type "Num(Int(Unsigned64))")))
+	(type_decls
+		(nominal @1.1-1.25 (type "TypeAnnoConnection")
+			(ty-header @1.1-1.19 (name "TypeAnnoConnection"))))
 	(expressions
 		(expr @4.11-4.20 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(expr @7.13-7.24 (type "Num(Int(Unsigned64))"))))

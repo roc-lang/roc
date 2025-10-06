@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Example of a more complex nominal tag union with two payload types
-type=file
+type=file:NominalTagPayloadTwo.roc
 ~~~
 # SOURCE
 ~~~roc
-module [MyResult, ok, is_ok]
+NominalTagPayloadTwo := {}
 
 MyResult(ok, err) := [Ok(ok), Err(err)]
 
@@ -19,24 +19,12 @@ is_ok = |result| match result {
 }
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - nominal_tag_payload_two.md:1:1:1:29
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**nominal_tag_payload_two.md:1:1:1:29:**
-```roc
-module [MyResult, ok, is_ok]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),Comma(1:17-1:18),LowerIdent(1:19-1:21),Comma(1:21-1:22),LowerIdent(1:23-1:28),CloseSquare(1:28-1:29),
+UpperIdent(1:1-1:21),OpColonEqual(1:22-1:24),OpenCurly(1:25-1:26),CloseCurly(1:26-1:27),
 UpperIdent(3:1-3:9),NoSpaceOpenRound(3:9-3:10),LowerIdent(3:10-3:12),Comma(3:12-3:13),LowerIdent(3:14-3:17),CloseRound(3:17-3:18),OpColonEqual(3:19-3:21),OpenSquare(3:22-3:23),UpperIdent(3:23-3:25),NoSpaceOpenRound(3:25-3:26),LowerIdent(3:26-3:28),CloseRound(3:28-3:29),Comma(3:29-3:30),UpperIdent(3:31-3:34),NoSpaceOpenRound(3:34-3:35),LowerIdent(3:35-3:38),CloseRound(3:38-3:39),CloseSquare(3:39-3:40),
 LowerIdent(5:1-5:3),OpColon(5:4-5:5),LowerIdent(5:6-5:8),OpArrow(5:9-5:11),UpperIdent(5:12-5:20),NoSpaceOpenRound(5:20-5:21),LowerIdent(5:21-5:23),Comma(5:23-5:24),Underscore(5:25-5:26),CloseRound(5:26-5:27),
 LowerIdent(6:1-6:3),OpAssign(6:4-6:5),OpBar(6:6-6:7),LowerIdent(6:7-6:8),OpBar(6:8-6:9),UpperIdent(6:10-6:18),NoSpaceDotUpperIdent(6:18-6:21),NoSpaceOpenRound(6:21-6:22),LowerIdent(6:22-6:23),CloseRound(6:23-6:24),
@@ -50,14 +38,12 @@ EndOfFile(13:1-13:1),
 # PARSE
 ~~~clojure
 (file @1.1-12.2
-	(module @1.1-1.29
-		(exposes @1.8-1.29
-			(exposed-upper-ident @1.9-1.17 (text "MyResult"))
-			(exposed-lower-ident @1.19-1.21
-				(text "ok"))
-			(exposed-lower-ident @1.23-1.28
-				(text "is_ok"))))
+	(type-module @1.1-1.21)
 	(statements
+		(s-type-decl @1.1-1.27
+			(header @1.1-1.21 (name "NominalTagPayloadTwo")
+				(args))
+			(ty-record @1.25-1.27))
 		(s-type-decl @3.1-3.40
 			(header @3.1-3.18 (name "MyResult")
 				(args
@@ -112,7 +98,7 @@ EndOfFile(13:1-13:1),
 ~~~
 # FORMATTED
 ~~~roc
-module [MyResult, ok, is_ok]
+NominalTagPayloadTwo := {}
 
 MyResult(ok, err) := [Ok(ok), Err(err)]
 
@@ -179,6 +165,9 @@ is_ok = |result| match result {
 						(ty-rigid-var @8.9-8.28 (name "_ok"))
 						(ty-rigid-var @8.9-8.28 (name "_err")))
 					(ty-lookup @8.32-8.36 (name "Bool") (local))))))
+	(s-nominal-decl @1.1-1.27
+		(ty-header @1.1-1.21 (name "NominalTagPayloadTwo"))
+		(ty-record @1.25-1.27))
 	(s-nominal-decl @3.1-3.40
 		(ty-header @3.1-3.18 (name "MyResult")
 			(ty-args
@@ -197,6 +186,8 @@ is_ok = |result| match result {
 		(patt @6.1-6.3 (type "ok -> MyResult(ok, err)"))
 		(patt @9.1-9.6 (type "MyResult(_ok, _err) -> Bool")))
 	(type_decls
+		(nominal @1.1-1.27 (type "NominalTagPayloadTwo")
+			(ty-header @1.1-1.21 (name "NominalTagPayloadTwo")))
 		(nominal @3.1-3.40 (type "MyResult(ok, err)")
 			(ty-header @3.1-3.18 (name "MyResult")
 				(ty-args

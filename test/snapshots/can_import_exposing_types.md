@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Import types using exposing syntax
-type=file
+type=file:CanImportExposingTypes.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+CanImportExposingTypes := {}
 
 import json.Json exposing [Value, Error, Config]
 import http.Client as Http exposing [Request, Response, Status]
@@ -61,7 +61,6 @@ combineResults = |jsonResult, httpStatus|
     }
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - can_import_exposing_types.md:1:1:1:10
 UNDECLARED TYPE - can_import_exposing_types.md:31:18:31:24
 UNDECLARED TYPE - can_import_exposing_types.md:32:18:32:24
 UNDECLARED TYPE - can_import_exposing_types.md:33:23:33:31
@@ -86,19 +85,6 @@ UNDECLARED TYPE - can_import_exposing_types.md:49:40:49:46
 UNDECLARED TYPE - can_import_exposing_types.md:49:57:49:65
 UNDECLARED TYPE - can_import_exposing_types.md:49:67:49:72
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**can_import_exposing_types.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **UNDECLARED TYPE**
 The type _Config_ is not declared in this scope.
 
@@ -354,7 +340,7 @@ combineResults : Result(Value, Error), Status -> Result(Response, Error)
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:23),OpColonEqual(1:24-1:26),OpenCurly(1:27-1:28),CloseCurly(1:28-1:29),
 KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:17),KwExposing(3:18-3:26),OpenSquare(3:27-3:28),UpperIdent(3:28-3:33),Comma(3:33-3:34),UpperIdent(3:35-3:40),Comma(3:40-3:41),UpperIdent(3:42-3:48),CloseSquare(3:48-3:49),
 KwImport(4:1-4:7),LowerIdent(4:8-4:12),NoSpaceDotUpperIdent(4:12-4:19),KwAs(4:20-4:22),UpperIdent(4:23-4:27),KwExposing(4:28-4:36),OpenSquare(4:37-4:38),UpperIdent(4:38-4:45),Comma(4:45-4:46),UpperIdent(4:47-4:55),Comma(4:55-4:56),UpperIdent(4:57-4:63),CloseSquare(4:63-4:64),
 KwImport(5:1-5:7),LowerIdent(5:8-5:13),NoSpaceDotUpperIdent(5:13-5:20),KwExposing(5:21-5:29),OpenSquare(5:30-5:31),UpperIdent(5:31-5:37),CloseSquare(5:37-5:38),
@@ -398,9 +384,12 @@ EndOfFile(55:1-55:1),
 # PARSE
 ~~~clojure
 (file @1.1-54.6
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.23)
 	(statements
+		(s-type-decl @1.1-1.29
+			(header @1.1-1.23 (name "CanImportExposingTypes")
+				(args))
+			(ty-record @1.27-1.29))
 		(s-import @3.1-3.49 (raw "json.Json")
 			(exposing
 				(exposed-upper-ident @3.28-3.33 (text "Value"))
@@ -579,7 +568,7 @@ EndOfFile(55:1-55:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
+CanImportExposingTypes := {}
 
 import json.Json exposing [Value, Error, Config]
 import http.Client as Http exposing [Request, Response, Status]
@@ -659,8 +648,8 @@ combineResults = |jsonResult, httpStatus|
 		(p-assign @13.1-13.14 (ident "handleRequest"))
 		(e-closure @13.17-19.2
 			(captures
-				(capture @16.12-16.17 (ident "value"))
-				(capture @17.13-17.18 (ident "error")))
+				(capture @17.13-17.18 (ident "error"))
+				(capture @16.12-16.17 (ident "value")))
 			(e-lambda @13.17-19.2
 				(args
 					(p-assign @13.18-13.21 (ident "req")))
@@ -764,8 +753,8 @@ combineResults = |jsonResult, httpStatus|
 		(p-assign @42.1-42.15 (ident "handleResponse"))
 		(e-closure @42.18-46.6
 			(captures
-				(capture @45.13-45.18 (ident "error"))
-				(capture @44.12-44.18 (ident "status")))
+				(capture @44.12-44.18 (ident "status"))
+				(capture @45.13-45.18 (ident "error")))
 			(e-lambda @42.18-46.6
 				(args
 					(p-assign @42.19-42.27 (ident "response")))
@@ -862,6 +851,9 @@ combineResults = |jsonResult, httpStatus|
 					(ty-apply @49.50-49.73 (name "Result") (local)
 						(ty-malformed @49.50-49.73)
 						(ty-malformed @49.50-49.73))))))
+	(s-nominal-decl @1.1-1.29
+		(ty-header @1.1-1.23 (name "CanImportExposingTypes"))
+		(ty-record @1.27-1.29))
 	(s-alias-decl @30.1-34.2
 		(ty-header @30.1-30.13 (name "ServerConfig"))
 		(ty-record @30.16-34.2
@@ -896,6 +888,8 @@ combineResults = |jsonResult, httpStatus|
 		(patt @42.1-42.15 (type "Error -> Str"))
 		(patt @50.1-50.15 (type "Result(Error, Error), Error -> Result(Error, Error)")))
 	(type_decls
+		(nominal @1.1-1.29 (type "CanImportExposingTypes")
+			(ty-header @1.1-1.23 (name "CanImportExposingTypes")))
 		(alias @30.1-34.2 (type "ServerConfig")
 			(ty-header @30.1-30.13 (name "ServerConfig"))))
 	(expressions

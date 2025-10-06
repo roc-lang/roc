@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Example if-then-else statement
-type=file
+type=file:IfThenElseSimpleFile.roc
 ~~~
 # SOURCE
 ~~~roc
-module [foo]
+IfThenElseSimpleFile := {}
 
 foo = if 1 A
 
@@ -14,23 +14,9 @@ foo = if 1 A
     }
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - if_then_else_simple_file.md:1:1:1:13
 INVALID IF CONDITION - if_then_else_simple_file.md:3:10:3:10
 INCOMPATIBLE IF BRANCHES - if_then_else_simple_file.md:3:7:3:7
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**if_then_else_simple_file.md:1:1:1:13:**
-```roc
-module [foo]
-```
-^^^^^^^^^^^^
-
-
 **INVALID IF CONDITION**
 This `if` condition needs to be a _Bool_:
 **if_then_else_simple_file.md:3:10:**
@@ -69,7 +55,7 @@ To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),
+UpperIdent(1:1-1:21),OpColonEqual(1:22-1:24),OpenCurly(1:25-1:26),CloseCurly(1:26-1:27),
 LowerIdent(3:1-3:4),OpAssign(3:5-3:6),KwIf(3:7-3:9),Int(3:10-3:11),UpperIdent(3:12-3:13),
 KwElse(5:5-5:9),OpenCurly(5:10-5:11),
 StringStart(6:2-6:3),StringPart(6:3-6:8),StringEnd(6:8-6:9),
@@ -79,11 +65,12 @@ EndOfFile(8:1-8:1),
 # PARSE
 ~~~clojure
 (file @1.1-7.6
-	(module @1.1-1.13
-		(exposes @1.8-1.13
-			(exposed-lower-ident @1.9-1.12
-				(text "foo"))))
+	(type-module @1.1-1.21)
 	(statements
+		(s-type-decl @1.1-1.27
+			(header @1.1-1.21 (name "IfThenElseSimpleFile")
+				(args))
+			(ty-record @1.25-1.27))
 		(s-decl @3.1-7.6
 			(p-ident @3.1-3.4 (raw "foo"))
 			(e-if-then-else @3.7-7.6
@@ -96,7 +83,7 @@ EndOfFile(8:1-8:1),
 ~~~
 # FORMATTED
 ~~~roc
-module [foo]
+IfThenElseSimpleFile := {}
 
 foo = if 1 A
 
@@ -117,13 +104,19 @@ foo = if 1 A
 			(if-else
 				(e-block @5.10-7.6
 					(e-string @6.2-6.9
-						(e-literal @6.3-6.8 (string "hello"))))))))
+						(e-literal @6.3-6.8 (string "hello")))))))
+	(s-nominal-decl @1.1-1.27
+		(ty-header @1.1-1.21 (name "IfThenElseSimpleFile"))
+		(ty-record @1.25-1.27)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt @3.1-3.4 (type "Error")))
+	(type_decls
+		(nominal @1.1-1.27 (type "IfThenElseSimpleFile")
+			(ty-header @1.1-1.21 (name "IfThenElseSimpleFile"))))
 	(expressions
 		(expr @3.7-7.6 (type "Error"))))
 ~~~

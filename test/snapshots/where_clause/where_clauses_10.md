@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=where_clauses (10)
-type=file
+type=file:WhereClauses10.roc
 ~~~
 # SOURCE
 ~~~roc
-module [decode]
+WhereClauses10 := {}
 
 import Decode exposing [Decode]
 
@@ -16,23 +16,8 @@ decodeThings # After member name
 				module(a).Decode
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - where_clauses_10.md:1:1:1:16
 MODULE NOT FOUND - where_clauses_10.md:3:1:3:32
-EXPOSED BUT NOT DEFINED - where_clauses_10.md:1:9:1:15
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**where_clauses_10.md:1:1:1:16:**
-```roc
-module [decode]
-```
-^^^^^^^^^^^^^^^
-
-
 **MODULE NOT FOUND**
 The module `Decode` was not found in this Roc project.
 
@@ -44,19 +29,9 @@ import Decode exposing [Decode]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**EXPOSED BUT NOT DEFINED**
-The module header says that `decode` is exposed, but it is not defined anywhere in this module.
-
-**where_clauses_10.md:1:9:1:15:**
-```roc
-module [decode]
-```
-        ^^^^^^
-You can fix this by either defining `decode` in this module, or by removing it from the list of exposed values.
-
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:15),CloseSquare(1:15-1:16),
+UpperIdent(1:1-1:15),OpColonEqual(1:16-1:18),OpenCurly(1:19-1:20),CloseCurly(1:20-1:21),
 KwImport(3:1-3:7),UpperIdent(3:8-3:14),KwExposing(3:15-3:23),OpenSquare(3:24-3:25),UpperIdent(3:25-3:31),CloseSquare(3:31-3:32),
 LowerIdent(5:1-5:13),
 OpColon(6:2-6:3),
@@ -68,11 +43,12 @@ EndOfFile(10:1-10:1),
 # PARSE
 ~~~clojure
 (file @1.1-9.21
-	(module @1.1-1.16
-		(exposes @1.8-1.16
-			(exposed-lower-ident @1.9-1.15
-				(text "decode"))))
+	(type-module @1.1-1.15)
 	(statements
+		(s-type-decl @1.1-1.21
+			(header @1.1-1.15 (name "WhereClauses10")
+				(args))
+			(ty-record @1.19-1.21))
 		(s-import @3.1-3.32 (raw "Decode")
 			(exposing
 				(exposed-upper-ident @3.25-3.31 (text "Decode"))))
@@ -96,6 +72,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(s-nominal-decl @1.1-1.21
+		(ty-header @1.1-1.15 (name "WhereClauses10"))
+		(ty-record @1.19-1.21))
 	(s-import @3.1-3.32 (module "Decode")
 		(exposes
 			(exposed (name "Decode") (wildcard false))))
@@ -114,5 +93,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs)
+	(type_decls
+		(nominal @1.1-1.21 (type "WhereClauses10")
+			(ty-header @1.1-1.15 (name "WhereClauses10"))))
 	(expressions))
 ~~~

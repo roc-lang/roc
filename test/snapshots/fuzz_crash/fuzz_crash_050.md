@@ -1,105 +1,64 @@
 # META
 ~~~ini
 description=fuzz crash
-type=file
+type=file:FuzzCrash050.roc
 ~~~
 # SOURCE
 ~~~roc
-module[]_0={
+FuzzCrash050 := {}
+
 )
  
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_050.md:2:1:2:2
-PARSE ERROR - fuzz_crash_050.md:4:1:4:1
-MODULE HEADER DEPRECATED - fuzz_crash_050.md:1:1:1:9
-UNRECOGNIZED SYNTAX - fuzz_crash_050.md:2:1:2:2
+PARSE ERROR - fuzz_crash_050.md:3:1:3:2
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **)** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**fuzz_crash_050.md:2:1:2:2:**
-```roc
-)
-```
-^
-
-
 **PARSE ERROR**
-A parsing error occurred: `expected_expr_close_curly`
+A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_050.md:4:1:4:1:**
-```roc
-
-```
-^
-
-
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**fuzz_crash_050.md:1:1:1:9:**
-```roc
-module[]_0={
-```
-^^^^^^^^
-
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**fuzz_crash_050.md:2:1:2:2:**
+**fuzz_crash_050.md:3:1:3:2:**
 ```roc
 )
 ```
 ^
 
-This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),NamedUnderscore(1:9-1:11),OpAssign(1:11-1:12),OpenCurly(1:12-1:13),
-CloseRound(2:1-2:2),
-EndOfFile(4:1-4:1),
+UpperIdent(1:1-1:13),OpColonEqual(1:14-1:16),OpenCurly(1:17-1:18),CloseCurly(1:18-1:19),
+CloseRound(3:1-3:2),
+EndOfFile(5:1-5:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-2.2
-	(module @1.1-1.9
-		(exposes @1.7-1.9))
+(file @1.1-3.2
+	(type-module @1.1-1.13)
 	(statements
-		(s-decl @1.9-2.2
-			(p-ident @1.9-1.11 (raw "_0"))
-			(e-block @1.12-2.2
-				(statements
-					(e-malformed @2.1-2.2 (reason "expr_unexpected_token")))))))
+		(s-type-decl @1.1-1.19
+			(header @1.1-1.13 (name "FuzzCrash050")
+				(args))
+			(ty-record @1.17-1.19))
+		(s-malformed @3.1-3.2 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-module []
-_0 = {
-	
+FuzzCrash050 := {}
 
-}
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign @1.9-1.11 (ident "_0"))
-		(e-block @1.12-2.2
-			(e-runtime-error (tag "expr_not_canonicalized")))))
+	(s-nominal-decl @1.1-1.19
+		(ty-header @1.1-1.13 (name "FuzzCrash050"))
+		(ty-record @1.17-1.19)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs
-		(patt @1.9-1.11 (type "Error")))
-	(expressions
-		(expr @1.12-2.2 (type "Error"))))
+	(defs)
+	(type_decls
+		(nominal @1.1-1.19 (type "FuzzCrash050")
+			(ty-header @1.1-1.13 (name "FuzzCrash050"))))
+	(expressions))
 ~~~

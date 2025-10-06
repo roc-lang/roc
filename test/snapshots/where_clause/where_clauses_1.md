@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=where_clauses (1)
-type=file
+type=file:WhereClauses1.roc
 ~~~
 # SOURCE
 ~~~roc
-module [Hash, Decode]
+WhereClauses1 := {}
 
 Hash(a, hasher) : a
 	where
@@ -15,23 +15,9 @@ Hash(a, hasher) : a
 Decode(a) : a where module(a).decode : List(U8) -> a
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - where_clauses_1.md:1:1:1:22
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_1.md:3:1:6:24
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_1.md:8:1:8:53
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**where_clauses_1.md:1:1:1:22:**
-```roc
-module [Hash, Decode]
-```
-^^^^^^^^^^^^^^^^^^^^^
-
-
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
 
@@ -58,7 +44,7 @@ Decode(a) : a where module(a).decode : List(U8) -> a
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:13),Comma(1:13-1:14),UpperIdent(1:15-1:21),CloseSquare(1:21-1:22),
+UpperIdent(1:1-1:14),OpColonEqual(1:15-1:17),OpenCurly(1:18-1:19),CloseCurly(1:19-1:20),
 UpperIdent(3:1-3:5),NoSpaceOpenRound(3:5-3:6),LowerIdent(3:6-3:7),Comma(3:7-3:8),LowerIdent(3:9-3:15),CloseRound(3:15-3:16),OpColon(3:17-3:18),LowerIdent(3:19-3:20),
 KwWhere(4:2-4:7),
 KwModule(5:3-5:9),NoSpaceOpenRound(5:9-5:10),LowerIdent(5:10-5:11),CloseRound(5:11-5:12),NoSpaceDotLowerIdent(5:12-5:17),OpColon(5:18-5:19),LowerIdent(5:20-5:26),OpArrow(5:27-5:29),LowerIdent(5:30-5:36),Comma(5:36-5:37),
@@ -69,11 +55,12 @@ EndOfFile(9:1-9:1),
 # PARSE
 ~~~clojure
 (file @1.1-8.53
-	(module @1.1-1.22
-		(exposes @1.8-1.22
-			(exposed-upper-ident @1.9-1.13 (text "Hash"))
-			(exposed-upper-ident @1.15-1.21 (text "Decode"))))
+	(type-module @1.1-1.14)
 	(statements
+		(s-type-decl @1.1-1.20
+			(header @1.1-1.14 (name "WhereClauses1")
+				(args))
+			(ty-record @1.18-1.20))
 		(s-type-decl @3.1-6.24
 			(header @3.1-3.16 (name "Hash")
 				(args
@@ -93,6 +80,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(s-nominal-decl @1.1-1.20
+		(ty-header @1.1-1.14 (name "WhereClauses1"))
+		(ty-record @1.18-1.20))
 	(s-alias-decl @3.1-6.24
 		(ty-header @3.1-3.16 (name "Hash")
 			(ty-args
@@ -110,6 +100,8 @@ NO CHANGE
 (inferred-types
 	(defs)
 	(type_decls
+		(nominal @1.1-1.20 (type "WhereClauses1")
+			(ty-header @1.1-1.14 (name "WhereClauses1")))
 		(alias @3.1-6.24 (type "Hash(a, hasher)")
 			(ty-header @3.1-3.16 (name "Hash")
 				(ty-args

@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Example of external nominal tag union fully qualified name
-type=file
+type=file:NominalExternalFullyQualified.roc
 ~~~
 # SOURCE
 ~~~roc
-module [handleResult]
+NominalExternalFullyQualified := {}
 
 import MyResultModule
 
@@ -18,23 +18,9 @@ handleResult = |result| {
 }
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - nominal_external_fully_qualified.md:1:1:1:22
 MODULE NOT FOUND - nominal_external_fully_qualified.md:3:1:3:22
 UNUSED VARIABLE - nominal_external_fully_qualified.md:9:41:9:45
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**nominal_external_fully_qualified.md:1:1:1:22:**
-```roc
-module [handleResult]
-```
-^^^^^^^^^^^^^^^^^^^^^
-
-
 **MODULE NOT FOUND**
 The module `MyResultModule` was not found in this Roc project.
 
@@ -60,7 +46,7 @@ The unused variable is declared here:
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:21),CloseSquare(1:21-1:22),
+UpperIdent(1:1-1:30),OpColonEqual(1:31-1:33),OpenCurly(1:34-1:35),CloseCurly(1:35-1:36),
 KwImport(3:1-3:7),UpperIdent(3:8-3:22),
 LowerIdent(5:1-5:13),OpColon(5:14-5:15),UpperIdent(5:16-5:30),NoSpaceDotUpperIdent(5:30-5:43),NoSpaceOpenRound(5:43-5:44),UpperIdent(5:44-5:47),Comma(5:47-5:48),UpperIdent(5:49-5:52),CloseRound(5:52-5:53),OpArrow(5:54-5:56),UpperIdent(5:57-5:60),
 LowerIdent(6:1-6:13),OpAssign(6:14-6:15),OpBar(6:16-6:17),LowerIdent(6:17-6:23),OpBar(6:23-6:24),OpenCurly(6:25-6:26),
@@ -74,11 +60,12 @@ EndOfFile(12:1-12:1),
 # PARSE
 ~~~clojure
 (file @1.1-11.2
-	(module @1.1-1.22
-		(exposes @1.8-1.22
-			(exposed-lower-ident @1.9-1.21
-				(text "handleResult"))))
+	(type-module @1.1-1.30)
 	(statements
+		(s-type-decl @1.1-1.36
+			(header @1.1-1.30 (name "NominalExternalFullyQualified")
+				(args))
+			(ty-record @1.34-1.36))
 		(s-import @3.1-3.22 (raw "MyResultModule"))
 		(s-type-anno @5.1-5.60 (name "handleResult")
 			(ty-fn @5.16-5.60
@@ -109,7 +96,7 @@ EndOfFile(12:1-12:1),
 ~~~
 # FORMATTED
 ~~~roc
-module [handleResult]
+NominalExternalFullyQualified := {}
 
 import MyResultModule
 
@@ -162,6 +149,9 @@ handleResult = |result| {
 						(ty-lookup @5.44-5.47 (name "Str") (builtin))
 						(ty-lookup @5.49-5.52 (name "I32") (builtin)))
 					(ty-lookup @5.57-5.60 (name "Str") (builtin))))))
+	(s-nominal-decl @1.1-1.36
+		(ty-header @1.1-1.30 (name "NominalExternalFullyQualified"))
+		(ty-record @1.34-1.36))
 	(s-import @3.1-3.22 (module "MyResultModule")
 		(exposes)))
 ~~~
@@ -170,6 +160,9 @@ handleResult = |result| {
 (inferred-types
 	(defs
 		(patt @6.1-6.13 (type "Error -> Str")))
+	(type_decls
+		(nominal @1.1-1.36 (type "NominalExternalFullyQualified")
+			(ty-header @1.1-1.30 (name "NominalExternalFullyQualified"))))
 	(expressions
 		(expr @6.16-11.2 (type "Error -> Str"))))
 ~~~

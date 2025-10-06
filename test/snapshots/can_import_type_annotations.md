@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Import types and use in type annotations
-type=file
+type=file:CanImportTypeAnnotations.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+CanImportTypeAnnotations := {}
 
 import http.Client as Http exposing [Request, Response]
 import json.Json
@@ -46,7 +46,6 @@ combineResults = |result1, result2|
     }
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - can_import_type_annotations.md:1:1:1:10
 MODULE NOT FOUND - can_import_type_annotations.md:3:1:3:56
 MODULE NOT FOUND - can_import_type_annotations.md:4:1:4:17
 MODULE NOT FOUND - can_import_type_annotations.md:5:1:5:38
@@ -56,19 +55,6 @@ UNUSED VARIABLE - can_import_type_annotations.md:8:19:8:22
 MODULE NOT IMPORTED - can_import_type_annotations.md:26:18:26:36
 MODULE NOT IMPORTED - can_import_type_annotations.md:26:64:26:81
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**can_import_type_annotations.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **MODULE NOT FOUND**
 The module `http.Client` was not found in this Roc project.
 
@@ -137,7 +123,7 @@ processRequest = |req| Http.defaultResponse
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `module []
+There is no module with the name `CanImportTypeAnnotations := {}
 
 import http.Client as Http exposing [Request, Response]
 import json.Json
@@ -173,7 +159,7 @@ advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `module []
+There is no module with the name `CanImportTypeAnnotations := {}
 
 import http.Client as Http exposing [Request, Response]
 import json.Json
@@ -210,7 +196,7 @@ advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:25),OpColonEqual(1:26-1:28),OpenCurly(1:29-1:30),CloseCurly(1:30-1:31),
 KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:19),KwAs(3:20-3:22),UpperIdent(3:23-3:27),KwExposing(3:28-3:36),OpenSquare(3:37-3:38),UpperIdent(3:38-3:45),Comma(3:45-3:46),UpperIdent(3:47-3:55),CloseSquare(3:55-3:56),
 KwImport(4:1-4:7),LowerIdent(4:8-4:12),NoSpaceDotUpperIdent(4:12-4:17),
 KwImport(5:1-5:7),LowerIdent(5:8-5:13),NoSpaceDotUpperIdent(5:13-5:20),KwExposing(5:21-5:29),OpenSquare(5:30-5:31),UpperIdent(5:31-5:37),CloseSquare(5:37-5:38),
@@ -245,9 +231,12 @@ EndOfFile(40:1-40:1),
 # PARSE
 ~~~clojure
 (file @1.1-39.6
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.25)
 	(statements
+		(s-type-decl @1.1-1.31
+			(header @1.1-1.25 (name "CanImportTypeAnnotations")
+				(args))
+			(ty-record @1.29-1.31))
 		(s-import @3.1-3.56 (raw "http.Client") (alias "Http")
 			(exposing
 				(exposed-upper-ident @3.38-3.45 (text "Request"))
@@ -394,7 +383,7 @@ EndOfFile(40:1-40:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
+CanImportTypeAnnotations := {}
 
 import http.Client as Http exposing [Request, Response]
 import json.Json
@@ -470,8 +459,8 @@ combineResults = |result1, result2|
 		(p-assign @14.1-14.10 (ident "handleApi"))
 		(e-closure @14.13-20.2
 			(captures
-				(capture @17.12-17.16 (ident "data"))
-				(capture @18.13-18.16 (ident "err")))
+				(capture @18.13-18.16 (ident "err"))
+				(capture @17.12-17.16 (ident "data")))
 			(e-lambda @14.13-20.2
 				(args
 					(p-assign @14.14-14.21 (ident "request")))
@@ -559,10 +548,10 @@ combineResults = |result1, result2|
 		(p-assign @31.1-31.15 (ident "combineResults"))
 		(e-closure @31.18-39.6
 			(captures
-				(capture @38.13-38.16 (ident "err"))
 				(capture @35.20-35.26 (ident "value2"))
+				(capture @33.12-33.18 (ident "value1"))
 				(capture @36.21-36.24 (ident "err"))
-				(capture @33.12-33.18 (ident "value1")))
+				(capture @38.13-38.16 (ident "err")))
 			(e-lambda @31.18-39.6
 				(args
 					(p-assign @31.19-31.26 (ident "result1"))
@@ -636,6 +625,9 @@ combineResults = |result1, result2|
 							(ty-rigid-var-lookup (ty-rigid-var @30.18-30.32 (name "a")))
 							(ty-rigid-var-lookup (ty-rigid-var @30.34-30.48 (name "b"))))
 						(ty-rigid-var-lookup (ty-rigid-var @30.18-30.32 (name "err"))))))))
+	(s-nominal-decl @1.1-1.31
+		(ty-header @1.1-1.25 (name "CanImportTypeAnnotations"))
+		(ty-record @1.29-1.31))
 	(s-import @3.1-3.56 (module "http.Client") (qualifier "http") (alias "Http")
 		(exposes
 			(exposed (name "Request") (wildcard false))
@@ -656,6 +648,9 @@ combineResults = |result1, result2|
 		(patt @23.1-23.7 (type "Error"))
 		(patt @27.1-27.15 (type "Error, Str -> Result(Error, Error)"))
 		(patt @31.1-31.15 (type "Result(a, err), Result(b, err) -> Result((a, b), err)")))
+	(type_decls
+		(nominal @1.1-1.31 (type "CanImportTypeAnnotations")
+			(ty-header @1.1-1.25 (name "CanImportTypeAnnotations"))))
 	(expressions
 		(expr @8.18-8.44 (type "Error -> Error"))
 		(expr @11.13-11.38 (type "Str -> Error"))

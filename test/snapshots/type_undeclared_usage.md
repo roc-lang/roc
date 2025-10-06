@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Undeclared type usage should produce error
-type=file
+type=file:TypeUndeclaredUsage.roc
 ~~~
 # SOURCE
 ~~~roc
-module [MyType, processValue]
+TypeUndeclaredUsage := {}
 
 MyType : UnknownType
 
@@ -17,25 +17,11 @@ processValue = |value| {
 AnotherType : SomeModule.MissingType
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - type_undeclared_usage.md:1:1:1:30
 UNDECLARED TYPE - type_undeclared_usage.md:3:10:3:21
 MODULE NOT IMPORTED - type_undeclared_usage.md:10:15:10:37
 UNDECLARED TYPE - type_undeclared_usage.md:5:16:5:32
 UNUSED VARIABLE - type_undeclared_usage.md:6:17:6:22
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**type_undeclared_usage.md:1:1:1:30:**
-```roc
-module [MyType, processValue]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 **UNDECLARED TYPE**
 The type _UnknownType_ is not declared in this scope.
 
@@ -83,7 +69,7 @@ processValue = |value| {
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:15),Comma(1:15-1:16),LowerIdent(1:17-1:29),CloseSquare(1:29-1:30),
+UpperIdent(1:1-1:20),OpColonEqual(1:21-1:23),OpenCurly(1:24-1:25),CloseCurly(1:25-1:26),
 UpperIdent(3:1-3:7),OpColon(3:8-3:9),UpperIdent(3:10-3:21),
 LowerIdent(5:1-5:13),OpColon(5:14-5:15),UpperIdent(5:16-5:32),OpArrow(5:33-5:35),UpperIdent(5:36-5:39),
 LowerIdent(6:1-6:13),OpAssign(6:14-6:15),OpBar(6:16-6:17),LowerIdent(6:17-6:22),OpBar(6:22-6:23),OpenCurly(6:24-6:25),
@@ -95,12 +81,12 @@ EndOfFile(11:1-11:1),
 # PARSE
 ~~~clojure
 (file @1.1-10.37
-	(module @1.1-1.30
-		(exposes @1.8-1.30
-			(exposed-upper-ident @1.9-1.15 (text "MyType"))
-			(exposed-lower-ident @1.17-1.29
-				(text "processValue"))))
+	(type-module @1.1-1.20)
 	(statements
+		(s-type-decl @1.1-1.26
+			(header @1.1-1.20 (name "TypeUndeclaredUsage")
+				(args))
+			(ty-record @1.24-1.26))
 		(s-type-decl @3.1-3.21
 			(header @3.1-3.7 (name "MyType")
 				(args))
@@ -125,7 +111,7 @@ EndOfFile(11:1-11:1),
 ~~~
 # FORMATTED
 ~~~roc
-module [MyType, processValue]
+TypeUndeclaredUsage := {}
 
 MyType : UnknownType
 
@@ -152,6 +138,9 @@ AnotherType : SomeModule.MissingType
 				(ty-fn @5.16-5.39 (effectful false)
 					(ty-malformed @5.16-5.32)
 					(ty-lookup @5.36-5.39 (name "Str") (builtin))))))
+	(s-nominal-decl @1.1-1.26
+		(ty-header @1.1-1.20 (name "TypeUndeclaredUsage"))
+		(ty-record @1.24-1.26))
 	(s-alias-decl @3.1-3.21
 		(ty-header @3.1-3.7 (name "MyType"))
 		(ty-malformed @3.10-3.21))
@@ -165,6 +154,8 @@ AnotherType : SomeModule.MissingType
 	(defs
 		(patt @6.1-6.13 (type "Error -> Str")))
 	(type_decls
+		(nominal @1.1-1.26 (type "TypeUndeclaredUsage")
+			(ty-header @1.1-1.20 (name "TypeUndeclaredUsage")))
 		(alias @3.1-3.21 (type "MyType")
 			(ty-header @3.1-3.7 (name "MyType")))
 		(alias @10.1-10.37 (type "AnotherType")

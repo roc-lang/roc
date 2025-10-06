@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Minimal where clause test
-type=file
+type=file:WhereClausesMinimal.roc
 ~~~
 # SOURCE
 ~~~roc
-module [convert_me]
+WhereClausesMinimal := {}
 
 convert_me : a -> b
 	where
@@ -13,24 +13,12 @@ convert_me : a -> b
 convert_me = ...
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - where_clauses_minimal.md:1:1:1:20
+NIL
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**where_clauses_minimal.md:1:1:1:20:**
-```roc
-module [convert_me]
-```
-^^^^^^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:19),CloseSquare(1:19-1:20),
+UpperIdent(1:1-1:20),OpColonEqual(1:21-1:23),OpenCurly(1:24-1:25),CloseCurly(1:25-1:26),
 LowerIdent(3:1-3:11),OpColon(3:12-3:13),LowerIdent(3:14-3:15),OpArrow(3:16-3:18),LowerIdent(3:19-3:20),
 KwWhere(4:2-4:7),
 KwModule(5:3-5:9),NoSpaceOpenRound(5:9-5:10),LowerIdent(5:10-5:11),CloseRound(5:11-5:12),NoSpaceDotLowerIdent(5:12-5:20),OpColon(5:21-5:22),LowerIdent(5:23-5:24),OpArrow(5:25-5:27),LowerIdent(5:28-5:29),
@@ -40,11 +28,12 @@ EndOfFile(7:1-7:1),
 # PARSE
 ~~~clojure
 (file @1.1-6.17
-	(module @1.1-1.20
-		(exposes @1.8-1.20
-			(exposed-lower-ident @1.9-1.19
-				(text "convert_me"))))
+	(type-module @1.1-1.20)
 	(statements
+		(s-type-decl @1.1-1.26
+			(header @1.1-1.20 (name "WhereClausesMinimal")
+				(args))
+			(ty-record @1.24-1.26))
 		(s-type-anno @3.1-5.29 (name "convert_me")
 			(ty-fn @3.14-3.20
 				(ty-var @3.14-3.15 (raw "a"))
@@ -73,6 +62,9 @@ NO CHANGE
 				(ty-fn @3.14-3.20 (effectful false)
 					(ty-rigid-var @3.14-3.15 (name "a"))
 					(ty-rigid-var @3.19-3.20 (name "b"))))))
+	(s-nominal-decl @1.1-1.26
+		(ty-header @1.1-1.20 (name "WhereClausesMinimal"))
+		(ty-record @1.24-1.26))
 	(s-type-anno @3.1-5.29 (name "convert_me")
 		(ty-fn @3.14-3.20 (effectful false)
 			(ty-rigid-var @3.14-3.15 (name "a"))
@@ -89,6 +81,9 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @6.1-6.11 (type "a -> b")))
+	(type_decls
+		(nominal @1.1-1.26 (type "WhereClausesMinimal")
+			(ty-header @1.1-1.20 (name "WhereClausesMinimal"))))
 	(expressions
 		(expr @1.1-1.1 (type "a -> b"))))
 ~~~

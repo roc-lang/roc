@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=inline_ingested_file
-type=file
+type=file:InlineIngestedFile.roc
 ~~~
 # SOURCE
 ~~~roc
-module [foo]
+InlineIngestedFile := {}
 
 import "users.json" as data : Str
 import Json
@@ -17,7 +17,6 @@ PARSE ERROR - inline_ingested_file.md:3:8:3:9
 PARSE ERROR - inline_ingested_file.md:3:9:3:19
 PARSE ERROR - inline_ingested_file.md:3:19:3:20
 PARSE ERROR - inline_ingested_file.md:3:21:3:23
-MODULE HEADER DEPRECATED - inline_ingested_file.md:1:1:1:13
 MODULE NOT FOUND - inline_ingested_file.md:4:1:4:12
 UNDEFINED VARIABLE - inline_ingested_file.md:6:18:6:22
 # PROBLEMS
@@ -65,19 +64,6 @@ import "users.json" as data : Str
                     ^^
 
 
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**inline_ingested_file.md:1:1:1:13:**
-```roc
-module [foo]
-```
-^^^^^^^^^^^^
-
-
 **MODULE NOT FOUND**
 The module `Json` was not found in this Roc project.
 
@@ -102,7 +88,7 @@ foo = Json.parse(data)
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),
+UpperIdent(1:1-1:19),OpColonEqual(1:20-1:22),OpenCurly(1:23-1:24),CloseCurly(1:24-1:25),
 KwImport(3:1-3:7),StringStart(3:8-3:9),StringPart(3:9-3:19),StringEnd(3:19-3:20),KwAs(3:21-3:23),LowerIdent(3:24-3:28),OpColon(3:29-3:30),UpperIdent(3:31-3:34),
 KwImport(4:1-4:7),UpperIdent(4:8-4:12),
 LowerIdent(6:1-6:4),OpAssign(6:5-6:6),UpperIdent(6:7-6:11),NoSpaceDotLowerIdent(6:11-6:17),NoSpaceOpenRound(6:17-6:18),LowerIdent(6:18-6:22),CloseRound(6:22-6:23),
@@ -111,11 +97,12 @@ EndOfFile(7:1-7:1),
 # PARSE
 ~~~clojure
 (file @1.1-6.23
-	(module @1.1-1.13
-		(exposes @1.8-1.13
-			(exposed-lower-ident @1.9-1.12
-				(text "foo"))))
+	(type-module @1.1-1.19)
 	(statements
+		(s-type-decl @1.1-1.25
+			(header @1.1-1.19 (name "InlineIngestedFile")
+				(args))
+			(ty-record @1.23-1.25))
 		(s-malformed @3.1-3.9 (tag "incomplete_import"))
 		(s-malformed @3.9-3.19 (tag "statement_unexpected_token"))
 		(s-malformed @3.19-3.20 (tag "statement_unexpected_token"))
@@ -131,7 +118,7 @@ EndOfFile(7:1-7:1),
 ~~~
 # FORMATTED
 ~~~roc
-module [foo]
+InlineIngestedFile := {}
 
 data : Str
 import Json
@@ -148,6 +135,9 @@ foo = Json.parse(data)
 				(module-idx "0")
 				(target-node-idx "0"))
 			(e-runtime-error (tag "ident_not_in_scope"))))
+	(s-nominal-decl @1.1-1.25
+		(ty-header @1.1-1.19 (name "InlineIngestedFile"))
+		(ty-record @1.23-1.25))
 	(s-import @4.1-4.12 (module "Json")
 		(exposes)))
 ~~~
@@ -156,6 +146,9 @@ foo = Json.parse(data)
 (inferred-types
 	(defs
 		(patt @6.1-6.4 (type "_a")))
+	(type_decls
+		(nominal @1.1-1.25 (type "InlineIngestedFile")
+			(ty-header @1.1-1.19 (name "InlineIngestedFile"))))
 	(expressions
 		(expr @6.7-6.23 (type "_a"))))
 ~~~

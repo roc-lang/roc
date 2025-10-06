@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Underscores are allowed in regular type annotations (not in type declarations)
-type=file
+type=file:UnderscoreInRegularAnnotations.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+UnderscoreInRegularAnnotations := {}
 
 main : _ -> _
 main = |x| x
@@ -40,7 +40,6 @@ transform = |_, b| b
 # EXPECTED
 PARSE ERROR - underscore_in_regular_annotations.md:30:22:30:24
 PARSE ERROR - underscore_in_regular_annotations.md:30:25:30:27
-MODULE HEADER DEPRECATED - underscore_in_regular_annotations.md:1:1:1:10
 UNUSED VARIABLE - underscore_in_regular_annotations.md:11:12:11:16
 # PROBLEMS
 **PARSE ERROR**
@@ -68,19 +67,6 @@ transform : _a -> _b -> _b
                         ^^
 
 
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**underscore_in_regular_annotations.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **UNUSED VARIABLE**
 Variable `list` is not used anywhere in your code.
 
@@ -95,7 +81,7 @@ process = |list| "processed"
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:31),OpColonEqual(1:32-1:34),OpenCurly(1:35-1:36),CloseCurly(1:36-1:37),
 LowerIdent(3:1-3:5),OpColon(3:6-3:7),Underscore(3:8-3:9),OpArrow(3:10-3:12),Underscore(3:13-3:14),
 LowerIdent(4:1-4:5),OpAssign(4:6-4:7),OpBar(4:8-4:9),LowerIdent(4:9-4:10),OpBar(4:10-4:11),LowerIdent(4:12-4:13),
 LowerIdent(6:1-6:9),OpColon(6:10-6:11),LowerIdent(6:12-6:13),OpArrow(6:14-6:16),LowerIdent(6:17-6:18),
@@ -119,9 +105,12 @@ EndOfFile(32:1-32:1),
 # PARSE
 ~~~clojure
 (file @1.1-31.21
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.31)
 	(statements
+		(s-type-decl @1.1-1.37
+			(header @1.1-1.31 (name "UnderscoreInRegularAnnotations")
+				(args))
+			(ty-record @1.35-1.37))
 		(s-type-anno @3.1-3.14 (name "main")
 			(ty-fn @3.8-3.14
 				(_)
@@ -229,7 +218,7 @@ EndOfFile(32:1-32:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
+UnderscoreInRegularAnnotations := {}
 
 main : _ -> _
 main = |x| x
@@ -382,7 +371,10 @@ transform = |_, b| b
 				(p-underscore @31.14-31.15)
 				(p-assign @31.17-31.18 (ident "b")))
 			(e-lookup-local @31.20-31.21
-				(p-assign @31.17-31.18 (ident "b"))))))
+				(p-assign @31.17-31.18 (ident "b")))))
+	(s-nominal-decl @1.1-1.37
+		(ty-header @1.1-1.31 (name "UnderscoreInRegularAnnotations"))
+		(ty-record @1.35-1.37)))
 ~~~
 # TYPES
 ~~~clojure
@@ -395,6 +387,9 @@ transform = |_, b| b
 		(patt @19.1-19.14 (type "Result(_c, Str) -> Str"))
 		(patt @27.1-27.4 (type "a -> b, List(a) -> List(b)"))
 		(patt @31.1-31.10 (type "_arg, c -> c")))
+	(type_decls
+		(nominal @1.1-1.37 (type "UnderscoreInRegularAnnotations")
+			(ty-header @1.1-1.31 (name "UnderscoreInRegularAnnotations"))))
 	(expressions
 		(expr @4.8-4.13 (type "_arg -> _ret"))
 		(expr @7.12-7.17 (type "a -> a"))

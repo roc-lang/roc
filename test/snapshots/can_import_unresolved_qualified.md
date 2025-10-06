@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Error handling for unresolved qualified names
-type=file
+type=file:CanImportUnresolvedQualified.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+CanImportUnresolvedQualified := {}
 
 import json.Json
 import http.Client as Http
@@ -34,26 +34,12 @@ client = Http.invalidMethod
 parser = Json.Parser.Advanced.NonExistent.create
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - can_import_unresolved_qualified.md:1:1:1:10
 MODULE NOT FOUND - can_import_unresolved_qualified.md:3:1:3:17
 MODULE NOT FOUND - can_import_unresolved_qualified.md:4:1:4:27
 MODULE NOT IMPORTED - can_import_unresolved_qualified.md:14:18:14:37
 MODULE NOT IMPORTED - can_import_unresolved_qualified.md:14:41:14:61
 UNUSED VARIABLE - can_import_unresolved_qualified.md:15:19:15:22
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**can_import_unresolved_qualified.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **MODULE NOT FOUND**
 The module `json.Json` was not found in this Roc project.
 
@@ -77,7 +63,7 @@ import http.Client as Http
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `module []
+There is no module with the name `CanImportUnresolvedQualified := {}
 
 import json.Json
 import http.Client as Http
@@ -101,7 +87,7 @@ processRequest : Http.Server.Request -> Http.Server.Response
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `module []
+There is no module with the name `CanImportUnresolvedQualified := {}
 
 import json.Json
 import http.Client as Http
@@ -138,7 +124,7 @@ processRequest = |req| Http.Server.defaultResponse
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:29),OpColonEqual(1:30-1:32),OpenCurly(1:33-1:34),CloseCurly(1:34-1:35),
 KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:17),
 KwImport(4:1-4:7),LowerIdent(4:8-4:12),NoSpaceDotUpperIdent(4:12-4:19),KwAs(4:20-4:22),UpperIdent(4:23-4:27),
 LowerIdent(7:1-7:5),OpAssign(7:6-7:7),UpperIdent(7:8-7:12),NoSpaceDotUpperIdent(7:12-7:24),NoSpaceDotLowerIdent(7:24-7:31),
@@ -155,9 +141,12 @@ EndOfFile(28:1-28:1),
 # PARSE
 ~~~clojure
 (file @1.1-27.49
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.29)
 	(statements
+		(s-type-decl @1.1-1.35
+			(header @1.1-1.29 (name "CanImportUnresolvedQualified")
+				(args))
+			(ty-record @1.33-1.35))
 		(s-import @3.1-3.17 (raw "json.Json"))
 		(s-import @4.1-4.27 (raw "http.Client") (alias "Http"))
 		(s-decl @7.1-7.31
@@ -264,6 +253,9 @@ NO CHANGE
 		(e-lookup-external @27.10-27.49
 			(module-idx "0")
 			(target-node-idx "0")))
+	(s-nominal-decl @1.1-1.35
+		(ty-header @1.1-1.29 (name "CanImportUnresolvedQualified"))
+		(ty-record @1.33-1.35))
 	(s-import @3.1-3.17 (module "json.Json") (qualifier "json")
 		(exposes))
 	(s-import @4.1-4.27 (module "http.Client") (qualifier "http") (alias "Http")
@@ -280,6 +272,9 @@ NO CHANGE
 		(patt @21.1-21.7 (type "_a"))
 		(patt @24.1-24.7 (type "Error"))
 		(patt @27.1-27.7 (type "Error")))
+	(type_decls
+		(nominal @1.1-1.35 (type "CanImportUnresolvedQualified")
+			(ty-header @1.1-1.29 (name "CanImportUnresolvedQualified"))))
 	(expressions
 		(expr @7.8-7.31 (type "Error"))
 		(expr @11.13-11.40 (type "Error -> Str"))

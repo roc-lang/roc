@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Comprehensive import test with various module access patterns
-type=file
+type=file:CanImportComprehensive.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+CanImportComprehensive := {}
 
 import json.Json
 import http.Client as Http exposing [get, post]
@@ -42,24 +42,10 @@ main = {
 }
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - can_import_comprehensive.md:1:1:1:10
 MODULE NOT FOUND - can_import_comprehensive.md:3:1:3:17
 MODULE NOT FOUND - can_import_comprehensive.md:4:1:4:48
 MODULE NOT FOUND - can_import_comprehensive.md:5:1:5:27
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**can_import_comprehensive.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **MODULE NOT FOUND**
 The module `json.Json` was not found in this Roc project.
 
@@ -95,7 +81,7 @@ import utils.String as Str
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:23),OpColonEqual(1:24-1:26),OpenCurly(1:27-1:28),CloseCurly(1:28-1:29),
 KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:17),
 KwImport(4:1-4:7),LowerIdent(4:8-4:12),NoSpaceDotUpperIdent(4:12-4:19),KwAs(4:20-4:22),UpperIdent(4:23-4:27),KwExposing(4:28-4:36),OpenSquare(4:37-4:38),LowerIdent(4:38-4:41),Comma(4:41-4:42),LowerIdent(4:43-4:47),CloseSquare(4:47-4:48),
 KwImport(5:1-5:7),LowerIdent(5:8-5:13),NoSpaceDotUpperIdent(5:13-5:20),KwAs(5:21-5:23),UpperIdent(5:24-5:27),
@@ -124,9 +110,12 @@ EndOfFile(36:1-36:1),
 # PARSE
 ~~~clojure
 (file @1.1-35.2
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.23)
 	(statements
+		(s-type-decl @1.1-1.29
+			(header @1.1-1.23 (name "CanImportComprehensive")
+				(args))
+			(ty-record @1.27-1.29))
 		(s-import @3.1-3.17 (raw "json.Json"))
 		(s-import @4.1-4.48 (raw "http.Client") (alias "Http")
 			(exposing
@@ -175,7 +164,7 @@ EndOfFile(36:1-36:1),
 ~~~
 # FORMATTED
 ~~~roc
-module []
+CanImportComprehensive := {}
 
 import json.Json
 import http.Client as Http exposing [get, post]
@@ -275,6 +264,9 @@ main = {
 						(p-assign @20.5-20.12 (ident "result4")))
 					(e-lookup-local @33.9-33.17
 						(p-assign @23.5-23.13 (ident "combined")))))))
+	(s-nominal-decl @1.1-1.29
+		(ty-header @1.1-1.23 (name "CanImportComprehensive"))
+		(ty-record @1.27-1.29))
 	(s-import @3.1-3.17 (module "json.Json") (qualifier "json")
 		(exposes))
 	(s-import @4.1-4.48 (module "http.Client") (qualifier "http") (alias "Http")
@@ -289,6 +281,9 @@ main = {
 (inferred-types
 	(defs
 		(patt @7.1-7.5 (type "(Error, Error, Error, Error, Error, Error, Error, Error)")))
+	(type_decls
+		(nominal @1.1-1.29 (type "CanImportComprehensive")
+			(ty-header @1.1-1.23 (name "CanImportComprehensive"))))
 	(expressions
 		(expr @7.8-35.2 (type "(Error, Error, Error, Error, Error, Error, Error, Error)"))))
 ~~~

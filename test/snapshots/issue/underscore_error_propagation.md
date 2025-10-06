@@ -1,11 +1,11 @@
 # META
 ~~~ini
 description=Error types should propagate through aliases when underscores are used
-type=file
+type=file:UnderscoreErrorPropagation.roc
 ~~~
 # SOURCE
 ~~~roc
-module []
+UnderscoreErrorPropagation := {}
 
 BadBase := _
 
@@ -22,30 +22,16 @@ goodValue : GoodDerived
 goodValue = "test"
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - underscore_error_propagation.md:1:1:1:10
 UNDERSCORE IN TYPE ALIAS - underscore_error_propagation.md:1:1:1:1
 TYPE MISMATCH - underscore_error_propagation.md:8:9:8:15
 TYPE MISMATCH - underscore_error_propagation.md:15:13:15:19
 # PROBLEMS
-**MODULE HEADER DEPRECATED**
-The `module` header is deprecated.
-
-Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
-
-Remove the `module` header and ensure your file defines a type that matches the filename.
-**underscore_error_propagation.md:1:1:1:10:**
-```roc
-module []
-```
-^^^^^^^^^
-
-
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
 
 **underscore_error_propagation.md:1:1:1:1:**
 ```roc
-module []
+UnderscoreErrorPropagation := {}
 ```
 ^
 
@@ -81,7 +67,7 @@ But the type annotation says it should have the type:
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
+UpperIdent(1:1-1:27),OpColonEqual(1:28-1:30),OpenCurly(1:31-1:32),CloseCurly(1:32-1:33),
 UpperIdent(3:1-3:8),OpColonEqual(3:9-3:11),Underscore(3:12-3:13),
 UpperIdent(5:1-5:11),OpColonEqual(5:12-5:14),UpperIdent(5:15-5:22),
 LowerIdent(7:1-7:6),OpColon(7:7-7:8),UpperIdent(7:9-7:19),
@@ -95,9 +81,12 @@ EndOfFile(16:1-16:1),
 # PARSE
 ~~~clojure
 (file @1.1-15.19
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+	(type-module @1.1-1.27)
 	(statements
+		(s-type-decl @1.1-1.33
+			(header @1.1-1.27 (name "UnderscoreErrorPropagation")
+				(args))
+			(ty-record @1.31-1.33))
 		(s-type-decl @3.1-3.13
 			(header @3.1-3.8 (name "BadBase")
 				(args))
@@ -148,6 +137,9 @@ NO CHANGE
 		(annotation @15.1-15.10
 			(declared-type
 				(ty-lookup @14.13-14.24 (name "GoodDerived") (local)))))
+	(s-nominal-decl @1.1-1.33
+		(ty-header @1.1-1.27 (name "UnderscoreErrorPropagation"))
+		(ty-record @1.31-1.33))
 	(s-nominal-decl @3.1-3.13
 		(ty-header @3.1-3.8 (name "BadBase"))
 		(ty-underscore @1.1-1.1))
@@ -168,6 +160,8 @@ NO CHANGE
 		(patt @8.1-8.6 (type "Error"))
 		(patt @15.1-15.10 (type "Error")))
 	(type_decls
+		(nominal @1.1-1.33 (type "UnderscoreErrorPropagation")
+			(ty-header @1.1-1.27 (name "UnderscoreErrorPropagation")))
 		(nominal @3.1-3.13 (type "BadBase")
 			(ty-header @3.1-3.8 (name "BadBase")))
 		(nominal @5.1-5.22 (type "BadDerived")
