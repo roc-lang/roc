@@ -734,51 +734,33 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
     const header = self.parse_ir.store.getHeader(file.header);
 
     if (header != .type_module) {
-        // Only type_module headers need validation
         return;
     }
 
-    // INFER mode - smart error messages, accept both type modules and default-app
-    const main_result = try self.findMainFunction();
-    const has_matching_type_decl = self.hasMatchingType();
+    const main_status = try self.checkMainFunction();
+    const has_matching_type = self.hasMatchingType();
 
-    if (main_result == .valid) {
-        // Valid default-app module
-        _ = main_result.valid; // Suppress unused warning
-    } else if (main_result == .wrong_arity) {
-        // Report wrong arity error for default-app
-        // Error already reported in findMainFunction
-    } else if (has_matching_type_decl) {
-        // Valid type module
-    } else {
-        // Neither valid - use heuristics for helpful error
+    // Valid if either we have a valid main! or a matching type declaration
+    const is_valid = (main_status == .valid) or has_matching_type;
+
+    if (!is_valid and main_status == .not_found) {
+        // Neither valid main! nor matching type - report helpful error
         try self.reportTypeModuleOrDefaultAppError();
     }
 }
 
-/// Validate a module for use in execution mode (roc run, roc build).
-/// This requires a valid default-app with a main! function.
+/// Validate a module for use in execution mode (e.g. `roc main.roc` or `roc build`).
+/// Requires a valid main! function for type_module headers.
 pub fn validateForExecution(self: *Self) std.mem.Allocator.Error!void {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
     const file = self.parse_ir.store.getFile();
     const header = self.parse_ir.store.getHeader(file.header);
 
     if (header != .type_module) {
-        // Only type_module headers need validation (app headers are checked elsewhere)
         return;
     }
 
-    // EXECUTION mode - require default-app (app header checked elsewhere)
-    const main_result = try self.findMainFunction();
-    if (main_result == .valid) {
-        // Valid default-app
-        _ = main_result.valid; // Suppress unused warning
-    } else if (main_result == .wrong_arity) {
-        // Error already reported in findMainFunction
-    } else {
-        // No main! - error, can't execute type module
+    const main_status = try self.checkMainFunction();
+    if (main_status == .not_found) {
         try self.reportExecutionRequiresAppOrDefaultApp();
     }
 }
@@ -7108,23 +7090,17 @@ fn createUnknownIdent(self: *Self) std.mem.Allocator.Error!Ident.Idx {
     return try self.env.insertIdent(base.Ident.for_text("unknown"));
 }
 
-/// Check if this module has a main! function suitable for default_app
-/// Returns the def index if found and valid, null otherwise
-const MainFunctionResult = union(enum) {
-    valid: struct { def_idx: CIR.Def.Idx, region: Region },
-    wrong_arity: struct { arity: u32, region: Region },
-    not_found,
-};
+const MainFunctionStatus = enum { valid, invalid, not_found };
 
-fn findMainFunction(self: *Self) std.mem.Allocator.Error!MainFunctionResult {
+/// Check if this module has a valid main! function (1 argument lambda).
+/// Reports an error if main! exists but has the wrong arity.
+fn checkMainFunction(self: *Self) std.mem.Allocator.Error!MainFunctionStatus {
     const file = self.parse_ir.store.getFile();
 
-    // Look through all statements for a definition of main!
     for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
         const stmt = self.parse_ir.store.getStatement(stmt_id);
         if (stmt == .decl) {
             const decl = stmt.decl;
-            // Check if this is a definition with name "main!"
             const pattern = self.parse_ir.store.getPattern(decl.pattern);
             if (pattern == .ident) {
                 const ident_token = pattern.ident.ident_tok;
@@ -7133,23 +7109,20 @@ fn findMainFunction(self: *Self) std.mem.Allocator.Error!MainFunctionResult {
 
                 if (std.mem.eql(u8, ident_text, "main!")) {
                     const region = self.parse_ir.tokenizedRegionToRegion(decl.region);
-
-                    // Found main! - now check if it's a lambda with exactly 1 parameter
                     const expr = self.parse_ir.store.getExpr(decl.body);
+
                     if (expr == .lambda) {
                         const lambda = expr.lambda;
                         const params = self.parse_ir.store.patternSlice(lambda.args);
 
                         if (params.len == 1) {
-                            // Valid main! function found
-                            return .{ .valid = .{ .def_idx = @enumFromInt(0), .region = region } }; // TODO: get actual CIR def idx
+                            return .valid;
                         } else {
-                            // main! found but with wrong arity
                             try self.env.pushDiagnostic(Diagnostic{ .default_app_wrong_arity = .{
                                 .arity = @intCast(params.len),
                                 .region = region,
                             } });
-                            return .{ .wrong_arity = .{ .arity = @intCast(params.len), .region = region } };
+                            return .invalid;
                         }
                     }
                 }
@@ -7306,25 +7279,6 @@ fn reportExecutionRequiresAppOrDefaultApp(self: *Self) std.mem.Allocator.Error!v
     try self.env.pushDiagnostic(.{
         .execution_requires_app_or_default_app = .{
             .region = file_region,
-        },
-    });
-}
-
-/// Report error when trying to import a default-app module
-fn reportCannotImportDefaultApp(self: *Self, main_result: MainFunctionResult) std.mem.Allocator.Error!void {
-    const region = switch (main_result) {
-        .valid => |v| v.region,
-        .wrong_arity => |w| w.region,
-        .not_found => unreachable, // Should never be called with not_found
-    };
-
-    const module_name_text = self.env.module_name;
-    const module_name_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
-
-    try self.env.pushDiagnostic(.{
-        .cannot_import_default_app = .{
-            .module_name = module_name_ident,
-            .region = region,
         },
     });
 }
