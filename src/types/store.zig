@@ -14,6 +14,8 @@ const Var = types.Var;
 const Content = types.Content;
 const Rank = types.Rank;
 const Mark = types.Mark;
+const Flex = types.Flex;
+const Rigid = types.Rigid;
 const RecordField = types.RecordField;
 const TagUnion = types.TagUnion;
 const Tag = types.Tag;
@@ -27,6 +29,7 @@ const FlatType = types.FlatType;
 const NominalType = types.NominalType;
 const Record = types.Record;
 const Num = types.Num;
+const StaticDispatchConstraint = types.StaticDispatchConstraint;
 
 const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
 
@@ -78,10 +81,10 @@ pub const Store = struct {
     descs: DescStore,
 
     /// Storage for compound type parts
-    /// TODO: Consolidate all var lists into 1
     vars: VarSafeList,
     record_fields: RecordFieldSafeMultiList,
     tags: TagSafeMultiList,
+    static_dispatch_constraints: StaticDispatchConstraint.SafeMultiList,
 
     /// Init the unification table
     pub fn init(gpa: Allocator) std.mem.Allocator.Error!Self {
@@ -102,6 +105,7 @@ pub const Store = struct {
             .vars = try VarSafeList.initCapacity(gpa, child_capacity),
             .record_fields = try RecordFieldSafeMultiList.initCapacity(gpa, child_capacity),
             .tags = try TagSafeMultiList.initCapacity(gpa, child_capacity),
+            .static_dispatch_constraints = try StaticDispatchConstraint.SafeMultiList.initCapacity(gpa, child_capacity),
         };
     }
 
@@ -121,6 +125,7 @@ pub const Store = struct {
         self.vars.deinit(self.gpa);
         self.record_fields.deinit(self.gpa);
         self.tags.deinit(self.gpa);
+        self.static_dispatch_constraints.deinit(self.gpa);
     }
 
     /// Return the number of type variables in the store.
@@ -133,13 +138,13 @@ pub const Store = struct {
     /// Create a new unbound, flexible type variable without a name
     /// Used in canonicalization when creating type slots
     pub fn fresh(self: *Self) std.mem.Allocator.Error!Var {
-        return try self.freshFromContent(Content{ .flex_var = null });
+        return try self.freshFromContent(Content{ .flex = Flex.init() });
     }
 
     /// Create a new unbound, flexible type variable without a name
     /// Used in canonicalization when creating type slots
     pub fn freshWithRank(self: *Self, rank: Rank) std.mem.Allocator.Error!Var {
-        return try self.freshFromContentWithRank(Content{ .flex_var = null }, rank);
+        return try self.freshFromContentWithRank(Content{ .flex = Flex.init() }, rank);
     }
 
     /// Create a new variable with the provided desc
@@ -378,8 +383,8 @@ pub const Store = struct {
 
     pub fn needsInstantiationContent(self: *const Self, content: Content) bool {
         return switch (content) {
-            .flex_var => true, // Flexible variables need instantiation
-            .rigid_var => true, // Rigid variables need instantiation when used outside their defining scope
+            .flex => true, // Flexible variables need instantiation
+            .rigid => true, // Rigid variables need instantiation when used outside their defining scope
             .alias => true, // Aliases may contain type variables, so assume they need instantiation
             .structure => |flat_type| self.needsInstantiationFlatType(flat_type),
             .err => false,
@@ -729,6 +734,7 @@ pub const Store = struct {
         vars: VarSafeList.Serialized,
         record_fields: RecordFieldSafeMultiList.Serialized,
         tags: TagSafeMultiList.Serialized,
+        static_dispatch_constraints: StaticDispatchConstraint.SafeMultiList.Serialized,
 
         /// Serialize a Store into this Serialized struct, appending data to the writer
         pub fn serialize(
@@ -743,6 +749,7 @@ pub const Store = struct {
             try self.vars.serialize(&store.vars, allocator, writer);
             try self.record_fields.serialize(&store.record_fields, allocator, writer);
             try self.tags.serialize(&store.tags, allocator, writer);
+            try self.static_dispatch_constraints.serialize(&store.static_dispatch_constraints, allocator, writer);
 
             // Store the allocator
             self.gpa = allocator;
@@ -763,6 +770,7 @@ pub const Store = struct {
                 .vars = self.vars.deserialize(offset).*,
                 .record_fields = self.record_fields.deserialize(offset).*,
                 .tags = self.tags.deserialize(offset).*,
+                .static_dispatch_constraints = self.static_dispatch_constraints.deserialize(offset).*,
             };
 
             return store;
@@ -786,6 +794,7 @@ pub const Store = struct {
             .vars = (try self.vars.serialize(allocator, writer)).*,
             .record_fields = (try self.record_fields.serialize(allocator, writer)).*,
             .tags = (try self.tags.serialize(allocator, writer)).*,
+            .static_dispatch_constraints = (try self.static_dispatch_constraints.serialize(allocator, writer)).*,
         };
 
         return @constCast(offset_self);
@@ -798,6 +807,7 @@ pub const Store = struct {
         self.vars.relocate(offset);
         self.record_fields.relocate(offset);
         self.tags.relocate(offset);
+        self.static_dispatch_constraints.relocate(offset);
     }
 
     /// Calculate the size needed to serialize this Store
@@ -807,9 +817,10 @@ pub const Store = struct {
         const record_fields_size = self.record_fields.serializedSize();
         const tags_size = self.tags.serializedSize();
         const vars_size = self.vars.serializedSize();
+        const static_dispatch_constraints_size = self.static_dispatch_constraints.serializedSize();
 
         // Add alignment padding for each component
-        var total_size: usize = @sizeOf(u32) * 5; // size headers
+        var total_size: usize = @sizeOf(u32) * 6; // size headers
         total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
 
         total_size += slots_size;
@@ -827,13 +838,16 @@ pub const Store = struct {
         total_size += vars_size;
         total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
 
+        total_size += static_dispatch_constraints_size;
+        total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
+
         // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
         return std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
     }
 
     /// Deserialize a Store from the provided buffer
     pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) !Self {
-        if (buffer.len < @sizeOf(u32) * 5) return error.BufferTooSmall;
+        if (buffer.len < @sizeOf(u32) * 6) return error.BufferTooSmall;
 
         var offset: usize = 0;
 
@@ -851,6 +865,9 @@ pub const Store = struct {
         offset += @sizeOf(u32);
 
         const vars_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
+        offset += @sizeOf(u32);
+
+        const static_dispatch_constraints_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
         offset += @sizeOf(u32);
 
         // Deserialize data
@@ -879,6 +896,11 @@ pub const Store = struct {
         const vars = try VarSafeList.deserializeFrom(vars_buffer, allocator);
         offset += vars_size;
 
+        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
+        const static_dispatch_constraints_buffer = @as([]align(SERIALIZATION_ALIGNMENT) const u8, @alignCast(buffer[offset .. offset + static_dispatch_constraints_size]));
+        const static_dispatch_constraints = try StaticDispatchConstraint.SafeMultiList.deserializeFrom(static_dispatch_constraints_buffer, allocator);
+        offset += static_dispatch_constraints_size;
+
         return Self{
             .gpa = allocator,
             .slots = slots,
@@ -886,6 +908,7 @@ pub const Store = struct {
             .record_fields = record_fields,
             .tags = tags,
             .vars = vars,
+            .static_dispatch_constraints = static_dispatch_constraints,
         };
     }
 };
@@ -1092,7 +1115,7 @@ pub const DescStoreIdx = DescStore.Idx;
 
 // path compression
 
-test "resolveVarAndCompressPath - flattens redirect chain to flex_var" {
+test "resolveVarAndCompressPath - flattens redirect chain to flex" {
     const gpa = std.testing.allocator;
 
     var store = try Store.init(gpa);
@@ -1103,7 +1126,7 @@ test "resolveVarAndCompressPath - flattens redirect chain to flex_var" {
     const a = try store.freshRedirect(b);
 
     const result = store.resolveVarAndCompressPath(a);
-    try std.testing.expectEqual(Content{ .flex_var = null }, result.desc.content);
+    try std.testing.expectEqual(Content{ .flex = Flex.init() }, result.desc.content);
     try std.testing.expectEqual(c, result.var_);
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(a));
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(b));
@@ -1194,18 +1217,18 @@ test "Store basic CompactWriter roundtrip" {
     defer original.deinit();
 
     // Create some type variables
-    const flex_var = try original.fresh();
-    const rigid_var = try original.freshFromContent(Content{ .rigid_var = @bitCast(@as(u32, 42)) });
+    const flex = try original.fresh();
+    const rigid = try original.freshFromContent(Content{ .rigid = Rigid.init(@bitCast(@as(u32, 42))) });
 
     // Create a redirect
-    const redirect_var = try original.freshRedirect(flex_var);
+    const redirect_var = try original.freshRedirect(flex);
 
     // Verify original values
-    const flex_resolved = original.resolveVar(flex_var);
-    try std.testing.expectEqual(Content{ .flex_var = null }, flex_resolved.desc.content);
+    const flex_resolved = original.resolveVar(flex);
+    try std.testing.expectEqual(Content{ .flex = Flex.init() }, flex_resolved.desc.content);
 
-    const rigid_resolved = original.resolveVar(rigid_var);
-    try std.testing.expectEqual(Content{ .rigid_var = @bitCast(@as(u32, 42)) }, rigid_resolved.desc.content);
+    const rigid_resolved = original.resolveVar(rigid);
+    try std.testing.expectEqual(Content{ .rigid = Rigid.init(@bitCast(@as(u32, 42))) }, rigid_resolved.desc.content);
 
     const redirect_resolved = original.resolveVar(redirect_var);
     try std.testing.expectEqual(flex_resolved.desc_idx, redirect_resolved.desc_idx);
@@ -1241,11 +1264,11 @@ test "Store basic CompactWriter roundtrip" {
     // Verify the types are accessible
     try std.testing.expectEqual(@as(usize, 3), deserialized.len());
 
-    const deser_flex_resolved = deserialized.resolveVar(flex_var);
-    try std.testing.expectEqual(Content{ .flex_var = null }, deser_flex_resolved.desc.content);
+    const deser_flex_resolved = deserialized.resolveVar(flex);
+    try std.testing.expectEqual(Content{ .flex = Flex.init() }, deser_flex_resolved.desc.content);
 
-    const deser_rigid_resolved = deserialized.resolveVar(rigid_var);
-    try std.testing.expectEqual(Content{ .rigid_var = @bitCast(@as(u32, 42)) }, deser_rigid_resolved.desc.content);
+    const deser_rigid_resolved = deserialized.resolveVar(rigid);
+    try std.testing.expectEqual(Content{ .rigid = Rigid.init(@bitCast(@as(u32, 42))) }, deser_rigid_resolved.desc.content);
 
     const deser_redirect_resolved = deserialized.resolveVar(redirect_var);
     try std.testing.expectEqual(deser_flex_resolved.desc_idx, deser_redirect_resolved.desc_idx);
@@ -1261,7 +1284,7 @@ test "Store comprehensive CompactWriter roundtrip" {
     defer original.deinit();
 
     // Create various types
-    const flex_var = try original.fresh();
+    const flex = try original.fresh();
     const str_var = try original.freshFromContent(Content{ .structure = .{ .str = {} } });
     const list_elem = try original.fresh();
     const list_var = try original.freshFromContent(Content{ .structure = .{ .list = list_elem } });
@@ -1285,7 +1308,7 @@ test "Store comprehensive CompactWriter roundtrip" {
     const record_var = try original.freshFromContent(record_content);
 
     // Create a tag union
-    const tag1 = try original.mkTag(base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 300 }, &[_]Var{flex_var});
+    const tag1 = try original.mkTag(base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 300 }, &[_]Var{flex});
     const tag2 = try original.mkTag(base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 400 }, &[_]Var{ arg1, arg2 });
     const tag_union_ext = try original.fresh();
     const tag_union_content = try original.mkTagUnion(&[_]Tag{ tag1, tag2 }, tag_union_ext);
@@ -1366,7 +1389,7 @@ test "Store comprehensive CompactWriter roundtrip" {
 
             const tag1_args = deserialized.sliceVars(tags_slice.items(.args)[0]);
             try std.testing.expectEqual(@as(usize, 1), tag1_args.len);
-            try std.testing.expectEqual(flex_var, tag1_args[0]);
+            try std.testing.expectEqual(flex, tag1_args[0]);
 
             const tag2_args = deserialized.sliceVars(tags_slice.items(.args)[1]);
             try std.testing.expectEqual(@as(usize, 2), tag2_args.len);
@@ -1438,7 +1461,7 @@ test "DescStore.Serialized roundtrip" {
 
     // Add some descriptors
     const desc1 = Descriptor{
-        .content = Content{ .flex_var = null },
+        .content = Content{ .flex = Flex.init() },
         .rank = Rank.generalized,
         .mark = Mark.none,
     };
@@ -1501,9 +1524,9 @@ test "Store.Serialized roundtrip" {
     defer store.deinit();
 
     // Create some type variables
-    const flex_var = try store.fresh();
+    const flex = try store.fresh();
     const str_var = try store.freshFromContent(Content{ .structure = .{ .str = {} } });
-    const redirect_var = try store.freshRedirect(flex_var);
+    const redirect_var = try store.freshRedirect(flex);
 
     // Create temp file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -1539,8 +1562,8 @@ test "Store.Serialized roundtrip" {
     // Verify the store was deserialized correctly
     try std.testing.expectEqual(@as(usize, 3), deserialized.len());
 
-    const flex_resolved = deserialized.resolveVar(flex_var);
-    try std.testing.expectEqual(Content{ .flex_var = null }, flex_resolved.desc.content);
+    const flex_resolved = deserialized.resolveVar(flex);
+    try std.testing.expectEqual(Content{ .flex = Flex.init() }, flex_resolved.desc.content);
 
     const str_resolved = deserialized.resolveVar(str_var);
     try std.testing.expectEqual(Content{ .structure = .{ .str = {} } }, str_resolved.desc.content);
@@ -1640,9 +1663,9 @@ test "SlotStore and DescStore serialization and deserialization" {
     defer original.deinit();
 
     // Create several variables to populate SlotStore with roots
-    const var1 = try original.freshFromContent(Content{ .flex_var = null });
+    const var1 = try original.freshFromContent(Content{ .flex = Flex.init() });
     const var2 = try original.freshFromContent(Content{ .structure = .{ .str = {} } });
-    const var3 = try original.freshFromContent(Content{ .rigid_var = @bitCast(@as(u32, 123)) });
+    const var3 = try original.freshFromContent(Content{ .rigid = Rigid.init(@bitCast(@as(u32, 123))) });
 
     // Create redirects to populate SlotStore with redirects
     const redirect1 = try original.freshRedirect(var1);
@@ -1695,13 +1718,13 @@ test "SlotStore and DescStore serialization and deserialization" {
 
     // Verify we can resolve variables correctly
     const resolved1 = deserialized.resolveVar(var1);
-    try std.testing.expectEqual(Content{ .flex_var = null }, resolved1.desc.content);
+    try std.testing.expectEqual(Content{ .flex = Flex.init() }, resolved1.desc.content);
 
     const resolved2 = deserialized.resolveVar(var2);
     try std.testing.expectEqual(Content{ .structure = .{ .str = {} } }, resolved2.desc.content);
 
     const resolved3 = deserialized.resolveVar(var3);
-    try std.testing.expectEqual(Content{ .rigid_var = @bitCast(@as(u32, 123)) }, resolved3.desc.content);
+    try std.testing.expectEqual(Content{ .rigid = Rigid.init(@bitCast(@as(u32, 123))) }, resolved3.desc.content);
 
     // Verify redirects work
     const resolved_redirect1 = deserialized.resolveVar(redirect1);

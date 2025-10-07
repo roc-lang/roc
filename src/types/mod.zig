@@ -15,6 +15,8 @@ pub const generalize = @import("generalize.zig");
 pub const TypeWriter = @import("TypeWriter.zig");
 
 pub const Alias = types.Alias;
+pub const Flex = types.Flex;
+pub const Rigid = types.Rigid;
 pub const Content = types.Content;
 pub const FlatType = types.FlatType;
 pub const Func = types.Func;

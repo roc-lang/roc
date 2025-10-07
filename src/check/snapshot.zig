@@ -22,6 +22,8 @@ const MkSafeMultiList = collections.SafeMultiList;
 
 const Var = types.Var;
 const Content = types.Content;
+const Flex = types.Flex;
+const Rigid = types.Rigid;
 
 /// Self-contained snapshot store with fully resolved content (ie no Vars)
 ///
@@ -105,10 +107,10 @@ pub const Store = struct {
 
     fn deepCopyContent(self: *Self, store: *const TypesStore, var_: types.Var, content: Content) std.mem.Allocator.Error!SnapshotContentIdx {
         const deep_content = switch (content) {
-            .flex_var => |ident| SnapshotContent{
-                .flex_var = .{ .ident = ident, .var_ = var_ },
+            .flex => |flex| SnapshotContent{
+                .flex = .{ .ident = flex.name, .var_ = var_ },
             },
-            .rigid_var => |ident| SnapshotContent{ .rigid_var = ident },
+            .rigid => |rigid| SnapshotContent{ .rigid = rigid.name },
             .alias => |alias| SnapshotContent{ .alias = try self.deepCopyAlias(store, alias) },
             .structure => |flat_type| SnapshotContent{ .structure = try self.deepCopyFlatType(store, flat_type) },
             .err => SnapshotContent.err,
@@ -402,8 +404,8 @@ pub const Store = struct {
 
 /// Snapshot types (no Var references!)
 pub const SnapshotContent = union(enum) {
-    flex_var: struct { ident: ?Ident.Idx, var_: Var },
-    rigid_var: Ident.Idx,
+    flex: struct { ident: ?Ident.Idx, var_: Var },
+    rigid: Ident.Idx,
     alias: SnapshotAlias,
     structure: SnapshotFlatType,
     recursive,
@@ -700,15 +702,15 @@ pub const SnapshotWriter = struct {
     /// Convert a content to a type string
     pub fn writeContent(self: *Self, content: SnapshotContent, context: TypeContext, content_idx: SnapshotContentIdx, root_idx: SnapshotContentIdx) Allocator.Error!void {
         switch (content) {
-            .flex_var => |flex| {
+            .flex => |flex| {
                 if (flex.ident) |ident_idx| {
                     _ = try self.buf.writer().write(self.idents.getText(ident_idx));
                 } else {
                     _ = try self.writeFlexVarName(flex.var_, content_idx, context, root_idx);
                 }
             },
-            .rigid_var => |ident_idx| {
-                _ = try self.buf.writer().write(self.idents.getText(ident_idx));
+            .rigid => |rigid_name| {
+                _ = try self.buf.writer().write(self.idents.getText(rigid_name));
             },
             .alias => |alias| {
                 try self.writeAlias(alias, root_idx);
@@ -948,7 +950,7 @@ pub const SnapshotWriter = struct {
 
         // Show extension variable if it's not empty
         switch (self.snapshots.contents.get(tag_union.ext).*) {
-            .flex_var => |flex| {
+            .flex => |flex| {
                 if (flex.ident) |ident_idx| {
                     _ = try self.buf.writer().write(self.idents.getText(ident_idx));
                 } else {
@@ -961,8 +963,8 @@ pub const SnapshotWriter = struct {
                     try self.writeWithContext(tag_union.ext, .TagUnionExtension, root_idx);
                 },
             },
-            .rigid_var => |ident_idx| {
-                _ = try self.buf.writer().write(self.idents.getText(ident_idx));
+            .rigid => |rigid_name| {
+                _ = try self.buf.writer().write(self.idents.getText(rigid_name));
             },
             else => {
                 try self.writeWithContext(tag_union.ext, .TagUnionExtension, root_idx);
@@ -1136,12 +1138,12 @@ pub const SnapshotWriter = struct {
     fn countContent(self: *const Self, search_flex_var: Var, current_idx: SnapshotContentIdx, count: *usize) void {
         const content = self.snapshots.contents.get(current_idx);
         switch (content.*) {
-            .flex_var => |cur_flex| {
+            .flex => |cur_flex| {
                 if (search_flex_var == cur_flex.var_) {
                     count.* += 1;
                 }
             },
-            .rigid_var, .recursive, .err => {},
+            .rigid, .recursive, .err => {},
             .alias => |alias| {
                 const args = self.snapshots.sliceVars(alias.vars);
                 for (args) |arg_idx| {

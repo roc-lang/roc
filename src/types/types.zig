@@ -153,8 +153,8 @@ pub const Mark = enum(u32) {
 pub const Content = union(enum) {
     const Self = @This();
 
-    flex_var: ?Ident.Idx,
-    rigid_var: Ident.Idx,
+    flex: Flex,
+    rigid: Rigid,
     alias: Alias,
     structure: FlatType,
     err,
@@ -204,6 +204,57 @@ pub const Content = union(enum) {
             },
             else => return null,
         }
+    }
+};
+
+// flex //
+
+/// A flex var, with optional static dispatch constraints
+pub const Flex = struct {
+    name: ?Ident.Idx,
+    constraints: StaticDispatchConstraint.SafeMultiList.Range,
+
+    pub fn init() Flex {
+        return .{
+            .name = null,
+            .constraints = StaticDispatchConstraint.SafeMultiList.Range.empty(),
+        };
+    }
+
+    pub fn withName(self: Flex, name: ?Ident.Idx) Flex {
+        return .{
+            .name = name,
+            .constraints = self.constraints,
+        };
+    }
+
+    pub fn withConstraints(self: Flex, constraints: StaticDispatchConstraint.SafeMultiList.Range) Flex {
+        return .{
+            .name = self.name,
+            .constraints = constraints,
+        };
+    }
+};
+
+// rigid //
+
+/// A rigid var, with optional static dispatch constraints
+pub const Rigid = struct {
+    name: Ident.Idx,
+    constraints: StaticDispatchConstraint.SafeMultiList.Range,
+
+    pub fn init(name: Ident.Idx) Rigid {
+        return .{
+            .name = name,
+            .constraints = StaticDispatchConstraint.SafeMultiList.Range.empty(),
+        };
+    }
+
+    pub fn withConstraints(self: Rigid, constraints: StaticDispatchConstraint.SafeMultiList.Range) Rigid {
+        return .{
+            .name = self.name,
+            .constraints = constraints,
+        };
     }
 };
 
@@ -880,3 +931,24 @@ test "BitsNeeded.fromValue calculates correct bits for various values" {
     try std.testing.expectEqual(@as(u8, 65), BitsNeeded.@"65_to_127".toBits());
     try std.testing.expectEqual(@as(u8, 128), BitsNeeded.@"128".toBits());
 }
+
+// content //
+
+/// Represents a static dispatch constraints on a variable
+///
+/// sort  : List(a) -> List(a) where [a.ord : a -> Ord]
+///
+/// TODO: This is WIP, likely to change during real implementation
+pub const StaticDispatchConstraint = struct {
+    const Self = @This();
+
+    /// the dispatch fn name
+    fn_name: Ident.Idx,
+    /// the dispatch fn args
+    fn_args: Var.SafeList.NonEmptyRange,
+    /// the dispatch fn ret
+    fn_ret: Var,
+
+    /// A safe multi list of static dispatch constraints
+    pub const SafeMultiList = MkSafeMultiList(Self);
+};

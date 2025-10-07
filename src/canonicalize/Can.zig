@@ -602,7 +602,7 @@ pub fn canonicalizeFile(
                     const expect_stmt = Statement{ .s_expect = .{
                         .body = malformed,
                     } };
-                    const expect_stmt_idx = try self.env.addStatementAndTypeVar(expect_stmt, Content{ .flex_var = null }, region);
+                    const expect_stmt_idx = try self.env.addStatementAndTypeVar(expect_stmt, Content{ .flex = types.Flex.init() }, region);
                     try self.env.store.addScratchStatement(expect_stmt_idx);
                     continue;
                 };
@@ -611,7 +611,7 @@ pub fn canonicalizeFile(
                 const expect_stmt = Statement{ .s_expect = .{
                     .body = can_expect.idx,
                 } };
-                const expect_stmt_idx = try self.env.addStatementAndTypeVar(expect_stmt, Content{ .flex_var = null }, region);
+                const expect_stmt_idx = try self.env.addStatementAndTypeVar(expect_stmt, Content{ .flex = types.Flex.init() }, region);
                 try self.env.store.addScratchStatement(expect_stmt_idx);
             },
             .@"for" => |for_stmt| {
@@ -688,7 +688,7 @@ pub fn canonicalizeFile(
                             .where = where_clauses,
                         },
                     };
-                    const type_anno_stmt_idx = try self.env.addStatementAndTypeVar(type_anno_stmt, Content{ .flex_var = null }, region);
+                    const type_anno_stmt_idx = try self.env.addStatementAndTypeVar(type_anno_stmt, Content{ .flex = types.Flex.init() }, region);
                     try self.env.store.addScratchStatement(type_anno_stmt_idx);
                 }
 
@@ -1219,7 +1219,7 @@ fn canonicalizeImportStatement(
         },
     };
 
-    const import_idx = try self.env.addStatementAndTypeVar(cir_import, Content{ .flex_var = null }, self.parse_ir.tokenizedRegionToRegion(import_stmt.region));
+    const import_idx = try self.env.addStatementAndTypeVar(cir_import, Content{ .flex = types.Flex.init() }, self.parse_ir.tokenizedRegionToRegion(import_stmt.region));
     try self.env.store.addScratchStatement(import_idx);
 
     // 8. Add the module to the current scope so it can be used in qualified lookups
@@ -1353,7 +1353,7 @@ fn convertASTExposesToCIR(
             inline else => |payload| payload.region,
         };
         const region = self.parse_ir.tokenizedRegionToRegion(tokenized_region);
-        const cir_exposed_idx = try self.env.addExposedItemAndTypeVar(cir_exposed, .{ .flex_var = null }, region);
+        const cir_exposed_idx = try self.env.addExposedItemAndTypeVar(cir_exposed, .{ .flex = types.Flex.init() }, region);
         try self.env.store.addScratchExposedItem(cir_exposed_idx);
     }
 
@@ -1484,7 +1484,7 @@ fn canonicalizeDeclWithAnnotation(
         .expr = can_expr.idx,
         .annotation = mb_anno_idx,
         .kind = .let,
-    }, Content{ .flex_var = null }, region);
+    }, Content{ .flex = types.Flex.init() }, region);
 
     return def_idx;
 }
@@ -1649,7 +1649,7 @@ fn canonicalizeRecordField(
         .value = can_value.idx,
     };
 
-    return try self.env.addRecordFieldAndTypeVar(cir_field, Content{ .flex_var = null }, self.parse_ir.tokenizedRegionToRegion(field.region));
+    return try self.env.addRecordFieldAndTypeVar(cir_field, Content{ .flex = types.Flex.init() }, self.parse_ir.tokenizedRegionToRegion(field.region));
 }
 
 /// Parse an integer with underscores.
@@ -1768,7 +1768,7 @@ pub fn canonicalizeExpr(
                                 .module_idx = import_idx,
                                 .target_node_idx = target_node_idx,
                                 .region = region,
-                            } }, Content{ .flex_var = null }, region);
+                            } }, Content{ .flex = types.Flex.init() }, region);
                             return CanonicalizedExpr{
                                 .idx = expr_idx,
                                 .free_vars = null,
@@ -2464,7 +2464,7 @@ pub fn canonicalizeExpr(
                         .pattern_idx = pattern_idx,
                         .scope_depth = 0, // This is now unused, but kept for struct compatibility.
                     };
-                    const capture_idx = try self.env.addCaptureAndTypeVar(capture, types.Content{ .flex_var = null }, region);
+                    const capture_idx = try self.env.addCaptureAndTypeVar(capture, types.Content{ .flex = types.Flex.init() }, region);
                     try self.env.store.addScratchCapture(capture_idx);
                 }
 
@@ -2562,7 +2562,7 @@ pub fn canonicalizeExpr(
 
             const expr_idx = try self.env.addExprAndTypeVar(Expr{
                 .e_binop = Expr.Binop.init(op, can_lhs.idx, can_rhs.idx),
-            }, Content{ .flex_var = null }, region);
+            }, Content{ .flex = types.Flex.init() }, region);
 
             const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
@@ -2587,7 +2587,7 @@ pub fn canonicalizeExpr(
                     // Create unary minus CIR expression
                     const expr_idx = try self.env.addExprAndTypeVar(Expr{
                         .e_unary_minus = Expr.UnaryMinus.init(can_operand.idx),
-                    }, Content{ .flex_var = null }, region);
+                    }, Content{ .flex = types.Flex.init() }, region);
 
                     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = can_operand.free_vars };
                 },
@@ -2598,7 +2598,7 @@ pub fn canonicalizeExpr(
                     // Create unary not CIR expression
                     const expr_idx = try self.env.addExprAndTypeVar(Expr{
                         .e_unary_not = Expr.UnaryNot.init(can_operand.idx),
-                    }, Content{ .flex_var = null }, region);
+                    }, Content{ .flex = types.Flex.init() }, region);
 
                     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = can_operand.free_vars };
                 },
@@ -2650,7 +2650,7 @@ pub fn canonicalizeExpr(
                     .cond = can_cond.idx,
                     .body = can_then.idx,
                 };
-                const if_branch_idx = try self.env.addIfBranchAndTypeVar(if_branch, Content{ .flex_var = null }, self.parse_ir.tokenizedRegionToRegion(current_if.region));
+                const if_branch_idx = try self.env.addIfBranchAndTypeVar(if_branch, Content{ .flex = types.Flex.init() }, self.parse_ir.tokenizedRegionToRegion(current_if.region));
                 try self.env.store.addScratchIfBranch(if_branch_idx);
 
                 // Check if the else clause is another if-then-else
@@ -2683,7 +2683,7 @@ pub fn canonicalizeExpr(
                     .branches = branches_span,
                     .final_else = final_else,
                 },
-            }, Content{ .flex_var = null }, region);
+            }, Content{ .flex = types.Flex.init() }, region);
 
             // Immediately redirect the if expression's type variable to the first branch's body
             const first_branch = self.env.store.getIfBranch(branches[0]);
@@ -2744,7 +2744,7 @@ pub fn canonicalizeExpr(
                                 const branch_pattern_idx = try self.env.addMatchBranchPatternAndTypeVar(Expr.Match.BranchPattern{
                                     .pattern = pattern_idx,
                                     .degenerate = false,
-                                }, Content{ .flex_var = null }, alt_pattern_region);
+                                }, Content{ .flex = types.Flex.init() }, alt_pattern_region);
                                 try self.env.store.addScratchMatchBranchPattern(branch_pattern_idx);
                             }
                         },
@@ -2764,7 +2764,7 @@ pub fn canonicalizeExpr(
                             const branch_pattern_idx = try self.env.addMatchBranchPatternAndTypeVar(Expr.Match.BranchPattern{
                                 .pattern = pattern_idx,
                                 .degenerate = false,
-                            }, Content{ .flex_var = null }, pattern_region);
+                            }, Content{ .flex = types.Flex.init() }, pattern_region);
                             try self.env.store.addScratchMatchBranchPattern(branch_pattern_idx);
                         },
                     }
@@ -2795,7 +2795,7 @@ pub fn canonicalizeExpr(
                         .guard = null,
                         .redundant = @enumFromInt(0), // TODO
                     },
-                    Content{ .flex_var = null },
+                    Content{ .flex = types.Flex.init() },
                     body_region,
                 );
 
@@ -2818,7 +2818,7 @@ pub fn canonicalizeExpr(
             };
 
             // Create initial content for the match expression
-            const initial_content = if (mb_branch_var) |_| Content{ .flex_var = null } else Content{ .err = {} };
+            const initial_content = if (mb_branch_var) |_| Content{ .flex = types.Flex.init() } else Content{ .err = {} };
             const expr_idx = try self.env.addExprAndTypeVar(CIR.Expr{ .e_match = match_expr }, initial_content, region);
 
             // If there is at least 1 branch, then set the root expr to redirect
@@ -2839,7 +2839,7 @@ pub fn canonicalizeExpr(
             // Create debug expression
             const dbg_expr = try self.env.addExprAndTypeVar(Expr{ .e_dbg = .{
                 .expr = can_inner.idx,
-            } }, Content{ .flex_var = null }, region);
+            } }, Content{ .flex = types.Flex.init() }, region);
 
             return CanonicalizedExpr{ .idx = dbg_expr, .free_vars = can_inner.free_vars };
         },
@@ -2853,7 +2853,7 @@ pub fn canonicalizeExpr(
         },
         .ellipsis => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-            const ellipsis_expr = try self.env.addExprAndTypeVar(Expr{ .e_ellipsis = .{} }, Content{ .flex_var = null }, region);
+            const ellipsis_expr = try self.env.addExprAndTypeVar(Expr{ .e_ellipsis = .{} }, Content{ .flex = types.Flex.init() }, region);
             return CanonicalizedExpr{ .idx = ellipsis_expr, .free_vars = null };
         },
         .block => |e| {
@@ -2911,7 +2911,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
 
     // Create a single tag, open tag union for this variable
     // Use a placeholder ext_var that will be handled during type checking
-    const ext_var = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex_var = null }, region, TypeVar);
+    const ext_var = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex = types.Flex.init() }, region, TypeVar);
     const tag = try self.env.types.mkTag(tag_name, @ptrCast(self.env.store.sliceExpr(args_span)));
     const tag_union = try self.env.types.mkTagUnion(&[_]Tag{tag}, ext_var);
 
@@ -3511,7 +3511,7 @@ fn canonicalizePattern(
             // Create the pattern type var first
             const arg_vars: []TypeVar = @ptrCast(self.env.store.slicePatterns(args));
             // We need to create a temporary pattern idx to get the type var
-            const ext_var = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex_var = null }, region, TypeVar);
+            const ext_var = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex = types.Flex.init() }, region, TypeVar);
             const tag = try self.env.types.mkTag(tag_name, arg_vars);
             _ = try self.env.types.mkTagUnion(&[_]Tag{tag}, ext_var);
 
@@ -3654,7 +3654,7 @@ fn canonicalizePattern(
                     };
 
                     // Successfully found the target node
-                    break :blk .{ other_module_node_id, Content{ .flex_var = null } };
+                    break :blk .{ other_module_node_id, Content{ .flex = types.Flex.init() } };
                 };
 
                 const nominal_pattern_idx = try self.env.addPatternAndTypeVar(CIR.Pattern{
@@ -4516,7 +4516,7 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
                             // Track this type variable for underscore validation
                             try self.scratch_type_var_validation.append(self.env.gpa, name_ident);
 
-                            const content = types.Content{ .rigid_var = name_ident };
+                            const content = types.Content{ .rigid = types.Rigid.init(name_ident) };
                             const new_anno_idx = try self.env.addTypeAnnoAndTypeVar(.{ .rigid_var = .{
                                 .name = name_ident,
                             } }, content, region);
@@ -4574,7 +4574,7 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
                             // Track this type variable for underscore validation
                             try self.scratch_type_var_validation.append(self.env.gpa, name_ident);
 
-                            const content = types.Content{ .rigid_var = name_ident };
+                            const content = types.Content{ .rigid = types.Rigid.init(name_ident) };
                             const new_anno_idx = try self.env.addTypeAnnoAndTypeVar(.{ .rigid_var = .{
                                 .name = name_ident,
                             } }, content, region);
@@ -4616,7 +4616,7 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
                 if (type_anno_ctx.isTypeDeclAndHasUnderscore()) {
                     break :blk types.Content{ .err = {} };
                 } else {
-                    break :blk types.Content{ .flex_var = null };
+                    break :blk types.Content{ .flex = types.Flex.init() };
                 }
             };
 
@@ -5124,7 +5124,7 @@ fn canonicalizeTypeAnnoTag(
             return try self.env.addTypeAnnoAndTypeVar(.{ .tag = .{
                 .name = type_name,
                 .args = args,
-            } }, Content{ .flex_var = null }, region);
+            } }, Content{ .flex = types.Flex.init() }, region);
         },
         else => {
             return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{
@@ -5191,7 +5191,7 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx) std.mem.A
         return try self.env.addTypeHeaderAndTypeVar(.{
             .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 }, // Invalid identifier
             .args = .{ .span = .{ .start = 0, .len = 0 } },
-        }, Content{ .flex_var = null }, node_region);
+        }, Content{ .flex = types.Flex.init() }, node_region);
     }
 
     const ast_header = self.parse_ir.store.getTypeHeader(header_idx) catch unreachable; // Malformed handled above
@@ -5203,7 +5203,7 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx) std.mem.A
         return try self.env.addTypeHeaderAndTypeVar(.{
             .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 }, // Invalid identifier
             .args = .{ .span = .{ .start = 0, .len = 0 } },
-        }, Content{ .flex_var = null }, region);
+        }, Content{ .flex = types.Flex.init() }, region);
     };
 
     // Check if this is a builtin type
@@ -5245,7 +5245,7 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx) std.mem.A
 
                 const param_anno = try self.env.addTypeAnnoAndTypeVar(.{ .rigid_var = .{
                     .name = param_ident,
-                } }, Content{ .rigid_var = param_ident }, param_region);
+                } }, Content{ .rigid = types.Rigid.init(param_ident) }, param_region);
                 try self.env.store.addScratchTypeAnno(param_anno);
             },
             .underscore => |underscore_param| {
@@ -5292,7 +5292,7 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx) std.mem.A
     return try self.env.addTypeHeaderAndTypeVar(.{
         .name = name_ident,
         .args = args,
-    }, Content{ .flex_var = null }, region);
+    }, Content{ .flex = types.Flex.init() }, region);
 }
 
 // expr statements //
@@ -5368,13 +5368,13 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
                                         const part_text = self.parse_ir.resolve(first_part.string_part.token);
                                         break :blk try self.env.addExprAndTypeVar(Expr{ .e_crash = .{
                                             .msg = try self.env.insertString(part_text),
-                                        } }, .{ .flex_var = null }, crash_region);
+                                        } }, .{ .flex = types.Flex.init() }, crash_region);
                                     }
                                 }
                                 // Fall back to default if we can't extract
                                 break :blk try self.env.addExprAndTypeVar(Expr{ .e_crash = .{
                                     .msg = try self.env.insertString("crash"),
-                                } }, .{ .flex_var = null }, crash_region);
+                                } }, .{ .flex = types.Flex.init() }, crash_region);
                             },
                             else => {
                                 // For non-string expressions, create a malformed expression
@@ -5484,7 +5484,7 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
             .final_expr = final_expr.idx,
         },
     };
-    const block_idx = try self.env.addExprAndTypeVar(block_expr, Content{ .flex_var = null }, block_region);
+    const block_idx = try self.env.addExprAndTypeVar(block_expr, Content{ .flex = types.Flex.init() }, block_region);
     const block_var = @as(TypeVar, @enumFromInt(@intFromEnum(block_idx)));
 
     // Set the root block expr to redirect to the final expr var
@@ -6701,7 +6701,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
             defer self.env.gpa.free(module_text);
             const module_name = try self.env.insertIdent(Ident.for_text(module_text));
 
-            const external_type_var = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex_var = null }, region, TypeVar);
+            const external_type_var = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex = types.Flex.init() }, region, TypeVar);
             const external_decl = try self.createExternalDeclaration(qualified_name, module_name, method_ident, .value, external_type_var, region);
 
             return try self.env.addWhereClauseAndTypeVar(WhereClause{ .mod_method = .{
@@ -6710,7 +6710,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
                 .args = args_span,
                 .ret_anno = ret_anno,
                 .external_decl = external_decl,
-            } }, .{ .flex_var = null }, region);
+            } }, .{ .flex = types.Flex.init() }, region);
         },
         .mod_alias => |ma| {
             const region = self.parse_ir.tokenizedRegionToRegion(ma.region);
@@ -6746,14 +6746,14 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
             defer self.env.gpa.free(module_text);
             const module_name = try self.env.insertIdent(Ident.for_text(module_text));
 
-            const external_type_var = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex_var = null }, region, TypeVar);
+            const external_type_var = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex = types.Flex.init() }, region, TypeVar);
             const external_decl = try self.createExternalDeclaration(qualified_name, module_name, alias_ident, .type, external_type_var, region);
 
             return try self.env.addWhereClauseAndTypeVar(WhereClause{ .mod_alias = .{
                 .var_name = var_ident,
                 .alias_name = alias_ident,
                 .external_decl = external_decl,
-            } }, .{ .flex_var = null }, region);
+            } }, .{ .flex = types.Flex.init() }, region);
         },
         .malformed => |m| {
             const region = self.parse_ir.tokenizedRegionToRegion(m.region);
@@ -6762,7 +6762,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
             } }, .err);
             return try self.env.addWhereClauseAndTypeVar(WhereClause{ .malformed = .{
                 .diagnostic = diagnostic,
-            } }, .{ .flex_var = null }, region);
+            } }, .{ .flex = types.Flex.init() }, region);
         },
     }
 }
@@ -6861,7 +6861,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
         .module_idx = import_idx,
         .target_node_idx = target_node_idx,
         .region = region,
-    } }, Content{ .flex_var = null }, region);
+    } }, Content{ .flex = types.Flex.init() }, region);
     return expr_idx;
 }
 
@@ -6889,7 +6889,7 @@ fn canonicalizeRegularFieldAccess(self: *Self, field_access: AST.BinOp) std.mem.
         },
     };
 
-    const expr_idx = try self.env.addExprAndTypeVar(dot_access_expr, Content{ .flex_var = null }, self.parse_ir.tokenizedRegionToRegion(field_access.region));
+    const expr_idx = try self.env.addExprAndTypeVar(dot_access_expr, Content{ .flex = types.Flex.init() }, self.parse_ir.tokenizedRegionToRegion(field_access.region));
     return expr_idx;
 }
 

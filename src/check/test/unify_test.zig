@@ -25,6 +25,8 @@ const Var = types_mod.Var;
 const Desc = types_mod.Descriptor;
 const Rank = types_mod.Rank;
 const Mark = types_mod.Mark;
+const Flex = types_mod.Flex;
+const Rigid = types_mod.Rigid;
 const Content = types_mod.Content;
 const Alias = types_mod.Alias;
 const NominalType = types_mod.NominalType;
@@ -146,7 +148,7 @@ const TestEnv = struct {
     }
 
     fn mkRigidVarFromIdent(ident_idx: Ident.Idx) Content {
-        return .{ .rigid_var = ident_idx };
+        return .{ .rigid = Rigid.init(ident_idx) };
     }
 
     // helpers - alias //
@@ -162,7 +164,7 @@ const TestEnv = struct {
     }
 
     fn mkNumPolyFlex(self: *Self) std.mem.Allocator.Error!Var {
-        const flex_var = try self.module_env.types.freshFromContent(.{ .flex_var = null });
+        const flex_var = try self.module_env.types.freshFromContent(.{ .flex = Flex.init() });
         return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = flex_var } } });
     }
 
@@ -179,7 +181,7 @@ const TestEnv = struct {
     }
 
     fn mkIntPolyFlex(self: *Self) std.mem.Allocator.Error!Var {
-        const flex_var = try self.module_env.types.freshFromContent(.{ .flex_var = null });
+        const flex_var = try self.module_env.types.freshFromContent(.{ .flex = Flex.init() });
         const int_var = try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = flex_var } } });
         return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_var } } });
     }
@@ -204,7 +206,7 @@ const TestEnv = struct {
     }
 
     fn mkFracPolyFlex(self: *Self) std.mem.Allocator.Error!Var {
-        const flex_var = try self.module_env.types.freshFromContent(.{ .flex_var = null });
+        const flex_var = try self.module_env.types.freshFromContent(.{ .flex = Flex.init() });
         const frac_var = try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = flex_var } } });
         return try self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = frac_var } } });
     }
@@ -278,7 +280,7 @@ const TestEnv = struct {
     }
 
     fn mkRecordOpen(self: *Self, fields: []const RecordField) std.mem.Allocator.Error!RecordInfo {
-        const ext_var = try self.module_env.types.freshFromContent(.{ .flex_var = null });
+        const ext_var = try self.module_env.types.freshFromContent(.{ .flex = Flex.init() });
         return self.mkRecord(fields, ext_var);
     }
 
@@ -307,7 +309,7 @@ const TestEnv = struct {
     }
 
     fn mkTagUnionOpen(self: *Self, tags: []const Tag) std.mem.Allocator.Error!TagUnionInfo {
-        const ext_var = try self.module_env.types.freshFromContent(.{ .flex_var = null });
+        const ext_var = try self.module_env.types.freshFromContent(.{ .flex = Flex.init() });
         return self.mkTagUnion(tags, ext_var);
     }
 
@@ -372,7 +374,7 @@ test "rigid_var - unifies with flex_var" {
     defer env.deinit();
 
     const rigid = try env.mkRigidVar("a");
-    const a = try env.module_env.types.freshFromContent(.{ .flex_var = null });
+    const a = try env.module_env.types.freshFromContent(.{ .flex = Flex.init() });
     const b = try env.module_env.types.freshFromContent(rigid);
 
     const result = try env.unify(a, b);
@@ -388,7 +390,7 @@ test "rigid_var - unifies with flex_var (other way)" {
 
     const rigid = try env.mkRigidVar("a");
     const a = try env.module_env.types.freshFromContent(rigid);
-    const b = try env.module_env.types.freshFromContent(.{ .flex_var = null });
+    const b = try env.module_env.types.freshFromContent(.{ .flex = Flex.init() });
 
     const result = try env.unify(a, b);
     try std.testing.expectEqual(true, result.isOk());
@@ -1895,7 +1897,7 @@ test "unify - identical open records" {
     try std.testing.expectEqual(field_shared.var_, b_record_fields.items(.var_)[0]);
 
     const b_ext = env.module_env.types.resolveVar(b_record.ext).desc.content;
-    try std.testing.expectEqual(Content{ .flex_var = null }, b_ext);
+    try std.testing.expectEqual(Content{ .flex = Flex.init() }, b_ext);
 
     // check that fresh vars are correct
 
@@ -1941,7 +1943,7 @@ test "unify - open record a extends b" {
     try std.testing.expectEqual(field_a_only.var_, b_ext_record_fields.items(.var_)[0]);
 
     const b_ext_ext = env.module_env.types.resolveVar(b_ext_record.ext).desc.content;
-    try std.testing.expectEqual(Content{ .flex_var = null }, b_ext_ext);
+    try std.testing.expectEqual(Content{ .flex = Flex.init() }, b_ext_ext);
 
     // check that fresh vars are correct
 
@@ -1985,7 +1987,7 @@ test "unify - open record b extends a" {
     try std.testing.expectEqual(field_b_only.var_, b_ext_record_fields.items(.var_)[0]);
 
     const b_ext_ext = env.module_env.types.resolveVar(b_ext_record.ext).desc.content;
-    try std.testing.expectEqual(Content{ .flex_var = null }, b_ext_ext);
+    try std.testing.expectEqual(Content{ .flex = Flex.init() }, b_ext_ext);
 
     // check that fresh vars are correct
 
@@ -2026,7 +2028,7 @@ test "unify - both extend open record" {
     try std.testing.expectEqual(field_b_only, b_record_fields.get(2));
 
     const b_ext = env.module_env.types.resolveVar(b_record.ext).desc.content;
-    try std.testing.expectEqual(Content{ .flex_var = null }, b_ext);
+    try std.testing.expectEqual(Content{ .flex = Flex.init() }, b_ext);
 
     // check that fresh vars are correct
 
@@ -2046,7 +2048,7 @@ test "unify - both extend open record" {
 
     const ext_var = env.scratch.fresh_vars.get(@enumFromInt(2)).*;
     const ext_content = env.module_env.types.resolveVar(ext_var).desc.content;
-    try std.testing.expectEqual(Content{ .flex_var = null }, ext_content);
+    try std.testing.expectEqual(Content{ .flex = Flex.init() }, ext_content);
 }
 
 test "unify - record mismatch on shared field (fail)" {
@@ -2367,7 +2369,7 @@ test "unify - identical open tag unions" {
     try std.testing.expectEqual(tag_shared.args, b_tags_args[0]);
 
     const b_ext = env.module_env.types.resolveVar(b_tag_union.ext).desc.content;
-    try std.testing.expectEqual(Content{ .flex_var = null }, b_ext);
+    try std.testing.expectEqual(Content{ .flex = Flex.init() }, b_ext);
 
     // check that fresh vars are correct
 
@@ -2419,7 +2421,7 @@ test "unify - open tag union a extends b" {
     try std.testing.expectEqual(tag_a_only.args, b_ext_tags_args[0]);
 
     const b_ext_ext = env.module_env.types.resolveVar(b_ext_tag_union.ext).desc.content;
-    try std.testing.expectEqual(Content{ .flex_var = null }, b_ext_ext);
+    try std.testing.expectEqual(Content{ .flex = Flex.init() }, b_ext_ext);
 
     // check that fresh vars are correct
 
@@ -2472,7 +2474,7 @@ test "unify - open tag union b extends a" {
     try std.testing.expectEqual(tag_b_only.args, b_ext_tags_args[0]);
 
     const b_ext_ext = env.module_env.types.resolveVar(b_ext_tag_union.ext).desc.content;
-    try std.testing.expectEqual(Content{ .flex_var = null }, b_ext_ext);
+    try std.testing.expectEqual(Content{ .flex = Flex.init() }, b_ext_ext);
 
     // check that fresh vars are correct
 
@@ -2516,7 +2518,7 @@ test "unify - both extend open tag union" {
     try std.testing.expectEqual(tag_b_only, b_tags.get(2));
 
     const b_ext = env.module_env.types.resolveVar(b_tag_union.ext).desc.content;
-    try std.testing.expectEqual(Content{ .flex_var = null }, b_ext);
+    try std.testing.expectEqual(Content{ .flex = Flex.init() }, b_ext);
 
     // check that fresh vars are correct
 
@@ -2536,7 +2538,7 @@ test "unify - both extend open tag union" {
 
     const ext_var = env.scratch.fresh_vars.get(@enumFromInt(2)).*;
     const ext_content = env.module_env.types.resolveVar(ext_var).desc.content;
-    try std.testing.expectEqual(Content{ .flex_var = null }, ext_content);
+    try std.testing.expectEqual(Content{ .flex = Flex.init() }, ext_content);
 }
 
 test "unify - open tag unions a & b have same tag name with diff args (fail)" {

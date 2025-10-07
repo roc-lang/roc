@@ -121,7 +121,7 @@ pub const Generalizer = struct {
 
     fn adjustRankContent(self: *Self, content: Content, group_rank: Rank) std.mem.Allocator.Error!Rank {
         return switch (content) {
-            .flex_var, .rigid_var, .err => return group_rank,
+            .flex, .rigid, .err => return group_rank,
             .alias => |alias| {
                 var next_rank = group_rank;
                 var args_iter = self.store.iterAliasArgs(alias);

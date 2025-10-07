@@ -24,6 +24,8 @@ const Ident = base.Ident;
 const Region = base.Region;
 const Func = types_mod.Func;
 const Var = types_mod.Var;
+const Flex = types_mod.Flex;
+const Rigid = types_mod.Rigid;
 const Content = types_mod.Content;
 const Rank = types_mod.Rank;
 const Num = types_mod.Num;
@@ -642,7 +644,7 @@ fn generateStmtTypeDeclType(
                 const header_var = ModuleEnv.varFrom(header_arg_idx);
                 switch (header_arg) {
                     .rigid_var => |rigid| {
-                        try self.updateVar(header_var, .{ .rigid_var = rigid.name }, Rank.generalized);
+                        try self.updateVar(header_var, .{ .rigid = Rigid.init(rigid.name) }, Rank.generalized);
                     },
                     .underscore, .malformed => {
                         try self.updateVar(header_var, .err, Rank.generalized);
@@ -690,7 +692,7 @@ fn generateStmtTypeDeclType(
                 const header_var = ModuleEnv.varFrom(header_arg_idx);
                 switch (header_arg) {
                     .rigid_var => |rigid| {
-                        try self.updateVar(header_var, .{ .rigid_var = rigid.name }, Rank.generalized);
+                        try self.updateVar(header_var, .{ .rigid = Rigid.init(rigid.name) }, Rank.generalized);
                     },
                     .underscore, .malformed => {
                         try self.updateVar(header_var, .err, Rank.generalized);
@@ -774,13 +776,13 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenType
 
     switch (anno) {
         .rigid_var => |rigid| {
-            try self.updateVar(anno_var, .{ .rigid_var = rigid.name }, Rank.generalized);
+            try self.updateVar(anno_var, .{ .rigid = Rigid.init(rigid.name) }, Rank.generalized);
         },
         .rigid_var_lookup => |rigid_lookup| {
             try self.types.setVarRedirect(anno_var, ModuleEnv.varFrom(rigid_lookup.ref));
         },
         .underscore => {
-            try self.updateVar(anno_var, .{ .flex_var = null }, Rank.generalized);
+            try self.updateVar(anno_var, .{ .flex = Flex.init() }, Rank.generalized);
         },
         .lookup => |lookup| {
             switch (lookup.base) {
@@ -967,10 +969,10 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenType
                     for (decl_arg_vars, anno_arg_vars) |decl_arg_var, anno_arg_var| {
                         const decl_arg_resolved = self.types.resolveVar(decl_arg_var).desc.content;
 
-                        std.debug.assert(decl_arg_resolved == .rigid_var);
-                        const decl_arg_rigid_ident = decl_arg_resolved.rigid_var;
+                        std.debug.assert(decl_arg_resolved == .rigid);
+                        const decl_arg_rigid = decl_arg_resolved.rigid;
 
-                        try self.rigid_var_substitutions.put(self.gpa, decl_arg_rigid_ident, anno_arg_var);
+                        try self.rigid_var_substitutions.put(self.gpa, decl_arg_rigid.name, anno_arg_var);
                     }
 
                     // Then instantiate the variable, substituting the rigid
@@ -1024,10 +1026,10 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenType
                         for (ext_arg_vars, anno_arg_vars) |decl_arg_var, anno_arg_var| {
                             const decl_arg_resolved = self.types.resolveVar(decl_arg_var).desc.content;
 
-                            std.debug.assert(decl_arg_resolved == .rigid_var);
-                            const decl_arg_rigid_ident = decl_arg_resolved.rigid_var;
+                            std.debug.assert(decl_arg_resolved == .rigid);
+                            const decl_arg_rigid = decl_arg_resolved.rigid;
 
-                            try self.rigid_var_substitutions.put(self.gpa, decl_arg_rigid_ident, anno_arg_var);
+                            try self.rigid_var_substitutions.put(self.gpa, decl_arg_rigid.name, anno_arg_var);
                         }
 
                         // Then instantiate the variable, substituting the rigid
@@ -1324,11 +1326,11 @@ fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx, rank: types_mod.Rank,
         .assign => |_| {
             // In the case of an assigned variable, set it to be a flex var initially.
             // This will be refined based on how it's used.
-            try self.updateVar(pattern_var, .{ .flex_var = null }, rank);
+            try self.updateVar(pattern_var, .{ .flex = Flex.init() }, rank);
         },
         .underscore => |_| {
             // Underscore can be anything
-            try self.updateVar(pattern_var, .{ .flex_var = null }, rank);
+            try self.updateVar(pattern_var, .{ .flex = Flex.init() }, rank);
         },
         // str //
         .str_literal => {
@@ -2098,7 +2100,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             const resolved_pat = self.types.resolveVar(pat_var).desc;
 
             // We never instantiate rigid variables
-            if (resolved_pat.rank == Rank.generalized and resolved_pat.content != .rigid_var) {
+            if (resolved_pat.rank == Rank.generalized and resolved_pat.content != .rigid) {
                 const instantiated = try self.instantiateVar(pat_var, rank, .use_last_var);
                 _ = try self.types.setVarRedirect(expr_var, instantiated);
             } else {
@@ -2283,10 +2285,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                         // The expected type is an annotation and as such,
                         // should never contain a flex var. If it did, that
                         // would indicate that the annotation is malformed
-                        // std.debug.assert(expected_resolved_1.desc.content != .flex_var);
+                        // std.debug.assert(expected_resolved_1.desc.content != .flex);
 
                         // Skip any concrete arguments
-                        if (expected_resolved_1.desc.content != .rigid_var) {
+                        if (expected_resolved_1.desc.content != .rigid) {
                             continue;
                         }
 
@@ -2446,10 +2448,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                                 // Ensure the above comment is true. That is, that all
                                 // rigid vars for this function have been instantiated to
                                 // flex vars by the time we get here.
-                                std.debug.assert(expected_resolved_1.desc.content != .rigid_var);
+                                std.debug.assert(expected_resolved_1.desc.content != .rigid);
 
                                 // Skip any concrete arguments
-                                if (expected_resolved_1.desc.content != .flex_var) {
+                                if (expected_resolved_1.desc.content != .flex) {
                                     continue;
                                 }
 
@@ -2715,7 +2717,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             }
         },
         .e_crash => {
-            try self.updateVar(expr_var, .{ .flex_var = null }, rank);
+            try self.updateVar(expr_var, .{ .flex = Flex.init() }, rank);
         },
         .e_dbg => |dbg| {
             does_fx = try self.checkExpr(dbg.expr, rank, expected) or does_fx;
@@ -2726,7 +2728,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             try self.updateVar(expr_var, .{ .structure = .empty_record }, rank);
         },
         .e_ellipsis => {
-            try self.updateVar(expr_var, .{ .flex_var = null }, rank);
+            try self.updateVar(expr_var, .{ .flex = Flex.init() }, rank);
         },
         .e_runtime_error => {
             try self.updateVar(expr_var, .err, rank);
