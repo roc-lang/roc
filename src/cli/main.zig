@@ -2667,6 +2667,95 @@ const BuildAppError = std.mem.Allocator.Error || std.fs.File.OpenError || std.fs
     CurrentWorkingDirectoryUnlinked,
 };
 
+/// Result from checking a file that preserves the BuildEnv for further processing (e.g., docs generation)
+const CheckResultWithBuildEnv = struct {
+    check_result: CheckResult,
+    build_env: BuildEnv,
+
+    /// Free allocated memory including the BuildEnv
+    pub fn deinit(self: *CheckResultWithBuildEnv, gpa: Allocator) void {
+        self.check_result.deinit(gpa);
+        self.build_env.deinit();
+    }
+};
+
+/// Check a Roc file using BuildEnv and preserve the BuildEnv for further processing
+fn checkFileWithBuildEnvPreserved(
+    gpa: Allocator,
+    filepath: []const u8,
+    collect_timing: bool,
+    cache_config: CacheConfig,
+) BuildAppError!CheckResultWithBuildEnv {
+    _ = collect_timing; // Timing is always collected by BuildEnv
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    // Initialize BuildEnv in single-threaded mode for checking
+    var build_env = BuildEnv.init(gpa, .single_threaded, 1);
+    build_env.compiler_version = build_options.compiler_version;
+    // Note: We do NOT defer build_env.deinit() here because we're returning it
+
+    // Set up cache manager if caching is enabled
+    if (cache_config.enabled) {
+        const cache_manager = try gpa.create(CacheManager);
+        cache_manager.* = CacheManager.init(gpa, cache_config, Filesystem.default());
+        build_env.setCacheManager(cache_manager);
+        // Note: BuildEnv.deinit() will clean up the cache manager when caller calls deinit
+    }
+
+    // Build the file (works for both app and module files)
+    try build_env.build(filepath);
+
+    // Drain all reports
+    const drained = try build_env.drainReports();
+
+    // Count errors and warnings
+    var error_count: u32 = 0;
+    var warning_count: u32 = 0;
+
+    for (drained) |mod| {
+        for (mod.reports) |report| {
+            switch (report.severity) {
+                .info => {},
+                .runtime_error, .fatal => error_count += 1,
+                .warning => warning_count += 1,
+            }
+        }
+    }
+
+    // Convert BuildEnv drained reports to our format
+    var reports = try gpa.alloc(DrainedReport, drained.len);
+    for (drained, 0..) |mod, i| {
+        reports[i] = .{
+            .file_path = try gpa.dupe(u8, mod.abs_path),
+            .reports = try gpa.dupe(reporting.Report, mod.reports),
+        };
+    }
+
+    // Free the original drained reports
+    // Note: abs_path is owned by BuildEnv, reports are moved to our array
+    gpa.free(drained);
+
+    // Get timing information from BuildEnv
+    const timing = if (builtin.target.cpu.arch == .wasm32)
+        CheckTimingInfo{}
+    else
+        build_env.getTimingInfo();
+
+    const check_result = CheckResult{
+        .reports = reports,
+        .timing = timing,
+        .was_cached = false, // BuildEnv doesn't currently expose cache info
+        .error_count = error_count,
+        .warning_count = warning_count,
+    };
+
+    return CheckResultWithBuildEnv{
+        .check_result = check_result,
+        .build_env = build_env,
+    };
+}
+
 /// Check a Roc file using the BuildEnv system
 fn checkFileWithBuildEnv(
     gpa: Allocator,
@@ -2854,9 +2943,202 @@ fn printTimingBreakdown(writer: anytype, timing: ?CheckTimingInfo) void {
 }
 
 fn rocDocs(gpa: Allocator, args: cli_args.DocsArgs) !void {
-    _ = gpa;
-    _ = args;
-    fatal("docs not implemented", .{});
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const stdout = std.io.getStdOut().writer();
+    const stderr = std.io.getStdErr().writer();
+    const stderr_writer = stderr.any();
+
+    var timer = try std.time.Timer.start();
+
+    // Set up cache configuration based on command line args
+    const cache_config = CacheConfig{
+        .enabled = !args.no_cache,
+        .verbose = args.verbose,
+    };
+
+    // Use BuildEnv to check the file, preserving the BuildEnv for docs generation
+    var result_with_env = checkFileWithBuildEnvPreserved(
+        gpa,
+        args.path,
+        args.time,
+        cache_config,
+    ) catch |err| {
+        handleProcessFileError(err, stderr, args.path);
+    };
+
+    // Clean up when we're done - this includes the BuildEnv and all module envs
+    defer result_with_env.deinit(gpa);
+
+    const check_result = &result_with_env.check_result;
+    const elapsed = timer.read();
+
+    // Handle cached results vs fresh compilation results differently
+    if (check_result.was_cached) {
+        // For cached results, use the stored diagnostic counts
+        const total_errors = check_result.error_count;
+        const total_warnings = check_result.warning_count;
+
+        if (total_errors > 0 or total_warnings > 0) {
+            stderr.print("Found {} error(s) and {} warning(s) in ", .{
+                total_errors,
+                total_warnings,
+            }) catch {};
+            formatElapsedTime(stderr, elapsed) catch {};
+            stderr.print(" for {s} (note module loaded from cache, use --no-cache to display Errors and Warnings.).", .{args.path}) catch {};
+            std.process.exit(1);
+        }
+    } else {
+        // For fresh compilation, process and display reports normally
+        var has_errors = false;
+
+        // Render reports grouped by module
+        for (check_result.reports) |module| {
+            for (module.reports) |*report| {
+
+                // Render the diagnostic report to stderr
+                reporting.renderReportToTerminal(report, stderr_writer, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
+                    stderr.print("Error rendering diagnostic report: {}", .{render_err}) catch {};
+                    // Fallback to just printing the title
+                    stderr.print("  {s}", .{report.title}) catch {};
+                };
+
+                if (report.severity == .fatal or report.severity == .runtime_error) {
+                    has_errors = true;
+                }
+            }
+        }
+
+        if (check_result.error_count > 0 or check_result.warning_count > 0) {
+            stderr.writeAll("\n") catch {};
+            stderr.print("Found {} error(s) and {} warning(s) in ", .{
+                check_result.error_count,
+                check_result.warning_count,
+            }) catch {};
+            formatElapsedTime(stderr, elapsed) catch {};
+            stderr.print(" for {s}.", .{args.path}) catch {};
+
+            std.process.exit(1);
+        }
+    }
+
+    // Print timing breakdown if requested
+    if (args.time) {
+        printTimingBreakdown(stdout, if (builtin.target.cpu.arch == .wasm32) null else check_result.timing);
+    }
+
+    // Generate documentation for all packages recursively
+    try generateDocsRecursive(gpa, &result_with_env.build_env, args.path, args.output, "");
+
+    stdout.print("\nDocumentation generation complete for {s}", .{args.path}) catch {};
+}
+
+/// Generate HTML index file for a package
+pub fn generatePackageIndex(
+    gpa: Allocator,
+    output_path: []const u8,
+    module_path: []const u8,
+    package_shorthands: []const []const u8,
+) !void {
+    // Create output directory if it doesn't exist
+    std.fs.cwd().makePath(output_path) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+
+    // Create index.html file
+    const index_path = try std.fs.path.join(gpa, &[_][]const u8{ output_path, "index.html" });
+    defer gpa.free(index_path);
+
+    const file = try std.fs.cwd().createFile(index_path, .{});
+    defer file.close();
+
+    const writer = file.writer();
+
+    // Write HTML header
+    try writer.writeAll("<!DOCTYPE html>\n<html>\n<head>\n");
+    try writer.writeAll("  <meta charset=\"UTF-8\">\n");
+    try writer.writeAll("  <title>Documentation</title>\n");
+    try writer.writeAll("</head>\n<body>\n");
+
+    // Write module path as h1
+    try writer.print("  <h1>{s}</h1>\n", .{module_path});
+
+    // Write links to package dependencies if any exist
+    if (package_shorthands.len > 0) {
+        try writer.writeAll("  <ul>\n");
+        for (package_shorthands) |shorthand| {
+            try writer.print("    <li><a href=\"{s}\">{s}</a></li>\n", .{ shorthand, shorthand });
+        }
+        try writer.writeAll("  </ul>\n");
+    }
+
+    try writer.writeAll("</body>\n</html>\n");
+}
+
+/// Recursively generate documentation for a package and all its dependencies
+fn generateDocsRecursive(
+    gpa: Allocator,
+    build_env: *compile.BuildEnv,
+    module_path: []const u8,
+    base_output_dir: []const u8,
+    relative_path: []const u8,
+) error{OutOfMemory}!void {
+    // Determine output directory for this package
+    const output_dir = if (relative_path.len == 0)
+        try gpa.dupe(u8, base_output_dir)
+    else
+        try std.fs.path.join(gpa, &[_][]const u8{ base_output_dir, relative_path });
+    defer gpa.free(output_dir);
+
+    // Collect package shorthands for the current package
+    var shorthands_list = std.ArrayList([]const u8).init(gpa);
+    defer {
+        for (shorthands_list.items) |item| gpa.free(item);
+        shorthands_list.deinit();
+    }
+
+    // Find the current package in build_env
+    var pkg_iter = build_env.packages.iterator();
+    while (pkg_iter.next()) |entry| {
+        const pkg = entry.value_ptr;
+
+        // Collect shorthands from this package
+        var shorthand_iter = pkg.shorthands.iterator();
+        while (shorthand_iter.next()) |sh_entry| {
+            const shorthand = try gpa.dupe(u8, sh_entry.key_ptr.*);
+            try shorthands_list.append(shorthand);
+        }
+
+        // Process package dependencies recursively
+        shorthand_iter = pkg.shorthands.iterator();
+        while (shorthand_iter.next()) |sh_entry| {
+            const shorthand = sh_entry.key_ptr.*;
+
+            // Build relative path for dependency
+            const dep_relative_path = if (relative_path.len == 0)
+                try gpa.dupe(u8, shorthand)
+            else
+                try std.fs.path.join(gpa, &[_][]const u8{ relative_path, shorthand });
+            defer gpa.free(dep_relative_path);
+
+            // Recursively generate docs for this dependency
+            const dep_ref = sh_entry.value_ptr.*;
+            generateDocsRecursive(gpa, build_env, dep_ref.root_file, base_output_dir, dep_relative_path) catch |err| {
+                // Continue on error - don't fail the whole generation
+                std.debug.print("Warning: failed to generate docs for {s}: {}\n", .{ shorthand, err });
+            };
+        }
+
+        // Only process the first package (the root one)
+        break;
+    }
+
+    // Generate index.html for this package
+    generatePackageIndex(gpa, output_dir, module_path, shorthands_list.items) catch |err| {
+        std.debug.print("Warning: failed to generate index for {s}: {}\n", .{ module_path, err });
+    };
 }
 
 /// Log a fatal error and exit the process with a non-zero code.
