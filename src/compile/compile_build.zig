@@ -33,6 +33,10 @@ const Thread = if (threads_available) std.Thread else struct {};
 const Mutex = if (threads_available) std.Thread.Mutex else struct {};
 const ThreadCondition = if (threads_available) std.Thread.Condition else struct {};
 
+/// The package name used for the root module being compiled
+/// Empty string is used to minimize hash computation overhead
+const ROOT_MODULE_SHORTHAND = "";
+
 // Inflight counter: atomic usize on non-wasm; no-op struct on wasm
 const InflightCounter = if (threads_available) struct {
     value: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
@@ -448,7 +452,7 @@ pub const BuildEnv = struct {
 
         // After building, verify it was actually an app
         // Check the package we just created
-        const pkg = self.packages.get("app");
+        const pkg = self.packages.get(ROOT_MODULE_SHORTHAND);
         if (pkg == null or pkg.?.kind != .app) {
             // If it wasn't an app, return an error
             return error.NotAnApp;
@@ -477,13 +481,8 @@ pub const BuildEnv = struct {
             return error.UnsupportedHeader;
         }
 
-        // Create package entry (for app, module, or type_module)
-        const pkg_name = switch (header_info.kind) {
-            .module => "module",
-            .type_module => "type_module",
-            .app => "app",
-            else => unreachable,
-        };
+        // Create package entry - use ROOT_MODULE_SHORTHAND as key for the root package
+        const pkg_name = ROOT_MODULE_SHORTHAND;
         const key_pkg = try self.gpa.dupe(u8, pkg_name);
         const pkg_root_file = try self.gpa.dupe(u8, root_abs);
         const pkg_root_dir = try self.gpa.dupe(u8, root_dir);
@@ -1235,18 +1234,12 @@ pub const BuildEnv = struct {
     /// Get the root module's ModuleEnv (for serialization)
     /// Returns null if the root module hasn't been built yet or if there are no packages
     pub fn getRootModuleEnv(self: *BuildEnv) ?*const ModuleEnv {
-        // Try to get the root package - could be "app", "module", or "type_module"
-        const pkg_names = [_][]const u8{ "app", "module", "type_module" };
-        for (pkg_names) |pkg_name| {
-            if (self.schedulers.get(pkg_name)) |scheduler| {
-                // Get the root module (first module in the package)
-                if (scheduler.modules.items.len == 0) continue;
-
-                // Find the module with depth 0 (root module)
-                for (scheduler.modules.items) |*mod| {
-                    if (mod.depth == 0) {
-                        return if (mod.env) |*env| env else null;
-                    }
+        // Get the root package scheduler
+        if (self.schedulers.get(ROOT_MODULE_SHORTHAND)) |scheduler| {
+            // Find the module with depth 0 (root module)
+            for (scheduler.modules.items) |*mod| {
+                if (mod.depth == 0) {
+                    return if (mod.env) |*env| env else null;
                 }
             }
         }
