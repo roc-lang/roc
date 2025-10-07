@@ -207,28 +207,7 @@ simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `module [
-    Color,
-    ModuleA.ModuleB.TypeC,
-    Result,
-    ExternalModule,
-]
-
-import Basics.Result
-import Color
-import ModuleA.ModuleB exposing [TypeC]
-import ExternalModule as ExtMod
-
-# Simple qualified type
-simpleQualified : Color.RGB
-simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
-
-# Aliased qualified type
-aliasedQualified : ExtMod.DataType
-aliasedQualified = ExtMod.DataType.Default
-
-# Multi-level qualified type
-multiLevelQualified : ModuleA.ModuleB` imported into this Roc file.
+There is no module with the name `ModuleA.ModuleB` imported into this Roc file.
 
 You're attempting to use this module here:
 **qualified_type_canonicalization.md:22:23:22:44:**
@@ -295,45 +274,7 @@ transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `module [
-    Color,
-    ModuleA.ModuleB.TypeC,
-    Result,
-    ExternalModule,
-]
-
-import Basics.Result
-import Color
-import ModuleA.ModuleB exposing [TypeC]
-import ExternalModule as ExtMod
-
-# Simple qualified type
-simpleQualified : Color.RGB
-simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
-
-# Aliased qualified type
-aliasedQualified : ExtMod.DataType
-aliasedQualified = ExtMod.DataType.Default
-
-# Multi-level qualified type
-multiLevelQualified : ModuleA.ModuleB.TypeC
-multiLevelQualified = TypeC.new
-
-# Using qualified type with generics
-resultType : Result.Result(I32, Str)
-resultType = Result.Ok(42)
-
-# Function returning qualified type
-getColor : {} -> Color.RGB
-getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
-
-# Function accepting qualified type
-processColor : Color.RGB -> Str
-processColor = |color|
-    "Color processed"
-
-# Multiple qualified types in a function signature
-transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB` imported into this Roc file.
+There is no module with the name `ModuleA.ModuleB` imported into this Roc file.
 
 You're attempting to use this module here:
 **qualified_type_canonicalization.md:39:55:39:76:**

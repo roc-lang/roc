@@ -389,6 +389,191 @@ const Self = @This();
 /// - Eliminates syntax sugar (for example, renaming `+` to the function call `add`).
 ///
 /// The canonicalization occurs on a single module (file) in isolation. This allows for this work to be easily parallelized and also cached. So where the source code for a module has not changed, the CanIR can simply be loaded from disk and used immediately.
+/// First pass helper: Process a type declaration and introduce it into scope
+/// If parent_name is provided, creates a qualified name (e.g., "Foo.Bar")
+fn processTypeDeclFirstPass(
+    self: *Self,
+    type_decl: anytype,
+    parent_name: ?Ident.Idx,
+) std.mem.Allocator.Error!void {
+    // Canonicalize the type declaration header first
+    const header_idx = try self.canonicalizeTypeHeader(type_decl.header);
+    const region = self.parse_ir.tokenizedRegionToRegion(type_decl.region);
+
+    // Extract the type name from the header
+    const type_header = self.env.store.getTypeHeader(header_idx);
+
+    // Build qualified name if we have a parent
+    const qualified_name_idx = if (parent_name) |parent_idx| blk: {
+        const parent_text = self.env.getIdent(parent_idx);
+        const type_text = self.env.getIdent(type_header.name);
+        const qualified_name_str = try std.fmt.allocPrint(
+            self.env.gpa,
+            "{s}.{s}",
+            .{ parent_text, type_text },
+        );
+        defer self.env.gpa.free(qualified_name_str);
+
+        const qualified_ident = base.Ident.for_text(qualified_name_str);
+        break :blk try self.env.insertIdent(qualified_ident);
+    } else type_header.name;
+
+    // Create a placeholder type declaration statement to introduce the type name into scope
+    // This allows recursive type references to work during annotation canonicalization
+    const placeholder_cir_type_decl = switch (type_decl.kind) {
+        .alias => Statement{
+            .s_alias_decl = .{
+                .header = header_idx,
+                .anno = @enumFromInt(0), // placeholder - will be replaced
+            },
+        },
+        .nominal => Statement{
+            .s_nominal_decl = .{
+                .header = header_idx,
+                .anno = @enumFromInt(0), // placeholder - will be replaced
+            },
+        },
+    };
+
+    const type_decl_stmt_idx = try self.env.addStatementAndTypeVar(placeholder_cir_type_decl, .err, region);
+
+    // Introduce the type name into scope early to support recursive references
+    try self.scopeIntroduceTypeDecl(qualified_name_idx, type_decl_stmt_idx, region);
+
+    // Process type parameters and annotation in a separate scope
+    const anno_idx = blk: {
+        // Enter a new scope for type parameters
+        const type_var_scope = self.scopeEnterTypeVar();
+        defer self.scopeExitTypeVar(type_var_scope);
+
+        // Introduce type parameters from the header into the scope
+        try self.introduceTypeParametersFromHeader(header_idx);
+
+        // Now canonicalize the type annotation with type parameters and type name in scope
+        break :blk try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno);
+    };
+
+    // Canonicalize where clauses if present
+    if (type_decl.where) |_| {
+        try self.env.pushDiagnostic(Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
+            .region = region,
+        } });
+    }
+
+    // Create the real CIR type declaration statement with the canonicalized annotation
+    const type_decl_stmt = blk: {
+        switch (type_decl.kind) {
+            .alias => {
+                break :blk Statement{
+                    .s_alias_decl = .{
+                        .header = header_idx,
+                        .anno = anno_idx,
+                    },
+                };
+            },
+            .nominal => {
+                break :blk Statement{
+                    .s_nominal_decl = .{
+                        .header = header_idx,
+                        .anno = anno_idx,
+                    },
+                };
+            },
+        }
+    };
+
+    // Create the real statement and add it to scratch statements
+    try self.env.store.setStatementNode(type_decl_stmt_idx, type_decl_stmt);
+    try self.env.store.addScratchStatement(type_decl_stmt_idx);
+
+    // Remove from exposed_type_texts since the type is now fully defined
+    const type_text = self.env.getIdent(type_header.name);
+    _ = self.exposed_type_texts.remove(type_text);
+
+    // Process associated items recursively
+    if (type_decl.associated) |assoc| {
+        try self.processAssociatedItemsFirstPass(qualified_name_idx, assoc.statements);
+    }
+}
+
+/// First pass helper: Process associated items and introduce them into scope with qualified names
+fn processAssociatedItemsFirstPass(
+    self: *Self,
+    parent_name: Ident.Idx,
+    statements: AST.Statement.Span,
+) std.mem.Allocator.Error!void {
+    for (self.parse_ir.store.statementSlice(statements)) |stmt_idx| {
+        const stmt = self.parse_ir.store.getStatement(stmt_idx);
+        switch (stmt) {
+            .type_decl => |type_decl| {
+                // Recursively process nested type declarations
+                try self.processTypeDeclFirstPass(type_decl, parent_name);
+            },
+            .decl => |decl| {
+                // Introduce declarations with qualified names for recursive references
+                const pattern = self.parse_ir.store.getPattern(decl.pattern);
+                if (pattern == .ident) {
+                    const pattern_ident_tok = pattern.ident.ident_tok;
+                    if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
+                        // Build qualified name (e.g., "Foo.Bar.baz")
+                        const parent_text = self.env.getIdent(parent_name);
+                        const decl_text = self.env.getIdent(decl_ident);
+                        const qualified_name_str = try std.fmt.allocPrint(
+                            self.env.gpa,
+                            "{s}.{s}",
+                            .{ parent_text, decl_text },
+                        );
+                        defer self.env.gpa.free(qualified_name_str);
+
+                        const qualified_ident = base.Ident.for_text(qualified_name_str);
+                        const qualified_idx = try self.env.insertIdent(qualified_ident);
+
+                        // Create placeholder pattern with qualified name
+                        const region = self.parse_ir.tokenizedRegionToRegion(decl.region);
+                        const placeholder_pattern = Pattern{
+                            .assign = .{
+                                .ident = qualified_idx,
+                            },
+                        };
+                        const placeholder_pattern_idx = try self.env.addPatternAndTypeVar(placeholder_pattern, .err, region);
+
+                        // Introduce the qualified name to scope
+                        switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, qualified_idx, placeholder_pattern_idx, false, true)) {
+                            .success => {},
+                            .shadowing_warning => |shadowed_pattern_idx| {
+                                const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+                                try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                                    .ident = qualified_idx,
+                                    .region = region,
+                                    .original_region = original_region,
+                                } });
+                            },
+                            .top_level_var_error => {
+                                // This shouldn't happen for declarations in associated blocks
+                            },
+                            .var_across_function_boundary => {
+                                // This shouldn't happen for declarations in associated blocks
+                            },
+                        }
+                    }
+                }
+            },
+            else => {
+                // Skip other statement types in first pass
+            },
+        }
+    }
+}
+
+/// Canonicalizes a full Roc source file, transforming the Abstract Syntax Tree (AST)
+/// into Canonical Intermediate Representation (CIR).
+///
+/// This is the main entry point for file-level canonicalization, handling:
+/// - Module headers and exposed items
+/// - Type declarations (including nested types in associated blocks)
+/// - Value definitions
+/// - Import statements
+/// - Module validation (type modules, default-app modules, etc.)
 pub fn canonicalizeFile(
     self: *Self,
 ) std.mem.Allocator.Error!void {
@@ -461,84 +646,7 @@ pub fn canonicalizeFile(
         const stmt = self.parse_ir.store.getStatement(stmt_id);
         switch (stmt) {
             .type_decl => |type_decl| {
-                // Canonicalize the type declaration header first
-                const header_idx = try self.canonicalizeTypeHeader(type_decl.header);
-                const region = self.parse_ir.tokenizedRegionToRegion(type_decl.region);
-
-                // Extract the type name from the header to introduce it into scope early
-                const type_header = self.env.store.getTypeHeader(header_idx);
-
-                // Create a placeholder type declaration statement to introduce the type name into scope
-                // This allows recursive type references to work during annotation canonicalization
-                const placeholder_cir_type_decl = switch (type_decl.kind) {
-                    .alias => Statement{
-                        .s_alias_decl = .{
-                            .header = header_idx,
-                            .anno = @enumFromInt(0), // placeholder - will be replaced
-                        },
-                    },
-                    .nominal => Statement{
-                        .s_nominal_decl = .{
-                            .header = header_idx,
-                            .anno = @enumFromInt(0), // placeholder - will be replaced
-                        },
-                    },
-                };
-
-                const type_decl_stmt_idx = try self.env.addStatementAndTypeVar(placeholder_cir_type_decl, .err, region);
-
-                // Introduce the type name into scope early to support recursive references
-                try self.scopeIntroduceTypeDecl(type_header.name, type_decl_stmt_idx, region);
-
-                // Process type parameters and annotation in a separate scope
-                const anno_idx = blk: {
-                    // Enter a new scope for type parameters
-                    const type_var_scope = self.scopeEnterTypeVar();
-                    defer self.scopeExitTypeVar(type_var_scope);
-
-                    // Introduce type parameters from the header into the scope
-                    try self.introduceTypeParametersFromHeader(header_idx);
-
-                    // Now canonicalize the type annotation with type parameters and type name in scope
-                    break :blk try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno);
-                };
-
-                // Canonicalize where clauses if present
-                if (type_decl.where) |_| {
-                    try self.env.pushDiagnostic(Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
-                        .region = region,
-                    } });
-                }
-
-                // Create the real CIR type declaration statement with the canonicalized annotation
-                const type_decl_stmt = blk: {
-                    switch (type_decl.kind) {
-                        .alias => {
-                            break :blk Statement{
-                                .s_alias_decl = .{
-                                    .header = header_idx,
-                                    .anno = anno_idx,
-                                },
-                            };
-                        },
-                        .nominal => {
-                            break :blk Statement{
-                                .s_nominal_decl = .{
-                                    .header = header_idx,
-                                    .anno = anno_idx,
-                                },
-                            };
-                        },
-                    }
-                };
-
-                // Create the real statement and add it to scratch statements
-                try self.env.store.setStatementNode(type_decl_stmt_idx, type_decl_stmt);
-                try self.env.store.addScratchStatement(type_decl_stmt_idx);
-
-                // Remove from exposed_type_texts since the type is now fully defined
-                const type_text = self.env.getIdent(type_header.name);
-                _ = self.exposed_type_texts.remove(type_text);
+                try self.processTypeDeclFirstPass(type_decl, null);
             },
             else => {
                 // Skip non-type-declaration statements in first pass
@@ -1795,6 +1903,36 @@ pub fn canonicalizeExpr(
                 // Check if this is a module-qualified identifier
                 const qualifier_tokens = self.parse_ir.store.tokenSlice(e.qualifiers);
                 if (qualifier_tokens.len > 0) {
+                    // First, try looking up the full qualified name as a local identifier (for associated items)
+                    const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotLowerIdent};
+                    const qualified_name_text = self.parse_ir.resolveQualifiedName(
+                        e.qualifiers,
+                        e.token,
+                        &strip_tokens,
+                    );
+                    const qualified_ident = try self.env.insertIdent(base.Ident.for_text(qualified_name_text));
+
+                    // Try local lookup first
+                    switch (self.scopeLookup(.ident, qualified_ident)) {
+                        .found => |found_pattern_idx| {
+                            // Mark this pattern as used for unused variable checking
+                            try self.used_patterns.put(self.env.gpa, found_pattern_idx, {});
+
+                            // We found the qualified ident in local scope
+                            const expr_idx = try self.env.addExprAndTypeVar(CIR.Expr{ .e_lookup_local = .{
+                                .pattern_idx = found_pattern_idx,
+                            } }, .err, region);
+
+                            const free_vars_start = self.scratch_free_vars.top();
+                            try self.scratch_free_vars.append(self.env.gpa, found_pattern_idx);
+                            const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
+                            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
+                        },
+                        .not_found => {
+                            // Not a local qualified identifier, try module-qualified lookup
+                        },
+                    }
+
                     const qualifier_tok = @as(Token.Idx, @intCast(qualifier_tokens[0]));
                     if (self.parse_ir.tokens.resolveIdentifier(qualifier_tok)) |module_alias| {
                         // Check if this is a module alias
@@ -4766,12 +4904,33 @@ fn canonicalizeTypeAnnoBasicType(
             } }, .err, region);
         }
     } else {
-        // This is an external type
-
-        // Get the fully resolved module name
+        // First, check if this is a qualified name for an associated type (e.g., Foo.Bar)
+        // Build the full qualified name
         const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
+        const qualified_prefix = self.parse_ir.resolveQualifiedName(
+            ty.qualifiers,
+            ty.token,
+            &strip_tokens,
+        );
+        const qualified_name_ident = try self.env.insertIdent(base.Ident.for_text(qualified_prefix));
+
+        // Try looking up the full qualified name in local scope (for associated types)
+        if (self.scopeLookupTypeDecl(qualified_name_ident)) |type_decl_idx| {
+            return try self.env.addTypeAnnoAndTypeVar(CIR.TypeAnno{ .lookup = .{
+                .name = qualified_name_ident,
+                .base = .{ .local = .{ .decl_idx = type_decl_idx } },
+            } }, .err, region);
+        }
+
+        // Not a local qualified type, so treat as an external type from a module
+        // Get qualifiers excluding the last one for module alias
+        const module_qualifiers: AST.Token.Span = if (qualifier_toks.len > 1)
+            .{ .span = .{ .start = ty.qualifiers.span.start, .len = @intCast(qualifier_toks.len - 1) } }
+        else
+            .{ .span = .{ .start = 0, .len = 0 } };
+
         const module_alias_text = self.parse_ir.resolveQualifiedName(
-            .{ .span = .{ .start = 0, .len = @intCast(qualifier_toks.len - 1) } },
+            module_qualifiers,
             qualifier_toks[qualifier_toks.len - 1],
             &strip_tokens,
         );

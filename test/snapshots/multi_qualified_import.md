@@ -217,13 +217,7 @@ json_encoder = Json.Core.Utf8.defaultEncoder
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `import json.Core.Utf8 exposing [Encoder]
-
-json_encoder : Encoder
-json_encoder = Json.Core.Utf8.defaultEncoder
-
-# Test with qualified type in annotation
-process : json.Core.Utf8` imported into this Roc file.
+There is no module with the name `json.Core.Utf8` imported into this Roc file.
 
 You're attempting to use this module here:
 **multi_qualified_import.md:7:11:7:33:**
@@ -246,17 +240,7 @@ process = |encoder| "processing"
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `import json.Core.Utf8 exposing [Encoder]
-
-json_encoder : Encoder
-json_encoder = Json.Core.Utf8.defaultEncoder
-
-# Test with qualified type in annotation
-process : json.Core.Utf8.Encoder -> Str
-process = |encoder| "processing"
-
-# Test with multiple qualifiers
-data : json.Core.Utf8` imported into this Roc file.
+There is no module with the name `json.Core.Utf8` imported into this Roc file.
 
 You're attempting to use this module here:
 **multi_qualified_import.md:11:8:11:34:**

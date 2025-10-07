@@ -1,15 +1,15 @@
 # META
 ~~~ini
-description=Nested types in associated blocks
+description=Nominal type with declarations in associated blocks
 type=file:Foo.roc
 ~~~
 # SOURCE
 ~~~roc
 Foo := [Whatever].{
     Bar := [Something].{
-        y = 6
+        baz = 5
     }
-    x = 5
+    blah = 6
 }
 ~~~
 # EXPECTED
@@ -20,9 +20,9 @@ NIL
 ~~~zig
 UpperIdent(1:1-1:4),OpColonEqual(1:5-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),CloseSquare(1:17-1:18),Dot(1:18-1:19),OpenCurly(1:19-1:20),
 UpperIdent(2:5-2:8),OpColonEqual(2:9-2:11),OpenSquare(2:12-2:13),UpperIdent(2:13-2:22),CloseSquare(2:22-2:23),Dot(2:23-2:24),OpenCurly(2:24-2:25),
-LowerIdent(3:9-3:10),OpAssign(3:11-3:12),Int(3:13-3:14),
+LowerIdent(3:9-3:12),OpAssign(3:13-3:14),Int(3:15-3:16),
 CloseCurly(4:5-4:6),
-LowerIdent(5:5-5:6),OpAssign(5:7-5:8),Int(5:9-5:10),
+LowerIdent(5:5-5:9),OpAssign(5:10-5:11),Int(5:12-5:13),
 CloseCurly(6:1-6:2),
 EndOfFile(7:1-7:1),
 ~~~
@@ -45,20 +45,20 @@ EndOfFile(7:1-7:1),
 						(tags
 							(ty @2.13-2.22 (name "Something"))))
 					(associated @2.24-4.6
-						(s-decl @3.9-3.14
-							(p-ident @3.9-3.10 (raw "y"))
-							(e-int @3.13-3.14 (raw "6")))))
-				(s-decl @5.5-5.10
-					(p-ident @5.5-5.6 (raw "x"))
-					(e-int @5.9-5.10 (raw "5")))))))
+						(s-decl @3.9-3.16
+							(p-ident @3.9-3.12 (raw "baz"))
+							(e-int @3.15-3.16 (raw "5")))))
+				(s-decl @5.5-5.13
+					(p-ident @5.5-5.9 (raw "blah"))
+					(e-int @5.12-5.13 (raw "6")))))))
 ~~~
 # FORMATTED
 ~~~roc
 Foo := [Whatever].{
 	Bar := [Something].{
-		y = 6
+		baz = 5
 	}
-	x = 5
+	blah = 6
 }
 ~~~
 # CANONICALIZE

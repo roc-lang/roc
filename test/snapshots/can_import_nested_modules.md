@@ -258,20 +258,7 @@ authenticate = |user, pass| HttpAuth.login(user, pass)
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `import json.Parser.Config
-import http.Client.Auth as HttpAuth
-import utils.String.Format exposing [padLeft]
-
-# Test multi-level type qualification
-parseConfig : Config.Settings -> Str
-parseConfig = |settings| Config.toString(settings)
-
-# Test multi-level value qualification
-authenticate : Str, Str -> HttpAuth.Token
-authenticate = |user, pass| HttpAuth.login(user, pass)
-
-# Test deeply nested qualification
-processData : Config.Parser` imported into this Roc file.
+There is no module with the name `Config.Parser` imported into this Roc file.
 
 You're attempting to use this module here:
 **can_import_nested_modules.md:14:15:14:37:**
@@ -282,20 +269,7 @@ processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `import json.Parser.Config
-import http.Client.Auth as HttpAuth
-import utils.String.Format exposing [padLeft]
-
-# Test multi-level type qualification
-parseConfig : Config.Settings -> Str
-parseConfig = |settings| Config.toString(settings)
-
-# Test multi-level value qualification
-authenticate : Str, Str -> HttpAuth.Token
-authenticate = |user, pass| HttpAuth.login(user, pass)
-
-# Test deeply nested qualification
-processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser` imported into this Roc file.
+There is no module with the name `Config.Parser` imported into this Roc file.
 
 You're attempting to use this module here:
 **can_import_nested_modules.md:14:58:14:77:**

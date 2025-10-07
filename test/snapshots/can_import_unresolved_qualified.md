@@ -61,18 +61,7 @@ import http.Client as Http
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `import json.Json
-import http.Client as Http
-
-# Test unresolved qualified value
-main = Json.NonExistent.method
-
-# Test unresolved qualified type in annotation
-parseData : Json.InvalidType -> Str
-parseData = |data| Json.stringify(data)
-
-# Test unresolved nested qualification
-processRequest : Http.Server` imported into this Roc file.
+There is no module with the name `Http.Server` imported into this Roc file.
 
 You're attempting to use this module here:
 **can_import_unresolved_qualified.md:12:18:12:37:**
@@ -83,18 +72,7 @@ processRequest : Http.Server.Request -> Http.Server.Response
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `import json.Json
-import http.Client as Http
-
-# Test unresolved qualified value
-main = Json.NonExistent.method
-
-# Test unresolved qualified type in annotation
-parseData : Json.InvalidType -> Str
-parseData = |data| Json.stringify(data)
-
-# Test unresolved nested qualification
-processRequest : Http.Server.Request -> Http.Server` imported into this Roc file.
+There is no module with the name `Http.Server` imported into this Roc file.
 
 You're attempting to use this module here:
 **can_import_unresolved_qualified.md:12:41:12:61:**

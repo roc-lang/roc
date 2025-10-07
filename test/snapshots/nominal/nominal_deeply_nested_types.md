@@ -105,7 +105,19 @@ Foo := [Whatever].{
 	(s-nominal-decl @1.1-12.2
 		(ty-header @1.1-1.4 (name "Foo"))
 		(ty-tag-union @1.8-1.18
-			(ty-tag-name @1.9-1.17 (name "Whatever")))))
+			(ty-tag-name @1.9-1.17 (name "Whatever"))))
+	(s-nominal-decl @2.5-10.6
+		(ty-header @2.5-2.8 (name "Bar"))
+		(ty-tag-union @2.12-2.23
+			(ty-tag-name @2.13-2.22 (name "Something"))))
+	(s-nominal-decl @3.9-8.10
+		(ty-header @3.9-3.12 (name "Baz"))
+		(ty-tag-union @3.16-3.22
+			(ty-tag-name @3.17-3.21 (name "Else"))))
+	(s-nominal-decl @4.13-6.14
+		(ty-header @4.13-4.16 (name "Qux"))
+		(ty-tag-union @4.20-4.26
+			(ty-tag-name @4.21-4.25 (name "Deep")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -113,6 +125,12 @@ Foo := [Whatever].{
 	(defs)
 	(type_decls
 		(nominal @1.1-12.2 (type "Foo")
-			(ty-header @1.1-1.4 (name "Foo"))))
+			(ty-header @1.1-1.4 (name "Foo")))
+		(nominal @2.5-10.6 (type "Bar")
+			(ty-header @2.5-2.8 (name "Bar")))
+		(nominal @3.9-8.10 (type "Baz")
+			(ty-header @3.9-3.12 (name "Baz")))
+		(nominal @4.13-6.14 (type "Qux")
+			(ty-header @4.13-4.16 (name "Qux"))))
 	(expressions))
 ~~~

@@ -121,30 +121,7 @@ processRequest = |req| Http.defaultResponse
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `import http.Client as Http exposing [Request, Response]
-import json.Json
-import utils.Result exposing [Result]
-
-processRequest : Request -> Response
-processRequest = |req| Http.defaultResponse
-
-parseJson : Str -> Json.Value
-parseJson = |input| Json.parse(input)
-
-handleApi : Http.Request -> Result(Http.Response, Json.Error)
-handleApi = |request| {
-    result = Json.decode(request.body)
-    match result {
-        Ok(data) => Ok(Http.success(data))
-        Err(err) => Err(err)
-    }
-}
-
-config : Json.Config
-config = Json.defaultConfig
-
-# Test nested type qualification
-advancedParser : Json.Parser` imported into this Roc file.
+There is no module with the name `Json.Parser` imported into this Roc file.
 
 You're attempting to use this module here:
 **can_import_type_annotations.md:24:18:24:36:**
@@ -155,30 +132,7 @@ advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `import http.Client as Http exposing [Request, Response]
-import json.Json
-import utils.Result exposing [Result]
-
-processRequest : Request -> Response
-processRequest = |req| Http.defaultResponse
-
-parseJson : Str -> Json.Value
-parseJson = |input| Json.parse(input)
-
-handleApi : Http.Request -> Result(Http.Response, Json.Error)
-handleApi = |request| {
-    result = Json.decode(request.body)
-    match result {
-        Ok(data) => Ok(Http.success(data))
-        Err(err) => Err(err)
-    }
-}
-
-config : Json.Config
-config = Json.defaultConfig
-
-# Test nested type qualification
-advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser` imported into this Roc file.
+There is no module with the name `Json.Parser` imported into this Roc file.
 
 You're attempting to use this module here:
 **can_import_type_annotations.md:24:64:24:81:**
