@@ -369,6 +369,47 @@ fn addMainExe(
     tracy: ?[]const u8,
     zstd: *Dependency,
 ) ?*Step.Compile {
+    // STAGE 0: Build shim library first (needed by both bootstrap and final compiler)
+    // Create builtins static library at build time with minimal dependencies
+    const builtins_obj = b.addObject(.{
+        .name = "roc_builtins",
+        .root_source_file = b.path("src/builtins/static_lib.zig"),
+        .target = target,
+        .optimize = optimize,
+        .strip = true,
+        .pic = true, // Enable Position Independent Code for PIE compatibility
+    });
+
+    // Create shim static library at build time - fully static without libc
+    //
+    // NOTE we do NOT link libC here to avoid dynamic dependency on libC
+    const shim_lib = b.addLibrary(.{
+        .name = "roc_interpreter_shim",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/interpreter_shim/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = true,
+            .pic = true, // Enable Position Independent Code for PIE compatibility
+        }),
+        .linkage = .static,
+    });
+    // Add all modules from roc_modules that the shim needs
+    roc_modules.addAll(shim_lib);
+    // Link against the pre-built builtins library
+    shim_lib.addObject(builtins_obj);
+    // Bundle compiler-rt for our math symbols
+    shim_lib.bundle_compiler_rt = true;
+    // Install shim library to the output directory
+    const install_shim = b.addInstallArtifact(shim_lib, .{});
+    b.getInstallStep().dependOn(&install_shim.step);
+    // Copy the shim library to the src/ directory for embedding as binary data
+    // This is because @embedFile happens at compile time and needs the file to exist already
+    // and zig doesn't permit embedding files from directories outside the source tree.
+    const copy_shim = b.addUpdateSourceFiles();
+    const interpreter_shim_filename = if (target.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
+    copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", interpreter_shim_filename }));
+
     // STAGE 1: Build bootstrap compiler with minimal builtins
     const bootstrap_compiler = @import("src/build/bootstrap_compiler.zig");
     var bootstrap_roc_modules = roc_modules;
@@ -379,6 +420,9 @@ fn addMainExe(
         optimize,
     );
     bootstrap_roc_modules.addAll(bootstrap_exe);
+
+    // Bootstrap compiler needs the shim library to be in place before it compiles
+    bootstrap_exe.step.dependOn(&copy_shim.step);
 
     // Install bootstrap compiler so we can test it
     b.installArtifact(bootstrap_exe);
@@ -423,8 +467,9 @@ fn addMainExe(
         .link_libc = true,
     });
 
-    // Make final roc depend on compiled builtins being ready
+    // Make final roc depend on compiled builtins and shim library being ready
     exe.step.dependOn(&compiled_builtins.step);
+    exe.step.dependOn(&copy_shim.step);
 
     // Add build option for final compiler (not bootstrap)
     const final_options = b.addOptions();
@@ -515,47 +560,6 @@ fn addMainExe(
             }
         }
     }
-
-    // Create builtins static library at build time with minimal dependencies
-    const builtins_obj = b.addObject(.{
-        .name = "roc_builtins",
-        .root_source_file = b.path("src/builtins/static_lib.zig"),
-        .target = target,
-        .optimize = optimize,
-        .strip = true,
-        .pic = true, // Enable Position Independent Code for PIE compatibility
-    });
-
-    // Create shim static library at build time - fully static without libc
-    //
-    // NOTE we do NOT link libC here to avoid dynamic dependency on libC
-    const shim_lib = b.addLibrary(.{
-        .name = "roc_interpreter_shim",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/interpreter_shim/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .strip = true,
-            .pic = true, // Enable Position Independent Code for PIE compatibility
-        }),
-        .linkage = .static,
-    });
-    // Add all modules from roc_modules that the shim needs
-    roc_modules.addAll(shim_lib);
-    // Link against the pre-built builtins library
-    shim_lib.addObject(builtins_obj);
-    // Bundle compiler-rt for our math symbols
-    shim_lib.bundle_compiler_rt = true;
-    // Install shim library to the output directory
-    const install_shim = b.addInstallArtifact(shim_lib, .{});
-    b.getInstallStep().dependOn(&install_shim.step);
-    // Copy the shim library to the src/ directory for embedding as binary data
-    // This is because @embedFile happens at compile time and needs the file to exist already
-    // and zig doesn't permit embedding files from directories outside the source tree.
-    const copy_shim = b.addUpdateSourceFiles();
-    const interpreter_shim_filename = if (target.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
-    copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", interpreter_shim_filename }));
-    exe.step.dependOn(&copy_shim.step);
 
     const config = b.addOptions();
     config.addOption(bool, "llvm", enable_llvm);
