@@ -46,7 +46,7 @@ EndOfFile(6:1-6:1),
 					(e-int @3.9-3.11 (raw "10")))
 				(s-decl @4.5-4.11
 					(p-ident @4.5-4.6 (raw "z"))
-					(e-int @4.9-4.11 (raw "15"))))))
+					(e-int @4.9-4.11 (raw "15")))))))
 ~~~
 # FORMATTED
 ~~~roc

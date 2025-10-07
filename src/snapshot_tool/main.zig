@@ -1066,6 +1066,7 @@ fn processSnapshotContent(
         .platform => try parse.parse(&module_env.common, allocator),
         .app => try parse.parse(&module_env.common, allocator),
         .repl => unreachable, // Handled above
+        .snippet => try parse.parse(&module_env.common, allocator),
     };
     defer parse_ast.deinit(allocator);
 
@@ -1094,13 +1095,16 @@ fn processSnapshotContent(
         .box = try can_ir.insertIdent(base.Ident.for_text("Box")),
     };
 
-    var czer = try Can.init(can_ir, &parse_ast, null, .checking);
+    var czer = try Can.init(can_ir, &parse_ast, null);
     defer czer.deinit();
 
     var maybe_expr_idx: ?Can.CanonicalizedExpr = null;
 
     switch (content.meta.node_type) {
-        .file => try czer.canonicalizeFile(),
+        .file => {
+            try czer.canonicalizeFile();
+            try czer.validateForChecking();
+        },
         .header => {
             // TODO: implement canonicalize_header when available
         },
@@ -1122,6 +1126,10 @@ fn processSnapshotContent(
         .platform => try czer.canonicalizeFile(),
         .app => try czer.canonicalizeFile(),
         .repl => unreachable, // Handled above
+        .snippet => {
+            // Snippet - just canonicalize without validation
+            try czer.canonicalizeFile();
+        },
     }
 
     // Assert that everything is in-sync
@@ -1499,6 +1507,7 @@ pub const NodeType = enum {
     platform,
     app,
     repl,
+    snippet,
 
     pub const HEADER = "header";
     pub const EXPR = "expr";
@@ -1508,6 +1517,7 @@ pub const NodeType = enum {
     pub const PLATFORM = "platform";
     pub const APP = "app";
     pub const REPL = "repl";
+    pub const SNIPPET = "snippet";
 
     fn fromString(str: []const u8) !NodeType {
         if (std.mem.eql(u8, str, HEADER)) return .header;
@@ -1518,6 +1528,7 @@ pub const NodeType = enum {
         if (std.mem.eql(u8, str, PLATFORM)) return .platform;
         if (std.mem.eql(u8, str, APP)) return .app;
         if (std.mem.eql(u8, str, REPL)) return .repl;
+        if (std.mem.eql(u8, str, SNIPPET)) return .snippet;
         return Error.InvalidNodeType;
     }
 
@@ -1531,6 +1542,7 @@ pub const NodeType = enum {
             .platform => "platform",
             .app => "app",
             .repl => "repl",
+            .snippet => "snippet",
         };
     }
 };
@@ -2031,6 +2043,10 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
             // REPL doesn't use parse trees
             return;
         },
+        .snippet => {
+            const file = parse_ast.store.getFile();
+            try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
+        },
     }
 
     // Only generate section if we have content on the stack
@@ -2093,6 +2109,9 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
         .repl => {
             // REPL doesn't use formatting
             return;
+        },
+        .snippet => {
+            try fmt.formatAst(parse_ast.*, formatted.writer().any());
         },
     }
 
