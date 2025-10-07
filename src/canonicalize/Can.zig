@@ -7146,13 +7146,12 @@ fn scopeLookupTypeDecl(self: *Self, ident_idx: Ident.Idx) ?Statement.Idx {
         i -= 1;
         const scope = &self.scopes.items[i];
 
-        // First check for type aliases (unqualified names in associated blocks)
-        // These have higher priority than regular type declarations
+        // Check for type aliases (unqualified names in associated blocks)
         if (scope.lookupTypeAlias(ident_idx)) |aliased_decl| {
             return aliased_decl;
         }
 
-        // Then check regular type declarations
+        // Check regular type declarations
         switch (scope.lookupTypeDecl(ident_idx)) {
             .found => |type_decl_idx| return type_decl_idx,
             .not_found => continue,
