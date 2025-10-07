@@ -21,21 +21,8 @@ external : Foo.Bar
 external = Foo.defaultBar
 ~~~
 # EXPECTED
-UNUSED VARIABLE - nominal_associated_self_reference.md:10:5:10:39
 TYPE MISMATCH - nominal_associated_self_reference.md:5:18:5:19
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `useDefault` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_useDefault` to suppress this warning.
-The unused variable is declared here:
-**nominal_associated_self_reference.md:10:5:10:39:**
-```roc
-    useDefault = transform(defaultBar)
-```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **nominal_associated_self_reference.md:5:18:5:19:**

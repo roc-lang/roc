@@ -948,6 +948,29 @@ pub fn canonicalizeFile(
         }
     }
 
+    // For type modules, expose the main type and all associated items before the second pass
+    // This ensures unused variable checking in the third pass doesn't flag exposed items
+    if (self.env.module_kind == .type_module) {
+        const module_name_text = self.env.module_name;
+        for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
+            const stmt = self.parse_ir.store.getStatement(stmt_id);
+            if (stmt == .type_decl) {
+                const type_decl = stmt.type_decl;
+                const type_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
+                const type_name_ident = self.parse_ir.tokens.resolveIdentifier(type_header.name) orelse continue;
+                const type_name_text = self.env.getIdent(type_name_ident);
+
+                if (std.mem.eql(u8, type_name_text, module_name_text)) {
+                    // Expose the main type
+                    try self.env.addExposedById(type_name_ident);
+                    // Expose all associated items recursively
+                    try self.exposeAssociatedItems(type_name_ident, type_decl);
+                    break;
+                }
+            }
+        }
+    }
+
     // Second pass: Process all other statements
     const ast_stmt_idxs = self.parse_ir.store.statementSlice(file.statements);
     var i: usize = 0;
@@ -1235,8 +1258,7 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
             // Store the matching type ident in module_kind if found
             if (matching_type_ident) |type_ident| {
                 main_type_ident.* = type_ident;
-                // Auto-expose the main type for type modules
-                try self.env.addExposedById(type_ident);
+                // The main type and associated items are already exposed in canonicalize()
             }
 
             // Valid if either we have a valid main! or a matching type declaration
@@ -6960,6 +6982,23 @@ fn checkScopeForUnusedVariables(self: *Self, scope: *const Scope) std.mem.Alloca
             continue;
         }
 
+        // Skip if this identifier is exposed (implicitly used in type modules)
+        if (self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(ident_idx))) {
+            continue;
+        }
+
+        // Get the pattern to check if it has a different ident than the scope key
+        // For pattern_identifier nodes, check if the qualified ident is exposed
+        const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
+        const node = self.env.store.nodes.get(node_idx);
+
+        if (node.tag == .pattern_identifier) {
+            const assign_ident: base.Ident.Idx = @bitCast(node.data_1);
+            if (self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(assign_ident))) {
+                continue;
+            }
+        }
+
         // Get the region for this pattern to provide good error location
         const region = self.env.store.getPatternRegion(pattern_idx);
 
@@ -7719,6 +7758,65 @@ fn findMatchingTypeIdent(self: *Self) ?Ident.Idx {
     }
 
     return null;
+}
+
+/// Expose all associated items of a type declaration (recursively for nested types)
+/// This is used for type modules where all associated items are implicitly exposed
+fn exposeAssociatedItems(self: *Self, parent_name: Ident.Idx, type_decl: anytype) std.mem.Allocator.Error!void {
+    if (type_decl.associated) |assoc| {
+        for (self.parse_ir.store.statementSlice(assoc.statements)) |assoc_stmt_idx| {
+            const assoc_stmt = self.parse_ir.store.getStatement(assoc_stmt_idx);
+            switch (assoc_stmt) {
+                .type_decl => |nested_type_decl| {
+                    // Get the nested type name
+                    const nested_header = self.parse_ir.store.getTypeHeader(nested_type_decl.header) catch continue;
+                    const nested_ident = self.parse_ir.tokens.resolveIdentifier(nested_header.name) orelse continue;
+
+                    // Build qualified name (e.g., "Foo.Bar")
+                    const parent_text = self.env.getIdent(parent_name);
+                    const nested_text = self.env.getIdent(nested_ident);
+                    const qualified_name_str = try std.fmt.allocPrint(
+                        self.env.gpa,
+                        "{s}.{s}",
+                        .{ parent_text, nested_text },
+                    );
+                    defer self.env.gpa.free(qualified_name_str);
+                    const qualified_ident = base.Ident.for_text(qualified_name_str);
+                    const qualified_idx = try self.env.insertIdent(qualified_ident);
+
+                    // Expose the nested type
+                    try self.env.addExposedById(qualified_idx);
+
+                    // Recursively expose its associated items
+                    try self.exposeAssociatedItems(qualified_idx, nested_type_decl);
+                },
+                .decl => |decl| {
+                    // Get the declaration name
+                    const pattern = self.parse_ir.store.getPattern(decl.pattern);
+                    if (pattern == .ident) {
+                        const pattern_ident_tok = pattern.ident.ident_tok;
+                        if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
+                            // Build qualified name (e.g., "Foo.stuff")
+                            const parent_text = self.env.getIdent(parent_name);
+                            const decl_text = self.env.getIdent(decl_ident);
+                            const qualified_name_str = try std.fmt.allocPrint(
+                                self.env.gpa,
+                                "{s}.{s}",
+                                .{ parent_text, decl_text },
+                            );
+                            defer self.env.gpa.free(qualified_name_str);
+                            const qualified_ident = base.Ident.for_text(qualified_name_str);
+                            const qualified_idx = try self.env.insertIdent(qualified_ident);
+
+                            // Expose the declaration
+                            try self.env.addExposedById(qualified_idx);
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+    }
 }
 
 /// Check if any type declarations exist in the file

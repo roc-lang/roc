@@ -13,20 +13,9 @@ Foo := [Whatever].{
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - nominal_associated_decls.md:5:5:5:13
+NIL
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `blah` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_blah` to suppress this warning.
-The unused variable is declared here:
-**nominal_associated_decls.md:5:5:5:13:**
-```roc
-    blah = 6
-```
-    ^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:4),OpColonEqual(1:5-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),CloseSquare(1:17-1:18),Dot(1:18-1:19),OpenCurly(1:19-1:20),
