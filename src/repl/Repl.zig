@@ -355,9 +355,9 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8, def_ident: ?[]co
     var module_env = try ModuleEnv.init(self.allocator, full_source);
     defer module_env.deinit();
 
-    // Parse based on context:
-    // - If we have past_defs OR a def_ident (i.e., current input is a definition), parse as file
-    // - Otherwise, parse as expression
+    // Parse as a file if buildFullSource wrapped the input in a synthetic `main! = |_| <expr>`.
+    // This happens when we have past definitions to include, or when evaluating a definition (def_ident != null).
+    // Otherwise, parse the input directly as an expression.
     const need_file_parse = self.past_defs.items.len > 0 or def_ident != null;
 
     var parse_ast = if (need_file_parse)
@@ -393,10 +393,8 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8, def_ident: ?[]co
 
     // Canonicalize based on whether we have past definitions or a def_ident
     const canonical_expr_idx: can.CIR.Expr.Idx = if (self.past_defs.items.len > 0 or def_ident != null) blk: {
-        // HACK: When there are past definitions, buildFullSource wraps the expression in a synthetic
-        // file containing `main! = |_| <expr>` so it can be evaluated. This is a workaround for
-        // limitations in the current evaluation system. Ideally, the REPL should handle statements
-        // and expressions directly without constructing fake files.
+        // When there are past definitions, buildFullSource wraps the expression in a synthetic
+        // `main! = |_| <expr>` so it can be evaluated along with those definitions.
         czer.canonicalizeFile() catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Canonicalize file error: {}", .{err});
         };
