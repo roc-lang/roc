@@ -36,7 +36,7 @@ It has the type:
     _[C]_others_
 
 But the type annotation says it should have the type:
-    _Level3_
+    _Foo.Level1.Level2.Level3_
 
 # TOKENS
 ~~~zig
@@ -136,20 +136,23 @@ deepType = C
 		(annotation @15.1-15.9
 			(declared-type
 				(ty-lookup @14.12-14.36 (name "Foo.Level1.Level2.Level3") (local)))))
+	(d-let
+		(p-assign @5.17-5.27 (ident "Foo.Level1.Level2.Level3.value"))
+		(e-num @5.25-5.27 (value "42")))
 	(s-nominal-decl @1.1-9.2
 		(ty-header @1.1-1.4 (name "Foo"))
 		(ty-tag-union @1.8-1.18
 			(ty-tag-name @1.9-1.17 (name "Whatever"))))
 	(s-nominal-decl @2.5-8.6
-		(ty-header @2.5-2.11 (name "Level1"))
+		(ty-header @2.5-8.6 (name "Foo.Level1"))
 		(ty-tag-union @2.15-2.18
 			(ty-tag-name @2.16-2.17 (name "A"))))
 	(s-nominal-decl @3.9-7.10
-		(ty-header @3.9-3.15 (name "Level2"))
+		(ty-header @3.9-7.10 (name "Foo.Level1.Level2"))
 		(ty-tag-union @3.19-3.22
 			(ty-tag-name @3.20-3.21 (name "B"))))
 	(s-nominal-decl @4.13-6.14
-		(ty-header @4.13-4.19 (name "Level3"))
+		(ty-header @4.13-6.14 (name "Foo.Level1.Level2.Level3"))
 		(ty-tag-union @4.23-4.26
 			(ty-tag-name @4.24-4.25 (name "C")))))
 ~~~
@@ -157,18 +160,20 @@ deepType = C
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @12.1-12.10 (type "Error"))
-		(patt @15.1-15.9 (type "Error")))
+		(patt @12.1-12.10 (type "Num(_size)"))
+		(patt @15.1-15.9 (type "Error"))
+		(patt @5.17-5.27 (type "Num(_size)")))
 	(type_decls
 		(nominal @1.1-9.2 (type "Foo")
 			(ty-header @1.1-1.4 (name "Foo")))
-		(nominal @2.5-8.6 (type "Level1")
-			(ty-header @2.5-2.11 (name "Level1")))
-		(nominal @3.9-7.10 (type "Level2")
-			(ty-header @3.9-3.15 (name "Level2")))
-		(nominal @4.13-6.14 (type "Level3")
-			(ty-header @4.13-4.19 (name "Level3"))))
+		(nominal @2.5-8.6 (type "Foo.Level1")
+			(ty-header @2.5-8.6 (name "Foo.Level1")))
+		(nominal @3.9-7.10 (type "Foo.Level1.Level2")
+			(ty-header @3.9-7.10 (name "Foo.Level1.Level2")))
+		(nominal @4.13-6.14 (type "Foo.Level1.Level2.Level3")
+			(ty-header @4.13-6.14 (name "Foo.Level1.Level2.Level3"))))
 	(expressions
-		(expr @12.13-12.43 (type "Error"))
-		(expr @15.12-15.13 (type "Error"))))
+		(expr @12.13-12.43 (type "Num(_size)"))
+		(expr @15.12-15.13 (type "Error"))
+		(expr @5.25-5.27 (type "Num(_size)"))))
 ~~~

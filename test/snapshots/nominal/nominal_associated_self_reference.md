@@ -21,9 +21,22 @@ external : Foo.Bar
 external = Foo.defaultBar
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - nominal_associated_self_reference.md:5:18:5:19
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**nominal_associated_self_reference.md:5:18:5:19:**
+```roc
+    defaultBar = X
+```
+                 ^
+
+It has the type:
+    _[X]_others_
+
+But the type annotation says it should have the type:
+    _Foo.Bar_
+
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:4),OpColonEqual(1:5-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),CloseSquare(1:17-1:18),Dot(1:18-1:19),OpenCurly(1:19-1:20),
@@ -108,12 +121,37 @@ external = Foo.defaultBar
 		(annotation @14.1-14.9
 			(declared-type
 				(ty-lookup @13.12-13.19 (name "Foo.Bar") (local)))))
+	(d-let
+		(p-assign @5.5-5.19 (ident "Foo.defaultBar"))
+		(e-tag @5.18-5.19 (name "X"))
+		(annotation @5.5-5.15
+			(declared-type
+				(ty-lookup @4.18-4.21 (name "Bar") (local)))))
+	(d-let
+		(p-assign @8.5-8.22 (ident "Foo.transform"))
+		(e-lambda @8.17-8.22
+			(args
+				(p-assign @8.18-8.19 (ident "x")))
+			(e-lookup-local @8.21-8.22
+				(p-assign @8.18-8.19 (ident "x"))))
+		(annotation @8.5-8.14
+			(declared-type
+				(ty-fn @7.17-7.27 (effectful false)
+					(ty-lookup @7.17-7.20 (name "Bar") (local))
+					(ty-lookup @7.24-7.27 (name "Bar") (local))))))
+	(d-let
+		(p-assign @10.5-10.39 (ident "Foo.useDefault"))
+		(e-call @10.18-10.39
+			(e-lookup-local @10.18-10.27
+				(p-assign @8.5-8.22 (ident "Foo.transform")))
+			(e-lookup-local @10.28-10.38
+				(p-assign @5.5-5.19 (ident "Foo.defaultBar")))))
 	(s-nominal-decl @1.1-11.2
 		(ty-header @1.1-1.4 (name "Foo"))
 		(ty-tag-union @1.8-1.18
 			(ty-tag-name @1.9-1.17 (name "Whatever"))))
 	(s-nominal-decl @2.5-2.21
-		(ty-header @2.5-2.8 (name "Bar"))
+		(ty-header @2.5-2.21 (name "Foo.Bar"))
 		(ty-tag-union @2.12-2.21
 			(ty-tag-name @2.13-2.14 (name "X"))
 			(ty-tag-name @2.16-2.17 (name "Y"))
@@ -123,12 +161,18 @@ external = Foo.defaultBar
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @14.1-14.9 (type "Error")))
+		(patt @14.1-14.9 (type "Error"))
+		(patt @5.5-5.19 (type "Error"))
+		(patt @8.5-8.22 (type "Foo.Bar -> Foo.Bar"))
+		(patt @10.5-10.39 (type "Foo.Bar")))
 	(type_decls
 		(nominal @1.1-11.2 (type "Foo")
 			(ty-header @1.1-1.4 (name "Foo")))
-		(nominal @2.5-2.21 (type "Bar")
-			(ty-header @2.5-2.8 (name "Bar"))))
+		(nominal @2.5-2.21 (type "Foo.Bar")
+			(ty-header @2.5-2.21 (name "Foo.Bar"))))
 	(expressions
-		(expr @14.12-14.26 (type "Error"))))
+		(expr @14.12-14.26 (type "Error"))
+		(expr @5.18-5.19 (type "Error"))
+		(expr @8.17-8.22 (type "Foo.Bar -> Foo.Bar"))
+		(expr @10.18-10.39 (type "Foo.Bar"))))
 ~~~

@@ -36,7 +36,7 @@ It has the type:
     _List([A, B, C]_others)_
 
 But the type annotation says it should have the type:
-    _List(Bar)_
+    _List(Foo.Bar)_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -50,7 +50,7 @@ It has the type:
     _Result([A]_others, err)_
 
 But the type annotation says it should have the type:
-    _Result(Bar, Error)_
+    _Result(Foo.Bar, Foo.Error)_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -64,7 +64,7 @@ It has the type:
     _{ bar: [A]_others, count: Num(_size) }_
 
 But the type annotation says it should have the type:
-    _{ bar: Bar, count: Num(Int(Unsigned64)) }_
+    _{ bar: Foo.Bar, count: Num(Int(Unsigned64)) }_
 
 **Hint:** This might be because the numeric literal is either negative or too large to fit in the unsigned type.
 
@@ -204,13 +204,13 @@ nested = { bar: A, count: 1 }
 		(ty-tag-union @1.8-1.18
 			(ty-tag-name @1.9-1.17 (name "Whatever"))))
 	(s-nominal-decl @2.5-2.21
-		(ty-header @2.5-2.8 (name "Bar"))
+		(ty-header @2.5-2.21 (name "Foo.Bar"))
 		(ty-tag-union @2.12-2.21
 			(ty-tag-name @2.13-2.14 (name "A"))
 			(ty-tag-name @2.16-2.17 (name "B"))
 			(ty-tag-name @2.19-2.20 (name "C"))))
 	(s-nominal-decl @3.5-3.27
-		(ty-header @3.5-3.10 (name "Error"))
+		(ty-header @3.5-3.27 (name "Foo.Error"))
 		(ty-tag-union @3.14-3.27
 			(ty-tag-name @3.15-3.19 (name "Oops"))
 			(ty-tag-name @3.21-3.26 (name "Yikes")))))
@@ -225,10 +225,10 @@ nested = { bar: A, count: 1 }
 	(type_decls
 		(nominal @1.1-4.2 (type "Foo")
 			(ty-header @1.1-1.4 (name "Foo")))
-		(nominal @2.5-2.21 (type "Bar")
-			(ty-header @2.5-2.8 (name "Bar")))
-		(nominal @3.5-3.27 (type "Error")
-			(ty-header @3.5-3.10 (name "Error"))))
+		(nominal @2.5-2.21 (type "Foo.Bar")
+			(ty-header @2.5-2.21 (name "Foo.Bar")))
+		(nominal @3.5-3.27 (type "Foo.Error")
+			(ty-header @3.5-3.27 (name "Foo.Error"))))
 	(expressions
 		(expr @7.9-7.18 (type "Error"))
 		(expr @10.10-10.15 (type "Error"))

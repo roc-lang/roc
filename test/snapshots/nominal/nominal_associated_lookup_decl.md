@@ -65,6 +65,9 @@ useBar = Foo.bar
 		(annotation @6.1-6.7
 			(declared-type
 				(ty-lookup @5.10-5.13 (name "U64") (builtin)))))
+	(d-let
+		(p-assign @2.5-2.13 (ident "Foo.bar"))
+		(e-num @2.11-2.13 (value "42")))
 	(s-nominal-decl @1.1-3.2
 		(ty-header @1.1-1.4 (name "Foo"))
 		(ty-tag-union @1.8-1.18
@@ -74,10 +77,12 @@ useBar = Foo.bar
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.7 (type "Error")))
+		(patt @6.1-6.7 (type "Num(_size)"))
+		(patt @2.5-2.13 (type "Num(_size)")))
 	(type_decls
 		(nominal @1.1-3.2 (type "Foo")
 			(ty-header @1.1-1.4 (name "Foo"))))
 	(expressions
-		(expr @6.10-6.17 (type "Error"))))
+		(expr @6.10-6.17 (type "Num(_size)"))
+		(expr @2.11-2.13 (type "Num(_size)"))))
 ~~~

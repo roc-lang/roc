@@ -403,7 +403,7 @@ fn processTypeDeclFirstPass(
     // Extract the type name from the header
     const type_header = self.env.store.getTypeHeader(header_idx);
 
-    // Build qualified name if we have a parent
+    // Build qualified name and header if we have a parent
     const qualified_name_idx = if (parent_name) |parent_idx| blk: {
         const parent_text = self.env.getIdent(parent_idx);
         const type_text = self.env.getIdent(type_header.name);
@@ -418,18 +418,27 @@ fn processTypeDeclFirstPass(
         break :blk try self.env.insertIdent(qualified_ident);
     } else type_header.name;
 
+    // Create a new header with the qualified name if needed
+    const final_header_idx = if (parent_name != null and qualified_name_idx.idx != type_header.name.idx) blk: {
+        const qualified_header = CIR.TypeHeader{
+            .name = qualified_name_idx,
+            .args = type_header.args,
+        };
+        break :blk try self.env.addTypeHeaderAndTypeVar(qualified_header, Content{ .flex_var = null }, region);
+    } else header_idx;
+
     // Create a placeholder type declaration statement to introduce the type name into scope
     // This allows recursive type references to work during annotation canonicalization
     const placeholder_cir_type_decl = switch (type_decl.kind) {
         .alias => Statement{
             .s_alias_decl = .{
-                .header = header_idx,
+                .header = final_header_idx,
                 .anno = @enumFromInt(0), // placeholder - will be replaced
             },
         },
         .nominal => Statement{
             .s_nominal_decl = .{
-                .header = header_idx,
+                .header = final_header_idx,
                 .anno = @enumFromInt(0), // placeholder - will be replaced
             },
         },
@@ -447,7 +456,7 @@ fn processTypeDeclFirstPass(
         defer self.scopeExitTypeVar(type_var_scope);
 
         // Introduce type parameters from the header into the scope
-        try self.introduceTypeParametersFromHeader(header_idx);
+        try self.introduceTypeParametersFromHeader(final_header_idx);
 
         // Now canonicalize the type annotation with type parameters and type name in scope
         break :blk try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno);
@@ -466,7 +475,7 @@ fn processTypeDeclFirstPass(
             .alias => {
                 break :blk Statement{
                     .s_alias_decl = .{
-                        .header = header_idx,
+                        .header = final_header_idx,
                         .anno = anno_idx,
                     },
                 };
@@ -474,7 +483,7 @@ fn processTypeDeclFirstPass(
             .nominal => {
                 break :blk Statement{
                     .s_nominal_decl = .{
-                        .header = header_idx,
+                        .header = final_header_idx,
                         .anno = anno_idx,
                     },
                 };
@@ -490,9 +499,278 @@ fn processTypeDeclFirstPass(
     const type_text = self.env.getIdent(type_header.name);
     _ = self.exposed_type_texts.remove(type_text);
 
-    // Process associated items recursively
+    // Process associated items recursively in the first pass to introduce names
+    // Aliases are introduced in the current scope (not a nested scope) during first pass
+    // They will be available when we process the associated block in the second pass
     if (type_decl.associated) |assoc| {
         try self.processAssociatedItemsFirstPass(qualified_name_idx, assoc.statements);
+    }
+}
+
+/// Canonicalize an associated item declaration with a qualified name
+fn canonicalizeAssociatedDecl(
+    self: *Self,
+    decl: AST.Statement.Decl,
+    qualified_ident: Ident.Idx,
+) std.mem.Allocator.Error!CIR.Def.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region());
+
+    // Look up the placeholder pattern that was created in the first pass
+    const pattern_idx = blk: {
+        const lookup_result = self.scopeLookup(.ident, qualified_ident);
+        switch (lookup_result) {
+            .found => |pattern| break :blk pattern,
+            .not_found => unreachable, // Pattern should have been created in first pass
+        }
+    };
+
+    // Canonicalize the body expression
+    const can_expr = try self.canonicalizeExprOrMalformed(decl.body);
+
+    // Create the def with no annotation (type annotations are handled via canonicalizeAssociatedDeclWithAnno)
+    const def = CIR.Def{
+        .pattern = pattern_idx,
+        .expr = can_expr.idx,
+        .annotation = null,
+        .kind = .{ .let = {} },
+    };
+
+    const def_idx = try self.env.addDefAndTypeVar(def, Content{ .flex_var = null }, pattern_region);
+    return def_idx;
+}
+
+/// Canonicalize an associated item declaration with a type annotation
+fn canonicalizeAssociatedDeclWithAnno(
+    self: *Self,
+    decl: AST.Statement.Decl,
+    qualified_ident: Ident.Idx,
+    type_anno_idx: CIR.TypeAnno.Idx,
+) std.mem.Allocator.Error!CIR.Def.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region());
+
+    // Look up the placeholder pattern that was created in the first pass
+    const pattern_idx = blk: {
+        const lookup_result = self.scopeLookup(.ident, qualified_ident);
+        switch (lookup_result) {
+            .found => |pattern| break :blk pattern,
+            .not_found => unreachable, // Pattern should have been created in first pass
+        }
+    };
+
+    // Canonicalize the body expression
+    const can_expr = try self.canonicalizeExprOrMalformed(decl.body);
+
+    // Create the annotation structure
+    const annotation = CIR.Annotation{
+        .type_anno = type_anno_idx,
+        .signature = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .err, pattern_region, TypeVar),
+    };
+    const annotation_idx = try self.env.addAnnotationAndTypeVarRedirect(annotation, ModuleEnv.varFrom(type_anno_idx), pattern_region);
+
+    // Create the def with the type annotation
+    const def = CIR.Def{
+        .pattern = pattern_idx,
+        .expr = can_expr.idx,
+        .annotation = annotation_idx,
+        .kind = .{ .let = {} },
+    };
+
+    const def_idx = try self.env.addDefAndTypeVar(def, Content{ .flex_var = null }, pattern_region);
+    return def_idx;
+}
+
+/// Second pass helper: Canonicalize associated item definitions
+fn processAssociatedItemsSecondPass(
+    self: *Self,
+    parent_name: Ident.Idx,
+    statements: AST.Statement.Span,
+) std.mem.Allocator.Error!void {
+    const stmt_idxs = self.parse_ir.store.statementSlice(statements);
+    var i: usize = 0;
+    while (i < stmt_idxs.len) : (i += 1) {
+        const stmt_idx = stmt_idxs[i];
+        const stmt = self.parse_ir.store.getStatement(stmt_idx);
+        switch (stmt) {
+            .type_decl => |type_decl| {
+                // Recursively process nested type declarations
+                if (type_decl.associated) |assoc| {
+                    const type_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
+                    const type_ident = self.parse_ir.tokens.resolveIdentifier(type_header.name) orelse continue;
+
+                    // Build qualified name for nested type
+                    const parent_text = self.env.getIdent(parent_name);
+                    const type_text = self.env.getIdent(type_ident);
+                    const qualified_name_str = try std.fmt.allocPrint(
+                        self.env.gpa,
+                        "{s}.{s}",
+                        .{ parent_text, type_text },
+                    );
+                    defer self.env.gpa.free(qualified_name_str);
+                    const qualified_ident = base.Ident.for_text(qualified_name_str);
+                    const qualified_idx = try self.env.insertIdent(qualified_ident);
+
+                    try self.processAssociatedItemsSecondPass(qualified_idx, assoc.statements);
+                }
+            },
+            .type_anno => |ta| {
+                const region = self.parse_ir.tokenizedRegionToRegion(ta.region);
+                const name_ident = self.parse_ir.tokens.resolveIdentifier(ta.name) orelse {
+                    // Malformed identifier - skip this annotation
+                    continue;
+                };
+
+                // First, make the top of our scratch list
+                const type_vars_top: u32 = @intCast(self.scratch_idents.top());
+
+                // Extract type variables from the AST annotation
+                try self.extractTypeVarIdentsFromASTAnno(ta.anno, type_vars_top);
+
+                // Enter a new type var scope
+                const type_var_scope = self.scopeEnterTypeVar();
+                defer self.scopeExitTypeVar(type_var_scope);
+                std.debug.assert(type_var_scope.idx == 0);
+
+                // Now canonicalize the annotation with type variables in scope
+                const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .inline_anno);
+
+                // Canonicalize where clauses if present
+                const where_clauses = if (ta.where) |where_coll| blk: {
+                    const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
+                    const where_start = self.env.store.scratchWhereClauseTop();
+
+                    for (where_slice) |where_idx| {
+                        const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .inline_anno);
+                        try self.env.store.addScratchWhereClause(canonicalized_where);
+                    }
+
+                    break :blk try self.env.store.whereClauseSpanFrom(where_start);
+                } else null;
+
+                // If we have where clauses, create a separate s_type_anno statement
+                if (where_clauses != null) {
+                    // Build qualified name for the annotation
+                    const parent_text = self.env.getIdent(parent_name);
+                    const name_text = self.env.getIdent(name_ident);
+                    const qualified_name_str = try std.fmt.allocPrint(
+                        self.env.gpa,
+                        "{s}.{s}",
+                        .{ parent_text, name_text },
+                    );
+                    defer self.env.gpa.free(qualified_name_str);
+                    const qualified_ident = base.Ident.for_text(qualified_name_str);
+                    const qualified_idx = try self.env.insertIdent(qualified_ident);
+
+                    const type_anno_stmt = Statement{
+                        .s_type_anno = .{
+                            .name = qualified_idx,
+                            .anno = type_anno_idx,
+                            .where = where_clauses,
+                        },
+                    };
+                    const type_anno_stmt_idx = try self.env.addStatementAndTypeVar(type_anno_stmt, Content{ .flex_var = null }, region);
+                    try self.env.store.addScratchStatement(type_anno_stmt_idx);
+                }
+
+                // Now, check the next stmt to see if it matches this anno
+                const next_i = i + 1;
+                if (next_i < stmt_idxs.len) {
+                    const next_stmt_id = stmt_idxs[next_i];
+                    const next_stmt = self.parse_ir.store.getStatement(next_stmt_id);
+
+                    switch (next_stmt) {
+                        .decl => |decl| {
+                            // Check if the declaration pattern matches the annotation name
+                            const pattern = self.parse_ir.store.getPattern(decl.pattern);
+                            if (pattern == .ident) {
+                                const pattern_ident_tok = pattern.ident.ident_tok;
+                                if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
+                                    // Check if names match
+                                    if (name_ident.idx == decl_ident.idx) {
+                                        // Skip the next statement since we're processing it now
+                                        i = next_i;
+
+                                        // Build qualified name (e.g., "Foo.bar")
+                                        const parent_text = self.env.getIdent(parent_name);
+                                        const decl_text = self.env.getIdent(decl_ident);
+                                        const qualified_name_str = try std.fmt.allocPrint(
+                                            self.env.gpa,
+                                            "{s}.{s}",
+                                            .{ parent_text, decl_text },
+                                        );
+                                        defer self.env.gpa.free(qualified_name_str);
+                                        const qualified_ident = base.Ident.for_text(qualified_name_str);
+                                        const qualified_idx = try self.env.insertIdent(qualified_ident);
+
+                                        // Canonicalize with the qualified name and type annotation
+                                        const def_idx = try self.canonicalizeAssociatedDeclWithAnno(decl, qualified_idx, type_anno_idx);
+                                        try self.env.store.addScratchDef(def_idx);
+                                    }
+                                }
+                            }
+                        },
+                        else => {
+                            // Type annotation doesn't match a declaration - continue normally
+                        },
+                    }
+                }
+            },
+            .decl => |decl| {
+                // Canonicalize the declaration with qualified name
+                const pattern = self.parse_ir.store.getPattern(decl.pattern);
+                if (pattern == .ident) {
+                    const pattern_ident_tok = pattern.ident.ident_tok;
+                    if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
+                        // Build qualified name (e.g., "Foo.bar")
+                        const parent_text = self.env.getIdent(parent_name);
+                        const decl_text = self.env.getIdent(decl_ident);
+                        const qualified_name_str = try std.fmt.allocPrint(
+                            self.env.gpa,
+                            "{s}.{s}",
+                            .{ parent_text, decl_text },
+                        );
+                        defer self.env.gpa.free(qualified_name_str);
+                        const qualified_ident = base.Ident.for_text(qualified_name_str);
+                        const qualified_idx = try self.env.insertIdent(qualified_ident);
+
+                        // Canonicalize with the qualified name
+                        const def_idx = try self.canonicalizeAssociatedDecl(decl, qualified_idx);
+                        try self.env.store.addScratchDef(def_idx);
+                    }
+                } else {
+                    // Non-identifier patterns are not supported in associated blocks
+                    const region = self.parse_ir.tokenizedRegionToRegion(decl.region);
+                    const feature = try self.env.insertString("non-identifier patterns in associated blocks");
+                    try self.env.pushDiagnostic(Diagnostic{
+                        .not_implemented = .{
+                            .feature = feature,
+                            .region = region,
+                        },
+                    });
+                }
+            },
+            .import => {
+                // Imports are not valid in associated blocks
+                const region = self.parse_ir.tokenizedRegionToRegion(stmt.import.region);
+                const feature = try self.env.insertString("import statements in associated blocks");
+                try self.env.pushDiagnostic(Diagnostic{
+                    .not_implemented = .{
+                        .feature = feature,
+                        .region = region,
+                    },
+                });
+            },
+            else => {
+                // Other statement types (var, expr, crash, dbg, expect, for, return, malformed)
+                // are not valid in associated blocks but are already caught by the parser,
+                // so we don't need to emit additional diagnostics here
+            },
+        }
     }
 }
 
@@ -506,7 +784,7 @@ fn processAssociatedItemsFirstPass(
         const stmt = self.parse_ir.store.getStatement(stmt_idx);
         switch (stmt) {
             .type_decl => |type_decl| {
-                // Recursively process nested type declarations
+                // Recursively process nested type declarations (this introduces the qualified name)
                 try self.processTypeDeclFirstPass(type_decl, parent_name);
             },
             .decl => |decl| {
@@ -651,6 +929,29 @@ pub fn canonicalizeFile(
             else => {
                 // Skip non-type-declaration statements in first pass
             },
+        }
+    }
+
+    // For type modules, expose the main type and all associated items before the second pass
+    // This ensures unused variable checking in the third pass doesn't flag exposed items
+    if (self.env.module_kind == .type_module) {
+        const module_name_text = self.env.module_name;
+        for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
+            const stmt = self.parse_ir.store.getStatement(stmt_id);
+            if (stmt == .type_decl) {
+                const type_decl = stmt.type_decl;
+                const type_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
+                const type_name_ident = self.parse_ir.tokens.resolveIdentifier(type_header.name) orelse continue;
+                const type_name_text = self.env.getIdent(type_name_ident);
+
+                if (std.mem.eql(u8, type_name_text, module_name_text)) {
+                    // Expose the main type
+                    try self.env.addExposedById(type_name_ident);
+                    // Expose all associated items recursively
+                    try self.exposeAssociatedItems(type_name_ident, type_decl);
+                    break;
+                }
+            }
         }
     }
 
@@ -833,6 +1134,85 @@ pub fn canonicalizeFile(
         }
     }
 
+    // Third pass: Process associated items in type declarations
+    for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
+        const stmt = self.parse_ir.store.getStatement(stmt_id);
+        switch (stmt) {
+            .type_decl => |type_decl| {
+                if (type_decl.associated) |assoc| {
+                    const type_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
+                    const type_ident = self.parse_ir.tokens.resolveIdentifier(type_header.name) orelse continue;
+
+                    // Enter a new scope for the associated block
+                    try self.scopeEnter(self.env.gpa, false); // false = not a function boundary
+                    defer self.scopeExit(self.env.gpa) catch unreachable;
+
+                    // Re-introduce the aliases from first pass
+                    // (We need to rebuild them since we're in a new scope)
+                    for (self.parse_ir.store.statementSlice(assoc.statements)) |assoc_stmt_idx| {
+                        const assoc_stmt = self.parse_ir.store.getStatement(assoc_stmt_idx);
+                        switch (assoc_stmt) {
+                            .type_decl => |nested_type_decl| {
+                                const nested_header = self.parse_ir.store.getTypeHeader(nested_type_decl.header) catch continue;
+                                const unqualified_ident = self.parse_ir.tokens.resolveIdentifier(nested_header.name) orelse continue;
+
+                                // Build qualified name
+                                const parent_text = self.env.getIdent(type_ident);
+                                const type_text = self.env.getIdent(unqualified_ident);
+                                const qualified_name_str = try std.fmt.allocPrint(
+                                    self.env.gpa,
+                                    "{s}.{s}",
+                                    .{ parent_text, type_text },
+                                );
+                                defer self.env.gpa.free(qualified_name_str);
+                                const qualified_ident_idx = try self.env.insertIdent(base.Ident.for_text(qualified_name_str));
+
+                                // Look up and alias
+                                if (self.scopeLookupTypeDecl(qualified_ident_idx)) |qualified_type_decl_idx| {
+                                    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                                    try current_scope.introduceTypeAlias(self.env.gpa, unqualified_ident, qualified_type_decl_idx);
+                                }
+                            },
+                            .decl => |decl| {
+                                const pattern = self.parse_ir.store.getPattern(decl.pattern);
+                                if (pattern == .ident) {
+                                    const pattern_ident_tok = pattern.ident.ident_tok;
+                                    if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
+                                        // Build qualified name
+                                        const parent_text = self.env.getIdent(type_ident);
+                                        const decl_text = self.env.getIdent(decl_ident);
+                                        const qualified_name_str = try std.fmt.allocPrint(
+                                            self.env.gpa,
+                                            "{s}.{s}",
+                                            .{ parent_text, decl_text },
+                                        );
+                                        defer self.env.gpa.free(qualified_name_str);
+                                        const qualified_ident_idx = try self.env.insertIdent(base.Ident.for_text(qualified_name_str));
+
+                                        // Look up the qualified pattern
+                                        switch (self.scopeLookup(.ident, qualified_ident_idx)) {
+                                            .found => |pattern_idx| {
+                                                const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                                                try current_scope.idents.put(self.env.gpa, decl_ident, pattern_idx);
+                                            },
+                                            .not_found => {},
+                                        }
+                                    }
+                                }
+                            },
+                            else => {},
+                        }
+                    }
+
+                    try self.processAssociatedItemsSecondPass(type_ident, assoc.statements);
+                }
+            },
+            else => {
+                // Skip non-type-declaration statements in third pass
+            },
+        }
+    }
+
     // Check for exposed but not implemented items
     try self.checkExposedButNotImplemented();
 
@@ -862,8 +1242,7 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
             // Store the matching type ident in module_kind if found
             if (matching_type_ident) |type_ident| {
                 main_type_ident.* = type_ident;
-                // Auto-expose the main type for type modules
-                try self.env.addExposedById(type_ident);
+                // The main type and associated items are already exposed in canonicalize()
             }
 
             // Valid if either we have a valid main! or a matching type declaration
@@ -3201,39 +3580,95 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
             },
         }
     } else {
-        // If this is a tag with more than 1 qualifier, then it is an imported
-        // nominal type where the last qualifier is the type name, then the other
-        // are the module
+        // Multi-qualified tag (e.g., Foo.Bar.X or Foo.Bar.Baz.X)
+        //
+        // All qualifiers form the type name, with the final segment as the tag name.
+        // Example: Foo.Bar.Baz.X has type "Foo.Bar.Baz" and tag "X"
+        //
+        // To resolve the type, check if the first qualifier matches an imported module name.
+        // If it does, look up the type in that module; otherwise, look up locally.
 
-        // Get the last token of the qualifiers
         const qualifier_toks = self.parse_ir.store.tokenSlice(e.qualifiers);
+        const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
 
-        // Get the type from the last qualifier
+        // Check if the first qualifier is an imported name
+        const first_tok_idx = qualifier_toks[0];
+        const first_tok_ident = self.parse_ir.tokens.resolveIdentifier(first_tok_idx) orelse unreachable;
+        const is_imported = self.scopeLookupModule(first_tok_ident) != null;
+
+        // Build the full qualified type name from ALL qualifiers (the tag name is separate in e.token)
+        // For Foo.Bar.X: qualifiers=[Foo, Bar], token=X, type name="Foo.Bar"
         const type_tok_idx = qualifier_toks[qualifier_toks.len - 1];
         const type_tok_ident = self.parse_ir.tokens.resolveIdentifier(type_tok_idx) orelse unreachable;
         const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
         const type_tok_text = self.env.getIdent(type_tok_ident);
 
-        // Get the fully resolved module name from all but the last qualifier
-        const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
-        const module_alias_text = self.parse_ir.resolveQualifiedName(
-            .{ .span = .{ .start = 0, .len = @intCast(qualifier_toks.len - 2) } },
-            qualifier_toks[qualifier_toks.len - 2],
+        const full_type_name = self.parse_ir.resolveQualifiedName(
+            e.qualifiers,
+            qualifier_toks[qualifier_toks.len - 1],
             &strip_tokens,
         );
-        const module_alias = try self.env.insertIdent(base.Ident.for_text(module_alias_text));
+        const full_type_ident = try self.env.insertIdent(base.Ident.for_text(full_type_name));
 
-        // Check if this is a module alias
-        const module_name = self.scopeLookupModule(module_alias) orelse {
-            // Module is not in current scope
-            return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .module_not_imported = .{
-                .module_name = module_alias,
-                .region = region,
-            } }), .free_vars = null };
-        };
+        if (!is_imported) {
+            // Local reference: look up the type locally
+            const nominal_type_decl_stmt_idx = self.scopeLookupTypeDecl(full_type_ident) orelse {
+                return CanonicalizedExpr{
+                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .undeclared_type = .{
+                        .name = full_type_ident,
+                        .region = type_tok_region,
+                    } }),
+                    .free_vars = null,
+                };
+            };
+
+            switch (self.env.store.getStatement(nominal_type_decl_stmt_idx)) {
+                .s_nominal_decl => {
+                    const expr_idx = try self.env.addExprAndTypeVar(CIR.Expr{
+                        .e_nominal = .{
+                            .nominal_type_decl = nominal_type_decl_stmt_idx,
+                            .backing_expr = tag_expr_idx,
+                            .backing_type = .tag,
+                        },
+                    }, .err, region);
+
+                    const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
+                    return CanonicalizedExpr{
+                        .idx = expr_idx,
+                        .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null,
+                    };
+                },
+                .s_alias_decl => {
+                    return CanonicalizedExpr{
+                        .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .type_alias_but_needed_nominal = .{
+                            .name = full_type_ident,
+                            .region = type_tok_region,
+                        } }),
+                        .free_vars = null,
+                    };
+                },
+                else => {
+                    const feature = try self.env.insertString("report an error resolved type decl in scope wasn't actually a type decl");
+                    const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+                        .feature = feature,
+                        .region = Region.zero(),
+                    } });
+                    return CanonicalizedExpr{
+                        .idx = malformed_idx,
+                        .free_vars = null,
+                    };
+                },
+            }
+        }
+
+        // Import reference: look up the type in the imported file
+        // For Imported.Foo.Bar.X: module=Imported, type=Foo.Bar, tag=X
+        // qualifiers=[Imported, Foo, Bar], so type name is built from qualifiers[1..]
+
+        const module_name = self.scopeLookupModule(first_tok_ident).?; // Already checked above
         const module_name_text = self.env.getIdent(module_name);
 
-        // Check if this module is imported in the current scope
+        // Check if this is imported in the current scope
         const import_idx = self.scopeLookupImportedModule(module_name_text) orelse {
             return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .module_not_imported = .{
                 .module_name = module_name,
@@ -3241,7 +3676,25 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
             } }), .free_vars = null };
         };
 
-        // Look up the target node index in the module's exposed_nodes
+        // Build the type name from all qualifiers except the first (module name)
+        // For Imported.Foo.Bar.X: qualifiers=[Imported, Foo, Bar], type="Foo.Bar"
+        const type_qualifiers_start = 1;
+        const type_name = if (qualifier_toks.len > type_qualifiers_start)
+            self.parse_ir.resolveQualifiedName(
+                Token.Span{
+                    .span = DataSpan.init(
+                        e.qualifiers.span.start + type_qualifiers_start,
+                        e.qualifiers.span.len - type_qualifiers_start,
+                    ),
+                },
+                qualifier_toks[qualifier_toks.len - 1],
+                &strip_tokens,
+            )
+        else
+            type_tok_text;
+        const type_name_ident = try self.env.insertIdent(base.Ident.for_text(type_name));
+
+        // Look up the target node index in the imported file's exposed_nodes
         const target_node_idx = blk: {
             const envs_map = self.module_envs orelse {
                 break :blk 0;
@@ -3251,20 +3704,20 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                 break :blk 0;
             };
 
-            const target_ident = module_env.common.findIdent(type_tok_text) orelse {
-                // Type is not exposed by the module
+            const target_ident = module_env.common.findIdent(type_name) orelse {
+                // Type is not exposed by the imported file
                 return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
-                    .type_name = type_tok_ident,
+                    .type_name = type_name_ident,
                     .region = type_tok_region,
                 } }), .free_vars = null };
             };
 
             const other_module_node_id = module_env.getExposedNodeIndexById(target_ident) orelse {
-                // Type is not exposed by the module
+                // Type is not exposed by the imported file
                 return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
-                    .type_name = type_tok_ident,
+                    .type_name = type_name_ident,
                     .region = type_tok_region,
                 } }), .free_vars = null };
             };
@@ -6521,6 +6974,23 @@ fn checkScopeForUnusedVariables(self: *Self, scope: *const Scope) std.mem.Alloca
             continue;
         }
 
+        // Skip if this identifier is exposed (implicitly used in type modules)
+        if (self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(ident_idx))) {
+            continue;
+        }
+
+        // Get the pattern to check if it has a different ident than the scope key
+        // For pattern_identifier nodes, check if the qualified ident is exposed
+        const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
+        const node = self.env.store.nodes.get(node_idx);
+
+        if (node.tag == .pattern_identifier) {
+            const assign_ident: base.Ident.Idx = @bitCast(node.data_1);
+            if (self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(assign_ident))) {
+                continue;
+            }
+        }
+
         // Get the region for this pattern to provide good error location
         const region = self.env.store.getPatternRegion(pattern_idx);
 
@@ -6676,6 +7146,12 @@ fn scopeLookupTypeDecl(self: *Self, ident_idx: Ident.Idx) ?Statement.Idx {
         i -= 1;
         const scope = &self.scopes.items[i];
 
+        // Check for type aliases (unqualified names in associated blocks)
+        if (scope.lookupTypeAlias(ident_idx)) |aliased_decl| {
+            return aliased_decl;
+        }
+
+        // Check regular type declarations
         switch (scope.lookupTypeDecl(ident_idx)) {
             .found => |type_decl_idx| return type_decl_idx,
             .not_found => continue,
@@ -7273,6 +7749,65 @@ fn findMatchingTypeIdent(self: *Self) ?Ident.Idx {
     }
 
     return null;
+}
+
+/// Expose all associated items of a type declaration (recursively for nested types)
+/// This is used for type modules where all associated items are implicitly exposed
+fn exposeAssociatedItems(self: *Self, parent_name: Ident.Idx, type_decl: anytype) std.mem.Allocator.Error!void {
+    if (type_decl.associated) |assoc| {
+        for (self.parse_ir.store.statementSlice(assoc.statements)) |assoc_stmt_idx| {
+            const assoc_stmt = self.parse_ir.store.getStatement(assoc_stmt_idx);
+            switch (assoc_stmt) {
+                .type_decl => |nested_type_decl| {
+                    // Get the nested type name
+                    const nested_header = self.parse_ir.store.getTypeHeader(nested_type_decl.header) catch continue;
+                    const nested_ident = self.parse_ir.tokens.resolveIdentifier(nested_header.name) orelse continue;
+
+                    // Build qualified name (e.g., "Foo.Bar")
+                    const parent_text = self.env.getIdent(parent_name);
+                    const nested_text = self.env.getIdent(nested_ident);
+                    const qualified_name_str = try std.fmt.allocPrint(
+                        self.env.gpa,
+                        "{s}.{s}",
+                        .{ parent_text, nested_text },
+                    );
+                    defer self.env.gpa.free(qualified_name_str);
+                    const qualified_ident = base.Ident.for_text(qualified_name_str);
+                    const qualified_idx = try self.env.insertIdent(qualified_ident);
+
+                    // Expose the nested type
+                    try self.env.addExposedById(qualified_idx);
+
+                    // Recursively expose its associated items
+                    try self.exposeAssociatedItems(qualified_idx, nested_type_decl);
+                },
+                .decl => |decl| {
+                    // Get the declaration name
+                    const pattern = self.parse_ir.store.getPattern(decl.pattern);
+                    if (pattern == .ident) {
+                        const pattern_ident_tok = pattern.ident.ident_tok;
+                        if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
+                            // Build qualified name (e.g., "Foo.stuff")
+                            const parent_text = self.env.getIdent(parent_name);
+                            const decl_text = self.env.getIdent(decl_ident);
+                            const qualified_name_str = try std.fmt.allocPrint(
+                                self.env.gpa,
+                                "{s}.{s}",
+                                .{ parent_text, decl_text },
+                            );
+                            defer self.env.gpa.free(qualified_name_str);
+                            const qualified_ident = base.Ident.for_text(qualified_name_str);
+                            const qualified_idx = try self.env.insertIdent(qualified_ident);
+
+                            // Expose the declaration
+                            try self.env.addExposedById(qualified_idx);
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+    }
 }
 
 /// Check if any type declarations exist in the file

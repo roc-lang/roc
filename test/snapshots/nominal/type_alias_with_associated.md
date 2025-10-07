@@ -1,7 +1,7 @@
 # META
 ~~~ini
 description=Type alias with associated items produces error
-type=snippet
+type=file:Foo.roc
 ~~~
 # SOURCE
 ~~~roc
@@ -54,6 +54,9 @@ Foo : [A, B, C].{
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(d-let
+		(p-assign @1.19-1.24 (ident "Foo.x"))
+		(e-num @1.23-1.24 (value "5")))
 	(s-alias-decl @1.1-1.26
 		(ty-header @1.1-1.4 (name "Foo"))
 		(ty-tag-union @1.7-1.16
@@ -64,9 +67,11 @@ Foo : [A, B, C].{
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs)
+	(defs
+		(patt @1.19-1.24 (type "Num(_size)")))
 	(type_decls
 		(alias @1.1-1.26 (type "Foo")
 			(ty-header @1.1-1.4 (name "Foo"))))
-	(expressions))
+	(expressions
+		(expr @1.23-1.24 (type "Num(_size)"))))
 ~~~
