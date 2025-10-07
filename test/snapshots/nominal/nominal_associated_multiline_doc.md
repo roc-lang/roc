@@ -1,7 +1,7 @@
 # META
 ~~~ini
 description=Multi-line doc comments on associated items
-type=snippet
+type=file:Foo.roc
 ~~~
 # SOURCE
 ~~~roc
@@ -17,20 +17,9 @@ Foo := [A, B].{
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - nominal_associated_multiline_doc.md:9:5:9:22
+NIL
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `defaultValue` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_defaultValue` to suppress this warning.
-The unused variable is declared here:
-**nominal_associated_multiline_doc.md:9:5:9:22:**
-```roc
-    defaultValue = 42
-```
-    ^^^^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:4),OpColonEqual(1:5-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:10),Comma(1:10-1:11),UpperIdent(1:12-1:13),CloseSquare(1:13-1:14),Dot(1:14-1:15),OpenCurly(1:15-1:16),

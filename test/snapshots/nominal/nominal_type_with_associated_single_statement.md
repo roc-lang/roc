@@ -1,27 +1,16 @@
 # META
 ~~~ini
 description=Nominal type with single statement associated items
-type=snippet
+type=file:Foo.roc
 ~~~
 # SOURCE
 ~~~roc
 Foo := [A, B, C].{ x = 5 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - nominal_type_with_associated_single_statement.md:1:20:1:25
+NIL
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `x` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
-**nominal_type_with_associated_single_statement.md:1:20:1:25:**
-```roc
-Foo := [A, B, C].{ x = 5 }
-```
-                   ^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:4),OpColonEqual(1:5-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:10),Comma(1:10-1:11),UpperIdent(1:12-1:13),Comma(1:13-1:14),UpperIdent(1:15-1:16),CloseSquare(1:16-1:17),Dot(1:17-1:18),OpenCurly(1:18-1:19),LowerIdent(1:20-1:21),OpAssign(1:22-1:23),Int(1:24-1:25),CloseCurly(1:26-1:27),
