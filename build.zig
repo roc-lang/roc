@@ -90,7 +90,7 @@ pub fn build(b: *std.Build) void {
     const roc_modules = modules.RocModules.create(b, build_options, zstd);
 
     // add main roc exe
-    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, host_zstd) orelse return;
+    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, flag_tracy_callstack, zstd, host_zstd) orelse return;
     roc_modules.addAll(roc_exe);
     install_and_run(b, no_bin, roc_exe, roc_step, run_step, run_args);
 
@@ -377,6 +377,7 @@ fn addMainExe(
     use_system_llvm: bool,
     user_llvm_path: ?[]const u8,
     tracy: ?[]const u8,
+    tracy_callstack: bool,
     zstd: *Dependency,
     host_zstd: *Dependency,
 ) ?*Step.Compile {
@@ -429,6 +430,7 @@ fn addMainExe(
     const bootstrap_compiler = @import("src/build/bootstrap_compiler.zig");
     const bootstrap_build_options = b.addOptions();
     bootstrap_build_options.addOption(bool, "enable_tracy", tracy != null);
+    bootstrap_build_options.addOption(bool, "enable_tracy_callstack", tracy != null and tracy_callstack);
     bootstrap_build_options.addOption(bool, "enable_tracy_allocation", false);
     bootstrap_build_options.addOption(u32, "tracy_callstack_depth", 0);
     bootstrap_build_options.addOption(bool, "target_is_native", true); // bootstrap always runs on host
