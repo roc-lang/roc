@@ -346,16 +346,18 @@ pub const PackageEnv = struct {
     }
 
     fn enqueue(self: *PackageEnv, module_id: ModuleId) !void {
-        // In multi_threaded mode with a non-noop schedule_hook, forward to the global queue
-        if (self.mode == .multi_threaded and !self.schedule_hook.isNoOp()) {
+        // If a schedule_hook is installed (global queue), always forward to it
+        if (!self.schedule_hook.isNoOp()) {
             // Look up the module to get its path and depth for the hook
-            self.lock.lock();
-            defer self.lock.unlock();
+            if (@import("builtin").target.cpu.arch != .wasm32 and self.mode == .multi_threaded) {
+                self.lock.lock();
+                defer self.lock.unlock();
+            }
 
             const st = &self.modules.items[module_id];
             self.schedule_hook.onSchedule(self.schedule_hook.ctx, self.package_name, st.name, st.path, st.depth);
         } else {
-            // Default behavior: use internal injector
+            // Default behavior: use internal injector (only when no schedule hook)
             try self.injector.append(self.gpa, .{ .module_id = module_id });
             if (@import("builtin").target.cpu.arch != .wasm32) self.cond.signal();
         }
@@ -870,6 +872,8 @@ pub const PackageEnv = struct {
             if (st.phase != .Done) break; // can't emit beyond an unfinished module in order
             // Emit all reports for this module
             for (st.reports.items) |rep| self.sink.emitFn(self.sink.ctx, st.name, rep);
+            // Clear reports WITHOUT deiniting - ownership has been transferred to the sink
+            st.reports.clearRetainingCapacity();
             // Mark emitted
             self.emitted.set(id);
         }

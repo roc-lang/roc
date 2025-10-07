@@ -394,6 +394,7 @@ pub const BuildEnv = struct {
             self.gpa.destroy(ctx_ptr);
         }
         self.resolver_ctxs.deinit();
+
         // Free per-package sink contexts
         for (self.pkg_sink_ctxs.items) |p| self.gpa.destroy(p);
         self.pkg_sink_ctxs.deinit();
@@ -401,6 +402,9 @@ pub const BuildEnv = struct {
         // Free schedule ctxs
         for (self.schedule_ctxs.items) |p| self.gpa.destroy(p);
         self.schedule_ctxs.deinit();
+
+        // IMPORTANT: Deinit sink BEFORE schedulers/packages since it borrows their strings
+        self.sink.deinit();
 
         // Deinit schedulers
         var sit = self.schedulers.iterator();
@@ -429,8 +433,6 @@ pub const BuildEnv = struct {
             self.gpa.free(root);
         }
         self.workspace_roots.deinit();
-
-        self.sink.deinit();
     }
 
     /// Set the cache manager for this build environment
@@ -470,13 +472,18 @@ pub const BuildEnv = struct {
         var header_info = try self.parseHeaderDeps(root_abs);
         defer header_info.deinit(self.gpa);
 
-        // Allow both app and module files
-        if (header_info.kind != .app and header_info.kind != .module) {
+        // Allow app, module, and type_module files
+        if (header_info.kind != .app and header_info.kind != .module and header_info.kind != .type_module) {
             return error.UnsupportedHeader;
         }
 
-        // Create package entry (for both app and module)
-        const pkg_name = if (header_info.kind == .module) "module" else "app";
+        // Create package entry (for app, module, or type_module)
+        const pkg_name = switch (header_info.kind) {
+            .module => "module",
+            .type_module => "type_module",
+            .app => "app",
+            else => unreachable,
+        };
         const key_pkg = try self.gpa.dupe(u8, pkg_name);
         const pkg_root_file = try self.gpa.dupe(u8, root_abs);
         const pkg_root_dir = try self.gpa.dupe(u8, root_dir);
@@ -520,6 +527,31 @@ pub const BuildEnv = struct {
         // Wait for global queue to drain only when using the global queue
         if (builtin.target.cpu.arch != .wasm32 and self.mode == .multi_threaded) {
             self.global_queue.waitForIdle();
+        } else {
+            // In single-threaded mode, manually drain the global queue
+            // Keep draining until the queue is empty (modules may re-enqueue themselves)
+            while (true) {
+                if (self.global_queue.take()) |task| {
+                    if (self.schedulers.get(task.pkg)) |sched| {
+                        sched.processModuleByName(task.module_name) catch {};
+                    }
+                    self.gpa.free(task.pkg);
+                    self.gpa.free(task.module_name);
+                } else {
+                    // Check if there are any remaining modules being processed
+                    var all_done = true;
+                    var sched_it = self.schedulers.iterator();
+                    while (sched_it.next()) |e| {
+                        if (e.value_ptr.*.remaining_modules > 0) {
+                            all_done = false;
+                            break;
+                        }
+                    }
+                    if (all_done) break;
+                    // Yield briefly in case tasks are being enqueued
+                    std.time.sleep(1_000_000); // 1ms
+                }
+            }
         }
 
         // Deterministic emission: globally order reports by (min dependency depth from app, then module name)
@@ -643,7 +675,7 @@ pub const BuildEnv = struct {
     // Package graph construction
     // ------------------------
 
-    const PackageKind = enum { app, package, platform, module, hosted };
+    const PackageKind = enum { app, package, platform, module, hosted, type_module };
 
     const PackageRef = struct {
         name: []const u8, // Package name (alias in workspace)
@@ -861,6 +893,11 @@ pub const BuildEnv = struct {
                 // Module headers don't have package dependencies, just exports/imports
                 // We'll handle imports during the module build process
             },
+            .type_module => {
+                info.kind = .type_module;
+                // Type modules are like modules but define a single type with associated items
+                // They have no explicit exports - the type itself is exported
+            },
             .hosted => {
                 info.kind = .hosted;
                 // Hosted headers are like modules but for platform-specific code
@@ -1008,10 +1045,10 @@ pub const BuildEnv = struct {
                 .max_threads = self.max_threads,
                 .sink = .{ .ctx = ps, .emitFn = PkgSinkCtx.emit },
                 .resolver = resolver,
-                .schedule_hook = if (builtin.target.cpu.arch != .wasm32 and self.mode == .multi_threaded)
-                    .{ .ctx = &self.global_queue, .onSchedule = GlobalQueue.hookOnSchedule }
-                else
-                    .{ .ctx = sc, .onSchedule = ScheduleCtx.onSchedule },
+                // Always use GlobalQueue hook to enqueue tasks
+                // In multi-threaded mode, workers will process them
+                // In single-threaded mode, we'll manually drain the queue
+                .schedule_hook = .{ .ctx = &self.global_queue, .onSchedule = GlobalQueue.hookOnSchedule },
                 .compiler_version = self.compiler_version,
             };
 
@@ -1193,6 +1230,28 @@ pub const BuildEnv = struct {
         }
 
         return total;
+    }
+
+    /// Get the root module's ModuleEnv (for serialization)
+    /// Returns null if the root module hasn't been built yet or if there are no packages
+    pub fn getRootModuleEnv(self: *BuildEnv) ?*const ModuleEnv {
+        // Try to get the root package - could be "app", "module", or "type_module"
+        const pkg_names = [_][]const u8{ "app", "module", "type_module" };
+        for (pkg_names) |pkg_name| {
+            if (self.schedulers.get(pkg_name)) |scheduler| {
+                // Get the root module (first module in the package)
+                if (scheduler.modules.items.len == 0) continue;
+
+                // Find the module with depth 0 (root module)
+                for (scheduler.modules.items) |*mod| {
+                    if (mod.depth == 0) {
+                        return if (mod.env) |*env| env else null;
+                    }
+                }
+            }
+        }
+
+        return null;
     }
 };
 

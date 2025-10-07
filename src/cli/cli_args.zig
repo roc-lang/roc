@@ -76,6 +76,7 @@ pub const CheckArgs = struct {
     time: bool = false, // whether to print timing information
     no_cache: bool = false, // disable cache
     verbose: bool = false, // enable verbose output
+    output_module_env: bool = false, // output serialized ModuleEnv to stdout (for build-time builtin compilation)
 };
 
 /// Arguments for `roc build`
@@ -177,11 +178,12 @@ fn parseCheck(args: []const []const u8) CliArgs {
     var time: bool = false;
     var no_cache: bool = false;
     var verbose: bool = false;
+    var output_module_env: bool = false;
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
-            return CliArgs{ .help = 
-            \\Check the code for problems, but don’t build or run it
+            return CliArgs{ .help =
+            \\Check the code for problems, but don't build or run it
             \\
             \\Usage: roc check [OPTIONS] [ROC_FILE]
             \\
@@ -189,11 +191,12 @@ fn parseCheck(args: []const []const u8) CliArgs {
             \\  [ROC_FILE]  The .roc file to check [default: main.roc]
             \\
             \\Options:
-            \\      --main=<main>  The .roc file of the main app/package module to resolve dependencies from
-            \\      --time         Print timing information for each compilation phase. Will not print anything if everything is cached.
-            \\      --no-cache     Disable caching
-            \\      --verbose      Enable verbose output including cache statistics
-            \\  -h, --help         Print help
+            \\      --main=<main>         The .roc file of the main app/package module to resolve dependencies from
+            \\      --time                Print timing information for each compilation phase. Will not print anything if everything is cached.
+            \\      --no-cache            Disable caching
+            \\      --verbose             Enable verbose output including cache statistics
+            \\      --output-module-env   Output serialized ModuleEnv to stdout (for build-time builtin compilation)
+            \\  -h, --help                Print help
             \\
         };
         } else if (mem.startsWith(u8, arg, "--main")) {
@@ -208,6 +211,8 @@ fn parseCheck(args: []const []const u8) CliArgs {
             no_cache = true;
         } else if (mem.eql(u8, arg, "--verbose")) {
             verbose = true;
+        } else if (mem.eql(u8, arg, "--output-module-env")) {
+            output_module_env = true;
         } else {
             if (path != null) {
                 return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "check", .arg = arg } } };
@@ -216,7 +221,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
         }
     }
 
-    return CliArgs{ .check = CheckArgs{ .path = path orelse "main.roc", .main = main, .time = time, .no_cache = no_cache, .verbose = verbose } };
+    return CliArgs{ .check = CheckArgs{ .path = path orelse "main.roc", .main = main, .time = time, .no_cache = no_cache, .verbose = verbose, .output_module_env = output_module_env } };
 }
 
 fn parseBuild(args: []const []const u8) CliArgs {

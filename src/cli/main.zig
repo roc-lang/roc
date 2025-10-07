@@ -2622,6 +2622,7 @@ const CheckResult = struct {
     was_cached: bool = false,
     error_count: u32 = 0,
     warning_count: u32 = 0,
+    serialized_module_env: ?[]const u8 = null, // Serialized ModuleEnv bytes (for --output-module-env)
 
     /// Free allocated memory
     pub fn deinit(self: *CheckResult, gpa: Allocator) void {
@@ -2629,6 +2630,9 @@ const CheckResult = struct {
             report.deinit(gpa);
         }
         gpa.free(self.reports);
+        if (self.serialized_module_env) |bytes| {
+            gpa.free(bytes);
+        }
     }
 };
 
@@ -2673,6 +2677,7 @@ fn checkFileWithBuildEnv(
     filepath: []const u8,
     collect_timing: bool,
     cache_config: CacheConfig,
+    serialize_module_env: bool,
 ) BuildAppError!CheckResult {
     _ = collect_timing; // Timing is always collected by BuildEnv
     const trace = tracy.trace(@src());
@@ -2730,12 +2735,32 @@ fn checkFileWithBuildEnv(
     else
         build_env.getTimingInfo();
 
+    // Serialize ModuleEnv if requested (must happen BEFORE build_env.deinit())
+    var serialized_module_env: ?[]const u8 = null;
+    if (serialize_module_env and error_count == 0) {
+        if (build_env.getRootModuleEnv()) |env| {
+            var arena = std.heap.ArenaAllocator.init(gpa);
+            defer arena.deinit();
+            const arena_allocator = arena.allocator();
+
+            serialized_module_env = compile.CacheModule.create(
+                gpa,
+                arena_allocator,
+                env,
+                env,
+                0,
+                0,
+            ) catch null;
+        }
+    }
+
     return CheckResult{
         .reports = reports,
         .timing = timing,
         .was_cached = false, // BuildEnv doesn't currently expose cache info
         .error_count = error_count,
         .warning_count = warning_count,
+        .serialized_module_env = serialized_module_env,
     };
 }
 
@@ -2761,6 +2786,7 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
         args.path,
         args.time,
         cache_config,
+        args.output_module_env,
     ) catch |err| {
         handleProcessFileError(err, stderr, args.path);
     };
@@ -2820,10 +2846,27 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
 
             std.process.exit(1);
         } else {
-            stdout.print("No errors found in ", .{}) catch {};
-            formatElapsedTime(stdout, elapsed) catch {};
-            stdout.print(" for {s}", .{args.path}) catch {};
+            // Only output normal message if NOT outputting ModuleEnv
+            if (!args.output_module_env) {
+                stdout.print("No errors found in ", .{}) catch {};
+                formatElapsedTime(stdout, elapsed) catch {};
+                stdout.print(" for {s}", .{args.path}) catch {};
+            }
         }
+    }
+
+    // Output serialized ModuleEnv if requested
+    if (args.output_module_env) {
+        if (check_result.serialized_module_env) |bytes| {
+            stdout.writeAll(bytes) catch |err| {
+                stderr.print("Failed to write ModuleEnv to stdout: {}\n", .{err}) catch {};
+                std.process.exit(1);
+            };
+        } else if (check_result.error_count == 0) {
+            stderr.print("Cannot output ModuleEnv: no module was compiled\n", .{}) catch {};
+            std.process.exit(1);
+        }
+        // If there were errors, the serialization was skipped (expected behavior)
     }
 
     // Print timing breakdown if requested

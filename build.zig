@@ -369,6 +369,44 @@ fn addMainExe(
     tracy: ?[]const u8,
     zstd: *Dependency,
 ) ?*Step.Compile {
+    // STAGE 1: Build bootstrap compiler with minimal builtins
+    const bootstrap_compiler = @import("src/build/bootstrap_compiler.zig");
+    var bootstrap_roc_modules = roc_modules;
+    const bootstrap_exe = bootstrap_compiler.buildBootstrapCompiler(
+        b,
+        &bootstrap_roc_modules,
+        target,
+        optimize,
+    );
+    bootstrap_roc_modules.addAll(bootstrap_exe);
+
+    // Install bootstrap compiler so we can test it
+    b.installArtifact(bootstrap_exe);
+
+    // STAGE 2: Compile builtins and generate embedded_envs.zig
+    const compile_builtins = @import("src/build/compile_builtins.zig");
+    const load_builtins = @import("src/builtins/load_builtins.zig");
+
+    const compiled_builtins = compile_builtins.compileBuiltins(
+        b,
+        bootstrap_exe,
+        &load_builtins.builtin_roc_files,
+    );
+
+    const embedded_envs_file = compile_builtins.generateEmbeddedEnvs(
+        b,
+        compiled_builtins,
+        &load_builtins.builtin_roc_files,
+    );
+
+    // Copy embedded_envs.zig to source tree so it can be imported
+    const copy_embedded = b.addUpdateSourceFiles();
+    copy_embedded.addCopyFileToSource(
+        embedded_envs_file,
+        "src/builtins/embedded_envs.zig",
+    );
+
+    // STAGE 3: Build final roc compiler with embedded builtins
     const exe = b.addExecutable(.{
         .name = "roc",
         .root_source_file = b.path("src/cli/main.zig"),
@@ -377,6 +415,14 @@ fn addMainExe(
         .strip = strip,
         .link_libc = true,
     });
+
+    // Make final roc depend on embedded_envs.zig being generated
+    exe.step.dependOn(&copy_embedded.step);
+
+    // Add build option for final compiler (not bootstrap)
+    const final_options = b.addOptions();
+    final_options.addOption(bool, "use_minimal_builtins", false);
+    exe.root_module.addOptions("bootstrap_options", final_options);
 
     // Create test platform host static library (str)
     const test_platform_host_lib = b.addLibrary(.{
