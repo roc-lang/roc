@@ -381,10 +381,9 @@ fn addMainExe(
     zstd: *Dependency,
     host_zstd: *Dependency,
 ) ?*Step.Compile {
-    // STAGE 0: Build shim libraries
-    // When cross-compiling, we need BOTH a host shim (for bootstrap) and target shim (for final roc)
-
-    // Build HOST shim library first (for bootstrap compiler)
+    // STAGE 0: Build HOST shim library for bootstrap compiler
+    // Note: The host shim is only @embedFile'd by bootstrap, never actually executed,
+    // so we use the target's roc_modules. This is safe because the shim is never run.
     const host_builtins_obj = b.addObject(.{
         .name = "roc_builtins_host",
         .root_source_file = b.path("src/builtins/static_lib.zig"),
@@ -450,9 +449,7 @@ fn addMainExe(
 
     // STAGE 1: Build bootstrap compiler with minimal builtins
     // Bootstrap must target the HOST platform (not target) so it can run during the build.
-    // The bootstrap only runs `roc check` so the embedded shim (which must exist for @embedFile)
-    // is never actually used - it just needs to compile.
-    // We create a separate RocModules for bootstrap using host_zstd to avoid linking target libraries.
+    // Create separate bootstrap_roc_modules using host_zstd
     const bootstrap_compiler = @import("src/build/bootstrap_compiler.zig");
     const bootstrap_build_options = b.addOptions();
     bootstrap_build_options.addOption(bool, "enable_tracy", tracy != null);
