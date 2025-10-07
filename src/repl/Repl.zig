@@ -393,21 +393,21 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8, def_ident: ?[]co
 
     // Canonicalize based on whether we have past definitions or a def_ident
     const canonical_expr_idx: can.CIR.Expr.Idx = if (self.past_defs.items.len > 0 or def_ident != null) blk: {
-        // Canonicalize the whole file (which includes type declarations and statements)
+        // HACK: When there are past definitions, buildFullSource wraps the expression in a synthetic
+        // file containing `main! = |_| <expr>` so it can be evaluated. This is a workaround for
+        // limitations in the current evaluation system. Ideally, the REPL should handle statements
+        // and expressions directly without constructing fake files.
         czer.canonicalizeFile() catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Canonicalize file error: {}", .{err});
         };
 
-        // Get all the defs that were created during canonicalization from the all_defs span
-        // (scratch_defs is cleared by defSpanFrom, so we need to use the span)
         const defs_slice = cir.store.sliceDefs(czer.env.all_defs);
 
         if (defs_slice.len == 0) {
             return try self.allocator.dupe(u8, "No definitions created during canonicalization");
         }
 
-        // The last def should be our main! definition
-        // Find it by looking for the pattern that matches "main!"
+        // Find the synthetic "main!" definition that wraps the expression
         var main_def_idx: ?can.CIR.Def.Idx = null;
         for (defs_slice) |def_idx| {
             const def = cir.store.getDef(def_idx);
@@ -425,12 +425,10 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8, def_ident: ?[]co
         if (main_def_idx) |def_idx| {
             const def = cir.store.getDef(def_idx);
             const expr = cir.store.getExpr(def.expr);
-            // main! is a lambda |_| <body>, so we need to extract the body
-            // It could be either e_lambda (no captures) or e_closure (with captures)
+            // Extract the body from main! = |_| <body>
             if (expr == .e_lambda) {
                 break :blk expr.e_lambda.body;
             } else if (expr == .e_closure) {
-                // e_closure wraps an e_lambda, so we need to get the lambda first
                 const lambda_expr = cir.store.getExpr(expr.e_closure.lambda_idx);
                 if (lambda_expr == .e_lambda) {
                     break :blk lambda_expr.e_lambda.body;
