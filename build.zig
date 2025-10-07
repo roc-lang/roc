@@ -36,7 +36,10 @@ pub fn build(b: *std.Build) void {
 
     // llvm configuration
     const use_system_llvm = b.option(bool, "system-llvm", "Attempt to automatically detect and use system installed llvm") orelse false;
-    const enable_llvm = !use_system_llvm; // removed build flag `-Dllvm`, we include LLVM libraries by default now
+    // TODO(windows): Temporarily disable LLVM on Windows due to broken roc_deps package
+    // The Windows roc_deps package appears to be missing the lib directory
+    const enable_llvm_base = !use_system_llvm; // removed build flag `-Dllvm`, we include LLVM libraries by default now
+    const enable_llvm = if (target.result.os.tag == .windows) false else enable_llvm_base;
     const user_llvm_path = b.option([]const u8, "llvm-path", "Path to llvm. This path must contain the bin, lib, and include directory.");
     // Since zig afl is broken currently, default to system afl.
     const use_system_afl = b.option(bool, "system-afl", "Attempt to automatically detect and use system installed afl++") orelse true;
@@ -754,6 +757,25 @@ fn llvmPaths(
     const triple = supported_deps_triples.get(raw_triple).?;
     const deps_name = b.fmt("roc_deps_{s}", .{triple});
     const deps = b.lazyDependency(deps_name, .{}) orelse return null;
+
+    // Windows zip packages may have a different structure than tar.xz packages
+    // Try to use the dependency path directly for Windows
+    if (target.result.os.tag == .windows) {
+        const lazy_llvm_path = deps.path(".");
+        const llvm_path = lazy_llvm_path.getPath(deps.builder);
+
+        // Check if lib and include directories exist at the root
+        const lib_path = b.pathJoin(&.{ llvm_path, "lib" });
+        const include_path = b.pathJoin(&.{ llvm_path, "include" });
+
+        // For now, just try the same structure as other platforms
+        // If this fails, the package structure is different
+        return .{
+            .include = include_path,
+            .lib = lib_path,
+        };
+    }
+
     const lazy_llvm_path = deps.path(".");
     // TODO: Is this ok to do in the zig build system?
     // We aren't in the make phase, but our static dep doesn't have a make phase anyway.
