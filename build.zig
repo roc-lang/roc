@@ -381,20 +381,49 @@ fn addMainExe(
     zstd: *Dependency,
     host_zstd: *Dependency,
 ) ?*Step.Compile {
-    // STAGE 0: Build shim library first (needed by both bootstrap and final compiler)
-    // Create builtins static library at build time with minimal dependencies
+    // STAGE 0: Build shim libraries
+    // When cross-compiling, we need BOTH a host shim (for bootstrap) and target shim (for final roc)
+
+    // Build HOST shim library first (for bootstrap compiler)
+    const host_builtins_obj = b.addObject(.{
+        .name = "roc_builtins_host",
+        .root_source_file = b.path("src/builtins/static_lib.zig"),
+        .target = b.graph.host,
+        .optimize = optimize,
+        .strip = true,
+        .pic = true,
+    });
+
+    const host_shim_lib = b.addLibrary(.{
+        .name = "roc_interpreter_shim_host",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/interpreter_shim/main.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+            .strip = true,
+            .pic = true,
+        }),
+        .linkage = .static,
+    });
+    roc_modules.addAll(host_shim_lib);
+    host_shim_lib.addObject(host_builtins_obj);
+    host_shim_lib.bundle_compiler_rt = true;
+
+    // Copy host shim to src/ for bootstrap compiler to embed
+    const copy_host_shim = b.addUpdateSourceFiles();
+    const host_shim_filename = if (b.graph.host.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
+    copy_host_shim.addCopyFileToSource(host_shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", host_shim_filename }));
+
+    // Build TARGET shim library (for final roc compiler)
     const builtins_obj = b.addObject(.{
         .name = "roc_builtins",
         .root_source_file = b.path("src/builtins/static_lib.zig"),
         .target = target,
         .optimize = optimize,
         .strip = true,
-        .pic = true, // Enable Position Independent Code for PIE compatibility
+        .pic = true,
     });
 
-    // Create shim static library at build time - fully static without libc
-    //
-    // NOTE we do NOT link libC here to avoid dynamic dependency on libC
     const shim_lib = b.addLibrary(.{
         .name = "roc_interpreter_shim",
         .root_module = b.createModule(.{
@@ -402,22 +431,19 @@ fn addMainExe(
             .target = target,
             .optimize = optimize,
             .strip = true,
-            .pic = true, // Enable Position Independent Code for PIE compatibility
+            .pic = true,
         }),
         .linkage = .static,
     });
-    // Add all modules from roc_modules that the shim needs
     roc_modules.addAll(shim_lib);
-    // Link against the pre-built builtins library
     shim_lib.addObject(builtins_obj);
-    // Bundle compiler-rt for our math symbols
     shim_lib.bundle_compiler_rt = true;
-    // Install shim library to the output directory
+
+    // Install target shim to output directory
     const install_shim = b.addInstallArtifact(shim_lib, .{});
     b.getInstallStep().dependOn(&install_shim.step);
-    // Copy the shim library to the src/ directory for embedding as binary data
-    // This is because @embedFile happens at compile time and needs the file to exist already
-    // and zig doesn't permit embedding files from directories outside the source tree.
+
+    // Copy target shim to src/ for final roc compiler to embed
     const copy_shim = b.addUpdateSourceFiles();
     const interpreter_shim_filename = if (target.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
     copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", interpreter_shim_filename }));
@@ -445,8 +471,8 @@ fn addMainExe(
     );
     bootstrap_roc_modules.addAll(bootstrap_exe);
 
-    // Bootstrap compiler needs the shim library to be in place before it compiles
-    bootstrap_exe.step.dependOn(&copy_shim.step);
+    // Bootstrap compiler needs the HOST shim library to be in place before it compiles
+    bootstrap_exe.step.dependOn(&copy_host_shim.step);
 
     // Note: We don't install the bootstrap compiler to avoid potential
     // dependency ordering issues on Windows. It's only used at build time.
