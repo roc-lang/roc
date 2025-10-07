@@ -523,22 +523,14 @@ fn canonicalizeAssociatedDecl(
         const lookup_result = self.scopeLookup(.ident, qualified_ident);
         switch (lookup_result) {
             .found => |pattern| break :blk pattern,
-            .not_found => {
-                // If not found (shouldn't happen), create a new pattern
-                const qualified_pattern = Pattern{
-                    .assign = .{
-                        .ident = qualified_ident,
-                    },
-                };
-                break :blk try self.env.addPatternAndTypeVar(qualified_pattern, Content{ .flex_var = null }, pattern_region);
-            },
+            .not_found => unreachable, // Pattern should have been created in first pass
         }
     };
 
     // Canonicalize the body expression
     const can_expr = try self.canonicalizeExprOrMalformed(decl.body);
 
-    // Create the def with no annotation for now (TODO: handle type annotations)
+    // Create the def with no annotation (type annotations are handled via canonicalizeAssociatedDeclWithAnno)
     const def = CIR.Def{
         .pattern = pattern_idx,
         .expr = can_expr.idx,
@@ -567,15 +559,7 @@ fn canonicalizeAssociatedDeclWithAnno(
         const lookup_result = self.scopeLookup(.ident, qualified_ident);
         switch (lookup_result) {
             .found => |pattern| break :blk pattern,
-            .not_found => {
-                // If not found (shouldn't happen), create a new pattern
-                const qualified_pattern = Pattern{
-                    .assign = .{
-                        .ident = qualified_ident,
-                    },
-                };
-                break :blk try self.env.addPatternAndTypeVar(qualified_pattern, Content{ .flex_var = null }, pattern_region);
-            },
+            .not_found => unreachable, // Pattern should have been created in first pass
         }
     };
 
@@ -3596,15 +3580,13 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
             },
         }
     } else {
-        // Tag with more than 1 qualifier: Foo.Bar.X or Foo.Bar.Baz.X
+        // Multi-qualified tag (e.g., Foo.Bar.X or Foo.Bar.Baz.X)
         //
-        // The interpretation is unambiguous: ALL qualifiers form the type name, and only the final segment is the tag.
-        // For Foo.Bar.Baz.X: type=Foo.Bar.Baz, tag=X
+        // All qualifiers form the type name, with the final segment as the tag name.
+        // Example: Foo.Bar.Baz.X has type "Foo.Bar.Baz" and tag "X"
         //
-        // To determine if this is local or imported, check if the FIRST qualifier is an imported name.
-        // If yes -> look up the type in that imported file
-        // If no -> look up the type locally
-        // No fallback, no ambiguity.
+        // To resolve the type, check if the first qualifier matches an imported module name.
+        // If it does, look up the type in that module; otherwise, look up locally.
 
         const qualifier_toks = self.parse_ir.store.tokenSlice(e.qualifiers);
         const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
@@ -3680,16 +3662,8 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
         }
 
         // Import reference: look up the type in the imported file
-        // Imports can only have 2 qualifiers (e.g., ImportedName.Type.Tag)
-        if (qualifier_toks.len != 2) {
-            return CanonicalizedExpr{
-                .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .undeclared_type = .{
-                    .name = full_type_ident,
-                    .region = type_tok_region,
-                } }),
-                .free_vars = null,
-            };
-        }
+        // For Imported.Foo.Bar.X: module=Imported, type=Foo.Bar, tag=X
+        // qualifiers=[Imported, Foo, Bar], so type name is built from qualifiers[1..]
 
         const module_name = self.scopeLookupModule(first_tok_ident).?; // Already checked above
         const module_name_text = self.env.getIdent(module_name);
@@ -3702,6 +3676,24 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
             } }), .free_vars = null };
         };
 
+        // Build the type name from all qualifiers except the first (module name)
+        // For Imported.Foo.Bar.X: qualifiers=[Imported, Foo, Bar], type="Foo.Bar"
+        const type_qualifiers_start = 1;
+        const type_name = if (qualifier_toks.len > type_qualifiers_start)
+            self.parse_ir.resolveQualifiedName(
+                Token.Span{
+                    .span = DataSpan.init(
+                        e.qualifiers.span.start + type_qualifiers_start,
+                        e.qualifiers.span.len - type_qualifiers_start,
+                    ),
+                },
+                qualifier_toks[qualifier_toks.len - 1],
+                &strip_tokens,
+            )
+        else
+            type_tok_text;
+        const type_name_ident = try self.env.insertIdent(base.Ident.for_text(type_name));
+
         // Look up the target node index in the imported file's exposed_nodes
         const target_node_idx = blk: {
             const envs_map = self.module_envs orelse {
@@ -3712,11 +3704,11 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                 break :blk 0;
             };
 
-            const target_ident = module_env.common.findIdent(type_tok_text) orelse {
+            const target_ident = module_env.common.findIdent(type_name) orelse {
                 // Type is not exposed by the imported file
                 return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
-                    .type_name = type_tok_ident,
+                    .type_name = type_name_ident,
                     .region = type_tok_region,
                 } }), .free_vars = null };
             };
@@ -3725,7 +3717,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                 // Type is not exposed by the imported file
                 return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
-                    .type_name = type_tok_ident,
+                    .type_name = type_name_ident,
                     .region = type_tok_region,
                 } }), .free_vars = null };
             };
