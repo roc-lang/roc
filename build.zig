@@ -433,7 +433,6 @@ fn addMainExe(
     const load_builtins = @import("src/builtins/load_builtins.zig");
 
     // Validate that the list in load_builtins.zig matches what's on disk
-    // TODO(windows): Validation is temporarily disabled - see compile_builtins.zig
     compile_builtins.validateBuiltinList(
         b,
         &load_builtins.builtin_roc_files,
