@@ -10,6 +10,7 @@ x }
 ~~~
 # EXPECTED
 EXPRESSION IN ASSOCIATED ITEMS - nominal_associated_with_final_expression.md:2:1:2:2
+UNUSED VARIABLE - nominal_associated_with_final_expression.md:1:20:1:25
 # PROBLEMS
 **EXPRESSION IN ASSOCIATED ITEMS**
 Associated items (such as types or methods) can only have associated types and values, not plain expressions.
@@ -21,6 +22,18 @@ To fix this, remove the expression at the very end.
 x }
 ```
 ^
+
+
+**UNUSED VARIABLE**
+Variable `x` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+**nominal_associated_with_final_expression.md:1:20:1:25:**
+```roc
+Foo := [A, B, C].{ x = 5
+```
+                   ^^^^^
 
 
 # TOKENS

@@ -13,9 +13,20 @@ Foo := [Whatever].{
 }
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - nominal_nested_types.md:5:5:5:10
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable `x` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+**nominal_nested_types.md:5:5:5:10:**
+```roc
+    x = 5
+```
+    ^^^^^
+
+
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:4),OpColonEqual(1:5-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),CloseSquare(1:17-1:18),Dot(1:18-1:19),OpenCurly(1:19-1:20),

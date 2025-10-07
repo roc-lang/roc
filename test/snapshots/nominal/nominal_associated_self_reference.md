@@ -21,66 +21,34 @@ external : Foo.Bar
 external = Foo.defaultBar
 ~~~
 # EXPECTED
-UNDECLARED TYPE - nominal_associated_self_reference.md:4:18:4:21
-UNDECLARED TYPE - nominal_associated_self_reference.md:7:17:7:20
-UNDECLARED TYPE - nominal_associated_self_reference.md:7:24:7:27
-UNDEFINED VARIABLE - nominal_associated_self_reference.md:10:18:10:27
-UNDEFINED VARIABLE - nominal_associated_self_reference.md:10:28:10:38
+UNUSED VARIABLE - nominal_associated_self_reference.md:10:5:10:39
+TYPE MISMATCH - nominal_associated_self_reference.md:5:18:5:19
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Bar_ is not declared in this scope.
+**UNUSED VARIABLE**
+Variable `useDefault` is not used anywhere in your code.
 
-This type is referenced here:
-**nominal_associated_self_reference.md:4:18:4:21:**
-```roc
-    defaultBar : Bar
-```
-                 ^^^
-
-
-**UNDECLARED TYPE**
-The type _Bar_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_associated_self_reference.md:7:17:7:20:**
-```roc
-    transform : Bar -> Bar
-```
-                ^^^
-
-
-**UNDECLARED TYPE**
-The type _Bar_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_associated_self_reference.md:7:24:7:27:**
-```roc
-    transform : Bar -> Bar
-```
-                       ^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `transform` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**nominal_associated_self_reference.md:10:18:10:27:**
+If you don't need this variable, prefix it with an underscore like `_useDefault` to suppress this warning.
+The unused variable is declared here:
+**nominal_associated_self_reference.md:10:5:10:39:**
 ```roc
     useDefault = transform(defaultBar)
 ```
-                 ^^^^^^^^^
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `defaultBar` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**nominal_associated_self_reference.md:10:28:10:38:**
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**nominal_associated_self_reference.md:5:18:5:19:**
 ```roc
-    useDefault = transform(defaultBar)
+    defaultBar = X
 ```
-                           ^^^^^^^^^^
+                 ^
 
+It has the type:
+    _[X]_others_
+
+But the type annotation says it should have the type:
+    _Foo.Bar_
 
 # TOKENS
 ~~~zig
@@ -171,7 +139,7 @@ external = Foo.defaultBar
 		(e-tag @5.18-5.19 (name "X"))
 		(annotation @5.5-5.15
 			(declared-type
-				(ty-malformed @4.18-4.21))))
+				(ty-lookup @4.18-4.21 (name "Bar") (local)))))
 	(d-let
 		(p-assign @8.5-8.22 (ident "Foo.transform"))
 		(e-lambda @8.17-8.22
@@ -182,13 +150,15 @@ external = Foo.defaultBar
 		(annotation @8.5-8.14
 			(declared-type
 				(ty-fn @7.17-7.27 (effectful false)
-					(ty-malformed @7.17-7.20)
-					(ty-malformed @7.24-7.27)))))
+					(ty-lookup @7.17-7.20 (name "Bar") (local))
+					(ty-lookup @7.24-7.27 (name "Bar") (local))))))
 	(d-let
 		(p-assign @10.5-10.39 (ident "Foo.useDefault"))
 		(e-call @10.18-10.39
-			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-runtime-error (tag "ident_not_in_scope"))))
+			(e-lookup-local @10.18-10.27
+				(p-assign @8.5-8.22 (ident "Foo.transform")))
+			(e-lookup-local @10.28-10.38
+				(p-assign @5.5-5.19 (ident "Foo.defaultBar")))))
 	(s-nominal-decl @1.1-11.2
 		(ty-header @1.1-1.4 (name "Foo"))
 		(ty-tag-union @1.8-1.18
@@ -206,8 +176,8 @@ external = Foo.defaultBar
 	(defs
 		(patt @14.1-14.9 (type "Error"))
 		(patt @5.5-5.19 (type "Error"))
-		(patt @8.5-8.22 (type "Error -> Error"))
-		(patt @10.5-10.39 (type "_a")))
+		(patt @8.5-8.22 (type "Foo.Bar -> Foo.Bar"))
+		(patt @10.5-10.39 (type "Foo.Bar")))
 	(type_decls
 		(nominal @1.1-11.2 (type "Foo")
 			(ty-header @1.1-1.4 (name "Foo")))
@@ -216,6 +186,6 @@ external = Foo.defaultBar
 	(expressions
 		(expr @14.12-14.26 (type "Error"))
 		(expr @5.18-5.19 (type "Error"))
-		(expr @8.17-8.22 (type "Error -> Error"))
-		(expr @10.18-10.39 (type "_a"))))
+		(expr @8.17-8.22 (type "Foo.Bar -> Foo.Bar"))
+		(expr @10.18-10.39 (type "Foo.Bar"))))
 ~~~

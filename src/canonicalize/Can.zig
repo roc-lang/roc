@@ -500,6 +500,8 @@ fn processTypeDeclFirstPass(
     _ = self.exposed_type_texts.remove(type_text);
 
     // Process associated items recursively in the first pass to introduce names
+    // Aliases are introduced in the current scope (not a nested scope) during first pass
+    // They will be available when we process the associated block in the second pass
     if (type_decl.associated) |assoc| {
         try self.processAssociatedItemsFirstPass(qualified_name_idx, assoc.statements);
     }
@@ -798,7 +800,7 @@ fn processAssociatedItemsFirstPass(
         const stmt = self.parse_ir.store.getStatement(stmt_idx);
         switch (stmt) {
             .type_decl => |type_decl| {
-                // Recursively process nested type declarations
+                // Recursively process nested type declarations (this introduces the qualified name)
                 try self.processTypeDeclFirstPass(type_decl, parent_name);
             },
             .decl => |decl| {
@@ -1133,6 +1135,68 @@ pub fn canonicalizeFile(
                 if (type_decl.associated) |assoc| {
                     const type_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
                     const type_ident = self.parse_ir.tokens.resolveIdentifier(type_header.name) orelse continue;
+
+                    // Enter a new scope for the associated block
+                    try self.scopeEnter(self.env.gpa, false); // false = not a function boundary
+                    defer self.scopeExit(self.env.gpa) catch unreachable;
+
+                    // Re-introduce the aliases from first pass
+                    // (We need to rebuild them since we're in a new scope)
+                    for (self.parse_ir.store.statementSlice(assoc.statements)) |assoc_stmt_idx| {
+                        const assoc_stmt = self.parse_ir.store.getStatement(assoc_stmt_idx);
+                        switch (assoc_stmt) {
+                            .type_decl => |nested_type_decl| {
+                                const nested_header = self.parse_ir.store.getTypeHeader(nested_type_decl.header) catch continue;
+                                const unqualified_ident = self.parse_ir.tokens.resolveIdentifier(nested_header.name) orelse continue;
+
+                                // Build qualified name
+                                const parent_text = self.env.getIdent(type_ident);
+                                const type_text = self.env.getIdent(unqualified_ident);
+                                const qualified_name_str = try std.fmt.allocPrint(
+                                    self.env.gpa,
+                                    "{s}.{s}",
+                                    .{ parent_text, type_text },
+                                );
+                                defer self.env.gpa.free(qualified_name_str);
+                                const qualified_ident_idx = try self.env.insertIdent(base.Ident.for_text(qualified_name_str));
+
+                                // Look up and alias
+                                if (self.scopeLookupTypeDecl(qualified_ident_idx)) |qualified_type_decl_idx| {
+                                    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                                    try current_scope.introduceTypeAlias(self.env.gpa, unqualified_ident, qualified_type_decl_idx);
+                                }
+                            },
+                            .decl => |decl| {
+                                const pattern = self.parse_ir.store.getPattern(decl.pattern);
+                                if (pattern == .ident) {
+                                    const pattern_ident_tok = pattern.ident.ident_tok;
+                                    if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
+                                        // Build qualified name
+                                        const parent_text = self.env.getIdent(type_ident);
+                                        const decl_text = self.env.getIdent(decl_ident);
+                                        const qualified_name_str = try std.fmt.allocPrint(
+                                            self.env.gpa,
+                                            "{s}.{s}",
+                                            .{ parent_text, decl_text },
+                                        );
+                                        defer self.env.gpa.free(qualified_name_str);
+                                        const qualified_ident_idx = try self.env.insertIdent(base.Ident.for_text(qualified_name_str));
+
+                                        // Look up the qualified pattern
+                                        switch (self.scopeLookup(.ident, qualified_ident_idx)) {
+                                            .found => |pattern_idx| {
+                                                const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                                                try current_scope.idents.put(self.env.gpa, decl_ident, pattern_idx);
+                                            },
+                                            .not_found => {},
+                                        }
+                                    }
+                                }
+                            },
+                            else => {},
+                        }
+                    }
+
                     try self.processAssociatedItemsSecondPass(type_ident, assoc.statements);
                 }
             },
@@ -7051,6 +7115,13 @@ fn scopeLookupTypeDecl(self: *Self, ident_idx: Ident.Idx) ?Statement.Idx {
         i -= 1;
         const scope = &self.scopes.items[i];
 
+        // First check for type aliases (unqualified names in associated blocks)
+        // These have higher priority than regular type declarations
+        if (scope.lookupTypeAlias(ident_idx)) |aliased_decl| {
+            return aliased_decl;
+        }
+
+        // Then check regular type declarations
         switch (scope.lookupTypeDecl(ident_idx)) {
             .found => |type_decl_idx| return type_decl_idx,
             .not_found => continue,

@@ -9,6 +9,7 @@ Foo : [A, B, C].{ x = 5 }
 ~~~
 # EXPECTED
 TYPE ALIAS WITH ASSOCIATED ITEMS - type_alias_with_associated.md:1:16:1:17
+UNUSED VARIABLE - type_alias_with_associated.md:1:19:1:24
 # PROBLEMS
 **TYPE ALIAS WITH ASSOCIATED ITEMS**
 Type aliases cannot have associated items (such as types or methods).
@@ -20,6 +21,18 @@ Only nominal types (defined with **:=**) can have associated items. Type aliases
 Foo : [A, B, C].{ x = 5 }
 ```
                ^
+
+
+**UNUSED VARIABLE**
+Variable `x` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+**type_alias_with_associated.md:1:19:1:24:**
+```roc
+Foo : [A, B, C].{ x = 5 }
+```
+                  ^^^^^
 
 
 # TOKENS

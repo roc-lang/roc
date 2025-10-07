@@ -18,19 +18,9 @@ result : Foo.Bar
 result = Foo.transform(Foo.defaultBar)
 ~~~
 # EXPECTED
-UNDECLARED TYPE - nominal_associated_lookup_mixed.md:4:18:4:21
+NIL
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Bar_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_associated_lookup_mixed.md:4:18:4:21:**
-```roc
-    defaultBar = Bar.A
-```
-                 ^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:4),OpColonEqual(1:5-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),CloseSquare(1:17-1:18),Dot(1:18-1:19),OpenCurly(1:19-1:20),
@@ -111,7 +101,8 @@ result = Foo.transform(Foo.defaultBar)
 				(ty-lookup @10.10-10.17 (name "Foo.Bar") (local)))))
 	(d-let
 		(p-assign @4.5-4.23 (ident "Foo.defaultBar"))
-		(e-runtime-error (tag "undeclared_type")))
+		(e-nominal @4.18-4.23 (nominal "Foo.Bar")
+			(e-tag @4.18-4.23 (name "A"))))
 	(d-let
 		(p-assign @7.5-7.22 (ident "Foo.transform"))
 		(e-lambda @7.17-7.22
@@ -140,7 +131,7 @@ result = Foo.transform(Foo.defaultBar)
 (inferred-types
 	(defs
 		(patt @11.1-11.7 (type "Foo.Bar"))
-		(patt @4.5-4.23 (type "Error"))
+		(patt @4.5-4.23 (type "Foo.Bar"))
 		(patt @7.5-7.22 (type "Foo.Bar -> Foo.Bar")))
 	(type_decls
 		(nominal @1.1-8.2 (type "Foo")
@@ -149,6 +140,6 @@ result = Foo.transform(Foo.defaultBar)
 			(ty-header @2.5-2.21 (name "Foo.Bar"))))
 	(expressions
 		(expr @11.10-11.39 (type "Foo.Bar"))
-		(expr @4.18-4.21 (type "Error"))
+		(expr @4.18-4.23 (type "Foo.Bar"))
 		(expr @7.17-7.22 (type "Foo.Bar -> Foo.Bar"))))
 ~~~
