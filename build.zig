@@ -425,8 +425,8 @@ fn addMainExe(
     // Bootstrap compiler needs the shim library to be in place before it compiles
     bootstrap_exe.step.dependOn(&copy_shim.step);
 
-    // Install bootstrap compiler so we can test it
-    b.installArtifact(bootstrap_exe);
+    // Note: We don't install the bootstrap compiler to avoid potential
+    // dependency ordering issues on Windows. It's only used at build time.
 
     // STAGE 2: Compile builtins and generate embedded_envs.zig
     const compile_builtins = @import("src/build/compile_builtins.zig");
