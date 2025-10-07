@@ -758,16 +758,31 @@ fn processAssociatedItemsSecondPass(
                     }
                 } else {
                     // Non-identifier patterns are not supported in associated blocks
-                    // Just canonicalize normally for now
-                    _ = try self.canonicalizeStmtDecl(decl, null);
+                    const region = self.parse_ir.tokenizedRegionToRegion(decl.region);
+                    const feature = try self.env.insertString("non-identifier patterns in associated blocks");
+                    try self.env.pushDiagnostic(Diagnostic{
+                        .not_implemented = .{
+                            .feature = feature,
+                            .region = region,
+                        },
+                    });
                 }
             },
             .import => {
                 // Imports are not valid in associated blocks
+                const region = self.parse_ir.tokenizedRegionToRegion(stmt.import.region);
+                const feature = try self.env.insertString("import statements in associated blocks");
+                try self.env.pushDiagnostic(Diagnostic{
+                    .not_implemented = .{
+                        .feature = feature,
+                        .region = region,
+                    },
+                });
             },
             else => {
-                // Skip other statement types (var, expr, crash, dbg, expect, for, return)
-                // These are not valid in associated blocks
+                // Other statement types (var, expr, crash, dbg, expect, for, return, malformed)
+                // are not valid in associated blocks but are already caught by the parser,
+                // so we don't need to emit additional diagnostics here
             },
         }
     }
@@ -3495,39 +3510,105 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
             },
         }
     } else {
-        // If this is a tag with more than 1 qualifier, then it is an imported
-        // nominal type where the last qualifier is the type name, then the other
-        // are the module
+        // Tag with more than 1 qualifier: Foo.Bar.X or Foo.Bar.Baz.X
+        //
+        // The interpretation is unambiguous: ALL qualifiers form the type name, and only the final segment is the tag.
+        // For Foo.Bar.Baz.X: type=Foo.Bar.Baz, tag=X
+        //
+        // To determine if this is local or imported, check if the FIRST qualifier is an imported name.
+        // If yes -> look up the type in that imported file
+        // If no -> look up the type locally
+        // No fallback, no ambiguity.
 
-        // Get the last token of the qualifiers
         const qualifier_toks = self.parse_ir.store.tokenSlice(e.qualifiers);
+        const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
 
-        // Get the type from the last qualifier
+        // Check if the first qualifier is an imported name
+        const first_tok_idx = qualifier_toks[0];
+        const first_tok_ident = self.parse_ir.tokens.resolveIdentifier(first_tok_idx) orelse unreachable;
+        const is_imported = self.scopeLookupModule(first_tok_ident) != null;
+
+        // Build the full qualified type name from ALL qualifiers (the tag name is separate in e.token)
+        // For Foo.Bar.X: qualifiers=[Foo, Bar], token=X, type name="Foo.Bar"
         const type_tok_idx = qualifier_toks[qualifier_toks.len - 1];
         const type_tok_ident = self.parse_ir.tokens.resolveIdentifier(type_tok_idx) orelse unreachable;
         const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
         const type_tok_text = self.env.getIdent(type_tok_ident);
 
-        // Get the fully resolved module name from all but the last qualifier
-        const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
-        const module_alias_text = self.parse_ir.resolveQualifiedName(
-            .{ .span = .{ .start = 0, .len = @intCast(qualifier_toks.len - 2) } },
-            qualifier_toks[qualifier_toks.len - 2],
+        const full_type_name = self.parse_ir.resolveQualifiedName(
+            e.qualifiers,
+            qualifier_toks[qualifier_toks.len - 1],
             &strip_tokens,
         );
-        const module_alias = try self.env.insertIdent(base.Ident.for_text(module_alias_text));
+        const full_type_ident = try self.env.insertIdent(base.Ident.for_text(full_type_name));
 
-        // Check if this is a module alias
-        const module_name = self.scopeLookupModule(module_alias) orelse {
-            // Module is not in current scope
-            return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .module_not_imported = .{
-                .module_name = module_alias,
-                .region = region,
-            } }), .free_vars = null };
-        };
+        if (!is_imported) {
+            // Local reference: look up the type locally
+            const nominal_type_decl_stmt_idx = self.scopeLookupTypeDecl(full_type_ident) orelse {
+                return CanonicalizedExpr{
+                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .undeclared_type = .{
+                        .name = full_type_ident,
+                        .region = type_tok_region,
+                    } }),
+                    .free_vars = null,
+                };
+            };
+
+            switch (self.env.store.getStatement(nominal_type_decl_stmt_idx)) {
+                .s_nominal_decl => {
+                    const expr_idx = try self.env.addExprAndTypeVar(CIR.Expr{
+                        .e_nominal = .{
+                            .nominal_type_decl = nominal_type_decl_stmt_idx,
+                            .backing_expr = tag_expr_idx,
+                            .backing_type = .tag,
+                        },
+                    }, .err, region);
+
+                    const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
+                    return CanonicalizedExpr{
+                        .idx = expr_idx,
+                        .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null,
+                    };
+                },
+                .s_alias_decl => {
+                    return CanonicalizedExpr{
+                        .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .type_alias_but_needed_nominal = .{
+                            .name = full_type_ident,
+                            .region = type_tok_region,
+                        } }),
+                        .free_vars = null,
+                    };
+                },
+                else => {
+                    const feature = try self.env.insertString("report an error resolved type decl in scope wasn't actually a type decl");
+                    const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+                        .feature = feature,
+                        .region = Region.zero(),
+                    } });
+                    return CanonicalizedExpr{
+                        .idx = malformed_idx,
+                        .free_vars = null,
+                    };
+                },
+            }
+        }
+
+        // Import reference: look up the type in the imported file
+        // Imports can only have 2 qualifiers (e.g., ImportedName.Type.Tag)
+        if (qualifier_toks.len != 2) {
+            return CanonicalizedExpr{
+                .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .undeclared_type = .{
+                    .name = full_type_ident,
+                    .region = type_tok_region,
+                } }),
+                .free_vars = null,
+            };
+        }
+
+        const module_name = self.scopeLookupModule(first_tok_ident).?; // Already checked above
         const module_name_text = self.env.getIdent(module_name);
 
-        // Check if this module is imported in the current scope
+        // Check if this is imported in the current scope
         const import_idx = self.scopeLookupImportedModule(module_name_text) orelse {
             return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .module_not_imported = .{
                 .module_name = module_name,
@@ -3535,7 +3616,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
             } }), .free_vars = null };
         };
 
-        // Look up the target node index in the module's exposed_nodes
+        // Look up the target node index in the imported file's exposed_nodes
         const target_node_idx = blk: {
             const envs_map = self.module_envs orelse {
                 break :blk 0;
@@ -3546,7 +3627,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
             };
 
             const target_ident = module_env.common.findIdent(type_tok_text) orelse {
-                // Type is not exposed by the module
+                // Type is not exposed by the imported file
                 return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
                     .type_name = type_tok_ident,
@@ -3555,7 +3636,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
             };
 
             const other_module_node_id = module_env.getExposedNodeIndexById(target_ident) orelse {
-                // Type is not exposed by the module
+                // Type is not exposed by the imported file
                 return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
                     .type_name = type_tok_ident,
