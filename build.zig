@@ -387,24 +387,31 @@ fn addMainExe(
     const compile_builtins = @import("src/build/compile_builtins.zig");
     const load_builtins = @import("src/builtins/load_builtins.zig");
 
+    // Validate that the list in load_builtins.zig matches what's on disk
+    compile_builtins.validateBuiltinList(
+        b,
+        &load_builtins.builtin_roc_files,
+    ) catch |err| {
+        std.debug.print("Builtin validation failed: {}\n", .{err});
+        std.process.exit(1);
+    };
+
     const compiled_builtins = compile_builtins.compileBuiltins(
         b,
         bootstrap_exe,
         &load_builtins.builtin_roc_files,
     );
 
-    const embedded_envs_file = compile_builtins.generateEmbeddedEnvs(
+    // Generate embedded_envs.zig in the build cache alongside the .env files
+    const embedded_envs_path = compile_builtins.generateEmbeddedEnvs(
         b,
         compiled_builtins,
         &load_builtins.builtin_roc_files,
-    );
-
-    // Copy embedded_envs.zig to source tree so it can be imported
-    const copy_embedded = b.addUpdateSourceFiles();
-    copy_embedded.addCopyFileToSource(
-        embedded_envs_file,
-        "src/builtins/embedded_envs.zig",
-    );
+    ) catch |err| {
+        std.debug.print("Failed to generate embedded_envs.zig: {}\n", .{err});
+        std.process.exit(1);
+    };
+    _ = embedded_envs_path; // Will be used when integrating with Can.zig
 
     // STAGE 3: Build final roc compiler with embedded builtins
     const exe = b.addExecutable(.{
@@ -416,8 +423,8 @@ fn addMainExe(
         .link_libc = true,
     });
 
-    // Make final roc depend on embedded_envs.zig being generated
-    exe.step.dependOn(&copy_embedded.step);
+    // Make final roc depend on compiled builtins being ready
+    exe.step.dependOn(&compiled_builtins.step);
 
     // Add build option for final compiler (not bootstrap)
     const final_options = b.addOptions();

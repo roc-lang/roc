@@ -1,52 +1,24 @@
-//! Generated file - embeds compiled builtin ModuleEnvs
-//! DO NOT EDIT - This file is auto-generated at build time
+//! Placeholder for embedded builtin ModuleEnvs
+//!
+//! NOTE: The actual embedded_envs.zig file is auto-generated at build time
+//! by compile_builtins.zig and lives in the build cache alongside the .env files.
+//! This file exists only for documentation purposes.
+//!
+//! When adding a new builtin:
+//! 1. Add the .roc file to src/builtins/roc/
+//! 2. Add it to the list in load_builtins.zig
+//! 3. Run the build - embedded_envs.zig will be auto-generated
+//! 4. The build will validate the list matches what's on disk
+//!
+//! The generated file will contain:
+//! - @embedFile declarations for each .env file (e.g., Bool_env_bytes)
+//! - A loadAll() function that deserializes all embedded ModuleEnvs
 
 const std = @import("std");
 const can = @import("can");
 const ModuleEnv = can.ModuleEnv;
 
-/// Serialized ModuleEnv bytes for Bool
-pub const Bool_env_bytes = @embedFile("Bool.roc.env");
-/// Serialized ModuleEnv bytes for Dict
-pub const Dict_env_bytes = @embedFile("Dict.roc.env");
-/// Serialized ModuleEnv bytes for Set
-pub const Set_env_bytes = @embedFile("Set.roc.env");
-
-/// Load all embedded builtin ModuleEnvs by deserializing them
-pub fn loadAll(gpa: std.mem.Allocator) ![]const *const ModuleEnv {
-    const compile = @import("compile");
-    const CacheModule = compile.CacheModule;
-
-    var envs = std.ArrayList(*const ModuleEnv).init(gpa);
-    errdefer {
-        for (envs.items) |env| {
-            @constCast(env).deinit();
-            gpa.destroy(@constCast(env));
-        }
-        envs.deinit();
-    }
-
-    // Deserialize Bool
-    {
-        const env_ptr = try gpa.create(ModuleEnv);
-        errdefer gpa.destroy(env_ptr);
-        env_ptr.* = try CacheModule.load(gpa, Bool_env_bytes);
-        try envs.append(env_ptr);
-    }
-    // Deserialize Dict
-    {
-        const env_ptr = try gpa.create(ModuleEnv);
-        errdefer gpa.destroy(env_ptr);
-        env_ptr.* = try CacheModule.load(gpa, Dict_env_bytes);
-        try envs.append(env_ptr);
-    }
-    // Deserialize Set
-    {
-        const env_ptr = try gpa.create(ModuleEnv);
-        errdefer gpa.destroy(env_ptr);
-        env_ptr.* = try CacheModule.load(gpa, Set_env_bytes);
-        try envs.append(env_ptr);
-    }
-
-    return envs.toOwnedSlice();
+/// Placeholder - this function will be generated at build time
+pub fn loadAll(_: std.mem.Allocator) ![]const *const ModuleEnv {
+    @compileError("This is a placeholder file. The real embedded_envs.zig is generated at build time in the cache.");
 }
