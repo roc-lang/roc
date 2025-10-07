@@ -403,7 +403,7 @@ fn processTypeDeclFirstPass(
     // Extract the type name from the header
     const type_header = self.env.store.getTypeHeader(header_idx);
 
-    // Build qualified name if we have a parent
+    // Build qualified name and header if we have a parent
     const qualified_name_idx = if (parent_name) |parent_idx| blk: {
         const parent_text = self.env.getIdent(parent_idx);
         const type_text = self.env.getIdent(type_header.name);
@@ -418,18 +418,27 @@ fn processTypeDeclFirstPass(
         break :blk try self.env.insertIdent(qualified_ident);
     } else type_header.name;
 
+    // Create a new header with the qualified name if needed
+    const final_header_idx = if (parent_name != null and qualified_name_idx.idx != type_header.name.idx) blk: {
+        const qualified_header = CIR.TypeHeader{
+            .name = qualified_name_idx,
+            .args = type_header.args,
+        };
+        break :blk try self.env.addTypeHeaderAndTypeVar(qualified_header, Content{ .flex_var = null }, region);
+    } else header_idx;
+
     // Create a placeholder type declaration statement to introduce the type name into scope
     // This allows recursive type references to work during annotation canonicalization
     const placeholder_cir_type_decl = switch (type_decl.kind) {
         .alias => Statement{
             .s_alias_decl = .{
-                .header = header_idx,
+                .header = final_header_idx,
                 .anno = @enumFromInt(0), // placeholder - will be replaced
             },
         },
         .nominal => Statement{
             .s_nominal_decl = .{
-                .header = header_idx,
+                .header = final_header_idx,
                 .anno = @enumFromInt(0), // placeholder - will be replaced
             },
         },
@@ -447,7 +456,7 @@ fn processTypeDeclFirstPass(
         defer self.scopeExitTypeVar(type_var_scope);
 
         // Introduce type parameters from the header into the scope
-        try self.introduceTypeParametersFromHeader(header_idx);
+        try self.introduceTypeParametersFromHeader(final_header_idx);
 
         // Now canonicalize the type annotation with type parameters and type name in scope
         break :blk try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno);
@@ -466,7 +475,7 @@ fn processTypeDeclFirstPass(
             .alias => {
                 break :blk Statement{
                     .s_alias_decl = .{
-                        .header = header_idx,
+                        .header = final_header_idx,
                         .anno = anno_idx,
                     },
                 };
@@ -474,7 +483,7 @@ fn processTypeDeclFirstPass(
             .nominal => {
                 break :blk Statement{
                     .s_nominal_decl = .{
-                        .header = header_idx,
+                        .header = final_header_idx,
                         .anno = anno_idx,
                     },
                 };
@@ -496,13 +505,110 @@ fn processTypeDeclFirstPass(
     }
 }
 
+/// Canonicalize an associated item declaration with a qualified name
+fn canonicalizeAssociatedDecl(
+    self: *Self,
+    decl: AST.Statement.Decl,
+    qualified_ident: Ident.Idx,
+) std.mem.Allocator.Error!CIR.Def.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region());
+
+    // Look up the placeholder pattern that was created in the first pass
+    const pattern_idx = blk: {
+        const lookup_result = self.scopeLookup(.ident, qualified_ident);
+        switch (lookup_result) {
+            .found => |pattern| break :blk pattern,
+            .not_found => {
+                // If not found (shouldn't happen), create a new pattern
+                const qualified_pattern = Pattern{
+                    .assign = .{
+                        .ident = qualified_ident,
+                    },
+                };
+                break :blk try self.env.addPatternAndTypeVar(qualified_pattern, Content{ .flex_var = null }, pattern_region);
+            },
+        }
+    };
+
+    // Canonicalize the body expression
+    const can_expr = try self.canonicalizeExprOrMalformed(decl.body);
+
+    // Create the def with no annotation for now (TODO: handle type annotations)
+    const def = CIR.Def{
+        .pattern = pattern_idx,
+        .expr = can_expr.idx,
+        .annotation = null,
+        .kind = .{ .let = {} },
+    };
+
+    const def_idx = try self.env.addDefAndTypeVar(def, Content{ .flex_var = null }, pattern_region);
+    return def_idx;
+}
+
+/// Canonicalize an associated item declaration with a type annotation
+fn canonicalizeAssociatedDeclWithAnno(
+    self: *Self,
+    decl: AST.Statement.Decl,
+    qualified_ident: Ident.Idx,
+    type_anno_idx: CIR.TypeAnno.Idx,
+) std.mem.Allocator.Error!CIR.Def.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region());
+
+    // Look up the placeholder pattern that was created in the first pass
+    const pattern_idx = blk: {
+        const lookup_result = self.scopeLookup(.ident, qualified_ident);
+        switch (lookup_result) {
+            .found => |pattern| break :blk pattern,
+            .not_found => {
+                // If not found (shouldn't happen), create a new pattern
+                const qualified_pattern = Pattern{
+                    .assign = .{
+                        .ident = qualified_ident,
+                    },
+                };
+                break :blk try self.env.addPatternAndTypeVar(qualified_pattern, Content{ .flex_var = null }, pattern_region);
+            },
+        }
+    };
+
+    // Canonicalize the body expression
+    const can_expr = try self.canonicalizeExprOrMalformed(decl.body);
+
+    // Create the annotation structure
+    const annotation = CIR.Annotation{
+        .type_anno = type_anno_idx,
+        .signature = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .err, pattern_region, TypeVar),
+    };
+    const annotation_idx = try self.env.addAnnotationAndTypeVarRedirect(annotation, ModuleEnv.varFrom(type_anno_idx), pattern_region);
+
+    // Create the def with the type annotation
+    const def = CIR.Def{
+        .pattern = pattern_idx,
+        .expr = can_expr.idx,
+        .annotation = annotation_idx,
+        .kind = .{ .let = {} },
+    };
+
+    const def_idx = try self.env.addDefAndTypeVar(def, Content{ .flex_var = null }, pattern_region);
+    return def_idx;
+}
+
 /// Second pass helper: Canonicalize associated item definitions
 fn processAssociatedItemsSecondPass(
     self: *Self,
     parent_name: Ident.Idx,
     statements: AST.Statement.Span,
 ) std.mem.Allocator.Error!void {
-    for (self.parse_ir.store.statementSlice(statements)) |stmt_idx| {
+    const stmt_idxs = self.parse_ir.store.statementSlice(statements);
+    var i: usize = 0;
+    while (i < stmt_idxs.len) : (i += 1) {
+        const stmt_idx = stmt_idxs[i];
         const stmt = self.parse_ir.store.getStatement(stmt_idx);
         switch (stmt) {
             .type_decl => |type_decl| {
@@ -526,13 +632,135 @@ fn processAssociatedItemsSecondPass(
                     try self.processAssociatedItemsSecondPass(qualified_idx, assoc.statements);
                 }
             },
-            .decl => |decl| {
-                // Canonicalize the declaration
-                _ = try self.canonicalizeStmtDecl(decl, null);
+            .type_anno => |ta| {
+                const region = self.parse_ir.tokenizedRegionToRegion(ta.region);
+                const name_ident = self.parse_ir.tokens.resolveIdentifier(ta.name) orelse {
+                    // Malformed identifier - skip this annotation
+                    continue;
+                };
+
+                // First, make the top of our scratch list
+                const type_vars_top: u32 = @intCast(self.scratch_idents.top());
+
+                // Extract type variables from the AST annotation
+                try self.extractTypeVarIdentsFromASTAnno(ta.anno, type_vars_top);
+
+                // Enter a new type var scope
+                const type_var_scope = self.scopeEnterTypeVar();
+                defer self.scopeExitTypeVar(type_var_scope);
+                std.debug.assert(type_var_scope.idx == 0);
+
+                // Now canonicalize the annotation with type variables in scope
+                const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .inline_anno);
+
+                // Canonicalize where clauses if present
+                const where_clauses = if (ta.where) |where_coll| blk: {
+                    const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
+                    const where_start = self.env.store.scratchWhereClauseTop();
+
+                    for (where_slice) |where_idx| {
+                        const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .inline_anno);
+                        try self.env.store.addScratchWhereClause(canonicalized_where);
+                    }
+
+                    break :blk try self.env.store.whereClauseSpanFrom(where_start);
+                } else null;
+
+                // If we have where clauses, create a separate s_type_anno statement
+                if (where_clauses != null) {
+                    // Build qualified name for the annotation
+                    const parent_text = self.env.getIdent(parent_name);
+                    const name_text = self.env.getIdent(name_ident);
+                    const qualified_name_str = try std.fmt.allocPrint(
+                        self.env.gpa,
+                        "{s}.{s}",
+                        .{ parent_text, name_text },
+                    );
+                    defer self.env.gpa.free(qualified_name_str);
+                    const qualified_ident = base.Ident.for_text(qualified_name_str);
+                    const qualified_idx = try self.env.insertIdent(qualified_ident);
+
+                    const type_anno_stmt = Statement{
+                        .s_type_anno = .{
+                            .name = qualified_idx,
+                            .anno = type_anno_idx,
+                            .where = where_clauses,
+                        },
+                    };
+                    const type_anno_stmt_idx = try self.env.addStatementAndTypeVar(type_anno_stmt, Content{ .flex_var = null }, region);
+                    try self.env.store.addScratchStatement(type_anno_stmt_idx);
+                }
+
+                // Now, check the next stmt to see if it matches this anno
+                const next_i = i + 1;
+                if (next_i < stmt_idxs.len) {
+                    const next_stmt_id = stmt_idxs[next_i];
+                    const next_stmt = self.parse_ir.store.getStatement(next_stmt_id);
+
+                    switch (next_stmt) {
+                        .decl => |decl| {
+                            // Check if the declaration pattern matches the annotation name
+                            const pattern = self.parse_ir.store.getPattern(decl.pattern);
+                            if (pattern == .ident) {
+                                const pattern_ident_tok = pattern.ident.ident_tok;
+                                if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
+                                    // Check if names match
+                                    if (name_ident.idx == decl_ident.idx) {
+                                        // Skip the next statement since we're processing it now
+                                        i = next_i;
+
+                                        // Build qualified name (e.g., "Foo.bar")
+                                        const parent_text = self.env.getIdent(parent_name);
+                                        const decl_text = self.env.getIdent(decl_ident);
+                                        const qualified_name_str = try std.fmt.allocPrint(
+                                            self.env.gpa,
+                                            "{s}.{s}",
+                                            .{ parent_text, decl_text },
+                                        );
+                                        defer self.env.gpa.free(qualified_name_str);
+                                        const qualified_ident = base.Ident.for_text(qualified_name_str);
+                                        const qualified_idx = try self.env.insertIdent(qualified_ident);
+
+                                        // Canonicalize with the qualified name and type annotation
+                                        const def_idx = try self.canonicalizeAssociatedDeclWithAnno(decl, qualified_idx, type_anno_idx);
+                                        try self.env.store.addScratchDef(def_idx);
+                                    }
+                                }
+                            }
+                        },
+                        else => {
+                            // Type annotation doesn't match a declaration - continue normally
+                        },
+                    }
+                }
             },
-            .type_anno => {
-                // Type annotations in associated blocks are handled together with their declarations
-                // We skip them here and let the next iteration process the matching declaration
+            .decl => |decl| {
+                // Canonicalize the declaration with qualified name
+                const pattern = self.parse_ir.store.getPattern(decl.pattern);
+                if (pattern == .ident) {
+                    const pattern_ident_tok = pattern.ident.ident_tok;
+                    if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
+                        // Build qualified name (e.g., "Foo.bar")
+                        const parent_text = self.env.getIdent(parent_name);
+                        const decl_text = self.env.getIdent(decl_ident);
+                        const qualified_name_str = try std.fmt.allocPrint(
+                            self.env.gpa,
+                            "{s}.{s}",
+                            .{ parent_text, decl_text },
+                        );
+                        defer self.env.gpa.free(qualified_name_str);
+                        const qualified_ident = base.Ident.for_text(qualified_name_str);
+                        const qualified_idx = try self.env.insertIdent(qualified_ident);
+
+                        // Canonicalize with the qualified name
+                        const def_idx = try self.canonicalizeAssociatedDecl(decl, qualified_idx);
+                        try self.env.store.addScratchDef(def_idx);
+                    }
+                } else {
+                    // Non-identifier patterns are not supported in associated blocks
+                    // Just canonicalize normally for now
+                    _ = try self.canonicalizeStmtDecl(decl, null);
+                }
             },
             .import => {
                 // Imports are not valid in associated blocks

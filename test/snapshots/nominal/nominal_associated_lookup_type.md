@@ -27,7 +27,7 @@ It has the type:
     _[Something]_others_
 
 But the type annotation says it should have the type:
-    _Bar_
+    _Foo.Bar_
 
 # TOKENS
 ~~~zig
@@ -85,7 +85,7 @@ myBar = Something
 		(ty-tag-union @1.8-1.18
 			(ty-tag-name @1.9-1.17 (name "Whatever"))))
 	(s-nominal-decl @2.5-2.23
-		(ty-header @2.5-2.8 (name "Bar"))
+		(ty-header @2.5-2.23 (name "Foo.Bar"))
 		(ty-tag-union @2.12-2.23
 			(ty-tag-name @2.13-2.22 (name "Something")))))
 ~~~
@@ -97,8 +97,8 @@ myBar = Something
 	(type_decls
 		(nominal @1.1-3.2 (type "Foo")
 			(ty-header @1.1-1.4 (name "Foo")))
-		(nominal @2.5-2.23 (type "Bar")
-			(ty-header @2.5-2.8 (name "Bar"))))
+		(nominal @2.5-2.23 (type "Foo.Bar")
+			(ty-header @2.5-2.23 (name "Foo.Bar"))))
 	(expressions
 		(expr @6.9-6.18 (type "Error"))))
 ~~~

@@ -32,7 +32,7 @@ It has the type:
     _[Something]_others_
 
 But the type annotation says it should have the type:
-    _Bar_
+    _Foo.Bar_
 
 # TOKENS
 ~~~zig
@@ -110,12 +110,15 @@ myNum = Foo.Bar.baz
 		(annotation @11.1-11.6
 			(declared-type
 				(ty-lookup @10.9-10.12 (name "U64") (builtin)))))
+	(d-let
+		(p-assign @3.9-3.16 (ident "Foo.Bar.baz"))
+		(e-num @3.15-3.16 (value "5")))
 	(s-nominal-decl @1.1-5.2
 		(ty-header @1.1-1.4 (name "Foo"))
 		(ty-tag-union @1.8-1.18
 			(ty-tag-name @1.9-1.17 (name "Whatever"))))
 	(s-nominal-decl @2.5-4.6
-		(ty-header @2.5-2.8 (name "Bar"))
+		(ty-header @2.5-4.6 (name "Foo.Bar"))
 		(ty-tag-union @2.12-2.23
 			(ty-tag-name @2.13-2.22 (name "Something")))))
 ~~~
@@ -124,13 +127,15 @@ myNum = Foo.Bar.baz
 (inferred-types
 	(defs
 		(patt @8.1-8.7 (type "Error"))
-		(patt @11.1-11.6 (type "Error")))
+		(patt @11.1-11.6 (type "Num(_size)"))
+		(patt @3.9-3.16 (type "Num(_size)")))
 	(type_decls
 		(nominal @1.1-5.2 (type "Foo")
 			(ty-header @1.1-1.4 (name "Foo")))
-		(nominal @2.5-4.6 (type "Bar")
-			(ty-header @2.5-2.8 (name "Bar"))))
+		(nominal @2.5-4.6 (type "Foo.Bar")
+			(ty-header @2.5-4.6 (name "Foo.Bar"))))
 	(expressions
 		(expr @8.10-8.19 (type "Error"))
-		(expr @11.9-11.20 (type "Error"))))
+		(expr @11.9-11.20 (type "Num(_size)"))
+		(expr @3.15-3.16 (type "Num(_size)"))))
 ~~~

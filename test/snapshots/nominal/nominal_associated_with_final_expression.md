@@ -58,6 +58,9 @@ Foo := [A, B, C].{
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(d-let
+		(p-assign @1.20-1.25 (ident "Foo.x"))
+		(e-num @1.24-1.25 (value "5")))
 	(s-nominal-decl @1.1-2.4
 		(ty-header @1.1-1.4 (name "Foo"))
 		(ty-tag-union @1.8-1.17
@@ -68,9 +71,11 @@ Foo := [A, B, C].{
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs)
+	(defs
+		(patt @1.20-1.25 (type "Num(_size)")))
 	(type_decls
 		(nominal @1.1-2.4 (type "Foo")
 			(ty-header @1.1-1.4 (name "Foo"))))
-	(expressions))
+	(expressions
+		(expr @1.24-1.25 (type "Num(_size)"))))
 ~~~

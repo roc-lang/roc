@@ -100,7 +100,7 @@ handleSuccess = |res| "success"
 		(ty-tag-union @1.8-1.18
 			(ty-tag-name @1.9-1.17 (name "Whatever"))))
 	(s-nominal-decl @2.5-2.43
-		(ty-header @2.5-2.11 (name "Result"))
+		(ty-header @2.5-2.43 (name "Foo.Result"))
 		(ty-tag-union @2.15-2.43
 			(ty-tag-name @2.16-2.28 (name "Success")
 				(ty-lookup @2.24-2.27 (name "U64") (builtin)))
@@ -111,12 +111,12 @@ handleSuccess = |res| "success"
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.14 (type "Result -> Str")))
+		(patt @6.1-6.14 (type "Foo.Result -> Str")))
 	(type_decls
 		(nominal @1.1-3.2 (type "Foo")
 			(ty-header @1.1-1.4 (name "Foo")))
-		(nominal @2.5-2.43 (type "Result")
-			(ty-header @2.5-2.11 (name "Result"))))
+		(nominal @2.5-2.43 (type "Foo.Result")
+			(ty-header @2.5-2.43 (name "Foo.Result"))))
 	(expressions
-		(expr @6.17-6.32 (type "Result -> Str"))))
+		(expr @6.17-6.32 (type "Foo.Result -> Str"))))
 ~~~

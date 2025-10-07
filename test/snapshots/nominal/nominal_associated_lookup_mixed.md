@@ -18,9 +18,19 @@ result : Foo.Bar
 result = Foo.transform(Foo.defaultBar)
 ~~~
 # EXPECTED
-NIL
+UNDECLARED TYPE - nominal_associated_lookup_mixed.md:4:18:4:21
 # PROBLEMS
-NIL
+**UNDECLARED TYPE**
+The type _Bar_ is not declared in this scope.
+
+This type is referenced here:
+**nominal_associated_lookup_mixed.md:4:18:4:21:**
+```roc
+    defaultBar = Bar.A
+```
+                 ^^^
+
+
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:4),OpColonEqual(1:5-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),CloseSquare(1:17-1:18),Dot(1:18-1:19),OpenCurly(1:19-1:20),
@@ -99,12 +109,27 @@ result = Foo.transform(Foo.defaultBar)
 		(annotation @11.1-11.7
 			(declared-type
 				(ty-lookup @10.10-10.17 (name "Foo.Bar") (local)))))
+	(d-let
+		(p-assign @4.5-4.23 (ident "Foo.defaultBar"))
+		(e-runtime-error (tag "undeclared_type")))
+	(d-let
+		(p-assign @7.5-7.22 (ident "Foo.transform"))
+		(e-lambda @7.17-7.22
+			(args
+				(p-assign @7.18-7.19 (ident "x")))
+			(e-lookup-local @7.21-7.22
+				(p-assign @7.18-7.19 (ident "x"))))
+		(annotation @7.5-7.14
+			(declared-type
+				(ty-fn @6.17-6.35 (effectful false)
+					(ty-lookup @6.17-6.24 (name "Foo.Bar") (local))
+					(ty-lookup @6.28-6.35 (name "Foo.Bar") (local))))))
 	(s-nominal-decl @1.1-8.2
 		(ty-header @1.1-1.4 (name "Foo"))
 		(ty-tag-union @1.8-1.18
 			(ty-tag-name @1.9-1.17 (name "Whatever"))))
 	(s-nominal-decl @2.5-2.21
-		(ty-header @2.5-2.8 (name "Bar"))
+		(ty-header @2.5-2.21 (name "Foo.Bar"))
 		(ty-tag-union @2.12-2.21
 			(ty-tag-name @2.13-2.14 (name "A"))
 			(ty-tag-name @2.16-2.17 (name "B"))
@@ -114,12 +139,16 @@ result = Foo.transform(Foo.defaultBar)
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @11.1-11.7 (type "Bar")))
+		(patt @11.1-11.7 (type "Foo.Bar"))
+		(patt @4.5-4.23 (type "Error"))
+		(patt @7.5-7.22 (type "Foo.Bar -> Foo.Bar")))
 	(type_decls
 		(nominal @1.1-8.2 (type "Foo")
 			(ty-header @1.1-1.4 (name "Foo")))
-		(nominal @2.5-2.21 (type "Bar")
-			(ty-header @2.5-2.8 (name "Bar"))))
+		(nominal @2.5-2.21 (type "Foo.Bar")
+			(ty-header @2.5-2.21 (name "Foo.Bar"))))
 	(expressions
-		(expr @11.10-11.39 (type "Bar"))))
+		(expr @11.10-11.39 (type "Foo.Bar"))
+		(expr @4.18-4.21 (type "Error"))
+		(expr @7.17-7.22 (type "Foo.Bar -> Foo.Bar"))))
 ~~~
