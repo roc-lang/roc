@@ -16,6 +16,7 @@ pub fn buildBootstrapCompiler(
     roc_modules: *modules.RocModules,
     target: ResolvedTarget,
     optimize: OptimizeMode,
+    tracy: ?[]const u8,
 ) *Step.Compile {
     const bootstrap_exe = b.addExecutable(.{
         .name = "roc_bootstrap",
@@ -43,5 +44,45 @@ pub fn buildBootstrapCompiler(
     // Add all the standard roc modules
     roc_modules.addAll(bootstrap_exe);
 
+    // Add Tracy support if enabled (bootstrap doesn't link LLVM so pass false)
+    addTracySupport(b, roc_modules.build_options, bootstrap_exe, target, false, tracy);
+
     return bootstrap_exe;
+}
+
+/// Add Tracy profiling support to a compile step
+/// This is extracted from build.zig's add_tracy function
+fn addTracySupport(
+    b: *Build,
+    module_build_options: *Build.Module,
+    exe: *Step.Compile,
+    target: ResolvedTarget,
+    links_llvm: bool,
+    tracy: ?[]const u8,
+) void {
+    exe.root_module.addImport("build_options", module_build_options);
+    if (tracy) |tracy_path| {
+        const client_cpp = b.pathJoin(
+            &[_][]const u8{ tracy_path, "public", "TracyClient.cpp" },
+        );
+
+        // On mingw, we need to opt into windows 7+ to get some features required by tracy.
+        const tracy_c_flags: []const []const u8 = if (target.result.os.tag == .windows and target.result.abi == .gnu)
+            &[_][]const u8{ "-DTRACY_ENABLE=1", "-fno-sanitize=undefined", "-D_WIN32_WINNT=0x601" }
+        else
+            &[_][]const u8{ "-DTRACY_ENABLE=1", "-fno-sanitize=undefined" };
+
+        exe.root_module.addIncludePath(.{ .cwd_relative = tracy_path });
+        exe.root_module.addCSourceFile(.{ .file = .{ .cwd_relative = client_cpp }, .flags = tracy_c_flags });
+        exe.root_module.addCSourceFile(.{ .file = .{ .cwd_relative = "src/build/tracy-shutdown.cpp" }, .flags = tracy_c_flags });
+        if (!links_llvm) {
+            exe.root_module.linkSystemLibrary("c++", .{ .use_pkg_config = .no });
+        }
+        exe.root_module.link_libc = true;
+
+        if (target.result.os.tag == .windows) {
+            exe.root_module.linkSystemLibrary("dbghelp", .{});
+            exe.root_module.linkSystemLibrary("ws2_32", .{});
+        }
+    }
 }

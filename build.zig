@@ -418,6 +418,7 @@ fn addMainExe(
         &bootstrap_roc_modules,
         target,
         optimize,
+        tracy,
     );
     bootstrap_roc_modules.addAll(bootstrap_exe);
 
