@@ -163,8 +163,8 @@ fn processInput(self: *Repl, input: []const u8) ![]const u8 {
             const type_name_copy = try self.allocator.dupe(u8, info.type_name);
             defer self.allocator.free(info.type_name);
 
-            // For now, just store it without evaluation
-            // TODO: In the future, we might want to evaluate associated items here
+            // Store the type declaration - associated items will be canonicalized and evaluated
+            // automatically when we build the full source for the next expression/definition
             try self.past_defs.append(.{
                 .source = try self.allocator.dupe(u8, input),
                 .kind = .{ .type_decl = .{
@@ -199,6 +199,48 @@ fn tryParseStatement(self: *Repl, input: []const u8) !ParseResult {
     var module_env = try ModuleEnv.init(self.allocator, input);
     defer module_env.deinit();
 
+    // Try parsing as a full file first (for type declarations with associated items)
+    if (parse.parse(&module_env.common, self.allocator)) |ast_const| {
+        var ast = ast_const;
+        defer ast.deinit(self.allocator);
+
+        if (ast.root_node_idx != 0) {
+            const file = ast.store.getFile();
+            const statements = ast.store.statementSlice(file.statements);
+            if (statements.len == 1) {
+                const stmt = ast.store.getStatement(statements[0]);
+                switch (stmt) {
+                    .decl => |decl| {
+                        const pattern = ast.store.getPattern(decl.pattern);
+                        if (pattern == .ident) {
+                            const ident_tok = pattern.ident.ident_tok;
+                            const token_region = ast.tokens.resolve(@intCast(ident_tok));
+                            const ident = ast.env.source[token_region.start.offset..token_region.end.offset];
+                            const ident_copy = try self.allocator.dupe(u8, ident);
+                            return ParseResult{ .assignment = .{ .ident = ident_copy } };
+                        }
+                        return ParseResult.expression;
+                    },
+                    .import => return ParseResult.import,
+                    .type_decl => |decl| {
+                        const header = ast.store.getTypeHeader(decl.header) catch {
+                            return ParseResult.expression;
+                        };
+                        const type_name_tok = header.name;
+                        const token_region = ast.tokens.resolve(type_name_tok);
+                        const type_name = ast.env.source[token_region.start.offset..token_region.end.offset];
+
+                        return ParseResult{ .type_decl = .{
+                            .type_name = try self.allocator.dupe(u8, type_name),
+                            .has_associated_items = decl.associated != null,
+                        } };
+                    },
+                    else => return ParseResult.expression,
+                }
+            }
+        }
+    } else |_| {}
+
     // Try statement parsing
     if (parse.parseStatement(&module_env.common, self.allocator)) |ast_const| {
         var ast = ast_const;
@@ -223,7 +265,10 @@ fn tryParseStatement(self: *Repl, input: []const u8) !ParseResult {
                 },
                 .import => return ParseResult.import,
                 .type_decl => |decl| {
-                    const header = try ast.store.getTypeHeader(decl.header);
+                    const header = ast.store.getTypeHeader(decl.header) catch {
+                        // If we can't get the type header, treat it as an expression
+                        return ParseResult.expression;
+                    };
                     const type_name_tok = header.name;
                     const token_region = ast.tokens.resolve(type_name_tok);
                     const type_name = ast.env.source[token_region.start.offset..token_region.end.offset];

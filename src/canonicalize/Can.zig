@@ -490,9 +490,58 @@ fn processTypeDeclFirstPass(
     const type_text = self.env.getIdent(type_header.name);
     _ = self.exposed_type_texts.remove(type_text);
 
-    // Process associated items recursively
+    // Process associated items recursively in the first pass to introduce names
     if (type_decl.associated) |assoc| {
         try self.processAssociatedItemsFirstPass(qualified_name_idx, assoc.statements);
+    }
+}
+
+/// Second pass helper: Canonicalize associated item definitions
+fn processAssociatedItemsSecondPass(
+    self: *Self,
+    parent_name: Ident.Idx,
+    statements: AST.Statement.Span,
+) std.mem.Allocator.Error!void {
+    for (self.parse_ir.store.statementSlice(statements)) |stmt_idx| {
+        const stmt = self.parse_ir.store.getStatement(stmt_idx);
+        switch (stmt) {
+            .type_decl => |type_decl| {
+                // Recursively process nested type declarations
+                if (type_decl.associated) |assoc| {
+                    const type_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
+                    const type_ident = self.parse_ir.tokens.resolveIdentifier(type_header.name) orelse continue;
+
+                    // Build qualified name for nested type
+                    const parent_text = self.env.getIdent(parent_name);
+                    const type_text = self.env.getIdent(type_ident);
+                    const qualified_name_str = try std.fmt.allocPrint(
+                        self.env.gpa,
+                        "{s}.{s}",
+                        .{ parent_text, type_text },
+                    );
+                    defer self.env.gpa.free(qualified_name_str);
+                    const qualified_ident = base.Ident.for_text(qualified_name_str);
+                    const qualified_idx = try self.env.insertIdent(qualified_ident);
+
+                    try self.processAssociatedItemsSecondPass(qualified_idx, assoc.statements);
+                }
+            },
+            .decl => |decl| {
+                // Canonicalize the declaration
+                _ = try self.canonicalizeStmtDecl(decl, null);
+            },
+            .type_anno => {
+                // Type annotations in associated blocks are handled together with their declarations
+                // We skip them here and let the next iteration process the matching declaration
+            },
+            .import => {
+                // Imports are not valid in associated blocks
+            },
+            else => {
+                // Skip other statement types (var, expr, crash, dbg, expect, for, return)
+                // These are not valid in associated blocks
+            },
+        }
     }
 }
 
@@ -829,6 +878,23 @@ pub fn canonicalizeFile(
             .malformed => |malformed| {
                 // We won't touch this since it's already a parse error.
                 _ = malformed;
+            },
+        }
+    }
+
+    // Third pass: Process associated items in type declarations
+    for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
+        const stmt = self.parse_ir.store.getStatement(stmt_id);
+        switch (stmt) {
+            .type_decl => |type_decl| {
+                if (type_decl.associated) |assoc| {
+                    const type_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
+                    const type_ident = self.parse_ir.tokens.resolveIdentifier(type_header.name) orelse continue;
+                    try self.processAssociatedItemsSecondPass(type_ident, assoc.statements);
+                }
+            },
+            else => {
+                // Skip non-type-declaration statements in third pass
             },
         }
     }
