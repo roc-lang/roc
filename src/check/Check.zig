@@ -98,6 +98,12 @@ pub fn init(
     regions: *Region.List,
     common_idents: CommonIdents,
 ) std.mem.Allocator.Error!Self {
+    std.debug.assert(types.len() == 0);
+    // TODO there is probably a faster way
+    for (0..cir.store.nodes.len()) |_| {
+        _ = try types.fresh();
+    }
+    std.debug.assert(types.len() == cir.store.regions.len());
     return .{
         .gpa = gpa,
         .types = types,
