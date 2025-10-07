@@ -3028,18 +3028,30 @@ fn rocDocs(gpa: Allocator, args: cli_args.DocsArgs) !void {
         printTimingBreakdown(stdout, if (builtin.target.cpu.arch == .wasm32) null else check_result.timing);
     }
 
-    // Generate documentation for all packages recursively
-    try generateDocsRecursive(gpa, &result_with_env.build_env, args.path, args.output, "");
+    // Generate documentation for all packages and modules
+    try generateDocs(gpa, &result_with_env.build_env, args.path, args.output);
 
     stdout.print("\nDocumentation generation complete for {s}", .{args.path}) catch {};
 }
 
-/// Generate HTML index file for a package
+/// Information about an imported module
+const ModuleInfo = struct {
+    name: []const u8, // e.g., "Foo" or "foo.Bar"
+    link_path: []const u8, // e.g., "Foo" or "foo/Bar"
+
+    fn deinit(self: ModuleInfo, gpa: Allocator) void {
+        gpa.free(self.name);
+        gpa.free(self.link_path);
+    }
+};
+
+/// Generate HTML index file for a package or app
 pub fn generatePackageIndex(
     gpa: Allocator,
     output_path: []const u8,
     module_path: []const u8,
     package_shorthands: []const []const u8,
+    imported_modules: []const ModuleInfo,
 ) !void {
     // Create output directory if it doesn't exist
     std.fs.cwd().makePath(output_path) catch |err| switch (err) {
@@ -3065,6 +3077,15 @@ pub fn generatePackageIndex(
     // Write module path as h1
     try writer.print("  <h1>{s}</h1>\n", .{module_path});
 
+    // Write sidebar with imported modules if any
+    if (imported_modules.len > 0) {
+        try writer.writeAll("  <ul class='sidebar'>\n");
+        for (imported_modules) |mod_info| {
+            try writer.print("    <li><a href=\"{s}\">{s}</a></li>\n", .{ mod_info.link_path, mod_info.name });
+        }
+        try writer.writeAll("  </ul>\n");
+    }
+
     // Write links to package dependencies if any exist
     if (package_shorthands.len > 0) {
         try writer.writeAll("  <ul>\n");
@@ -3077,66 +3098,251 @@ pub fn generatePackageIndex(
     try writer.writeAll("</body>\n</html>\n");
 }
 
-/// Recursively generate documentation for a package and all its dependencies
-fn generateDocsRecursive(
+/// Generate HTML index file for a module
+pub fn generateModuleIndex(
+    gpa: Allocator,
+    output_path: []const u8,
+    module_name: []const u8,
+) !void {
+    // Create output directory if it doesn't exist
+    std.fs.cwd().makePath(output_path) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+
+    // Create index.html file
+    const index_path = try std.fs.path.join(gpa, &[_][]const u8{ output_path, "index.html" });
+    defer gpa.free(index_path);
+
+    const file = try std.fs.cwd().createFile(index_path, .{});
+    defer file.close();
+
+    const writer = file.writer();
+
+    // Write HTML header
+    try writer.writeAll("<!DOCTYPE html>\n<html>\n<head>\n");
+    try writer.writeAll("  <meta charset=\"UTF-8\">\n");
+    try writer.print("  <title>{s}</title>\n", .{module_name});
+    try writer.writeAll("</head>\n<body>\n");
+
+    // Write module name as h1
+    try writer.print("  <h1>{s}</h1>\n", .{module_name});
+
+    try writer.writeAll("</body>\n</html>\n");
+}
+
+/// Generate documentation for the root and all its dependencies and imported modules
+fn generateDocs(
     gpa: Allocator,
     build_env: *compile.BuildEnv,
     module_path: []const u8,
     base_output_dir: []const u8,
-    relative_path: []const u8,
-) error{OutOfMemory}!void {
-    // Determine output directory for this package
-    const output_dir = if (relative_path.len == 0)
-        try gpa.dupe(u8, base_output_dir)
-    else
-        try std.fs.path.join(gpa, &[_][]const u8{ base_output_dir, relative_path });
-    defer gpa.free(output_dir);
+) !void {
+    // First, determine if this is an app or other kind
+    var pkg_iter = build_env.packages.iterator();
+    const first_pkg = if (pkg_iter.next()) |entry| entry.value_ptr.* else return;
 
-    // Collect package shorthands for the current package
+    const is_app = first_pkg.kind == .app;
+
+    if (is_app) {
+        // For apps, collect all imported modules and generate sidebar
+        try generateAppDocs(gpa, build_env, module_path, base_output_dir);
+    } else {
+        // For packages, just generate package dependency docs
+        try generatePackageDocs(gpa, build_env, module_path, base_output_dir, "");
+    }
+}
+
+/// Generate docs for an app module
+fn generateAppDocs(
+    gpa: Allocator,
+    build_env: *compile.BuildEnv,
+    module_path: []const u8,
+    base_output_dir: []const u8,
+) !void {
+    // Collect all imported modules (both local and from packages)
+    var modules_map = std.StringHashMap(ModuleInfo).init(gpa);
+    defer {
+        var it = modules_map.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.deinit(gpa);
+        }
+        modules_map.deinit();
+    }
+
+    // Get the root package
+    var pkg_iter = build_env.packages.iterator();
+    const first_pkg = if (pkg_iter.next()) |entry| entry.value_ptr.* else return;
+
+    // Iterate through schedulers to get modules
+    var sched_iter = build_env.schedulers.iterator();
+    while (sched_iter.next()) |sched_entry| {
+        const package_name = sched_entry.key_ptr.*;
+        const package_env = sched_entry.value_ptr.*;
+
+        // Iterate through modules in this package
+        for (package_env.modules.items) |module_state| {
+            // Process external imports (e.g., "cli.Stdout")
+            for (module_state.external_imports.items) |ext_import| {
+                // Parse the import (e.g., "cli.Stdout" -> package="cli", module="Stdout")
+                if (std.mem.indexOfScalar(u8, ext_import, '.')) |dot_index| {
+                    const pkg_shorthand = ext_import[0..dot_index];
+                    const module_name = ext_import[dot_index + 1 ..];
+
+                    // Create full name and link path
+                    const full_name = try gpa.dupe(u8, ext_import);
+                    const link_path = try std.fmt.allocPrint(gpa, "{s}/{s}", .{ pkg_shorthand, module_name });
+
+                    const mod_info = ModuleInfo{
+                        .name = full_name,
+                        .link_path = link_path,
+                    };
+
+                    // Add to map (deduplicates automatically)
+                    const gop = try modules_map.getOrPut(full_name);
+                    if (!gop.found_existing) {
+                        gop.value_ptr.* = mod_info;
+                    } else {
+                        // Free the duplicates
+                        gpa.free(full_name);
+                        gpa.free(link_path);
+                    }
+
+                    // Generate index.html for this module
+                    const module_output_dir = try std.fs.path.join(gpa, &[_][]const u8{ base_output_dir, pkg_shorthand, module_name });
+                    defer gpa.free(module_output_dir);
+                    generateModuleIndex(gpa, module_output_dir, ext_import) catch |err| {
+                        std.debug.print("Warning: failed to generate module index for {s}: {}\n", .{ ext_import, err });
+                    };
+                }
+            }
+
+            // Process local imports (non-external modules in the same package)
+            for (module_state.imports.items) |import_id| {
+                if (import_id < package_env.modules.items.len) {
+                    const imported_module = package_env.modules.items[import_id];
+                    const module_name = imported_module.name;
+
+                    // Skip if this is the root module itself
+                    if (std.mem.eql(u8, module_name, "main")) continue;
+
+                    // Only include if it's a local module (not from a package)
+                    if (std.mem.eql(u8, package_name, first_pkg.name)) {
+                        const full_name = try gpa.dupe(u8, module_name);
+                        const link_path = try gpa.dupe(u8, module_name);
+
+                        const mod_info = ModuleInfo{
+                            .name = full_name,
+                            .link_path = link_path,
+                        };
+
+                        const gop = try modules_map.getOrPut(full_name);
+                        if (!gop.found_existing) {
+                            gop.value_ptr.* = mod_info;
+                        } else {
+                            gpa.free(full_name);
+                            gpa.free(link_path);
+                        }
+
+                        // Generate index.html for this local module
+                        const module_output_dir = try std.fs.path.join(gpa, &[_][]const u8{ base_output_dir, module_name });
+                        defer gpa.free(module_output_dir);
+                        generateModuleIndex(gpa, module_output_dir, module_name) catch |err| {
+                            std.debug.print("Warning: failed to generate module index for {s}: {}\n", .{ module_name, err });
+                        };
+                    }
+                }
+            }
+        }
+    }
+
+    // Convert map to sorted list
+    var modules_list = std.ArrayList(ModuleInfo).init(gpa);
+    defer modules_list.deinit();
+    var map_iter = modules_map.iterator();
+    while (map_iter.next()) |entry| {
+        try modules_list.append(entry.value_ptr.*);
+    }
+
+    // Collect package shorthands
     var shorthands_list = std.ArrayList([]const u8).init(gpa);
     defer {
         for (shorthands_list.items) |item| gpa.free(item);
         shorthands_list.deinit();
     }
 
-    // Find the current package in build_env
+    var shorthand_iter = first_pkg.shorthands.iterator();
+    while (shorthand_iter.next()) |sh_entry| {
+        const shorthand = try gpa.dupe(u8, sh_entry.key_ptr.*);
+        try shorthands_list.append(shorthand);
+    }
+
+    // Generate root index.html
+    try generatePackageIndex(gpa, base_output_dir, module_path, shorthands_list.items, modules_list.items);
+
+    // Generate package dependency docs recursively
+    shorthand_iter = first_pkg.shorthands.iterator();
+    while (shorthand_iter.next()) |sh_entry| {
+        const shorthand = sh_entry.key_ptr.*;
+        const dep_ref = sh_entry.value_ptr.*;
+
+        generatePackageDocs(gpa, build_env, dep_ref.root_file, base_output_dir, shorthand) catch |err| {
+            std.debug.print("Warning: failed to generate docs for package {s}: {}\n", .{ shorthand, err });
+        };
+    }
+}
+
+/// Recursively generate documentation for a package and its dependencies
+fn generatePackageDocs(
+    gpa: Allocator,
+    build_env: *compile.BuildEnv,
+    module_path: []const u8,
+    base_output_dir: []const u8,
+    relative_path: []const u8,
+) error{OutOfMemory}!void {
+    const output_dir = if (relative_path.len == 0)
+        try gpa.dupe(u8, base_output_dir)
+    else
+        try std.fs.path.join(gpa, &[_][]const u8{ base_output_dir, relative_path });
+    defer gpa.free(output_dir);
+
+    var shorthands_list = std.ArrayList([]const u8).init(gpa);
+    defer {
+        for (shorthands_list.items) |item| gpa.free(item);
+        shorthands_list.deinit();
+    }
+
     var pkg_iter = build_env.packages.iterator();
     while (pkg_iter.next()) |entry| {
         const pkg = entry.value_ptr;
 
-        // Collect shorthands from this package
         var shorthand_iter = pkg.shorthands.iterator();
         while (shorthand_iter.next()) |sh_entry| {
             const shorthand = try gpa.dupe(u8, sh_entry.key_ptr.*);
             try shorthands_list.append(shorthand);
         }
 
-        // Process package dependencies recursively
         shorthand_iter = pkg.shorthands.iterator();
         while (shorthand_iter.next()) |sh_entry| {
             const shorthand = sh_entry.key_ptr.*;
 
-            // Build relative path for dependency
             const dep_relative_path = if (relative_path.len == 0)
                 try gpa.dupe(u8, shorthand)
             else
                 try std.fs.path.join(gpa, &[_][]const u8{ relative_path, shorthand });
             defer gpa.free(dep_relative_path);
 
-            // Recursively generate docs for this dependency
             const dep_ref = sh_entry.value_ptr.*;
-            generateDocsRecursive(gpa, build_env, dep_ref.root_file, base_output_dir, dep_relative_path) catch |err| {
-                // Continue on error - don't fail the whole generation
+            generatePackageDocs(gpa, build_env, dep_ref.root_file, base_output_dir, dep_relative_path) catch |err| {
                 std.debug.print("Warning: failed to generate docs for {s}: {}\n", .{ shorthand, err });
             };
         }
 
-        // Only process the first package (the root one)
         break;
     }
 
-    // Generate index.html for this package
-    generatePackageIndex(gpa, output_dir, module_path, shorthands_list.items) catch |err| {
+    const no_modules = [_]ModuleInfo{};
+    generatePackageIndex(gpa, output_dir, module_path, shorthands_list.items, &no_modules) catch |err| {
         std.debug.print("Warning: failed to generate index for {s}: {}\n", .{ module_path, err });
     };
 }

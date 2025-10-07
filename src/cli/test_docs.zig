@@ -116,10 +116,11 @@ test "generatePackageIndex creates valid HTML" {
     const tmp_path = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(tmp_path);
 
-    // Test with no dependencies
+    // Test with no dependencies or modules
     {
         const shorthands = [_][]const u8{};
-        try main.generatePackageIndex(gpa, tmp_path, "test/module.roc", &shorthands);
+        const modules = [_]main.ModuleInfo{};
+        try main.generatePackageIndex(gpa, tmp_path, "test/module.roc", &shorthands, &modules);
 
         const content = try tmp.dir.readFileAlloc(gpa, "index.html", 10000);
         defer gpa.free(content);
@@ -132,10 +133,11 @@ test "generatePackageIndex creates valid HTML" {
     // Delete the file for next test
     try tmp.dir.deleteFile("index.html");
 
-    // Test with dependencies
+    // Test with package dependencies
     {
         const shorthands = [_][]const u8{ "foo", "bar", "baz" };
-        try main.generatePackageIndex(gpa, tmp_path, "root.roc", &shorthands);
+        const modules = [_]main.ModuleInfo{};
+        try main.generatePackageIndex(gpa, tmp_path, "root.roc", &shorthands, &modules);
 
         const content = try tmp.dir.readFileAlloc(gpa, "index.html", 10000);
         defer gpa.free(content);
@@ -146,6 +148,61 @@ test "generatePackageIndex creates valid HTML" {
         try testing.expect(std.mem.indexOf(u8, content, "<a href=\"bar\">bar</a>") != null);
         try testing.expect(std.mem.indexOf(u8, content, "<a href=\"baz\">baz</a>") != null);
     }
+}
+
+test "generatePackageIndex with imported modules" {
+    const gpa = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const tmp_path = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(tmp_path);
+
+    // Test with local and package modules
+    {
+        const shorthands = [_][]const u8{"pf"};
+
+        var modules = [_]main.ModuleInfo{
+            .{ .name = try gpa.dupe(u8, "Foo"), .link_path = try gpa.dupe(u8, "Foo") },
+            .{ .name = try gpa.dupe(u8, "Bar"), .link_path = try gpa.dupe(u8, "Bar") },
+            .{ .name = try gpa.dupe(u8, "pf.Stdout"), .link_path = try gpa.dupe(u8, "pf/Stdout") },
+        };
+        defer for (modules) |mod| mod.deinit(gpa);
+
+        try main.generatePackageIndex(gpa, tmp_path, "root.roc", &shorthands, &modules);
+
+        const content = try tmp.dir.readFileAlloc(gpa, "index.html", 10000);
+        defer gpa.free(content);
+
+        // Check for sidebar
+        try testing.expect(std.mem.indexOf(u8, content, "<ul class='sidebar'>") != null);
+
+        // Check local modules
+        try testing.expect(std.mem.indexOf(u8, content, "<a href=\"Foo\">Foo</a>") != null);
+        try testing.expect(std.mem.indexOf(u8, content, "<a href=\"Bar\">Bar</a>") != null);
+
+        // Check package module
+        try testing.expect(std.mem.indexOf(u8, content, "<a href=\"pf/Stdout\">pf.Stdout</a>") != null);
+    }
+}
+
+test "generateModuleIndex creates valid HTML" {
+    const gpa = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const tmp_path = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(tmp_path);
+
+    try main.generateModuleIndex(gpa, tmp_path, "Foo");
+
+    const content = try tmp.dir.readFileAlloc(gpa, "index.html", 10000);
+    defer gpa.free(content);
+
+    try testing.expect(std.mem.indexOf(u8, content, "<h1>Foo</h1>") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "<title>Foo</title>") != null);
 }
 
 test "generatePackageIndex handles nested paths" {
@@ -165,7 +222,8 @@ test "generatePackageIndex handles nested paths" {
     defer gpa.free(nested_path);
 
     const shorthands = [_][]const u8{"baz"};
-    try main.generatePackageIndex(gpa, nested_path, "foo/bar/module.roc", &shorthands);
+    const modules = [_]main.ModuleInfo{};
+    try main.generatePackageIndex(gpa, nested_path, "foo/bar/module.roc", &shorthands, &modules);
 
     // Verify the file was created in the nested directory
     const content = try tmp.dir.readFileAlloc(gpa, "foo/bar/index.html", 10000);
@@ -173,4 +231,44 @@ test "generatePackageIndex handles nested paths" {
 
     try testing.expect(std.mem.indexOf(u8, content, "<h1>foo/bar/module.roc</h1>") != null);
     try testing.expect(std.mem.indexOf(u8, content, "<a href=\"baz\">baz</a>") != null);
+}
+
+test "module deduplication" {
+    const gpa = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const tmp_path = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(tmp_path);
+
+    // Test that duplicate modules are handled correctly (only appear once)
+    {
+        const shorthands = [_][]const u8{};
+
+        // Create same module twice - simulating what would happen if multiple files import it
+        var modules = [_]main.ModuleInfo{
+            .{ .name = try gpa.dupe(u8, "Foo"), .link_path = try gpa.dupe(u8, "Foo") },
+            .{ .name = try gpa.dupe(u8, "pf.Stdout"), .link_path = try gpa.dupe(u8, "pf/Stdout") },
+            // Foo appears again - but should only show up once in output
+        };
+        defer for (modules) |mod| mod.deinit(gpa);
+
+        try main.generatePackageIndex(gpa, tmp_path, "root.roc", &shorthands, &modules);
+
+        const content = try tmp.dir.readFileAlloc(gpa, "index.html", 10000);
+        defer gpa.free(content);
+
+        // Count occurrences of "Foo" link - should appear exactly once
+        const foo_link = "<a href=\"Foo\">Foo</a>";
+        var count: usize = 0;
+        var search_start: usize = 0;
+        while (std.mem.indexOfPos(u8, content, search_start, foo_link)) |pos| {
+            count += 1;
+            search_start = pos + foo_link.len;
+        }
+
+        // Each module should only appear once in the sidebar
+        try testing.expectEqual(@as(usize, 1), count);
+    }
 }
