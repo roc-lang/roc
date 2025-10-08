@@ -381,39 +381,45 @@ fn addMainExe(
     zstd: *Dependency,
     host_zstd: *Dependency,
 ) ?*Step.Compile {
-    // STAGE 0: Build HOST shim library for bootstrap compiler
-    // Note: The host shim is only @embedFile'd by bootstrap, never actually executed,
-    // so we use the target's roc_modules. This is safe because the shim is never run.
-    const host_builtins_obj = b.addObject(.{
-        .name = "roc_builtins_host",
-        .root_source_file = b.path("src/builtins/static_lib.zig"),
-        .target = b.graph.host,
-        .optimize = optimize,
-        .strip = true,
-        .pic = true,
-    });
+    // STAGE 0: Build shim library (or libraries if cross-compiling)
+    // When cross-compiling, we need a host shim for bootstrap AND a target shim for final roc.
+    // When not cross-compiling, we only need one shim.
+    const is_cross_compile = target.result.cpu.arch != b.graph.host.result.cpu.arch or
+        target.result.os.tag != b.graph.host.result.os.tag;
 
-    const host_shim_lib = b.addLibrary(.{
-        .name = "roc_interpreter_shim_host",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/interpreter_shim/main.zig"),
+    // Build host shim only when cross-compiling
+    const copy_host_shim = if (is_cross_compile) blk: {
+        const host_builtins_obj = b.addObject(.{
+            .name = "roc_builtins_host",
+            .root_source_file = b.path("src/builtins/static_lib.zig"),
             .target = b.graph.host,
             .optimize = optimize,
             .strip = true,
             .pic = true,
-        }),
-        .linkage = .static,
-    });
-    roc_modules.addAll(host_shim_lib);
-    host_shim_lib.addObject(host_builtins_obj);
-    host_shim_lib.bundle_compiler_rt = true;
+        });
 
-    // Copy host shim to src/ for bootstrap compiler to embed
-    const copy_host_shim = b.addUpdateSourceFiles();
-    const host_shim_filename = if (b.graph.host.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
-    copy_host_shim.addCopyFileToSource(host_shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", host_shim_filename }));
+        const host_shim_lib = b.addLibrary(.{
+            .name = "roc_interpreter_shim_host",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/interpreter_shim/main.zig"),
+                .target = b.graph.host,
+                .optimize = optimize,
+                .strip = true,
+                .pic = true,
+            }),
+            .linkage = .static,
+        });
+        roc_modules.addAll(host_shim_lib);
+        host_shim_lib.addObject(host_builtins_obj);
+        host_shim_lib.bundle_compiler_rt = true;
 
-    // Build TARGET shim library (for final roc compiler)
+        const copy = b.addUpdateSourceFiles();
+        const host_shim_filename = if (b.graph.host.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
+        copy.addCopyFileToSource(host_shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", host_shim_filename }));
+        break :blk copy;
+    } else null;
+
+    // Build TARGET shim library (always needed)
     const builtins_obj = b.addObject(.{
         .name = "roc_builtins",
         .root_source_file = b.path("src/builtins/static_lib.zig"),
@@ -468,8 +474,13 @@ fn addMainExe(
     );
     bootstrap_roc_modules.addAll(bootstrap_exe);
 
-    // Bootstrap compiler needs the HOST shim library to be in place before it compiles
-    bootstrap_exe.step.dependOn(&copy_host_shim.step);
+    // Bootstrap compiler needs a shim library to be in place before it compiles
+    // When cross-compiling, use host shim; otherwise use target shim (they're the same)
+    if (copy_host_shim) |host_copy| {
+        bootstrap_exe.step.dependOn(&host_copy.step);
+    } else {
+        bootstrap_exe.step.dependOn(&copy_shim.step);
+    }
 
     // Note: We don't install the bootstrap compiler to avoid potential
     // dependency ordering issues on Windows. It's only used at build time.
