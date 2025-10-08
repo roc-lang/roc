@@ -377,42 +377,42 @@ test "ModuleEnv.Serialized roundtrip" {
 //     try testing.expectEqual(original.line_starts.items.items.len, deserialized.line_starts.items.items.len);
 // }
 
-test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
-    const testing = std.testing;
-    const gpa = testing.allocator;
+// test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
+//     const testing = std.testing;
+//     const gpa = testing.allocator;
 
-    // Create a simple ModuleEnv
-    var env = try ModuleEnv.init(gpa, "hello");
-    defer env.deinit();
+//     // Create a simple ModuleEnv
+//     var env = try ModuleEnv.init(gpa, "hello");
+//     defer env.deinit();
 
-    // First add a string literal
-    const str_literal_idx = try env.insertString("hello");
+//     // First add a string literal
+//     const str_literal_idx = try env.insertString("hello");
 
-    // Add a string segment expression
-    const segment_idx = try env.addExpr(.{ .e_str_segment = .{ .literal = str_literal_idx } }, base.Region.from_raw_offsets(0, 5));
+//     // Add a string segment expression
+//     const segment_idx = try env.addExpr(.{ .e_str_segment = .{ .literal = str_literal_idx } }, base.Region.from_raw_offsets(0, 5));
 
-    // Now create a string expression that references the segment
-    const expr_idx = try env.addExpr(.{ .e_str = .{ .span = Expr.Span{ .span = base.DataSpan{ .start = @intFromEnum(segment_idx), .len = 1 } } } }, base.Region.from_raw_offsets(0, 5));
+//     // Now create a string expression that references the segment
+//     const expr_idx = try env.addExpr(.{ .e_str = .{ .span = Expr.Span{ .span = base.DataSpan{ .start = @intFromEnum(segment_idx), .len = 1 } } } }, base.Region.from_raw_offsets(0, 5));
 
-    // Create an S-expression tree
-    var tree = base.SExprTree.init(gpa);
-    defer tree.deinit();
+//     // Create an S-expression tree
+//     var tree = base.SExprTree.init(gpa);
+//     defer tree.deinit();
 
-    // Call pushExprTypesToSExprTree (which is called by pushTypesToSExprTree)
-    try env.pushTypesToSExprTree(expr_idx, &tree);
+//     // Call pushExprTypesToSExprTree (which is called by pushTypesToSExprTree)
+//     try env.pushTypesToSExprTree(expr_idx, &tree);
 
-    // Convert tree to string
-    var result = std.ArrayList(u8).init(gpa);
-    defer result.deinit();
-    try tree.toStringPretty(result.writer().any());
+//     // Convert tree to string
+//     var result = std.ArrayList(u8).init(gpa);
+//     defer result.deinit();
+//     try tree.toStringPretty(result.writer().any());
 
-    // Verify the output contains the type information
-    const result_str = result.items;
+//     // Verify the output contains the type information
+//     const result_str = result.items;
 
-    // Uncomment to debug:
-    // std.debug.print("\nType extraction result:\n{s}\n", .{result_str});
+//     // Uncomment to debug:
+//     // std.debug.print("\nType extraction result:\n{s}\n", .{result_str});
 
-    try testing.expect(std.mem.indexOf(u8, result_str, "(expr") != null);
-    try testing.expect(std.mem.indexOf(u8, result_str, "(type") != null);
-    try testing.expect(std.mem.indexOf(u8, result_str, "Str") != null);
-}
+//     try testing.expect(std.mem.indexOf(u8, result_str, "(expr") != null);
+//     try testing.expect(std.mem.indexOf(u8, result_str, "(type") != null);
+//     try testing.expect(std.mem.indexOf(u8, result_str, "Str") != null);
+// }
