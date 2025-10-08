@@ -409,7 +409,14 @@ fn addMainExe(
             }),
             .linkage = .static,
         });
-        roc_modules.addAll(host_shim_lib);
+        // Add only the modules the shim actually needs (not bundle/zstd)
+        host_shim_lib.root_module.addImport("builtins", roc_modules.builtins);
+        host_shim_lib.root_module.addImport("base", roc_modules.base);
+        host_shim_lib.root_module.addImport("can", roc_modules.can);
+        host_shim_lib.root_module.addImport("types", roc_modules.types);
+        host_shim_lib.root_module.addImport("eval", roc_modules.eval);
+        host_shim_lib.root_module.addImport("ipc", roc_modules.ipc);
+        host_shim_lib.root_module.link_libc = true;
         host_shim_lib.addObject(host_builtins_obj);
         host_shim_lib.bundle_compiler_rt = true;
 
@@ -440,7 +447,14 @@ fn addMainExe(
         }),
         .linkage = .static,
     });
-    roc_modules.addAll(shim_lib);
+    // Add only the modules the shim actually needs (not bundle/zstd)
+    shim_lib.root_module.addImport("builtins", roc_modules.builtins);
+    shim_lib.root_module.addImport("base", roc_modules.base);
+    shim_lib.root_module.addImport("can", roc_modules.can);
+    shim_lib.root_module.addImport("types", roc_modules.types);
+    shim_lib.root_module.addImport("eval", roc_modules.eval);
+    shim_lib.root_module.addImport("ipc", roc_modules.ipc);
+    shim_lib.root_module.link_libc = true;
     shim_lib.addObject(builtins_obj);
     shim_lib.bundle_compiler_rt = true;
 
@@ -474,10 +488,10 @@ fn addMainExe(
     );
     bootstrap_roc_modules.addAll(bootstrap_exe);
 
-    // Bootstrap compiler needs a shim library to be in place before it compiles
-    // When cross-compiling, use host shim; otherwise use target shim (they're the same)
-    if (copy_host_shim) |host_copy| {
-        bootstrap_exe.step.dependOn(&host_copy.step);
+    // Bootstrap compiler needs the shim library to be in place before it compiles
+    // When cross-compiling, it needs the host shim. When not, it uses the target shim.
+    if (copy_host_shim) |host_shim| {
+        bootstrap_exe.step.dependOn(&host_shim.step);
     } else {
         bootstrap_exe.step.dependOn(&copy_shim.step);
     }
