@@ -136,15 +136,15 @@ pub fn freezeInterners(self: *Self) void {
 
 /// Records a diagnostic error during canonicalization without blocking compilation.
 pub fn pushDiagnostic(self: *Self, reason: CIR.Diagnostic) std.mem.Allocator.Error!void {
-    _ = try self.addDiagnosticAndTypeVar(reason, .err);
+    _ = try self.addDiagnostic(reason);
 }
 
 /// Creates a malformed node that represents a runtime error in the IR.
 pub fn pushMalformed(self: *Self, comptime RetIdx: type, reason: CIR.Diagnostic) std.mem.Allocator.Error!RetIdx {
     comptime if (!isCastable(RetIdx)) @compileError("Idx type " ++ @typeName(RetIdx) ++ " is not castable");
-    const diag_idx = try self.addDiagnosticAndTypeVar(reason, .err);
+    const diag_idx = try self.addDiagnostic(reason);
     const region = getDiagnosticRegion(reason);
-    const malformed_idx = try self.addMalformedAndTypeVar(diag_idx, .err, region);
+    const malformed_idx = try self.addMalformed(diag_idx, region);
     return castIdx(Node.Idx, RetIdx, malformed_idx);
 }
 
@@ -1519,17 +1519,16 @@ pub fn containsExposedById(self: *const Self, ident_idx: Ident.Idx) bool {
     return self.common.exposed_items.containsById(self.gpa, @bitCast(ident_idx));
 }
 
-/// Assert that nodes, regions and types are all in sync
+/// Assert that nodes and regions are in sync
 pub inline fn debugAssertArraysInSync(self: *const Self) void {
     if (builtin.mode == .Debug) {
         const cir_nodes = self.store.nodes.items.len;
         const region_nodes = self.store.regions.len();
-        const type_nodes = self.types.len();
 
-        if (!(cir_nodes == region_nodes and region_nodes == type_nodes)) {
+        if (!(cir_nodes == region_nodes)) {
             std.debug.panic(
-                "Arrays out of sync:\n  cir_nodes={}\n  region_nodes={}\n  type_nodes={}\n",
-                .{ cir_nodes, region_nodes, type_nodes },
+                "Arrays out of sync:\n  cir_nodes={}\n  region_nodes={}\n",
+                .{ cir_nodes, region_nodes },
             );
         }
     }
@@ -1550,309 +1549,171 @@ inline fn debugAssertIdxsEql(comptime desc: []const u8, idx1: anytype, idx2: any
     }
 }
 
-/// Add a new expression and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addDefAndTypeVar(self: *Self, expr: CIR.Def, content: types_mod.Content, region: Region) std.mem.Allocator.Error!CIR.Def.Idx {
+/// Add a new expression to the node store.
+/// This function asserts that the nodes and regions are in sync.
+pub fn addDef(self: *Self, expr: CIR.Def, region: Region) std.mem.Allocator.Error!CIR.Def.Idx {
     const expr_idx = try self.store.addDef(expr, region);
-    const expr_var = try self.types.freshFromContent(content);
-    debugAssertIdxsEql("self", expr_idx, expr_var);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
 
-/// Add a new expression and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addTypeHeaderAndTypeVar(self: *Self, expr: CIR.TypeHeader, content: types_mod.Content, region: Region) std.mem.Allocator.Error!CIR.TypeHeader.Idx {
+/// Add a new type header to the node store.
+/// This function asserts that the nodes and regions are in sync.
+pub fn addTypeHeader(self: *Self, expr: CIR.TypeHeader, region: Region) std.mem.Allocator.Error!CIR.TypeHeader.Idx {
     const expr_idx = try self.store.addTypeHeader(expr, region);
-    const expr_var = try self.types.freshFromContent(content);
-    debugAssertIdxsEql("addTypeHeaderAndTypeVar", expr_idx, expr_var);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
 
-/// Add a new expression and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addStatementAndTypeVar(self: *Self, expr: CIR.Statement, content: types_mod.Content, region: Region) std.mem.Allocator.Error!CIR.Statement.Idx {
+/// Add a new statement to the node store.
+/// This function asserts that the nodes and regions are in sync.
+pub fn addStatement(self: *Self, expr: CIR.Statement, region: Region) std.mem.Allocator.Error!CIR.Statement.Idx {
     const expr_idx = try self.store.addStatement(expr, region);
-    const expr_var = try self.types.freshFromContent(content);
-    debugAssertIdxsEql("addStatementAndTypeVar", expr_idx, expr_var);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
 
-/// Add a new expression and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addStatementAndTypeVarRedirect(self: *Self, expr: CIR.Statement, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!CIR.Statement.Idx {
-    const expr_idx = try self.store.addStatement(expr, region);
-    const expr_var = try self.types.freshRedirect(redirect_to);
-    debugAssertIdxsEql("addStatementAndTypeVarRedirect", expr_idx, expr_var);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
-/// Add a new expression and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addPatternAndTypeVar(self: *Self, expr: CIR.Pattern, content: types_mod.Content, region: Region) std.mem.Allocator.Error!CIR.Pattern.Idx {
+/// Add a new pattern to the node store.
+/// This function asserts that the nodes and regions are in sync.
+pub fn addPattern(self: *Self, expr: CIR.Pattern, region: Region) std.mem.Allocator.Error!CIR.Pattern.Idx {
     const expr_idx = try self.store.addPattern(expr, region);
-    const expr_var = try self.types.freshFromContent(content);
-    debugAssertIdxsEql("addPatternAndTypeVar", expr_idx, expr_var);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
 
-/// Add a new expression and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addPatternAndTypeVarRedirect(self: *Self, expr: CIR.Pattern, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!CIR.Pattern.Idx {
-    const expr_idx = try self.store.addPattern(expr, region);
-    const expr_var = try self.types.freshRedirect(redirect_to);
-    debugAssertIdxsEql("addPatternAndTypeVar", expr_idx, expr_var);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
-
-/// Add a new expression and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addExprAndTypeVar(self: *Self, expr: CIR.Expr, content: types_mod.Content, region: Region) std.mem.Allocator.Error!CIR.Expr.Idx {
+/// Add a new expression to the node store.
+/// This function asserts that the nodes and regions are in sync.
+pub fn addExpr(self: *Self, expr: CIR.Expr, region: Region) std.mem.Allocator.Error!CIR.Expr.Idx {
     const expr_idx = try self.store.addExpr(expr, region);
-    const expr_var = try self.types.freshFromContent(content);
-    debugAssertIdxsEql("addExprAndTypeVar", expr_idx, expr_var);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
 
-/// Add a new expression and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addExprAndTypeVarRedirect(self: *Self, expr: CIR.Expr, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!CIR.Expr.Idx {
-    const expr_idx = try self.store.addExpr(expr, region);
-    const expr_var = try self.types.freshRedirect(redirect_to);
-    debugAssertIdxsEql("addExprAndTypeVarRedirect", expr_idx, expr_var);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
-
-/// Add a new capture and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addCaptureAndTypeVar(self: *Self, capture: CIR.Expr.Capture, content: types_mod.Content, region: Region) std.mem.Allocator.Error!CIR.Expr.Capture.Idx {
+/// Add a new capture to the node store.
+/// This function asserts that the nodes and regions are in sync.
+pub fn addCapture(self: *Self, capture: CIR.Expr.Capture, region: Region) std.mem.Allocator.Error!CIR.Expr.Capture.Idx {
     const capture_idx = try self.store.addCapture(capture, region);
-    const capture_var = try self.types.freshFromContent(content);
-    debugAssertIdxsEql("addCaptureAndTypeVar", capture_idx, capture_var);
     self.debugAssertArraysInSync();
     return capture_idx;
 }
 
-/// Add a new expression and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addRecordFieldAndTypeVar(self: *Self, expr: CIR.RecordField, content: types_mod.Content, region: Region) std.mem.Allocator.Error!CIR.RecordField.Idx {
+/// Add a new record field to the node store.
+/// This function asserts that the nodes and regions are in sync.
+pub fn addRecordField(self: *Self, expr: CIR.RecordField, region: Region) std.mem.Allocator.Error!CIR.RecordField.Idx {
     const expr_idx = try self.store.addRecordField(expr, region);
-    const expr_var = try self.types.freshFromContent(content);
-    debugAssertIdxsEql("addRecordFieldAndTypeVar", expr_idx, expr_var);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
 
-/// Add a new expression and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addRecordDestructAndTypeVar(self: *Self, expr: CIR.Pattern.RecordDestruct, content: types_mod.Content, region: Region) std.mem.Allocator.Error!CIR.Pattern.RecordDestruct.Idx {
+/// Add a new record destructuring to the node store.
+/// This function asserts that the nodes and regions are in sync.
+pub fn addRecordDestruct(self: *Self, expr: CIR.Pattern.RecordDestruct, region: Region) std.mem.Allocator.Error!CIR.Pattern.RecordDestruct.Idx {
     const expr_idx = try self.store.addRecordDestruct(expr, region);
-    const expr_var = try self.types.freshFromContent(content);
-    debugAssertIdxsEql("addRecordDestructorAndTypeVar", expr_idx, expr_var);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
 
-/// Add a new expression and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addIfBranchAndTypeVar(self: *Self, expr: CIR.Expr.IfBranch, content: types_mod.Content, region: Region) std.mem.Allocator.Error!CIR.Expr.IfBranch.Idx {
+/// Adds a new if branch to the store.
+/// This function asserts that the nodes and regions are in sync.
+pub fn addIfBranch(self: *Self, expr: CIR.Expr.IfBranch, region: Region) std.mem.Allocator.Error!CIR.Expr.IfBranch.Idx {
     const expr_idx = try self.store.addIfBranch(expr, region);
-    const expr_var = try self.types.freshFromContent(content);
-    debugAssertIdxsEql("addIfBranchAndTypeVar", expr_idx, expr_var);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
 
-/// Add a new expression and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addMatchBranchAndTypeVar(self: *Self, expr: CIR.Expr.Match.Branch, content: types_mod.Content, region: Region) std.mem.Allocator.Error!CIR.Expr.Match.Branch.Idx {
+/// Add a new match branch to the node store.
+/// This function asserts that the nodes and regions are in sync.
+pub fn addMatchBranch(self: *Self, expr: CIR.Expr.Match.Branch, region: Region) std.mem.Allocator.Error!CIR.Expr.Match.Branch.Idx {
     const expr_idx = try self.store.addMatchBranch(expr, region);
-    const expr_var = try self.types.freshFromContent(content);
-    debugAssertIdxsEql("addMatchBranchAndTypeVar", expr_idx, expr_var);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
 
-/// Add a new expression and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addWhereClauseAndTypeVar(self: *Self, expr: CIR.WhereClause, content: types_mod.Content, region: Region) std.mem.Allocator.Error!CIR.WhereClause.Idx {
+/// Add a new where clause to the node store.
+/// This function asserts that the nodes and regions are in sync.
+pub fn addWhereClause(self: *Self, expr: CIR.WhereClause, region: Region) std.mem.Allocator.Error!CIR.WhereClause.Idx {
     const expr_idx = try self.store.addWhereClause(expr, region);
-    const expr_var = try self.types.freshFromContent(content);
-    debugAssertIdxsEql("addWhereClauseAndTypeVar", expr_idx, expr_var);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
 
-/// Add a new expression and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addTypeAnnoAndTypeVar(self: *Self, expr: CIR.TypeAnno, content: types_mod.Content, region: Region) std.mem.Allocator.Error!CIR.TypeAnno.Idx {
+/// Add a new type annotation to the node store.
+/// This function asserts that the nodes and regions are in sync.
+pub fn addTypeAnno(self: *Self, expr: CIR.TypeAnno, region: Region) std.mem.Allocator.Error!CIR.TypeAnno.Idx {
     const expr_idx = try self.store.addTypeAnno(expr, region);
-    const expr_var = try self.types.freshFromContent(content);
-    debugAssertIdxsEql("addTypeAnnoAndTypeVar", expr_idx, expr_var);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
 
-/// Add a new expression and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addTypeAnnoAndTypeVarRedirect(self: *Self, expr: CIR.TypeAnno, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!CIR.TypeAnno.Idx {
-    const expr_idx = try self.store.addTypeAnno(expr, region);
-    const expr_var = try self.types.freshRedirect(redirect_to);
-    debugAssertIdxsEql("addTypeAnnoAndTypeVarRedirect", expr_idx, expr_var);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
-
-/// Add a new expression and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addAnnotationAndTypeVar(self: *Self, expr: CIR.Annotation, content: types_mod.Content, region: Region) std.mem.Allocator.Error!CIR.Annotation.Idx {
+/// Add a new annotation to the node store.
+/// This function asserts that the nodes and regions are in sync.
+pub fn addAnnotation(self: *Self, expr: CIR.Annotation, region: Region) std.mem.Allocator.Error!CIR.Annotation.Idx {
     const expr_idx = try self.store.addAnnotation(expr, region);
-    const expr_var = try self.types.freshFromContent(content);
-    debugAssertIdxsEql("addAnnotationAndTypeVar", expr_idx, expr_var);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
 
-/// Add a new expression and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addAnnotationAndTypeVarRedirect(self: *Self, expr: CIR.Annotation, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!CIR.Annotation.Idx {
-    const expr_idx = try self.store.addAnnotation(expr, region);
-    const expr_var = try self.types.freshRedirect(redirect_to);
-    debugAssertIdxsEql("addAnnotationAndTypeVar", expr_idx, expr_var);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
-
-/// Add a new expression and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addAnnoRecordFieldAndTypeVar(self: *Self, expr: CIR.TypeAnno.RecordField, content: types_mod.Content, region: Region) std.mem.Allocator.Error!CIR.TypeAnno.RecordField.Idx {
+/// Add a new record field to the node store.
+/// This function asserts that the nodes and regions are in sync.
+pub fn addAnnoRecordField(self: *Self, expr: CIR.TypeAnno.RecordField, region: Region) std.mem.Allocator.Error!CIR.TypeAnno.RecordField.Idx {
     const expr_idx = try self.store.addAnnoRecordField(expr, region);
-    const expr_var = try self.types.freshFromContent(content);
-    debugAssertIdxsEql("addAnnoRecordFieldAndTypeVar", expr_idx, expr_var);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
 
-/// Add a new expression and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addAnnoRecordFieldAndTypeVarRedirect(self: *Self, expr: CIR.TypeAnno.RecordField, redirect_to: TypeVar, region: Region) std.mem.Allocator.Error!CIR.TypeAnno.RecordField.Idx {
-    const expr_idx = try self.store.addAnnoRecordField(expr, region);
-    const expr_var = try self.types.freshRedirect(redirect_to);
-    debugAssertIdxsEql("addAnnoRecordFieldAndTypeVar", expr_idx, expr_var);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
-
-/// Add a new expression and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addExposedItemAndTypeVar(self: *Self, expr: CIR.ExposedItem, content: types_mod.Content, region: Region) std.mem.Allocator.Error!CIR.ExposedItem.Idx {
+/// Add a new exposed item to the node store.
+/// This function asserts that the nodes and regions are in sync.
+pub fn addExposedItem(self: *Self, expr: CIR.ExposedItem, region: Region) std.mem.Allocator.Error!CIR.ExposedItem.Idx {
     const expr_idx = try self.store.addExposedItem(expr, region);
-    const expr_var = try self.types.freshFromContent(content);
-    debugAssertIdxsEql("addExposedItemAndTypeVar", expr_idx, expr_var);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
 
-/// Add a diagnostic without creating a corresponding type variable.
+/// Add a diagnostic.
+/// This function asserts that the nodes and regions are in sync.
 pub fn addDiagnostic(self: *Self, reason: CIR.Diagnostic) std.mem.Allocator.Error!CIR.Diagnostic.Idx {
-    return self.store.addDiagnostic(reason);
-}
-
-/// Add a new expression and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addDiagnosticAndTypeVar(self: *Self, reason: CIR.Diagnostic, content: types_mod.Content) std.mem.Allocator.Error!CIR.Diagnostic.Idx {
     const expr_idx = try self.store.addDiagnostic(reason);
-    const expr_var = try self.types.freshFromContent(content);
-    debugAssertIdxsEql("addDiagnosticAndTypeVar", expr_idx, expr_var);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
 
-/// Add a new expression and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addMalformedAndTypeVar(self: *Self, diagnostic_idx: CIR.Diagnostic.Idx, content: types_mod.Content, region: Region) std.mem.Allocator.Error!CIR.Node.Idx {
+/// Add a new malformed node to the node store.
+/// This function asserts that the nodes and regions are in sync.
+pub fn addMalformed(self: *Self, diagnostic_idx: CIR.Diagnostic.Idx, region: Region) std.mem.Allocator.Error!CIR.Node.Idx {
     const malformed_idx = try self.store.addMalformed(diagnostic_idx, region);
-    const malformed_var = try self.types.freshFromContent(content);
-    debugAssertIdxsEql("addMalformedAndTypeVar", malformed_idx, malformed_var);
     self.debugAssertArraysInSync();
     return malformed_idx;
 }
 
-/// Add a new match branch pattern and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addMatchBranchPatternAndTypeVar(self: *Self, expr: CIR.Expr.Match.BranchPattern, content: types_mod.Content, region: Region) std.mem.Allocator.Error!CIR.Expr.Match.BranchPattern.Idx {
+/// Add a new match branch pattern to the node store.
+/// This function asserts that the nodes and regions are in sync.
+pub fn addMatchBranchPattern(self: *Self, expr: CIR.Expr.Match.BranchPattern, region: Region) std.mem.Allocator.Error!CIR.Expr.Match.BranchPattern.Idx {
     const expr_idx = try self.store.addMatchBranchPattern(expr, region);
-    const expr_var = try self.types.freshFromContent(content);
-    debugAssertIdxsEql("addMatchBranchPatternAndTypeVar", expr_idx, expr_var);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
 
-/// Add a new pattern record field and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addPatternRecordFieldAndTypeVar(self: *Self, expr: CIR.PatternRecordField, content: types_mod.Content, region: Region) std.mem.Allocator.Error!CIR.PatternRecordField.Idx {
+/// Add a new pattern record field to the node store.
+/// This function asserts that the nodes and regions are in sync.
+pub fn addPatternRecordField(self: *Self, expr: CIR.PatternRecordField, region: Region) std.mem.Allocator.Error!CIR.PatternRecordField.Idx {
     _ = region;
     const expr_idx = try self.store.addPatternRecordField(expr);
-    const expr_var = try self.types.freshFromContent(content);
-    debugAssertIdxsEql("addPatternRecordFieldAndTypeVar", expr_idx, expr_var);
     self.debugAssertArraysInSync();
     return expr_idx;
 }
 
-/// Add a new expression and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addTypeSlotAndTypeVar(
+/// Add a new type variable to the node store.
+/// This function asserts that the nodes and regions are in sync.
+pub fn addTypeSlot(
     self: *Self,
     parent_node: CIR.Node.Idx,
-    content: types_mod.Content,
     region: Region,
     comptime RetIdx: type,
 ) std.mem.Allocator.Error!RetIdx {
     comptime if (!isCastable(RetIdx)) @compileError("Idx type " ++ @typeName(RetIdx) ++ " is not castable");
     const node_idx = try self.store.addTypeVarSlot(parent_node, region);
-    const node_var = try self.types.freshFromContent(content);
-    debugAssertIdxsEql("addTypeSlotAndTypeVar", node_idx, node_var);
     self.debugAssertArraysInSync();
     return @enumFromInt(@intFromEnum(node_idx));
-}
-
-/// Add a new expression and type variable.
-/// This function asserts that the types array and the nodes are in sync.
-pub fn addTypeSlotAndTypeVarRedirect(
-    self: *Self,
-    parent_node: CIR.Node.Idx,
-    redirect_to: TypeVar,
-    region: Region,
-    comptime RetIdx: type,
-) std.mem.Allocator.Error!RetIdx {
-    comptime if (!isCastable(RetIdx)) @compileError("Idx type " ++ @typeName(RetIdx) ++ " is not castable");
-    const node_idx = try self.store.addTypeVarSlot(parent_node, region);
-    const node_var = try self.types.freshRedirect(redirect_to);
-    debugAssertIdxsEql("addTypeSlotAndTypeVarRedirect", node_idx, node_var);
-    self.debugAssertArraysInSync();
-    return @enumFromInt(@intFromEnum(node_idx));
-}
-
-/// Function that redirects an existing node to the provided var.
-/// Assert that the requested idx in in bounds
-pub fn redirectTypeTo(
-    self: *Self,
-    comptime FromIdx: type,
-    at_idx: FromIdx,
-    redirect_to: types_mod.Var,
-) std.mem.Allocator.Error!void {
-    comptime if (!isCastable(FromIdx)) @compileError("Idx type " ++ @typeName(FromIdx) ++ " is not castable");
-    self.debugAssertArraysInSync();
-    std.debug.assert(@intFromEnum(at_idx) < self.types.len());
-
-    const var_ = varFrom(at_idx);
-    try self.types.setVarRedirect(var_, redirect_to);
 }
 
 /// Adds an external declaration and returns its index
