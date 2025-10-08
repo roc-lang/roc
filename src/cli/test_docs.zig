@@ -163,10 +163,11 @@ test "generatePackageIndex with imported modules" {
     {
         const shorthands = [_][]const u8{"pf"};
 
+        const empty_items = [_]main.AssociatedItem{};
         var modules = [_]main.ModuleInfo{
-            .{ .name = try gpa.dupe(u8, "Foo"), .link_path = try gpa.dupe(u8, "Foo") },
-            .{ .name = try gpa.dupe(u8, "Bar"), .link_path = try gpa.dupe(u8, "Bar") },
-            .{ .name = try gpa.dupe(u8, "pf.Stdout"), .link_path = try gpa.dupe(u8, "pf/Stdout") },
+            .{ .name = try gpa.dupe(u8, "Foo"), .link_path = try gpa.dupe(u8, "Foo"), .associated_items = &empty_items },
+            .{ .name = try gpa.dupe(u8, "Bar"), .link_path = try gpa.dupe(u8, "Bar"), .associated_items = &empty_items },
+            .{ .name = try gpa.dupe(u8, "pf.Stdout"), .link_path = try gpa.dupe(u8, "pf/Stdout"), .associated_items = &empty_items },
         };
         defer for (modules) |mod| mod.deinit(gpa);
 
@@ -246,10 +247,11 @@ test "module deduplication" {
     {
         const shorthands = [_][]const u8{};
 
+        const empty_items = [_]main.AssociatedItem{};
         // Create same module twice - simulating what would happen if multiple files import it
         var modules = [_]main.ModuleInfo{
-            .{ .name = try gpa.dupe(u8, "Foo"), .link_path = try gpa.dupe(u8, "Foo") },
-            .{ .name = try gpa.dupe(u8, "pf.Stdout"), .link_path = try gpa.dupe(u8, "pf/Stdout") },
+            .{ .name = try gpa.dupe(u8, "Foo"), .link_path = try gpa.dupe(u8, "Foo"), .associated_items = &empty_items },
+            .{ .name = try gpa.dupe(u8, "pf.Stdout"), .link_path = try gpa.dupe(u8, "pf/Stdout"), .associated_items = &empty_items },
             // Foo appears again - but should only show up once in output
         };
         defer for (modules) |mod| mod.deinit(gpa);
@@ -270,5 +272,79 @@ test "module deduplication" {
 
         // Each module should only appear once in the sidebar
         try testing.expectEqual(@as(usize, 1), count);
+    }
+}
+
+test "nested associated items in sidebar" {
+    const gpa = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const tmp_path = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(tmp_path);
+
+    // Create a module with nested associated items like:
+    // Foo := [Bar, Baz].{ OtherThing := [Etc].{ stuff = "" } thing = {} }
+    {
+        const shorthands = [_][]const u8{};
+
+        // Build the nested structure: stuff is child of OtherThing
+        const stuff_item = main.AssociatedItem{
+            .name = try gpa.dupe(u8, "stuff"),
+            .children = &[_]main.AssociatedItem{},
+        };
+        const stuff_items = try gpa.dupe(main.AssociatedItem, &[_]main.AssociatedItem{stuff_item});
+
+        // OtherThing has stuff as a child
+        const other_thing = main.AssociatedItem{
+            .name = try gpa.dupe(u8, "OtherThing"),
+            .children = stuff_items,
+        };
+
+        // thing has no children
+        const thing_item = main.AssociatedItem{
+            .name = try gpa.dupe(u8, "thing"),
+            .children = &[_]main.AssociatedItem{},
+        };
+
+        // Foo has both OtherThing and thing as children
+        const foo_items = try gpa.dupe(main.AssociatedItem, &[_]main.AssociatedItem{ other_thing, thing_item });
+
+        var modules = [_]main.ModuleInfo{
+            .{
+                .name = try gpa.dupe(u8, "Foo"),
+                .link_path = try gpa.dupe(u8, "Foo"),
+                .associated_items = foo_items,
+            },
+        };
+        defer for (modules) |mod| mod.deinit(gpa);
+
+        try main.generatePackageIndex(gpa, tmp_path, "root.roc", &shorthands, &modules);
+
+        const content = try tmp.dir.readFileAlloc(gpa, "index.html", 10000);
+        defer gpa.free(content);
+
+        // Verify the nested structure exists
+        try testing.expect(std.mem.indexOf(u8, content, "<a href=\"Foo\">Foo</a>") != null);
+        try testing.expect(std.mem.indexOf(u8, content, "<li>OtherThing") != null);
+        try testing.expect(std.mem.indexOf(u8, content, "<li>thing") != null);
+        try testing.expect(std.mem.indexOf(u8, content, "<li>stuff") != null);
+
+        // Verify nested <ul> structure - OtherThing should have a nested <ul> for stuff
+        // The structure should be: <li>OtherThing ... <ul> ... <li>stuff
+        const other_thing_pos = std.mem.indexOf(u8, content, "<li>OtherThing").?;
+        const stuff_pos = std.mem.indexOf(u8, content, "<li>stuff").?;
+        try testing.expect(stuff_pos > other_thing_pos);
+
+        // Verify that there are nested <ul> tags (multiple levels)
+        var ul_count: usize = 0;
+        var search_start: usize = 0;
+        while (std.mem.indexOfPos(u8, content, search_start, "<ul>")) |pos| {
+            ul_count += 1;
+            search_start = pos + 4;
+        }
+        // Should have at least 2 <ul> tags: one for the sidebar, and one for nested items
+        try testing.expect(ul_count >= 2);
     }
 }

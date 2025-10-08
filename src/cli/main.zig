@@ -3034,16 +3034,61 @@ fn rocDocs(gpa: Allocator, args: cli_args.DocsArgs) !void {
     stdout.print("\nDocumentation generation complete for {s}", .{args.path}) catch {};
 }
 
+/// Associated item (type or value) within a module or type
+pub const AssociatedItem = struct {
+    name: []const u8,
+    children: []AssociatedItem, // Nested associated items (for types with associated items)
+
+    fn deinit(self: AssociatedItem, gpa: Allocator) void {
+        gpa.free(self.name);
+        for (self.children) |child| {
+            child.deinit(gpa);
+        }
+        gpa.free(self.children);
+    }
+};
+
 /// Information about an imported module
-const ModuleInfo = struct {
+pub const ModuleInfo = struct {
     name: []const u8, // e.g., "Foo" or "foo.Bar"
     link_path: []const u8, // e.g., "Foo" or "foo/Bar"
+    associated_items: []AssociatedItem, // Types and values defined in this module
 
     fn deinit(self: ModuleInfo, gpa: Allocator) void {
         gpa.free(self.name);
         gpa.free(self.link_path);
+        for (self.associated_items) |item| {
+            item.deinit(gpa);
+        }
+        gpa.free(self.associated_items);
     }
 };
+
+/// Recursively write associated items as nested <ul> elements
+fn writeAssociatedItems(writer: anytype, items: []const AssociatedItem, indent_level: usize) !void {
+    // Write opening <ul>
+    try writer.writeByteNTimes(' ', indent_level * 2);
+    try writer.writeAll("<ul>\n");
+
+    for (items) |item| {
+        // Write <li> with item name
+        try writer.writeByteNTimes(' ', (indent_level + 1) * 2);
+        try writer.print("<li>{s}\n", .{item.name});
+
+        // Recursively write children if any
+        if (item.children.len > 0) {
+            try writeAssociatedItems(writer, item.children, indent_level + 2);
+        }
+
+        // Close <li>
+        try writer.writeByteNTimes(' ', (indent_level + 1) * 2);
+        try writer.writeAll("</li>\n");
+    }
+
+    // Write closing </ul>
+    try writer.writeByteNTimes(' ', indent_level * 2);
+    try writer.writeAll("</ul>\n");
+}
 
 /// Generate HTML index file for a package or app
 pub fn generatePackageIndex(
@@ -3081,7 +3126,14 @@ pub fn generatePackageIndex(
     if (imported_modules.len > 0) {
         try writer.writeAll("  <ul class='sidebar'>\n");
         for (imported_modules) |mod_info| {
-            try writer.print("    <li><a href=\"{s}\">{s}</a></li>\n", .{ mod_info.link_path, mod_info.name });
+            try writer.print("    <li>\n      <a href=\"{s}\">{s}</a>\n", .{ mod_info.link_path, mod_info.name });
+
+            // Write nested associated items if any
+            if (mod_info.associated_items.len > 0) {
+                try writeAssociatedItems(writer, mod_info.associated_items, 3);
+            }
+
+            try writer.writeAll("    </li>\n");
         }
         try writer.writeAll("  </ul>\n");
     }
@@ -3129,6 +3181,116 @@ pub fn generateModuleIndex(
     try writer.print("  <h1>{s}</h1>\n", .{module_name});
 
     try writer.writeAll("</body>\n</html>\n");
+}
+
+/// Extract associated items from a record expression (recursively)
+fn extractRecordAssociatedItems(
+    gpa: Allocator,
+    module_env: *const ModuleEnv,
+    record_fields: can.CIR.RecordField.Span,
+) ![]AssociatedItem {
+    var items = std.ArrayList(AssociatedItem).init(gpa);
+    errdefer {
+        for (items.items) |item| {
+            item.deinit(gpa);
+        }
+        items.deinit();
+    }
+
+    const fields_slice = module_env.store.sliceRecordFields(record_fields);
+    for (fields_slice) |field_idx| {
+        const field = module_env.store.getRecordField(field_idx);
+        const field_name = try gpa.dupe(u8, module_env.getIdentText(field.name));
+        errdefer gpa.free(field_name);
+
+        // Check if the field value is a nominal type (has nested associated items)
+        const field_expr = module_env.store.getExpr(field.value);
+        const children = switch (field_expr) {
+            .e_nominal => |nom| blk: {
+                // Get the nominal type's backing expression
+                const backing_expr = module_env.store.getExpr(nom.backing_expr);
+                break :blk switch (backing_expr) {
+                    .e_record => |rec| try extractRecordAssociatedItems(gpa, module_env, rec.fields),
+                    else => try gpa.alloc(AssociatedItem, 0),
+                };
+            },
+            else => try gpa.alloc(AssociatedItem, 0),
+        };
+
+        try items.append(.{
+            .name = field_name,
+            .children = children,
+        });
+    }
+
+    return try items.toOwnedSlice();
+}
+
+/// Extract associated items from a module's exports
+fn extractAssociatedItems(
+    gpa: Allocator,
+    module_env: *const ModuleEnv,
+) ![]AssociatedItem {
+    var items = std.ArrayList(AssociatedItem).init(gpa);
+    errdefer {
+        for (items.items) |item| {
+            item.deinit(gpa);
+        }
+        items.deinit();
+    }
+
+    // Get all exported definitions
+    const exports_slice = module_env.store.sliceDefs(module_env.exports);
+
+    for (exports_slice) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+
+        // Get the pattern to find the name
+        const pattern = module_env.store.getPattern(def.pattern);
+
+        // Extract name from pattern (could be assign, nominal, etc.)
+        const name_ident_opt = switch (pattern) {
+            .assign => |a| a.ident,
+            .nominal => |n| blk: {
+                // For nominal types, we need to get the statement and extract the header
+                const stmt = module_env.store.getStatement(n.nominal_type_decl);
+                break :blk switch (stmt) {
+                    .s_nominal_decl => |decl| module_env.store.getTypeHeader(decl.header).name,
+                    else => continue,
+                };
+            },
+            else => continue,
+        };
+
+        const name = try gpa.dupe(u8, module_env.getIdentText(name_ident_opt));
+        errdefer gpa.free(name);
+
+        // Extract nested associated items if this is a nominal type with a record
+        const children = switch (pattern) {
+            .nominal => blk: {
+                // For nominal types, look at the expression to find associated items
+                const expr = module_env.store.getExpr(def.expr);
+                break :blk switch (expr) {
+                    .e_nominal => |nom_expr| blk2: {
+                        const backing = module_env.store.getExpr(nom_expr.backing_expr);
+                        break :blk2 switch (backing) {
+                            .e_record => |record| try extractRecordAssociatedItems(gpa, module_env, record.fields),
+                            else => try gpa.alloc(AssociatedItem, 0),
+                        };
+                    },
+                    else => try gpa.alloc(AssociatedItem, 0),
+                };
+            },
+            else => try gpa.alloc(AssociatedItem, 0),
+        };
+
+        try items.append(.{
+            .name = name,
+            .children = children,
+        });
+    }
+
+    return try items.toOwnedSlice();
 }
 
 /// Generate documentation for the root and all its dependencies and imported modules
@@ -3193,9 +3355,11 @@ fn generateAppDocs(
                     const full_name = try gpa.dupe(u8, ext_import);
                     const link_path = try std.fmt.allocPrint(gpa, "{s}/{s}", .{ pkg_shorthand, module_name });
 
+                    const empty_items = [_]AssociatedItem{};
                     const mod_info = ModuleInfo{
                         .name = full_name,
                         .link_path = link_path,
+                        .associated_items = &empty_items,
                     };
 
                     // Add to map (deduplicates automatically)
@@ -3231,17 +3395,29 @@ fn generateAppDocs(
                         const full_name = try gpa.dupe(u8, module_name);
                         const link_path = try gpa.dupe(u8, module_name);
 
+                        // Extract associated items from the module if it has an env
+                        const associated_items = if (imported_module.env) |*mod_env|
+                            try extractAssociatedItems(gpa, mod_env)
+                        else
+                            try gpa.alloc(AssociatedItem, 0);
+
                         const mod_info = ModuleInfo{
                             .name = full_name,
                             .link_path = link_path,
+                            .associated_items = associated_items,
                         };
 
                         const gop = try modules_map.getOrPut(full_name);
                         if (!gop.found_existing) {
                             gop.value_ptr.* = mod_info;
                         } else {
+                            // Free the duplicates
                             gpa.free(full_name);
                             gpa.free(link_path);
+                            for (associated_items) |item| {
+                                item.deinit(gpa);
+                            }
+                            gpa.free(associated_items);
                         }
 
                         // Generate index.html for this local module
