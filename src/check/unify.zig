@@ -56,6 +56,7 @@ const ModuleEnv = can.ModuleEnv;
 
 const Region = base.Region;
 const Ident = base.Ident;
+const MkSafeList = collections.SafeList;
 
 const SmallStringInterner = collections.SmallStringInterner;
 
@@ -541,7 +542,18 @@ const Unifier = struct {
                 } });
             },
             .alias => |_| self.merge(vars, b_content),
-            .structure => self.merge(vars, b_content),
+            .structure => {
+                if (a_flex.constraints.len() > 0) {
+                    // Record that we need to check constraints later
+                    _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
+                        .constrained_var = vars.a.var_,
+                        .concrete_var = vars.b.var_,
+                        .constraints = a_flex.constraints,
+                    }) catch return Error.AllocatorError;
+                }
+
+                self.merge(vars, b_content);
+            },
             .err => self.merge(vars, .err),
         }
     }
@@ -670,8 +682,16 @@ const Unifier = struct {
         defer trace.end();
 
         switch (b_content) {
-            .flex => |_| {
-                // TODO: Check static dispatch constraints
+            .flex => |b_flex| {
+                if (b_flex.constraints.len() > 0) {
+                    // Record that we need to check constraints later
+                    _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
+                        .constrained_var = vars.b.var_,
+                        .concrete_var = vars.a.var_,
+                        .constraints = b_flex.constraints,
+                    }) catch return Error.AllocatorError;
+                }
+
                 self.merge(vars, Content{ .structure = a_flat_type });
             },
             .rigid => return error.TypeMismatch,
@@ -2976,6 +2996,14 @@ pub const UnifyErrCtx = union(enum) {
     invalid_tag_union_ext: Var,
 };
 
+pub const DeferredConstraintCheck = struct {
+    constrained_var: Var,
+    concrete_var: Var,
+    constraints: StaticDispatchConstraint.SafeList.Range,
+
+    pub const SafeList = MkSafeList(@This());
+};
+
 /// Public helper functions for tests
 pub fn partitionFields(
     ident_store: *const Ident.Store,
@@ -3028,6 +3056,12 @@ pub fn partitionTags(
 ///
 /// TODO: If canonicalization can ensure that record fields/tags are always sorted
 /// then we could switch these to use multi lists.
+///
+/// TODO: Currently, we capture vars created during unifcation in `fresh_vars`
+/// and constraints to check later in `deferred_constraints`. We then copy
+/// these values into other arrays in Check.  In the future, we should consider
+/// passing in references to arrays by the caller of unify. Then we can write
+/// directly into the output arrays and save the extra copying.
 pub const Scratch = struct {
     const Self = @This();
 
@@ -3049,7 +3083,8 @@ pub const Scratch = struct {
     only_in_b_tags: TagSafeList,
     in_both_tags: TwoTagsSafeList,
 
-    // records - used internal by unification
+    // constraints
+    deferred_constraints: DeferredConstraintCheck.SafeList,
     only_in_a_static_dispatch_constraints: StaticDispatchConstraint.SafeList,
     only_in_b_static_dispatch_constraints: StaticDispatchConstraint.SafeList,
     in_both_static_dispatch_constraints: TwoStaticDispatchConstraints.SafeList,
@@ -3074,6 +3109,7 @@ pub const Scratch = struct {
             .only_in_a_tags = try TagSafeList.initCapacity(gpa, 32),
             .only_in_b_tags = try TagSafeList.initCapacity(gpa, 32),
             .in_both_tags = try TwoTagsSafeList.initCapacity(gpa, 32),
+            .deferred_constraints = try DeferredConstraintCheck.SafeList.initCapacity(gpa, 32),
             .only_in_a_static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, 32),
             .only_in_b_static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, 32),
             .in_both_static_dispatch_constraints = try TwoStaticDispatchConstraints.SafeList.initCapacity(gpa, 32),
@@ -3093,6 +3129,7 @@ pub const Scratch = struct {
         self.only_in_a_tags.deinit(self.gpa);
         self.only_in_b_tags.deinit(self.gpa);
         self.in_both_tags.deinit(self.gpa);
+        self.deferred_constraints.deinit(self.gpa);
         self.only_in_a_static_dispatch_constraints.deinit(self.gpa);
         self.only_in_b_static_dispatch_constraints.deinit(self.gpa);
         self.in_both_static_dispatch_constraints.deinit(self.gpa);
@@ -3109,6 +3146,7 @@ pub const Scratch = struct {
         self.only_in_a_tags.items.clearRetainingCapacity();
         self.only_in_b_tags.items.clearRetainingCapacity();
         self.in_both_tags.items.clearRetainingCapacity();
+        self.deferred_constraints.items.clearRetainingCapacity();
         self.only_in_a_static_dispatch_constraints.items.clearRetainingCapacity();
         self.only_in_b_static_dispatch_constraints.items.clearRetainingCapacity();
         self.in_both_static_dispatch_constraints.items.clearRetainingCapacity();

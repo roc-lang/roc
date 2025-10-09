@@ -3885,3 +3885,165 @@ test "unify - empty constraints unify with any" {
     const result = try env.unify(a, b);
     try std.testing.expectEqual(.ok, result);
 }
+
+// capture constraints
+
+test "unify - flex with constraints vs structure captures deferred check" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+
+    // Create constraint: a.to_str : a -> Str
+    const to_str_args = try env.module_env.types.appendVars(&[_]Var{str});
+    const to_str_constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
+        .fn_args = .{ .nonempty = to_str_args },
+        .fn_ret = str,
+    };
+    const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{to_str_constraint});
+
+    const flex_var = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = constraints,
+    } });
+    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+
+    const result = try env.unify(flex_var, structure_var);
+    try std.testing.expectEqual(.ok, result);
+
+    // Check that constraint was captured
+    try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
+    const deferred = env.scratch.deferred_constraints.get(@enumFromInt(0)).*;
+    try std.testing.expectEqual(flex_var, deferred.constrained_var);
+    try std.testing.expectEqual(structure_var, deferred.concrete_var);
+    try std.testing.expectEqual(constraints, deferred.constraints);
+}
+
+test "unify - structure vs flex with constraints captures deferred check (reversed)" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+
+    // Create constraint: a.to_str : a -> Str
+    const to_str_args = try env.module_env.types.appendVars(&[_]Var{str});
+    const to_str_constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
+        .fn_args = .{ .nonempty = to_str_args },
+        .fn_ret = str,
+    };
+    const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{to_str_constraint});
+
+    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const flex_var = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = constraints,
+    } });
+
+    const result = try env.unify(structure_var, flex_var);
+    try std.testing.expectEqual(.ok, result);
+
+    // Check that constraint was captured (note: vars might be swapped due to merge order)
+    try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
+    const deferred = env.scratch.deferred_constraints.get(@enumFromInt(0)).*;
+    try std.testing.expectEqual(flex_var, deferred.constrained_var);
+    try std.testing.expectEqual(structure_var, deferred.concrete_var);
+    try std.testing.expectEqual(constraints, deferred.constraints);
+}
+
+test "unify - flex with no constraints vs structure does not capture" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const flex_var = try env.module_env.types.freshFromContent(.{ .flex = Flex.init() });
+    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+
+    const result = try env.unify(flex_var, structure_var);
+    try std.testing.expectEqual(.ok, result);
+
+    // Check that NO constraint was captured
+    try std.testing.expectEqual(0, env.scratch.deferred_constraints.len());
+}
+
+test "unify - flex with multiple constraints vs structure captures all" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
+
+    // Create multiple constraints
+    const to_str_args = try env.module_env.types.appendVars(&[_]Var{str});
+    const to_str_constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
+        .fn_args = .{ .nonempty = to_str_args },
+        .fn_ret = str,
+    };
+
+    const hash_args = try env.module_env.types.appendVars(&[_]Var{int});
+    const hash_constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("hash")),
+        .fn_args = .{ .nonempty = hash_args },
+        .fn_ret = int,
+    };
+
+    const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{ to_str_constraint, hash_constraint });
+
+    const flex_var = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = constraints,
+    } });
+    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+
+    const result = try env.unify(flex_var, structure_var);
+    try std.testing.expectEqual(.ok, result);
+
+    // Check that constraint was captured with BOTH constraints
+    try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
+    const deferred = env.scratch.deferred_constraints.get(@enumFromInt(0)).*;
+    try std.testing.expectEqual(flex_var, deferred.constrained_var);
+    try std.testing.expectEqual(structure_var, deferred.concrete_var);
+    try std.testing.expectEqual(constraints, deferred.constraints);
+    try std.testing.expectEqual(@as(u32, 2), deferred.constraints.len());
+}
+
+test "unify - flex vs nominal type captures constraint" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+
+    // Create constraint
+    const ord_args = try env.module_env.types.appendVars(&[_]Var{str});
+    const ord_constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("ord")),
+        .fn_args = .{ .nonempty = ord_args },
+        .fn_ret = str,
+    };
+    const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{ord_constraint});
+
+    const flex_var = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = constraints,
+    } });
+
+    // Create nominal type (e.g., Path)
+    const backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const nominal_var = try env.module_env.types.freshFromContent(try env.mkNominalType("Path", backing_var, &[_]Var{}));
+
+    const result = try env.unify(flex_var, nominal_var);
+    try std.testing.expectEqual(.ok, result);
+
+    // Check that constraint was captured
+    try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
+    const deferred = env.scratch.deferred_constraints.get(@enumFromInt(0)).*;
+    try std.testing.expectEqual(flex_var, deferred.constrained_var);
+    try std.testing.expectEqual(nominal_var, deferred.concrete_var);
+    try std.testing.expectEqual(constraints, deferred.constraints);
+}

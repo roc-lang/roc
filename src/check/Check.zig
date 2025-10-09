@@ -79,6 +79,9 @@ scratch_record_fields: base.Scratch(types_mod.RecordField),
 import_cache: ImportCache,
 /// Maps variables to the expressions that constrained them (for better error regions)
 constraint_origins: std.AutoHashMap(Var, Var),
+/// Deferred static dispatch constriants - accumulated during type checking,
+/// then solved for at the end
+deferred_static_dispatch_constraints: std.AutoHashMap(Var, types_mod.StaticDispatchConstraint.SafeList.Range),
 
 /// A map of rigid variables that we build up during a branch of type checking
 const FreeVar = struct { ident: base.Ident.Idx, var_: Var };
@@ -123,6 +126,7 @@ pub fn init(
         .scratch_record_fields = try base.Scratch(types_mod.RecordField).init(gpa),
         .import_cache = ImportCache{},
         .constraint_origins = std.AutoHashMap(Var, Var).init(gpa),
+        .deferred_static_dispatch_constraints = std.AutoHashMap(Var, types_mod.StaticDispatchConstraint.SafeList.Range).init(gpa),
     };
 }
 
@@ -144,6 +148,7 @@ pub fn deinit(self: *Self) void {
     self.scratch_record_fields.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
     self.constraint_origins.deinit();
+    self.deferred_static_dispatch_constraints.deinit();
 }
 
 /// Assert that type vars and regions in sync
