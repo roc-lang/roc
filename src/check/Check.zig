@@ -158,6 +158,13 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
     }
 }
 
+/// Fills the type store with fresh variables up to the number of regions
+inline fn ensureTypeStoreIsFilled(self: *Self) Allocator.Error!void {
+    for (self.types.len()..self.regions.len()) |_| {
+        _ = try self.types.fresh();
+    }
+}
+
 // import caches //
 
 /// Key for the import cache: module index + expression index in that module
@@ -198,7 +205,7 @@ const ImportCache = std.HashMapUnmanaged(ImportCacheKey, Var, struct {
 // unify //
 
 /// Unify two types
-pub fn unify(self: *Self, a: Var, b: Var, rank: Rank) std.mem.Allocator.Error!unifier.Result {
+fn unify(self: *Self, a: Var, b: Var, rank: Rank) std.mem.Allocator.Error!unifier.Result {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -267,7 +274,7 @@ fn findConstraintOriginForVars(self: *Self, a: Var, b: Var) ?Var {
 
 /// Unify two variables where the second represents an annotation type.
 /// This sets from_annotation=true to ensure proper error region highlighting.
-pub fn unifyFromAnno(self: *Self, a: Var, b: Var, rank: Rank) std.mem.Allocator.Error!unifier.Result {
+fn unifyFromAnno(self: *Self, a: Var, b: Var, rank: Rank) std.mem.Allocator.Error!unifier.Result {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -305,7 +312,7 @@ pub fn unifyFromAnno(self: *Self, a: Var, b: Var, rank: Rank) std.mem.Allocator.
 
 /// Unify two variables with a specific constraint origin for better error reporting.
 /// The constraint_origin_var should point to the expression that created the constraint.
-pub fn unifyWithConstraintOrigin(self: *Self, a: Var, b: Var, constraint_origin_var: Var) std.mem.Allocator.Error!unifier.Result {
+fn unifyWithConstraintOrigin(self: *Self, a: Var, b: Var, constraint_origin_var: Var) std.mem.Allocator.Error!unifier.Result {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -512,6 +519,8 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    try ensureTypeStoreIsFilled(self);
+
     // First, iterate over the statements, generating types for each type declaration
     const builtin_stmts_slice = self.cir.store.sliceStatements(self.cir.builtin_statements);
     for (builtin_stmts_slice) |builtin_stmt_idx| {
@@ -541,6 +550,7 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 
 /// Check an expr for the repl
 pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
+    try ensureTypeStoreIsFilled(self);
     // First, iterate over the statements, generating types for each type declaration
     const stms_slice = self.cir.store.sliceStatements(self.cir.builtin_statements);
     for (stms_slice) |stmt_idx| {
