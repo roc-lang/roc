@@ -87,7 +87,7 @@ NO CHANGE
 				(p-assign @7.17-7.20 (ident "msg")))
 			(e-call @7.22-7.39
 				(e-lookup-external @7.22-7.34
-					(module-idx "0")
+					(module-idx "2")
 					(target-node-idx "0"))
 				(e-lookup-local @7.35-7.38
 					(p-assign @7.17-7.20 (ident "msg")))))

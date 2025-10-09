@@ -123,7 +123,7 @@ foo = Json.parse(data)
 		(p-assign @4.1-4.4 (ident "foo"))
 		(e-call @4.7-4.23
 			(e-lookup-external @4.7-4.17
-				(module-idx "0")
+				(module-idx "2")
 				(target-node-idx "0"))
 			(e-runtime-error (tag "ident_not_in_scope"))))
 	(s-import @2.1-2.12 (module "Json")

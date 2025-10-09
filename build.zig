@@ -154,6 +154,8 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     roc_modules.addAll(snapshot_exe);
+    snapshot_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    snapshot_exe.step.dependOn(&write_compiled_builtins.step);
     add_tracy(b, roc_modules.build_options, snapshot_exe, target, false, flag_enable_tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step, run_args);
 
@@ -251,6 +253,8 @@ pub fn build(b: *std.Build) void {
             .filters = test_filters,
         });
         roc_modules.addAll(snapshot_test);
+        snapshot_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
+        snapshot_test.step.dependOn(&write_compiled_builtins.step);
         add_tracy(b, roc_modules.build_options, snapshot_test, target, false, flag_enable_tracy);
 
         const run_snapshot_test = b.addRunArtifact(snapshot_test);

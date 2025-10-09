@@ -53,12 +53,12 @@ NO CHANGE
 	(d-let
 		(p-assign @4.1-4.4 (ident "red"))
 		(e-nominal-external @4.7-4.20
-			(module-idx "0")
+			(module-idx "2")
 			(target-node-idx "0")
 			(e-tag @4.7-4.20 (name "Red")))
 		(annotation @4.1-4.4
 			(declared-type
-				(ty-lookup @3.7-3.16 (name "RGB") (external (module-idx "0") (target-node-idx "0"))))))
+				(ty-lookup @3.7-3.16 (name "RGB") (external (module-idx "2") (target-node-idx "0"))))))
 	(s-import @1.1-1.13 (module "Color")
 		(exposes)))
 ~~~
