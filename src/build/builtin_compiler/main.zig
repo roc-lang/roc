@@ -47,7 +47,6 @@ pub fn main() !void {
     defer gpa.free(set_roc_source);
 
     // Compile Bool.roc first WITHOUT injecting builtins (it defines Bool itself)
-    std.debug.print("Compiling Bool.roc...\n", .{});
     const bool_env = try compileModule(
         gpa,
         "Bool",
@@ -63,13 +62,11 @@ pub fn main() !void {
     // Verify that Bool's type declaration is at the expected index (2)
     // This is critical for the compiler's hardcoded BUILTIN_BOOL constant
     const bool_type_idx = bool_env.all_statements.span.start;
-    const stderr = std.io.getStdErr().writer();
-    try stderr.print("Bool type declaration at statement index: {}\n", .{bool_type_idx});
     if (bool_type_idx != 2) {
+        const stderr = std.io.getStdErr().writer();
         try stderr.print("WARNING: Expected Bool at index 2, but got {}!\n", .{bool_type_idx});
         return error.UnexpectedBoolIndex;
     }
-    std.debug.print("Bool.roc compiled successfully!\n", .{});
 
     // Compile Dict.roc (it has no dependencies, but needs builtins for if expressions)
     const dict_env = try compileModule(
@@ -100,22 +97,12 @@ pub fn main() !void {
     }
 
     // Create output directory
-    std.debug.print("\nCreating output directory...\n", .{});
     try std.fs.cwd().makePath("zig-out/builtins");
 
-    // Serialize Bool module
-    std.debug.print("Serializing Bool.roc...\n", .{});
+    // Serialize modules
     try serializeModuleEnv(gpa, bool_env, "zig-out/builtins/Bool.bin");
-
-    // Serialize Dict module
-    std.debug.print("Serializing Dict.roc...\n", .{});
     try serializeModuleEnv(gpa, dict_env, "zig-out/builtins/Dict.bin");
-
-    // Serialize Set module
-    std.debug.print("Serializing Set.roc...\n", .{});
     try serializeModuleEnv(gpa, set_env, "zig-out/builtins/Set.bin");
-
-    std.debug.print("\n✓ All modules compiled and serialized successfully!\n", .{});
 }
 
 const ModuleDep = struct {
