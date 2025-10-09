@@ -107,6 +107,7 @@ const CalledVia = base.CalledVia;
 
 const TypeVar = types.Var;
 const Content = types.Content;
+const Flex = types.Flex;
 
 const FlatType = types.FlatType;
 const Num = types.Num;
@@ -424,7 +425,7 @@ fn processTypeDeclFirstPass(
             .name = qualified_name_idx,
             .args = type_header.args,
         };
-        break :blk try self.env.addTypeHeaderAndTypeVar(qualified_header, Content{ .flex_var = null }, region);
+        break :blk try self.env.addTypeHeaderAndTypeVar(qualified_header, Content{ .flex = Flex.init() }, region);
     } else header_idx;
 
     // Create a placeholder type declaration statement to introduce the type name into scope
@@ -538,7 +539,7 @@ fn canonicalizeAssociatedDecl(
         .kind = .{ .let = {} },
     };
 
-    const def_idx = try self.env.addDefAndTypeVar(def, Content{ .flex_var = null }, pattern_region);
+    const def_idx = try self.env.addDefAndTypeVar(def, Content{ .flex = Flex.init() }, pattern_region);
     return def_idx;
 }
 
@@ -581,7 +582,7 @@ fn canonicalizeAssociatedDeclWithAnno(
         .kind = .{ .let = {} },
     };
 
-    const def_idx = try self.env.addDefAndTypeVar(def, Content{ .flex_var = null }, pattern_region);
+    const def_idx = try self.env.addDefAndTypeVar(def, Content{ .flex = Flex.init() }, pattern_region);
     return def_idx;
 }
 
@@ -673,7 +674,7 @@ fn processAssociatedItemsSecondPass(
                             .where = where_clauses,
                         },
                     };
-                    const type_anno_stmt_idx = try self.env.addStatementAndTypeVar(type_anno_stmt, Content{ .flex_var = null }, region);
+                    const type_anno_stmt_idx = try self.env.addStatementAndTypeVar(type_anno_stmt, Content{ .flex = Flex.init() }, region);
                     try self.env.store.addScratchStatement(type_anno_stmt_idx);
                 }
 
