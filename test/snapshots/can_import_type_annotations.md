@@ -373,7 +373,7 @@ combineResults = |result1, result2|
 			(args
 				(p-assign @6.19-6.22 (ident "req")))
 			(e-lookup-external @6.24-6.44
-				(module-idx "0")
+				(module-idx "2")
 				(target-node-idx "0")))
 		(annotation @6.1-6.15
 			(declared-type
@@ -387,7 +387,7 @@ combineResults = |result1, result2|
 				(p-assign @9.14-9.19 (ident "input")))
 			(e-call @9.21-9.38
 				(e-lookup-external @9.21-9.31
-					(module-idx "1")
+					(module-idx "3")
 					(target-node-idx "0"))
 				(e-lookup-local @9.32-9.37
 					(p-assign @9.14-9.19 (ident "input")))))
@@ -395,7 +395,7 @@ combineResults = |result1, result2|
 			(declared-type
 				(ty-fn @8.13-8.30 (effectful false)
 					(ty-lookup @8.13-8.16 (name "Str") (builtin))
-					(ty-lookup @8.20-8.30 (name "Value") (external (module-idx "1") (target-node-idx "0")))))))
+					(ty-lookup @8.20-8.30 (name "Value") (external (module-idx "3") (target-node-idx "0")))))))
 	(d-let
 		(p-assign @12.1-12.10 (ident "handleApi"))
 		(e-closure @12.13-18.2
@@ -410,7 +410,7 @@ combineResults = |result1, result2|
 						(p-assign @13.5-13.11 (ident "result"))
 						(e-call @13.14-13.39
 							(e-lookup-external @13.14-13.25
-								(module-idx "1")
+								(module-idx "3")
 								(target-node-idx "0"))
 							(e-dot-access @13.26-13.38 (field "body")
 								(receiver
@@ -433,7 +433,7 @@ combineResults = |result1, result2|
 												(args
 													(e-call @15.24-15.42
 														(e-lookup-external @15.24-15.36
-															(module-idx "0")
+															(module-idx "2")
 															(target-node-idx "0"))
 														(e-lookup-local @15.37-15.41
 															(p-assign @15.12-15.16 (ident "data")))))))))
@@ -451,18 +451,18 @@ combineResults = |result1, result2|
 		(annotation @12.1-12.10
 			(declared-type
 				(ty-fn @11.13-11.62 (effectful false)
-					(ty-lookup @11.13-11.25 (name "Request") (external (module-idx "0") (target-node-idx "0")))
+					(ty-lookup @11.13-11.25 (name "Request") (external (module-idx "2") (target-node-idx "0")))
 					(ty-apply @11.29-11.62 (name "Result") (local)
-						(ty-lookup @11.29-11.62 (name "Response") (external (module-idx "0") (target-node-idx "0")))
-						(ty-lookup @11.29-11.62 (name "Error") (external (module-idx "1") (target-node-idx "0"))))))))
+						(ty-lookup @11.29-11.62 (name "Response") (external (module-idx "2") (target-node-idx "0")))
+						(ty-lookup @11.29-11.62 (name "Error") (external (module-idx "3") (target-node-idx "0"))))))))
 	(d-let
 		(p-assign @21.1-21.7 (ident "config"))
 		(e-lookup-external @21.10-21.28
-			(module-idx "1")
+			(module-idx "3")
 			(target-node-idx "0"))
 		(annotation @21.1-21.7
 			(declared-type
-				(ty-lookup @20.10-20.21 (name "Config") (external (module-idx "1") (target-node-idx "0"))))))
+				(ty-lookup @20.10-20.21 (name "Config") (external (module-idx "3") (target-node-idx "0"))))))
 	(d-let
 		(p-assign @25.1-25.15 (ident "advancedParser"))
 		(e-lambda @25.18-25.82
@@ -471,7 +471,7 @@ combineResults = |result1, result2|
 				(p-assign @25.33-25.38 (ident "input")))
 			(e-call @25.40-25.82
 				(e-lookup-external @25.40-25.61
-					(module-idx "1")
+					(module-idx "3")
 					(target-node-idx "0"))
 				(e-lookup-local @25.62-25.74
 					(p-assign @25.19-25.31 (ident "parserConfig")))
@@ -483,7 +483,7 @@ combineResults = |result1, result2|
 					(ty-malformed @24.18-24.36)
 					(ty-lookup @24.38-24.41 (name "Str") (builtin))
 					(ty-apply @24.45-24.82 (name "Result") (local)
-						(ty-lookup @24.45-24.82 (name "Value") (external (module-idx "1") (target-node-idx "0")))
+						(ty-lookup @24.45-24.82 (name "Value") (external (module-idx "3") (target-node-idx "0")))
 						(ty-malformed @24.45-24.82))))))
 	(d-let
 		(p-assign @29.1-29.15 (ident "combineResults"))

@@ -817,17 +817,8 @@ test "Repl - type with associated value" {
     try testing.expectEqualStrings("Foo", result1);
 
     // Use the associated value
-    std.debug.print("\nTrying to evaluate Foo.x...\n", .{});
     const result2 = try repl.step("Foo.x");
     defer std.testing.allocator.free(result2);
-    std.debug.print("REPL test: Foo.x returned: '{s}'\n", .{result2});
-
-    // If it's a crash, we want to know, but the test should still pass to see the output
-    if (std.mem.indexOf(u8, result2, "Crash") != null or std.mem.indexOf(u8, result2, "Error") != null) {
-        std.debug.print("⚠️  Associated item access crashed or errored in REPL\n", .{});
-    } else {
-        std.debug.print("✅ Associated item access worked! Value: {s}\n", .{result2});
-    }
 }
 
 test "Repl - nested type declaration" {
@@ -845,7 +836,6 @@ test "Repl - nested type declaration" {
     // Use a tag from the nested type
     const result2 = try repl.step("Foo.Bar.X");
     defer std.testing.allocator.free(result2);
-    std.debug.print("\nREPL test: Foo.Bar.X returned: '{s}'\n", .{result2});
 }
 
 test "Repl - associated value with type annotation" {
@@ -863,7 +853,6 @@ test "Repl - associated value with type annotation" {
     // Define a value using the associated item
     const result2 = try repl.step("x = Foo.defaultNum");
     defer std.testing.allocator.free(result2);
-    std.debug.print("\nREPL test: x = Foo.defaultNum returned: '{s}'\n", .{result2});
 }
 
 test "Repl - nested type with tag constructor" {

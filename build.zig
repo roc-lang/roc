@@ -79,10 +79,68 @@ pub fn build(b: *std.Build) void {
 
     const roc_modules = modules.RocModules.create(b, build_options, zstd);
 
-    // add main roc exe
     const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd) orelse return;
     roc_modules.addAll(roc_exe);
     install_and_run(b, no_bin, roc_exe, roc_step, run_step, run_args);
+
+    // Build-time compiler for builtin .roc modules
+    const builtin_compiler_exe = b.addExecutable(.{
+        .name = "builtin_compiler",
+        .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
+        .target = b.graph.host, // this runs at build time on the *host* machine!
+        .optimize = .ReleaseSafe,
+        // Note: libc linking is handled by add_tracy below (required when tracy is enabled)
+    });
+
+    // Add only the minimal modules needed for parsing/checking
+    builtin_compiler_exe.root_module.addImport("base", roc_modules.base);
+    builtin_compiler_exe.root_module.addImport("collections", roc_modules.collections);
+    builtin_compiler_exe.root_module.addImport("types", roc_modules.types);
+    builtin_compiler_exe.root_module.addImport("parse", roc_modules.parse);
+    builtin_compiler_exe.root_module.addImport("can", roc_modules.can);
+    builtin_compiler_exe.root_module.addImport("check", roc_modules.check);
+    builtin_compiler_exe.root_module.addImport("reporting", roc_modules.reporting);
+    builtin_compiler_exe.root_module.addImport("builtins", roc_modules.builtins);
+
+    // Add tracy support (required by parse/can/check modules)
+    add_tracy(b, roc_modules.build_options, builtin_compiler_exe, b.graph.host, false, flag_enable_tracy);
+
+    // Run the builtin compiler to generate .bin files in zig-out/builtins/
+    const run_builtin_compiler = b.addRunArtifact(builtin_compiler_exe);
+
+    // Create a manual build step for testing the builtin compiler
+    const builtin_compiler_step = b.step("builtin-compiler", "Run the builtin compiler to compile builtin .roc modules");
+    builtin_compiler_step.dependOn(&run_builtin_compiler.step);
+
+    // The builtin compiler outputs to zig-out/builtins/ which is in .gitignore
+    // We need to copy those files to the build cache and create a module that embeds them
+    const write_compiled_builtins = b.addWriteFiles();
+    write_compiled_builtins.step.dependOn(&run_builtin_compiler.step);
+
+    // Copy the generated .bin files from zig-out to the build cache directory
+    _ = write_compiled_builtins.addCopyFile(
+        .{ .cwd_relative = "zig-out/builtins/Dict.bin" },
+        "Dict.bin",
+    );
+    _ = write_compiled_builtins.addCopyFile(
+        .{ .cwd_relative = "zig-out/builtins/Set.bin" },
+        "Set.bin",
+    );
+
+    // Create a Zig file in the same directory that embeds the .bin files
+    const compiled_builtins_source = write_compiled_builtins.add("compiled_builtins.zig",
+        \\pub const dict_bin = @embedFile("Dict.bin");
+        \\pub const set_bin = @embedFile("Set.bin");
+    );
+
+    // Create a module from this generated file
+    const compiled_builtins_module = b.createModule(.{
+        .root_source_file = compiled_builtins_source,
+    });
+
+    // Add the compiled builtins module to roc exe and make it depend on the builtins being ready
+    roc_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    roc_exe.step.dependOn(&write_compiled_builtins.step);
 
     // Add snapshot tool
     const snapshot_exe = b.addExecutable(.{
@@ -93,6 +151,8 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     roc_modules.addAll(snapshot_exe);
+    snapshot_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    snapshot_exe.step.dependOn(&write_compiled_builtins.step);
     add_tracy(b, roc_modules.build_options, snapshot_exe, target, false, flag_enable_tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step, run_args);
 
@@ -152,6 +212,12 @@ pub fn build(b: *std.Build) void {
     // Create and add module tests
     const module_tests = roc_modules.createModuleTests(b, target, optimize, zstd, test_filters);
     for (module_tests) |module_test| {
+        // Add compiled builtins to check module tests
+        if (std.mem.eql(u8, module_test.test_step.name, "check")) {
+            module_test.test_step.root_module.addImport("compiled_builtins", compiled_builtins_module);
+            module_test.test_step.step.dependOn(&write_compiled_builtins.step);
+        }
+
         if (run_args.len != 0) {
             module_test.run_step.addArgs(run_args);
         }
@@ -184,6 +250,8 @@ pub fn build(b: *std.Build) void {
             .filters = test_filters,
         });
         roc_modules.addAll(snapshot_test);
+        snapshot_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
+        snapshot_test.step.dependOn(&write_compiled_builtins.step);
         add_tracy(b, roc_modules.build_options, snapshot_test, target, false, flag_enable_tracy);
 
         const run_snapshot_test = b.addRunArtifact(snapshot_test);

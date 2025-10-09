@@ -72,7 +72,7 @@ NO CHANGE
 				(p-underscore @5.10-5.11))
 			(e-call @5.13-5.42
 				(e-lookup-external @5.13-5.25
-					(module-idx "0")
+					(module-idx "2")
 					(target-node-idx "0"))
 				(e-string @5.26-5.41
 					(e-literal @5.27-5.40 (string "Hello, world!"))))))

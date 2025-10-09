@@ -167,7 +167,7 @@ NO CHANGE
 	(d-let
 		(p-assign @5.1-5.5 (ident "main"))
 		(e-lookup-external @5.8-5.31
-			(module-idx "0")
+			(module-idx "2")
 			(target-node-idx "0")))
 	(d-let
 		(p-assign @9.1-9.10 (ident "parseData"))
@@ -176,14 +176,14 @@ NO CHANGE
 				(p-assign @9.14-9.18 (ident "data")))
 			(e-call @9.20-9.40
 				(e-lookup-external @9.20-9.34
-					(module-idx "0")
+					(module-idx "2")
 					(target-node-idx "0"))
 				(e-lookup-local @9.35-9.39
 					(p-assign @9.14-9.18 (ident "data")))))
 		(annotation @9.1-9.10
 			(declared-type
 				(ty-fn @8.13-8.36 (effectful false)
-					(ty-lookup @8.13-8.29 (name "InvalidType") (external (module-idx "0") (target-node-idx "0")))
+					(ty-lookup @8.13-8.29 (name "InvalidType") (external (module-idx "2") (target-node-idx "0")))
 					(ty-lookup @8.33-8.36 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @13.1-13.15 (ident "processRequest"))
@@ -191,7 +191,7 @@ NO CHANGE
 			(args
 				(p-assign @13.19-13.22 (ident "req")))
 			(e-lookup-external @13.24-13.51
-				(module-idx "1")
+				(module-idx "3")
 				(target-node-idx "0")))
 		(annotation @13.1-13.15
 			(declared-type
@@ -202,7 +202,7 @@ NO CHANGE
 		(p-assign @16.1-16.7 (ident "result"))
 		(e-call @16.10-16.28
 			(e-lookup-external @16.10-16.20
-				(module-idx "0")
+				(module-idx "2")
 				(target-node-idx "0"))
 			(e-string @16.21-16.27
 				(e-literal @16.22-16.26 (string "test")))))
@@ -213,12 +213,12 @@ NO CHANGE
 	(d-let
 		(p-assign @22.1-22.7 (ident "client"))
 		(e-lookup-external @22.10-22.28
-			(module-idx "1")
+			(module-idx "3")
 			(target-node-idx "0")))
 	(d-let
 		(p-assign @25.1-25.7 (ident "parser"))
 		(e-lookup-external @25.10-25.49
-			(module-idx "0")
+			(module-idx "2")
 			(target-node-idx "0")))
 	(s-import @1.1-1.17 (module "json.Json") (qualifier "json")
 		(exposes))

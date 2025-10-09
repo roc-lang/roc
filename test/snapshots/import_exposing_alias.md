@@ -16,6 +16,8 @@ main = {
 ~~~
 # EXPECTED
 MODULE NOT FOUND - import_exposing_alias.md:1:1:1:65
+UNDEFINED VARIABLE - import_exposing_alias.md:5:12:5:18
+UNDEFINED VARIABLE - import_exposing_alias.md:6:12:6:20
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `json.Json` was not found in this Roc project.
@@ -26,6 +28,28 @@ You're attempting to use this module here:
 import json.Json exposing [decode as fromJson, encode as toJson]
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `toJson` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**import_exposing_alias.md:5:12:5:18:**
+```roc
+	encoded = toJson(data)
+```
+	          ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `fromJson` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**import_exposing_alias.md:6:12:6:20:**
+```roc
+	decoded = fromJson(encoded)
+```
+	          ^^^^^^^^
 
 
 # TOKENS
@@ -98,17 +122,13 @@ NO CHANGE
 			(s-let @5.2-5.24
 				(p-assign @5.2-5.9 (ident "encoded"))
 				(e-call @5.12-5.24
-					(e-lookup-external @5.12-5.18
-						(module-idx "0")
-						(target-node-idx "0"))
+					(e-runtime-error (tag "ident_not_in_scope"))
 					(e-lookup-local @5.19-5.23
 						(p-assign @4.2-4.6 (ident "data")))))
 			(s-let @6.2-6.29
 				(p-assign @6.2-6.9 (ident "decoded"))
 				(e-call @6.12-6.29
-					(e-lookup-external @6.12-6.20
-						(module-idx "0")
-						(target-node-idx "0"))
+					(e-runtime-error (tag "ident_not_in_scope"))
 					(e-lookup-local @6.21-6.28
 						(p-assign @5.2-5.9 (ident "encoded")))))
 			(e-lookup-local @7.2-7.9
