@@ -1,7 +1,7 @@
-//! Build-time compiler for Roc builtin modules (Dict.roc and Set.roc).
+//! Build-time compiler for Roc builtin modules (Bool.roc, Result.roc, Dict.roc, and Set.roc).
 //!
 //! This executable runs during `zig build` on the host machine to:
-//! 1. Parse and type-check Dict.roc and Set.roc
+//! 1. Parse and type-check the builtin .roc modules
 //! 2. Serialize the resulting ModuleEnvs to binary files
 //! 3. Output .bin files to zig-out/builtins/ (which get embedded in the roc binary)
 
@@ -40,6 +40,9 @@ pub fn main() !void {
     const bool_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Bool.roc", 1024 * 1024);
     defer gpa.free(bool_roc_source);
 
+    const result_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Result.roc", 1024 * 1024);
+    defer gpa.free(result_roc_source);
+
     const dict_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Dict.roc", 1024 * 1024);
     defer gpa.free(dict_roc_source);
 
@@ -66,6 +69,19 @@ pub fn main() !void {
         const stderr = std.io.getStdErr().writer();
         try stderr.print("WARNING: Expected Bool at index 2, but got {}!\n", .{bool_type_idx});
         return error.UnexpectedBoolIndex;
+    }
+
+    // Compile Result.roc (injects Bool since Result might use if expressions)
+    const result_env = try compileModule(
+        gpa,
+        "Result",
+        result_roc_source,
+        &.{}, // No module dependencies
+        .{ .inject_bool = true, .inject_result = false },
+    );
+    defer {
+        result_env.deinit();
+        gpa.destroy(result_env);
     }
 
     // Compile Dict.roc (needs Bool injected for if expressions, and Result for error handling)
@@ -101,6 +117,7 @@ pub fn main() !void {
 
     // Serialize modules
     try serializeModuleEnv(gpa, bool_env, "zig-out/builtins/Bool.bin");
+    try serializeModuleEnv(gpa, result_env, "zig-out/builtins/Result.bin");
     try serializeModuleEnv(gpa, dict_env, "zig-out/builtins/Dict.bin");
     try serializeModuleEnv(gpa, set_env, "zig-out/builtins/Set.bin");
 }

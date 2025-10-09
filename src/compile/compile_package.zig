@@ -497,7 +497,7 @@ pub const PackageEnv = struct {
 
     fn doCanonicalize(self: *PackageEnv, module_id: ModuleId) !void {
         var st = &self.modules.items[module_id];
-        var env = st.env.?;
+        var env = &st.env.?;
 
         // Parse and canonicalize in one step to avoid double parsing
         const parse_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
@@ -511,9 +511,8 @@ pub const PackageEnv = struct {
 
         // canonicalize using the AST
         const canon_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        var czer = try Can.init(&env, &parse_ast, null, .{});
+        var czer = try Can.init(env, &parse_ast, null, .{});
         try czer.canonicalizeFile();
-        try czer.validateForExecution();
         czer.deinit();
         const canon_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         if (@import("builtin").target.cpu.arch != .wasm32) {
@@ -542,7 +541,7 @@ pub const PackageEnv = struct {
             const mod_name = env.getString(str_idx);
 
             // Use CIR qualifier metadata instead of heuristic; this allocates nothing and scans only once
-            const qualified = hadQualifiedImport(&env, mod_name);
+            const qualified = hadQualifiedImport(env, mod_name);
 
             if (qualified) {
                 // Qualified imports refer to external packages; track and schedule externally
