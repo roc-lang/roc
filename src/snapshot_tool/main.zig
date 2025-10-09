@@ -842,7 +842,6 @@ pub fn main() !void {
         try std.fs.cwd().makePath(config.maybe_fuzz_corpus_path.?);
     }
     const snapshots_dir = "test/snapshots";
-    var timer = std.time.Timer.start() catch unreachable;
 
     // Stage 1: Collect work items
     var work_list = WorkList.init(gpa);
@@ -863,18 +862,8 @@ pub fn main() !void {
         try collectWorkItems(gpa, snapshots_dir, &work_list);
     }
 
-    const collect_duration_ms = timer.read() / std.time.ns_per_ms;
-    log("collected {d} work items in {d} ms", .{ work_list.items.len, collect_duration_ms });
-
     // Stage 2: Process work items (in parallel or single-threaded)
     const result = try processWorkItems(gpa, work_list, max_threads, debug_mode, &config);
-
-    const duration_ms = timer.read() / std.time.ns_per_ms;
-
-    std.log.debug(
-        "collected {d} items in {d} ms, processed {d} snapshots in {d} ms.",
-        .{ work_list.items.len, collect_duration_ms, result.success, duration_ms },
-    );
 
     if (result.failed > 0) {
         std.log.err("Failed to process {d} snapshots.", .{result.failed});

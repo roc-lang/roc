@@ -38,8 +38,6 @@ pub fn main() !void {
     const set_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Set.roc", 1024 * 1024);
     defer gpa.free(set_roc_source);
 
-    std.debug.print("Compiling Dict.roc...\n", .{});
-
     // Compile Dict.roc first (it has no dependencies)
     const dict_env = try compileModule(
         gpa,
@@ -51,9 +49,6 @@ pub fn main() !void {
         dict_env.deinit();
         gpa.destroy(dict_env);
     }
-
-    std.debug.print("Dict.roc compiled successfully!\n", .{});
-    std.debug.print("\nCompiling Set.roc...\n", .{});
 
     // Compile Set.roc (it imports Dict)
     const set_env = try compileModule(
@@ -69,21 +64,14 @@ pub fn main() !void {
         gpa.destroy(set_env);
     }
 
-    std.debug.print("Set.roc compiled successfully!\n", .{});
-
     // Create output directory
-    std.debug.print("\nCreating output directory...\n", .{});
     try std.fs.cwd().makePath("zig-out/builtins");
 
     // Serialize Dict module
-    std.debug.print("Serializing Dict.roc...\n", .{});
     try serializeModuleEnv(gpa, dict_env, "zig-out/builtins/Dict.bin");
 
     // Serialize Set module
-    std.debug.print("Serializing Set.roc...\n", .{});
     try serializeModuleEnv(gpa, set_env, "zig-out/builtins/Set.bin");
-
-    std.debug.print("\n✓ All modules compiled and serialized successfully!\n", .{});
 }
 
 const ModuleDep = struct {
@@ -224,7 +212,4 @@ fn serializeModuleEnv(
 
     // Write to file
     try writer.writeGather(arena_alloc, file);
-
-    const file_size = try file.getEndPos();
-    std.debug.print("  Serialized {s} ({} bytes)\n", .{ output_path, file_size });
 }
