@@ -171,8 +171,14 @@ pub fn deinit(
     self.scratch_free_vars.deinit(gpa);
 }
 
+/// Options for initializing the canonicalizer.
+/// Controls which built-in types are injected into the module's scope.
 pub const InitOptions = struct {
+    /// Whether to inject the Bool type declaration (`Bool := [True, False]`).
+    /// Set to false when compiling Bool.roc itself to avoid duplication.
     inject_bool: bool = true,
+    /// Whether to inject the Result type declaration (`Result(ok, err) := [Ok(ok), Err(err)]`).
+    /// Set to false when compiling Result.roc itself (if it exists).
     inject_result: bool = true,
 };
 

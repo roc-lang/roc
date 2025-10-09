@@ -46,14 +46,13 @@ pub fn main() !void {
     const set_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Set.roc", 1024 * 1024);
     defer gpa.free(set_roc_source);
 
-    // Compile Bool.roc without injecting Bool (it defines Bool itself)
-    // We still inject Result since Bool.roc might use it
+    // Compile Bool.roc without injecting anything (it's completely self-contained)
     const bool_env = try compileModule(
         gpa,
         "Bool",
         bool_roc_source,
         &.{}, // No module dependencies
-        .{ .inject_bool = false, .inject_result = true },
+        .{ .inject_bool = false, .inject_result = false },
     );
     defer {
         bool_env.deinit();
