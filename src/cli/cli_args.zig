@@ -11,7 +11,7 @@ pub const CliArgs = union(enum) {
     run: RunArgs,
     check: CheckArgs,
     build: BuildArgs,
-    format: FormatArgs,
+    fmt: FormatArgs,
     test_cmd: TestArgs,
     bundle: BundleArgs,
     unbundle: UnbundleArgs,
@@ -24,7 +24,7 @@ pub const CliArgs = union(enum) {
 
     pub fn deinit(self: CliArgs, gpa: mem.Allocator) void {
         switch (self) {
-            .format => |fmt| gpa.free(fmt.paths),
+            .fmt => |fmt| gpa.free(fmt.paths),
             .run => |run| gpa.free(run.app_args),
             .bundle => |bundle| gpa.free(bundle.paths),
             .unbundle => |unbundle| gpa.free(unbundle.paths),
@@ -134,7 +134,7 @@ pub fn parse(gpa: mem.Allocator, args: []const []const u8) !CliArgs {
     if (mem.eql(u8, args[0], "build")) return parseBuild(args[1..]);
     if (mem.eql(u8, args[0], "bundle")) return try parseBundle(gpa, args[1..]);
     if (mem.eql(u8, args[0], "unbundle")) return try parseUnbundle(gpa, args[1..]);
-    if (mem.eql(u8, args[0], "format")) return try parseFormat(gpa, args[1..]);
+    if (mem.eql(u8, args[0], "fmt")) return try parseFormat(gpa, args[1..]);
     if (mem.eql(u8, args[0], "test")) return parseTest(args[1..]);
     if (mem.eql(u8, args[0], "repl")) return parseRepl(args[1..]);
     if (mem.eql(u8, args[0], "version")) return parseVersion(args[1..]);
@@ -158,7 +158,7 @@ const main_help =
     \\  unbundle         Extract files from compressed .tar.zst archives
     \\  test             Run all top-level `expect`s in a main module and any modules it imports
     \\  repl             Launch the interactive Read Eval Print Loop (REPL)
-    \\  format           Format a .roc file or the .roc files contained in a directory using standard Roc formatting
+    \\  fmt              Format a .roc file or the .roc files contained in a directory using standard Roc formatting
     \\  version          Print the Roc compiler's version
     \\  check            Check the code for problems, but don't build or run it
     \\  docs             Generate documentation for a Roc package or platform
@@ -433,7 +433,7 @@ fn parseFormat(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.E
             return CliArgs{ .help = 
             \\Format a .roc file or the .roc files contained in a directory using standard Roc formatting
             \\
-            \\Usage: roc format [OPTIONS] [DIRECTORY_OR_FILES]
+            \\Usage: roc fmt [OPTIONS] [DIRECTORY_OR_FILES]
             \\
             \\Arguments:
             \\  [DIRECTORY_OR_FILES]
@@ -458,7 +458,7 @@ fn parseFormat(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.E
     if (paths.items.len == 0) {
         try paths.append("main.roc");
     }
-    return CliArgs{ .format = FormatArgs{ .paths = try paths.toOwnedSlice(), .stdin = stdin, .check = check } };
+    return CliArgs{ .fmt = FormatArgs{ .paths = try paths.toOwnedSlice(), .stdin = stdin, .check = check } };
 }
 
 fn parseTest(args: []const []const u8) CliArgs {
@@ -821,61 +821,61 @@ test "roc build" {
     }
 }
 
-test "roc format" {
+test "roc fmt" {
     const gpa = testing.allocator;
     {
-        const result = try parse(gpa, &[_][]const u8{"format"});
+        const result = try parse(gpa, &[_][]const u8{"fmt"});
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("main.roc", result.format.paths[0]);
-        try testing.expect(!result.format.stdin);
-        try testing.expect(!result.format.check);
+        try testing.expectEqualStrings("main.roc", result.fmt.paths[0]);
+        try testing.expect(!result.fmt.stdin);
+        try testing.expect(!result.fmt.check);
     }
     {
-        const result = try parse(gpa, &[_][]const u8{ "format", "--check" });
+        const result = try parse(gpa, &[_][]const u8{ "fmt", "--check" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("main.roc", result.format.paths[0]);
-        try testing.expect(!result.format.stdin);
-        try testing.expect(result.format.check);
+        try testing.expectEqualStrings("main.roc", result.fmt.paths[0]);
+        try testing.expect(!result.fmt.stdin);
+        try testing.expect(result.fmt.check);
     }
     {
-        const result = try parse(gpa, &[_][]const u8{ "format", "--stdin" });
+        const result = try parse(gpa, &[_][]const u8{ "fmt", "--stdin" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("main.roc", result.format.paths[0]);
-        try testing.expect(result.format.stdin);
-        try testing.expect(!result.format.check);
+        try testing.expectEqualStrings("main.roc", result.fmt.paths[0]);
+        try testing.expect(result.fmt.stdin);
+        try testing.expect(!result.fmt.check);
     }
     {
-        const result = try parse(gpa, &[_][]const u8{ "format", "--stdin", "--check", "foo.roc" });
+        const result = try parse(gpa, &[_][]const u8{ "fmt", "--stdin", "--check", "foo.roc" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("foo.roc", result.format.paths[0]);
-        try testing.expect(result.format.stdin);
-        try testing.expect(result.format.check);
+        try testing.expectEqualStrings("foo.roc", result.fmt.paths[0]);
+        try testing.expect(result.fmt.stdin);
+        try testing.expect(result.fmt.check);
     }
     {
-        const result = try parse(gpa, &[_][]const u8{ "format", "foo.roc", "bar.roc" });
+        const result = try parse(gpa, &[_][]const u8{ "fmt", "foo.roc", "bar.roc" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("foo.roc", result.format.paths[0]);
-        try testing.expectEqualStrings("bar.roc", result.format.paths[1]);
+        try testing.expectEqualStrings("foo.roc", result.fmt.paths[0]);
+        try testing.expectEqualStrings("bar.roc", result.fmt.paths[1]);
     }
     {
-        const result = try parse(gpa, &[_][]const u8{ "format", "-h" });
+        const result = try parse(gpa, &[_][]const u8{ "fmt", "-h" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = try parse(gpa, &[_][]const u8{ "format", "--help" });
+        const result = try parse(gpa, &[_][]const u8{ "fmt", "--help" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = try parse(gpa, &[_][]const u8{ "format", "foo.roc", "--help" });
+        const result = try parse(gpa, &[_][]const u8{ "fmt", "foo.roc", "--help" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = try parse(gpa, &[_][]const u8{ "format", "--thisisactuallyafile" });
+        const result = try parse(gpa, &[_][]const u8{ "fmt", "--thisisactuallyafile" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("--thisisactuallyafile", result.format.paths[0]);
+        try testing.expectEqualStrings("--thisisactuallyafile", result.fmt.paths[0]);
     }
 }
 

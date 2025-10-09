@@ -427,7 +427,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
         .build => |build_args| rocBuild(gpa, build_args),
         .bundle => |bundle_args| rocBundle(gpa, bundle_args),
         .unbundle => |unbundle_args| rocUnbundle(gpa, unbundle_args),
-        .format => |format_args| rocFormat(gpa, arena, format_args),
+        .fmt => |format_args| rocFormat(gpa, arena, format_args),
         .test_cmd => |test_args| rocTest(gpa, test_args),
         .repl => rocRepl(gpa),
         .version => stdout.print("Roc compiler version {s}", .{build_options.compiler_version}),
