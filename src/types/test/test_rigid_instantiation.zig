@@ -18,6 +18,8 @@ const Var = types_mod.Var;
 const Desc = types_mod.Descriptor;
 const Rank = types_mod.Rank;
 const Mark = types_mod.Mark;
+const Flex = types_mod.Flex;
+const Rigid = types_mod.Rigid;
 const Content = types_mod.Content;
 const Alias = types_mod.Alias;
 const NominalType = types_mod.NominalType;
@@ -48,7 +50,7 @@ test "instantiate - flex var creates new flex var" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const original = try env.types.freshFromContent(.{ .flex_var = null });
+    const original = try env.types.freshFromContent(.{ .flex = Flex.init() });
 
     var instantiator = Instantiator{
         .store = &env.types,
@@ -64,7 +66,7 @@ test "instantiate - flex var creates new flex var" {
 
     // Should still be flex
     const resolved = env.types.resolveVar(instantiated);
-    try std.testing.expect(resolved.desc.content == .flex_var);
+    try std.testing.expect(resolved.desc.content == .flex);
 }
 
 test "instantiate - rigid var with fresh_flex creates flex var" {
@@ -88,7 +90,7 @@ test "instantiate - rigid var with fresh_flex creates flex var" {
 
     // Should now be flex
     const resolved = env.types.resolveVar(instantiated);
-    try std.testing.expect(resolved.desc.content == .flex_var);
+    try std.testing.expect(resolved.desc.content == .flex);
 }
 
 test "instantiate - rigid var with fresh_rigid creates new rigid var" {
@@ -112,7 +114,7 @@ test "instantiate - rigid var with fresh_rigid creates new rigid var" {
 
     // Should still be rigid
     const resolved = env.types.resolveVar(instantiated);
-    try std.testing.expect(resolved.desc.content == .rigid_var);
+    try std.testing.expect(resolved.desc.content == .rigid);
 }
 
 test "instantiate - rigid var with substitute_rigids substitutes correctly" {
@@ -121,7 +123,7 @@ test "instantiate - rigid var with substitute_rigids substitutes correctly" {
     defer env.deinit();
 
     const ident_idx = try env.idents.insert(gpa, Ident.for_text("a"));
-    const original = try env.types.freshFromContent(.{ .rigid_var = ident_idx });
+    const original = try env.types.freshFromContent(.{ .rigid = Rigid.init(ident_idx) });
 
     const substitute_var = try env.types.freshFromContent(.{ .structure = .{ .num = Num.int_u8 } });
 
@@ -519,7 +521,7 @@ const TestEnv = struct {
     }
 
     fn mkRigidVarFromIdent(ident_idx: Ident.Idx) Content {
-        return .{ .rigid_var = ident_idx };
+        return .{ .rigid = Rigid.init(ident_idx) };
     }
 
     // helpers - tuple //
@@ -549,7 +551,7 @@ const TestEnv = struct {
     }
 
     fn mkRecordOpen(self: *Self, fields: []const RecordField) std.mem.Allocator.Error!RecordInfo {
-        const ext_var = try self.types.freshFromContent(.{ .flex_var = null });
+        const ext_var = try self.types.freshFromContent(.{ .flex = Flex.init() });
         return self.mkRecord(fields, ext_var);
     }
 
@@ -584,7 +586,7 @@ const TestEnv = struct {
     }
 
     fn mkTagUnionOpen(self: *Self, tags: []const Tag) std.mem.Allocator.Error!TagUnionInfo {
-        const ext_var = try self.types.freshFromContent(.{ .flex_var = null });
+        const ext_var = try self.types.freshFromContent(.{ .flex = Flex.init() });
         return self.mkTagUnion(tags, ext_var);
     }
 
