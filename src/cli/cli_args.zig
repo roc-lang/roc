@@ -123,6 +123,7 @@ pub const DocsArgs = struct {
     time: bool = false, // whether to print timing information
     no_cache: bool = false, // disable cache
     verbose: bool = false, // enable verbose output
+    serve: bool = false, // start an HTTP server after generating docs
 };
 
 /// Parse a list of arguments.
@@ -574,6 +575,7 @@ fn parseDocs(args: []const []const u8) CliArgs {
     var time: bool = false;
     var no_cache: bool = false;
     var verbose: bool = false;
+    var serve: bool = false;
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
@@ -588,6 +590,7 @@ fn parseDocs(args: []const []const u8) CliArgs {
             \\Options:
             \\      --main=<main>    The .roc file of the main app/package module to resolve dependencies from
             \\      --output=<dir>   Output directory for generated documentation [default: generated-docs]
+            \\      --serve          Start an HTTP server to view the documentation
             \\      --time           Print timing information for each compilation phase. Will not print anything if everything is cached.
             \\      --no-cache       Disable caching
             \\      --verbose        Enable verbose output including cache statistics
@@ -606,6 +609,8 @@ fn parseDocs(args: []const []const u8) CliArgs {
             } else {
                 return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--output" } } };
             }
+        } else if (mem.eql(u8, arg, "--serve")) {
+            serve = true;
         } else if (mem.eql(u8, arg, "--time")) {
             time = true;
         } else if (mem.eql(u8, arg, "--no-cache")) {
@@ -620,7 +625,7 @@ fn parseDocs(args: []const []const u8) CliArgs {
         }
     }
 
-    return CliArgs{ .docs = DocsArgs{ .path = path orelse "main.roc", .main = main, .output = output orelse "generated-docs", .time = time, .no_cache = no_cache, .verbose = verbose } };
+    return CliArgs{ .docs = DocsArgs{ .path = path orelse "main.roc", .main = main, .output = output orelse "generated-docs", .time = time, .no_cache = no_cache, .verbose = verbose, .serve = serve } };
 }
 
 fn parseRun(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {

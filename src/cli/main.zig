@@ -2942,6 +2942,141 @@ fn printTimingBreakdown(writer: anytype, timing: ?CheckTimingInfo) void {
     }
 }
 
+/// Start an HTTP server to serve the generated documentation
+fn serveDocumentation(gpa: Allocator, docs_dir: []const u8) !void {
+    const stdout = std.io.getStdOut().writer();
+
+    const address = try std.net.Address.parseIp("127.0.0.1", 8080);
+    var server = try address.listen(.{
+        .reuse_address = true,
+    });
+    defer server.deinit();
+
+    stdout.print("Visit http://localhost:8080 to view the docs at ./{s}/\n", .{docs_dir}) catch {};
+    stdout.print("Press Ctrl+C to stop the server\n", .{}) catch {};
+
+    while (true) {
+        const connection = try server.accept();
+        handleConnection(gpa, connection, docs_dir) catch |err| {
+            std.debug.print("Error handling connection: {}\n", .{err});
+        };
+    }
+}
+
+/// Handle a single HTTP connection
+fn handleConnection(gpa: Allocator, connection: std.net.Server.Connection, docs_dir: []const u8) !void {
+    defer connection.stream.close();
+
+    var buffer: [4096]u8 = undefined;
+    const bytes_read = try connection.stream.read(&buffer);
+
+    if (bytes_read == 0) return;
+
+    const request = buffer[0..bytes_read];
+
+    // Parse the request line (e.g., "GET /path HTTP/1.1")
+    var lines = std.mem.splitSequence(u8, request, "\r\n");
+    const request_line = lines.next() orelse return;
+
+    var parts = std.mem.splitSequence(u8, request_line, " ");
+    const method = parts.next() orelse return;
+    const path = parts.next() orelse return;
+
+    if (!std.mem.eql(u8, method, "GET")) {
+        try sendResponse(connection.stream, "405 Method Not Allowed", "text/plain", "Method Not Allowed");
+        return;
+    }
+
+    // Determine the file path to serve
+    const file_path = try resolveFilePath(gpa, docs_dir, path);
+    defer gpa.free(file_path);
+
+    // Try to open and serve the file
+    const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
+        if (err == error.FileNotFound) {
+            try sendResponse(connection.stream, "404 Not Found", "text/plain", "File Not Found");
+        } else {
+            try sendResponse(connection.stream, "500 Internal Server Error", "text/plain", "Internal Server Error");
+        }
+        return;
+    };
+    defer file.close();
+
+    // Read file contents
+    const file_content = try file.readToEndAlloc(gpa, 10 * 1024 * 1024); // 10MB max
+    defer gpa.free(file_content);
+
+    // Determine content type
+    const content_type = getContentType(file_path);
+
+    // Send response
+    try sendResponse(connection.stream, "200 OK", content_type, file_content);
+}
+
+/// Resolve the file path based on the URL path
+fn resolveFilePath(gpa: Allocator, docs_dir: []const u8, url_path: []const u8) ![]const u8 {
+    // Remove leading slash
+    const clean_path = if (url_path.len > 0 and url_path[0] == '/')
+        url_path[1..]
+    else
+        url_path;
+
+    // If path is empty or ends with /, serve index.html
+    if (clean_path.len == 0 or clean_path[clean_path.len - 1] == '/') {
+        return try std.fmt.allocPrint(gpa, "{s}/{s}index.html", .{ docs_dir, clean_path });
+    }
+
+    // Check if the path has a file extension (contains a dot in the last component)
+    const last_slash = std.mem.lastIndexOfScalar(u8, clean_path, '/') orelse 0;
+    const last_component = clean_path[last_slash..];
+    const has_extension = std.mem.indexOfScalar(u8, last_component, '.') != null;
+
+    if (has_extension) {
+        // Path has extension, serve the file directly
+        return try std.fmt.allocPrint(gpa, "{s}/{s}", .{ docs_dir, clean_path });
+    } else {
+        // No extension, serve index.html from that directory
+        return try std.fmt.allocPrint(gpa, "{s}/{s}/index.html", .{ docs_dir, clean_path });
+    }
+}
+
+/// Get content type based on file extension
+fn getContentType(file_path: []const u8) []const u8 {
+    if (std.mem.endsWith(u8, file_path, ".html")) {
+        return "text/html; charset=utf-8";
+    } else if (std.mem.endsWith(u8, file_path, ".css")) {
+        return "text/css";
+    } else if (std.mem.endsWith(u8, file_path, ".js")) {
+        return "application/javascript";
+    } else if (std.mem.endsWith(u8, file_path, ".json")) {
+        return "application/json";
+    } else if (std.mem.endsWith(u8, file_path, ".png")) {
+        return "image/png";
+    } else if (std.mem.endsWith(u8, file_path, ".jpg") or std.mem.endsWith(u8, file_path, ".jpeg")) {
+        return "image/jpeg";
+    } else if (std.mem.endsWith(u8, file_path, ".svg")) {
+        return "image/svg+xml";
+    } else {
+        return "text/plain";
+    }
+}
+
+/// Send an HTTP response
+fn sendResponse(stream: std.net.Stream, status: []const u8, content_type: []const u8, body: []const u8) !void {
+    var response_buffer: [8192]u8 = undefined;
+    const response = try std.fmt.bufPrint(&response_buffer,
+        "HTTP/1.1 {s}\r\n" ++
+        "Content-Type: {s}\r\n" ++
+        "Content-Length: {d}\r\n" ++
+        "Connection: close\r\n" ++
+        "\r\n",
+        .{ status, content_type, body.len },
+    );
+
+    try stream.writeAll(response);
+    try stream.writeAll(body);
+}
+
 fn rocDocs(gpa: Allocator, args: cli_args.DocsArgs) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -3031,7 +3166,12 @@ fn rocDocs(gpa: Allocator, args: cli_args.DocsArgs) !void {
     // Generate documentation for all packages and modules
     try generateDocs(gpa, &result_with_env.build_env, args.path, args.output);
 
-    stdout.print("\nDocumentation generation complete for {s}", .{args.path}) catch {};
+    stdout.print("\nDocumentation generation complete for {s}\n", .{args.path}) catch {};
+
+    // Start HTTP server if --serve flag is enabled
+    if (args.serve) {
+        try serveDocumentation(gpa, args.output);
+    }
 }
 
 /// Associated item (type or value) within a module or type
