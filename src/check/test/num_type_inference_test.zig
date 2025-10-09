@@ -73,7 +73,7 @@ test "infers type for nums with specific requirements" {
 
         try testing.expectEqual(tc.expected_sign_needed, reqs.int_requirements.sign_needed);
         try testing.expectEqual(
-            @as(u8, @intCast(@intFromEnum(tc.expected_bits_needed))),
+            tc.expected_bits_needed.toBits(),
             reqs.int_requirements.bits_needed,
         );
 
@@ -114,7 +114,7 @@ test "infers num requirements correctly" {
 
         try testing.expectEqual(tc.expected_sign_needed, reqs.int_requirements.sign_needed);
         try testing.expectEqual(
-            @as(u8, @intCast(@intFromEnum(tc.expected_bits_needed))),
+            tc.expected_bits_needed.toBits(),
             reqs.int_requirements.bits_needed,
         );
 
@@ -161,7 +161,7 @@ test "edge case: negative 0" {
     const reqs = typ.structure.num.num_unbound;
 
     try testing.expectEqual(false, reqs.int_requirements.sign_needed);
-    try testing.expectEqual(0, reqs.int_requirements.bits_needed);
+    try testing.expectEqual(7, reqs.int_requirements.bits_needed);
 
     try testing.expectEqual(true, reqs.frac_requirements.fits_in_f32);
     try testing.expectEqual(true, reqs.frac_requirements.fits_in_dec);
@@ -181,7 +181,7 @@ test "edge case: positive 0" {
     const reqs = typ.structure.num.num_unbound;
 
     try testing.expectEqual(false, reqs.int_requirements.sign_needed);
-    try testing.expectEqual(0, reqs.int_requirements.bits_needed);
+    try testing.expectEqual(7, reqs.int_requirements.bits_needed);
 
     try testing.expectEqual(true, reqs.frac_requirements.fits_in_f32);
     try testing.expectEqual(true, reqs.frac_requirements.fits_in_dec);
@@ -191,34 +191,34 @@ test "infer hexadecimal literals as unbound integer" {
     const test_cases = [_]struct {
         source: []const u8,
         expected_sign_needed: bool,
-        expected_bits_needed: u8,
+        expected_bits_needed: types.Num.Int.BitsNeeded,
     }{
         // Basic hex literals
-        .{ .source = "0x0", .expected_sign_needed = false, .expected_bits_needed = 0 },
-        .{ .source = "0x1", .expected_sign_needed = false, .expected_bits_needed = 0 },
-        .{ .source = "0xFF", .expected_sign_needed = false, .expected_bits_needed = 1 },
-        .{ .source = "0x100", .expected_sign_needed = false, .expected_bits_needed = 2 },
-        .{ .source = "0xFFFF", .expected_sign_needed = false, .expected_bits_needed = 3 },
-        .{ .source = "0x10000", .expected_sign_needed = false, .expected_bits_needed = 4 },
-        .{ .source = "0xFFFFFFFF", .expected_sign_needed = false, .expected_bits_needed = 5 },
-        .{ .source = "0x100000000", .expected_sign_needed = false, .expected_bits_needed = 6 },
-        .{ .source = "0xFFFFFFFFFFFFFFFF", .expected_sign_needed = false, .expected_bits_needed = 7 },
+        .{ .source = "0x0", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(0) },
+        .{ .source = "0x1", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(0) },
+        .{ .source = "0xFF", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(1) },
+        .{ .source = "0x100", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(2) },
+        .{ .source = "0xFFFF", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(3) },
+        .{ .source = "0x10000", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(4) },
+        .{ .source = "0xFFFFFFFF", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(5) },
+        .{ .source = "0x100000000", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(6) },
+        .{ .source = "0xFFFFFFFFFFFFFFFF", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(7) },
 
         // Hex with underscores
-        .{ .source = "0x1_000", .expected_sign_needed = false, .expected_bits_needed = 2 },
-        .{ .source = "0xFF_FF", .expected_sign_needed = false, .expected_bits_needed = 3 },
-        .{ .source = "0x1234_5678_9ABC_DEF0", .expected_sign_needed = false, .expected_bits_needed = 6 },
+        .{ .source = "0x1_000", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(2) },
+        .{ .source = "0xFF_FF", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(3) },
+        .{ .source = "0x1234_5678_9ABC_DEF0", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(6) },
 
         // Negative hex literals
-        .{ .source = "-0x1", .expected_sign_needed = true, .expected_bits_needed = 0 },
-        .{ .source = "-0x80", .expected_sign_needed = true, .expected_bits_needed = 0 },
-        .{ .source = "-0x81", .expected_sign_needed = true, .expected_bits_needed = 1 },
-        .{ .source = "-0x8000", .expected_sign_needed = true, .expected_bits_needed = 2 },
-        .{ .source = "-0x8001", .expected_sign_needed = true, .expected_bits_needed = 3 },
-        .{ .source = "-0x80000000", .expected_sign_needed = true, .expected_bits_needed = 4 },
-        .{ .source = "-0x80000001", .expected_sign_needed = true, .expected_bits_needed = 5 },
-        .{ .source = "-0x8000000000000000", .expected_sign_needed = true, .expected_bits_needed = 6 },
-        .{ .source = "-0x8000000000000001", .expected_sign_needed = true, .expected_bits_needed = 7 },
+        .{ .source = "-0x1", .expected_sign_needed = true, .expected_bits_needed = @enumFromInt(0) },
+        .{ .source = "-0x80", .expected_sign_needed = true, .expected_bits_needed = @enumFromInt(0) },
+        .{ .source = "-0x81", .expected_sign_needed = true, .expected_bits_needed = @enumFromInt(1) },
+        .{ .source = "-0x8000", .expected_sign_needed = true, .expected_bits_needed = @enumFromInt(2) },
+        .{ .source = "-0x8001", .expected_sign_needed = true, .expected_bits_needed = @enumFromInt(3) },
+        .{ .source = "-0x80000000", .expected_sign_needed = true, .expected_bits_needed = @enumFromInt(4) },
+        .{ .source = "-0x80000001", .expected_sign_needed = true, .expected_bits_needed = @enumFromInt(5) },
+        .{ .source = "-0x8000000000000000", .expected_sign_needed = true, .expected_bits_needed = @enumFromInt(6) },
+        .{ .source = "-0x8000000000000001", .expected_sign_needed = true, .expected_bits_needed = @enumFromInt(7) },
     };
 
     inline for (test_cases) |tc| {
@@ -240,7 +240,7 @@ test "infer hexadecimal literals as unbound integer" {
         const reqs = int_typ.structure.num.int_unbound;
 
         try testing.expectEqual(tc.expected_sign_needed, reqs.sign_needed);
-        try testing.expectEqual(tc.expected_bits_needed, reqs.bits_needed);
+        try testing.expectEqual(tc.expected_bits_needed.toBits(), reqs.bits_needed);
     }
 }
 
@@ -248,29 +248,29 @@ test "infer binary literals as unbound integer" {
     const test_cases = [_]struct {
         source: []const u8,
         expected_sign_needed: bool,
-        expected_bits_needed: u8,
+        expected_bits_needed: types.Num.Int.BitsNeeded,
     }{
         // Basic binary literals
-        .{ .source = "0b0", .expected_sign_needed = false, .expected_bits_needed = 0 },
-        .{ .source = "0b1", .expected_sign_needed = false, .expected_bits_needed = 0 },
-        .{ .source = "0b10", .expected_sign_needed = false, .expected_bits_needed = 0 },
-        .{ .source = "0b11111111", .expected_sign_needed = false, .expected_bits_needed = 1 },
-        .{ .source = "0b100000000", .expected_sign_needed = false, .expected_bits_needed = 2 },
-        .{ .source = "0b1111111111111111", .expected_sign_needed = false, .expected_bits_needed = 3 },
-        .{ .source = "0b10000000000000000", .expected_sign_needed = false, .expected_bits_needed = 4 },
+        .{ .source = "0b0", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(0) },
+        .{ .source = "0b1", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(0) },
+        .{ .source = "0b10", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(0) },
+        .{ .source = "0b11111111", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(1) },
+        .{ .source = "0b100000000", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(2) },
+        .{ .source = "0b1111111111111111", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(3) },
+        .{ .source = "0b10000000000000000", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(4) },
 
         // Binary with underscores
-        .{ .source = "0b11_11", .expected_sign_needed = false, .expected_bits_needed = 0 },
-        .{ .source = "0b1111_1111", .expected_sign_needed = false, .expected_bits_needed = 1 },
-        .{ .source = "0b1_0000_0000", .expected_sign_needed = false, .expected_bits_needed = 2 },
-        .{ .source = "0b1010_1010_1010_1010", .expected_sign_needed = false, .expected_bits_needed = 3 },
+        .{ .source = "0b11_11", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(0) },
+        .{ .source = "0b1111_1111", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(1) },
+        .{ .source = "0b1_0000_0000", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(2) },
+        .{ .source = "0b1010_1010_1010_1010", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(3) },
 
         // Negative binary
-        .{ .source = "-0b1", .expected_sign_needed = true, .expected_bits_needed = 0 },
-        .{ .source = "-0b10000000", .expected_sign_needed = true, .expected_bits_needed = 0 },
-        .{ .source = "-0b10000001", .expected_sign_needed = true, .expected_bits_needed = 1 },
-        .{ .source = "-0b1000000000000000", .expected_sign_needed = true, .expected_bits_needed = 2 },
-        .{ .source = "-0b1000000000000001", .expected_sign_needed = true, .expected_bits_needed = 3 },
+        .{ .source = "-0b1", .expected_sign_needed = true, .expected_bits_needed = @enumFromInt(0) },
+        .{ .source = "-0b10000000", .expected_sign_needed = true, .expected_bits_needed = @enumFromInt(0) },
+        .{ .source = "-0b10000001", .expected_sign_needed = true, .expected_bits_needed = @enumFromInt(1) },
+        .{ .source = "-0b1000000000000000", .expected_sign_needed = true, .expected_bits_needed = @enumFromInt(2) },
+        .{ .source = "-0b1000000000000001", .expected_sign_needed = true, .expected_bits_needed = @enumFromInt(3) },
     };
 
     inline for (test_cases) |tc| {
@@ -292,7 +292,7 @@ test "infer binary literals as unbound integer" {
         const reqs = int_typ.structure.num.int_unbound;
 
         try testing.expectEqual(tc.expected_sign_needed, reqs.sign_needed);
-        try testing.expectEqual(tc.expected_bits_needed, reqs.bits_needed);
+        try testing.expectEqual(tc.expected_bits_needed.toBits(), reqs.bits_needed);
     }
 }
 
@@ -300,29 +300,29 @@ test "infer octal literals as unbound integer" {
     const test_cases = [_]struct {
         source: []const u8,
         expected_sign_needed: bool,
-        expected_bits_needed: u8,
+        expected_bits_needed: types.Num.Int.BitsNeeded,
     }{
         // Basic octal literals
-        .{ .source = "0o0", .expected_sign_needed = false, .expected_bits_needed = 0 },
-        .{ .source = "0o1", .expected_sign_needed = false, .expected_bits_needed = 0 },
-        .{ .source = "0o7", .expected_sign_needed = false, .expected_bits_needed = 0 },
-        .{ .source = "0o10", .expected_sign_needed = false, .expected_bits_needed = 0 },
-        .{ .source = "0o377", .expected_sign_needed = false, .expected_bits_needed = 1 },
-        .{ .source = "0o400", .expected_sign_needed = false, .expected_bits_needed = 2 },
-        .{ .source = "0o177777", .expected_sign_needed = false, .expected_bits_needed = 3 },
-        .{ .source = "0o200000", .expected_sign_needed = false, .expected_bits_needed = 4 },
+        .{ .source = "0o0", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(0) },
+        .{ .source = "0o1", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(0) },
+        .{ .source = "0o7", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(0) },
+        .{ .source = "0o10", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(0) },
+        .{ .source = "0o377", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(1) },
+        .{ .source = "0o400", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(2) },
+        .{ .source = "0o177777", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(3) },
+        .{ .source = "0o200000", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(4) },
 
         // Octal with underscores
-        .{ .source = "0o377_377", .expected_sign_needed = false, .expected_bits_needed = 4 },
-        .{ .source = "0o1_234_567", .expected_sign_needed = false, .expected_bits_needed = 4 },
+        .{ .source = "0o377_377", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(4) },
+        .{ .source = "0o1_234_567", .expected_sign_needed = false, .expected_bits_needed = @enumFromInt(4) },
 
         // Negative octal literals
-        .{ .source = "-0o1", .expected_sign_needed = true, .expected_bits_needed = 0 },
-        .{ .source = "-0o100", .expected_sign_needed = true, .expected_bits_needed = 0 },
-        .{ .source = "-0o200", .expected_sign_needed = true, .expected_bits_needed = 0 },
-        .{ .source = "-0o201", .expected_sign_needed = true, .expected_bits_needed = 1 },
-        .{ .source = "-0o100000", .expected_sign_needed = true, .expected_bits_needed = 2 },
-        .{ .source = "-0o100001", .expected_sign_needed = true, .expected_bits_needed = 3 },
+        .{ .source = "-0o1", .expected_sign_needed = true, .expected_bits_needed = @enumFromInt(0) },
+        .{ .source = "-0o100", .expected_sign_needed = true, .expected_bits_needed = @enumFromInt(0) },
+        .{ .source = "-0o200", .expected_sign_needed = true, .expected_bits_needed = @enumFromInt(0) },
+        .{ .source = "-0o201", .expected_sign_needed = true, .expected_bits_needed = @enumFromInt(1) },
+        .{ .source = "-0o100000", .expected_sign_needed = true, .expected_bits_needed = @enumFromInt(2) },
+        .{ .source = "-0o100001", .expected_sign_needed = true, .expected_bits_needed = @enumFromInt(3) },
     };
 
     inline for (test_cases) |tc| {
@@ -344,8 +344,6 @@ test "infer octal literals as unbound integer" {
         const reqs = int_typ.structure.num.int_unbound;
 
         try testing.expectEqual(tc.expected_sign_needed, reqs.sign_needed);
-        try testing.expectEqual(tc.expected_bits_needed, reqs.bits_needed);
+        try testing.expectEqual(tc.expected_bits_needed.toBits(), reqs.bits_needed);
     }
 }
-
-// TODO: Patterns
