@@ -2704,7 +2704,30 @@ fn checkFileWithBuildEnvPreserved(
     }
 
     // Build the file (works for both app and module files)
-    try build_env.build(filepath);
+    build_env.build(filepath) catch |err| {
+        return err;
+    };
+
+    // Force processing to ensure canonicalization happens
+    var sched_iter = build_env.schedulers.iterator();
+    if (sched_iter.next()) |sched_entry| {
+        const package_env = sched_entry.value_ptr.*;
+        if (package_env.modules.items.len > 0) {
+            const module_name = package_env.modules.items[0].name;
+
+            // Keep processing until the module is done
+            var max_iterations: u32 = 20;
+            while (max_iterations > 0) : (max_iterations -= 1) {
+                const phase = package_env.modules.items[0].phase;
+                if (phase == .Done) break;
+
+                package_env.processModuleByName(module_name) catch |err| {
+                    std.debug.print("Error processing module: {}\n", .{err});
+                    break;
+                };
+            }
+        }
+    }
 
     // Drain all reports
     const drained = try build_env.drainReports();
@@ -3154,7 +3177,9 @@ fn rocDocs(gpa: Allocator, args: cli_args.DocsArgs) !void {
             formatElapsedTime(stderr, elapsed) catch {};
             stderr.print(" for {s}.", .{args.path}) catch {};
 
-            std.process.exit(1);
+            if (check_result.error_count > 0) {
+                std.process.exit(1);
+            }
         }
     }
 
@@ -3382,7 +3407,13 @@ fn extractAssociatedItems(
     // Get all exported definitions
     const exports_slice = module_env.store.sliceDefs(module_env.exports);
 
-    for (exports_slice) |def_idx| {
+    // If no exports, try all_defs (for modules that are still being processed)
+    const defs_slice = if (exports_slice.len == 0)
+        module_env.store.sliceDefs(module_env.all_defs)
+    else
+        exports_slice;
+
+    for (defs_slice) |def_idx| {
         const def = module_env.store.getDef(def_idx);
 
         // Get the pattern to find the name
@@ -3657,8 +3688,34 @@ fn generatePackageDocs(
         break;
     }
 
-    const no_modules = [_]ModuleInfo{};
-    generatePackageIndex(gpa, output_dir, module_path, shorthands_list.items, &no_modules) catch |err| {
+    // For standalone modules, extract and display their exports
+    var module_infos = std.ArrayList(ModuleInfo).init(gpa);
+    defer {
+        for (module_infos.items) |mod| mod.deinit(gpa);
+        module_infos.deinit();
+    }
+
+    // Get the module's exports if it's a standalone module
+    var sched_iter = build_env.schedulers.iterator();
+    while (sched_iter.next()) |sched_entry| {
+        const package_env = sched_entry.value_ptr.*;
+
+        // Check ALL modules in this package
+        for (package_env.modules.items) |module_state| {
+            if (module_state.env) |*mod_env| {
+                const associated_items = try extractAssociatedItems(gpa, mod_env);
+                const mod_name = try gpa.dupe(u8, module_state.name);
+
+                try module_infos.append(.{
+                    .name = mod_name,
+                    .link_path = try gpa.dupe(u8, ""),
+                    .associated_items = associated_items,
+                });
+            }
+        }
+    }
+
+    generatePackageIndex(gpa, output_dir, module_path, shorthands_list.items, module_infos.items) catch |err| {
         std.debug.print("Warning: failed to generate index for {s}: {}\n", .{ module_path, err });
     };
 }
