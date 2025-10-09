@@ -79,9 +79,12 @@ pub fn build(b: *std.Build) void {
 
     const roc_modules = modules.RocModules.create(b, build_options, zstd);
 
-    // Build this executable and then run it during the build process to compile
-    // builtin .roc modules into serialized binary blobs that the actual compiler
-    // can then load.
+    // add main roc exe first to ensure LLVM dependencies are resolved early
+    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd) orelse return;
+    roc_modules.addAll(roc_exe);
+
+    // Build the builtin compiler executable that runs during the build process to compile
+    // builtin .roc modules into serialized binary blobs that the actual compiler can then load.
     const builtin_compiler_exe = b.addExecutable(.{
         .name = "builtin_compiler",
         .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
@@ -135,10 +138,6 @@ pub fn build(b: *std.Build) void {
     const compiled_builtins_module = b.createModule(.{
         .root_source_file = compiled_builtins_source,
     });
-
-    // add main roc exe
-    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd) orelse return;
-    roc_modules.addAll(roc_exe);
 
     // Add the compiled builtins module to roc exe and make it depend on the builtins being ready
     roc_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
