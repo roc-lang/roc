@@ -91,7 +91,7 @@ pub fn build(b: *std.Build) void {
     //
     // We cache the builtin compiler executable to avoid ~doubling normal build times.
     // CI always rebuilds from scratch, so it's not affected by this caching.
-    //
+
     // Discover all .roc files in src/build/roc/
     const roc_files = discoverBuiltinRocFiles(b) catch |err| {
         std.debug.print("Failed to discover builtin .roc files: {}\n", .{err});

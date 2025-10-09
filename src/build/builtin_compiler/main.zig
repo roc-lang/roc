@@ -21,6 +21,9 @@ const Allocator = std.mem.Allocator;
 /// Build-time compiler that compiles builtin .roc sources into serialized ModuleEnvs.
 /// This runs during `zig build` on the host machine to generate .bin files
 /// that get embedded into the final roc executable.
+///
+/// Note: Command-line arguments are ignored. The .roc files are read from fixed paths.
+/// The build system may pass file paths as arguments for cache tracking, but we don't use them.
 pub fn main() !void {
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
     defer {
@@ -31,26 +34,57 @@ pub fn main() !void {
     }
     const gpa = gpa_impl.allocator();
 
+    // Ignore command-line arguments - they're only used by Zig's build system for cache tracking
+
     // Read the .roc source files at runtime
+    const bool_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Bool.roc", 1024 * 1024);
+    defer gpa.free(bool_roc_source);
+
     const dict_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Dict.roc", 1024 * 1024);
     defer gpa.free(dict_roc_source);
 
     const set_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Set.roc", 1024 * 1024);
     defer gpa.free(set_roc_source);
 
-    // Compile Dict.roc first (it has no dependencies)
+    // Compile Bool.roc first WITHOUT injecting builtins (it defines Bool itself)
+    std.debug.print("Compiling Bool.roc...\n", .{});
+    const bool_env = try compileModule(
+        gpa,
+        "Bool",
+        bool_roc_source,
+        &.{}, // No module dependencies
+        false, // Don't inject builtins
+    );
+    defer {
+        bool_env.deinit();
+        gpa.destroy(bool_env);
+    }
+
+    // Verify that Bool's type declaration is at the expected index (2)
+    // This is critical for the compiler's hardcoded BUILTIN_BOOL constant
+    const bool_type_idx = bool_env.all_statements.span.start;
+    const stderr = std.io.getStdErr().writer();
+    try stderr.print("Bool type declaration at statement index: {}\n", .{bool_type_idx});
+    if (bool_type_idx != 2) {
+        try stderr.print("WARNING: Expected Bool at index 2, but got {}!\n", .{bool_type_idx});
+        return error.UnexpectedBoolIndex;
+    }
+    std.debug.print("Bool.roc compiled successfully!\n", .{});
+
+    // Compile Dict.roc (it has no dependencies, but needs builtins for if expressions)
     const dict_env = try compileModule(
         gpa,
         "Dict",
         dict_roc_source,
         &.{}, // No module dependencies
+        true, // Inject builtins
     );
     defer {
         dict_env.deinit();
         gpa.destroy(dict_env);
     }
 
-    // Compile Set.roc (it imports Dict)
+    // Compile Set.roc (it imports Dict and needs builtins)
     const set_env = try compileModule(
         gpa,
         "Set",
@@ -58,6 +92,7 @@ pub fn main() !void {
         &[_]ModuleDep{
             .{ .name = "Dict", .env = dict_env },
         },
+        true, // Inject builtins
     );
     defer {
         set_env.deinit();
@@ -65,13 +100,22 @@ pub fn main() !void {
     }
 
     // Create output directory
+    std.debug.print("\nCreating output directory...\n", .{});
     try std.fs.cwd().makePath("zig-out/builtins");
 
+    // Serialize Bool module
+    std.debug.print("Serializing Bool.roc...\n", .{});
+    try serializeModuleEnv(gpa, bool_env, "zig-out/builtins/Bool.bin");
+
     // Serialize Dict module
+    std.debug.print("Serializing Dict.roc...\n", .{});
     try serializeModuleEnv(gpa, dict_env, "zig-out/builtins/Dict.bin");
 
     // Serialize Set module
+    std.debug.print("Serializing Set.roc...\n", .{});
     try serializeModuleEnv(gpa, set_env, "zig-out/builtins/Set.bin");
+
+    std.debug.print("\n✓ All modules compiled and serialized successfully!\n", .{});
 }
 
 const ModuleDep = struct {
@@ -84,6 +128,7 @@ fn compileModule(
     module_name: []const u8,
     source: []const u8,
     deps: []const ModuleDep,
+    inject_builtins: bool,
 ) !*ModuleEnv {
     // This follows the pattern from TestEnv.init() in src/check/test/TestEnv.zig
 
@@ -149,7 +194,7 @@ fn compileModule(
         gpa.destroy(can_result);
     }
 
-    can_result.* = try Can.init(module_env, parse_ast, &module_envs);
+    can_result.* = try Can.init(module_env, parse_ast, &module_envs, .{ .inject_builtins = inject_builtins });
 
     try can_result.canonicalizeFile();
     try can_result.validateForChecking();

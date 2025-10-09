@@ -892,7 +892,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
     };
 
-    var czer = try Can.init(env, &result.parse_ast.?, null);
+    var czer = try Can.init(env, &result.parse_ast.?, null, .{});
     defer czer.deinit();
 
     czer.canonicalizeFile() catch |err| {

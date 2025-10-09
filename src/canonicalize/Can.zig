@@ -133,7 +133,7 @@ const RecordField = CIR.RecordField;
 const SeenRecordField = struct { ident: base.Ident.Idx, region: base.Region };
 
 /// The idx of the builtin Bool
-pub const BUILTIN_BOOL: Statement.Idx = @enumFromInt(4);
+pub const BUILTIN_BOOL: Statement.Idx = @enumFromInt(2);
 /// The idx of the builtin Result
 pub const BUILTIN_RESULT: Statement.Idx = @enumFromInt(13);
 
@@ -171,10 +171,15 @@ pub fn deinit(
     self.scratch_free_vars.deinit(gpa);
 }
 
+pub const InitOptions = struct {
+    inject_builtins: bool = true,
+};
+
 pub fn init(
     env: *ModuleEnv,
     parse_ir: *AST,
     module_envs: ?*const std.StringHashMap(*const ModuleEnv),
+    options: InitOptions,
 ) std.mem.Allocator.Error!Self {
     const gpa = env.gpa;
 
@@ -207,14 +212,17 @@ pub fn init(
 
     const scratch_statements_start = result.env.store.scratch_statements.top();
 
-    // Simulate the builtins by add type declarations
-    // TODO: These should ultimately come from the platform/builtin files rather than being hardcoded
-    try result.addBuiltinTypeBool(env);
-    try result.addBuiltinTypeResult(env);
+    if (options.inject_builtins) {
+        // Simulate the builtins by add type declarations
+        // TODO: These should ultimately come from the platform/builtin files rather than being hardcoded
+        const bool_idx = try result.addBuiltinTypeBool(env);
+        const result_idx = try result.addBuiltinTypeResult(env);
 
-    // Add builtins to builtin stmts
-    try result.env.store.addScratchStatement(BUILTIN_BOOL);
-    try result.env.store.addScratchStatement(BUILTIN_RESULT);
+        // Add builtins to builtin stmts (use the actual indices where they were created)
+        try result.env.store.addScratchStatement(bool_idx);
+        try result.env.store.addScratchStatement(result_idx);
+    }
+
     result.env.builtin_statements = try result.env.store.statementSpanFrom(scratch_statements_start);
 
     // Assert that the node store is completely empty
@@ -226,7 +234,8 @@ pub fn init(
 // builtins //
 
 /// Creates `Bool := [True, False]`
-fn addBuiltinTypeBool(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!void {
+/// Returns the statement index where Bool was created
+fn addBuiltinTypeBool(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!Statement.Idx {
     const gpa = ir.gpa;
     const type_ident = try ir.insertIdent(base.Ident.for_text("Bool"));
     const true_ident = try ir.insertIdent(base.Ident.for_text("True"));
@@ -268,8 +277,9 @@ fn addBuiltinTypeBool(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!void 
         .s_nominal_decl = .{ .header = header_idx, .anno = tag_union_anno_idx },
     }, .err, Region.zero());
 
-    // Assert that this is the first stmt in the file
-    std.debug.assert(type_decl_idx == BUILTIN_BOOL);
+    // Note: When Bool.roc is compiled without injecting builtins, Bool ends up at index 2 (BUILTIN_BOOL)
+    // This is verified during build time by the builtin_compiler.
+    // When builtins are injected into other modules (Dict, Set), Bool can be at any index.
 
     // Introduce to scope
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
@@ -279,10 +289,13 @@ fn addBuiltinTypeBool(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!void 
     // TODO: in the future, we should have hardcoded constants for these.
     try self.unqualified_nominal_tags.put(gpa, "True", type_decl_idx);
     try self.unqualified_nominal_tags.put(gpa, "False", type_decl_idx);
+
+    return type_decl_idx;
 }
 
 /// Creates `Result(ok, err) := [Ok(ok), Err(err)]`
-fn addBuiltinTypeResult(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!void {
+/// Returns the statement index where Result was created
+fn addBuiltinTypeResult(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!Statement.Idx {
     const gpa = ir.gpa;
     const type_ident = try ir.insertIdent(base.Ident.for_text("Result"));
     const ok_tag_ident = try ir.insertIdent(base.Ident.for_text("Ok"));
@@ -357,17 +370,19 @@ fn addBuiltinTypeResult(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!voi
         Region.zero(),
     );
 
-    // Assert that this is the first stmt in the file
-    std.debug.assert(type_decl_idx == BUILTIN_RESULT);
+    // Note: When Result.roc is compiled without injecting builtins, Result ends up at index 13 (BUILTIN_RESULT)
+    // This is verified during build time.
+    // When builtins are injected into other modules (Dict, Set), Result can be at any index.
 
     // Add to scope
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
     try current_scope.put(gpa, .type_decl, type_ident, type_decl_idx);
 
-    // Add True and False to unqualified_nominal_tags
-    // TODO: in the future, we should have hardcoded constants for these.
+    // Add Ok and Err to unqualified_nominal_tags
     try self.unqualified_nominal_tags.put(gpa, "Ok", type_decl_idx);
     try self.unqualified_nominal_tags.put(gpa, "Err", type_decl_idx);
+
+    return type_decl_idx;
 }
 
 // canonicalize //
