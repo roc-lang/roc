@@ -225,6 +225,15 @@ pub fn init(
 
     result.env.builtin_statements = try result.env.store.statementSpanFrom(scratch_statements_start);
 
+    // Debug assertion: Bool must always be the first builtin statement
+    if (std.debug.runtime_safety and options.inject_builtins) {
+        const builtin_stmts = result.env.store.sliceStatements(result.env.builtin_statements);
+        std.debug.assert(builtin_stmts.len >= 1); // Must have at least Bool
+        // Verify first builtin is Bool by checking it's a nominal_decl with name "Bool"
+        const first_stmt = result.env.store.getStatement(builtin_stmts[0]);
+        std.debug.assert(first_stmt == .s_nominal_decl);
+    }
+
     // Assert that the node store is completely empty
     env.debugAssertArraysInSync();
 
@@ -277,9 +286,10 @@ fn addBuiltinTypeBool(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!State
         .s_nominal_decl = .{ .header = header_idx, .anno = tag_union_anno_idx },
     }, .err, Region.zero());
 
-    // Note: When Bool.roc is compiled without injecting builtins, Bool ends up at index 2 (BUILTIN_BOOL)
-    // This is verified during build time by the builtin_compiler.
-    // When builtins are injected into other modules (Dict, Set), Bool can be at any index.
+    // Note: When Bool.roc is compiled without injecting builtins, Bool is at absolute index 2 (BUILTIN_BOOL).
+    // This is verified at build time by the builtin_compiler.
+    // When builtins are injected into other modules, Bool is always the FIRST builtin (builtin_statements[0]),
+    // though its absolute statement index may differ from BUILTIN_BOOL.
 
     // Introduce to scope
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
