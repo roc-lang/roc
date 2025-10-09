@@ -139,10 +139,8 @@ pub fn build(b: *std.Build) void {
     const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd) orelse return;
     roc_modules.addAll(roc_exe);
 
-    // Add the compiled builtins module to roc exe
+    // Add the compiled builtins module to roc exe and make it depend on the builtins being ready
     roc_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
-
-    // Make roc exe depend on compiled builtins being available
     roc_exe.step.dependOn(&write_compiled_builtins.step);
 
     install_and_run(b, no_bin, roc_exe, roc_step, run_step, run_args);
@@ -215,6 +213,12 @@ pub fn build(b: *std.Build) void {
     // Create and add module tests
     const module_tests = roc_modules.createModuleTests(b, target, optimize, zstd, test_filters);
     for (module_tests) |module_test| {
+        // Add compiled builtins to check module tests
+        if (std.mem.eql(u8, module_test.test_step.name, "check")) {
+            module_test.test_step.root_module.addImport("compiled_builtins", compiled_builtins_module);
+            module_test.test_step.step.dependOn(&write_compiled_builtins.step);
+        }
+
         if (run_args.len != 0) {
             module_test.run_step.addArgs(run_args);
         }
