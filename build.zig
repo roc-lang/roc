@@ -79,13 +79,14 @@ pub fn build(b: *std.Build) void {
 
     const roc_modules = modules.RocModules.create(b, build_options, zstd);
 
-    // CRITICAL: Build-time builtin compiler - MUST use b.graph.host target for cross-compilation support
-    // This executable runs during the build process to compile builtin .roc modules
+    // Build this executable and then run it during the build process to compile
+    // builtin .roc modules into serialized binary blobs that the actual compiler
+    // can then load.
     const builtin_compiler_exe = b.addExecutable(.{
         .name = "builtin_compiler",
         .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
-        .target = b.graph.host, // ALWAYS use b.graph.host - this runs at build time on the host machine!
-        .optimize = .ReleaseSafe, // Fast enough for build time
+        .target = b.graph.host, // this runs at build time on the *host* machine!
+        .optimize = .Debug, // No need to optimize - only compiles two small files
         // Note: libc linking is handled by add_tracy below (required when tracy is enabled)
     });
 
