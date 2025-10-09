@@ -74,8 +74,8 @@ fn copyContent(
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Content {
     return switch (content) {
-        .flex_var => |maybe_ident| Content{ .flex_var = maybe_ident },
-        .rigid_var => |ident| Content{ .rigid_var = ident },
+        .flex => |flex| Content{ .flex = flex },
+        .rigid => |rigid| Content{ .rigid = rigid },
         .alias => |alias| Content{ .alias = try copyAlias(source_store, dest_store, alias, var_mapping, source_idents, dest_idents, allocator) },
         .structure => |flat_type| Content{ .structure = try copyFlatType(source_store, dest_store, flat_type, var_mapping, source_idents, dest_idents, allocator) },
         .err => Content.err,

@@ -118,7 +118,7 @@ test "addTypeVar - host opaque types compile to opaque_ptr" {
     defer lt.deinit();
 
     // Box of flex_var
-    const flex_var = try lt.type_store.freshFromContent(.{ .flex_var = null });
+    const flex_var = try lt.type_store.freshFromContent(.{ .flex = types.Flex.init() });
     const box_flex_var = try lt.type_store.freshFromContent(.{ .structure = .{ .box = flex_var } });
     const box_flex_idx = try lt.layout_store.addTypeVar(box_flex_var, &lt.type_scope);
     const box_flex_layout = lt.layout_store.getLayout(box_flex_idx);
@@ -127,7 +127,7 @@ test "addTypeVar - host opaque types compile to opaque_ptr" {
 
     // Box of rigid_var
     const ident_idx = try lt.module_env.insertIdent(base.Ident.for_text("a"));
-    const rigid_var = try lt.type_store.freshFromContent(.{ .rigid_var = ident_idx });
+    const rigid_var = try lt.type_store.freshFromContent(.{ .rigid = types.Rigid.init(ident_idx) });
     const box_rigid_var = try lt.type_store.freshFromContent(.{ .structure = .{ .box = rigid_var } });
     const box_rigid_idx = try lt.layout_store.addTypeVar(box_rigid_var, &lt.type_scope);
     const box_rigid_layout = lt.layout_store.getLayout(box_rigid_idx);

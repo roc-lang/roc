@@ -230,8 +230,8 @@ const CheckOccurs = struct {
                     const backing_var = self.types_store.getAliasBackingVar(alias);
                     try self.occursSubVar(root, backing_var, ctx);
                 },
-                .flex_var => {},
-                .rigid_var => {},
+                .flex => {},
+                .rigid => {},
                 .err => {},
             }
             self.scratch.popSeen();

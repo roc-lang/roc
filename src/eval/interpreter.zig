@@ -3316,7 +3316,7 @@ pub const Interpreter = struct {
                                             const next_type = module.types.resolveVar(var_).desc.content;
                                             if (next_type == .structure and next_type.structure == .num) {
                                                 num = next_type.structure.num;
-                                            } else if (next_type == .flex_var) {
+                                            } else if (next_type == .flex) {
                                                 break :prec .{ .int = types.Num.Int.Precision.default };
                                             } else {
                                                 return Error.InvalidNumExt;
@@ -3326,7 +3326,7 @@ pub const Interpreter = struct {
                                             const next_type = module.types.resolveVar(var_).desc.content;
                                             if (next_type == .structure and next_type.structure == .num) {
                                                 num = next_type.structure.num;
-                                            } else if (next_type == .flex_var) {
+                                            } else if (next_type == .flex) {
                                                 break :prec .{ .int = types.Num.Int.Precision.default };
                                             } else {
                                                 return Error.InvalidNumExt;
@@ -3336,7 +3336,7 @@ pub const Interpreter = struct {
                                             const next_type = module.types.resolveVar(var_).desc.content;
                                             if (next_type == .structure and next_type.structure == .num) {
                                                 num = next_type.structure.num;
-                                            } else if (next_type == .flex_var) {
+                                            } else if (next_type == .flex) {
                                                 break :prec .{ .frac = types.Num.Frac.Precision.default };
                                             } else {
                                                 return Error.InvalidNumExt;
@@ -3393,7 +3393,7 @@ pub const Interpreter = struct {
                             break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .list = rt_elem } });
                         },
                         .list_unbound => {
-                            const elem_var = try self.runtime_types.freshFromContent(.{ .flex_var = null });
+                            const elem_var = try self.runtime_types.freshFromContent(.{ .flex = types.Flex.init() });
                             break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .list = elem_var } });
                         },
                         .record => |rec| {
@@ -3504,12 +3504,12 @@ pub const Interpreter = struct {
                     const content = try self.runtime_types.mkAlias(alias.ident, rt_backing, buf);
                     break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                 },
-                .flex_var => |id_opt| {
-                    const content: types.Content = .{ .flex_var = id_opt };
+                .flex => |flex| {
+                    const content: types.Content = .{ .flex = flex };
                     break :blk try self.runtime_types.freshFromContent(content);
                 },
-                .rigid_var => |ident| {
-                    const content: types.Content = .{ .rigid_var = ident };
+                .rigid => |rigid| {
+                    const content: types.Content = .{ .rigid = rigid };
                     break :blk try self.runtime_types.freshFromContent(content);
                 },
                 .err => {
@@ -3561,8 +3561,8 @@ pub const Interpreter = struct {
                 .alias => |alias| {
                     current_ext = module.types.getAliasBackingVar(alias);
                 },
-                .flex_var => break,
-                .rigid_var => break,
+                .flex => break,
+                .rigid => break,
                 else => {
                     // TODO: Don't use unreachable here
                     unreachable;
@@ -3941,10 +3941,10 @@ test "interpreter: translateTypeVar for flex var" {
     var interp = try Interpreter.init(gpa, &env);
     defer interp.deinit();
 
-    const ct_flex = try env.types.freshFromContent(.{ .flex_var = null });
+    const ct_flex = try env.types.freshFromContent(.{ .flex = types.Flex.init() });
     const rt_var = try interp.translateTypeVar(&env, ct_flex);
     const resolved = interp.runtime_types.resolveVar(rt_var);
-    try std.testing.expect(resolved.desc.content == .flex_var);
+    try std.testing.expect(resolved.desc.content == .flex);
 }
 
 // RED: translating a compile-time rigid var should produce a runtime rigid var with same ident
@@ -3957,11 +3957,11 @@ test "interpreter: translateTypeVar for rigid var" {
     defer interp.deinit();
 
     const name_a = try env.common.idents.insert(gpa, @import("base").Ident.for_text("A"));
-    const ct_rigid = try env.types.freshFromContent(.{ .rigid_var = name_a });
+    const ct_rigid = try env.types.freshFromContent(.{ .rigid = types.Rigid.init(name_a) });
     const rt_var = try interp.translateTypeVar(&env, ct_rigid);
     const resolved = interp.runtime_types.resolveVar(rt_var);
-    try std.testing.expect(resolved.desc.content == .rigid_var);
-    try std.testing.expectEqual(name_a, resolved.desc.content.rigid_var);
+    try std.testing.expect(resolved.desc.content == .rigid);
+    try std.testing.expectEqual(name_a, resolved.desc.content.rigid.name);
 }
 
 // RED: poly cache miss then hit
@@ -4068,7 +4068,7 @@ test "interpreter: unification constrains (a->a) with Str" {
 
     const func_id: u32 = 42;
     // runtime flex var 'a'
-    const a = try interp.runtime_types.freshFromContent(.{ .flex_var = null });
+    const a = try interp.runtime_types.freshFromContent(.{ .flex = types.Flex.init() });
     const func_content = try interp.runtime_types.mkFuncPure(&.{a}, a);
     const func_var = try interp.runtime_types.register(.{ .content = func_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
 

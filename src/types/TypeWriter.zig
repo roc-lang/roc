@@ -259,15 +259,15 @@ fn writeVarWithContext(self: *TypeWriter, var_: Var, context: TypeContext, root_
             defer _ = self.seen.pop();
 
             switch (resolved.desc.content) {
-                .flex_var => |mb_ident_idx| {
-                    if (mb_ident_idx) |ident_idx| {
+                .flex => |flex| {
+                    if (flex.name) |ident_idx| {
                         _ = try self.buf.writer().write(self.getIdent(ident_idx));
                     } else {
                         try self.writeFlexVarName(var_, context, root_var);
                     }
                 },
-                .rigid_var => |ident_idx| {
-                    _ = try self.buf.writer().write(self.getIdent(ident_idx));
+                .rigid => |rigid| {
+                    _ = try self.buf.writer().write(self.getIdent(rigid.name));
                     // Useful in debugging to see if a var is rigid or not
                     // _ = try self.buf.writer().write("[r]");
                 },
@@ -481,19 +481,19 @@ fn writeRecord(self: *TypeWriter, record: Record, root_var: Var) std.mem.Allocat
                 try self.writeVarWithContext(record.ext, .RecordExtension, root_var);
             },
         },
-        .flex_var => |mb_ident| {
+        .flex => |flex| {
             // Only show flex vars if they have a name
-            if (mb_ident) |_| {
+            if (flex.name) |_| {
                 if (fields.len > 0) _ = try self.buf.writer().write(", ");
                 try self.writeVarWithContext(record.ext, .RecordExtension, root_var);
             }
             // Otherwise hide unnamed flex vars, so they render as no extension.
         },
-        .rigid_var => |ident_idx| {
+        .rigid => |rigid| {
             // Show rigid vars with .. syntax
             if (fields.len > 0) _ = try self.buf.writer().write(", ");
             _ = try self.buf.writer().write("..");
-            _ = try self.buf.writer().write(self.getIdent(ident_idx));
+            _ = try self.buf.writer().write(self.getIdent(rigid.name));
         },
         else => {
             if (fields.len > 0) _ = try self.buf.writer().write(", ");
@@ -527,19 +527,19 @@ fn writeRecordExtension(self: *TypeWriter, ext_var: Var, num_fields: usize, root
                 try self.writeVarWithContext(ext_var, .RecordExtension, root_var);
             },
         },
-        .flex_var => |mb_ident| {
+        .flex => |flex| {
             // Only show flex vars if they have a name
-            if (mb_ident) |_| {
+            if (flex.name) |_| {
                 if (num_fields > 0) _ = try self.buf.writer().write(", ");
                 try self.writeVarWithContext(ext_var, .RecordExtension, root_var);
             }
             // Otherwise hide unnamed flex vars, so they render as no extension.
         },
-        .rigid_var => |ident_idx| {
+        .rigid => |rigid| {
             // Show rigid vars with .. syntax
             if (num_fields > 0) _ = try self.buf.writer().write(", ");
             _ = try self.buf.writer().write("..");
-            _ = try self.buf.writer().write(self.getIdent(ident_idx));
+            _ = try self.buf.writer().write(self.getIdent(rigid.name));
         },
         else => {
             // Show other types (aliases, errors, etc)
@@ -567,8 +567,8 @@ fn writeTagUnion(self: *TypeWriter, tag_union: TagUnion, root_var: Var) std.mem.
     // Show extension variable if it's not empty
     const ext_resolved = self.types.resolveVar(tag_union.ext);
     switch (ext_resolved.desc.content) {
-        .flex_var => |mb_ident_idx| {
-            if (mb_ident_idx) |ident_idx| {
+        .flex => |flex| {
+            if (flex.name) |ident_idx| {
                 _ = try self.buf.writer().write(self.getIdent(ident_idx));
             } else {
                 try self.writeFlexVarName(tag_union.ext, .TagUnionExtension, root_var);
@@ -580,8 +580,8 @@ fn writeTagUnion(self: *TypeWriter, tag_union: TagUnion, root_var: Var) std.mem.
                 try self.writeVarWithContext(tag_union.ext, .TagUnionExtension, root_var);
             },
         },
-        .rigid_var => |ident_idx| {
-            _ = try self.buf.writer().write(self.getIdent(ident_idx));
+        .rigid => |rigid| {
+            _ = try self.buf.writer().write(self.getIdent(rigid.name));
             // _ = try self.buf.writer().write("[r]");
         },
         else => {
@@ -763,7 +763,7 @@ fn countVar(self: *const TypeWriter, search_var: Var, current_var: Var, count: *
     }
 
     switch (resolved.desc.content) {
-        .flex_var, .rigid_var, .err => {},
+        .flex, .rigid, .err => {},
         .alias => |alias| {
             // For aliases, we only count occurrences in the type arguments
             var args_iter = self.types.iterAliasArgs(alias);

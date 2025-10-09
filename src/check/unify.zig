@@ -67,6 +67,8 @@ const Var = types_mod.Var;
 const Desc = types_mod.Descriptor;
 const Rank = types_mod.Rank;
 const Mark = types_mod.Mark;
+const Flex = types_mod.Flex;
+const Rigid = types_mod.Rigid;
 const Content = types_mod.Content;
 const Alias = types_mod.Alias;
 const NominalType = types_mod.NominalType;
@@ -459,10 +461,10 @@ fn Unifier(comptime StoreTypeB: type) type {
             defer trace.end();
 
             switch (vars.a.desc.content) {
-                .flex_var => |mb_a_ident| {
-                    self.unifyFlex(vars, mb_a_ident, vars.b.desc.content);
+                .flex => |flex| {
+                    self.unifyFlex(vars, flex, vars.b.desc.content);
                 },
-                .rigid_var => |_| {
+                .rigid => |_| {
                     try self.unifyRigid(vars, vars.b.desc.content);
                 },
                 .alias => |a_alias| {
@@ -509,19 +511,26 @@ fn Unifier(comptime StoreTypeB: type) type {
         // Unify flex //
 
         /// Unify when `a` was a flex
-        fn unifyFlex(self: *Self, vars: *const ResolvedVarDescs, mb_a_ident: ?Ident.Idx, b_content: Content) void {
+        fn unifyFlex(self: *Self, vars: *const ResolvedVarDescs, a_flex: Flex, b_content: Content) void {
             const trace = tracy.trace(@src());
             defer trace.end();
 
             switch (b_content) {
-                .flex_var => |mb_b_ident| {
-                    if (mb_a_ident) |a_ident| {
-                        self.merge(vars, Content{ .flex_var = a_ident });
-                    } else {
-                        self.merge(vars, Content{ .flex_var = mb_b_ident });
-                    }
+                .flex => |b_flex| {
+                    const mb_ident = blk: {
+                        if (a_flex.name) |a_ident| {
+                            break :blk a_ident;
+                        } else {
+                            break :blk b_flex.name;
+                        }
+                    };
+                    // TODO: Merge static dispatch constraints
+                    self.merge(vars, Content{ .flex = Flex.init().withName(mb_ident) });
                 },
-                .rigid_var => self.merge(vars, b_content),
+                .rigid => {
+                    // TODO: Merge static dispatch constraints
+                    self.merge(vars, b_content);
+                },
                 .alias => |_| self.merge(vars, b_content),
                 .structure => self.merge(vars, b_content),
                 .err => self.merge(vars, .err),
@@ -536,8 +545,11 @@ fn Unifier(comptime StoreTypeB: type) type {
             defer trace.end();
 
             switch (b_content) {
-                .flex_var => self.merge(vars, vars.a.desc.content),
-                .rigid_var => return error.TypeMismatch,
+                .flex => {
+                    // TODO: Merge static dispatch constraints
+                    self.merge(vars, vars.a.desc.content);
+                },
+                .rigid => return error.TypeMismatch,
                 .alias => return error.TypeMismatch,
                 .structure => return error.TypeMismatch,
                 .err => self.merge(vars, .err),
@@ -554,10 +566,12 @@ fn Unifier(comptime StoreTypeB: type) type {
             const backing_var = self.types_store.getAliasBackingVar(a_alias);
 
             switch (b_content) {
-                .flex_var => |_| {
+                .flex => |_| {
+                    // TODO: Unwrap alias?
+                    // TODO: Merge static dispatch constraints
                     self.merge(vars, Content{ .alias = a_alias });
                 },
-                .rigid_var => |_| {
+                .rigid => |_| {
                     try self.unifyGuarded(backing_var, vars.b.var_);
                 },
                 .alias => |b_alias| {
@@ -644,10 +658,11 @@ fn Unifier(comptime StoreTypeB: type) type {
             defer trace.end();
 
             switch (b_content) {
-                .flex_var => |_| {
+                .flex => |_| {
+                    // TODO: Check static dispatch constraints
                     self.merge(vars, Content{ .structure = a_flat_type });
                 },
-                .rigid_var => return error.TypeMismatch,
+                .rigid => return error.TypeMismatch,
                 .alias => |b_alias| {
                     // When unifying an alias with a concrete structure, we
                     // want to preserve the alias for display while ensuring the
@@ -1733,7 +1748,7 @@ fn Unifier(comptime StoreTypeB: type) type {
         /// For example:
         ///   Given a type like `Num(Int(U8))`, this function returns `.int_resolved(.u8)`.
         ///
-        /// If resolution reaches a `.flex_var`, it returns `.flex_resolved`,
+        /// If resolution reaches a `.flex`, it returns `.flex_resolved`,
         /// indicating the number is still unspecialized.
         ///
         /// If the chain ends in an invalid structure (e.g. `Num(Str)`),
@@ -1750,7 +1765,7 @@ fn Unifier(comptime StoreTypeB: type) type {
             while (true) {
                 const resolved = self.types_store.resolveVar(num_var);
                 switch (resolved.desc.content) {
-                    .flex_var => {
+                    .flex => {
                         if (seen_int and seen_frac) {
                             return .{ .err = num_var };
                         } else if (seen_int) {
@@ -1761,7 +1776,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                             return .num_flex;
                         }
                     },
-                    .rigid_var => {
+                    .rigid => {
                         if (seen_int and seen_frac) {
                             return .{ .err = num_var };
                         } else if (seen_int) {
@@ -2002,13 +2017,13 @@ fn Unifier(comptime StoreTypeB: type) type {
 
             const a_gathered_ext = blk: {
                 switch (a_gathered_fields.ext) {
-                    .unbound => break :blk self.fresh(vars, .{ .flex_var = null }) catch return Error.AllocatorError,
+                    .unbound => break :blk self.fresh(vars, .{ .flex = Flex.init() }) catch return Error.AllocatorError,
                     .ext => |ext_var| break :blk ext_var,
                 }
             };
             const b_gathered_ext = blk: {
                 switch (b_gathered_fields.ext) {
-                    .unbound => break :blk self.fresh(vars, .{ .flex_var = null }) catch return Error.AllocatorError,
+                    .unbound => break :blk self.fresh(vars, .{ .flex = Flex.init() }) catch return Error.AllocatorError,
                     .ext => |ext_var| break :blk ext_var,
                 }
             };
@@ -2099,7 +2114,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                     } } }) catch return Error.AllocatorError;
 
                     // Create a new ext var
-                    const new_ext_var = self.fresh(vars, .{ .flex_var = null }) catch return Error.AllocatorError;
+                    const new_ext_var = self.fresh(vars, .{ .flex = Flex.init() }) catch return Error.AllocatorError;
 
                     // Unify the sub records with exts
                     try self.unifyGuarded(a_gathered_ext, only_in_b_var);
@@ -2151,10 +2166,10 @@ fn Unifier(comptime StoreTypeB: type) type {
                     },
                     .ext => |ext_var| {
                         switch (self.types_store.resolveVar(ext_var).desc.content) {
-                            .flex_var => {
+                            .flex => {
                                 return .{ .ext = .{ .ext = ext_var }, .range = range };
                             },
-                            .rigid_var => {
+                            .rigid => {
                                 return .{ .ext = .{ .ext = ext_var }, .range = range };
                             },
                             .alias => |alias| {
@@ -2517,7 +2532,7 @@ fn Unifier(comptime StoreTypeB: type) type {
                     } } }) catch return Error.AllocatorError;
 
                     // Create a new ext var
-                    const new_ext_var = self.fresh(vars, .{ .flex_var = null }) catch return Error.AllocatorError;
+                    const new_ext_var = self.fresh(vars, .{ .flex = Flex.init() }) catch return Error.AllocatorError;
 
                     // Unify the sub tag_unions with exts
                     try self.unifyGuarded(a_gathered_tags.ext, only_in_b_var);
@@ -2562,10 +2577,10 @@ fn Unifier(comptime StoreTypeB: type) type {
             var ext_var = tag_union.ext;
             while (true) {
                 switch (self.types_store.resolveVar(ext_var).desc.content) {
-                    .flex_var => {
+                    .flex => {
                         return .{ .ext = ext_var, .range = range };
                     },
-                    .rigid_var => {
+                    .rigid => {
                         return .{ .ext = ext_var, .range = range };
                     },
                     .alias => |alias| {
