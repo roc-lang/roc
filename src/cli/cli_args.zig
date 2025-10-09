@@ -579,7 +579,7 @@ fn parseDocs(args: []const []const u8) CliArgs {
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
-            return CliArgs{ .help =
+            return CliArgs{ .help = 
             \\Generate documentation for a Roc package
             \\
             \\Usage: roc docs [OPTIONS] [ROC_FILE]

@@ -3087,12 +3087,13 @@ fn getContentType(file_path: []const u8) []const u8 {
 /// Send an HTTP response
 fn sendResponse(stream: std.net.Stream, status: []const u8, content_type: []const u8, body: []const u8) !void {
     var response_buffer: [8192]u8 = undefined;
-    const response = try std.fmt.bufPrint(&response_buffer,
+    const response = try std.fmt.bufPrint(
+        &response_buffer,
         "HTTP/1.1 {s}\r\n" ++
-        "Content-Type: {s}\r\n" ++
-        "Content-Length: {d}\r\n" ++
-        "Connection: close\r\n" ++
-        "\r\n",
+            "Content-Type: {s}\r\n" ++
+            "Content-Length: {d}\r\n" ++
+            "Connection: close\r\n" ++
+            "\r\n",
         .{ status, content_type, body.len },
     );
 
