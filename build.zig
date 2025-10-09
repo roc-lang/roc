@@ -79,9 +79,69 @@ pub fn build(b: *std.Build) void {
 
     const roc_modules = modules.RocModules.create(b, build_options, zstd);
 
+    // CRITICAL: Build-time builtin compiler - MUST use b.graph.host target for cross-compilation support
+    // This executable runs during the build process to compile builtin .roc modules
+    const builtin_compiler_exe = b.addExecutable(.{
+        .name = "builtin_compiler",
+        .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
+        .target = b.graph.host, // ALWAYS use b.graph.host - this runs at build time on the host machine!
+        .optimize = .ReleaseSafe, // Fast enough for build time
+        .link_libc = false, // No libc needed - pure Zig/Roc parsing
+    });
+
+    // Add only the minimal modules needed for parsing/checking
+    builtin_compiler_exe.root_module.addImport("base", roc_modules.base);
+    builtin_compiler_exe.root_module.addImport("collections", roc_modules.collections);
+    builtin_compiler_exe.root_module.addImport("types", roc_modules.types);
+    builtin_compiler_exe.root_module.addImport("parse", roc_modules.parse);
+    builtin_compiler_exe.root_module.addImport("can", roc_modules.can);
+    builtin_compiler_exe.root_module.addImport("check", roc_modules.check);
+    builtin_compiler_exe.root_module.addImport("reporting", roc_modules.reporting);
+    builtin_compiler_exe.root_module.addImport("builtins", roc_modules.builtins);
+
+    // Run the builtin compiler to generate .bin files in zig-out/builtins/
+    const run_builtin_compiler = b.addRunArtifact(builtin_compiler_exe);
+
+    // Create a manual build step for testing the builtin compiler
+    const builtin_compiler_step = b.step("builtin-compiler", "Run the builtin compiler to compile builtin .roc modules");
+    builtin_compiler_step.dependOn(&run_builtin_compiler.step);
+
+    // The builtin compiler outputs to zig-out/builtins/ which is in .gitignore
+    // We need to copy those files to the build cache and create a module that embeds them
+    const write_compiled_builtins = b.addWriteFiles();
+    write_compiled_builtins.step.dependOn(&run_builtin_compiler.step);
+
+    // Copy the generated .bin files from zig-out to the build cache directory
+    _ = write_compiled_builtins.addCopyFile(
+        .{ .cwd_relative = "zig-out/builtins/Dict.bin" },
+        "Dict.bin",
+    );
+    _ = write_compiled_builtins.addCopyFile(
+        .{ .cwd_relative = "zig-out/builtins/Set.bin" },
+        "Set.bin",
+    );
+
+    // Create a Zig file in the same directory that embeds the .bin files
+    const compiled_builtins_source = write_compiled_builtins.add("compiled_builtins.zig",
+        \\pub const dict_bin = @embedFile("Dict.bin");
+        \\pub const set_bin = @embedFile("Set.bin");
+    );
+
+    // Create a module from this generated file
+    const compiled_builtins_module = b.createModule(.{
+        .root_source_file = compiled_builtins_source,
+    });
+
     // add main roc exe
     const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd) orelse return;
     roc_modules.addAll(roc_exe);
+
+    // Add the compiled builtins module to roc exe
+    roc_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
+
+    // Make roc exe depend on compiled builtins being available
+    roc_exe.step.dependOn(&write_compiled_builtins.step);
+
     install_and_run(b, no_bin, roc_exe, roc_step, run_step, run_args);
 
     // Add snapshot tool
