@@ -18,7 +18,7 @@ const Can = can.Can;
 const Check = check.Check;
 const Allocator = std.mem.Allocator;
 
-/// Build-time compiler that compiles Dict.roc and Set.roc into serialized ModuleEnvs.
+/// Build-time compiler that compiles builtin .roc sources into serialized ModuleEnvs.
 /// This runs during `zig build` on the host machine to generate .bin files
 /// that get embedded into the final roc executable.
 pub fn main() !void {
