@@ -40,6 +40,7 @@
 //! subsequent unification runs.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const tracy = @import("tracy");
 const collections = @import("collections");
@@ -84,6 +85,8 @@ const TwoRecordFields = types_mod.TwoRecordFields;
 const TagUnion = types_mod.TagUnion;
 const Tag = types_mod.Tag;
 const TwoTags = types_mod.TwoTags;
+const StaticDispatchConstraint = types_mod.StaticDispatchConstraint;
+const TwoStaticDispatchConstraints = types_mod.TwoStaticDispatchConstraints;
 
 const VarSafeList = Var.SafeList;
 const RecordFieldSafeMultiList = RecordField.SafeMultiList;
@@ -461,10 +464,10 @@ const Unifier = struct {
 
         switch (vars.a.desc.content) {
             .flex => |flex| {
-                self.unifyFlex(vars, flex, vars.b.desc.content);
+                try self.unifyFlex(vars, flex, vars.b.desc.content);
             },
-            .rigid => |_| {
-                try self.unifyRigid(vars, vars.b.desc.content);
+            .rigid => |rigid| {
+                try self.unifyRigid(vars, rigid, vars.b.desc.content);
             },
             .alias => |a_alias| {
                 try self.unifyAlias(vars, a_alias, vars.b.desc.content);
@@ -510,7 +513,7 @@ const Unifier = struct {
     // Unify flex //
 
     /// Unify when `a` was a flex
-    fn unifyFlex(self: *Self, vars: *const ResolvedVarDescs, a_flex: Flex, b_content: Content) void {
+    fn unifyFlex(self: *Self, vars: *const ResolvedVarDescs, a_flex: Flex, b_content: Content) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
 
@@ -523,12 +526,19 @@ const Unifier = struct {
                         break :blk b_flex.name;
                     }
                 };
-                // TODO: Merge static dispatch constraints
-                self.merge(vars, Content{ .flex = Flex.init().withName(mb_ident) });
+
+                const merged_constraints = try self.unifyStaticDispatchConstraints(a_flex.constraints, b_flex.constraints, .union_all);
+                self.merge(vars, Content{ .flex = .{
+                    .name = mb_ident,
+                    .constraints = merged_constraints,
+                } });
             },
-            .rigid => {
-                // TODO: Merge static dispatch constraints
-                self.merge(vars, b_content);
+            .rigid => |b_rigid| {
+                const merged_constraints = try self.unifyStaticDispatchConstraints(a_flex.constraints, b_rigid.constraints, .a_subset_b);
+                self.merge(vars, Content{ .rigid = .{
+                    .name = b_rigid.name,
+                    .constraints = merged_constraints,
+                } });
             },
             .alias => |_| self.merge(vars, b_content),
             .structure => self.merge(vars, b_content),
@@ -539,14 +549,17 @@ const Unifier = struct {
     // Unify rigid //
 
     /// Unify when `a` was a rigid
-    fn unifyRigid(self: *Self, vars: *const ResolvedVarDescs, b_content: Content) Error!void {
+    fn unifyRigid(self: *Self, vars: *const ResolvedVarDescs, a_rigid: Rigid, b_content: Content) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
 
         switch (b_content) {
-            .flex => {
-                // TODO: Merge static dispatch constraints
-                self.merge(vars, vars.a.desc.content);
+            .flex => |b_flex| {
+                const merged_constraints = try self.unifyStaticDispatchConstraints(a_rigid.constraints, b_flex.constraints, .b_subset_a);
+                self.merge(vars, Content{ .rigid = .{
+                    .name = a_rigid.name,
+                    .constraints = merged_constraints,
+                } });
             },
             .rigid => return error.TypeMismatch,
             .alias => return error.TypeMismatch,
@@ -2736,6 +2749,217 @@ const Unifier = struct {
         } } });
     }
 
+    // constraints //
+
+    const ConstraintMergeStrategy = enum {
+        /// Take union of all constraints (flex + flex)
+        union_all,
+        /// Require a ⊆ b, return b's constraints (flex + rigid)
+        a_subset_b,
+        /// Require b ⊆ a, return a's constraints (rigid + flex)
+        b_subset_a,
+    };
+
+    fn unifyStaticDispatchConstraints(
+        self: *Self,
+        a_constraints: StaticDispatchConstraint.SafeList.Range,
+        b_constraints: StaticDispatchConstraint.SafeList.Range,
+        strategy: ConstraintMergeStrategy,
+    ) Error!StaticDispatchConstraint.SafeList.Range {
+        const a_len = a_constraints.len();
+        const b_len = b_constraints.len();
+
+        // Early exits for empty ranges
+        if (a_len == 0 and b_len == 0) {
+            return StaticDispatchConstraint.SafeList.Range.empty();
+        }
+        if (a_len == 0) return if (strategy == .b_subset_a) a_constraints else b_constraints;
+        if (b_len == 0) return if (strategy == .a_subset_b) b_constraints else a_constraints;
+
+        // Subset validation
+        switch (strategy) {
+            .a_subset_b => if (a_len > b_len) return error.TypeMismatch,
+            .b_subset_a => if (b_len > a_len) return error.TypeMismatch,
+            .union_all => {},
+        }
+
+        // Partition constraints
+        const partitioned = self.partitionStaticDispatchConstraints(a_constraints, b_constraints) catch return Error.AllocatorError;
+
+        // Check subset requirements
+        switch (strategy) {
+            .a_subset_b => if (partitioned.only_in_a.len() > 0) {
+                // TODO: Throw custom error message
+                return error.TypeMismatch;
+            },
+            .b_subset_a => if (partitioned.only_in_b.len() > 0) {
+                // TODO: Throw custom error message
+                return error.TypeMismatch;
+            },
+            .union_all => {},
+        }
+
+        // Unify shared constraints
+        if (partitioned.in_both.len() > 0) {
+            for (self.scratch.in_both_static_dispatch_constraints.sliceRange(partitioned.in_both)) |two_constraints| {
+                // TODO: Catch type mismatch and throw a custom error message?
+                try self.unifyStaticDispatchConstraint(two_constraints.a, two_constraints.b);
+            }
+        }
+
+        // Build result based on strategy
+        const top: u32 = @intCast(self.types_store.static_dispatch_constraints.len());
+
+        const capacity = partitioned.in_both.len() + switch (strategy) {
+            .union_all => partitioned.only_in_a.len() + partitioned.only_in_b.len(),
+            .a_subset_b => partitioned.only_in_b.len(),
+            .b_subset_a => partitioned.only_in_a.len(),
+        };
+
+        self.types_store.static_dispatch_constraints.items.ensureUnusedCapacity(
+            self.types_store.gpa,
+            capacity,
+        ) catch return Error.AllocatorError;
+
+        // Always append shared constraints (using b's version)
+        for (self.scratch.in_both_static_dispatch_constraints.sliceRange(partitioned.in_both)) |two_constraints| {
+            self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(two_constraints.b);
+        }
+
+        // Append unique constraints based on strategy
+        switch (strategy) {
+            .union_all => {
+                for (self.scratch.only_in_a_static_dispatch_constraints.sliceRange(partitioned.only_in_a)) |only_a| {
+                    self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(only_a);
+                }
+                for (self.scratch.only_in_b_static_dispatch_constraints.sliceRange(partitioned.only_in_b)) |only_b| {
+                    self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(only_b);
+                }
+            },
+            .a_subset_b => {
+                for (self.scratch.only_in_b_static_dispatch_constraints.sliceRange(partitioned.only_in_b)) |only_b| {
+                    self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(only_b);
+                }
+            },
+            .b_subset_a => {
+                for (self.scratch.only_in_a_static_dispatch_constraints.sliceRange(partitioned.only_in_a)) |only_a| {
+                    self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(only_a);
+                }
+            },
+        }
+
+        return self.types_store.static_dispatch_constraints.rangeToEnd(top);
+    }
+
+    /// Unify two static dispatch constraints
+    fn unifyStaticDispatchConstraint(
+        self: *Self,
+        a_constraint: StaticDispatchConstraint,
+        b_constraint: StaticDispatchConstraint,
+    ) Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
+        if (a_constraint.fn_args.nonempty.len() != b_constraint.fn_args.nonempty.len()) {
+            return error.TypeMismatch;
+        }
+
+        const a_args = self.types_store.sliceVars(a_constraint.fn_args.nonempty);
+        const b_args = self.types_store.sliceVars(b_constraint.fn_args.nonempty);
+        for (a_args, b_args) |a_arg, b_arg| {
+            try self.unifyGuarded(a_arg, b_arg);
+        }
+
+        try self.unifyGuarded(a_constraint.fn_ret, b_constraint.fn_ret);
+    }
+
+    const PartitionedStaticDispatchConstraints = struct {
+        only_in_a: StaticDispatchConstraint.SafeList.Range,
+        only_in_b: StaticDispatchConstraint.SafeList.Range,
+        in_both: TwoStaticDispatchConstraints.SafeList.Range,
+    };
+
+    /// Given two ranges of record fields stored in `scratch.gathered_fields`, this function:
+    /// * sorts both slices in-place by field name
+    /// * partitions them into three disjoint groups:
+    ///     - fields only in `a`
+    ///     - fields only in `b`
+    ///     - fields present in both (by name)
+    ///
+    /// These groups are stored into dedicated scratch buffers:
+    /// * `only_in_a_fields`
+    /// * `only_in_b_fields`
+    /// * `in_both_fields`
+    ///
+    /// The result is a set of ranges that can be used to slice those buffers.
+    fn partitionStaticDispatchConstraints(
+        self: *const Self,
+        a_constraints_range: StaticDispatchConstraint.SafeList.Range,
+        b_constraints_range: StaticDispatchConstraint.SafeList.Range,
+    ) std.mem.Allocator.Error!PartitionedStaticDispatchConstraints {
+        const ident_store = self.module_env.getIdentStore();
+        const scratch = self.scratch;
+
+        // First sort the fields
+        const a_constraints = self.types_store.static_dispatch_constraints.sliceRange(a_constraints_range);
+        std.mem.sort(StaticDispatchConstraint, a_constraints, ident_store, comptime StaticDispatchConstraint.sortByFnNameAsc);
+        const b_constraints = self.types_store.static_dispatch_constraints.sliceRange(b_constraints_range);
+        std.mem.sort(StaticDispatchConstraint, b_constraints, ident_store, comptime StaticDispatchConstraint.sortByFnNameAsc);
+
+        // Get the start of index of the new range
+        const a_constraints_start: u32 = @intCast(scratch.only_in_a_static_dispatch_constraints.len());
+        const b_constraints_start: u32 = @intCast(scratch.only_in_b_static_dispatch_constraints.len());
+        const both_constraints_start: u32 = @intCast(scratch.in_both_static_dispatch_constraints.len());
+
+        // Iterate over the fields in order, grouping them
+        var a_i: usize = 0;
+        var b_i: usize = 0;
+        while (a_i < a_constraints.len and b_i < b_constraints.len) {
+            const a_next = a_constraints[a_i];
+            const b_next = b_constraints[b_i];
+            const ord = StaticDispatchConstraint.orderByFnName(ident_store, a_next, b_next);
+            switch (ord) {
+                .eq => {
+                    _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, TwoStaticDispatchConstraints{
+                        .a = a_next,
+                        .b = b_next,
+                    });
+                    a_i = a_i + 1;
+                    b_i = b_i + 1;
+                },
+                .lt => {
+                    _ = try scratch.only_in_a_static_dispatch_constraints.append(scratch.gpa, a_next);
+                    a_i = a_i + 1;
+                },
+                .gt => {
+                    _ = try scratch.only_in_b_static_dispatch_constraints.append(scratch.gpa, b_next);
+                    b_i = b_i + 1;
+                },
+            }
+        }
+
+        // If b was shorter, add the extra a elems
+        while (a_i < a_constraints.len) {
+            const a_next = a_constraints[a_i];
+            _ = try scratch.only_in_a_static_dispatch_constraints.append(scratch.gpa, a_next);
+            a_i = a_i + 1;
+        }
+
+        // If a was shorter, add the extra b elems
+        while (b_i < b_constraints.len) {
+            const b_next = b_constraints[b_i];
+            _ = try scratch.only_in_b_static_dispatch_constraints.append(scratch.gpa, b_next);
+            b_i = b_i + 1;
+        }
+
+        // Return the ranges
+        return .{
+            .only_in_a = scratch.only_in_a_static_dispatch_constraints.rangeToEnd(a_constraints_start),
+            .only_in_b = scratch.only_in_b_static_dispatch_constraints.rangeToEnd(b_constraints_start),
+            .in_both = scratch.in_both_static_dispatch_constraints.rangeToEnd(both_constraints_start),
+        };
+    }
+
     /// Set error data in scratch & throw
     inline fn setUnifyErrAndThrow(self: *Self, err: UnifyErrCtx) Error!void {
         self.scratch.setUnifyErr(err);
@@ -2825,6 +3049,11 @@ pub const Scratch = struct {
     only_in_b_tags: TagSafeList,
     in_both_tags: TwoTagsSafeList,
 
+    // records - used internal by unification
+    only_in_a_static_dispatch_constraints: StaticDispatchConstraint.SafeList,
+    only_in_b_static_dispatch_constraints: StaticDispatchConstraint.SafeList,
+    in_both_static_dispatch_constraints: TwoStaticDispatchConstraints.SafeList,
+
     // occurs
     occurs_scratch: occurs.Scratch,
 
@@ -2845,6 +3074,9 @@ pub const Scratch = struct {
             .only_in_a_tags = try TagSafeList.initCapacity(gpa, 32),
             .only_in_b_tags = try TagSafeList.initCapacity(gpa, 32),
             .in_both_tags = try TwoTagsSafeList.initCapacity(gpa, 32),
+            .only_in_a_static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, 32),
+            .only_in_b_static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, 32),
+            .in_both_static_dispatch_constraints = try TwoStaticDispatchConstraints.SafeList.initCapacity(gpa, 32),
             .occurs_scratch = try occurs.Scratch.init(gpa),
             .err = null,
         };
@@ -2861,6 +3093,9 @@ pub const Scratch = struct {
         self.only_in_a_tags.deinit(self.gpa);
         self.only_in_b_tags.deinit(self.gpa);
         self.in_both_tags.deinit(self.gpa);
+        self.only_in_a_static_dispatch_constraints.deinit(self.gpa);
+        self.only_in_b_static_dispatch_constraints.deinit(self.gpa);
+        self.in_both_static_dispatch_constraints.deinit(self.gpa);
         self.occurs_scratch.deinit();
     }
 
@@ -2874,6 +3109,9 @@ pub const Scratch = struct {
         self.only_in_a_tags.items.clearRetainingCapacity();
         self.only_in_b_tags.items.clearRetainingCapacity();
         self.in_both_tags.items.clearRetainingCapacity();
+        self.only_in_a_static_dispatch_constraints.items.clearRetainingCapacity();
+        self.only_in_b_static_dispatch_constraints.items.clearRetainingCapacity();
+        self.in_both_static_dispatch_constraints.items.clearRetainingCapacity();
         self.occurs_scratch.reset();
         self.err = null;
     }
