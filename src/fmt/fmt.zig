@@ -31,7 +31,7 @@ const FormatFlags = enum {
 pub const FormattingResult = struct {
     success: usize,
     failure: usize,
-    /// Only relevant when using `roc format --check`
+    /// Only relevant when using `roc fmt --check`
     unformatted_files: ?std.ArrayList([]const u8),
 
     pub fn deinit(self: *@This()) void {
@@ -51,7 +51,7 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
 
     var success_count: usize = 0;
     var failed_count: usize = 0;
-    // Only used for `roc format --check`. If we aren't doing check, don't bother allocating
+    // Only used for `roc fmt --check`. If we aren't doing check, don't bother allocating
     var unformatted_files = if (check) std.ArrayList([]const u8).init(gpa) else null;
 
     // First try as a directory.
