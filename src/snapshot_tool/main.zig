@@ -1184,17 +1184,28 @@ fn processSnapshotContent(
     var module_envs = std.StringHashMap(*const ModuleEnv).init(allocator);
     defer module_envs.deinit();
 
+    var dict_import_idx: ?CIR.Import.Idx = null;
+    var set_import_idx: ?CIR.Import.Idx = null;
+
     if (config.dict_module) |dict_env| {
-        _ = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Dict");
+        dict_import_idx = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Dict");
         try module_envs.put("Dict", dict_env);
     }
     if (config.set_module) |set_env| {
-        _ = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Set");
+        set_import_idx = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Set");
         try module_envs.put("Set", set_env);
     }
 
     var czer = try Can.init(can_ir, &parse_ast, &module_envs);
     defer czer.deinit();
+
+    // Register auto-injected imports with the canonicalizer so it knows they're already imported
+    if (dict_import_idx) |idx| {
+        try czer.import_indices.put(allocator, "Dict", idx);
+    }
+    if (set_import_idx) |idx| {
+        try czer.import_indices.put(allocator, "Set", idx);
+    }
 
     var maybe_expr_idx: ?Can.CanonicalizedExpr = null;
 
