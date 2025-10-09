@@ -46,13 +46,14 @@ pub fn main() !void {
     const set_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Set.roc", 1024 * 1024);
     defer gpa.free(set_roc_source);
 
-    // Compile Bool.roc first WITHOUT injecting builtins (it defines Bool itself)
+    // Compile Bool.roc without injecting Bool (it defines Bool itself)
+    // We still inject Result since Bool.roc might use it
     const bool_env = try compileModule(
         gpa,
         "Bool",
         bool_roc_source,
         &.{}, // No module dependencies
-        false, // Don't inject builtins
+        .{ .inject_bool = false, .inject_result = true },
     );
     defer {
         bool_env.deinit();
@@ -68,20 +69,20 @@ pub fn main() !void {
         return error.UnexpectedBoolIndex;
     }
 
-    // Compile Dict.roc (it has no dependencies, but needs builtins for if expressions)
+    // Compile Dict.roc (needs Bool injected for if expressions, and Result for error handling)
     const dict_env = try compileModule(
         gpa,
         "Dict",
         dict_roc_source,
         &.{}, // No module dependencies
-        true, // Inject builtins
+        .{}, // Inject Bool and Result (defaults)
     );
     defer {
         dict_env.deinit();
         gpa.destroy(dict_env);
     }
 
-    // Compile Set.roc (it imports Dict and needs builtins)
+    // Compile Set.roc (imports Dict, needs Bool and Result injected)
     const set_env = try compileModule(
         gpa,
         "Set",
@@ -89,7 +90,7 @@ pub fn main() !void {
         &[_]ModuleDep{
             .{ .name = "Dict", .env = dict_env },
         },
-        true, // Inject builtins
+        .{}, // Inject Bool and Result (defaults)
     );
     defer {
         set_env.deinit();
@@ -115,7 +116,7 @@ fn compileModule(
     module_name: []const u8,
     source: []const u8,
     deps: []const ModuleDep,
-    inject_builtins: bool,
+    can_options: Can.InitOptions,
 ) !*ModuleEnv {
     // This follows the pattern from TestEnv.init() in src/check/test/TestEnv.zig
 
@@ -181,7 +182,7 @@ fn compileModule(
         gpa.destroy(can_result);
     }
 
-    can_result.* = try Can.init(module_env, parse_ast, &module_envs, .{ .inject_builtins = inject_builtins });
+    can_result.* = try Can.init(module_env, parse_ast, &module_envs, can_options);
 
     try can_result.canonicalizeFile();
     try can_result.validateForChecking();
