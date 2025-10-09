@@ -86,7 +86,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
         .target = b.graph.host, // ALWAYS use b.graph.host - this runs at build time on the host machine!
         .optimize = .ReleaseSafe, // Fast enough for build time
-        .link_libc = false, // No libc needed - pure Zig/Roc parsing
+        // Note: libc linking is handled by add_tracy below (required when tracy is enabled)
     });
 
     // Add only the minimal modules needed for parsing/checking
@@ -98,6 +98,9 @@ pub fn build(b: *std.Build) void {
     builtin_compiler_exe.root_module.addImport("check", roc_modules.check);
     builtin_compiler_exe.root_module.addImport("reporting", roc_modules.reporting);
     builtin_compiler_exe.root_module.addImport("builtins", roc_modules.builtins);
+
+    // Add tracy support (required by parse/can/check modules)
+    add_tracy(b, roc_modules.build_options, builtin_compiler_exe, b.graph.host, false, flag_enable_tracy);
 
     // Run the builtin compiler to generate .bin files in zig-out/builtins/
     const run_builtin_compiler = b.addRunArtifact(builtin_compiler_exe);
