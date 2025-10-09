@@ -226,8 +226,6 @@ UNDECLARED TYPE - syntax_grab_bag.md:52:4:52:6
 UNDECLARED TYPE - syntax_grab_bag.md:53:8:53:17
 MODULE NOT FOUND - syntax_grab_bag.md:4:1:4:42
 NOT IMPLEMENTED - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
 MODULE NOT FOUND - syntax_grab_bag.md:6:1:12:4
 MODULE NOT FOUND - syntax_grab_bag.md:14:1:14:82
 MODULE NOT FOUND - syntax_grab_bag.md:16:1:16:27
@@ -394,16 +392,6 @@ import pf.Stdout exposing [line!, write!]
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented: malformed import module name contains invalid control characters
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: Exposed item 'line!' already imported from module 'pf.Stdout', cannot import again from module 'MALFORMED_IMPORT'
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: Exposed item 'write!' already imported from module 'pf.Stdout', cannot import again from module 'MALFORMED_IMPORT'
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
@@ -1883,8 +1871,8 @@ expect {
 		(p-assign @80.1-80.11 (ident "match_time"))
 		(e-closure @80.14-138.3
 			(captures
-				(capture @94.5-94.6 (ident "x"))
 				(capture @86.4-86.5 (ident "x"))
+				(capture @94.5-94.6 (ident "x"))
 				(capture @136.11-136.15 (ident "dude")))
 			(e-lambda @80.14-138.3
 				(args
@@ -2272,7 +2260,7 @@ expect {
 						(e-runtime-error (tag "not_implemented")))
 					(e-call @191.2-195.3
 						(e-lookup-external @191.2-191.14
-							(module-idx "0")
+							(module-idx "2")
 							(target-node-idx "0"))
 						(e-string @192.3-194.18
 							(e-literal @192.4-192.14 (string "How about "))

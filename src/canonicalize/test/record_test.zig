@@ -248,7 +248,7 @@ test "record with extension variable" {
                 // Check that extension is a flex var (open record)
                 const ext_resolved = env.types.resolveVar(record.ext);
                 switch (ext_resolved.desc.content) {
-                    .flex_var => {
+                    .flex => {
                         // Success! The record has an open extension
                     },
                     else => return error.ExpectedFlexVar,

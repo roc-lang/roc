@@ -503,16 +503,16 @@ transform = |result|
 		(e-runtime-error (tag "undeclared_type"))
 		(annotation @15.1-15.16
 			(declared-type
-				(ty-lookup @14.19-14.28 (name "RGB") (external (module-idx "0") (target-node-idx "0"))))))
+				(ty-lookup @14.19-14.28 (name "RGB") (external (module-idx "2") (target-node-idx "0"))))))
 	(d-let
 		(p-assign @19.1-19.17 (ident "aliasedQualified"))
 		(e-nominal-external @19.20-19.43
-			(module-idx "2")
+			(module-idx "4")
 			(target-node-idx "0")
 			(e-tag @19.20-19.43 (name "Default")))
 		(annotation @19.1-19.17
 			(declared-type
-				(ty-lookup @18.20-18.35 (name "DataType") (external (module-idx "2") (target-node-idx "0"))))))
+				(ty-lookup @18.20-18.35 (name "DataType") (external (module-idx "4") (target-node-idx "0"))))))
 	(d-let
 		(p-assign @23.1-23.20 (ident "multiLevelQualified"))
 		(e-runtime-error (tag "ident_not_in_scope"))
@@ -538,7 +538,7 @@ transform = |result|
 			(declared-type
 				(ty-fn @30.12-30.27 (effectful false)
 					(ty-record @30.12-30.14)
-					(ty-lookup @30.18-30.27 (name "RGB") (external (module-idx "0") (target-node-idx "0")))))))
+					(ty-lookup @30.18-30.27 (name "RGB") (external (module-idx "2") (target-node-idx "0")))))))
 	(d-let
 		(p-assign @35.1-35.13 (ident "processColor"))
 		(e-lambda @35.16-36.22
@@ -549,7 +549,7 @@ transform = |result|
 		(annotation @35.1-35.13
 			(declared-type
 				(ty-fn @34.16-34.32 (effectful false)
-					(ty-lookup @34.16-34.25 (name "RGB") (external (module-idx "0") (target-node-idx "0")))
+					(ty-lookup @34.16-34.25 (name "RGB") (external (module-idx "2") (target-node-idx "0")))
 					(ty-lookup @34.29-34.32 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @40.1-40.10 (ident "transform"))
