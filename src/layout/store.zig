@@ -886,6 +886,12 @@ pub const Store = struct {
                         return idx;
                     },
                     .nominal_type => |nominal_type| {
+                        // Special case for Str: always use .str scalar layout
+                        const type_name = self.env.getIdent(nominal_type.ident.ident_idx);
+                        if (std.mem.eql(u8, type_name, "Str")) {
+                            break :flat_type Layout.str();
+                        }
+
                         // TODO special-case the builtin Num type here.
                         // If we have one of those, then convert it to a Num layout,
                         // or to a runtime error if it's an invalid elem type.

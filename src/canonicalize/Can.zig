@@ -177,8 +177,11 @@ pub const InitOptions = struct {
     /// Whether to inject the Bool type declaration (`Bool := [True, False]`).
     /// Set to false when compiling Bool.roc itself to avoid duplication.
     inject_bool: bool = true,
+    /// Whether to inject the Str type declaration (`Str := [EmptyStr]`).
+    /// Set to false when compiling Str.roc itself to avoid duplication.
+    inject_str: bool = true,
     /// Whether to inject the Result type declaration (`Result(ok, err) := [Ok(ok), Err(err)]`).
-    /// Set to false when compiling Result.roc itself (if it exists).
+    /// Set to false when compiling Result.roc itself to avoid duplication.
     inject_result: bool = true,
 };
 
@@ -224,6 +227,10 @@ pub fn init(
     if (options.inject_bool) {
         const bool_idx = try result.addBuiltinTypeBool(env);
         try result.env.store.addScratchStatement(bool_idx);
+    }
+    if (options.inject_str) {
+        const str_idx = try result.addBuiltinTypeStr(env);
+        try result.env.store.addScratchStatement(str_idx);
     }
     if (options.inject_result) {
         const result_idx = try result.addBuiltinTypeResult(env);
@@ -306,6 +313,49 @@ fn addBuiltinTypeBool(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!State
     // TODO: in the future, we should have hardcoded constants for these.
     try self.unqualified_nominal_tags.put(gpa, "True", type_decl_idx);
     try self.unqualified_nominal_tags.put(gpa, "False", type_decl_idx);
+
+    return type_decl_idx;
+}
+
+/// Creates `Str := [EmptyStr]`
+/// Returns the statement index where Str was created
+fn addBuiltinTypeStr(self: *Self, ir: *ModuleEnv) std.mem.Allocator.Error!Statement.Idx {
+    const gpa = ir.gpa;
+    const type_ident = try ir.insertIdent(base.Ident.for_text("Str"));
+    const empty_str_ident = try ir.insertIdent(base.Ident.for_text("EmptyStr"));
+
+    // Create a type header (lhs) => Str //
+
+    const header_idx = try ir.addTypeHeaderAndTypeVar(.{
+        .name = type_ident,
+        .args = .{ .span = DataSpan.empty() },
+    }, .err, Region.zero());
+
+    // Create the type body (rhs) => [EmptyStr] //
+
+    const scratch_top = self.env.store.scratchTypeAnnoTop();
+
+    const empty_str_tag_anno_idx = try ir.addTypeAnnoAndTypeVar(
+        .{ .tag = .{ .name = empty_str_ident, .args = .{ .span = DataSpan.empty() } } },
+        .err,
+        Region.zero(),
+    );
+    try self.env.store.addScratchTypeAnno(empty_str_tag_anno_idx);
+
+    const tag_union_anno_idx = try ir.addTypeAnnoAndTypeVar(.{ .tag_union = .{
+        .tags = try self.env.store.typeAnnoSpanFrom(scratch_top),
+        .ext = null,
+    } }, .err, Region.zero());
+
+    // Create the type declaration statement //
+
+    const type_decl_idx = try ir.addStatementAndTypeVar(Statement{
+        .s_nominal_decl = .{ .header = header_idx, .anno = tag_union_anno_idx },
+    }, .err, Region.zero());
+
+    // Introduce to scope
+    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+    try current_scope.put(gpa, .type_decl, type_ident, type_decl_idx);
 
     return type_decl_idx;
 }

@@ -510,6 +510,20 @@ fn freshBool(self: *Self, rank: Rank, new_region: Region) Allocator.Error!Var {
     return try self.instantiateVar(ModuleEnv.varFrom(bool_stmt_idx), rank, .{ .explicit = new_region });
 }
 
+/// Get a fresh Str type variable
+fn freshStr(self: *Self, rank: Rank, new_region: Region) Allocator.Error!Var {
+    // Look up Str's actual index from builtin_statements (should be second, after Bool)
+    const builtin_stmts_slice = self.cir.store.sliceStatements(self.cir.builtin_statements);
+    std.debug.assert(builtin_stmts_slice.len >= 2); // Must have at least Bool and Str
+    const str_stmt_idx = builtin_stmts_slice[1]; // Str is always the second builtin
+    // Debug assertion: verify this is a nominal type declaration
+    if (std.debug.runtime_safety) {
+        const stmt = self.cir.store.getStatement(str_stmt_idx);
+        std.debug.assert(stmt == .s_nominal_decl);
+    }
+    return try self.instantiateVar(ModuleEnv.varFrom(str_stmt_idx), rank, .{ .explicit = new_region });
+}
+
 // fresh vars //
 
 fn updateVar(self: *Self, target_var: Var, content: types_mod.Content, rank: types_mod.Rank) std.mem.Allocator.Error!void {
@@ -1209,7 +1223,6 @@ fn generateBuiltinTypeInstance(
     anno_region: Region,
 ) std.mem.Allocator.Error!Var {
     switch (anno_builtin_type) {
-        .str => return try self.freshFromContent(.{ .structure = .str }, Rank.generalized, anno_region),
         .u8 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.int_u8 } }, Rank.generalized, anno_region),
         .u16 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.int_u16 } }, Rank.generalized, anno_region),
         .u32 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.int_u32 } }, Rank.generalized, anno_region),
@@ -1346,7 +1359,8 @@ fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx, rank: types_mod.Rank,
         },
         // str //
         .str_literal => {
-            try self.updateVar(pattern_var, .{ .structure = .str }, rank);
+            const str_var = try self.freshStr(rank, pattern_region);
+            _ = try self.types.setVarRedirect(pattern_var, str_var);
         },
         // as //
         .as => |p| {
@@ -1722,7 +1736,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
     switch (expr) {
         // str //
         .e_str_segment => |_| {
-            try self.updateVar(expr_var, .{ .structure = .str }, rank);
+            const str_var = try self.freshStr(rank, expr_region);
+            _ = try self.types.setVarRedirect(expr_var, str_var);
         },
         .e_str => |str| {
             // Iterate over the string segments, capturing if any error'd
@@ -1741,8 +1756,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                 // If any segment errored, propgate that error to the root string
                 try self.updateVar(expr_var, .err, rank);
             } else {
-                // Otherwise, set the type of this expr to be string
-                try self.updateVar(expr_var, .{ .structure = .str }, rank);
+                // Otherwise, set the type of this expr to be Str
+                const str_var = try self.freshStr(rank, expr_region);
+                _ = try self.types.setVarRedirect(expr_var, str_var);
             }
         },
         // nums //

@@ -30,6 +30,34 @@ pub const RenderCtx = struct {
 pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.Var) ![]u8 {
     const gpa = ctx.allocator;
     var resolved = ctx.runtime_types.resolveVar(rt_var);
+
+    // Special case for Str nominal type - render as string literal before unwrapping
+    if (resolved.desc.content == .structure) {
+        if (resolved.desc.content.structure == .nominal_type) {
+            const nominal = resolved.desc.content.structure.nominal_type;
+            const type_name = ctx.env.getIdent(nominal.ident.ident_idx);
+            if (std.mem.eql(u8, type_name, "Str")) {
+                // Str is stored as a scalar .str at runtime
+                if (value.layout.tag == .scalar and value.layout.data.scalar.tag == .str) {
+                    const rs: *const builtins.str.RocStr = @ptrCast(@alignCast(value.ptr.?));
+                    const s = rs.asSlice();
+                    var buf = std.ArrayList(u8).init(gpa);
+                    errdefer buf.deinit();
+                    try buf.append('"');
+                    for (s) |ch| {
+                        switch (ch) {
+                            '\\' => try buf.appendSlice("\\\\"),
+                            '"' => try buf.appendSlice("\\\""),
+                            else => try buf.append(ch),
+                        }
+                    }
+                    try buf.append('"');
+                    return buf.toOwnedSlice();
+                }
+            }
+        }
+    }
+
     // unwrap aliases/nominals
     unwrap: while (true) {
         switch (resolved.desc.content) {

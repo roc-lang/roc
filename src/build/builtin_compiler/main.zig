@@ -1,4 +1,4 @@
-//! Build-time compiler for Roc builtin modules (Bool.roc, Result.roc, Dict.roc, and Set.roc).
+//! Build-time compiler for Roc builtin modules (Bool.roc, Str.roc, Result.roc, Dict.roc, and Set.roc).
 //!
 //! This executable runs during `zig build` on the host machine to:
 //! 1. Parse and type-check the builtin .roc modules
@@ -40,6 +40,9 @@ pub fn main() !void {
     const bool_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Bool.roc", 1024 * 1024);
     defer gpa.free(bool_roc_source);
 
+    const str_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Str.roc", 1024 * 1024);
+    defer gpa.free(str_roc_source);
+
     const result_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Result.roc", 1024 * 1024);
     defer gpa.free(result_roc_source);
 
@@ -55,7 +58,7 @@ pub fn main() !void {
         "Bool",
         bool_roc_source,
         &.{}, // No module dependencies
-        .{ .inject_bool = false, .inject_result = false },
+        .{ .inject_bool = false, .inject_str = false, .inject_result = false },
     );
     defer {
         bool_env.deinit();
@@ -69,6 +72,19 @@ pub fn main() !void {
         const stderr = std.io.getStdErr().writer();
         try stderr.print("WARNING: Expected Bool at index 2, but got {}!\n", .{bool_type_idx});
         return error.UnexpectedBoolIndex;
+    }
+
+    // Compile Str.roc without injecting anything (it's completely self-contained, just an empty tag union)
+    const str_env = try compileModule(
+        gpa,
+        "Str",
+        str_roc_source,
+        &.{}, // No module dependencies
+        .{ .inject_bool = false, .inject_str = false, .inject_result = false },
+    );
+    defer {
+        str_env.deinit();
+        gpa.destroy(str_env);
     }
 
     // Compile Result.roc (injects Bool since Result might use if expressions)
@@ -117,6 +133,7 @@ pub fn main() !void {
 
     // Serialize modules
     try serializeModuleEnv(gpa, bool_env, "zig-out/builtins/Bool.bin");
+    try serializeModuleEnv(gpa, str_env, "zig-out/builtins/Str.bin");
     try serializeModuleEnv(gpa, result_env, "zig-out/builtins/Result.bin");
     try serializeModuleEnv(gpa, dict_env, "zig-out/builtins/Dict.bin");
     try serializeModuleEnv(gpa, set_env, "zig-out/builtins/Set.bin");
