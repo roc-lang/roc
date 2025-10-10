@@ -177,6 +177,12 @@ pub fn build(b: *std.Build) void {
                 bin_filename,
             );
         }
+
+        // Also copy builtin_indices.bin
+        _ = write_compiled_builtins.addCopyFile(
+            .{ .cwd_relative = "zig-out/builtins/builtin_indices.bin" },
+            "builtin_indices.bin",
+        );
     } else {
         // Use existing .bin files from zig-out/builtins/
         for (roc_files) |roc_path| {
@@ -189,6 +195,12 @@ pub fn build(b: *std.Build) void {
                 bin_filename,
             );
         }
+
+        // Also copy builtin_indices.bin
+        _ = write_compiled_builtins.addCopyFile(
+            .{ .cwd_relative = "zig-out/builtins/builtin_indices.bin" },
+            "builtin_indices.bin",
+        );
     }
 
     // Generate compiled_builtins.zig dynamically based on discovered .roc files
@@ -205,6 +217,11 @@ pub fn build(b: *std.Build) void {
     const compiled_builtins_module = b.createModule(.{
         .root_source_file = compiled_builtins_source,
     });
+
+    // Add compiled_builtins to the repl module so it can load Bool and Result
+    roc_modules.repl.addImport("compiled_builtins", compiled_builtins_module);
+    // Add compiled_builtins to the compile module for type checking with builtin indices
+    roc_modules.compile.addImport("compiled_builtins", compiled_builtins_module);
 
     // Manual rebuild command: zig build rebuild-builtins
     // Use this after making compiler changes to ensure those changes are reflected in builtins
@@ -277,6 +294,8 @@ pub fn build(b: *std.Build) void {
     playground_exe.entry = .disabled;
     playground_exe.rdynamic = true;
     roc_modules.addAll(playground_exe);
+    playground_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    playground_exe.step.dependOn(&write_compiled_builtins.step);
 
     add_tracy(b, roc_modules.build_options, playground_exe, b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
@@ -321,8 +340,8 @@ pub fn build(b: *std.Build) void {
     // Create and add module tests
     const module_tests = roc_modules.createModuleTests(b, target, optimize, zstd, test_filters);
     for (module_tests) |module_test| {
-        // Add compiled builtins to check module tests
-        if (std.mem.eql(u8, module_test.test_step.name, "check")) {
+        // Add compiled builtins to check, repl, and eval module tests
+        if (std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "repl") or std.mem.eql(u8, module_test.test_step.name, "eval")) {
             module_test.test_step.root_module.addImport("compiled_builtins", compiled_builtins_module);
             module_test.test_step.step.dependOn(&write_compiled_builtins.step);
         }
@@ -516,6 +535,9 @@ fn generateCompiledBuiltinsSource(b: *std.Build, roc_files: []const []const u8) 
             name_without_ext,
         });
     }
+
+    // Also embed builtin_indices.bin
+    try writer.writeAll("pub const builtin_indices_bin = @embedFile(\"builtin_indices.bin\");\n");
 
     return builtins_source.toOwnedSlice();
 }

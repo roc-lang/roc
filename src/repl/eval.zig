@@ -12,11 +12,79 @@ const Check = check.Check;
 const builtins = @import("builtins");
 const eval_mod = @import("eval");
 const CrashContext = eval_mod.CrashContext;
+const collections = @import("collections");
 
 const AST = parse.AST;
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const RocOps = builtins.host_abi.RocOps;
+
+/// Wrapper for a loaded compiled builtin module that tracks the buffer
+const LoadedModule = struct {
+    env: *ModuleEnv,
+    buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT) u8,
+    gpa: std.mem.Allocator,
+
+    fn deinit(self: *LoadedModule) void {
+        // Only free the hashmap that was allocated during deserialization
+        // Most other data (like the SafeList contents) points into the buffer
+        self.env.imports.map.deinit(self.gpa);
+
+        // Free the buffer (the env points into this buffer for most data)
+        self.gpa.free(self.buffer);
+        // Free the env struct itself
+        self.gpa.destroy(self.env);
+    }
+};
+
+/// Deserialize BuiltinIndices from the binary data generated at build time
+fn deserializeBuiltinIndices(bin_data: []const u8) can.CIR.BuiltinIndices {
+    // The binary data is just the raw bytes of the struct
+    const indices_ptr = @as(*const can.CIR.BuiltinIndices, @ptrCast(@alignCast(bin_data.ptr)));
+    return indices_ptr.*;
+}
+
+/// Load a compiled ModuleEnv from embedded binary data
+fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) !LoadedModule {
+    // Copy the embedded data to properly aligned memory
+    // CompactWriter requires specific alignment for serialization
+    const CompactWriter = collections.CompactWriter;
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
+    @memcpy(buffer, bin_data);
+
+    // Cast to the serialized structure
+    const serialized_ptr = @as(
+        *ModuleEnv.Serialized,
+        @ptrCast(@alignCast(buffer.ptr)),
+    );
+
+    const env = try gpa.create(ModuleEnv);
+    errdefer gpa.destroy(env);
+
+    // Deserialize
+    const base_ptr = @intFromPtr(buffer.ptr);
+    env.* = ModuleEnv{
+        .gpa = gpa,
+        .common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), source).*,
+        .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr))).*,
+        .module_kind = serialized_ptr.module_kind,
+        .all_defs = serialized_ptr.all_defs,
+        .all_statements = serialized_ptr.all_statements,
+        .exports = serialized_ptr.exports,
+        .builtin_statements = serialized_ptr.builtin_statements,
+        .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
+        .imports = serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+        .module_name = module_name,
+        .diagnostics = serialized_ptr.diagnostics,
+        .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+    };
+
+    return LoadedModule{
+        .env = env,
+        .buffer = buffer,
+        .gpa = gpa,
+    };
+}
 
 /// REPL state that tracks past definitions and evaluates expressions
 pub const Repl = struct {
@@ -37,8 +105,29 @@ pub const Repl = struct {
     debug_can_html: std.ArrayList([]const u8),
     /// Storage for rendered TYPES HTML at each step (only when debug_store_snapshots is true)
     debug_types_html: std.ArrayList([]const u8),
+    /// Builtin type declaration indices (loaded once at startup from builtin_indices.bin)
+    builtin_indices: can.CIR.BuiltinIndices,
+    /// Loaded Bool module (loaded once at startup)
+    bool_module: LoadedModule,
+    /// Loaded Result module (loaded once at startup)
+    result_module: LoadedModule,
 
     pub fn init(allocator: Allocator, roc_ops: *RocOps, crash_ctx: ?*CrashContext) !Repl {
+        const compiled_builtins = @import("compiled_builtins");
+
+        // Load builtin indices once at startup (generated at build time)
+        const builtin_indices = deserializeBuiltinIndices(compiled_builtins.builtin_indices_bin);
+
+        // Load Bool module once at startup
+        const bool_source = "Bool := [True, False].{}\n";
+        var bool_module = try loadCompiledModule(allocator, compiled_builtins.bool_bin, "Bool", bool_source);
+        errdefer bool_module.deinit();
+
+        // Load Result module once at startup
+        const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+        var result_module = try loadCompiledModule(allocator, compiled_builtins.result_bin, "Result", result_source);
+        errdefer result_module.deinit();
+
         return Repl{
             .allocator = allocator,
             .definitions = std.StringHashMap([]const u8).init(allocator),
@@ -49,6 +138,9 @@ pub const Repl = struct {
             .debug_store_snapshots = false,
             .debug_can_html = std.ArrayList([]const u8).init(allocator),
             .debug_types_html = std.ArrayList([]const u8).init(allocator),
+            .builtin_indices = builtin_indices,
+            .bool_module = bool_module,
+            .result_module = result_module,
         };
     }
 
@@ -164,6 +256,10 @@ pub const Repl = struct {
             module_env.deinit();
             self.allocator.destroy(module_env);
         }
+
+        // Clean up loaded builtin modules
+        self.bool_module.deinit();
+        self.result_module.deinit();
     }
 
     /// Process a line of input and return the result
@@ -362,17 +458,48 @@ pub const Repl = struct {
         // Create CIR
         const cir = module_env; // CIR is now just ModuleEnv
         try cir.initCIRFields(self.allocator, "repl");
+
+        // Inject builtin type declarations (Bool and Result)
+        // We loaded builtin_indices.bin at REPL startup (generated at build time via string lookup)
+        // The indices in builtin_indices refer to positions within Bool.bin/Result.bin
+        // When we inject them here, they get NEW indices in the current module
+
+        // Get the Bool type declaration from the loaded module using the build-time index
+        const bool_stmt = self.bool_module.env.store.getStatement(self.builtin_indices.bool_type);
+        const actual_bool_idx = try cir.store.addStatement(bool_stmt, base.Region.zero());
+
+        // Get the Result type declaration from the loaded module using the build-time index
+        const result_stmt = self.result_module.env.store.getStatement(self.builtin_indices.result_type);
+        const actual_result_idx = try cir.store.addStatement(result_stmt, base.Region.zero());
+
+        // Update builtin_statements span to include injected Bool and Result
+        // Use the ACTUAL indices where they landed (not hardcoded!)
+        const start_idx = @intFromEnum(actual_bool_idx);
+        const end_idx = @intFromEnum(actual_result_idx);
+        cir.builtin_statements = .{ .span = .{
+            .start = start_idx,
+            .len = end_idx - start_idx + 1,
+        } };
+
         const module_common_idents: Check.CommonIdents = .{
             .module_name = try module_env.insertIdent(base.Ident.for_text("repl")),
             .list = try module_env.insertIdent(base.Ident.for_text("List")),
             .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+            .bool_stmt = actual_bool_idx,
+            .result_stmt = actual_result_idx,
         };
 
-        // Create canonicalizer
+        // Create canonicalizer without module_envs since we're injecting instead of importing
         var czer = Can.init(cir, &parse_ast, null) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err});
         };
         defer czer.deinit();
+
+        // Register unqualified nominal tags (True, False, Ok, Err) pointing to the actual injected indices
+        try czer.unqualified_nominal_tags.put(self.allocator, "True", actual_bool_idx);
+        try czer.unqualified_nominal_tags.put(self.allocator, "False", actual_bool_idx);
+        try czer.unqualified_nominal_tags.put(self.allocator, "Ok", actual_result_idx);
+        try czer.unqualified_nominal_tags.put(self.allocator, "Err", actual_result_idx);
 
         // Since we're always parsing as expressions now, handle them the same way
         const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
@@ -393,8 +520,8 @@ pub const Repl = struct {
             return try std.fmt.allocPrint(self.allocator, "Type check expr error: {}", .{err});
         };
 
-        // Create interpreter instance
-        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env) catch |err| {
+        // Create interpreter instance with the actual Bool statement index
+        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, actual_bool_idx) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
         };
         defer interpreter.deinit();

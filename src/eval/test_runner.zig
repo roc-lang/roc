@@ -116,11 +116,12 @@ pub const TestRunner = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         cir: *ModuleEnv,
+        bool_stmt: CIR.Statement.Idx,
     ) !TestRunner {
         return TestRunner{
             .allocator = allocator,
             .env = cir,
-            .interpreter = try Interpreter.init(allocator, cir),
+            .interpreter = try Interpreter.init(allocator, cir, bool_stmt),
             .crash = CrashContext.init(allocator),
             .roc_ops = null,
             .test_results = std.ArrayList(TestResult).init(allocator),

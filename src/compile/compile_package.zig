@@ -26,6 +26,13 @@ const Report = reporting.Report;
 const ModuleEnv = can.ModuleEnv;
 const ReportBuilder = check.ReportBuilder;
 
+/// Deserialize BuiltinIndices from the binary data generated at build time
+fn deserializeBuiltinIndices(bin_data: []const u8) can.CIR.BuiltinIndices {
+    // The binary data is just the raw bytes of the struct
+    const indices_ptr = @as(*const can.CIR.BuiltinIndices, @ptrCast(@alignCast(bin_data.ptr)));
+    return indices_ptr.*;
+}
+
 /// Timing information for different phases
 pub const TimingInfo = struct {
     tokenize_parse_ns: u64,
@@ -680,10 +687,16 @@ pub const PackageEnv = struct {
         var st = &self.modules.items[module_id];
         var env = st.env.?;
 
+        // Load builtin indices from the binary data generated at build time
+        const compiled_builtins = @import("compiled_builtins");
+        const builtin_indices = deserializeBuiltinIndices(compiled_builtins.builtin_indices_bin);
+
         const module_common_idents: Check.CommonIdents = .{
             .module_name = try env.insertIdent(base.Ident.for_text("test")),
             .list = try env.insertIdent(base.Ident.for_text("List")),
             .box = try env.insertIdent(base.Ident.for_text("Box")),
+            .bool_stmt = builtin_indices.bool_type,
+            .result_stmt = builtin_indices.result_type,
         };
 
         // Build other_modules array according to env.imports order

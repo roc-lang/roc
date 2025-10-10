@@ -9,8 +9,10 @@ const can = @import("can");
 const eval = @import("eval");
 const check = @import("check");
 const builtins = @import("builtins");
+const collections = @import("collections");
 
 const CrashContext = eval.CrashContext;
+const compiled_builtins = @import("compiled_builtins");
 
 const TestEnv = @import("repl_test_env.zig").TestEnv;
 
@@ -20,8 +22,80 @@ const Check = check.Check;
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const RocOps = builtins.host_abi.RocOps;
+const CIR = can.CIR;
 
 const Repl = @This();
+
+/// Wrapper for a loaded compiled module that tracks the buffer
+const LoadedModule = struct {
+    env: *ModuleEnv,
+    buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT) u8,
+    gpa: std.mem.Allocator,
+
+    fn deinit(self: *LoadedModule) void {
+        // Only free the hashmap that was allocated during deserialization
+        // Most other data (like the SafeList contents) points into the buffer
+        self.env.imports.map.deinit(self.gpa);
+
+        // Free the buffer (the env points into this buffer for most data)
+        self.gpa.free(self.buffer);
+        // Free the env struct itself
+        self.gpa.destroy(self.env);
+    }
+};
+
+/// Deserialize BuiltinIndices from the binary data generated at build time
+fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !CIR.BuiltinIndices {
+    // Copy to properly aligned memory
+    const aligned_buffer = try gpa.alignedAlloc(u8, @alignOf(CIR.BuiltinIndices), bin_data.len);
+    defer gpa.free(aligned_buffer);
+    @memcpy(aligned_buffer, bin_data);
+
+    const indices_ptr = @as(*const CIR.BuiltinIndices, @ptrCast(aligned_buffer.ptr));
+    return indices_ptr.*;
+}
+
+/// Load a compiled ModuleEnv from embedded binary data
+fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) !LoadedModule {
+    // Copy the embedded data to properly aligned memory
+    // CompactWriter requires specific alignment for serialization
+    const CompactWriter = collections.CompactWriter;
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
+    @memcpy(buffer, bin_data);
+
+    // Cast to the serialized structure
+    const serialized_ptr = @as(
+        *ModuleEnv.Serialized,
+        @ptrCast(@alignCast(buffer.ptr)),
+    );
+
+    const env = try gpa.create(ModuleEnv);
+    errdefer gpa.destroy(env);
+
+    // Deserialize
+    const base_ptr = @intFromPtr(buffer.ptr);
+    env.* = ModuleEnv{
+        .gpa = gpa,
+        .common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), source).*,
+        .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr))).*,
+        .module_kind = serialized_ptr.module_kind,
+        .all_defs = serialized_ptr.all_defs,
+        .all_statements = serialized_ptr.all_statements,
+        .exports = serialized_ptr.exports,
+        .builtin_statements = serialized_ptr.builtin_statements,
+        .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
+        .imports = serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+        .module_name = module_name,
+        .diagnostics = serialized_ptr.diagnostics,
+        .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+    };
+
+    return LoadedModule{
+        .env = env,
+        .buffer = buffer,
+        .gpa = gpa,
+    };
+}
 
 /// Information about a type declaration
 const TypeDeclInfo = struct {
@@ -378,10 +452,30 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8, def_ident: ?[]co
     const module_name = "repl";
     try cir.initCIRFields(self.allocator, module_name);
 
+    // Load builtin modules and inject their type declarations
+    const builtin_indices = try deserializeBuiltinIndices(self.allocator, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+
+    var bool_module = try loadCompiledModule(self.allocator, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    var result_module = try loadCompiledModule(self.allocator, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
+    // Get the Bool type declaration from the loaded module using the build-time index
+    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
+    const actual_bool_idx = try cir.store.addStatement(bool_stmt, base.Region.zero());
+
+    // Get the Result type declaration from the loaded module using the build-time index
+    const result_stmt = result_module.env.store.getStatement(builtin_indices.result_type);
+    const actual_result_idx = try cir.store.addStatement(result_stmt, base.Region.zero());
+
     const common_idents: Check.CommonIdents = .{
         .module_name = try cir.insertIdent(base.Ident.for_text(module_name)),
         .list = try cir.insertIdent(base.Ident.for_text("List")),
         .box = try cir.insertIdent(base.Ident.for_text("Box")),
+        .bool_stmt = actual_bool_idx,
+        .result_stmt = actual_result_idx,
     };
 
     // Create czer
@@ -469,7 +563,7 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8, def_ident: ?[]co
     }
 
     // Create interpreter
-    var interpreter = eval.Interpreter.init(self.allocator, cir) catch |err| {
+    var interpreter = eval.Interpreter.init(self.allocator, cir, actual_bool_idx) catch |err| {
         return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
     };
     defer interpreter.deinit();
@@ -764,10 +858,30 @@ test "Repl - minimal interpreter integration" {
     const cir = &module_env; // CIR is now just ModuleEnv
     try cir.initCIRFields(gpa, "test");
 
+    // Load builtin modules and inject their type declarations
+    const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+
+    var bool_module = try loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    var result_module = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
+    // Get the Bool type declaration from the loaded module using the build-time index
+    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
+    const actual_bool_idx = try cir.store.addStatement(bool_stmt, base.Region.zero());
+
+    // Get the Result type declaration from the loaded module using the build-time index
+    const result_stmt = result_module.env.store.getStatement(builtin_indices.result_type);
+    const actual_result_idx = try cir.store.addStatement(result_stmt, base.Region.zero());
+
     const module_common_idents: Check.CommonIdents = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
         .list = try module_env.insertIdent(base.Ident.for_text("List")),
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+        .bool_stmt = actual_bool_idx,
+        .result_stmt = actual_result_idx,
     };
 
     // Step 4: Canonicalize
@@ -786,7 +900,7 @@ test "Repl - minimal interpreter integration" {
     _ = try checker.checkExprRepl(canonical_expr_idx.get_idx());
 
     // Step 6: Create interpreter
-    var interpreter = try eval.Interpreter.init(gpa, cir);
+    var interpreter = try eval.Interpreter.init(gpa, cir, actual_bool_idx);
     defer interpreter.deinit();
 
     // Step 7: Evaluate

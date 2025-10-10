@@ -83,11 +83,15 @@ constraint_origins: std.AutoHashMap(Var, Var),
 /// A map of rigid variables that we build up during a branch of type checking
 const FreeVar = struct { ident: base.Ident.Idx, var_: Var };
 
-/// A struct of common idents
+/// A struct of common idents and builtin statement indices
 pub const CommonIdents = struct {
     module_name: base.Ident.Idx,
     list: base.Ident.Idx,
     box: base.Ident.Idx,
+    /// Statement index of Bool type in the current module (injected from Bool.bin)
+    bool_stmt: can.CIR.Statement.Idx,
+    /// Statement index of Result type in the current module (injected from Result.bin)
+    result_stmt: can.CIR.Statement.Idx,
 };
 
 /// Init type solver
@@ -2180,7 +2184,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                         does_fx = try self.checkExpr(expr_stmt.body, rank, .no_expectation) or does_fx;
                         const stmt_expr: Var = ModuleEnv.varFrom(expr_stmt.body);
 
-                        const bool_var = ModuleEnv.varFrom(can.Can.BUILTIN_BOOL);
+                        const bool_var = ModuleEnv.varFrom(self.common_idents.bool_stmt);
                         _ = try self.unify(bool_var, stmt_expr, rank);
                     },
                     else => {
@@ -2758,7 +2762,7 @@ fn checkIfElseExpr(
     // Check the condition of the 1st branch
     var does_fx = try self.checkExpr(first_branch.cond, rank, .no_expectation);
     const first_cond_var: Var = ModuleEnv.varFrom(first_branch.cond);
-    const bool_var = ModuleEnv.varFrom(can.Can.BUILTIN_BOOL);
+    const bool_var = ModuleEnv.varFrom(self.common_idents.bool_stmt);
     const first_cond_result = try self.unify(bool_var, first_cond_var, rank);
     self.setDetailIfTypeMismatch(first_cond_result, .incompatible_if_cond);
 
@@ -2780,7 +2784,7 @@ fn checkIfElseExpr(
         // Check the branches condition
         does_fx = try self.checkExpr(branch.cond, rank, .no_expectation) or does_fx;
         const cond_var: Var = ModuleEnv.varFrom(branch.cond);
-        const branch_bool_var = ModuleEnv.varFrom(can.Can.BUILTIN_BOOL);
+        const branch_bool_var = ModuleEnv.varFrom(self.common_idents.bool_stmt);
         const cond_result = try self.unify(branch_bool_var, cond_var, rank);
         self.setDetailIfTypeMismatch(cond_result, .incompatible_if_cond);
 
@@ -2803,7 +2807,7 @@ fn checkIfElseExpr(
                 does_fx = try self.checkExpr(remaining_branch.cond, rank, .no_expectation) or does_fx;
                 const remaining_cond_var: Var = ModuleEnv.varFrom(remaining_branch.cond);
 
-                const fresh_bool = ModuleEnv.varFrom(can.Can.BUILTIN_BOOL);
+                const fresh_bool = ModuleEnv.varFrom(self.common_idents.bool_stmt);
                 const remaining_cond_result = try self.unify(fresh_bool, remaining_cond_var, rank);
                 self.setDetailIfTypeMismatch(remaining_cond_result, .incompatible_if_cond);
 
@@ -2990,7 +2994,7 @@ fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, r
     const result_var = @as(Var, ModuleEnv.varFrom(expr_idx));
 
     // Create a fresh boolean variable for the operation
-    const bool_var = ModuleEnv.varFrom(can.Can.BUILTIN_BOOL);
+    const bool_var = ModuleEnv.varFrom(self.common_idents.bool_stmt);
 
     // Unify operand and result with the boolean type
     _ = try self.unify(bool_var, operand_var, rank);
@@ -3072,14 +3076,14 @@ fn checkBinopExpr(
             const result = try self.unify(lhs_var, rhs_var, rank);
 
             if (result.isOk()) {
-                const fresh_bool = ModuleEnv.varFrom(can.Can.BUILTIN_BOOL);
+                const fresh_bool = ModuleEnv.varFrom(self.common_idents.bool_stmt);
                 try self.types.setVarRedirect(expr_var, fresh_bool);
             } else {
                 try self.updateVar(expr_var, .err, rank);
             }
         },
         .@"and" => {
-            const lhs_fresh_bool = ModuleEnv.varFrom(can.Can.BUILTIN_BOOL);
+            const lhs_fresh_bool = ModuleEnv.varFrom(self.common_idents.bool_stmt);
             const lhs_result = try self.unify(lhs_fresh_bool, lhs_var, rank);
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
@@ -3087,7 +3091,7 @@ fn checkBinopExpr(
                 .binop = .@"and",
             } });
 
-            const rhs_bool = ModuleEnv.varFrom(can.Can.BUILTIN_BOOL);
+            const rhs_bool = ModuleEnv.varFrom(self.common_idents.bool_stmt);
             const rhs_result = try self.unify(rhs_bool, rhs_var, rank);
             self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
@@ -3103,7 +3107,7 @@ fn checkBinopExpr(
             try self.types.setVarRedirect(expr_var, lhs_var);
         },
         .@"or" => {
-            const lhs_fresh_bool = ModuleEnv.varFrom(can.Can.BUILTIN_BOOL);
+            const lhs_fresh_bool = ModuleEnv.varFrom(self.common_idents.bool_stmt);
             const lhs_result = try self.unify(lhs_fresh_bool, lhs_var, rank);
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
@@ -3111,7 +3115,7 @@ fn checkBinopExpr(
                 .binop = .@"and",
             } });
 
-            const rhs_bool = ModuleEnv.varFrom(can.Can.BUILTIN_BOOL);
+            const rhs_bool = ModuleEnv.varFrom(self.common_idents.bool_stmt);
             const rhs_result = try self.unify(rhs_bool, rhs_var, rank);
             self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,

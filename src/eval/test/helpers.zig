@@ -6,6 +6,8 @@ const base = @import("base");
 const can = @import("can");
 const check = @import("check");
 const builtins = @import("builtins");
+const collections = @import("collections");
+const compiled_builtins = @import("compiled_builtins");
 
 const TestEnv = @import("TestEnv.zig");
 const Interpreter = @import("../interpreter.zig").Interpreter;
@@ -19,6 +21,77 @@ const test_allocator = std.testing.allocator;
 
 const TestParseError = parse.Parser.Error || error{ TokenizeError, SyntaxError };
 
+/// Wrapper for a loaded compiled module that tracks the buffer
+pub const LoadedModule = struct {
+    env: *ModuleEnv,
+    buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT) u8,
+    gpa: std.mem.Allocator,
+
+    pub fn deinit(self: *LoadedModule) void {
+        // Only free the hashmap that was allocated during deserialization
+        // Most other data (like the SafeList contents) points into the buffer
+        self.env.imports.map.deinit(self.gpa);
+
+        // Free the buffer (the env points into this buffer for most data)
+        self.gpa.free(self.buffer);
+        // Free the env struct itself
+        self.gpa.destroy(self.env);
+    }
+};
+
+/// Deserialize BuiltinIndices from the binary data generated at build time
+pub fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !CIR.BuiltinIndices {
+    // Copy to properly aligned memory
+    const aligned_buffer = try gpa.alignedAlloc(u8, @alignOf(CIR.BuiltinIndices), bin_data.len);
+    defer gpa.free(aligned_buffer);
+    @memcpy(aligned_buffer, bin_data);
+
+    const indices_ptr = @as(*const CIR.BuiltinIndices, @ptrCast(aligned_buffer.ptr));
+    return indices_ptr.*;
+}
+
+/// Load a compiled ModuleEnv from embedded binary data
+pub fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) !LoadedModule {
+    // Copy the embedded data to properly aligned memory
+    // CompactWriter requires specific alignment for serialization
+    const CompactWriter = collections.CompactWriter;
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
+    @memcpy(buffer, bin_data);
+
+    // Cast to the serialized structure
+    const serialized_ptr = @as(
+        *ModuleEnv.Serialized,
+        @ptrCast(@alignCast(buffer.ptr)),
+    );
+
+    const env = try gpa.create(ModuleEnv);
+    errdefer gpa.destroy(env);
+
+    // Deserialize
+    const base_ptr = @intFromPtr(buffer.ptr);
+    env.* = ModuleEnv{
+        .gpa = gpa,
+        .common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), source).*,
+        .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr))).*,
+        .module_kind = serialized_ptr.module_kind,
+        .all_defs = serialized_ptr.all_defs,
+        .all_statements = serialized_ptr.all_statements,
+        .exports = serialized_ptr.exports,
+        .builtin_statements = serialized_ptr.builtin_statements,
+        .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
+        .imports = serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+        .module_name = module_name,
+        .diagnostics = serialized_ptr.diagnostics,
+        .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+    };
+
+    return LoadedModule{
+        .env = env,
+        .buffer = buffer,
+        .gpa = gpa,
+    };
+}
+
 /// Helper function to run an expression and expect a specific error.
 pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
@@ -27,7 +100,7 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: e
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -54,7 +127,7 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -79,7 +152,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -113,7 +186,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -161,7 +234,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -204,7 +277,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -260,7 +333,17 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     can: *Can,
     checker: *Check,
     expr_idx: CIR.Expr.Idx,
+    bool_stmt: CIR.Statement.Idx,
 } {
+    // Load builtin modules (following TestEnv.zig pattern)
+    const builtin_indices = try deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var bool_module = try loadCompiledModule(allocator, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    var result_module = try loadCompiledModule(allocator, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
     // Initialize the ModuleEnv
     const module_env = try allocator.create(ModuleEnv);
     module_env.* = try ModuleEnv.init(allocator, source);
@@ -291,10 +374,28 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
 
     // Initialize CIR fields in ModuleEnv
     try module_env.initCIRFields(allocator, "test");
+
+    // Inject builtin type declarations (Bool and Result) following TestEnv.zig pattern
+    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
+    const actual_bool_idx = try module_env.store.addStatement(bool_stmt, base.Region.zero());
+
+    const result_stmt = result_module.env.store.getStatement(builtin_indices.result_type);
+    const actual_result_idx = try module_env.store.addStatement(result_stmt, base.Region.zero());
+
+    // Update builtin_statements span
+    const start_idx = @intFromEnum(actual_bool_idx);
+    const end_idx = @intFromEnum(actual_result_idx);
+    module_env.builtin_statements = .{ .span = .{
+        .start = start_idx,
+        .len = end_idx - start_idx + 1,
+    } };
+
     const common_idents: Check.CommonIdents = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
         .list = try module_env.insertIdent(base.Ident.for_text("List")),
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+        .bool_stmt = actual_bool_idx,
+        .result_stmt = actual_result_idx,
     };
 
     // Create czer
@@ -320,6 +421,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
             .expr_idx = try module_env.store.addExpr(.{ .e_runtime_error = .{
                 .diagnostic = diagnostic_idx,
             } }, base.Region.zero()),
+            .bool_stmt = actual_bool_idx,
         };
     };
 
@@ -336,6 +438,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
         .can = czer,
         .checker = checker,
         .expr_idx = canonical_expr_idx.get_idx(),
+        .bool_stmt = actual_bool_idx,
     };
 }
 
@@ -363,7 +466,7 @@ test "eval tag - already primitive" {
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt);
     defer interpreter.deinit();
 
     const ops = test_env_instance.get_ops();
@@ -392,7 +495,7 @@ test "interpreter reuse across multiple evaluations" {
         var test_env_instance = TestEnv.init(test_allocator);
         defer test_env_instance.deinit();
 
-        var interpreter = try Interpreter.init(test_allocator, resources.module_env);
+        var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt);
         defer interpreter.deinit();
 
         const ops = test_env_instance.get_ops();

@@ -8,6 +8,7 @@ const check = @import("check");
 const builtins = @import("builtins");
 const collections = @import("collections");
 const serialization = @import("serialization");
+const compiled_builtins = @import("compiled_builtins");
 
 const helpers = @import("helpers.zig");
 const TestEnv = @import("TestEnv.zig");
@@ -406,7 +407,7 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interpreter = try Interpreter.init(testing.allocator, resources.module_env);
+    var interpreter = try Interpreter.init(testing.allocator, resources.module_env, resources.bool_stmt);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -681,6 +682,15 @@ test "ModuleEnv serialization and interpreter evaluation" {
     var test_env_instance = TestEnv.init(gpa);
     defer test_env_instance.deinit();
 
+    // Load builtin modules (following TestEnv.zig pattern)
+    const builtin_indices = try helpers.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var bool_module = try helpers.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    var result_module = try helpers.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
     // Create original ModuleEnv
     var original_env = try ModuleEnv.init(gpa, source);
     defer original_env.deinit();
@@ -698,10 +708,28 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
     // Initialize CIR fields in ModuleEnv
     try original_env.initCIRFields(gpa, "test");
+
+    // Inject builtin type declarations (Bool and Result) following TestEnv.zig pattern
+    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
+    const actual_bool_idx = try original_env.store.addStatement(bool_stmt, base.Region.zero());
+
+    const result_stmt = result_module.env.store.getStatement(builtin_indices.result_type);
+    const actual_result_idx = try original_env.store.addStatement(result_stmt, base.Region.zero());
+
+    // Update builtin_statements span
+    const start_idx = @intFromEnum(actual_bool_idx);
+    const end_idx = @intFromEnum(actual_result_idx);
+    original_env.builtin_statements = .{ .span = .{
+        .start = start_idx,
+        .len = end_idx - start_idx + 1,
+    } };
+
     const common_idents: Check.CommonIdents = .{
         .module_name = try original_env.insertIdent(base.Ident.for_text("test")),
         .list = try original_env.insertIdent(base.Ident.for_text("List")),
         .box = try original_env.insertIdent(base.Ident.for_text("Box")),
+        .bool_stmt = actual_bool_idx,
+        .result_stmt = actual_result_idx,
     };
 
     // Create canonicalizer
@@ -722,7 +750,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
     // Test 1: Evaluate with the original ModuleEnv
     {
-        var interpreter = try Interpreter.init(gpa, &original_env);
+        var interpreter = try Interpreter.init(gpa, &original_env, actual_bool_idx);
         defer interpreter.deinit();
 
         const ops = test_env_instance.get_ops();
@@ -786,7 +814,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         // Test 4: Evaluate the same expression using the deserialized ModuleEnv
         // The original expression index should still be valid since the NodeStore structure is preserved
         {
-            var interpreter = try Interpreter.init(gpa, deserialized_env);
+            var interpreter = try Interpreter.init(gpa, deserialized_env, actual_bool_idx);
             defer interpreter.deinit();
 
             const ops = test_env_instance.get_ops();

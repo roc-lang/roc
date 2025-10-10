@@ -647,6 +647,17 @@ const LoadedModule = struct {
     }
 };
 
+/// Deserialize BuiltinIndices from the binary data generated at build time
+fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !CIR.BuiltinIndices {
+    // Copy to properly aligned memory
+    const aligned_buffer = try gpa.alignedAlloc(u8, @alignOf(CIR.BuiltinIndices), bin_data.len);
+    defer gpa.free(aligned_buffer);
+    @memcpy(aligned_buffer, bin_data);
+
+    const indices_ptr = @as(*const CIR.BuiltinIndices, @ptrCast(aligned_buffer.ptr));
+    return indices_ptr.*;
+}
+
 /// Load a compiled ModuleEnv from embedded binary data
 fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) !LoadedModule {
     // Copy the embedded data to properly aligned memory
@@ -1162,10 +1173,39 @@ fn processSnapshotContent(
     var can_ir = &module_env; // ModuleEnv contains the canonical IR
     try can_ir.initCIRFields(allocator, module_name);
 
+    // Load builtin modules and inject Bool and Result type declarations
+    // (following the pattern from eval.zig and TestEnv.zig)
+    const builtin_indices = try deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
+
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try loadCompiledModule(allocator, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try loadCompiledModule(allocator, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
+    // Inject Bool and Result type declarations into the current module
+    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
+    const actual_bool_idx = try can_ir.store.addStatement(bool_stmt, base.Region.zero());
+
+    const result_stmt = result_module.env.store.getStatement(builtin_indices.result_type);
+    const actual_result_idx = try can_ir.store.addStatement(result_stmt, base.Region.zero());
+
+    // Update builtin_statements span
+    const start_idx = @intFromEnum(actual_bool_idx);
+    const end_idx = @intFromEnum(actual_result_idx);
+    can_ir.builtin_statements = .{ .span = .{
+        .start = start_idx,
+        .len = end_idx - start_idx + 1,
+    } };
+
     const common_idents: Check.CommonIdents = .{
         .module_name = try can_ir.insertIdent(base.Ident.for_text(module_name)),
         .list = try can_ir.insertIdent(base.Ident.for_text("List")),
         .box = try can_ir.insertIdent(base.Ident.for_text("Box")),
+        .bool_stmt = actual_bool_idx,
+        .result_stmt = actual_result_idx,
     };
 
     // Auto-inject Set and Dict as available imports (if they're loaded)

@@ -30,6 +30,8 @@ const unbundle = @import("unbundle");
 const fmt = @import("fmt");
 const WasmFilesystem = @import("WasmFilesystem.zig");
 const layout = @import("layout");
+const collections = @import("collections");
+const compiled_builtins = @import("compiled_builtins");
 
 const CrashContext = eval.CrashContext;
 
@@ -129,6 +131,7 @@ const CompilerStageData = struct {
     module_env: *ModuleEnv,
     parse_ast: ?parse.AST = null,
     solver: ?Check = null,
+    bool_stmt: ?can.CIR.Statement.Idx = null,
 
     // Pre-canonicalization HTML representations
     tokens_html: ?[]const u8 = null,
@@ -886,10 +889,89 @@ fn compileSource(source: []const u8) !CompilerStageData {
     const env = result.module_env;
     try env.initCIRFields(allocator, "main");
 
+    // Load builtin modules and inject Bool and Result type declarations
+    // (following the pattern from eval.zig and TestEnv.zig)
+    const LoadedModule = struct {
+        env: *ModuleEnv,
+        buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT) u8,
+        gpa: Allocator,
+
+        fn deinit(self: *@This()) void {
+            self.env.imports.map.deinit(self.gpa);
+            self.gpa.free(self.buffer);
+            self.gpa.destroy(self.env);
+        }
+
+        fn loadCompiledModule(gpa: Allocator, bin_data: []const u8, module_name_param: []const u8, module_source: []const u8) !@This() {
+            const CompactWriter = collections.CompactWriter;
+            const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
+            @memcpy(buffer, bin_data);
+
+            const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
+            const module_env_ptr = try gpa.create(ModuleEnv);
+            errdefer gpa.destroy(module_env_ptr);
+
+            const base_ptr = @intFromPtr(buffer.ptr);
+            module_env_ptr.* = ModuleEnv{
+                .gpa = gpa,
+                .common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), module_source).*,
+                .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr))).*,
+                .module_kind = serialized_ptr.module_kind,
+                .all_defs = serialized_ptr.all_defs,
+                .all_statements = serialized_ptr.all_statements,
+                .exports = serialized_ptr.exports,
+                .builtin_statements = serialized_ptr.builtin_statements,
+                .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
+                .imports = serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+                .module_name = module_name_param,
+                .diagnostics = serialized_ptr.diagnostics,
+                .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+            };
+
+            return .{ .env = module_env_ptr, .buffer = buffer, .gpa = gpa };
+        }
+    };
+
+    const builtin_indices = blk: {
+        const aligned_buffer = try allocator.alignedAlloc(u8, @alignOf(can.CIR.BuiltinIndices), compiled_builtins.builtin_indices_bin.len);
+        defer allocator.free(aligned_buffer);
+        @memcpy(aligned_buffer, compiled_builtins.builtin_indices_bin);
+        const indices_ptr = @as(*const can.CIR.BuiltinIndices, @ptrCast(aligned_buffer.ptr));
+        break :blk indices_ptr.*;
+    };
+
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try LoadedModule.loadCompiledModule(allocator, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try LoadedModule.loadCompiledModule(allocator, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
+    // Inject Bool and Result type declarations into the current module
+    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
+    const actual_bool_idx = try env.store.addStatement(bool_stmt, base.Region.zero());
+
+    const result_stmt = result_module.env.store.getStatement(builtin_indices.result_type);
+    const actual_result_idx = try env.store.addStatement(result_stmt, base.Region.zero());
+
+    // Store bool_stmt in result for later use (e.g., in test runner)
+    result.bool_stmt = actual_bool_idx;
+
+    // Update builtin_statements span
+    const start_idx = @intFromEnum(actual_bool_idx);
+    const end_idx = @intFromEnum(actual_result_idx);
+    env.builtin_statements = .{ .span = .{
+        .start = start_idx,
+        .len = end_idx - start_idx + 1,
+    } };
+
     const module_common_idents: Check.CommonIdents = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("main")),
         .list = try module_env.insertIdent(base.Ident.for_text("List")),
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+        .bool_stmt = actual_bool_idx,
+        .result_stmt = actual_result_idx,
     };
 
     var czer = try Can.init(env, &result.parse_ast.?, null);
@@ -1393,8 +1475,14 @@ fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) Re
     var local_arena = std.heap.ArenaAllocator.init(allocator);
     defer local_arena.deinit();
 
+    // Check if bool_stmt is available
+    const bool_stmt = data.bool_stmt orelse {
+        try writeErrorResponse(response_buffer, .ERROR, "Bool statement not available for test evaluation.");
+        return;
+    };
+
     // Create interpreter infrastructure for test evaluation
-    var test_runner = TestRunner.init(local_arena.allocator(), env) catch {
+    var test_runner = TestRunner.init(local_arena.allocator(), env, bool_stmt) catch {
         try writeErrorResponse(response_buffer, .ERROR, "Failed to initialize test runner.");
         return;
     };

@@ -7,12 +7,86 @@ const parse = @import("parse");
 const CIR = @import("can").CIR;
 const Can = @import("can").Can;
 const ModuleEnv = @import("can").ModuleEnv;
+const collections = @import("collections");
 
 const Check = @import("../Check.zig");
 const problem_mod = @import("../problem.zig");
 
 const CommonEnv = base.CommonEnv;
 const testing = std.testing;
+
+const compiled_builtins = @import("compiled_builtins");
+
+/// Wrapper for a loaded compiled module that tracks the buffer
+const LoadedModule = struct {
+    env: *ModuleEnv,
+    buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT) u8,
+    gpa: std.mem.Allocator,
+
+    fn deinit(self: *LoadedModule) void {
+        // Only free the hashmap that was allocated during deserialization
+        // Most other data (like the SafeList contents) points into the buffer
+        self.env.imports.map.deinit(self.gpa);
+
+        // Free the buffer (the env points into this buffer for most data)
+        self.gpa.free(self.buffer);
+        // Free the env struct itself
+        self.gpa.destroy(self.env);
+    }
+};
+
+/// Deserialize BuiltinIndices from the binary data generated at build time
+fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !CIR.BuiltinIndices {
+    // Copy to properly aligned memory
+    const aligned_buffer = try gpa.alignedAlloc(u8, @alignOf(CIR.BuiltinIndices), bin_data.len);
+    defer gpa.free(aligned_buffer);
+    @memcpy(aligned_buffer, bin_data);
+
+    const indices_ptr = @as(*const CIR.BuiltinIndices, @ptrCast(aligned_buffer.ptr));
+    return indices_ptr.*;
+}
+
+/// Load a compiled ModuleEnv from embedded binary data
+fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) !LoadedModule {
+    // Copy the embedded data to properly aligned memory
+    // CompactWriter requires specific alignment for serialization
+    const CompactWriter = collections.CompactWriter;
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
+    @memcpy(buffer, bin_data);
+
+    // Cast to the serialized structure
+    const serialized_ptr = @as(
+        *ModuleEnv.Serialized,
+        @ptrCast(@alignCast(buffer.ptr)),
+    );
+
+    const env = try gpa.create(ModuleEnv);
+    errdefer gpa.destroy(env);
+
+    // Deserialize
+    const base_ptr = @intFromPtr(buffer.ptr);
+    env.* = ModuleEnv{
+        .gpa = gpa,
+        .common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), source).*,
+        .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr))).*,
+        .module_kind = serialized_ptr.module_kind,
+        .all_defs = serialized_ptr.all_defs,
+        .all_statements = serialized_ptr.all_statements,
+        .exports = serialized_ptr.exports,
+        .builtin_statements = serialized_ptr.builtin_statements,
+        .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
+        .imports = serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+        .module_name = module_name,
+        .diagnostics = serialized_ptr.diagnostics,
+        .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+    };
+
+    return LoadedModule{
+        .env = env,
+        .buffer = buffer,
+        .gpa = gpa,
+    };
+}
 
 gpa: std.mem.Allocator,
 module_env: *ModuleEnv,
@@ -23,6 +97,10 @@ type_writer: types.TypeWriter,
 
 module_envs: std.StringHashMap(*const ModuleEnv),
 other_envs: std.ArrayList(*const ModuleEnv),
+
+// Loaded builtin modules (loaded per test, cleaned up in deinit)
+bool_module: LoadedModule,
+result_module: LoadedModule,
 
 /// Test environment for canonicalization testing, providing a convenient wrapper around ModuleEnv, AST, and Can.
 const TestEnv = @This();
@@ -55,6 +133,15 @@ pub fn initWithImport(source: []const u8, other_module_name: []const u8, other_m
     const module_name = "Test";
     std.debug.assert(!std.mem.eql(u8, module_name, other_module_name));
 
+    // Load builtin modules (following eval.zig pattern)
+    const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var bool_module = try loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    errdefer bool_module.deinit();
+    var result_module = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    errdefer result_module.deinit();
+
     // Initialize the ModuleEnv with the CommonEnv
     module_env.* = try ModuleEnv.init(gpa, source);
     errdefer module_env.deinit();
@@ -63,12 +150,6 @@ pub fn initWithImport(source: []const u8, other_module_name: []const u8, other_m
     module_env.module_name = module_name;
     try module_env.common.calcLineStarts(gpa);
 
-    const module_common_idents: Check.CommonIdents = .{
-        .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
-        .list = try module_env.insertIdent(base.Ident.for_text("List")),
-        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
-    };
-
     // Parse the AST
     parse_ast.* = try parse.parse(&module_env.common, gpa);
     errdefer parse_ast.deinit(gpa);
@@ -76,11 +157,35 @@ pub fn initWithImport(source: []const u8, other_module_name: []const u8, other_m
 
     // Canonicalize
     try module_env.initCIRFields(gpa, "test");
+
+    // Inject builtin type declarations (Bool and Result) following eval.zig pattern
+    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
+    const actual_bool_idx = try module_env.store.addStatement(bool_stmt, base.Region.zero());
+
+    const result_stmt = result_module.env.store.getStatement(builtin_indices.result_type);
+    const actual_result_idx = try module_env.store.addStatement(result_stmt, base.Region.zero());
+
+    // Update builtin_statements span
+    const start_idx = @intFromEnum(actual_bool_idx);
+    const end_idx = @intFromEnum(actual_result_idx);
+    module_env.builtin_statements = .{ .span = .{
+        .start = start_idx,
+        .len = end_idx - start_idx + 1,
+    } };
+
     can.* = try Can.init(module_env, parse_ast, &module_envs);
     errdefer can.deinit();
 
     try can.canonicalizeFile();
     try can.validateForChecking();
+
+    const module_common_idents: Check.CommonIdents = .{
+        .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
+        .list = try module_env.insertIdent(base.Ident.for_text("List")),
+        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+        .bool_stmt = actual_bool_idx,
+        .result_stmt = actual_result_idx,
+    };
 
     // Pull out the imported index
     std.debug.assert(can.import_indices.size == 1);
@@ -106,6 +211,8 @@ pub fn initWithImport(source: []const u8, other_module_name: []const u8, other_m
         .type_writer = type_writer,
         .module_envs = module_envs,
         .other_envs = other_envs,
+        .bool_module = bool_module,
+        .result_module = result_module,
     };
 }
 
@@ -130,6 +237,15 @@ pub fn init(source: []const u8) !TestEnv {
 
     const module_name = "Test";
 
+    // Load builtin modules (following eval.zig pattern)
+    const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var bool_module = try loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    errdefer bool_module.deinit();
+    var result_module = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    errdefer result_module.deinit();
+
     // Initialize the ModuleEnv with the CommonEnv
     module_env.* = try ModuleEnv.init(gpa, source);
     errdefer module_env.deinit();
@@ -138,12 +254,6 @@ pub fn init(source: []const u8) !TestEnv {
     module_env.module_name = module_name;
     try module_env.common.calcLineStarts(gpa);
 
-    const module_common_idents: Check.CommonIdents = .{
-        .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
-        .list = try module_env.insertIdent(base.Ident.for_text("List")),
-        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
-    };
-
     // Parse the AST
     parse_ast.* = try parse.parse(&module_env.common, gpa);
     errdefer parse_ast.deinit(gpa);
@@ -151,11 +261,38 @@ pub fn init(source: []const u8) !TestEnv {
 
     // Canonicalize
     try module_env.initCIRFields(gpa, "test");
+
+    // Inject builtin type declarations (Bool and Result) following eval.zig pattern
+    // Get the Bool type declaration from the loaded module using the build-time index
+    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
+    const actual_bool_idx = try module_env.store.addStatement(bool_stmt, base.Region.zero());
+
+    // Get the Result type declaration from the loaded module using the build-time index
+    const result_stmt = result_module.env.store.getStatement(builtin_indices.result_type);
+    const actual_result_idx = try module_env.store.addStatement(result_stmt, base.Region.zero());
+
+    // Update builtin_statements span to include injected Bool and Result
+    // Use the ACTUAL indices where they landed (not hardcoded!)
+    const start_idx = @intFromEnum(actual_bool_idx);
+    const end_idx = @intFromEnum(actual_result_idx);
+    module_env.builtin_statements = .{ .span = .{
+        .start = start_idx,
+        .len = end_idx - start_idx + 1,
+    } };
+
     can.* = try Can.init(module_env, parse_ast, null);
     errdefer can.deinit();
 
     try can.canonicalizeFile();
     try can.validateForChecking();
+
+    const module_common_idents: Check.CommonIdents = .{
+        .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
+        .list = try module_env.insertIdent(base.Ident.for_text("List")),
+        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+        .bool_stmt = actual_bool_idx,
+        .result_stmt = actual_result_idx,
+    };
 
     // Type Check
     var checker = try Check.init(gpa, &module_env.types, module_env, &.{}, &module_env.store.regions, module_common_idents);
@@ -175,6 +312,8 @@ pub fn init(source: []const u8) !TestEnv {
         .type_writer = type_writer,
         .module_envs = module_envs,
         .other_envs = other_envs,
+        .bool_module = bool_module,
+        .result_module = result_module,
     };
 }
 
@@ -210,6 +349,10 @@ pub fn deinit(self: *TestEnv) void {
 
     self.module_envs.deinit();
     self.other_envs.deinit();
+
+    // Clean up loaded builtin modules
+    self.bool_module.deinit();
+    self.result_module.deinit();
 }
 
 /// Get the inferred type of the last declaration and compare it to the provided

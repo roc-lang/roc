@@ -132,11 +132,6 @@ const RecordField = CIR.RecordField;
 /// Struct to track fields that have been seen before during canonicalization
 const SeenRecordField = struct { ident: base.Ident.Idx, region: base.Region };
 
-/// The idx of the builtin Bool
-pub const BUILTIN_BOOL: Statement.Idx = @enumFromInt(2);
-/// The idx of the builtin Result
-pub const BUILTIN_RESULT: Statement.Idx = @enumFromInt(13);
-
 /// Deinitialize canonicalizer resources
 pub fn deinit(
     self: *Self,

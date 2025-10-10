@@ -26,6 +26,16 @@ pub const Statement = @import("Statement.zig").Statement;
 pub const TypeAnno = @import("TypeAnnotation.zig").TypeAnno;
 pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 
+/// Indices of builtin type declarations within their respective modules.
+/// Loaded once at startup from builtin_indices.bin (generated at build time).
+/// The indices refer to statement positions within the source modules (Bool.bin, Result.bin).
+pub const BuiltinIndices = struct {
+    /// Statement index of Bool type declaration within Bool module
+    bool_type: Statement.Idx,
+    /// Statement index of Result type declaration within Result module
+    result_type: Statement.Idx,
+};
+
 // Type definitions for module compilation
 
 /// Represents a definition (binding of a pattern to an expression) in the CIR
