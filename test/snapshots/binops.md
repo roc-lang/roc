@@ -26,7 +26,50 @@ type=expr
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
+
+This type is referenced here:
+**binops.md:14:5:14:9:**
+```roc
+    Bool.True and Bool.False,
+```
+    ^^^^
+
+
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
+
+This type is referenced here:
+**binops.md:14:19:14:23:**
+```roc
+    Bool.True and Bool.False,
+```
+                  ^^^^
+
+
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
+
+This type is referenced here:
+**binops.md:15:5:15:9:**
+```roc
+    Bool.False or Bool.True,
+```
+    ^^^^
+
+
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
+
+This type is referenced here:
+**binops.md:15:19:15:23:**
+```roc
+    Bool.False or Bool.True,
+```
+                  ^^^^
+
+
 # TOKENS
 ~~~zig
 OpenRound(1:1-1:2),
@@ -158,20 +201,16 @@ EndOfFile(18:1-18:1),
 			(e-num @13.5-13.6 (value "4"))
 			(e-num @13.10-13.11 (value "2")))
 		(e-binop @14.5-14.29 (op "and")
-			(e-nominal @14.5-14.14 (nominal "Bool")
-				(e-tag @14.5-14.14 (name "True")))
-			(e-nominal @14.19-14.29 (nominal "Bool")
-				(e-tag @14.19-14.29 (name "False"))))
+			(e-runtime-error (tag "undeclared_type"))
+			(e-runtime-error (tag "undeclared_type")))
 		(e-binop @15.5-15.28 (op "or")
-			(e-nominal @15.5-15.15 (nominal "Bool")
-				(e-tag @15.5-15.15 (name "False")))
-			(e-nominal @15.19-15.28 (nominal "Bool")
-				(e-tag @15.19-15.28 (name "True"))))
+			(e-runtime-error (tag "undeclared_type"))
+			(e-runtime-error (tag "undeclared_type")))
 		(e-binop @16.5-16.14 (op "null_coalesce")
 			(e-tag @16.5-16.9 (name "None"))
 			(e-num @16.13-16.14 (value "0")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-17.2 (type "(Num(_size), Num(_size2), Num(_size3), Num(_size4), Num(_size5), Bool, Bool, Bool, Bool, Bool, Bool, Num(_size6), Bool, Bool, _field)"))
+(expr @1.1-17.2 (type "(Error, Num(_size), Num(_size2), Num(_size3), Num(_size4), Error, Error, Error, Error, Error, Error, Num(_size5), Error, Error, _field)"))
 ~~~

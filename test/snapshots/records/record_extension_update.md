@@ -49,10 +49,9 @@ NO CHANGE
 		(field (name "age")
 			(e-num @1.18-1.20 (value "31")))
 		(field (name "active")
-			(e-nominal @1.30-1.34 (nominal "Bool")
-				(e-tag @1.30-1.34 (name "True"))))))
+			(e-tag @1.30-1.34 (name "True")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.36 (type "{ active: Bool, age: Num(_size), Error }"))
+(expr @1.1-1.36 (type "{ active: [True]_others, age: Num(_size), Error }"))
 ~~~

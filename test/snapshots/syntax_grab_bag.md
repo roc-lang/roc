@@ -593,6 +593,17 @@ main! : List(String) -> Result({}, _)
              ^^^^^^
 
 
+**UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**syntax_grab_bag.md:143:25:143:31:**
+```roc
+main! : List(String) -> Result({}, _)
+```
+                        ^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `blah` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -790,19 +801,6 @@ tuple : Value((a, b, c))
 ```
         ^^^^^
 
-
-**INVALID IF CONDITION**
-This `if` condition needs to be a _Bool_:
-**syntax_grab_bag.md:70:5:**
-```roc
-	if num {
-```
-    ^^^
-
-Right now, it has the type:
-    _Num(Int(Unsigned64))_
-
-Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:
@@ -1871,9 +1869,9 @@ expect {
 		(p-assign @80.1-80.11 (ident "match_time"))
 		(e-closure @80.14-138.3
 			(captures
-				(capture @86.4-86.5 (ident "x"))
+				(capture @136.11-136.15 (ident "dude"))
 				(capture @94.5-94.6 (ident "x"))
-				(capture @136.11-136.15 (ident "dude")))
+				(capture @86.4-86.5 (ident "x")))
 			(e-lambda @80.14-138.3
 				(args
 					(p-assign @81.2-81.3 (ident "a"))
@@ -2065,15 +2063,13 @@ expect {
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @135.3-135.10
-											(p-applied-tag @135.3-135.10))))
+										(p-applied-tag @135.3-135.10)))
 								(value
 									(e-num @135.14-135.17 (value "123"))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @136.3-136.17
-											(p-applied-tag @136.3-136.17))))
+										(p-applied-tag @136.3-136.17)))
 								(value
 									(e-lookup-local @136.21-136.25
 										(p-assign @136.11-136.15 (ident "dude")))))
@@ -2125,11 +2121,10 @@ expect {
 					(s-crash @162.2-163.17 (msg "Unreachable!"))
 					(s-let @164.2-164.31
 						(p-assign @164.2-164.18 (ident "tag_with_payload"))
-						(e-nominal @164.21-164.31 (nominal "Result")
-							(e-tag @164.21-164.31 (name "Ok")
-								(args
-									(e-lookup-local @164.24-164.30
-										(p-assign @146.2-146.18 (ident "number")))))))
+						(e-tag @164.21-164.31 (name "Ok")
+							(args
+								(e-lookup-local @164.24-164.30
+									(p-assign @146.2-146.18 (ident "number"))))))
 					(s-let @165.2-165.34
 						(p-assign @165.2-165.14 (ident "interpolated"))
 						(e-string @165.17-165.34
@@ -2163,11 +2158,10 @@ expect {
 									(e-lookup-local @178.42-178.45
 										(p-assign @148.2-148.5 (ident "tag"))))
 								(field (name "qux")
-									(e-nominal @178.52-178.61 (nominal "Result")
-										(e-tag @178.52-178.61 (name "Ok")
-											(args
-												(e-lookup-local @178.55-178.60
-													(p-assign @145.2-145.7 (ident "world")))))))
+									(e-tag @178.52-178.61 (name "Ok")
+										(args
+											(e-lookup-local @178.55-178.60
+												(p-assign @145.2-145.7 (ident "world"))))))
 								(field (name "punned")
 									(e-runtime-error (tag "ident_not_in_scope"))))))
 					(s-let @179.2-179.68
@@ -2179,11 +2173,10 @@ expect {
 									(e-literal @179.17-179.22 (string "World")))
 								(e-lookup-local @179.25-179.28
 									(p-assign @148.2-148.5 (ident "tag")))
-								(e-nominal @179.30-179.39 (nominal "Result")
-									(e-tag @179.30-179.39 (name "Ok")
-										(args
-											(e-lookup-local @179.33-179.38
-												(p-assign @145.2-145.7 (ident "world"))))))
+								(e-tag @179.30-179.39 (name "Ok")
+									(args
+										(e-lookup-local @179.33-179.38
+											(p-assign @145.2-145.7 (ident "world")))))
 								(e-tuple @179.41-179.56
 									(elems
 										(e-runtime-error (tag "ident_not_in_scope"))
@@ -2202,11 +2195,10 @@ expect {
 								(e-string @182.3-182.10
 									(e-literal @182.4-182.9 (string "World")))
 								(e-runtime-error (tag "ident_not_in_scope"))
-								(e-nominal @184.3-184.12 (nominal "Result")
-									(e-tag @184.3-184.12 (name "Ok")
-										(args
-											(e-lookup-local @184.6-184.11
-												(p-assign @145.2-145.7 (ident "world"))))))
+								(e-tag @184.3-184.12 (name "Ok")
+									(args
+										(e-lookup-local @184.6-184.11
+											(p-assign @145.2-145.7 (ident "world")))))
 								(e-tuple @185.3-185.18
 									(elems
 										(e-runtime-error (tag "ident_not_in_scope"))
@@ -2222,10 +2214,9 @@ expect {
 						(e-binop @188.18-188.86 (op "or")
 							(e-binop @188.18-188.40 (op "gt")
 								(e-binop @188.18-188.32 (op "null_coalesce")
-									(e-nominal @188.18-188.26 (nominal "Result")
-										(e-tag @188.18-188.26 (name "Err")
-											(args
-												(e-runtime-error (tag "ident_not_in_scope")))))
+									(e-tag @188.18-188.26 (name "Err")
+										(args
+											(e-runtime-error (tag "ident_not_in_scope"))))
 									(e-num @188.30-188.32 (value "12")))
 								(e-binop @188.35-188.40 (op "mul")
 									(e-num @188.35-188.36 (value "5"))
@@ -2274,9 +2265,7 @@ expect {
 				(ty-fn @143.9-143.38 (effectful false)
 					(ty-apply @143.9-143.21 (name "List") (builtin)
 						(ty-malformed @143.14-143.20))
-					(ty-apply @143.25-143.38 (name "Result") (local)
-						(ty-record @143.25-143.38)
-						(ty-underscore @143.25-143.38))))))
+					(ty-malformed @143.25-143.31)))))
 	(d-let
 		(p-assign @199.1-199.6 (ident "empty"))
 		(e-empty_record @199.9-199.11)
@@ -2413,10 +2402,10 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @65.1-65.16 (type "Bool -> Num(_size)"))
+		(patt @65.1-65.16 (type "Num(Int(Unsigned64)) -> Num(_size)"))
 		(patt @68.1-68.8 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(patt @80.1-80.11 (type "[Red][Blue, Green]_others, _arg -> Error"))
-		(patt @144.1-144.6 (type "List(Error) -> Result({  }, _d)"))
+		(patt @144.1-144.6 (type "List(Error) -> Error"))
 		(patt @199.1-199.6 (type "{}")))
 	(type_decls
 		(alias @22.1-22.41 (type "Map(a, b)")
@@ -2458,9 +2447,9 @@ expect {
 				(ty-args
 					(ty-rigid-var @63.10-63.11 (name "a"))))))
 	(expressions
-		(expr @65.19-65.40 (type "Bool -> Num(_size)"))
+		(expr @65.19-65.40 (type "Num(Int(Unsigned64)) -> Num(_size)"))
 		(expr @68.11-78.2 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(expr @80.14-138.3 (type "[Red][Blue, Green]_others, _arg -> Error"))
-		(expr @144.9-196.2 (type "List(Error) -> Result({  }, _d)"))
+		(expr @144.9-196.2 (type "List(Error) -> Error"))
 		(expr @199.9-199.11 (type "{}"))))
 ~~~

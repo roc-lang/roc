@@ -1626,8 +1626,7 @@ expect {
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-nominal @68.3-68.10
-										(p-applied-tag @68.3-68.10))))
+									(p-applied-tag @68.3-68.10)))
 							(value
 								(e-num @68.14-68.16 (value "12")))))))))
 	(d-let
@@ -1692,10 +1691,9 @@ expect {
 								(field (name "baz")
 									(e-runtime-error (tag "ident_not_in_scope")))
 								(field (name "qux")
-									(e-nominal @96.44-96.53 (nominal "Result")
-										(e-tag @96.44-96.53 (name "Ok")
-											(args
-												(e-runtime-error (tag "ident_not_in_scope"))))))
+									(e-tag @96.44-96.53 (name "Ok")
+										(args
+											(e-runtime-error (tag "ident_not_in_scope")))))
 								(field (name "ned")
 									(e-runtime-error (tag "ident_not_in_scope"))))))
 					(s-let @97.2-97.48
@@ -1848,7 +1846,7 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @35.1-35.4 (type "Bool -> Num(_size)"))
+		(patt @35.1-35.4 (type "Error -> Num(_size)"))
 		(patt @38.1-38.4 (type "[Rum]_others -> Error"))
 		(patt @49.1-49.3 (type "[Blue]_others -> Error"))
 		(patt @75.1-75.3 (type "_arg -> [Stdo!(Str)]_others"))
@@ -1880,7 +1878,7 @@ expect {
 				(ty-args
 					(ty-rigid-var @32.8-32.9 (name "a"))))))
 	(expressions
-		(expr @35.7-35.28 (type "Bool -> Num(_size)"))
+		(expr @35.7-35.28 (type "Error -> Num(_size)"))
 		(expr @38.7-47.2 (type "[Rum]_others -> Error"))
 		(expr @49.6-69.3 (type "[Blue]_others -> Error"))
 		(expr @75.5-111.2 (type "_arg -> [Stdo!(Str)]_others"))

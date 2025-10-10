@@ -77,6 +77,17 @@ process = |list| "processed"
            ^^^^
 
 
+**UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**underscore_in_regular_annotations.md:16:17:16:23:**
+```roc
+handle_result : Result(_, Str) -> Str
+```
+                ^^^^^^
+
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),OpColon(1:6-1:7),Underscore(1:8-1:9),OpArrow(1:10-1:12),Underscore(1:13-1:14),
@@ -317,25 +328,21 @@ transform = |_, b| b
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @19.9-19.14
-											(p-applied-tag @19.9-19.14))))
+										(p-applied-tag @19.9-19.14)))
 								(value
 									(e-string @19.18-19.27
 										(e-literal @19.19-19.26 (string "success")))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @20.9-20.17
-											(p-applied-tag @20.9-20.17))))
+										(p-applied-tag @20.9-20.17)))
 								(value
 									(e-lookup-local @20.21-20.24
 										(p-assign @20.13-20.16 (ident "msg"))))))))))
 		(annotation @17.1-17.14
 			(declared-type
 				(ty-fn @16.17-16.38 (effectful false)
-					(ty-apply @16.17-16.31 (name "Result") (local)
-						(ty-underscore @16.17-16.31)
-						(ty-lookup @16.17-16.31 (name "Str") (builtin)))
+					(ty-malformed @16.17-16.23)
 					(ty-lookup @16.35-16.38 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @25.1-25.4 (ident "map"))
@@ -372,7 +379,7 @@ transform = |_, b| b
 		(patt @5.1-5.9 (type "a -> a"))
 		(patt @9.1-9.8 (type "List(_elem) -> Str"))
 		(patt @13.1-13.9 (type "{ field: _field2, other: Num(Int(Unsigned32)) } -> Num(Int(Unsigned32))"))
-		(patt @17.1-17.14 (type "Result(_c, Str) -> Str"))
+		(patt @17.1-17.14 (type "Error -> Str"))
 		(patt @25.1-25.4 (type "a -> b, List(a) -> List(b)"))
 		(patt @29.1-29.10 (type "_arg, c -> c")))
 	(expressions
@@ -380,7 +387,7 @@ transform = |_, b| b
 		(expr @5.12-5.17 (type "a -> a"))
 		(expr @9.11-9.29 (type "List(_elem) -> Str"))
 		(expr @13.12-13.33 (type "{ field: _field2, other: Num(Int(Unsigned32)) } -> Num(Int(Unsigned32))"))
-		(expr @17.17-21.6 (type "Result(_c, Str) -> Str"))
+		(expr @17.17-21.6 (type "Error -> Str"))
 		(expr @25.7-25.16 (type "a -> b, List(a) -> List(b)"))
 		(expr @29.13-29.21 (type "_arg, c -> c"))))
 ~~~

@@ -496,18 +496,10 @@ fn freshFromContent(self: *Self, content: Content, rank: types_mod.Rank, new_reg
     return var_;
 }
 
-/// The the region for a variable
-fn freshBool(self: *Self, rank: Rank, new_region: Region) Allocator.Error!Var {
-    // Look up Bool's actual index from builtin_statements (should be first)
-    const builtin_stmts_slice = self.cir.store.sliceStatements(self.cir.builtin_statements);
-    std.debug.assert(builtin_stmts_slice.len >= 1); // Must have at least Bool
-    const bool_stmt_idx = builtin_stmts_slice[0]; // Bool is always the first builtin
-    // Debug assertion: verify this is a nominal type declaration
-    if (std.debug.runtime_safety) {
-        const stmt = self.cir.store.getStatement(bool_stmt_idx);
-        std.debug.assert(stmt == .s_nominal_decl);
-    }
-    return try self.instantiateVar(ModuleEnv.varFrom(bool_stmt_idx), rank, .{ .explicit = new_region });
+/// Get the Bool type variable (no instantiation needed since Bool has no type parameters)
+fn getBool(self: *Self) Var {
+    _ = self;
+    return ModuleEnv.varFrom(can.Can.BUILTIN_BOOL);
 }
 
 // fresh vars //
@@ -523,15 +515,7 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // First, iterate over the statements, generating types for each type declaration
-    const builtin_stmts_slice = self.cir.store.sliceStatements(self.cir.builtin_statements);
-    for (builtin_stmts_slice) |builtin_stmt_idx| {
-        // If the statement is a type declaration, then generate the it's type
-        // The resulting generalized type is saved at the type var slot at `stmt_idx`
-        try self.generateStmtTypeDeclType(builtin_stmt_idx);
-    }
-
-    // First, iterate over the statements, generating types for each type declaration
+    // Iterate over the statements, generating types for each type declaration
     const stmts_slice = self.cir.store.sliceStatements(self.cir.all_statements);
     for (stmts_slice) |stmt_idx| {
         // If the statement is a type declaration, then generate the it's type
@@ -552,14 +536,6 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 
 /// Check an expr for the repl
 pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
-    // First, iterate over the statements, generating types for each type declaration
-    const stms_slice = self.cir.store.sliceStatements(self.cir.builtin_statements);
-    for (stms_slice) |stmt_idx| {
-        // If the statement is a type declaration, then generate the it's type
-        // The resulting generalized type is saved at the type var slot at `stmt_idx`
-        try self.generateStmtTypeDeclType(stmt_idx);
-    }
-
     // Push the rank for this definition
     try self.var_pool.pushRank();
     defer self.var_pool.popRank();
@@ -2210,7 +2186,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                         does_fx = try self.checkExpr(expr_stmt.body, rank, .no_expectation) or does_fx;
                         const stmt_expr: Var = ModuleEnv.varFrom(expr_stmt.body);
 
-                        const bool_var = try self.freshBool(rank, expr_region);
+                        const bool_var = self.getBool();
                         _ = try self.unify(bool_var, stmt_expr, rank);
                     },
                     else => {
@@ -2772,6 +2748,7 @@ fn checkIfElseExpr(
     rank: types_mod.Rank,
     if_: std.meta.FieldType(CIR.Expr, .e_if),
 ) std.mem.Allocator.Error!bool {
+    _ = expr_region;
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -2787,7 +2764,7 @@ fn checkIfElseExpr(
     // Check the condition of the 1st branch
     var does_fx = try self.checkExpr(first_branch.cond, rank, .no_expectation);
     const first_cond_var: Var = ModuleEnv.varFrom(first_branch.cond);
-    const bool_var = try self.freshBool(rank, expr_region);
+    const bool_var = self.getBool();
     const first_cond_result = try self.unify(bool_var, first_cond_var, rank);
     self.setDetailIfTypeMismatch(first_cond_result, .incompatible_if_cond);
 
@@ -2809,7 +2786,7 @@ fn checkIfElseExpr(
         // Check the branches condition
         does_fx = try self.checkExpr(branch.cond, rank, .no_expectation) or does_fx;
         const cond_var: Var = ModuleEnv.varFrom(branch.cond);
-        const branch_bool_var = try self.freshBool(rank, expr_region);
+        const branch_bool_var = self.getBool();
         const cond_result = try self.unify(branch_bool_var, cond_var, rank);
         self.setDetailIfTypeMismatch(cond_result, .incompatible_if_cond);
 
@@ -2832,7 +2809,7 @@ fn checkIfElseExpr(
                 does_fx = try self.checkExpr(remaining_branch.cond, rank, .no_expectation) or does_fx;
                 const remaining_cond_var: Var = ModuleEnv.varFrom(remaining_branch.cond);
 
-                const fresh_bool = try self.freshBool(rank, expr_region);
+                const fresh_bool = self.getBool();
                 const remaining_cond_result = try self.unify(fresh_bool, remaining_cond_var, rank);
                 self.setDetailIfTypeMismatch(remaining_cond_result, .incompatible_if_cond);
 
@@ -3007,6 +2984,7 @@ fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region,
 // unary not //
 
 fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, rank: Rank, unary: CIR.Expr.UnaryNot) Allocator.Error!bool {
+    _ = expr_region;
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -3018,7 +2996,7 @@ fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, r
     const result_var = @as(Var, ModuleEnv.varFrom(expr_idx));
 
     // Create a fresh boolean variable for the operation
-    const bool_var = try self.freshBool(rank, expr_region);
+    const bool_var = self.getBool();
 
     // Unify operand and result with the boolean type
     _ = try self.unify(bool_var, operand_var, rank);
@@ -3100,14 +3078,14 @@ fn checkBinopExpr(
             const result = try self.unify(lhs_var, rhs_var, rank);
 
             if (result.isOk()) {
-                const fresh_bool = try self.freshBool(rank, expr_region);
+                const fresh_bool = self.getBool();
                 try self.types.setVarRedirect(expr_var, fresh_bool);
             } else {
                 try self.updateVar(expr_var, .err, rank);
             }
         },
         .@"and" => {
-            const lhs_fresh_bool = try self.freshBool(rank, expr_region);
+            const lhs_fresh_bool = self.getBool();
             const lhs_result = try self.unify(lhs_fresh_bool, lhs_var, rank);
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
@@ -3115,7 +3093,7 @@ fn checkBinopExpr(
                 .binop = .@"and",
             } });
 
-            const rhs_fresh_bool = try self.freshBool(rank, expr_region);
+            const rhs_fresh_bool = self.getBool();
             const rhs_result = try self.unify(rhs_fresh_bool, rhs_var, rank);
             self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
@@ -3131,7 +3109,7 @@ fn checkBinopExpr(
             try self.types.setVarRedirect(expr_var, lhs_var);
         },
         .@"or" => {
-            const lhs_fresh_bool = try self.freshBool(rank, expr_region);
+            const lhs_fresh_bool = self.getBool();
             const lhs_result = try self.unify(lhs_fresh_bool, lhs_var, rank);
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
@@ -3139,7 +3117,7 @@ fn checkBinopExpr(
                 .binop = .@"and",
             } });
 
-            const rhs_fresh_bool = try self.freshBool(rank, expr_region);
+            const rhs_fresh_bool = self.getBool();
             const rhs_result = try self.unify(rhs_fresh_bool, rhs_var, rank);
             self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,

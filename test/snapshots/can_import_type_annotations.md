@@ -120,6 +120,17 @@ processRequest = |req| Http.defaultResponse
                   ^^^
 
 
+**UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**can_import_type_annotations.md:11:29:11:35:**
+```roc
+handleApi : Http.Request -> Result(Http.Response, Json.Error)
+```
+                            ^^^^^^
+
+
 **MODULE NOT IMPORTED**
 There is no module with the name `Json.Parser` imported into this Roc file.
 
@@ -131,6 +142,17 @@ advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error
                  ^^^^^^^^^^^^^^^^^^
 
 
+**UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**can_import_type_annotations.md:24:45:24:51:**
+```roc
+advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
+```
+                                            ^^^^^^
+
+
 **MODULE NOT IMPORTED**
 There is no module with the name `Json.Parser` imported into this Roc file.
 
@@ -140,6 +162,39 @@ You're attempting to use this module here:
 advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
 ```
                                                                ^^^^^^^^^^^^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**can_import_type_annotations.md:28:18:28:24:**
+```roc
+combineResults : Result(a, err), Result(b, err) -> Result((a, b), err)
+```
+                 ^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**can_import_type_annotations.md:28:34:28:40:**
+```roc
+combineResults : Result(a, err), Result(b, err) -> Result((a, b), err)
+```
+                                 ^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**can_import_type_annotations.md:28:52:28:58:**
+```roc
+combineResults : Result(a, err), Result(b, err) -> Result((a, b), err)
+```
+                                                   ^^^^^^
 
 
 # TOKENS
@@ -425,36 +480,30 @@ combineResults = |result1, result2|
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-nominal @15.9-15.17
-												(p-applied-tag @15.9-15.17))))
+											(p-applied-tag @15.9-15.17)))
 									(value
-										(e-nominal @15.21-15.43 (nominal "Result")
-											(e-tag @15.21-15.43 (name "Ok")
-												(args
-													(e-call @15.24-15.42
-														(e-lookup-external @15.24-15.36
-															(module-idx "2")
-															(target-node-idx "0"))
-														(e-lookup-local @15.37-15.41
-															(p-assign @15.12-15.16 (ident "data")))))))))
+										(e-tag @15.21-15.43 (name "Ok")
+											(args
+												(e-call @15.24-15.42
+													(e-lookup-external @15.24-15.36
+														(module-idx "2")
+														(target-node-idx "0"))
+													(e-lookup-local @15.37-15.41
+														(p-assign @15.12-15.16 (ident "data"))))))))
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-nominal @16.9-16.17
-												(p-applied-tag @16.9-16.17))))
+											(p-applied-tag @16.9-16.17)))
 									(value
-										(e-nominal @16.21-16.29 (nominal "Result")
-											(e-tag @16.21-16.29 (name "Err")
-												(args
-													(e-lookup-local @16.25-16.28
-														(p-assign @16.13-16.16 (ident "err"))))))))))))))
+										(e-tag @16.21-16.29 (name "Err")
+											(args
+												(e-lookup-local @16.25-16.28
+													(p-assign @16.13-16.16 (ident "err")))))))))))))
 		(annotation @12.1-12.10
 			(declared-type
 				(ty-fn @11.13-11.62 (effectful false)
 					(ty-lookup @11.13-11.25 (name "Request") (external (module-idx "2") (target-node-idx "0")))
-					(ty-apply @11.29-11.62 (name "Result") (local)
-						(ty-lookup @11.29-11.62 (name "Response") (external (module-idx "2") (target-node-idx "0")))
-						(ty-lookup @11.29-11.62 (name "Error") (external (module-idx "3") (target-node-idx "0"))))))))
+					(ty-malformed @11.29-11.35)))))
 	(d-let
 		(p-assign @21.1-21.7 (ident "config"))
 		(e-lookup-external @21.10-21.28
@@ -482,17 +531,15 @@ combineResults = |result1, result2|
 				(ty-fn @24.18-24.82 (effectful false)
 					(ty-malformed @24.18-24.36)
 					(ty-lookup @24.38-24.41 (name "Str") (builtin))
-					(ty-apply @24.45-24.82 (name "Result") (local)
-						(ty-lookup @24.45-24.82 (name "Value") (external (module-idx "3") (target-node-idx "0")))
-						(ty-malformed @24.45-24.82))))))
+					(ty-malformed @24.45-24.51)))))
 	(d-let
 		(p-assign @29.1-29.15 (ident "combineResults"))
 		(e-closure @29.18-37.6
 			(captures
 				(capture @34.21-34.24 (ident "err"))
-				(capture @33.20-33.26 (ident "value2"))
 				(capture @36.13-36.16 (ident "err"))
-				(capture @31.12-31.18 (ident "value1")))
+				(capture @31.12-31.18 (ident "value1"))
+				(capture @33.20-33.26 (ident "value2")))
 			(e-lambda @29.18-37.6
 				(args
 					(p-assign @29.19-29.26 (ident "result1"))
@@ -506,8 +553,7 @@ combineResults = |result1, result2|
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @31.9-31.19
-											(p-applied-tag @31.9-31.19))))
+										(p-applied-tag @31.9-31.19)))
 								(value
 									(e-match @32.13-35.14
 										(match @32.13-35.14
@@ -518,54 +564,40 @@ combineResults = |result1, result2|
 												(branch
 													(patterns
 														(pattern (degenerate false)
-															(p-nominal @33.17-33.27
-																(p-applied-tag @33.17-33.27))))
+															(p-applied-tag @33.17-33.27)))
 													(value
-														(e-nominal @33.31-33.51 (nominal "Result")
-															(e-tag @33.31-33.51 (name "Ok")
-																(args
-																	(e-tuple @33.34-33.50
-																		(elems
-																			(e-lookup-local @33.35-33.41
-																				(p-assign @31.12-31.18 (ident "value1")))
-																			(e-lookup-local @33.43-33.49
-																				(p-assign @33.20-33.26 (ident "value2"))))))))))
+														(e-tag @33.31-33.51 (name "Ok")
+															(args
+																(e-tuple @33.34-33.50
+																	(elems
+																		(e-lookup-local @33.35-33.41
+																			(p-assign @31.12-31.18 (ident "value1")))
+																		(e-lookup-local @33.43-33.49
+																			(p-assign @33.20-33.26 (ident "value2")))))))))
 												(branch
 													(patterns
 														(pattern (degenerate false)
-															(p-nominal @34.17-34.25
-																(p-applied-tag @34.17-34.25))))
+															(p-applied-tag @34.17-34.25)))
 													(value
-														(e-nominal @34.29-34.37 (nominal "Result")
-															(e-tag @34.29-34.37 (name "Err")
-																(args
-																	(e-lookup-local @34.33-34.36
-																		(p-assign @34.21-34.24 (ident "err")))))))))))))
+														(e-tag @34.29-34.37 (name "Err")
+															(args
+																(e-lookup-local @34.33-34.36
+																	(p-assign @34.21-34.24 (ident "err"))))))))))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @36.9-36.17
-											(p-applied-tag @36.9-36.17))))
+										(p-applied-tag @36.9-36.17)))
 								(value
-									(e-nominal @36.21-36.29 (nominal "Result")
-										(e-tag @36.21-36.29 (name "Err")
-											(args
-												(e-lookup-local @36.25-36.28
-													(p-assign @36.13-36.16 (ident "err")))))))))))))
+									(e-tag @36.21-36.29 (name "Err")
+										(args
+											(e-lookup-local @36.25-36.28
+												(p-assign @36.13-36.16 (ident "err"))))))))))))
 		(annotation @29.1-29.15
 			(declared-type
 				(ty-fn @28.18-28.71 (effectful false)
-					(ty-apply @28.18-28.32 (name "Result") (local)
-						(ty-rigid-var @28.18-28.32 (name "a"))
-						(ty-rigid-var @28.18-28.32 (name "err")))
-					(ty-apply @28.34-28.48 (name "Result") (local)
-						(ty-rigid-var @28.34-28.48 (name "b"))
-						(ty-rigid-var-lookup (ty-rigid-var @28.18-28.32 (name "err"))))
-					(ty-apply @28.52-28.71 (name "Result") (local)
-						(ty-tuple @28.52-28.71
-							(ty-rigid-var-lookup (ty-rigid-var @28.18-28.32 (name "a")))
-							(ty-rigid-var-lookup (ty-rigid-var @28.34-28.48 (name "b"))))
-						(ty-rigid-var-lookup (ty-rigid-var @28.18-28.32 (name "err"))))))))
+					(ty-malformed @28.18-28.24)
+					(ty-malformed @28.34-28.40)
+					(ty-malformed @28.52-28.58)))))
 	(s-import @1.1-1.56 (module "http.Client") (qualifier "http") (alias "Http")
 		(exposes
 			(exposed (name "Request") (wildcard false))
@@ -582,15 +614,15 @@ combineResults = |result1, result2|
 	(defs
 		(patt @6.1-6.15 (type "Error -> Error"))
 		(patt @9.1-9.10 (type "Str -> Error"))
-		(patt @12.1-12.10 (type "Error -> Result(Error, Error)"))
+		(patt @12.1-12.10 (type "Error -> Error"))
 		(patt @21.1-21.7 (type "Error"))
-		(patt @25.1-25.15 (type "Error, Str -> Result(Error, Error)"))
-		(patt @29.1-29.15 (type "Result(a, err), Result(b, err) -> Result((a, b), err)")))
+		(patt @25.1-25.15 (type "Error, Str -> Error"))
+		(patt @29.1-29.15 (type "Error, Error -> Error")))
 	(expressions
 		(expr @6.18-6.44 (type "Error -> Error"))
 		(expr @9.13-9.38 (type "Str -> Error"))
-		(expr @12.13-18.2 (type "Error -> Result(Error, Error)"))
+		(expr @12.13-18.2 (type "Error -> Error"))
 		(expr @21.10-21.28 (type "Error"))
-		(expr @25.18-25.82 (type "Error, Str -> Result(Error, Error)"))
-		(expr @29.18-37.6 (type "Result(a, err), Result(b, err) -> Result((a, b), err)"))))
+		(expr @25.18-25.82 (type "Error, Str -> Error"))
+		(expr @29.18-37.6 (type "Error, Error -> Error"))))
 ~~~

@@ -150,6 +150,17 @@ import utils.Result exposing [Result]
 
 
 **UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**can_import_exposing_types.md:6:20:6:26:**
+```roc
+parseJson : Str -> Result(Value, Error)
+```
+                   ^^^^^^
+
+
+**UNDECLARED TYPE**
 The type _Value_ is not declared in this scope.
 
 This type is referenced here:
@@ -213,6 +224,17 @@ This type is referenced here:
 processData : Config, List(Value) -> Result(List(Value), Error)
 ```
                            ^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**can_import_exposing_types.md:20:38:20:44:**
+```roc
+processData : Config, List(Value) -> Result(List(Value), Error)
+```
+                                     ^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -282,6 +304,17 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**can_import_exposing_types.md:47:18:47:24:**
+```roc
+combineResults : Result(Value, Error), Status -> Result(Response, Error)
+```
+                 ^^^^^^
+
+
+**UNDECLARED TYPE**
 The type _Value_ is not declared in this scope.
 
 This type is referenced here:
@@ -312,6 +345,17 @@ This type is referenced here:
 combineResults : Result(Value, Error), Status -> Result(Response, Error)
 ```
                                        ^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**can_import_exposing_types.md:47:50:47:56:**
+```roc
+combineResults : Result(Value, Error), Status -> Result(Response, Error)
+```
+                                                 ^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -632,15 +676,13 @@ combineResults = |jsonResult, httpStatus|
 			(declared-type
 				(ty-fn @6.13-6.40 (effectful false)
 					(ty-lookup @6.13-6.16 (name "Str") (builtin))
-					(ty-apply @6.20-6.40 (name "Result") (local)
-						(ty-malformed @6.20-6.40)
-						(ty-malformed @6.20-6.40))))))
+					(ty-malformed @6.20-6.26)))))
 	(d-let
 		(p-assign @11.1-11.14 (ident "handleRequest"))
 		(e-closure @11.17-17.2
 			(captures
-				(capture @14.12-14.17 (ident "value"))
-				(capture @15.13-15.18 (ident "error")))
+				(capture @15.13-15.18 (ident "error"))
+				(capture @14.12-14.17 (ident "value")))
 			(e-lambda @11.17-17.2
 				(args
 					(p-assign @11.18-11.21 (ident "req")))
@@ -664,8 +706,7 @@ combineResults = |jsonResult, httpStatus|
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-nominal @14.9-14.18
-												(p-applied-tag @14.9-14.18))))
+											(p-applied-tag @14.9-14.18)))
 									(value
 										(e-call @14.22-14.36
 											(e-lookup-external @14.22-14.29
@@ -676,8 +717,7 @@ combineResults = |jsonResult, httpStatus|
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-nominal @15.9-15.19
-												(p-applied-tag @15.9-15.19))))
+											(p-applied-tag @15.9-15.19)))
 									(value
 										(e-call @15.23-15.45
 											(e-lookup-external @15.23-15.38
@@ -720,10 +760,7 @@ combineResults = |jsonResult, httpStatus|
 					(ty-malformed @20.15-20.21)
 					(ty-apply @20.23-20.34 (name "List") (builtin)
 						(ty-malformed @20.28-20.33))
-					(ty-apply @20.38-20.64 (name "Result") (local)
-						(ty-apply @20.38-20.64 (name "List") (builtin)
-							(ty-malformed @20.50-20.55))
-						(ty-malformed @20.38-20.64))))))
+					(ty-malformed @20.38-20.44)))))
 	(d-let
 		(p-assign @36.1-36.13 (ident "createClient"))
 		(e-lambda @36.16-36.48
@@ -760,8 +797,7 @@ combineResults = |jsonResult, httpStatus|
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @42.9-42.19
-											(p-applied-tag @42.9-42.19))))
+										(p-applied-tag @42.9-42.19)))
 								(value
 									(e-call @42.23-42.50
 										(e-lookup-external @42.23-42.42
@@ -772,8 +808,7 @@ combineResults = |jsonResult, httpStatus|
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @43.9-43.19
-											(p-applied-tag @43.9-43.19))))
+										(p-applied-tag @43.9-43.19)))
 								(value
 									(e-call @43.23-43.44
 										(e-runtime-error (tag "ident_not_in_scope"))
@@ -803,45 +838,37 @@ combineResults = |jsonResult, httpStatus|
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @50.9-50.18
-											(p-applied-tag @50.9-50.18))))
+										(p-applied-tag @50.9-50.18)))
 								(value
-									(e-nominal @50.22-50.74 (nominal "Result")
-										(e-tag @50.22-50.74 (name "Ok")
-											(args
-												(e-record @50.25-50.73
-													(fields
-														(field (name "body")
-															(e-call @50.33-50.51
-																(e-lookup-external @50.33-50.44
-																	(module-idx "2")
-																	(target-node-idx "0"))
-																(e-lookup-local @50.45-50.50
-																	(p-assign @50.12-50.17 (ident "value")))))
-														(field (name "status")
-															(e-lookup-local @50.61-50.71
-																(p-assign @48.31-48.41 (ident "httpStatus")))))))))))
+									(e-tag @50.22-50.74 (name "Ok")
+										(args
+											(e-record @50.25-50.73
+												(fields
+													(field (name "body")
+														(e-call @50.33-50.51
+															(e-lookup-external @50.33-50.44
+																(module-idx "2")
+																(target-node-idx "0"))
+															(e-lookup-local @50.45-50.50
+																(p-assign @50.12-50.17 (ident "value")))))
+													(field (name "status")
+														(e-lookup-local @50.61-50.71
+															(p-assign @48.31-48.41 (ident "httpStatus"))))))))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @51.9-51.19
-											(p-applied-tag @51.9-51.19))))
+										(p-applied-tag @51.9-51.19)))
 								(value
-									(e-nominal @51.23-51.33 (nominal "Result")
-										(e-tag @51.23-51.33 (name "Err")
-											(args
-												(e-lookup-local @51.27-51.32
-													(p-assign @51.13-51.18 (ident "error")))))))))))))
+									(e-tag @51.23-51.33 (name "Err")
+										(args
+											(e-lookup-local @51.27-51.32
+												(p-assign @51.13-51.18 (ident "error"))))))))))))
 		(annotation @48.1-48.15
 			(declared-type
 				(ty-fn @47.18-47.73 (effectful false)
-					(ty-apply @47.18-47.38 (name "Result") (local)
-						(ty-malformed @47.18-47.38)
-						(ty-malformed @47.18-47.38))
+					(ty-malformed @47.18-47.24)
 					(ty-malformed @47.40-47.46)
-					(ty-apply @47.50-47.73 (name "Result") (local)
-						(ty-malformed @47.50-47.73)
-						(ty-malformed @47.50-47.73))))))
+					(ty-malformed @47.50-47.56)))))
 	(s-alias-decl @28.1-32.2
 		(ty-header @28.1-28.13 (name "ServerConfig"))
 		(ty-record @28.16-32.2
@@ -869,20 +896,20 @@ combineResults = |jsonResult, httpStatus|
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @7.1-7.10 (type "Str -> Result(Error, Error)"))
+		(patt @7.1-7.10 (type "Str -> Error"))
 		(patt @11.1-11.14 (type "Error -> Error"))
-		(patt @21.1-21.12 (type "Error, List(Error) -> Result(List(Error), Error)"))
+		(patt @21.1-21.12 (type "Error, List(Error) -> Error"))
 		(patt @36.1-36.13 (type "Error -> Error"))
 		(patt @40.1-40.15 (type "Error -> Str"))
-		(patt @48.1-48.15 (type "Result(Error, Error), Error -> Result(Error, Error)")))
+		(patt @48.1-48.15 (type "Error, Error -> Error")))
 	(type_decls
 		(alias @28.1-32.2 (type "ServerConfig")
 			(ty-header @28.1-28.13 (name "ServerConfig"))))
 	(expressions
-		(expr @7.13-7.38 (type "Str -> Result(Error, Error)"))
+		(expr @7.13-7.38 (type "Str -> Error"))
 		(expr @11.17-17.2 (type "Error -> Error"))
-		(expr @21.15-25.6 (type "Error, List(Error) -> Result(List(Error), Error)"))
+		(expr @21.15-25.6 (type "Error, List(Error) -> Error"))
 		(expr @36.16-36.48 (type "Error -> Error"))
 		(expr @40.18-44.6 (type "Error -> Str"))
-		(expr @48.18-52.6 (type "Result(Error, Error), Error -> Result(Error, Error)"))))
+		(expr @48.18-52.6 (type "Error, Error -> Error"))))
 ~~~

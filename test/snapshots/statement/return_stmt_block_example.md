@@ -18,6 +18,17 @@ foo = |num| {
 # EXPECTED
 INCOMPATIBLE IF BRANCHES - return_stmt_block_example.md:3:11:3:11
 # PROBLEMS
+**UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**return_stmt_block_example.md:1:14:1:20:**
+```roc
+foo : U64 -> Result(Str, [TooBig])
+```
+             ^^^^^^
+
+
 **INCOMPATIBLE IF BRANCHES**
 This `if` has an `else` branch with a different type from it's `then` branch:
 **return_stmt_block_example.md:3:11:**
@@ -34,7 +45,7 @@ The `else` branch has the type:
     _Str_
 
 But the `then` branch has the type:
-    _Result(ok, [TooBig]_others)_
+    _[Err([TooBig]_others)]_others2_
 
 All branches in an `if` must have compatible types.
 
@@ -127,33 +138,28 @@ foo = |num| {
 										(p-assign @2.8-2.11 (ident "num")))
 									(e-num @3.21-3.23 (value "10")))
 								(e-block @3.25-5.6
-									(e-nominal @4.16-4.27 (nominal "Result")
-										(e-tag @4.16-4.27 (name "Err")
-											(args
-												(e-tag @4.20-4.26 (name "TooBig"))))))))
+									(e-tag @4.16-4.27 (name "Err")
+										(args
+											(e-tag @4.20-4.26 (name "TooBig")))))))
 						(if-else
 							(e-block @5.12-7.6
 								(e-string @6.9-6.16
 									(e-literal @6.10-6.15 (string "SMALL")))))))
-				(e-nominal @8.5-8.12 (nominal "Result")
-					(e-tag @8.5-8.12 (name "Ok")
-						(args
-							(e-lookup-local @8.8-8.11
-								(p-assign @3.5-3.8 (ident "str"))))))))
+				(e-tag @8.5-8.12 (name "Ok")
+					(args
+						(e-lookup-local @8.8-8.11
+							(p-assign @3.5-3.8 (ident "str")))))))
 		(annotation @2.1-2.4
 			(declared-type
 				(ty-fn @1.7-1.35 (effectful false)
 					(ty-lookup @1.7-1.10 (name "U64") (builtin))
-					(ty-apply @1.14-1.35 (name "Result") (local)
-						(ty-lookup @1.14-1.35 (name "Str") (builtin))
-						(ty-tag-union @1.14-1.35
-							(ty-tag-name @1.27-1.33 (name "TooBig")))))))))
+					(ty-malformed @1.14-1.20))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @2.1-2.4 (type "Num(Int(Unsigned64)) -> Result(Error, [TooBig])")))
+		(patt @2.1-2.4 (type "Num(Int(Unsigned64)) -> Error")))
 	(expressions
-		(expr @2.7-9.2 (type "Num(Int(Unsigned64)) -> Result(Error, [TooBig])"))))
+		(expr @2.7-9.2 (type "Num(Int(Unsigned64)) -> Error"))))
 ~~~

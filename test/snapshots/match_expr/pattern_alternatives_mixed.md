@@ -136,8 +136,7 @@ NO CHANGE
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-nominal @4.2-4.7
-							(p-applied-tag @4.2-4.7)))
+						(p-applied-tag @4.2-4.7))
 					(pattern (degenerate false)
 						(p-applied-tag @4.10-4.17)))
 				(value

@@ -49,13 +49,12 @@ pub fn main() !void {
     const set_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Set.roc", 1024 * 1024);
     defer gpa.free(set_roc_source);
 
-    // Compile Bool.roc without injecting anything (it's completely self-contained)
+    // Compile Bool.roc (it's completely self-contained)
     const bool_env = try compileModule(
         gpa,
         "Bool",
         bool_roc_source,
         &.{}, // No module dependencies
-        .{ .inject_bool = false, .inject_result = false },
     );
     defer {
         bool_env.deinit();
@@ -71,33 +70,31 @@ pub fn main() !void {
         return error.UnexpectedBoolIndex;
     }
 
-    // Compile Result.roc (injects Bool since Result might use if expressions)
+    // Compile Result.roc
     const result_env = try compileModule(
         gpa,
         "Result",
         result_roc_source,
         &.{}, // No module dependencies
-        .{ .inject_bool = true, .inject_result = false },
     );
     defer {
         result_env.deinit();
         gpa.destroy(result_env);
     }
 
-    // Compile Dict.roc (needs Bool injected for if expressions, and Result for error handling)
+    // Compile Dict.roc
     const dict_env = try compileModule(
         gpa,
         "Dict",
         dict_roc_source,
         &.{}, // No module dependencies
-        .{}, // Inject Bool and Result (defaults)
     );
     defer {
         dict_env.deinit();
         gpa.destroy(dict_env);
     }
 
-    // Compile Set.roc (imports Dict, needs Bool and Result injected)
+    // Compile Set.roc (imports Dict)
     const set_env = try compileModule(
         gpa,
         "Set",
@@ -105,7 +102,6 @@ pub fn main() !void {
         &[_]ModuleDep{
             .{ .name = "Dict", .env = dict_env },
         },
-        .{}, // Inject Bool and Result (defaults)
     );
     defer {
         set_env.deinit();
@@ -132,7 +128,6 @@ fn compileModule(
     module_name: []const u8,
     source: []const u8,
     deps: []const ModuleDep,
-    can_options: Can.InitOptions,
 ) !*ModuleEnv {
     // This follows the pattern from TestEnv.init() in src/check/test/TestEnv.zig
 
@@ -198,7 +193,7 @@ fn compileModule(
         gpa.destroy(can_result);
     }
 
-    can_result.* = try Can.init(module_env, parse_ast, &module_envs, can_options);
+    can_result.* = try Can.init(module_env, parse_ast, &module_envs);
 
     try can_result.canonicalizeFile();
     try can_result.validateForChecking();

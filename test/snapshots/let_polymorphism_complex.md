@@ -653,8 +653,7 @@ main = |_| {
 			(e-literal @6.8-6.13 (string "hello"))))
 	(d-let
 		(p-assign @7.1-7.5 (ident "bool"))
-		(e-nominal @7.8-7.12 (nominal "Bool")
-			(e-tag @7.8-7.12 (name "True"))))
+		(e-tag @7.8-7.12 (name "True")))
 	(d-let
 		(p-assign @10.1-10.11 (ident "empty_list"))
 		(e-empty_list @10.14-10.16))
@@ -682,10 +681,8 @@ main = |_| {
 		(p-assign @16.1-16.10 (ident "bool_list"))
 		(e-list @16.13-16.26
 			(elems
-				(e-nominal @16.14-16.18 (nominal "Bool")
-					(e-tag @16.14-16.18 (name "True")))
-				(e-nominal @16.20-16.25 (nominal "Bool")
-					(e-tag @16.20-16.25 (name "False"))))))
+				(e-tag @16.14-16.18 (name "True"))
+				(e-tag @16.20-16.25 (name "False")))))
 	(d-let
 		(p-assign @19.1-19.13 (ident "nested_empty"))
 		(e-list @19.16-19.52
@@ -1061,12 +1058,12 @@ main = |_| {
 		(patt @4.1-4.4 (type "Num(_size)"))
 		(patt @5.1-5.5 (type "Num(Frac(_size))"))
 		(patt @6.1-6.4 (type "Str"))
-		(patt @7.1-7.5 (type "Bool"))
+		(patt @7.1-7.5 (type "[True]_others"))
 		(patt @10.1-10.11 (type "List(Num(_size))"))
 		(patt @11.1-11.13 (type "{}"))
 		(patt @14.1-14.9 (type "List(Num(_size))"))
 		(patt @15.1-15.9 (type "List(Str)"))
-		(patt @16.1-16.10 (type "List(Bool)"))
+		(patt @16.1-16.10 (type "List([True, False]_others)"))
 		(patt @19.1-19.13 (type "List(List(Num(_size)))"))
 		(patt @20.1-20.13 (type "List(List(Num(_size)))"))
 		(patt @23.1-23.12 (type "{ count: Num(_size), items: List(Num(_size2)) }"))
@@ -1090,12 +1087,12 @@ main = |_| {
 		(expr @4.7-4.9 (type "Num(_size)"))
 		(expr @5.8-5.11 (type "Num(Frac(_size))"))
 		(expr @6.7-6.14 (type "Str"))
-		(expr @7.8-7.12 (type "Bool"))
+		(expr @7.8-7.12 (type "[True]_others"))
 		(expr @10.14-10.16 (type "List(Num(_size))"))
 		(expr @11.16-11.18 (type "{}"))
 		(expr @14.12-14.21 (type "List(Num(_size))"))
 		(expr @15.12-15.27 (type "List(Str)"))
-		(expr @16.13-16.26 (type "List(Bool)"))
+		(expr @16.13-16.26 (type "List([True, False]_others)"))
 		(expr @19.16-19.52 (type "List(List(Num(_size)))"))
 		(expr @20.16-20.56 (type "List(List(Num(_size)))"))
 		(expr @23.15-23.46 (type "{ count: Num(_size), items: List(Num(_size2)) }"))

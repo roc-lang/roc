@@ -10,7 +10,17 @@ dbg Bool.True
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
+
+This type is referenced here:
+**dbg_stmt.md:1:5:1:9:**
+```roc
+dbg Bool.True
+```
+    ^^^^
+
+
 # TOKENS
 ~~~zig
 KwDbg(1:1-1:4),UpperIdent(1:5-1:9),NoSpaceDotUpperIdent(1:9-1:14),
@@ -29,8 +39,7 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(s-dbg @1.1-1.14
-		(e-nominal @1.5-1.14 (nominal "Bool")
-			(e-tag @1.5-1.14 (name "True")))))
+		(e-runtime-error (tag "undeclared_type"))))
 ~~~
 # TYPES
 ~~~clojure

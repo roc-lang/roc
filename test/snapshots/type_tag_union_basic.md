@@ -27,7 +27,50 @@ main! = |_| {}
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
+
+This type is referenced here:
+**type_tag_union_basic.md:6:56:6:60:**
+```roc
+is_ok_ret_unqualified_bool : [Ok2(_ok), Err2(_err)] -> Bool
+```
+                                                       ^^^^
+
+
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
+
+This type is referenced here:
+**type_tag_union_basic.md:12:46:12:50:**
+```roc
+is_ok_ret_bool : [Ok2(_ok2), Err2(_err2)] -> Bool
+```
+                                             ^^^^
+
+
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
+
+This type is referenced here:
+**type_tag_union_basic.md:14:15:14:19:**
+```roc
+    Ok2(_) => Bool.True
+```
+              ^^^^
+
+
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
+
+This type is referenced here:
+**type_tag_union_basic.md:15:16:15:20:**
+```roc
+    Err2(_) => Bool.False
+```
+               ^^^^
+
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
@@ -193,15 +236,13 @@ main! = |_| {}
 								(pattern (degenerate false)
 									(p-applied-tag @8.5-8.11)))
 							(value
-								(e-nominal @8.15-8.19 (nominal "Bool")
-									(e-tag @8.15-8.19 (name "True")))))
+								(e-tag @8.15-8.19 (name "True"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-applied-tag @9.5-9.12)))
 							(value
-								(e-nominal @9.16-9.21 (nominal "Bool")
-									(e-tag @9.16-9.21 (name "False")))))))))
+								(e-tag @9.16-9.21 (name "False"))))))))
 		(annotation @7.1-7.27
 			(declared-type
 				(ty-fn @6.30-6.60 (effectful false)
@@ -210,7 +251,7 @@ main! = |_| {}
 							(ty-rigid-var @6.35-6.38 (name "_ok")))
 						(ty-tag-name @6.41-6.51 (name "Err2")
 							(ty-rigid-var @6.46-6.50 (name "_err"))))
-					(ty-lookup @6.56-6.60 (name "Bool") (local))))))
+					(ty-malformed @6.56-6.60)))))
 	(d-let
 		(p-assign @13.1-13.15 (ident "is_ok_ret_bool"))
 		(e-lambda @13.18-16.2
@@ -227,15 +268,13 @@ main! = |_| {}
 								(pattern (degenerate false)
 									(p-applied-tag @14.5-14.11)))
 							(value
-								(e-nominal @14.15-14.24 (nominal "Bool")
-									(e-tag @14.15-14.24 (name "True")))))
+								(e-runtime-error (tag "undeclared_type"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-applied-tag @15.5-15.12)))
 							(value
-								(e-nominal @15.16-15.26 (nominal "Bool")
-									(e-tag @15.16-15.26 (name "False")))))))))
+								(e-runtime-error (tag "undeclared_type"))))))))
 		(annotation @13.1-13.15
 			(declared-type
 				(ty-fn @12.18-12.50 (effectful false)
@@ -244,7 +283,7 @@ main! = |_| {}
 							(ty-rigid-var @12.23-12.27 (name "_ok2")))
 						(ty-tag-name @12.30-12.41 (name "Err2")
 							(ty-rigid-var @12.35-12.40 (name "_err2"))))
-					(ty-lookup @12.46-12.50 (name "Bool") (local))))))
+					(ty-malformed @12.46-12.50)))))
 	(d-let
 		(p-assign @18.1-18.6 (ident "main!"))
 		(e-lambda @18.9-18.15
@@ -257,12 +296,12 @@ main! = |_| {}
 (inferred-types
 	(defs
 		(patt @4.1-4.8 (type "[None, Some(Str)] -> Str"))
-		(patt @7.1-7.27 (type "[Err2(_err), Ok2(_ok)] -> Bool"))
-		(patt @13.1-13.15 (type "[Err2(_err2), Ok2(_ok2)] -> Bool"))
+		(patt @7.1-7.27 (type "[Err2(_err), Ok2(_ok)] -> Error"))
+		(patt @13.1-13.15 (type "[Err2(_err2), Ok2(_ok2)] -> Error"))
 		(patt @18.1-18.6 (type "_arg -> {}")))
 	(expressions
 		(expr @4.11-4.28 (type "[None, Some(Str)] -> Str"))
-		(expr @7.30-10.2 (type "[Err2(_err), Ok2(_ok)] -> Bool"))
-		(expr @13.18-16.2 (type "[Err2(_err2), Ok2(_ok2)] -> Bool"))
+		(expr @7.30-10.2 (type "[Err2(_err), Ok2(_ok)] -> Error"))
+		(expr @13.18-16.2 (type "[Err2(_err2), Ok2(_ok2)] -> Error"))
 		(expr @18.9-18.15 (type "_arg -> {}"))))
 ~~~

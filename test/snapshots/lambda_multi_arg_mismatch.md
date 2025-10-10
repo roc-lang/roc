@@ -239,8 +239,7 @@ result = multi_arg_fn(
 				(elems
 					(e-num @14.6-14.7 (value "1"))
 					(e-num @14.9-14.10 (value "2"))))
-			(e-nominal @15.5-15.9 (nominal "Bool")
-				(e-tag @15.5-15.9 (name "True")))
+			(e-tag @15.5-15.9 (name "True"))
 			(e-string @16.5-16.11
 				(e-literal @16.6-16.10 (string "done"))))))
 ~~~

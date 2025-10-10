@@ -14,7 +14,39 @@ foo = |a| {
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
+
+This type is referenced here:
+**expect_stmt_block_assertion.md:1:7:1:11:**
+```roc
+foo : Bool -> Bool
+```
+      ^^^^
+
+
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
+
+This type is referenced here:
+**expect_stmt_block_assertion.md:1:15:1:19:**
+```roc
+foo : Bool -> Bool
+```
+              ^^^^
+
+
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
+
+This type is referenced here:
+**expect_stmt_block_assertion.md:3:17:3:21:**
+```roc
+    expect a == Bool.True
+```
+                ^^^^
+
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:4),OpColon(1:5-1:6),UpperIdent(1:7-1:11),OpArrow(1:12-1:14),UpperIdent(1:15-1:19),
@@ -67,21 +99,20 @@ foo = |a| {
 					(e-binop @3.12-3.26 (op "eq")
 						(e-lookup-local @3.12-3.13
 							(p-assign @2.8-2.9 (ident "a")))
-						(e-nominal @3.17-3.26 (nominal "Bool")
-							(e-tag @3.17-3.26 (name "True")))))
+						(e-runtime-error (tag "undeclared_type"))))
 				(e-lookup-local @4.5-4.6
 					(p-assign @2.8-2.9 (ident "a")))))
 		(annotation @2.1-2.4
 			(declared-type
 				(ty-fn @1.7-1.19 (effectful false)
-					(ty-lookup @1.7-1.11 (name "Bool") (local))
-					(ty-lookup @1.15-1.19 (name "Bool") (local)))))))
+					(ty-malformed @1.7-1.11)
+					(ty-malformed @1.15-1.19))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @2.1-2.4 (type "Bool -> Bool")))
+		(patt @2.1-2.4 (type "Error -> Error")))
 	(expressions
-		(expr @2.7-5.2 (type "Bool -> Bool"))))
+		(expr @2.7-5.2 (type "Error -> Error"))))
 ~~~

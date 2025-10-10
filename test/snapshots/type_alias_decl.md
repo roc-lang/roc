@@ -50,24 +50,6 @@ TYPE REDECLARED - type_alias_decl.md:7:1:7:37
 UNUSED VARIABLE - type_alias_decl.md:33:5:33:11
 UNUSED VARIABLE - type_alias_decl.md:36:5:36:10
 # PROBLEMS
-**TYPE REDECLARED**
-The type _Result_ is being redeclared.
-
-The redeclaration is here:
-**type_alias_decl.md:7:1:7:37:**
-```roc
-Result(ok, err) : [Ok(ok), Err(err)]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-But _Result_ was already declared here:
-**type_alias_decl.md:1:1:1:1:**
-```roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
-```
-^
-
-
 **UNUSED VARIABLE**
 Variable `person` is not used anywhere in your code.
 

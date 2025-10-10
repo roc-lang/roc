@@ -70,10 +70,9 @@ match l {
 						(p-list @2.5-2.7
 							(patterns))))
 				(value
-					(e-nominal @2.11-2.25 (nominal "Result")
-						(e-tag @2.11-2.25 (name "Err")
-							(args
-								(e-tag @2.15-2.24 (name "EmptyList")))))))
+					(e-tag @2.11-2.25 (name "Err")
+						(args
+							(e-tag @2.15-2.24 (name "EmptyList"))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -82,13 +81,12 @@ match l {
 								(p-assign @3.10-3.11 (ident "e")))
 							(rest-at (index 0)))))
 				(value
-					(e-nominal @3.16-3.21 (nominal "Result")
-						(e-tag @3.16-3.21 (name "Ok")
-							(args
-								(e-lookup-local @3.19-3.20
-									(p-assign @3.10-3.11 (ident "e")))))))))))
+					(e-tag @3.16-3.21 (name "Ok")
+						(args
+							(e-lookup-local @3.19-3.20
+								(p-assign @3.10-3.11 (ident "e"))))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-4.2 (type "Result(ok, [EmptyList]_others)"))
+(expr @1.1-4.2 (type "[Err([EmptyList]_others), Ok(_a)]_others2"))
 ~~~

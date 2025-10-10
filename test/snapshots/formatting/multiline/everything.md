@@ -657,11 +657,11 @@ h = |x, y| {
 		(p-assign @58.1-58.2 (ident "h"))
 		(e-closure @58.5-108.2
 			(captures
+				(capture @92.4-92.5 (ident "a"))
 				(capture @103.5-103.6 (ident "a"))
-				(capture @97.5-97.6 (ident "a"))
-				(capture @87.5-87.6 (ident "a"))
 				(capture @58.1-58.2 (ident "h"))
-				(capture @92.4-92.5 (ident "a")))
+				(capture @97.5-97.6 (ident "a"))
+				(capture @87.5-87.6 (ident "a")))
 			(e-lambda @58.5-108.2
 				(args
 					(p-assign @58.6-58.7 (ident "x"))

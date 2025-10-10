@@ -1185,7 +1185,7 @@ fn processSnapshotContent(
         try module_envs.put("Set", set_env);
     }
 
-    var czer = try Can.init(can_ir, &parse_ast, &module_envs, .{});
+    var czer = try Can.init(can_ir, &parse_ast, &module_envs);
     defer czer.deinit();
 
     // Register auto-injected imports with the canonicalizer so it knows they're already imported

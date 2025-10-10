@@ -29,19 +29,6 @@ if bool {
    ^^^^
 
 
-**INVALID IF CONDITION**
-This `if` condition needs to be a _Bool_:
-**if_then_else_9.md:3:11:**
-```roc
-} else if 10 { # Comment after else open
-```
-          ^^
-
-Right now, it has the type:
-    _Num(_size)_
-
-Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
-
 **INCOMPATIBLE IF BRANCHES**
 The type of the second branch of this `if` does not match the previous branches:
 **if_then_else_9.md:1:1:**
