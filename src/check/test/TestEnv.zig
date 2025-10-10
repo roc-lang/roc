@@ -89,14 +89,10 @@ pub fn initWithImport(source: []const u8, other_module_name: []const u8, other_m
     try other_envs.append(other_module_env);
 
     // Type Check
-    var type_store = try types.Store.init(gpa);
-    errdefer type_store.deinit();
-    var checker = try Check.init(gpa, &type_store, module_env, other_envs.items, &module_env.store.regions, module_common_idents);
+    var checker = try Check.init(gpa, &module_env.types, module_env, other_envs.items, &module_env.store.regions, module_common_idents);
     errdefer checker.deinit();
 
     try checker.checkFile();
-    module_env.types.deinit();
-    module_env.types = type_store;
 
     var type_writer = try module_env.initTypeWriter();
     errdefer type_writer.deinit();
@@ -162,14 +158,10 @@ pub fn init(source: []const u8) !TestEnv {
     try can.validateForChecking();
 
     // Type Check
-    var type_store = try types.Store.init(gpa);
-    errdefer type_store.deinit();
-    var checker = try Check.init(gpa, &type_store, module_env, other_envs.items, &module_env.store.regions, module_common_idents);
+    var checker = try Check.init(gpa, &module_env.types, module_env, &.{}, &module_env.store.regions, module_common_idents);
     errdefer checker.deinit();
 
     try checker.checkFile();
-    module_env.types.deinit();
-    module_env.types = type_store;
 
     var type_writer = try module_env.initTypeWriter();
     errdefer type_writer.deinit();
