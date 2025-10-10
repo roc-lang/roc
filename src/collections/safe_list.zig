@@ -192,6 +192,16 @@ pub fn SafeList(comptime T: type) type {
             return @intCast(self.items.items.len);
         }
 
+        /// Modify the array so that it can hold at least `additional_count` **more** items.
+        /// Invalidates element pointers if additional memory is needed.
+        pub fn ensureUnusedCapacity(
+            self: *SafeList(T),
+            gpa: Allocator,
+            additional_count: usize,
+        ) Allocator.Error!void {
+            try self.items.ensureUnusedCapacity(gpa, additional_count);
+        }
+
         /// Add an item to the end of this list.
         pub fn append(self: *SafeList(T), gpa: Allocator, item: T) std.mem.Allocator.Error!Idx {
             const length = self.len();
