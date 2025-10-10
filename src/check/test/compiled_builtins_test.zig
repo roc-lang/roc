@@ -178,7 +178,7 @@ test "compiled builtins - use Set and Dict together" {
         gpa.destroy(can_result);
     }
 
-    can_result.* = try can.Can.init(module_env, parse_ast, &module_envs);
+    can_result.* = try can.Can.init(module_env, parse_ast, &module_envs, .{});
     try can_result.canonicalizeFile();
     try can_result.validateForChecking();
 

@@ -386,7 +386,7 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8, def_ident: ?[]co
 
     // Create czer
     //
-    var czer = Can.init(cir, &parse_ast, null) catch |err| {
+    var czer = Can.init(cir, &parse_ast, null, .{}) catch |err| {
         return try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err});
     };
     defer czer.deinit();
@@ -771,7 +771,7 @@ test "Repl - minimal interpreter integration" {
     };
 
     // Step 4: Canonicalize
-    var czer = try Can.init(cir, &parse_ast, null);
+    var czer = try Can.init(cir, &parse_ast, null, .{});
     defer czer.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);

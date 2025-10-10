@@ -22,9 +22,19 @@ pub fn build(b: *std.Build) void {
     const playground_test_step = b.step("test-playground", "Build the integration test suite for the WASM playground");
 
     // general configuration
-    const target = b.standardTargetOptions(.{ .default_target = .{
-        .abi = if (builtin.target.os.tag == .linux) .musl else null,
-    } });
+    const target = blk: {
+        var default_target_query: std.Target.Query = .{
+            .abi = if (builtin.target.os.tag == .linux) .musl else null,
+        };
+
+        // Use baseline x86_64 CPU for Valgrind compatibility on CI (Valgrind 3.18.1 doesn't support AVX-512)
+        const is_ci = std.process.getEnvVarOwned(b.allocator, "CI") catch null;
+        if (is_ci != null and builtin.target.cpu.arch == .x86_64 and builtin.target.os.tag == .linux) {
+            default_target_query.cpu_model = .{ .explicit = &std.Target.x86.cpu.x86_64 };
+        }
+
+        break :blk b.standardTargetOptions(.{ .default_target = default_target_query });
+    };
     const optimize = b.standardOptimizeOption(.{});
     const strip = b.option(bool, "strip", "Omit debug information");
     const no_bin = b.option(bool, "no-bin", "Skip emitting binaries (important for fast incremental compilation)") orelse false;
@@ -91,7 +101,7 @@ pub fn build(b: *std.Build) void {
     //
     // We cache the builtin compiler executable to avoid ~doubling normal build times.
     // CI always rebuilds from scratch, so it's not affected by this caching.
-    //
+
     // Discover all .roc files in src/build/roc/
     const roc_files = discoverBuiltinRocFiles(b) catch |err| {
         std.debug.print("Failed to discover builtin .roc files: {}\n", .{err});

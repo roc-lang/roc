@@ -498,7 +498,16 @@ fn freshFromContent(self: *Self, content: Content, rank: types_mod.Rank, new_reg
 
 /// The the region for a variable
 fn freshBool(self: *Self, rank: Rank, new_region: Region) Allocator.Error!Var {
-    return try self.instantiateVar(ModuleEnv.varFrom(can.Can.BUILTIN_BOOL), rank, .{ .explicit = new_region });
+    // Look up Bool's actual index from builtin_statements (should be first)
+    const builtin_stmts_slice = self.cir.store.sliceStatements(self.cir.builtin_statements);
+    std.debug.assert(builtin_stmts_slice.len >= 1); // Must have at least Bool
+    const bool_stmt_idx = builtin_stmts_slice[0]; // Bool is always the first builtin
+    // Debug assertion: verify this is a nominal type declaration
+    if (std.debug.runtime_safety) {
+        const stmt = self.cir.store.getStatement(bool_stmt_idx);
+        std.debug.assert(stmt == .s_nominal_decl);
+    }
+    return try self.instantiateVar(ModuleEnv.varFrom(bool_stmt_idx), rank, .{ .explicit = new_region });
 }
 
 // fresh vars //

@@ -939,7 +939,17 @@ pub const Interpreter = struct {
                 const ct_var = can.ModuleEnv.varFrom(expr_idx);
                 const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
                 const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
-                const backing_rt_var = if (nom.nominal_type_decl == can.Can.BUILTIN_BOOL)
+                // Check if this is Bool by comparing against the first builtin statement
+                const builtin_stmts_slice = self.env.store.sliceStatements(self.env.builtin_statements);
+                const bool_decl_idx = if (builtin_stmts_slice.len > 0) blk: {
+                    // Debug assertion: when we have builtins, first must be Bool (a nominal type)
+                    if (std.debug.runtime_safety) {
+                        const stmt = self.env.store.getStatement(builtin_stmts_slice[0]);
+                        std.debug.assert(stmt == .s_nominal_decl);
+                    }
+                    break :blk builtin_stmts_slice[0];
+                } else can.Can.BUILTIN_BOOL;
+                const backing_rt_var = if (nom.nominal_type_decl == bool_decl_idx)
                     try self.getCanonicalBoolRuntimeVar()
                 else switch (nominal_resolved.desc.content) {
                     .structure => |st| switch (st) {
@@ -2523,7 +2533,15 @@ pub const Interpreter = struct {
 
     fn getCanonicalBoolRuntimeVar(self: *Interpreter) !types.Var {
         if (self.canonical_bool_rt_var) |cached| return cached;
-        const bool_decl_idx = can.Can.BUILTIN_BOOL;
+        // Look up Bool's actual index from builtin_statements (should be first)
+        const builtin_stmts_slice = self.env.store.sliceStatements(self.env.builtin_statements);
+        std.debug.assert(builtin_stmts_slice.len >= 1); // Must have at least Bool
+        const bool_decl_idx = builtin_stmts_slice[0]; // Bool is always the first builtin
+        // Debug assertion: verify this is a nominal type declaration
+        if (std.debug.runtime_safety) {
+            const stmt = self.env.store.getStatement(bool_decl_idx);
+            std.debug.assert(stmt == .s_nominal_decl);
+        }
         const ct_var = can.ModuleEnv.varFrom(bool_decl_idx);
         const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
         const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
