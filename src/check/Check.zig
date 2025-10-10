@@ -160,7 +160,9 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
 
 /// Fills the type store with fresh variables up to the number of regions
 inline fn ensureTypeStoreIsFilled(self: *Self) Allocator.Error!void {
-    for (self.types.len()..self.regions.len()) |_| {
+    const region_nodes: usize = @intCast(self.regions.len());
+    const type_nodes: usize = @intCast(self.types.len());
+    for (type_nodes..region_nodes) |_| {
         _ = try self.types.fresh();
     }
 }
