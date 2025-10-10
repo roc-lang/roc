@@ -2916,8 +2916,9 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: Rank, match: CIR.Ex
     does_fx = try self.checkExpr(first_branch.value, rank, .no_expectation) or does_fx;
     const branch_var = ModuleEnv.varFrom(first_branch.value);
 
-    // Unify the match expr to the first branch. TODO: I don't think this can fail?
-    _ = try self.unify(ModuleEnv.varFrom(expr_idx), branch_var, rank);
+    // Unify the match expr to the first branch.
+    const match_result = try self.unify(ModuleEnv.varFrom(expr_idx), branch_var, rank);
+    std.debug.assert(match_result.isOk());
 
     // Then iterate over the rest of the branches
     for (branch_idxs[1..], 1..) |branch_idx, branch_cur_index| {
