@@ -59,12 +59,14 @@ pub fn main() !void {
     const set_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Set.roc", 1024 * 1024);
     defer gpa.free(set_roc_source);
 
-    // Compile Bool.roc (it's completely self-contained)
+    // Compile Bool.roc (it's completely self-contained, doesn't use Bool or Result types)
     const bool_env = try compileModule(
         gpa,
         "Bool",
         bool_roc_source,
         &.{}, // No module dependencies
+        null, // bool_stmt not available yet
+        null, // result_stmt not available yet
     );
     defer {
         bool_env.deinit();
@@ -74,12 +76,14 @@ pub fn main() !void {
     // Find Bool type declaration via string lookup
     const bool_type_idx = try findTypeDeclaration(bool_env, "Bool");
 
-    // Compile Result.roc
+    // Compile Result.roc (doesn't use Bool or Result types in its definition)
     const result_env = try compileModule(
         gpa,
         "Result",
         result_roc_source,
         &.{}, // No module dependencies
+        null, // bool_stmt not needed for Result
+        null, // result_stmt not available yet
     );
     defer {
         result_env.deinit();
@@ -89,19 +93,21 @@ pub fn main() !void {
     // Find Result type declaration via string lookup
     const result_type_idx = try findTypeDeclaration(result_env, "Result");
 
-    // Compile Dict.roc
+    // Compile Dict.roc (may use Result type, so we provide the indices)
     const dict_env = try compileModule(
         gpa,
         "Dict",
         dict_roc_source,
         &.{}, // No module dependencies
+        bool_type_idx, // Provide Bool type index
+        result_type_idx, // Provide Result type index
     );
     defer {
         dict_env.deinit();
         gpa.destroy(dict_env);
     }
 
-    // Compile Set.roc (imports Dict)
+    // Compile Set.roc (imports Dict, may use Result)
     const set_env = try compileModule(
         gpa,
         "Set",
@@ -109,6 +115,8 @@ pub fn main() !void {
         &[_]ModuleDep{
             .{ .name = "Dict", .env = dict_env },
         },
+        bool_type_idx, // Provide Bool type index
+        result_type_idx, // Provide Result type index
     );
     defer {
         set_env.deinit();
@@ -148,6 +156,8 @@ fn compileModule(
     module_name: []const u8,
     source: []const u8,
     deps: []const ModuleDep,
+    bool_stmt_opt: ?CIR.Statement.Idx,
+    result_stmt_opt: ?CIR.Statement.Idx,
 ) !*ModuleEnv {
     // This follows the pattern from TestEnv.init() in src/check/test/TestEnv.zig
 
@@ -167,14 +177,13 @@ fn compileModule(
     const list_ident = try module_env.insertIdent(base.Ident.for_text("List"));
     const box_ident = try module_env.insertIdent(base.Ident.for_text("Box"));
 
-    // When compiling builtin modules, we use undefined for bool_stmt and result_stmt
-    // because we're in the process of defining these types - they don't exist yet!
+    // Use provided bool_stmt and result_stmt if available, otherwise use undefined
     const common_idents: Check.CommonIdents = .{
         .module_name = module_ident,
         .list = list_ident,
         .box = box_ident,
-        .bool_stmt = undefined, // Not used when compiling Bool.roc itself
-        .result_stmt = undefined, // Not used when compiling Result.roc itself
+        .bool_stmt = bool_stmt_opt orelse undefined,
+        .result_stmt = result_stmt_opt orelse undefined,
     };
 
     // 3. Parse

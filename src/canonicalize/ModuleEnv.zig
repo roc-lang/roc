@@ -1407,6 +1407,7 @@ pub const Serialized = struct {
     gpa: std.mem.Allocator, // Serialized as zeros, provided during deserialization
     common: CommonEnv.Serialized,
     types: TypeStore.Serialized,
+    module_kind: ModuleKind,  // Must match field order in Self
     all_defs: CIR.Def.Span,
     all_statements: CIR.Statement.Span,
     exports: CIR.Def.Span,
@@ -1416,7 +1417,6 @@ pub const Serialized = struct {
     module_name: []const u8, // Serialized as zeros, provided during deserialization
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
-    module_kind: ModuleKind,
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -1432,6 +1432,7 @@ pub const Serialized = struct {
         try self.types.serialize(&env.types, allocator, writer);
 
         // Copy simple values directly
+        self.module_kind = env.module_kind;
         self.all_defs = env.all_defs;
         self.all_statements = env.all_statements;
         self.exports = env.exports;
