@@ -258,8 +258,8 @@ main! = |_| {
 		(p-assign @19.1-19.6 (ident "main!"))
 		(e-closure @19.9-25.2
 			(captures
-				(capture @9.1-9.9 (ident "multiply"))
 				(capture @5.1-5.4 (ident "add"))
+				(capture @9.1-9.9 (ident "multiply"))
 				(capture @17.1-17.7 (ident "double"))
 				(capture @13.1-13.8 (ident "process")))
 			(e-lambda @19.9-25.2

@@ -15,7 +15,17 @@ type=expr
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**ann_effectful_fn.md:2:28:2:34:**
+```roc
+    launchTheNukes : {} => Result Bool LaunchNukeErr
+```
+                           ^^^^^^
+
+
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),

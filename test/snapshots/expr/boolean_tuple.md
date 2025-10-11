@@ -30,12 +30,10 @@ NO CHANGE
 ~~~clojure
 (e-tuple @1.1-1.14
 	(elems
-		(e-nominal @1.2-1.6 (nominal "Bool")
-			(e-tag @1.2-1.6 (name "True")))
-		(e-nominal @1.8-1.13 (nominal "Bool")
-			(e-tag @1.8-1.13 (name "False")))))
+		(e-tag @1.2-1.6 (name "True"))
+		(e-tag @1.8-1.13 (name "False"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.14 (type "(Bool, Bool)"))
+(expr @1.1-1.14 (type "([True]_others, [False]_others2)"))
 ~~~

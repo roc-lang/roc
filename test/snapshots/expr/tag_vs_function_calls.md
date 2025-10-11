@@ -119,17 +119,15 @@ EndOfFile(11:1-11:1),
 		(field (name "noneTag")
 			(e-tag @3.14-3.18 (name "None")))
 		(field (name "okTag")
-			(e-nominal @4.12-4.23 (nominal "Result")
-				(e-tag @4.12-4.23 (name "Ok")
-					(args
-						(e-string @4.15-4.22
-							(e-literal @4.16-4.21 (string "hello")))))))
+			(e-tag @4.12-4.23 (name "Ok")
+				(args
+					(e-string @4.15-4.22
+						(e-literal @4.16-4.21 (string "hello"))))))
 		(field (name "errTag")
-			(e-nominal @5.13-5.24 (nominal "Result")
-				(e-tag @5.13-5.24 (name "Err")
-					(args
-						(e-string @5.17-5.23
-							(e-literal @5.18-5.22 (string "oops")))))))
+			(e-tag @5.13-5.24 (name "Err")
+				(args
+					(e-string @5.17-5.23
+						(e-literal @5.18-5.22 (string "oops"))))))
 		(field (name "addOne")
 			(e-lambda @6.13-6.22
 				(args
@@ -145,12 +143,11 @@ EndOfFile(11:1-11:1),
 		(field (name "nested")
 			(e-tag @8.13-8.31 (name "Some")
 				(args
-					(e-nominal @8.18-8.30 (nominal "Result")
-						(e-tag @8.18-8.30 (name "Ok")
-							(args
-								(e-tag @8.21-8.29 (name "Just")
-									(args
-										(e-num @8.26-8.28 (value "42"))))))))))
+					(e-tag @8.18-8.30 (name "Ok")
+						(args
+							(e-tag @8.21-8.29 (name "Just")
+								(args
+									(e-num @8.26-8.28 (value "42")))))))))
 		(field (name "tagList")
 			(e-list @9.14-9.47
 				(elems
@@ -167,5 +164,5 @@ EndOfFile(11:1-11:1),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-10.2 (type "{ addOne: Num(_size) -> Num(_size2), errTag: Result(ok, Str), nested: [Some(Result([Just(Num(_size3))]_others, err))]_others2, noneTag: [None]_others3, okTag: Result(Str, err), result: _field, someTag: [Some(Num(_size4))]_others4, tagList: List([Some(Num(_size5))][None]_others5) }"))
+(expr @1.1-10.2 (type "{ addOne: Num(_size) -> Num(_size2), errTag: [Err(Str)]_others, nested: [Some([Ok([Just(Num(_size3))]_others2)]_others3)]_others4, noneTag: [None]_others5, okTag: [Ok(Str)]_others6, result: _field, someTag: [Some(Num(_size4))]_others7, tagList: List([Some(Num(_size5))][None]_others8) }"))
 ~~~

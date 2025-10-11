@@ -240,6 +240,17 @@ resultType : Result.Result(I32, Str)
 
 
 **UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**qualified_type_canonicalization.md:27:14:27:20:**
+```roc
+resultType = Result.Ok(42)
+```
+             ^^^^^^
+
+
+**UNDECLARED TYPE**
 The type _Color_ is not declared in this scope.
 
 This type is referenced here:
@@ -284,6 +295,17 @@ transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
                                                       ^^^^^^^^^^^^^^^^^^^^^
 
 
+**UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**qualified_type_canonicalization.md:42:9:42:15:**
+```roc
+        Result.Ok(rgb) => TypeC.fromColor(rgb)
+```
+        ^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `fromColor` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -293,6 +315,17 @@ Is there an `import` or `exposing` missing up-top?
         Result.Ok(rgb) => TypeC.fromColor(rgb)
 ```
                           ^^^^^^^^^^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**qualified_type_canonicalization.md:43:9:43:15:**
+```roc
+        Result.Err(err) => TypeC.default
+```
+        ^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -521,10 +554,7 @@ transform = |result|
 				(ty-malformed @22.23-22.44))))
 	(d-let
 		(p-assign @27.1-27.11 (ident "resultType"))
-		(e-nominal @27.14-27.27 (nominal "Result")
-			(e-tag @27.14-27.27 (name "Ok")
-				(args
-					(e-num @27.24-27.26 (value "42")))))
+		(e-runtime-error (tag "undeclared_type"))
 		(annotation @27.1-27.11
 			(declared-type
 				(ty-malformed @26.14-26.27))))
@@ -568,8 +598,7 @@ transform = |result|
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @42.9-42.23
-											(p-applied-tag @42.9-42.23))))
+										(p-runtime-error @42.9-42.15 (tag "undeclared_type"))))
 								(value
 									(e-call @42.27-42.47
 										(e-runtime-error (tag "ident_not_in_scope"))
@@ -578,8 +607,7 @@ transform = |result|
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @43.9-43.24
-											(p-applied-tag @43.9-43.24))))
+										(p-runtime-error @43.9-43.15 (tag "undeclared_type"))))
 								(value
 									(e-runtime-error (tag "ident_not_in_scope")))))))))
 		(annotation @40.1-40.10
@@ -609,7 +637,7 @@ transform = |result|
 		(expr @15.19-15.24 (type "Error"))
 		(expr @19.20-19.43 (type "Error"))
 		(expr @23.23-23.32 (type "Error"))
-		(expr @27.14-27.27 (type "Error"))
+		(expr @27.14-27.20 (type "Error"))
 		(expr @31.12-31.49 (type "{  } -> Error"))
 		(expr @35.16-36.22 (type "Error -> Str"))
 		(expr @40.13-44.6 (type "Error -> Error"))))

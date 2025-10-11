@@ -112,5 +112,5 @@ match person {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-3.2 (type "Bool"))
+(expr @1.1-3.2 (type "_a"))
 ~~~

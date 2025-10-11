@@ -358,8 +358,7 @@ EndOfFile(20:1-20:1),
 					(e-literal @13.33-13.38 (string "Alice")))
 				(e-string @13.41-13.48
 					(e-literal @13.42-13.47 (string "fixed")))
-				(e-nominal @13.50-13.54 (nominal "Bool")
-					(e-tag @13.50-13.54 (name "True"))))))
+				(e-tag @13.50-13.54 (name "True")))))
 	(s-let @16.5-16.41
 		(p-tuple @16.5-16.18
 			(patterns

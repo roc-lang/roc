@@ -65,10 +65,9 @@ NO CHANGE
 (e-binop @1.1-1.69 (op "or")
 	(e-binop @1.1-1.23 (op "gt")
 		(e-binop @1.1-1.15 (op "null_coalesce")
-			(e-nominal @1.1-1.9 (nominal "Result")
-				(e-tag @1.1-1.9 (name "Err")
-					(args
-						(e-runtime-error (tag "ident_not_in_scope")))))
+			(e-tag @1.1-1.9 (name "Err")
+				(args
+					(e-runtime-error (tag "ident_not_in_scope"))))
 			(e-num @1.13-1.15 (value "12")))
 		(e-binop @1.18-1.23 (op "mul")
 			(e-num @1.18-1.19 (value "5"))
@@ -93,5 +92,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.69 (type "Bool"))
+(expr @1.1-1.69 (type "_a"))
 ~~~

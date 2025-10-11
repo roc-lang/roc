@@ -69,24 +69,6 @@ This is an unexpected parsing error. Please check your syntax.
 ^
 
 
-**TYPE REDECLARED**
-The type _Result_ is being redeclared.
-
-The redeclaration is here:
-**type_shadowing_across_scopes.md:1:1:1:31:**
-```roc
-Result(a, b) : [Ok(a), Err(b)]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-But _Result_ was already declared here:
-**type_shadowing_across_scopes.md:1:1:1:1:**
-```roc
-Result(a, b) : [Ok(a), Err(b)]
-```
-^
-
-
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 

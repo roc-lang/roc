@@ -175,26 +175,25 @@ EndOfFile(16:1-16:1),
 								(e-string @5.54-5.73
 									(e-literal @5.55-5.72 (string "alice@example.com")))))))))
 		(field (name "metadata")
-			(e-nominal @6.15-9.7 (nominal "Result")
-				(e-tag @6.15-9.7 (name "Ok")
-					(args
-						(e-record @6.18-9.6
-							(fields
-								(field (name "tags")
-									(e-list @7.15-7.51
-										(elems
-											(e-string @7.16-7.27
-												(e-literal @7.17-7.26 (string "developer")))
-											(e-string @7.29-7.37
-												(e-literal @7.30-7.36 (string "senior")))
-											(e-string @7.39-7.50
-												(e-literal @7.40-7.49 (string "fullstack"))))))
-								(field (name "permissions")
-									(e-list @8.22-8.42
-										(elems
-											(e-tag @8.23-8.27 (name "Read"))
-											(e-tag @8.29-8.34 (name "Write"))
-											(e-tag @8.36-8.41 (name "Admin")))))))))))
+			(e-tag @6.15-9.7 (name "Ok")
+				(args
+					(e-record @6.18-9.6
+						(fields
+							(field (name "tags")
+								(e-list @7.15-7.51
+									(elems
+										(e-string @7.16-7.27
+											(e-literal @7.17-7.26 (string "developer")))
+										(e-string @7.29-7.37
+											(e-literal @7.30-7.36 (string "senior")))
+										(e-string @7.39-7.50
+											(e-literal @7.40-7.49 (string "fullstack"))))))
+							(field (name "permissions")
+								(e-list @8.22-8.42
+									(elems
+										(e-tag @8.23-8.27 (name "Read"))
+										(e-tag @8.29-8.34 (name "Write"))
+										(e-tag @8.36-8.41 (name "Admin"))))))))))
 		(field (name "callback")
 			(e-lambda @10.15-10.24
 				(args
@@ -235,5 +234,5 @@ EndOfFile(16:1-16:1),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-15.2 (type "{ callback: Num(_size) -> Num(_size2), metadata: Result({ permissions: List([Read, Write, Admin]_others), tags: List(Str) }, err), name: Str, nested: { items: List([Some(Str)][None]_others2), result: [Success({ data: List(Num(_size3)), timestamp: Str })]_others3 }, preferences: { notifications: [Email(Str)]_others4, theme: [Dark]_others5 }, scores: List(Num(_size4)), status: [Active({ since: Str })]_others6 }"))
+(expr @1.1-15.2 (type "{ callback: Num(_size) -> Num(_size2), metadata: [Ok({ permissions: List([Read, Write, Admin]_others), tags: List(Str) })]_others2, name: Str, nested: { items: List([Some(Str)][None]_others3), result: [Success({ data: List(Num(_size3)), timestamp: Str })]_others4 }, preferences: { notifications: [Email(Str)]_others5, theme: [Dark]_others6 }, scores: List(Num(_size4)), status: [Active({ since: Str })]_others7 }"))
 ~~~

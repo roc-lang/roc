@@ -179,8 +179,8 @@ NO CHANGE
 		(p-assign @14.1-14.6 (ident "main!"))
 		(e-closure @14.9-17.2
 			(captures
-				(capture @12.1-12.14 (ident "get_user_name"))
-				(capture @9.1-9.12 (ident "create_user")))
+				(capture @9.1-9.12 (ident "create_user"))
+				(capture @12.1-12.14 (ident "get_user_name")))
 			(e-lambda @14.9-17.2
 				(args
 					(p-underscore @14.10-14.11))

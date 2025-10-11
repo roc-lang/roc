@@ -24,6 +24,17 @@ TYPE MISMATCH - nominal_associated_lookup_in_containers.md:7:9:7:18
 TYPE MISMATCH - nominal_associated_lookup_in_containers.md:10:10:10:15
 TYPE MISMATCH - nominal_associated_lookup_in_containers.md:13:10:13:30
 # PROBLEMS
+**UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**nominal_associated_lookup_in_containers.md:9:10:9:16:**
+```roc
+result : Result(Foo.Bar, Foo.Error)
+```
+         ^^^^^^
+
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **nominal_associated_lookup_in_containers.md:7:9:7:18:**
@@ -37,20 +48,6 @@ It has the type:
 
 But the type annotation says it should have the type:
     _List(Foo.Bar)_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_associated_lookup_in_containers.md:10:10:10:15:**
-```roc
-result = Ok(A)
-```
-         ^^^^^
-
-It has the type:
-    _Result([A]_others, err)_
-
-But the type annotation says it should have the type:
-    _Result(Foo.Bar, Foo.Error)_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -175,15 +172,12 @@ nested = { bar: A, count: 1 }
 					(ty-lookup @6.14-6.21 (name "Foo.Bar") (local))))))
 	(d-let
 		(p-assign @10.1-10.7 (ident "result"))
-		(e-nominal @10.10-10.15 (nominal "Result")
-			(e-tag @10.10-10.15 (name "Ok")
-				(args
-					(e-tag @10.13-10.14 (name "A")))))
+		(e-tag @10.10-10.15 (name "Ok")
+			(args
+				(e-tag @10.13-10.14 (name "A"))))
 		(annotation @10.1-10.7
 			(declared-type
-				(ty-apply @9.10-9.36 (name "Result") (local)
-					(ty-lookup @9.10-9.36 (name "Foo.Bar") (local))
-					(ty-lookup @9.10-9.36 (name "Foo.Error") (local))))))
+				(ty-malformed @9.10-9.16))))
 	(d-let
 		(p-assign @13.1-13.7 (ident "nested"))
 		(e-record @13.10-13.30

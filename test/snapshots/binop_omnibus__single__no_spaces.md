@@ -22,19 +22,6 @@ Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
     ^^^
 
 
-**INVALID BOOL OPERATION**
-I'm having trouble with this bool operation:
-**binop_omnibus__single__no_spaces.md:1:21:**
-```roc
-Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
-```
-                               ^^
-
-Both sides of `and` must be _Bool_ values, but the right side is:
-    _Num(_size)_
-
-Note: Roc does not have "truthiness" where other values like strings, numbers or lists are automatically converted to bools. You must do that conversion yourself!
-
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:4),NoSpaceOpenRound(1:4-1:5),LowerIdent(1:5-1:8),CloseRound(1:8-1:9),OpDoubleQuestion(1:9-1:11),Int(1:11-1:13),OpGreaterThan(1:13-1:14),Int(1:14-1:15),OpStar(1:15-1:16),Int(1:16-1:17),OpOr(1:18-1:20),Int(1:21-1:23),OpPlus(1:23-1:24),Int(1:24-1:25),OpLessThan(1:25-1:26),Int(1:26-1:27),OpAnd(1:28-1:31),Int(1:32-1:34),Int(1:34-1:36),OpGreaterThanOrEq(1:36-1:38),Int(1:38-1:40),OpOr(1:41-1:43),Int(1:44-1:46),OpLessThanOrEq(1:46-1:48),Int(1:48-1:49),OpSlash(1:49-1:50),Int(1:50-1:51),
@@ -69,10 +56,9 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10
 (e-binop @1.1-1.34 (op "or")
 	(e-binop @1.1-1.17 (op "gt")
 		(e-binop @1.1-1.13 (op "null_coalesce")
-			(e-nominal @1.1-1.9 (nominal "Result")
-				(e-tag @1.1-1.9 (name "Err")
-					(args
-						(e-runtime-error (tag "ident_not_in_scope")))))
+			(e-tag @1.1-1.9 (name "Err")
+				(args
+					(e-runtime-error (tag "ident_not_in_scope"))))
 			(e-num @1.11-1.13 (value "12")))
 		(e-binop @1.14-1.17 (op "mul")
 			(e-num @1.14-1.15 (value "5"))
@@ -87,5 +73,5 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.34 (type "Error"))
+(expr @1.1-1.34 (type "Num(_size)"))
 ~~~

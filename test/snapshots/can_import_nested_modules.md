@@ -268,6 +268,17 @@ processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
               ^^^^^^^^^^^^^^^^^^^^^^
 
 
+**UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**can_import_nested_modules.md:14:46:14:52:**
+```roc
+processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
+```
+                                             ^^^^^^
+
+
 **MODULE NOT IMPORTED**
 There is no module with the name `Config.Parser` imported into this Roc file.
 
@@ -321,6 +332,17 @@ You're attempting to use this module here:
 validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 ```
                ^^^^^^^^^^^^^^^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**can_import_nested_modules.md:23:40:23:46:**
+```roc
+validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
+```
+                                       ^^^^^^
 
 
 **MODULE NOT IMPORTED**
@@ -547,9 +569,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(ty-fn @14.15-14.78 (effectful false)
 					(ty-malformed @14.15-14.37)
 					(ty-lookup @14.39-14.42 (name "Str") (builtin))
-					(ty-apply @14.46-14.78 (name "Result") (local)
-						(ty-lookup @14.46-14.78 (name "Str") (builtin))
-						(ty-malformed @14.46-14.78))))))
+					(ty-malformed @14.46-14.52)))))
 	(d-let
 		(p-assign @20.1-20.13 (ident "formatOutput"))
 		(e-lambda @20.16-20.59
@@ -578,9 +598,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(declared-type
 				(ty-fn @23.16-23.78 (effectful false)
 					(ty-malformed @23.16-23.36)
-					(ty-apply @23.40-23.78 (name "Result") (local)
-						(ty-malformed @23.40-23.78)
-						(ty-malformed @23.40-23.78))))))
+					(ty-malformed @23.40-23.46)))))
 	(s-import @1.1-1.19 (module "json.Parser") (qualifier "json")
 		(exposes))
 	(s-import @2.1-2.19 (module "http.Client") (qualifier "http")
@@ -592,13 +610,13 @@ validateAuth = |creds| HttpAuth.validate(creds)
 	(defs
 		(patt @7.1-7.12 (type "Error -> Str"))
 		(patt @11.1-11.13 (type "Str, Str -> Error"))
-		(patt @15.1-15.12 (type "Error, Str -> Result(Str, Error)"))
+		(patt @15.1-15.12 (type "Error, Str -> Error"))
 		(patt @20.1-20.13 (type "Str -> Str"))
-		(patt @24.1-24.13 (type "Error -> Result(Error, Error)")))
+		(patt @24.1-24.13 (type "Error -> Error")))
 	(expressions
 		(expr @7.15-7.51 (type "Error -> Str"))
 		(expr @11.16-11.55 (type "Str, Str -> Error"))
-		(expr @15.15-16.60 (type "Error, Str -> Result(Str, Error)"))
+		(expr @15.15-16.60 (type "Error, Str -> Error"))
 		(expr @20.16-20.59 (type "Str -> Str"))
-		(expr @24.16-24.48 (type "Error -> Result(Error, Error)"))))
+		(expr @24.16-24.48 (type "Error -> Error"))))
 ~~~

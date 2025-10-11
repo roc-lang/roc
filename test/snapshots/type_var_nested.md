@@ -37,7 +37,50 @@ main = |_| "done"
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**type_var_nested.md:4:14:4:20:**
+```roc
+map_result : Result(a, e), (a -> b) -> Result(b, e)
+```
+             ^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**type_var_nested.md:4:40:4:46:**
+```roc
+map_result : Result(a, e), (a -> b) -> Result(b, e)
+```
+                                       ^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**type_var_nested.md:25:23:25:29:**
+```roc
+wrap_in_result : a -> Result(Result(a, Str), Str)
+```
+                      ^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**type_var_nested.md:25:30:25:36:**
+```roc
+wrap_in_result : a -> Result(Result(a, Str), Str)
+```
+                             ^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:10),CloseSquare(1:10-1:11),OpenCurly(1:12-1:13),LowerIdent(1:14-1:16),OpColon(1:16-1:17),KwPlatform(1:18-1:26),StringStart(1:27-1:28),StringPart(1:28-1:40),StringEnd(1:40-1:41),CloseCurly(1:42-1:43),
@@ -236,41 +279,33 @@ main = |_| "done"
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-nominal @7.9-7.18
-												(p-applied-tag @7.9-7.18))))
+											(p-applied-tag @7.9-7.18)))
 									(value
-										(e-nominal @7.22-7.42 (nominal "Result")
-											(e-tag @7.22-7.42 (name "Ok")
-												(args
-													(e-call @7.25-7.41
-														(e-lookup-local @7.25-7.34
-															(p-assign @5.23-5.32 (ident "transform")))
-														(e-lookup-local @7.35-7.40
-															(p-assign @7.12-7.17 (ident "value")))))))))
+										(e-tag @7.22-7.42 (name "Ok")
+											(args
+												(e-call @7.25-7.41
+													(e-lookup-local @7.25-7.34
+														(p-assign @5.23-5.32 (ident "transform")))
+													(e-lookup-local @7.35-7.40
+														(p-assign @7.12-7.17 (ident "value"))))))))
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-nominal @8.9-8.19
-												(p-applied-tag @8.9-8.19))))
+											(p-applied-tag @8.9-8.19)))
 									(value
-										(e-nominal @8.23-8.33 (nominal "Result")
-											(e-tag @8.23-8.33 (name "Err")
-												(args
-													(e-lookup-local @8.27-8.32
-														(p-assign @8.13-8.18 (ident "error"))))))))))))))
+										(e-tag @8.23-8.33 (name "Err")
+											(args
+												(e-lookup-local @8.27-8.32
+													(p-assign @8.13-8.18 (ident "error")))))))))))))
 		(annotation @5.1-5.11
 			(declared-type
 				(ty-fn @4.14-4.52 (effectful false)
-					(ty-apply @4.14-4.26 (name "Result") (local)
-						(ty-rigid-var @4.14-4.26 (name "a"))
-						(ty-rigid-var @4.14-4.26 (name "e")))
+					(ty-malformed @4.14-4.20)
 					(ty-parens @4.28-4.36
 						(ty-fn @4.29-4.35 (effectful false)
-							(ty-rigid-var-lookup (ty-rigid-var @4.14-4.26 (name "a")))
+							(ty-rigid-var-lookup (ty-rigid-var @4.21-4.22 (name "a")))
 							(ty-rigid-var @4.34-4.35 (name "b"))))
-					(ty-apply @4.40-4.52 (name "Result") (local)
-						(ty-rigid-var-lookup (ty-rigid-var @4.34-4.35 (name "b")))
-						(ty-rigid-var-lookup (ty-rigid-var @4.14-4.26 (name "e"))))))))
+					(ty-malformed @4.40-4.46)))))
 	(d-let
 		(p-assign @14.1-14.9 (ident "identity"))
 		(e-lambda @14.12-14.17
@@ -324,23 +359,17 @@ main = |_| "done"
 		(e-lambda @26.18-26.39
 			(args
 				(p-assign @26.19-26.24 (ident "value")))
-			(e-nominal @26.26-26.39 (nominal "Result")
-				(e-tag @26.26-26.39 (name "Ok")
-					(args
-						(e-nominal @26.29-26.38 (nominal "Result")
-							(e-tag @26.29-26.38 (name "Ok")
-								(args
-									(e-lookup-local @26.32-26.37
-										(p-assign @26.19-26.24 (ident "value"))))))))))
+			(e-tag @26.26-26.39 (name "Ok")
+				(args
+					(e-tag @26.29-26.38 (name "Ok")
+						(args
+							(e-lookup-local @26.32-26.37
+								(p-assign @26.19-26.24 (ident "value"))))))))
 		(annotation @26.1-26.15
 			(declared-type
 				(ty-fn @25.18-25.50 (effectful false)
 					(ty-rigid-var @25.18-25.19 (name "a"))
-					(ty-apply @25.23-25.50 (name "Result") (local)
-						(ty-apply @25.23-25.50 (name "Result") (local)
-							(ty-rigid-var-lookup (ty-rigid-var @25.18-25.19 (name "a")))
-							(ty-lookup @25.30-25.44 (name "Str") (builtin)))
-						(ty-lookup @25.23-25.50 (name "Str") (builtin)))))))
+					(ty-malformed @25.23-25.29)))))
 	(d-let
 		(p-assign @28.1-28.5 (ident "main"))
 		(e-lambda @28.8-28.18
@@ -353,17 +382,17 @@ main = |_| "done"
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.11 (type "Result(a, e), a -> b -> Result(b, e)"))
+		(patt @5.1-5.11 (type "Error, a -> b -> Error"))
 		(patt @14.1-14.9 (type "a -> a"))
 		(patt @18.1-18.10 (type "a, b -> { first: a, second: b }"))
 		(patt @22.1-22.12 (type "List(_a) -> Num(Int(Unsigned64))"))
-		(patt @26.1-26.15 (type "a -> Result(Result(a, Str), Str)"))
+		(patt @26.1-26.15 (type "a -> Error"))
 		(patt @28.1-28.5 (type "_arg -> Str")))
 	(expressions
-		(expr @5.14-10.2 (type "Result(a, e), a -> b -> Result(b, e)"))
+		(expr @5.14-10.2 (type "Error, a -> b -> Error"))
 		(expr @14.12-14.17 (type "a -> a"))
 		(expr @18.13-18.43 (type "a, b -> { first: a, second: b }"))
 		(expr @22.15-22.24 (type "List(_a) -> Num(Int(Unsigned64))"))
-		(expr @26.18-26.39 (type "a -> Result(Result(a, Str), Str)"))
+		(expr @26.18-26.39 (type "a -> Error"))
 		(expr @28.8-28.18 (type "_arg -> Str"))))
 ~~~

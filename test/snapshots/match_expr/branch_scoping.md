@@ -85,8 +85,7 @@ match result {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-nominal @2.5-2.14
-							(p-applied-tag @2.5-2.14))))
+						(p-applied-tag @2.5-2.14)))
 				(value
 					(e-binop @2.18-2.27 (op "add")
 						(e-lookup-local @2.18-2.23
@@ -95,8 +94,7 @@ match result {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-nominal @3.5-3.15
-							(p-applied-tag @3.5-3.15))))
+						(p-applied-tag @3.5-3.15)))
 				(value
 					(e-binop @3.19-3.28 (op "sub")
 						(e-lookup-local @3.19-3.24
@@ -105,8 +103,7 @@ match result {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-nominal @4.5-4.18
-							(p-applied-tag @4.5-4.18))))
+						(p-applied-tag @4.5-4.18)))
 				(value
 					(e-binop @4.22-4.35 (op "mul")
 						(e-lookup-local @4.22-4.31
@@ -115,8 +112,7 @@ match result {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-nominal @5.5-5.19
-							(p-applied-tag @5.5-5.19))))
+						(p-applied-tag @5.5-5.19)))
 				(value
 					(e-binop @5.23-5.36 (op "div")
 						(e-lookup-local @5.23-5.32

@@ -419,12 +419,10 @@ main! = |_| {
 		(e-dec-small @11.5-11.9 (numerator "314") (denominator-power-of-ten "2") (value "3.14")))
 	(d-let
 		(p-assign @12.1-12.2 (ident "d"))
-		(e-nominal @12.5-12.9 (nominal "Bool")
-			(e-tag @12.5-12.9 (name "True"))))
+		(e-tag @12.5-12.9 (name "True")))
 	(d-let
 		(p-assign @13.1-13.2 (ident "e"))
-		(e-nominal @13.5-13.10 (nominal "Bool")
-			(e-tag @13.5-13.10 (name "False"))))
+		(e-tag @13.5-13.10 (name "False")))
 	(d-let
 		(p-assign @16.1-16.16 (ident "anotherIdentity"))
 		(e-lambda @16.19-16.24
@@ -531,12 +529,12 @@ main! = |_| {
 		(p-assign @55.1-55.6 (ident "main!"))
 		(e-closure @55.9-65.2
 			(captures
-				(capture @16.1-16.16 (ident "anotherIdentity"))
-				(capture @23.1-23.2 (ident "f"))
 				(capture @4.1-4.2 (ident "a"))
-				(capture @53.1-53.14 (ident "finalIdentity"))
+				(capture @23.1-23.2 (ident "f"))
 				(capture @7.1-7.9 (ident "identity"))
+				(capture @16.1-16.16 (ident "anotherIdentity"))
 				(capture @20.1-20.8 (ident "combine"))
+				(capture @53.1-53.14 (ident "finalIdentity"))
 				(capture @46.1-46.19 (ident "yetAnotherIdentity")))
 			(e-lambda @55.9-65.2
 				(args
@@ -569,8 +567,7 @@ main! = |_| {
 						(e-call @60.15-60.39
 							(e-lookup-local @60.15-60.33
 								(p-assign @46.1-46.19 (ident "yetAnotherIdentity")))
-							(e-nominal @60.34-60.38 (nominal "Bool")
-								(e-tag @60.34-60.38 (name "True")))))
+							(e-tag @60.34-60.38 (name "True"))))
 					(s-let @61.5-61.34
 						(p-assign @61.5-61.12 (ident "result5"))
 						(e-call @61.15-61.34
@@ -591,8 +588,8 @@ main! = |_| {
 		(patt @7.1-7.9 (type "ac -> ac"))
 		(patt @10.1-10.2 (type "Str"))
 		(patt @11.1-11.2 (type "Num(Frac(_size))"))
-		(patt @12.1-12.2 (type "Bool"))
-		(patt @13.1-13.2 (type "Bool"))
+		(patt @12.1-12.2 (type "[True]_others"))
+		(patt @13.1-13.2 (type "[False]_others"))
 		(patt @16.1-16.16 (type "ac -> ac"))
 		(patt @20.1-20.8 (type "ac, ad -> (ac, ad)"))
 		(patt @23.1-23.2 (type "Num(_size)"))
@@ -626,8 +623,8 @@ main! = |_| {
 		(expr @7.12-7.17 (type "ac -> ac"))
 		(expr @10.5-10.12 (type "Str"))
 		(expr @11.5-11.9 (type "Num(Frac(_size))"))
-		(expr @12.5-12.9 (type "Bool"))
-		(expr @13.5-13.10 (type "Bool"))
+		(expr @12.5-12.9 (type "[True]_others"))
+		(expr @13.5-13.10 (type "[False]_others"))
 		(expr @16.19-16.24 (type "ac -> ac"))
 		(expr @20.11-20.42 (type "ac, ad -> (ac, ad)"))
 		(expr @23.5-23.6 (type "Num(_size)"))

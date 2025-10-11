@@ -38,6 +38,17 @@ UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
 UNDECLARED TYPE - type_app_complex_nested.md:12:32:12:36
 # PROBLEMS
 **UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**type_app_complex_nested.md:18:21:18:27:**
+```roc
+ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
+```
+                    ^^^^^^
+
+
+**UNDECLARED TYPE**
 The type _Maybe_ is not declared in this scope.
 
 This type is referenced here:
@@ -68,6 +79,17 @@ This type is referenced here:
 ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
 ```
                                                      ^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**type_app_complex_nested.md:4:18:4:24:**
+```roc
+processComplex : Result(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
+```
+                 ^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -124,6 +146,17 @@ This type is referenced here:
 deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
 ```
              ^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**type_app_complex_nested.md:12:20:12:26:**
+```roc
+deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
+```
+                   ^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -300,24 +333,19 @@ main! = |_| processComplex(Ok([Some(42), None]))
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-nominal @7.9-7.22
-										(p-applied-tag @7.9-7.22))))
+									(p-applied-tag @7.9-7.22)))
 							(value
 								(e-empty_list @7.26-7.28)))
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-nominal @8.9-8.15
-										(p-applied-tag @8.9-8.15))))
+									(p-applied-tag @8.9-8.15)))
 							(value
 								(e-empty_list @8.19-8.21)))))))
 		(annotation @5.1-5.15
 			(declared-type
 				(ty-fn @4.18-4.73 (effectful false)
-					(ty-apply @4.18-4.62 (name "Result") (local)
-						(ty-apply @4.18-4.62 (name "List") (builtin)
-							(ty-malformed @4.30-4.35))
-						(ty-malformed @4.18-4.62))
+					(ty-malformed @4.18-4.24)
 					(ty-apply @4.66-4.73 (name "List") (builtin)
 						(ty-rigid-var-lookup (ty-rigid-var @4.36-4.37 (name "a"))))))))
 	(d-let
@@ -343,30 +371,26 @@ main! = |_| processComplex(Ok([Some(42), None]))
 				(e-call @20.13-20.49
 					(e-lookup-local @20.13-20.27
 						(p-assign @5.1-5.15 (ident "processComplex")))
-					(e-nominal @20.28-20.48 (nominal "Result")
-						(e-tag @20.28-20.48 (name "Ok")
-							(args
-								(e-list @20.31-20.47
-									(elems
-										(e-tag @20.32-20.40 (name "Some")
-											(args
-												(e-num @20.37-20.39 (value "42"))))
-										(e-tag @20.42-20.46 (name "None")))))))))))
+					(e-tag @20.28-20.48 (name "Ok")
+						(args
+							(e-list @20.31-20.47
+								(elems
+									(e-tag @20.32-20.40 (name "Some")
+										(args
+											(e-num @20.37-20.39 (value "42"))))
+									(e-tag @20.42-20.46 (name "None"))))))))))
 	(s-alias-decl @18.1-18.64
 		(ty-header @18.1-18.18 (name "ComplexType")
 			(ty-args
 				(ty-rigid-var @18.13-18.14 (name "a"))
 				(ty-rigid-var @18.16-18.17 (name "b"))))
-		(ty-apply @18.21-18.64 (name "Result") (local)
-			(ty-apply @18.21-18.64 (name "List") (builtin)
-				(ty-malformed @18.33-18.38))
-			(ty-malformed @18.21-18.64))))
+		(ty-malformed @18.21-18.27)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.15 (type "Result(List(Error), Error) -> List(a)"))
+		(patt @5.1-5.15 (type "Error -> List(a)"))
 		(patt @13.1-13.11 (type "Error -> a"))
 		(patt @20.1-20.6 (type "_arg -> List(a)")))
 	(type_decls
@@ -376,7 +400,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 					(ty-rigid-var @18.13-18.14 (name "a"))
 					(ty-rigid-var @18.16-18.17 (name "b"))))))
 	(expressions
-		(expr @5.18-9.6 (type "Result(List(Error), Error) -> List(a)"))
+		(expr @5.18-9.6 (type "Error -> List(a)"))
 		(expr @13.14-15.2 (type "Error -> a"))
 		(expr @20.9-20.49 (type "_arg -> List(a)"))))
 ~~~

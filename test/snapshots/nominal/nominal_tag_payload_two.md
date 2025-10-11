@@ -19,7 +19,39 @@ is_ok = |result| match result {
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
+
+This type is referenced here:
+**nominal_tag_payload_two.md:6:32:6:36:**
+```roc
+is_ok : MyResult(_ok, _err) -> Bool
+```
+                               ^^^^
+
+
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
+
+This type is referenced here:
+**nominal_tag_payload_two.md:8:23:8:27:**
+```roc
+    MyResult.Ok(_) => Bool.True
+```
+                      ^^^^
+
+
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
+
+This type is referenced here:
+**nominal_tag_payload_two.md:9:24:9:28:**
+```roc
+    MyResult.Err(_) => Bool.False
+```
+                       ^^^^
+
+
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:9),NoSpaceOpenRound(1:9-1:10),LowerIdent(1:10-1:12),Comma(1:12-1:13),LowerIdent(1:14-1:17),CloseRound(1:17-1:18),OpColonEqual(1:19-1:21),OpenSquare(1:22-1:23),UpperIdent(1:23-1:25),NoSpaceOpenRound(1:25-1:26),LowerIdent(1:26-1:28),CloseRound(1:28-1:29),Comma(1:29-1:30),UpperIdent(1:31-1:34),NoSpaceOpenRound(1:34-1:35),LowerIdent(1:35-1:38),CloseRound(1:38-1:39),CloseSquare(1:39-1:40),
@@ -139,23 +171,21 @@ is_ok = |result| match result {
 									(p-nominal @8.5-8.19
 										(p-applied-tag @8.5-8.19))))
 							(value
-								(e-nominal @8.23-8.32 (nominal "Bool")
-									(e-tag @8.23-8.32 (name "True")))))
+								(e-runtime-error (tag "undeclared_type"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-nominal @9.5-9.20
 										(p-applied-tag @9.5-9.20))))
 							(value
-								(e-nominal @9.24-9.34 (nominal "Bool")
-									(e-tag @9.24-9.34 (name "False")))))))))
+								(e-runtime-error (tag "undeclared_type"))))))))
 		(annotation @7.1-7.6
 			(declared-type
 				(ty-fn @6.9-6.36 (effectful false)
 					(ty-apply @6.9-6.28 (name "MyResult") (local)
 						(ty-rigid-var @6.9-6.28 (name "_ok"))
 						(ty-rigid-var @6.9-6.28 (name "_err")))
-					(ty-lookup @6.32-6.36 (name "Bool") (local))))))
+					(ty-malformed @6.32-6.36)))))
 	(s-nominal-decl @1.1-1.40
 		(ty-header @1.1-1.18 (name "MyResult")
 			(ty-args
@@ -172,7 +202,7 @@ is_ok = |result| match result {
 (inferred-types
 	(defs
 		(patt @4.1-4.3 (type "ok -> MyResult(ok, err)"))
-		(patt @7.1-7.6 (type "MyResult(_ok, _err) -> Bool")))
+		(patt @7.1-7.6 (type "MyResult(_ok, _err) -> Error")))
 	(type_decls
 		(nominal @1.1-1.40 (type "MyResult(ok, err)")
 			(ty-header @1.1-1.18 (name "MyResult")
@@ -181,5 +211,5 @@ is_ok = |result| match result {
 					(ty-rigid-var @1.14-1.17 (name "err"))))))
 	(expressions
 		(expr @4.6-4.24 (type "ok -> MyResult(ok, err)"))
-		(expr @7.9-10.2 (type "MyResult(_ok, _err) -> Bool"))))
+		(expr @7.9-10.2 (type "MyResult(_ok, _err) -> Error"))))
 ~~~

@@ -30,6 +30,25 @@ pub const RenderCtx = struct {
 pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.Var) ![]u8 {
     const gpa = ctx.allocator;
     var resolved = ctx.runtime_types.resolveVar(rt_var);
+
+    // Check if this is Bool before unwrapping (special case for bool display)
+    if (resolved.desc.content == .structure) {
+        if (resolved.desc.content.structure == .nominal_type) {
+            const nominal = resolved.desc.content.structure.nominal_type;
+            const type_name = ctx.env.getIdent(nominal.ident.ident_idx);
+            if (std.mem.eql(u8, type_name, "Bool")) {
+                // Bool is represented as a scalar bool (0 or 1) - render as True/False
+                if (value.layout.tag == .scalar and value.layout.data.scalar.tag == .bool) {
+                    const b: *const u8 = @ptrCast(@alignCast(value.ptr.?));
+                    return if (b.* != 0)
+                        try gpa.dupe(u8, "True")
+                    else
+                        try gpa.dupe(u8, "False");
+                }
+            }
+        }
+    }
+
     // unwrap aliases/nominals
     unwrap: while (true) {
         switch (resolved.desc.content) {

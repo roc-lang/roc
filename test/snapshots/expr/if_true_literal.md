@@ -32,8 +32,7 @@ NO CHANGE
 (e-if @1.1-1.17
 	(if-branches
 		(if-branch
-			(e-nominal @1.4-1.8 (nominal "Bool")
-				(e-tag @1.4-1.8 (name "True")))
+			(e-tag @1.4-1.8 (name "True"))
 			(e-num @1.9-1.10 (value "1"))))
 	(if-else
 		(e-num @1.16-1.17 (value "2"))))
