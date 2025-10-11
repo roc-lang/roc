@@ -20,6 +20,7 @@ pub fn build(b: *std.Build) void {
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
     const playground_step = b.step("playground", "Build the WASM playground");
     const playground_test_step = b.step("test-playground", "Build the integration test suite for the WASM playground");
+    const serialization_size_step = b.step("test-serialization-sizes", "Verify that Serialized types have identical sizes on 32-bit and 64-bit platforms");
 
     // general configuration
     const target = blk: {
@@ -336,6 +337,47 @@ pub fn build(b: *std.Build) void {
 
         break :blk install;
     };
+
+    // Add serialization size check
+    // This verifies that Serialized types have the same size on 32-bit and 64-bit platforms
+    {
+        // Build for native (64-bit)
+        const size_check_native = b.addExecutable(.{
+            .name = "serialization_size_check_native",
+            .root_source_file = b.path("test/serialization_size_check.zig"),
+            .target = target,
+            .optimize = .Debug,
+        });
+        roc_modules.addAll(size_check_native);
+
+        // Build for wasm32 (32-bit)
+        const size_check_wasm32 = b.addExecutable(.{
+            .name = "serialization_size_check_wasm32",
+            .root_source_file = b.path("test/serialization_size_check.zig"),
+            .target = b.resolveTargetQuery(.{
+                .cpu_arch = .wasm32,
+                .os_tag = .freestanding,
+            }),
+            .optimize = .Debug,
+        });
+        size_check_wasm32.entry = .disabled;
+        size_check_wasm32.rdynamic = true;
+        roc_modules.addAll(size_check_wasm32);
+
+        // Install both executables
+        const install_native = b.addInstallArtifact(size_check_native, .{});
+        const install_wasm32 = b.addInstallArtifact(size_check_wasm32, .{});
+
+        // Run the native version
+        const run_native = b.addRunArtifact(size_check_native);
+        run_native.step.dependOn(&install_native.step);
+
+        // Create the test step that runs the native executable
+        // (The wasm32 version requires a wasm runtime, so we just verify it compiles)
+        serialization_size_step.dependOn(&install_native.step);
+        serialization_size_step.dependOn(&install_wasm32.step);
+        serialization_size_step.dependOn(&run_native.step);
+    }
 
     // Create and add module tests
     const module_tests = roc_modules.createModuleTests(b, target, optimize, zstd, test_filters);
