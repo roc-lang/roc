@@ -543,6 +543,10 @@ fn add_fuzz_target(
         // Work around instrumentation bugs on mac without giving up perf on linux.
         .optimize = if (target.result.os.tag == .macos) .Debug else .ReleaseSafe,
     });
+    // Required for fuzzing.
+    fuzz_obj.root_module.link_libc = true;
+    fuzz_obj.root_module.stack_check = false;
+
     roc_modules.addAll(fuzz_obj);
     add_tracy(b, roc_modules.build_options, fuzz_obj, target, false, tracy);
 
@@ -565,7 +569,7 @@ fn add_fuzz_target(
         b.default_step.dependOn(fuzz_step);
 
         const afl = b.lazyImport(@This(), "afl_kit") orelse return;
-        const fuzz_exe = afl.addInstrumentedExe(b, target, .ReleaseSafe, &.{}, use_system_afl, fuzz_obj) orelse return;
+        const fuzz_exe = afl.addInstrumentedExe(b, target, .ReleaseSafe, &.{}, use_system_afl, fuzz_obj, &.{"-lm"}) orelse return;
         const install_fuzz = b.addInstallBinFile(fuzz_exe, name_exe);
         fuzz_step.dependOn(&install_fuzz.step);
         b.getInstallStep().dependOn(&install_fuzz.step);
