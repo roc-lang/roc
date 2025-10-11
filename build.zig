@@ -294,6 +294,8 @@ pub fn build(b: *std.Build) void {
     });
     playground_exe.entry = .disabled;
     playground_exe.rdynamic = true;
+    playground_exe.link_function_sections = true;
+    playground_exe.import_memory = false;
     roc_modules.addAll(playground_exe);
     playground_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
     playground_exe.step.dependOn(&write_compiled_builtins.step);
