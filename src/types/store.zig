@@ -727,8 +727,8 @@ pub const Store = struct {
     // serialization //
 
     /// Serialized representation of types store
+    /// Following SafeList.Serialized pattern: NO pointers, NO slices, NO Allocators
     pub const Serialized = struct {
-        gpa: Allocator,
         slots: SlotStore.Serialized,
         descs: DescStore.Serialized,
         vars: VarSafeList.Serialized,
@@ -750,13 +750,10 @@ pub const Store = struct {
             try self.record_fields.serialize(&store.record_fields, allocator, writer);
             try self.tags.serialize(&store.tags, allocator, writer);
             try self.static_dispatch_constraints.serialize(&store.static_dispatch_constraints, allocator, writer);
-
-            // Store the allocator
-            self.gpa = allocator;
         }
 
         /// Deserialize this Serialized struct into a Store
-        pub fn deserialize(self: *Serialized, offset: i64) *Store {
+        pub fn deserialize(self: *Serialized, offset: i64, gpa: Allocator) *Store {
             // types.Store.Serialized should be at least as big as types.Store
             std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Store));
 
@@ -764,7 +761,7 @@ pub const Store = struct {
             const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
 
             store.* = Store{
-                .gpa = self.gpa,
+                .gpa = gpa,
                 .slots = self.slots.deserialize(offset).*,
                 .descs = self.descs.deserialize(offset).*,
                 .vars = self.vars.deserialize(offset).*,

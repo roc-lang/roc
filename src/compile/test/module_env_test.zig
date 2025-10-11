@@ -81,10 +81,16 @@ test "ModuleEnv.Serialized roundtrip" {
 
     // Now manually construct the ModuleEnv using the deserialized CommonEnv
     const env = @as(*ModuleEnv, @ptrCast(@alignCast(deserialized_ptr)));
+
+    // Deserialize store separately (returns a pointer that must be freed after copying)
+    const deserialized_store_ptr = try deserialized_ptr.store.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), deser_alloc);
+    const deserialized_store = deserialized_store_ptr.*;
+    deser_alloc.destroy(deserialized_store_ptr);
+
     env.* = ModuleEnv{
         .gpa = gpa,
         .common = deserialized_ptr.common.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), source).*,
-        .types = deserialized_ptr.types.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
+        .types = deserialized_ptr.types.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), deser_alloc).*, // Pass gpa to types deserialize
         .module_kind = deserialized_ptr.module_kind,
         .all_defs = deserialized_ptr.all_defs,
         .all_statements = deserialized_ptr.all_statements,
@@ -94,7 +100,7 @@ test "ModuleEnv.Serialized roundtrip" {
         .imports = deserialized_ptr.imports.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), deser_alloc).*,
         .module_name = "TestModule",
         .diagnostics = deserialized_ptr.diagnostics,
-        .store = deserialized_ptr.store.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), deser_alloc).*,
+        .store = deserialized_store,
     };
 
     // Verify the data was preserved

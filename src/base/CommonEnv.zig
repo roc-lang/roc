@@ -91,12 +91,12 @@ pub fn freezeInterners(self: *CommonEnv) void {
 }
 
 /// Serialized representation of ModuleEnv
+/// Following SafeList.Serialized pattern: NO pointers, NO slices
 pub const Serialized = struct {
     idents: Ident.Store.Serialized,
     strings: StringLiteral.Store.Serialized,
     exposed_items: ExposedItems.Serialized,
     line_starts: SafeList(u32).Serialized,
-    source: []const u8, // Serialized as zeros, provided during deserialization
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -105,8 +105,6 @@ pub const Serialized = struct {
         allocator: std.mem.Allocator,
         writer: *CompactWriter,
     ) !void {
-        self.source = ""; // Empty slice
-
         // Serialize each component using its Serialized struct
         try self.idents.serialize(&env.idents, allocator, writer);
         try self.strings.serialize(&env.strings, allocator, writer);

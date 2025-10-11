@@ -600,8 +600,7 @@ pub const Import = struct {
         }
 
         pub const Serialized = struct {
-            // Placeholder to match Store size - not serialized
-            map: std.AutoHashMapUnmanaged(base.StringLiteral.Idx, Import.Idx) = .{},
+            // NO HashMap! Following SafeList.Serialized pattern: NO pointers, NO slices
             imports: collections.SafeList(base.StringLiteral.Idx).Serialized,
 
             /// Serialize a Store into this Serialized struct, appending data to the writer

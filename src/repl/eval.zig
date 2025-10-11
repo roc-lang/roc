@@ -63,10 +63,16 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
 
     // Deserialize
     const base_ptr = @intFromPtr(buffer.ptr);
+
+    // Deserialize store separately (returns a pointer that must be freed after copying)
+    const deserialized_store_ptr = try serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa);
+    const deserialized_store = deserialized_store_ptr.*;
+    gpa.destroy(deserialized_store_ptr);
+
     env.* = ModuleEnv{
         .gpa = gpa,
         .common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), source).*,
-        .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr))).*,
+        .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*, // Pass gpa to types deserialize
         .module_kind = serialized_ptr.module_kind,
         .all_defs = serialized_ptr.all_defs,
         .all_statements = serialized_ptr.all_statements,
@@ -76,7 +82,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .imports = serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
         .module_name = module_name,
         .diagnostics = serialized_ptr.diagnostics,
-        .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+        .store = deserialized_store,
     };
 
     return LoadedModule{
@@ -464,13 +470,15 @@ pub const Repl = struct {
         // The indices in builtin_indices refer to positions within Bool.bin/Result.bin
         // When we inject them here, they get NEW indices in the current module
 
-        // Get the Bool type declaration from the loaded module using the build-time index
+        // Get the Bool type declaration from the loaded module
+        // Use .err content to match the old builtin injection system behavior
         const bool_stmt = self.bool_module.env.store.getStatement(self.builtin_indices.bool_type);
-        const actual_bool_idx = try cir.store.addStatement(bool_stmt, base.Region.zero());
+        const actual_bool_idx = try cir.addStatementAndTypeVar(bool_stmt, .err, base.Region.zero());
 
-        // Get the Result type declaration from the loaded module using the build-time index
+        // Get the Result type declaration from the loaded module
+        // Use .err content to match the old builtin injection system behavior
         const result_stmt = self.result_module.env.store.getStatement(self.builtin_indices.result_type);
-        const actual_result_idx = try cir.store.addStatement(result_stmt, base.Region.zero());
+        const actual_result_idx = try cir.addStatementAndTypeVar(result_stmt, .err, base.Region.zero());
 
         // Update builtin_statements span to include injected Bool and Result
         // Use the ACTUAL indices where they landed (not hardcoded!)

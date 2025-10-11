@@ -1403,8 +1403,8 @@ pub fn relocate(self: *Self, offset: isize) void {
 }
 
 /// Serialized representation of ModuleEnv
+/// Following SafeList.Serialized pattern: NO pointers, NO slices, NO Allocators
 pub const Serialized = struct {
-    gpa: std.mem.Allocator, // Serialized as zeros, provided during deserialization
     common: CommonEnv.Serialized,
     types: TypeStore.Serialized,
     module_kind: ModuleKind,  // Must match field order in Self
@@ -1414,7 +1414,6 @@ pub const Serialized = struct {
     builtin_statements: CIR.Statement.Span,
     external_decls: CIR.ExternalDecl.SafeList.Serialized,
     imports: CIR.Import.Store.Serialized,
-    module_name: []const u8, // Serialized as zeros, provided during deserialization
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
 
@@ -1425,9 +1424,6 @@ pub const Serialized = struct {
         allocator: std.mem.Allocator,
         writer: *CompactWriter,
     ) !void {
-        // Set fields that will be provided during deserialization to zeros
-        self.gpa = undefined; // Will be set to zeros below
-
         try self.common.serialize(&env.common, allocator, writer);
         try self.types.serialize(&env.types, allocator, writer);
 
@@ -1445,10 +1441,6 @@ pub const Serialized = struct {
 
         // Serialize NodeStore
         try self.store.serialize(&env.store, allocator, writer);
-
-        // Set gpa to all zeros; the space needs to be here,
-        // but the value will be set separately during deserialization.
-        @memset(@as([*]u8, @ptrCast(&self.gpa))[0..@sizeOf(@TypeOf(self.gpa))], 0);
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
@@ -1465,10 +1457,15 @@ pub const Serialized = struct {
         // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
         const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
 
+        // Deserialize store separately (returns a pointer that must be freed after copying)
+        const deserialized_store_ptr = try self.store.deserialize(offset, gpa);
+        const deserialized_store = deserialized_store_ptr.*;
+        gpa.destroy(deserialized_store_ptr);
+
         env.* = Self{
             .gpa = gpa,
             .common = self.common.deserialize(offset, source).*,
-            .types = self.types.deserialize(offset).*,
+            .types = self.types.deserialize(offset, gpa).*,
             .module_kind = self.module_kind,
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
@@ -1478,7 +1475,7 @@ pub const Serialized = struct {
             .imports = self.imports.deserialize(offset, gpa).*,
             .module_name = module_name,
             .diagnostics = self.diagnostics,
-            .store = self.store.deserialize(offset, gpa).*,
+            .store = deserialized_store,
         };
 
         return env;

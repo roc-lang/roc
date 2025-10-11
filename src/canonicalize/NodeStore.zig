@@ -3274,30 +3274,12 @@ pub fn relocate(self: *NodeStore, offset: isize) void {
 }
 
 /// Serialized representation of NodeStore
+/// Following SafeList.Serialized pattern: NO pointers, NO slices, NO ArrayLists, NO HashMaps, NO Allocators
 pub const Serialized = struct {
     nodes: Node.List.Serialized,
     regions: Region.List.Serialized,
     extra_data: collections.SafeList(u32).Serialized,
-    // Scratch arrays - not serialized, just placeholders to match NodeStore size
-    // TODO move these out of NodeStore so that we don't need to serialize and
-    // deserialize a bunch of zeros for these; it's a waste of space.
-    scratch_statements: std.ArrayListUnmanaged(CIR.Statement.Idx) = .{},
-    scratch_exprs: std.ArrayListUnmanaged(CIR.Expr.Idx) = .{},
-    scratch_record_fields: std.ArrayListUnmanaged(CIR.RecordField.Idx) = .{},
-    scratch_match_branches: std.ArrayListUnmanaged(CIR.Expr.Match.Branch.Idx) = .{},
-    scratch_match_branch_patterns: std.ArrayListUnmanaged(CIR.Expr.Match.BranchPattern.Idx) = .{},
-    scratch_if_branches: std.ArrayListUnmanaged(CIR.Expr.IfBranch.Idx) = .{},
-    scratch_where_clauses: std.ArrayListUnmanaged(CIR.WhereClause.Idx) = .{},
-    scratch_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .{},
-    scratch_pattern_record_fields: std.ArrayListUnmanaged(CIR.PatternRecordField.Idx) = .{},
-    scratch_record_destructs: std.ArrayListUnmanaged(CIR.Pattern.RecordDestruct.Idx) = .{},
-    scratch_type_annos: std.ArrayListUnmanaged(CIR.TypeAnno.Idx) = .{},
-    scratch_anno_record_fields: std.ArrayListUnmanaged(CIR.TypeAnno.RecordField.Idx) = .{},
-    scratch_exposed_items: std.ArrayListUnmanaged(CIR.ExposedItem.Idx) = .{},
-    scratch_defs: std.ArrayListUnmanaged(CIR.Def.Idx) = .{},
-    scratch_diagnostics: std.ArrayListUnmanaged(CIR.Diagnostic.Idx) = .{},
-    scratch_captures: std.ArrayListUnmanaged(CIR.Expr.Capture.Idx) = .{},
-    gpa: std.mem.Allocator = undefined,
+    // NO scratch arrays or gpa - those contain pointers and vary in size across platforms
 
     /// Serialize a NodeStore into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -3315,18 +3297,32 @@ pub const Serialized = struct {
     }
 
     /// Deserialize this Serialized struct into a NodeStore
-    pub fn deserialize(self: *Serialized, offset: i64, gpa: std.mem.Allocator) *NodeStore {
-        // NodeStore.Serialized should be at least as big as NodeStore
-        std.debug.assert(@sizeOf(Serialized) >= @sizeOf(NodeStore));
+    ///
+    /// IMPORTANT: On 32-bit platforms (like WASM32), NodeStore (~170 bytes) is larger than
+    /// NodeStore.Serialized (72 bytes) because of scratch arrays and allocator fields.
+    /// We CANNOT overwrite the Serialized struct in-place, as this would corrupt adjacent
+    /// memory (the serialized array data that follows ModuleEnv.Serialized in the buffer).
+    ///
+    /// Instead, we must allocate a separate NodeStore and return a pointer to it.
+    pub fn deserialize(self: *Serialized, offset: i64, gpa: std.mem.Allocator) !*NodeStore {
+        // Allocate a new NodeStore (cannot reuse Serialized location due to size mismatch on 32-bit)
+        const store = try gpa.create(NodeStore);
+        errdefer gpa.destroy(store);
 
-        // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
-        const store = @as(*NodeStore, @ptrFromInt(@intFromPtr(self)));
+        // CRITICAL: On 32-bit platforms, deserializing nodes in-place corrupts the adjacent
+        // regions and extra_data fields. We must deserialize in REVERSE order (last to first)
+        // so that each deserialization doesn't corrupt fields that haven't been deserialized yet.
+
+        // Deserialize in reverse order: extra_data, regions, then nodes
+        const deserialized_extra_data = self.extra_data.deserialize(offset).*;
+        const deserialized_regions = self.regions.deserialize(offset).*;
+        const deserialized_nodes = self.nodes.deserialize(offset).*;
 
         store.* = NodeStore{
             .gpa = gpa,
-            .nodes = self.nodes.deserialize(offset).*,
-            .regions = self.regions.deserialize(offset).*,
-            .extra_data = self.extra_data.deserialize(offset).*,
+            .nodes = deserialized_nodes,
+            .regions = deserialized_regions,
+            .extra_data = deserialized_extra_data,
             // Initialize scratch arrays as proper Scratch instances
             .scratch_statements = base.Scratch(CIR.Statement.Idx){ .items = .{} },
             .scratch_exprs = base.Scratch(CIR.Expr.Idx){ .items = .{} },

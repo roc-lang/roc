@@ -806,34 +806,44 @@ fn compileSource(source: []const u8) !CompilerStageData {
     // Set up the source in WASM filesystem
     WasmFilesystem.setSource(allocator, source);
 
+    logDebug("compileSource: Starting compilation (source len={})\n", .{source.len});
+
     // Initialize the ModuleEnv
     var module_env = try allocator.create(ModuleEnv);
     module_env.* = try ModuleEnv.init(allocator, source);
     try module_env.common.calcLineStarts(module_env.gpa);
+    logDebug("compileSource: ModuleEnv initialized\n", .{});
 
     var result = CompilerStageData.init(allocator, module_env);
 
     // Stage 1: Parse (includes tokenization)
+    logDebug("compileSource: Starting parse stage\n", .{});
     var parse_ast = try parse.parse(&module_env.common, module_env.gpa);
     result.parse_ast = parse_ast;
+    logDebug("compileSource: Parse complete\n", .{});
 
     // Generate and store HTML before canonicalization corrupts the AST/tokens
+    logDebug("compileSource: Starting HTML generation\n", .{});
     var local_arena = std.heap.ArenaAllocator.init(allocator);
     defer local_arena.deinit();
     const temp_alloc = local_arena.allocator();
 
     // Generate Tokens HTML
+    logDebug("compileSource: Generating tokens HTML\n", .{});
     var tokens_html_buffer = std.ArrayList(u8).init(temp_alloc);
     const tokens_writer = tokens_html_buffer.writer().any();
     AST.tokensToHtml(&parse_ast, &module_env.common, tokens_writer) catch |err| {
         logDebug("compileSource: tokensToHtml failed: {}\n", .{err});
     };
+    logDebug("compileSource: Tokens HTML generated, duping to main allocator\n", .{});
     result.tokens_html = allocator.dupe(u8, tokens_html_buffer.items) catch |err| {
         logDebug("compileSource: failed to dupe tokens_html: {}\n", .{err});
         return err;
     };
+    logDebug("compileSource: Tokens HTML complete\n", .{});
 
     // Generate AST HTML
+    logDebug("compileSource: Generating AST HTML\n", .{});
     var ast_html_buffer = std.ArrayList(u8).init(temp_alloc);
     const ast_writer = ast_html_buffer.writer().any();
     {
@@ -842,27 +852,34 @@ fn compileSource(source: []const u8) !CompilerStageData {
         var tree = SExprTree.init(temp_alloc);
         defer tree.deinit();
 
+        logDebug("compileSource: Call pushToSExprTree\n", .{});
         try file.pushToSExprTree(module_env.gpa, &module_env.common, &parse_ast, &tree);
 
+        logDebug("compileSource: Call toHtml\n", .{});
         try tree.toHtml(ast_writer);
     }
+    logDebug("compileSource: AST HTML generated\n", .{});
 
     result.ast_html = allocator.dupe(u8, ast_html_buffer.items) catch |err| {
         logDebug("compileSource: failed to dupe ast_html: {}\n", .{err});
         return err;
     };
+    logDebug("compileSource: AST HTML complete\n", .{});
 
     // Generate formatted code
+    logDebug("compileSource: Generating formatted code\n", .{});
     var formatted_code_buffer = std.ArrayList(u8).init(temp_alloc);
     fmt.formatAst(parse_ast, formatted_code_buffer.writer().any()) catch |err| {
         logDebug("compileSource: formatAst failed: {}\n", .{err});
         return err;
     };
+    logDebug("compileSource: Formatted code generated\n", .{});
 
     result.formatted_code = allocator.dupe(u8, formatted_code_buffer.items) catch |err| {
         logDebug("compileSource: failed to dupe formatted_code: {}\n", .{err});
         return err;
     };
+    logDebug("compileSource: Formatted code complete\n", .{});
 
     // Collect tokenize diagnostics with additional error handling
     for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
@@ -907,31 +924,67 @@ fn compileSource(source: []const u8) !CompilerStageData {
             const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
             @memcpy(buffer, bin_data);
 
+            logDebug("loadCompiledModule: bin_data.len={}, @sizeOf(ModuleEnv.Serialized)={}\n", .{ bin_data.len, @sizeOf(ModuleEnv.Serialized) });
+
             const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
+
+            // Log the raw all_statements value to see what we're reading
+            logDebug("loadCompiledModule: raw all_statements.span.start={}, .len={}\n", .{
+                serialized_ptr.all_statements.span.start,
+                serialized_ptr.all_statements.span.len,
+            });
+
             const module_env_ptr = try gpa.create(ModuleEnv);
             errdefer gpa.destroy(module_env_ptr);
 
             const base_ptr = @intFromPtr(buffer.ptr);
+
+            logDebug("loadCompiledModule: About to deserialize common\n", .{});
+            const deserialized_common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), module_source).*;
+            logDebug("loadCompiledModule: common deserialized successfully\n", .{});
+
+            logDebug("loadCompiledModule: About to deserialize types\n", .{});
+            const deserialized_types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*;
+            logDebug("loadCompiledModule: types deserialized successfully\n", .{});
+
+            logDebug("loadCompiledModule: About to deserialize external_decls\n", .{});
+            const deserialized_external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*;
+            logDebug("loadCompiledModule: external_decls deserialized successfully\n", .{});
+
+            logDebug("loadCompiledModule: About to deserialize imports\n", .{});
+            const deserialized_imports = serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa).*;
+            logDebug("loadCompiledModule: imports deserialized successfully\n", .{});
+
+            logDebug("loadCompiledModule: About to deserialize store\n", .{});
+            const deserialized_store_ptr = try serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa);
+            const deserialized_store = deserialized_store_ptr.*;
+            gpa.destroy(deserialized_store_ptr); // Free the pointer after copying the value
+            logDebug("loadCompiledModule: store deserialized successfully\n", .{});
+
+            logDebug("loadCompiledModule: All deserialized, constructing ModuleEnv\n", .{});
             module_env_ptr.* = ModuleEnv{
                 .gpa = gpa,
-                .common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), module_source).*,
-                .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr))).*,
+                .common = deserialized_common,
+                .types = deserialized_types,
                 .module_kind = serialized_ptr.module_kind,
                 .all_defs = serialized_ptr.all_defs,
                 .all_statements = serialized_ptr.all_statements,
                 .exports = serialized_ptr.exports,
                 .builtin_statements = serialized_ptr.builtin_statements,
-                .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
-                .imports = serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+                .external_decls = deserialized_external_decls,
+                .imports = deserialized_imports,
                 .module_name = module_name_param,
                 .diagnostics = serialized_ptr.diagnostics,
-                .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+                .store = deserialized_store,
             };
+            logDebug("loadCompiledModule: ModuleEnv constructed successfully\n", .{});
 
+            logDebug("loadCompiledModule: Returning LoadedModule\n", .{});
             return .{ .env = module_env_ptr, .buffer = buffer, .gpa = gpa };
         }
     };
 
+    logDebug("compileSource: Loading builtin indices\n", .{});
     const builtin_indices = blk: {
         const aligned_buffer = try allocator.alignedAlloc(u8, @alignOf(can.CIR.BuiltinIndices), compiled_builtins.builtin_indices_bin.len);
         defer allocator.free(aligned_buffer);
@@ -939,21 +992,74 @@ fn compileSource(source: []const u8) !CompilerStageData {
         const indices_ptr = @as(*const can.CIR.BuiltinIndices, @ptrCast(aligned_buffer.ptr));
         break :blk indices_ptr.*;
     };
+    logDebug("compileSource: Builtin indices loaded, bool_type={}\n", .{@intFromEnum(builtin_indices.bool_type)});
 
+    logDebug("compileSource: Loading Bool module\n", .{});
     const bool_source = "Bool := [True, False].{}\n";
     var bool_module = try LoadedModule.loadCompiledModule(allocator, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
+    logDebug("compileSource: Bool module loaded\n", .{});
 
+    logDebug("compileSource: Loading Result module\n", .{});
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try LoadedModule.loadCompiledModule(allocator, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    logDebug("compileSource: Result module loaded\n", .{});
 
     // Inject Bool and Result type declarations into the current module
-    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
-    const actual_bool_idx = try env.store.addStatement(bool_stmt, base.Region.zero());
+    // Use .err content to match the old builtin injection system behavior
+    logDebug("compileSource: Loading builtin modules\n", .{});
 
-    const result_stmt = result_module.env.store.getStatement(builtin_indices.result_type);
-    const actual_result_idx = try env.store.addStatement(result_stmt, base.Region.zero());
+    logDebug("compileSource: About to slice Bool statements\n", .{});
+    logDebug("compileSource: Bool extra_data.items.items.len={}, all_statements.span={{start={}, len={}}}\n", .{
+        bool_module.env.store.extra_data.items.items.len,
+        bool_module.env.all_statements.span.start,
+        bool_module.env.all_statements.span.len,
+    });
+    const bool_stmts = bool_module.env.store.sliceStatements(bool_module.env.all_statements);
+    logDebug("compileSource: Sliced Bool statements successfully, count={}\n", .{bool_stmts.len});
+
+    logDebug("compileSource: Bool all_statements span: start={}, len={}\n", .{
+        bool_module.env.all_statements.span.start,
+        bool_module.env.all_statements.span.len,
+    });
+
+    // Get Bool statement from the sliced statements (bool_stmts[0] is the Bool type declaration)
+    logDebug("compileSource: About to get Bool statement from sliced statements\n", .{});
+    logDebug("compileSource: bool_stmts[0] = {}, nodes.len() = {}\n", .{
+        @intFromEnum(bool_stmts[0]),
+        bool_module.env.store.nodes.len(),
+    });
+
+    // Check if we can safely access node at index 1
+    const node_idx_to_access = @intFromEnum(bool_stmts[0]);
+    logDebug("compileSource: Attempting to access node at index {}\n", .{node_idx_to_access});
+
+    if (node_idx_to_access >= bool_module.env.store.nodes.len()) {
+        logDebug("compileSource: ERROR - node index {} is out of bounds (nodes.len={})\n", .{
+            node_idx_to_access,
+            bool_module.env.store.nodes.len(),
+        });
+        return error.NodeIndexOutOfBounds;
+    }
+
+    const bool_stmt = bool_module.env.store.getStatement(bool_stmts[0]);
+    logDebug("compileSource: Got Bool statement successfully\n", .{});
+
+    logDebug("compileSource: About to add Bool statement and type var to main env\n", .{});
+    const actual_bool_idx = try env.addStatementAndTypeVar(bool_stmt, .err, base.Region.zero());
+    logDebug("compileSource: Bool statement added successfully, idx={}\n", .{@intFromEnum(actual_bool_idx)});
+
+    // Get Result statements
+    const result_stmts = result_module.env.store.sliceStatements(result_module.env.all_statements);
+    logDebug("compileSource: About to get Result statement from sliced statements\n", .{});
+    const result_stmt = result_module.env.store.getStatement(result_stmts[0]);
+    logDebug("compileSource: Got Result statement successfully\n", .{});
+
+    logDebug("compileSource: About to add Result statement and type var to main env\n", .{});
+    const actual_result_idx = try env.addStatementAndTypeVar(result_stmt, .err, base.Region.zero());
+    logDebug("compileSource: Result statement added successfully, idx={}\n", .{@intFromEnum(actual_result_idx)});
+    logDebug("compileSource: Builtin injection complete\n", .{});
 
     // Store bool_stmt in result for later use (e.g., in test runner)
     result.bool_stmt = actual_bool_idx;
@@ -974,6 +1080,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
         .result_stmt = actual_result_idx,
     };
 
+    logDebug("compileSource: Starting canonicalization\n", .{});
     var czer = try Can.init(env, &result.parse_ast.?, null);
     defer czer.deinit();
 
@@ -992,6 +1099,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
             return err;
         }
     };
+    logDebug("compileSource: Canonicalization complete\n", .{});
 
     // Copy the modified AST back into the main result to ensure state consistency
     result.parse_ast = parse_ast;
@@ -1011,6 +1119,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     // Stage 3: Type checking (always run if we have CIR, even with canonicalization errors)
     // The type checker works with malformed canonical nodes to provide partial type information
+    logDebug("compileSource: Starting type checking\n", .{});
     {
         const type_can_ir = result.module_env;
         const empty_modules: []const *ModuleEnv = &.{};
@@ -1028,6 +1137,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
                 return check_err;
             }
         };
+        logDebug("compileSource: Type checking complete\n", .{});
 
         // Collect type checking problems and convert them to reports using ReportBuilder
         var report_builder = problem.ReportBuilder.init(
@@ -1053,6 +1163,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
         }
     }
 
+    logDebug("compileSource: Compilation complete\n", .{});
     return result;
 }
 
