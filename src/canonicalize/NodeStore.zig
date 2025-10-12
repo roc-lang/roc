@@ -3224,55 +3224,6 @@ pub fn matchBranchPatternSpanFrom(store: *NodeStore, start: u32) std.mem.Allocat
     return try store.spanFrom("scratch_match_branch_patterns", CIR.Expr.Match.BranchPattern.Span, start);
 }
 
-/// Serialize this NodeStore to the given CompactWriter. The resulting NodeStore
-/// in the writer's buffer will have offsets instead of pointers. Calling any
-/// methods on it or dereferencing its internal "pointers" (which are now
-/// offsets) is illegal behavior!
-pub fn serialize(
-    self: *const NodeStore,
-    allocator: std.mem.Allocator,
-    writer: *CompactWriter,
-) std.mem.Allocator.Error!*const NodeStore {
-    // First, write the NodeStore struct itself
-    const offset_self = try writer.appendAlloc(allocator, NodeStore);
-
-    // Then serialize the sub-structures and update the struct
-    offset_self.* = .{
-        .gpa = undefined, // Will be set when deserializing
-        .nodes = (try self.nodes.serialize(allocator, writer)).*,
-        .regions = (try self.regions.serialize(allocator, writer)).*,
-        .extra_data = (try self.extra_data.serialize(allocator, writer)).*,
-        // All scratch arrays are serialized as empty
-        // TODO: maybe we can put these all at the end of ModuleEnv and not bother serializing them, and just re-init on deserialization?
-        .scratch_statements = .{ .items = .{} },
-        .scratch_exprs = .{ .items = .{} },
-        .scratch_captures = .{ .items = .{} },
-        .scratch_record_fields = .{ .items = .{} },
-        .scratch_match_branches = .{ .items = .{} },
-        .scratch_match_branch_patterns = .{ .items = .{} },
-        .scratch_if_branches = .{ .items = .{} },
-        .scratch_where_clauses = .{ .items = .{} },
-        .scratch_patterns = .{ .items = .{} },
-        .scratch_pattern_record_fields = .{ .items = .{} },
-        .scratch_record_destructs = .{ .items = .{} },
-        .scratch_type_annos = .{ .items = .{} },
-        .scratch_anno_record_fields = .{ .items = .{} },
-        .scratch_exposed_items = .{ .items = .{} },
-        .scratch_defs = .{ .items = .{} },
-        .scratch_diagnostics = .{ .items = .{} },
-    };
-
-    return @constCast(offset_self);
-}
-
-/// Add the given offset to the memory addresses of all pointers in `self`.
-pub fn relocate(self: *NodeStore, offset: isize) void {
-    self.nodes.relocate(offset);
-    self.regions.relocate(offset);
-    self.extra_data.relocate(offset);
-    // Note: scratch arrays are empty after deserialization, so no need to relocate
-}
-
 /// Serialized representation of NodeStore
 pub const Serialized = struct {
     nodes: Node.List.Serialized,

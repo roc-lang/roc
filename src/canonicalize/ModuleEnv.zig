@@ -1346,62 +1346,6 @@ pub fn getSourceLine(self: *const Self, region: Region) ![]const u8 {
     return self.common.getSourceLine(region);
 }
 
-/// Serialize this ModuleEnv to the given CompactWriter.
-/// IMPORTANT: The returned pointer points to memory inside the writer!
-/// Attempting to dereference this pointer or calling any methods on it
-/// is illegal behavior!
-pub fn serialize(
-    self: *const Self,
-    allocator: std.mem.Allocator,
-    writer: *CompactWriter,
-) std.mem.Allocator.Error!*const Self {
-    // First, write the ModuleEnv struct itself
-    const offset_self = try writer.appendAlloc(allocator, Self);
-
-    // Then serialize the sub-structures and update the struct
-    offset_self.* = .{
-        .gpa = undefined, // Will be set when deserializing
-        .common = (try self.common.serialize(allocator, writer)).*,
-        .types = (try self.types.serialize(allocator, writer)).*,
-        .module_kind = self.module_kind,
-        .all_defs = self.all_defs,
-        .all_statements = self.all_statements,
-        .exports = self.exports,
-        .builtin_statements = self.builtin_statements,
-        .external_decls = (try self.external_decls.serialize(allocator, writer)).*,
-        .imports = (try self.imports.serialize(allocator, writer)).*,
-        .module_name = "", // Will be set when deserializing
-        .diagnostics = self.diagnostics,
-        .store = (try self.store.serialize(allocator, writer)).*,
-    };
-
-    // set gpa to all zeros, so that what we write to the file is deterministic
-    @memset(@as([*]u8, @ptrCast(&offset_self.gpa))[0..@sizeOf(@TypeOf(offset_self.gpa))], 0);
-
-    return @constCast(offset_self);
-}
-
-/// Add the given offset to the memory addresses of all pointers in `self`.
-/// IMPORTANT: The gpa, source, and module_name fields must be manually set before calling this function.
-pub fn relocate(self: *Self, offset: isize) void {
-    // IMPORTANT: gpa, and module_name are not relocated - they should be set manually before calling relocate
-
-    // Relocate all sub-structures
-    self.common.relocate(offset);
-    self.types.relocate(offset);
-
-    // Note: all_defs and all_statements are just spans with numeric values, no pointers to relocate
-
-    self.external_decls.relocate(offset);
-    // self.imports is deserialized separately, so no need to relocate here
-
-    // Note: module_name is not relocated - it should be set manually
-
-    // Note: diagnostics is just a span with numeric values, no pointers to relocate
-
-    self.store.relocate(offset);
-}
-
 /// Serialized representation of ModuleEnv
 pub const Serialized = struct {
     gpa: std.mem.Allocator, // Serialized as zeros, provided during deserialization
