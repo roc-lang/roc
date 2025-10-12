@@ -142,9 +142,8 @@ fn compileModule(
 
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
-    const arena_allocator = arena.allocator();
 
-    module_env.* = try ModuleEnv.init(gpa, arena_allocator, source);
+    module_env.* = try ModuleEnv.init(gpa, source);
     errdefer module_env.deinit();
 
     module_env.common.source = source;

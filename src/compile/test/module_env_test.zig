@@ -16,13 +16,8 @@ test "ModuleEnv.Serialized roundtrip" {
 
     const source = "hello world\ntest line 2\n";
 
-    // Create arena allocator for ModuleEnv initialization
-    var init_arena = std.heap.ArenaAllocator.init(gpa);
-    defer init_arena.deinit();
-    const init_arena_allocator = init_arena.allocator();
-
     // Create original ModuleEnv with some data
-    var original = try ModuleEnv.init(gpa, init_arena_allocator, source);
+    var original = try ModuleEnv.init(gpa, source);
     defer original.deinit();
 
     // Add some test data
@@ -386,13 +381,8 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    // Create arena allocator for ModuleEnv initialization
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
     // Create a simple ModuleEnv
-    var env = try ModuleEnv.init(gpa, arena_allocator, "hello");
+    var env = try ModuleEnv.init(gpa, "hello");
     defer env.deinit();
 
     // First add a string literal

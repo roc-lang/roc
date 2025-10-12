@@ -33,13 +33,8 @@ pub fn init(source: []const u8) !TestEnv {
     const can = try gpa.create(Can);
     errdefer gpa.destroy(can);
 
-    // Create arena allocator for ModuleEnv initialization
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
     // Initialize the ModuleEnv with the CommonEnv
-    module_env.* = try ModuleEnv.init(gpa, arena_allocator, source);
+    module_env.* = try ModuleEnv.init(gpa, source);
     errdefer module_env.deinit();
 
     parse_ast.* = try parse.parseExpr(&module_env.common, gpa);

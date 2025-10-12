@@ -54,11 +54,8 @@ fn rand_region() base.Region {
 
 test "NodeStore round trip - Statements" {
     const gpa = testing.allocator;
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
 
-    var store = try NodeStore.init(gpa, arena_allocator);
+    var store = try NodeStore.init(gpa);
     defer store.deinit();
 
     var statements = std.ArrayList(CIR.Statement).init(gpa);
@@ -179,11 +176,8 @@ test "NodeStore round trip - Statements" {
 
 test "NodeStore round trip - Expressions" {
     const gpa = testing.allocator;
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
 
-    var store = try NodeStore.init(gpa, arena_allocator);
+    var store = try NodeStore.init(gpa);
     defer store.deinit();
 
     var expressions = std.ArrayList(CIR.Expr).init(gpa);
@@ -399,11 +393,8 @@ test "NodeStore round trip - Expressions" {
 
 test "NodeStore round trip - Diagnostics" {
     const gpa = testing.allocator;
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
 
-    var store = try NodeStore.init(gpa, arena_allocator);
+    var store = try NodeStore.init(gpa);
     defer store.deinit();
 
     var diagnostics = std.ArrayList(CIR.Diagnostic).init(gpa);
@@ -814,11 +805,8 @@ test "NodeStore round trip - Diagnostics" {
 
 test "NodeStore round trip - TypeAnno" {
     const gpa = testing.allocator;
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
 
-    var store = try NodeStore.init(gpa, arena_allocator);
+    var store = try NodeStore.init(gpa);
     defer store.deinit();
 
     var type_annos = std.ArrayList(CIR.TypeAnno).init(gpa);
@@ -961,11 +949,8 @@ test "NodeStore round trip - TypeAnno" {
 
 test "NodeStore round trip - Pattern" {
     const gpa = testing.allocator;
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
 
-    var store = try NodeStore.init(gpa, arena_allocator);
+    var store = try NodeStore.init(gpa);
     defer store.deinit();
 
     var patterns = std.ArrayList(CIR.Pattern).init(gpa);

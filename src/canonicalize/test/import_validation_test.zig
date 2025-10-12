@@ -30,7 +30,7 @@ fn parseAndCanonicalizeSource(
     const parse_env = try allocator.create(ModuleEnv);
     // Note: We pass allocator for both gpa and arena since the ModuleEnv
     // will be cleaned up by the caller
-    parse_env.* = try ModuleEnv.init(allocator, allocator, source);
+    parse_env.* = try ModuleEnv.init(allocator, source);
 
     const ast = try allocator.create(parse.AST);
     ast.* = try parse.parse(&parse_env.common, allocator);
@@ -53,16 +53,12 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
     // First, create some module environments with exposed items
     var module_envs = std.StringHashMap(*const ModuleEnv).init(allocator);
     defer module_envs.deinit();
     // Create module environment for "Json" module
     const json_env = try allocator.create(ModuleEnv);
-    json_env.* = try ModuleEnv.init(allocator, arena_allocator, "");
+    json_env.* = try ModuleEnv.init(allocator, "");
     defer {
         json_env.deinit();
         allocator.destroy(json_env);
@@ -80,7 +76,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     try module_envs.put("Json", json_env);
     // Create module environment for "Utils" module
     const utils_env = try allocator.create(ModuleEnv);
-    utils_env.* = try ModuleEnv.init(allocator, arena_allocator, "");
+    utils_env.* = try ModuleEnv.init(allocator, "");
     defer {
         utils_env.deinit();
         allocator.destroy(utils_env);
@@ -113,7 +109,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     ;
     // Parse the source
     const parse_env = try allocator.create(ModuleEnv);
-    parse_env.* = try ModuleEnv.init(allocator, arena_allocator, source);
+    parse_env.* = try ModuleEnv.init(allocator, source);
     defer {
         parse_env.deinit();
         allocator.destroy(parse_env);
@@ -177,10 +173,6 @@ test "import validation - no module_envs provided" {
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
     // Parse source code with import statements
     const source =
         \\module [main]
@@ -191,7 +183,7 @@ test "import validation - no module_envs provided" {
     ;
     // Let's do it manually instead of using the helper to isolate the issue
     const parse_env = try allocator.create(ModuleEnv);
-    parse_env.* = try ModuleEnv.init(allocator, arena_allocator, source);
+    parse_env.* = try ModuleEnv.init(allocator, source);
     defer {
         parse_env.deinit();
         allocator.destroy(parse_env);
@@ -477,16 +469,12 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
     // Create module environments with exposed items
     var module_envs = std.StringHashMap(*const ModuleEnv).init(allocator);
     defer module_envs.deinit();
     // Create a "MathUtils" module with some exposed definitions
     const math_env = try allocator.create(ModuleEnv);
-    math_env.* = try ModuleEnv.init(allocator, arena_allocator, "");
+    math_env.* = try ModuleEnv.init(allocator, "");
     defer {
         math_env.deinit();
         allocator.destroy(math_env);
@@ -555,7 +543,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     try expectEqual(true, found_pi_with_idx_300);
     // Test case where node index is not populated (should get 0)
     const empty_env = try allocator.create(ModuleEnv);
-    empty_env.* = try ModuleEnv.init(allocator, arena_allocator, "");
+    empty_env.* = try ModuleEnv.init(allocator, "");
     defer {
         empty_env.deinit();
         allocator.destroy(empty_env);
@@ -605,17 +593,13 @@ test "export count safety - ensures safe u16 casting" {
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
     // This test verifies that we check export counts to ensure safe casting to u16
     // The check triggers when exposed_items.len >= maxInt(u16) (65535)
     // This leaves 0 available as a potential sentinel value if needed
     // Verify the threshold is what we expect
     try expectEqual(@as(u32, 65535), std.math.maxInt(u16));
     // Test the diagnostic for exactly maxInt(u16) exports
-    var env1 = try ModuleEnv.init(allocator, arena_allocator, "");
+    var env1 = try ModuleEnv.init(allocator, "");
     defer env1.deinit();
     try env1.initCIRFields(allocator, "Test");
     const diag_at_limit = CIR.Diagnostic{
@@ -633,7 +617,7 @@ test "export count safety - ensures safe u16 casting" {
         else => return error.UnexpectedDiagnostic,
     }
     // Test the diagnostic for exceeding the limit
-    var env2 = try ModuleEnv.init(allocator, arena_allocator, "");
+    var env2 = try ModuleEnv.init(allocator, "");
     defer env2.deinit();
     try env2.initCIRFields(allocator, "Test");
     const diag_over_limit = CIR.Diagnostic{

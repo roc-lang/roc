@@ -33,7 +33,6 @@ extra_data: collections.SafeList(u32),
 scratch: ?*Scratch, // Nullable because when we deserialize a NodeStore, we don't bother to reinitialize scratch.
 
 const Scratch = struct {
-    arena: Allocator,
     statements: base.Scratch(CIR.Statement.Idx),
     exprs: base.Scratch(CIR.Expr.Idx),
     record_fields: base.Scratch(CIR.RecordField.Idx),
@@ -51,48 +50,67 @@ const Scratch = struct {
     diagnostics: base.Scratch(CIR.Diagnostic.Idx),
     captures: base.Scratch(CIR.Expr.Capture.Idx),
 
-    fn init(arena: Allocator) Allocator.Error!*@This() {
-        const ptr = try arena.create(Scratch);
+    fn init(gpa: Allocator) Allocator.Error!*@This() {
+        const ptr = try gpa.create(Scratch);
 
         ptr.* = .{
-            .arena = arena,
-            .statements = try base.Scratch(CIR.Statement.Idx).init(arena),
-            .exprs = try base.Scratch(CIR.Expr.Idx).init(arena),
-            .record_fields = try base.Scratch(CIR.RecordField.Idx).init(arena),
-            .match_branches = try base.Scratch(CIR.Expr.Match.Branch.Idx).init(arena),
-            .match_branch_patterns = try base.Scratch(CIR.Expr.Match.BranchPattern.Idx).init(arena),
-            .if_branches = try base.Scratch(CIR.Expr.IfBranch.Idx).init(arena),
-            .where_clauses = try base.Scratch(CIR.WhereClause.Idx).init(arena),
-            .patterns = try base.Scratch(CIR.Pattern.Idx).init(arena),
-            .pattern_record_fields = try base.Scratch(CIR.PatternRecordField.Idx).init(arena),
-            .record_destructs = try base.Scratch(CIR.Pattern.RecordDestruct.Idx).init(arena),
-            .type_annos = try base.Scratch(CIR.TypeAnno.Idx).init(arena),
-            .anno_record_fields = try base.Scratch(CIR.TypeAnno.RecordField.Idx).init(arena),
-            .exposed_items = try base.Scratch(CIR.ExposedItem.Idx).init(arena),
-            .defs = try base.Scratch(CIR.Def.Idx).init(arena),
-            .diagnostics = try base.Scratch(CIR.Diagnostic.Idx).init(arena),
-            .captures = try base.Scratch(CIR.Expr.Capture.Idx).init(arena),
+            .statements = try base.Scratch(CIR.Statement.Idx).init(gpa),
+            .exprs = try base.Scratch(CIR.Expr.Idx).init(gpa),
+            .record_fields = try base.Scratch(CIR.RecordField.Idx).init(gpa),
+            .match_branches = try base.Scratch(CIR.Expr.Match.Branch.Idx).init(gpa),
+            .match_branch_patterns = try base.Scratch(CIR.Expr.Match.BranchPattern.Idx).init(gpa),
+            .if_branches = try base.Scratch(CIR.Expr.IfBranch.Idx).init(gpa),
+            .where_clauses = try base.Scratch(CIR.WhereClause.Idx).init(gpa),
+            .patterns = try base.Scratch(CIR.Pattern.Idx).init(gpa),
+            .pattern_record_fields = try base.Scratch(CIR.PatternRecordField.Idx).init(gpa),
+            .record_destructs = try base.Scratch(CIR.Pattern.RecordDestruct.Idx).init(gpa),
+            .type_annos = try base.Scratch(CIR.TypeAnno.Idx).init(gpa),
+            .anno_record_fields = try base.Scratch(CIR.TypeAnno.RecordField.Idx).init(gpa),
+            .exposed_items = try base.Scratch(CIR.ExposedItem.Idx).init(gpa),
+            .defs = try base.Scratch(CIR.Def.Idx).init(gpa),
+            .diagnostics = try base.Scratch(CIR.Diagnostic.Idx).init(gpa),
+            .captures = try base.Scratch(CIR.Expr.Capture.Idx).init(gpa),
         };
 
         return ptr;
     }
+
+    fn deinit(self: *@This(), gpa: Allocator) void {
+        self.statements.deinit(gpa);
+        self.exprs.deinit(gpa);
+        self.record_fields.deinit(gpa);
+        self.match_branches.deinit(gpa);
+        self.match_branch_patterns.deinit(gpa);
+        self.if_branches.deinit(gpa);
+        self.where_clauses.deinit(gpa);
+        self.patterns.deinit(gpa);
+        self.pattern_record_fields.deinit(gpa);
+        self.record_destructs.deinit(gpa);
+        self.type_annos.deinit(gpa);
+        self.anno_record_fields.deinit(gpa);
+        self.exposed_items.deinit(gpa);
+        self.defs.deinit(gpa);
+        self.diagnostics.deinit(gpa);
+        self.captures.deinit(gpa);
+        gpa.destroy(self);
+    }
 };
 
 /// Initializes the NodeStore
-pub fn init(gpa: Allocator, arena: Allocator) Allocator.Error!NodeStore {
+pub fn init(gpa: Allocator) Allocator.Error!NodeStore {
     // TODO determine what capacity to use
     // maybe these should be moved to build/compile flags?
-    return try NodeStore.initCapacity(gpa, arena, 128);
+    return try NodeStore.initCapacity(gpa, 128);
 }
 
 /// Initializes the NodeStore with a specified capacity.
-pub fn initCapacity(gpa: Allocator, arena: Allocator, capacity: usize) Allocator.Error!NodeStore {
+pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
     return .{
         .gpa = gpa,
         .nodes = try Node.List.initCapacity(gpa, capacity),
         .regions = try Region.List.initCapacity(gpa, capacity),
         .extra_data = try collections.SafeList(u32).initCapacity(gpa, capacity / 2),
-        .scratch = try Scratch.init(arena),
+        .scratch = try Scratch.init(gpa),
     };
 }
 
@@ -101,8 +119,9 @@ pub fn deinit(store: *NodeStore) void {
     store.nodes.deinit(store.gpa);
     store.regions.deinit(store.gpa);
     store.extra_data.deinit(store.gpa);
-    // scratch is arena-allocated and should not be freed here
-    // The arena itself will be freed by the caller
+    if (store.scratch) |scratch| {
+        scratch.deinit(store.gpa);
+    }
 }
 
 /// Compile-time constants for union variant counts to ensure we don't miss cases
@@ -3273,12 +3292,9 @@ pub const Serialized = struct {
 test "NodeStore empty CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
 
     // Create an empty NodeStore
-    var original = try NodeStore.init(gpa, arena_allocator);
+    var original = try NodeStore.init(gpa);
     defer original.deinit();
 
     // Create a temp file
@@ -3319,12 +3335,9 @@ test "NodeStore empty CompactWriter roundtrip" {
 test "NodeStore basic CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
 
     // Create NodeStore and add some nodes
-    var original = try NodeStore.init(gpa, arena_allocator);
+    var original = try NodeStore.init(gpa);
     defer original.deinit();
 
     // Add a simple expression node
@@ -3403,12 +3416,9 @@ test "NodeStore basic CompactWriter roundtrip" {
 test "NodeStore multiple nodes CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
 
     // Create NodeStore with various node types
-    var original = try NodeStore.init(gpa, arena_allocator);
+    var original = try NodeStore.init(gpa);
     defer original.deinit();
 
     // Add expression variable node

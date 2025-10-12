@@ -682,11 +682,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     defer test_env_instance.deinit();
 
     // Create original ModuleEnv
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
-    var original_env = try ModuleEnv.init(gpa, arena_allocator, source);
+    var original_env = try ModuleEnv.init(gpa, source);
     defer original_env.deinit();
 
     original_env.common.source = source;

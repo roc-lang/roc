@@ -55,13 +55,8 @@ pub fn initWithImport(source: []const u8, other_module_name: []const u8, other_m
     const module_name = "Test";
     std.debug.assert(!std.mem.eql(u8, module_name, other_module_name));
 
-    // Create arena allocator for ModuleEnv initialization
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
     // Initialize the ModuleEnv with the CommonEnv
-    module_env.* = try ModuleEnv.init(gpa, arena_allocator, source);
+    module_env.* = try ModuleEnv.init(gpa, source);
     errdefer module_env.deinit();
 
     module_env.common.source = source;
@@ -135,13 +130,8 @@ pub fn init(source: []const u8) !TestEnv {
 
     const module_name = "Test";
 
-    // Create arena allocator for ModuleEnv initialization
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
     // Initialize the ModuleEnv with the CommonEnv
-    module_env.* = try ModuleEnv.init(gpa, arena_allocator, source);
+    module_env.* = try ModuleEnv.init(gpa, source);
     errdefer module_env.deinit();
 
     module_env.common.source = source;

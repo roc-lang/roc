@@ -786,11 +786,8 @@ fn compileSource(source: []const u8) !CompilerStageData {
     if (source.len == 0) {
         // Return empty compiler stage data for completely empty input
         var module_env = try allocator.create(ModuleEnv);
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        defer arena.deinit();
-        const arena_allocator = arena.allocator();
 
-        module_env.* = try ModuleEnv.init(allocator, arena_allocator, source);
+        module_env.* = try ModuleEnv.init(allocator, source);
         try module_env.common.calcLineStarts(module_env.gpa);
         return CompilerStageData.init(allocator, module_env);
     }
@@ -799,11 +796,8 @@ fn compileSource(source: []const u8) !CompilerStageData {
     if (trimmed_source.len == 0) {
         // Return empty compiler stage data for whitespace-only input
         var module_env = try allocator.create(ModuleEnv);
-        var arena2 = std.heap.ArenaAllocator.init(allocator);
-        defer arena2.deinit();
-        const arena_allocator2 = arena2.allocator();
 
-        module_env.* = try ModuleEnv.init(allocator, arena_allocator2, source);
+        module_env.* = try ModuleEnv.init(allocator, source);
         try module_env.common.calcLineStarts(module_env.gpa);
         return CompilerStageData.init(allocator, module_env);
     }
@@ -813,11 +807,8 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     // Initialize the ModuleEnv
     var module_env = try allocator.create(ModuleEnv);
-    var arena3 = std.heap.ArenaAllocator.init(allocator);
-    defer arena3.deinit();
-    const arena_allocator3 = arena3.allocator();
 
-    module_env.* = try ModuleEnv.init(allocator, arena_allocator3, source);
+    module_env.* = try ModuleEnv.init(allocator, source);
     try module_env.common.calcLineStarts(module_env.gpa);
 
     var result = CompilerStageData.init(allocator, module_env);

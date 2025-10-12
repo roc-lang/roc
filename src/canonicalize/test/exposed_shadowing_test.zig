@@ -25,11 +25,7 @@ test "exposed but not implemented - values" {
         \\foo = 42
     ;
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
-    var env = try ModuleEnv.init(allocator, arena_allocator, source);
+    var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
 
@@ -68,11 +64,7 @@ test "exposed but not implemented - types" {
         \\MyType : [A, B]
     ;
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
-    var env = try ModuleEnv.init(allocator, arena_allocator, source);
+    var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
 
@@ -111,11 +103,7 @@ test "redundant exposed entries" {
         \\bar = "hello"
         \\MyType : [A, B]
     ;
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
-    var env = try ModuleEnv.init(allocator, arena_allocator, source);
+    var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
@@ -158,11 +146,7 @@ test "shadowing with exposed items" {
         \\y = "first"
         \\y = "second"
     ;
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
-    var env = try ModuleEnv.init(allocator, arena_allocator, source);
+    var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
@@ -195,11 +179,7 @@ test "shadowing non-exposed items" {
         \\notExposed = 2
         \\# Shadowing is allowed for non-exposed items
     ;
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
-    var env = try ModuleEnv.init(allocator, arena_allocator, source);
+    var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
@@ -239,11 +219,7 @@ test "exposed items correctly tracked across shadowing" {
         \\
         \\# z is exposed but never defined
     ;
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
-    var env = try ModuleEnv.init(allocator, arena_allocator, source);
+    var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
@@ -299,11 +275,7 @@ test "complex case with redundant, shadowing, and not implemented" {
         \\
         \\c = 100
     ;
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
-    var env = try ModuleEnv.init(allocator, arena_allocator, source);
+    var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
@@ -355,11 +327,7 @@ test "exposed_items is populated correctly" {
         \\bar = "hello"
         \\MyType : [A, B]
     ;
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
-    var env = try ModuleEnv.init(allocator, arena_allocator, source);
+    var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
@@ -391,11 +359,7 @@ test "exposed_items persists after canonicalization" {
         \\y = 2
         \\# z is not defined
     ;
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
-    var env = try ModuleEnv.init(allocator, arena_allocator, source);
+    var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
@@ -425,11 +389,7 @@ test "exposed_items never has entries removed" {
         \\bar = "hello"
         \\baz = 3.14
     ;
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
-    var env = try ModuleEnv.init(allocator, arena_allocator, source);
+    var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
@@ -462,11 +422,7 @@ test "exposed_items handles identifiers with different attributes" {
         \\foo = 42
         \\foo! = \x -> x + 1
     ;
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
-    var env = try ModuleEnv.init(allocator, arena_allocator, source);
+    var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);

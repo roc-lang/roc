@@ -21,12 +21,8 @@ const ScopeTestContext = struct {
 
     fn init(gpa: std.mem.Allocator) !ScopeTestContext {
         // heap allocate ModuleEnv for testing
-        var arena = std.heap.ArenaAllocator.init(gpa);
-        defer arena.deinit();
-        const arena_allocator = arena.allocator();
-
         const module_env = try gpa.create(ModuleEnv);
-        module_env.* = try ModuleEnv.init(gpa, arena_allocator, "");
+        module_env.* = try ModuleEnv.init(gpa, "");
         try module_env.initCIRFields(gpa, "test");
 
         return ScopeTestContext{

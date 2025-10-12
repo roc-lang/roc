@@ -129,12 +129,7 @@ test "compiled builtins - use Set and Dict together" {
     var module_env: *ModuleEnv = try gpa.create(ModuleEnv);
     errdefer gpa.destroy(module_env);
 
-    // Create arena allocator for ModuleEnv initialization
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
-    module_env.* = try ModuleEnv.init(gpa, arena_allocator, test_source);
+    module_env.* = try ModuleEnv.init(gpa, test_source);
     errdefer module_env.deinit();
 
     module_env.common.source = test_source;

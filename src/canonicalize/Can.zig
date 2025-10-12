@@ -2933,7 +2933,7 @@ pub fn canonicalizeExpr(
 
                         // Only canonicalize and include non-duplicate fields
                         if (try self.canonicalizeRecordField(field)) |can_field_idx| {
-                            try self.env.store.scratch.?.record_fields.append(self.env.store.scratch.?.arena, can_field_idx);
+                            try self.env.store.scratch.?.record_fields.append(self.env.gpa, can_field_idx);
                         }
                     } else {
                         // TODO: Add diagnostic on duplicate record field
@@ -2941,7 +2941,7 @@ pub fn canonicalizeExpr(
                 } else {
                     // Field name couldn't be resolved, still try to canonicalize
                     if (try self.canonicalizeRecordField(field)) |can_field_idx| {
-                        try self.env.store.scratch.?.record_fields.append(self.env.store.scratch.?.arena, can_field_idx);
+                        try self.env.store.scratch.?.record_fields.append(self.env.gpa, can_field_idx);
                     }
                 }
             }
@@ -2996,17 +2996,18 @@ pub fn canonicalizeExpr(
             defer self.scopeExit(self.env.gpa) catch {};
 
             // args
+            const gpa = self.env.gpa;
             const args_start = self.env.store.scratch.?.patterns.top();
             for (self.parse_ir.store.patternSlice(e.args)) |arg_pattern_idx| {
                 if (try self.canonicalizePattern(arg_pattern_idx)) |pattern_idx| {
-                    try self.env.store.scratch.?.patterns.append(self.env.store.scratch.?.arena, pattern_idx);
+                    try self.env.store.scratch.?.patterns.append(gpa, pattern_idx);
                 } else {
                     const arg = self.parse_ir.store.getPattern(arg_pattern_idx);
                     const arg_region = self.parse_ir.tokenizedRegionToRegion(arg.to_tokenized_region());
                     const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .pattern_arg_invalid = .{
                         .region = arg_region,
                     } });
-                    try self.env.store.scratch.?.patterns.append(self.env.store.scratch.?.arena, malformed_idx);
+                    try self.env.store.scratch.?.patterns.append(gpa, malformed_idx);
                 }
             }
             const args_span = try self.env.store.patternSpanFrom(args_start);
@@ -3859,7 +3860,7 @@ fn extractMultilineStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.
 fn canonicalizePattern(
     self: *Self,
     ast_pattern_idx: AST.Pattern.Idx,
-)std.mem.Allocator.Error!?Pattern.Idx {
+) std.mem.Allocator.Error!?Pattern.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -4175,6 +4176,7 @@ fn canonicalizePattern(
             return try self.canonicalizeSingleQuote(e.region, e.token, Pattern.Idx);
         },
         .tag => |e| {
+            const gpa = self.env.gpa;
             const tag_name = self.parse_ir.tokens.resolveIdentifier(e.tag_tok) orelse return null;
             const tag_name_text = self.parse_ir.env.getIdent(tag_name);
 
@@ -4184,14 +4186,14 @@ fn canonicalizePattern(
             const patterns_start = self.env.store.scratch.?.patterns.top();
             for (self.parse_ir.store.patternSlice(e.args)) |sub_ast_pattern_idx| {
                 if (try self.canonicalizePattern(sub_ast_pattern_idx)) |idx| {
-                    try self.env.store.scratch.?.patterns.append(self.env.store.scratch.?.arena, idx);
+                    try self.env.store.scratch.?.patterns.append(gpa, idx);
                 } else {
                     const arg = self.parse_ir.store.getPattern(sub_ast_pattern_idx);
                     const arg_region = self.parse_ir.tokenizedRegionToRegion(arg.to_tokenized_region());
                     const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .pattern_arg_invalid = .{
                         .region = arg_region,
                     } });
-                    try self.env.store.scratch.?.patterns.append(self.env.store.scratch.?.arena, malformed_idx);
+                    try self.env.store.scratch.?.patterns.append(gpa, malformed_idx);
                 }
             }
             const args = try self.env.store.patternSpanFrom(patterns_start);
@@ -4486,6 +4488,7 @@ fn canonicalizePattern(
         },
         .list => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+            const gpa = self.env.gpa;
 
             // Mark the start of scratch patterns for non-rest patterns only
             const scratch_top = self.env.store.scratchPatternTop();
@@ -4562,13 +4565,13 @@ fn canonicalizePattern(
                 } else {
                     // Regular pattern - canonicalize it and add to scratch patterns
                     if (try self.canonicalizePattern(pattern_idx)) |canonicalized| {
-                        try self.env.store.scratch.?.patterns.append(self.env.store.scratch.?.arena, canonicalized);
+                        try self.env.store.scratch.?.patterns.append(gpa, canonicalized);
                     } else {
                         const pattern_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.to_tokenized_region());
                         const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .pattern_not_canonicalized = .{
                             .region = pattern_region,
                         } });
-                        try self.env.store.scratch.?.patterns.append(self.env.store.scratch.?.arena, malformed_idx);
+                        try self.env.store.scratch.?.patterns.append(gpa, malformed_idx);
                     }
                 }
             }

@@ -93,7 +93,7 @@ pub fn initModuleEnvFields(self: *Self, gpa: std.mem.Allocator, module_name: []c
 }
 
 /// Initialize the module environment.
-pub fn init(gpa: std.mem.Allocator, arena: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!Self {
+pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!Self {
     // TODO: maybe wire in smarter default based on the initial input text size.
 
     return Self{
@@ -109,7 +109,7 @@ pub fn init(gpa: std.mem.Allocator, arena: std.mem.Allocator, source: []const u8
         .imports = CIR.Import.Store.init(),
         .module_name = "", // Will be set later during canonicalization
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
-        .store = try NodeStore.initCapacity(gpa, arena, 10_000), // Default node store capacity
+        .store = try NodeStore.initCapacity(gpa, 10_000), // Default node store capacity
     };
 }
 

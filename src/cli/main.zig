@@ -1349,9 +1349,8 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
     // Create arena allocator for scratch memory
     var arena = std.heap.ArenaAllocator.init(shm_allocator);
     defer arena.deinit();
-    const arena_allocator = arena.allocator();
 
-    var env = try ModuleEnv.init(shm_allocator, arena_allocator, source);
+    var env = try ModuleEnv.init(shm_allocator, source);
     env.common.source = source;
     env.module_name = module_name;
     try env.common.calcLineStarts(shm_allocator);
@@ -1746,10 +1745,9 @@ fn extractEntrypointsFromPlatform(gpa: std.mem.Allocator, roc_file_path: []const
     // Create arena allocator for scratch memory
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
-    const arena_allocator = arena.allocator();
 
     // Create ModuleEnv
-    var env = ModuleEnv.init(gpa, arena_allocator, source) catch return error.ParseFailed;
+    var env = ModuleEnv.init(gpa, source) catch return error.ParseFailed;
     defer env.deinit();
 
     env.common.source = source;
@@ -2409,10 +2407,9 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
     // Create arena allocator for scratch memory
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
-    const arena_allocator = arena.allocator();
 
     // Create ModuleEnv
-    var env = ModuleEnv.init(gpa, arena_allocator, source) catch |err| {
+    var env = ModuleEnv.init(gpa, source) catch |err| {
         try stderr.print("Failed to initialize module environment: {}", .{err});
         std.process.exit(1);
     };

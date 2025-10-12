@@ -1125,9 +1125,8 @@ fn processSnapshotContent(
     // Process the content through the compilation pipeline
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    const arena_allocator = arena.allocator();
 
-    var module_env = try ModuleEnv.init(allocator, arena_allocator, content.source);
+    var module_env = try ModuleEnv.init(allocator, content.source);
     defer module_env.deinit();
 
     // Calculate line starts for source location tracking

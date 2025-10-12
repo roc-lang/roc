@@ -260,16 +260,10 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     can: *Can,
     checker: *Check,
     expr_idx: CIR.Expr.Idx,
-    arena: *std.heap.ArenaAllocator,
 } {
-    // Create an arena allocator for scratch memory
-    const arena = try allocator.create(std.heap.ArenaAllocator);
-    arena.* = std.heap.ArenaAllocator.init(allocator);
-    const arena_allocator = arena.allocator();
-
     // Initialize the ModuleEnv
     const module_env = try allocator.create(ModuleEnv);
-    module_env.* = try ModuleEnv.init(allocator, arena_allocator, source);
+    module_env.* = try ModuleEnv.init(allocator, source);
 
     module_env.common.source = source;
     try module_env.common.calcLineStarts(module_env.gpa);
@@ -326,7 +320,6 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
             .expr_idx = try module_env.store.addExpr(.{ .e_runtime_error = .{
                 .diagnostic = diagnostic_idx,
             } }, base.Region.zero()),
-            .arena = arena,
         };
     };
 
@@ -343,7 +336,6 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
         .can = czer,
         .checker = checker,
         .expr_idx = canonical_expr_idx.get_idx(),
-        .arena = arena,
     };
 }
 
@@ -358,9 +350,6 @@ pub fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: anytype
     allocator.destroy(resources.can);
     allocator.destroy(resources.parse_ast);
     allocator.destroy(resources.module_env);
-    // Deinit and destroy the arena allocator
-    resources.arena.deinit();
-    allocator.destroy(resources.arena);
 }
 
 test "eval runtime error - returns crash error" {

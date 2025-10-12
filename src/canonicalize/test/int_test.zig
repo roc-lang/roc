@@ -471,12 +471,8 @@ test "hexadecimal integer literals" {
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
     for (test_cases) |tc| {
-        var env = try ModuleEnv.init(gpa, arena_allocator, tc.literal);
+        var env = try ModuleEnv.init(gpa, tc.literal);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -534,12 +530,8 @@ test "binary integer literals" {
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
     for (test_cases) |tc| {
-        var env = try ModuleEnv.init(gpa, arena_allocator, tc.literal);
+        var env = try ModuleEnv.init(gpa, tc.literal);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -597,12 +589,8 @@ test "octal integer literals" {
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
     for (test_cases) |tc| {
-        var env = try ModuleEnv.init(gpa, arena_allocator, tc.literal);
+        var env = try ModuleEnv.init(gpa, tc.literal);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -660,12 +648,8 @@ test "integer literals with uppercase base prefixes" {
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
     for (test_cases) |tc| {
-        var env = try ModuleEnv.init(gpa, arena_allocator, tc.literal);
+        var env = try ModuleEnv.init(gpa, tc.literal);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -696,13 +680,9 @@ test "numeric literal patterns use pattern idx as type var" {
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
     // Test that int literal patterns work and use the pattern index as the type variable
     {
-        var env = try ModuleEnv.init(gpa, arena_allocator, "");
+        var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -725,7 +705,7 @@ test "numeric literal patterns use pattern idx as type var" {
 
     // Test that f64 literal patterns work
     {
-        var env = try ModuleEnv.init(gpa, arena_allocator, "");
+        var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -753,13 +733,9 @@ test "pattern numeric literal value edge cases" {
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
     // Test max/min integer values
     {
-        var env = try ModuleEnv.init(gpa, arena_allocator, "");
+        var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -789,7 +765,7 @@ test "pattern numeric literal value edge cases" {
 
     // Test small decimal pattern
     {
-        var env = try ModuleEnv.init(gpa, arena_allocator, "");
+        var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -814,7 +790,7 @@ test "pattern numeric literal value edge cases" {
 
     // Test dec literal pattern
     {
-        var env = try ModuleEnv.init(gpa, arena_allocator, "");
+        var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -835,7 +811,7 @@ test "pattern numeric literal value edge cases" {
 
     // Test special float values
     {
-        var env = try ModuleEnv.init(gpa, arena_allocator, "");
+        var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");

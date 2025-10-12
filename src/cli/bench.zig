@@ -66,9 +66,8 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
     // Create a module environment for tokenization (reused for tokenizer, created per-iteration for parser)
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
-    const arena_allocator = arena.allocator();
 
-    var env: ?ModuleEnv = if (!is_parse) try ModuleEnv.init(gpa, arena_allocator, "") else null;
+    var env: ?ModuleEnv = if (!is_parse) try ModuleEnv.init(gpa, "") else null;
     defer if (env) |*e| e.deinit();
 
     // Benchmark parameters
@@ -93,9 +92,8 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
                 const source_copy = try gpa.dupe(u8, roc_file.content);
 
                 var parse_arena = std.heap.ArenaAllocator.init(gpa);
-                const parse_arena_allocator = parse_arena.allocator();
 
-                var parse_env = try ModuleEnv.init(gpa, parse_arena_allocator, source_copy);
+                var parse_env = try ModuleEnv.init(gpa, source_copy);
 
                 var ir = try parse.parse(&parse_env.common, gpa);
                 iteration_tokens += ir.tokens.tokens.len;
