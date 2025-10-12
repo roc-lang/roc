@@ -124,6 +124,16 @@ pub fn deinit(store: *NodeStore) void {
     }
 }
 
+/// Relocate all pointers in the NodeStore by the given offset.
+/// This is used when loading a NodeStore from shared memory at a different address.
+pub fn relocate(store: *NodeStore, offset: i64) void {
+    const ioffset: isize = @intCast(offset);
+    store.nodes.relocate(ioffset);
+    store.regions.relocate(ioffset);
+    store.extra_data.relocate(ioffset);
+    // Note: scratch is a separately allocated pointer, doesn't need relocation
+}
+
 /// Compile-time constants for union variant counts to ensure we don't miss cases
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///

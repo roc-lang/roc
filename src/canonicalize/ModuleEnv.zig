@@ -72,6 +72,24 @@ diagnostics: CIR.Diagnostic.Span,
 /// Uses an efficient data structure, and provides helpers for storing and retrieving nodes.
 store: NodeStore,
 
+/// Relocate all pointers in the ModuleEnv by the given offset.
+/// This is used when loading a ModuleEnv from shared memory at a different address.
+pub fn relocate(self: *Self, offset: isize) void {
+    // Relocate all sub-structures that contain pointers
+    self.common.relocate(offset);
+    self.types.relocate(offset);
+    self.external_decls.relocate(offset);
+    self.imports.relocate(offset);
+    self.store.relocate(@intCast(offset));
+
+    // Relocate the module_name pointer if it's not empty
+    if (self.module_name.len > 0) {
+        const old_ptr = @intFromPtr(self.module_name.ptr);
+        const new_ptr = @as(isize, @intCast(old_ptr)) + offset;
+        self.module_name.ptr = @ptrFromInt(@as(usize, @intCast(new_ptr)));
+    }
+}
+
 /// Initialize the compilation fields in an existing ModuleEnv
 pub fn initCIRFields(self: *Self, gpa: std.mem.Allocator, module_name: []const u8) !void {
     _ = gpa; // unused since we don't create new allocations

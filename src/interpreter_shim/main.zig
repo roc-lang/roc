@@ -189,14 +189,7 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*Modu
 
     // Set up the environment
     env_ptr.gpa = std.heap.page_allocator;
-    // Note: relocate method was removed - relocation now handled by Serialized.deserialize
-    // For shared memory use case, we manually relocate pointers that need adjustment
-
-    if (env_ptr.module_name.len > 0) {
-        const old_module_ptr = @intFromPtr(env_ptr.module_name.ptr);
-        const new_module_ptr = @as(isize, @intCast(old_module_ptr)) + offset;
-        env_ptr.module_name.ptr = @ptrFromInt(@as(usize, @intCast(new_module_ptr)));
-    }
+    env_ptr.relocate(offset);
 
     return env_ptr;
 }
