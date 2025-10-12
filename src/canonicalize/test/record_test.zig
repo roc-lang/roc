@@ -14,11 +14,15 @@ const Content = types.Content;
 test "record literal uses record_unbound" {
     const gpa = std.testing.allocator;
 
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
     // Test a simple record literal
     {
         const source = "{ x: 42, y: \"hello\" }";
 
-        var env = try ModuleEnv.init(gpa, source);
+        var env = try ModuleEnv.init(gpa, arena_allocator, source);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -55,7 +59,7 @@ test "record literal uses record_unbound" {
     {
         const source2 = "{}";
 
-        var env = try ModuleEnv.init(gpa, source2);
+        var env = try ModuleEnv.init(gpa, arena_allocator, source2);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -92,7 +96,7 @@ test "record literal uses record_unbound" {
     {
         const source3 = "{ value: 123 }";
 
-        var env = try ModuleEnv.init(gpa, source3);
+        var env = try ModuleEnv.init(gpa, arena_allocator, source3);
         defer env.deinit();
 
         try env.initCIRFields(gpa, "test");
@@ -133,10 +137,15 @@ test "record literal uses record_unbound" {
 
 test "record_unbound basic functionality" {
     const gpa = std.testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
     const source = "{ x: 42, y: 99 }";
 
     // Test that record literals create record_unbound types
-    var env = try ModuleEnv.init(gpa, source);
+    var env = try ModuleEnv.init(gpa, arena_allocator, source);
     defer env.deinit();
 
     try env.initCIRFields(gpa, "test");
@@ -176,9 +185,14 @@ test "record_unbound basic functionality" {
 
 test "record_unbound with multiple fields" {
     const gpa = std.testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
     const source = "{ a: 123, b: 456, c: 789 }";
 
-    var env = try ModuleEnv.init(gpa, source);
+    var env = try ModuleEnv.init(gpa, arena_allocator, source);
     defer env.deinit();
 
     try env.initCIRFields(gpa, "test");
@@ -219,7 +233,11 @@ test "record_unbound with multiple fields" {
 test "record with extension variable" {
     const gpa = std.testing.allocator;
 
-    var env = try ModuleEnv.init(gpa, "");
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    var env = try ModuleEnv.init(gpa, arena_allocator, "");
     defer env.deinit();
 
     try env.initCIRFields(gpa, "test");

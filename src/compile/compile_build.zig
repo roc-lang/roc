@@ -734,7 +734,12 @@ pub const BuildEnv = struct {
         const src = try std.fs.cwd().readFileAlloc(self.gpa, file_abs, std.math.maxInt(usize));
         defer self.gpa.free(src);
 
-        var env = try ModuleEnv.init(self.gpa, src);
+        // Create arena allocator for scratch memory
+        var arena = std.heap.ArenaAllocator.init(self.gpa);
+        defer arena.deinit();
+        const arena_allocator = arena.allocator();
+
+        var env = try ModuleEnv.init(self.gpa, arena_allocator, src);
         defer env.deinit();
 
         try env.common.calcLineStarts(self.gpa);

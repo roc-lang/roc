@@ -481,7 +481,12 @@ pub const PackageEnv = struct {
 
         // line starts for diagnostics and consistent positions
 
-        var env = try ModuleEnv.init(self.gpa, src);
+        // Create arena allocator for scratch memory
+        var arena = std.heap.ArenaAllocator.init(self.gpa);
+        defer arena.deinit();
+        const arena_allocator = arena.allocator();
+
+        var env = try ModuleEnv.init(self.gpa, arena_allocator, src);
         // init CIR fields
         try env.initCIRFields(self.gpa, st.name);
 

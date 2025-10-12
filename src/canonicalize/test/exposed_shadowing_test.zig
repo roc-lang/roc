@@ -25,7 +25,11 @@ test "exposed but not implemented - values" {
         \\foo = 42
     ;
 
-    var env = try ModuleEnv.init(allocator, source);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    var env = try ModuleEnv.init(allocator, arena_allocator, source);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
 
@@ -39,8 +43,8 @@ test "exposed but not implemented - values" {
 
     // Check that we have an "exposed but not implemented" diagnostic for 'bar'
     var found_bar_error = false;
-    for (0..env.store.scratch_diagnostics.top()) |i| {
-        const diag_idx = env.store.scratch_diagnostics.items.items[i];
+    for (0..env.store.scratch.?.diagnostics.top()) |i| {
+        const diag_idx = env.store.scratch.?.diagnostics.items.items[i];
         const diag = env.store.getDiagnostic(diag_idx);
         switch (diag) {
             .exposed_but_not_implemented => |d| {
@@ -64,7 +68,11 @@ test "exposed but not implemented - types" {
         \\MyType : [A, B]
     ;
 
-    var env = try ModuleEnv.init(allocator, source);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    var env = try ModuleEnv.init(allocator, arena_allocator, source);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
 
@@ -78,8 +86,8 @@ test "exposed but not implemented - types" {
 
     // Check that we have an "exposed but not implemented" diagnostic for 'OtherType'
     var found_other_type_error = false;
-    for (0..env.store.scratch_diagnostics.top()) |i| {
-        const diag_idx = env.store.scratch_diagnostics.items.items[i];
+    for (0..env.store.scratch.?.diagnostics.top()) |i| {
+        const diag_idx = env.store.scratch.?.diagnostics.items.items[i];
         const diag = env.store.getDiagnostic(diag_idx);
         switch (diag) {
             .exposed_but_not_implemented => |d| {
@@ -103,7 +111,11 @@ test "redundant exposed entries" {
         \\bar = "hello"
         \\MyType : [A, B]
     ;
-    var env = try ModuleEnv.init(allocator, source);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    var env = try ModuleEnv.init(allocator, arena_allocator, source);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
@@ -116,8 +128,8 @@ test "redundant exposed entries" {
     // Check that we have redundant exposed warnings
     var found_foo_redundant = false;
     var found_bar_redundant = false;
-    for (0..env.store.scratch_diagnostics.top()) |i| {
-        const diag_idx = env.store.scratch_diagnostics.items.items[i];
+    for (0..env.store.scratch.?.diagnostics.top()) |i| {
+        const diag_idx = env.store.scratch.?.diagnostics.items.items[i];
         const diag = env.store.getDiagnostic(diag_idx);
         switch (diag) {
             .redundant_exposed => |d| {
@@ -146,7 +158,11 @@ test "shadowing with exposed items" {
         \\y = "first"
         \\y = "second"
     ;
-    var env = try ModuleEnv.init(allocator, source);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    var env = try ModuleEnv.init(allocator, arena_allocator, source);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
@@ -158,8 +174,8 @@ test "shadowing with exposed items" {
         .canonicalizeFile();
     // Check that we have shadowing warnings
     var shadowing_count: usize = 0;
-    for (0..env.store.scratch_diagnostics.top()) |i| {
-        const diag_idx = env.store.scratch_diagnostics.items.items[i];
+    for (0..env.store.scratch.?.diagnostics.top()) |i| {
+        const diag_idx = env.store.scratch.?.diagnostics.items.items[i];
         const diag = env.store.getDiagnostic(diag_idx);
         switch (diag) {
             .shadowing_warning => shadowing_count += 1,
@@ -179,7 +195,11 @@ test "shadowing non-exposed items" {
         \\notExposed = 2
         \\# Shadowing is allowed for non-exposed items
     ;
-    var env = try ModuleEnv.init(allocator, source);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    var env = try ModuleEnv.init(allocator, arena_allocator, source);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
@@ -191,8 +211,8 @@ test "shadowing non-exposed items" {
         .canonicalizeFile();
     // Check that we still get shadowing warnings for non-exposed items
     var found_shadowing = false;
-    for (0..env.store.scratch_diagnostics.top()) |i| {
-        const diag_idx = env.store.scratch_diagnostics.items.items[i];
+    for (0..env.store.scratch.?.diagnostics.top()) |i| {
+        const diag_idx = env.store.scratch.?.diagnostics.items.items[i];
         const diag = env.store.getDiagnostic(diag_idx);
         switch (diag) {
             .shadowing_warning => |d| {
@@ -219,7 +239,11 @@ test "exposed items correctly tracked across shadowing" {
         \\
         \\# z is exposed but never defined
     ;
-    var env = try ModuleEnv.init(allocator, source);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    var env = try ModuleEnv.init(allocator, arena_allocator, source);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
@@ -237,8 +261,8 @@ test "exposed items correctly tracked across shadowing" {
     var found_x_shadowing = false;
     var found_z_not_implemented = false;
     var found_unexpected_not_implemented = false;
-    for (0..env.store.scratch_diagnostics.top()) |i| {
-        const diag_idx = env.store.scratch_diagnostics.items.items[i];
+    for (0..env.store.scratch.?.diagnostics.top()) |i| {
+        const diag_idx = env.store.scratch.?.diagnostics.items.items[i];
         const diag = env.store.getDiagnostic(diag_idx);
         switch (diag) {
             .shadowing_warning => |d| {
@@ -275,7 +299,11 @@ test "complex case with redundant, shadowing, and not implemented" {
         \\
         \\c = 100
     ;
-    var env = try ModuleEnv.init(allocator, source);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    var env = try ModuleEnv.init(allocator, arena_allocator, source);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
@@ -288,8 +316,8 @@ test "complex case with redundant, shadowing, and not implemented" {
     var found_a_redundant = false;
     var found_a_shadowing = false;
     var found_not_implemented = false;
-    for (0..env.store.scratch_diagnostics.top()) |i| {
-        const diag_idx = env.store.scratch_diagnostics.items.items[i];
+    for (0..env.store.scratch.?.diagnostics.top()) |i| {
+        const diag_idx = env.store.scratch.?.diagnostics.items.items[i];
         const diag = env.store.getDiagnostic(diag_idx);
         switch (diag) {
             .redundant_exposed => |d| {
@@ -327,7 +355,11 @@ test "exposed_items is populated correctly" {
         \\bar = "hello"
         \\MyType : [A, B]
     ;
-    var env = try ModuleEnv.init(allocator, source);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    var env = try ModuleEnv.init(allocator, arena_allocator, source);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
@@ -359,7 +391,11 @@ test "exposed_items persists after canonicalization" {
         \\y = 2
         \\# z is not defined
     ;
-    var env = try ModuleEnv.init(allocator, source);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    var env = try ModuleEnv.init(allocator, arena_allocator, source);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
@@ -389,7 +425,11 @@ test "exposed_items never has entries removed" {
         \\bar = "hello"
         \\baz = 3.14
     ;
-    var env = try ModuleEnv.init(allocator, source);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    var env = try ModuleEnv.init(allocator, arena_allocator, source);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);
@@ -422,7 +462,11 @@ test "exposed_items handles identifiers with different attributes" {
         \\foo = 42
         \\foo! = \x -> x + 1
     ;
-    var env = try ModuleEnv.init(allocator, source);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    var env = try ModuleEnv.init(allocator, arena_allocator, source);
     defer env.deinit();
     try env.initCIRFields(allocator, "Test");
     var ast = try parse.parse(&env.common, allocator);

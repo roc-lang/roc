@@ -163,7 +163,11 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
         }
     };
 
-    var module_env = try ModuleEnv.init(gpa, contents);
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    var module_env = try ModuleEnv.init(gpa, arena_allocator, contents);
     defer module_env.deinit();
 
     var parse_ast: AST = try parse.parse(&module_env.common, gpa);
@@ -197,7 +201,11 @@ pub fn formatStdin(gpa: std.mem.Allocator) !void {
     const contents = try std.io.getStdIn().readToEndAlloc(gpa, Filesystem.max_file_size);
 
     // ModuleEnv takes ownership of contents
-    var module_env = try ModuleEnv.init(gpa, contents);
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    var module_env = try ModuleEnv.init(gpa, arena_allocator, contents);
     defer module_env.deinit();
 
     var parse_ast: AST = try parse.parse(&module_env.common, gpa);
@@ -2324,7 +2332,11 @@ pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) 
 }
 
 fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
-    var module_env = try ModuleEnv.init(gpa, input);
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    var module_env = try ModuleEnv.init(gpa, arena_allocator, input);
     defer module_env.deinit();
 
     var parse_ast = try parse.parse(&module_env.common, module_env.gpa);

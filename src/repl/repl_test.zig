@@ -183,7 +183,11 @@ test "Repl - minimal interpreter integration" {
 
     // Step 1: Create module environment
     const source = "42";
-    var module_env = try ModuleEnv.init(gpa, source);
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    var module_env = try ModuleEnv.init(gpa, arena_allocator, source);
     defer module_env.deinit();
 
     // Step 2: Parse as expression

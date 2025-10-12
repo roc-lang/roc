@@ -33,6 +33,7 @@ extra_data: collections.SafeList(u32),
 scratch: ?*Scratch, // Nullable because when we deserialize a NodeStore, we don't bother to reinitialize scratch.
 
 const Scratch = struct {
+    arena: Allocator,
     statements: base.Scratch(CIR.Statement.Idx),
     exprs: base.Scratch(CIR.Expr.Idx),
     record_fields: base.Scratch(CIR.RecordField.Idx),
@@ -54,22 +55,23 @@ const Scratch = struct {
         const ptr = try arena.create(Scratch);
 
         ptr.* = .{
-            .scratch_statements = try base.Scratch(CIR.Statement.Idx).init(arena),
-            .scratch_exprs = try base.Scratch(CIR.Expr.Idx).init(arena),
-            .scratch_record_fields = try base.Scratch(CIR.RecordField.Idx).init(arena),
-            .scratch_match_branches = try base.Scratch(CIR.Expr.Match.Branch.Idx).init(arena),
-            .scratch_match_branch_patterns = try base.Scratch(CIR.Expr.Match.BranchPattern.Idx).init(arena),
-            .scratch_if_branches = try base.Scratch(CIR.Expr.IfBranch.Idx).init(arena),
-            .scratch_where_clauses = try base.Scratch(CIR.WhereClause.Idx).init(arena),
-            .scratch_patterns = try base.Scratch(CIR.Pattern.Idx).init(arena),
-            .scratch_pattern_record_fields = try base.Scratch(CIR.PatternRecordField.Idx).init(arena),
-            .scratch_record_destructs = try base.Scratch(CIR.Pattern.RecordDestruct.Idx).init(arena),
-            .scratch_type_annos = try base.Scratch(CIR.TypeAnno.Idx).init(arena),
-            .scratch_anno_record_fields = try base.Scratch(CIR.TypeAnno.RecordField.Idx).init(arena),
-            .scratch_exposed_items = try base.Scratch(CIR.ExposedItem.Idx).init(arena),
-            .scratch_defs = try base.Scratch(CIR.Def.Idx).init(arena),
-            .scratch_diagnostics = try base.Scratch(CIR.Diagnostic.Idx).init(arena),
-            .scratch_captures = try base.Scratch(CIR.Expr.Capture.Idx).init(arena),
+            .arena = arena,
+            .statements = try base.Scratch(CIR.Statement.Idx).init(arena),
+            .exprs = try base.Scratch(CIR.Expr.Idx).init(arena),
+            .record_fields = try base.Scratch(CIR.RecordField.Idx).init(arena),
+            .match_branches = try base.Scratch(CIR.Expr.Match.Branch.Idx).init(arena),
+            .match_branch_patterns = try base.Scratch(CIR.Expr.Match.BranchPattern.Idx).init(arena),
+            .if_branches = try base.Scratch(CIR.Expr.IfBranch.Idx).init(arena),
+            .where_clauses = try base.Scratch(CIR.WhereClause.Idx).init(arena),
+            .patterns = try base.Scratch(CIR.Pattern.Idx).init(arena),
+            .pattern_record_fields = try base.Scratch(CIR.PatternRecordField.Idx).init(arena),
+            .record_destructs = try base.Scratch(CIR.Pattern.RecordDestruct.Idx).init(arena),
+            .type_annos = try base.Scratch(CIR.TypeAnno.Idx).init(arena),
+            .anno_record_fields = try base.Scratch(CIR.TypeAnno.RecordField.Idx).init(arena),
+            .exposed_items = try base.Scratch(CIR.ExposedItem.Idx).init(arena),
+            .defs = try base.Scratch(CIR.Def.Idx).init(arena),
+            .diagnostics = try base.Scratch(CIR.Diagnostic.Idx).init(arena),
+            .captures = try base.Scratch(CIR.Expr.Capture.Idx).init(arena),
         };
 
         return ptr;
@@ -99,7 +101,8 @@ pub fn deinit(store: *NodeStore) void {
     store.nodes.deinit(store.gpa);
     store.regions.deinit(store.gpa);
     store.extra_data.deinit(store.gpa);
-    // scratch is arena-allocated and should not be freed
+    // scratch is arena-allocated and should not be freed here
+    // The arena itself will be freed by the caller
 }
 
 /// Compile-time constants for union variant counts to ensure we don't miss cases
@@ -2180,22 +2183,22 @@ pub fn getIfBranch(store: *const NodeStore, if_branch_idx: CIR.Expr.IfBranch.Idx
 
 /// Generic function to get the top of any scratch buffer
 pub fn scratchTop(store: *NodeStore, comptime field_name: []const u8) u32 {
-    return @field(store, field_name).top();
+    return @field(store.scratch.?, field_name).top();
 }
 
 /// Generic function to add an item to any scratch buffer
 pub fn addScratch(store: *NodeStore, comptime field_name: []const u8, idx: anytype) Allocator.Error!void {
-    try @field(store, field_name).append(store.gpa, idx);
+    try @field(store.scratch.?, field_name).append(store.gpa, idx);
 }
 
 /// Generic function to clear any scratch buffer from a given position
 pub fn clearScratchFrom(store: *NodeStore, comptime field_name: []const u8, start: u32) void {
-    @field(store, field_name).clearFrom(start);
+    @field(store.scratch.?, field_name).clearFrom(start);
 }
 
 /// Generic function to create a span from any scratch buffer
 pub fn spanFrom(store: *NodeStore, comptime field_name: []const u8, comptime SpanType: type, start: u32) Allocator.Error!SpanType {
-    const scratch_field = &@field(store, field_name);
+    const scratch_field = &@field(store.scratch.?, field_name);
     const end = scratch_field.top();
     defer scratch_field.clearFrom(start);
     var i = @as(usize, @intCast(start));
@@ -2210,42 +2213,42 @@ pub fn spanFrom(store: *NodeStore, comptime field_name: []const u8, comptime Spa
 
 /// Returns the top of the scratch expressions buffer.
 pub fn scratchExprTop(store: *NodeStore) u32 {
-    return store.scratchTop("scratch_exprs");
+    return store.scratchTop("exprs");
 }
 
 /// Adds a scratch expression to temporary storage.
 pub fn addScratchExpr(store: *NodeStore, idx: CIR.Expr.Idx) Allocator.Error!void {
-    try store.addScratch("scratch_exprs", idx);
+    try store.addScratch("exprs", idx);
 }
 
 /// Adds a capture index to the scratch captures list for building spans.
 pub fn addScratchCapture(store: *NodeStore, idx: CIR.Expr.Capture.Idx) Allocator.Error!void {
-    try store.addScratch("scratch_captures", idx);
+    try store.addScratch("captures", idx);
 }
 
 /// Adds a statement index to the scratch statements list for building spans.
 pub fn addScratchStatement(store: *NodeStore, idx: CIR.Statement.Idx) Allocator.Error!void {
-    try store.addScratch("scratch_statements", idx);
+    try store.addScratch("statements", idx);
 }
 
 /// Computes the span of an expression starting from a given index.
 pub fn exprSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Expr.Span {
-    return try store.spanFrom("scratch_exprs", CIR.Expr.Span, start);
+    return try store.spanFrom("exprs", CIR.Expr.Span, start);
 }
 
 /// Computes the span of captures starting from a given index.
 pub fn capturesSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Expr.Capture.Span {
-    return try store.spanFrom("scratch_captures", CIR.Expr.Capture.Span, start);
+    return try store.spanFrom("captures", CIR.Expr.Capture.Span, start);
 }
 
 /// Creates a statement span from the given start position to the current top of scratch statements.
 pub fn statementSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Statement.Span {
-    return try store.spanFrom("scratch_statements", CIR.Statement.Span, start);
+    return try store.spanFrom("statements", CIR.Statement.Span, start);
 }
 
 /// Clears scratch expressions starting from a specified index.
 pub fn clearScratchExprsFrom(store: *NodeStore, start: u32) void {
-    store.clearScratchFrom("scratch_exprs", start);
+    store.clearScratchFrom("exprs", start);
 }
 
 /// Returns a slice of expressions from the scratch space.
@@ -2255,97 +2258,97 @@ pub fn exprSlice(store: *const NodeStore, span: CIR.Expr.Span) []CIR.Expr.Idx {
 
 /// Returns the top index for scratch definitions.
 pub fn scratchDefTop(store: *NodeStore) u32 {
-    return store.scratchTop("scratch_defs");
+    return store.scratchTop("defs");
 }
 
 /// Adds a scratch definition to temporary storage.
 pub fn addScratchDef(store: *NodeStore, idx: CIR.Def.Idx) Allocator.Error!void {
-    try store.addScratch("scratch_defs", idx);
+    try store.addScratch("defs", idx);
 }
 
 /// Adds a type annotation to the scratch buffer.
 pub fn addScratchTypeAnno(store: *NodeStore, idx: CIR.TypeAnno.Idx) Allocator.Error!void {
-    try store.addScratch("scratch_type_annos", idx);
+    try store.addScratch("type_annos", idx);
 }
 
 /// Adds a where clause to the scratch buffer.
 pub fn addScratchWhereClause(store: *NodeStore, idx: CIR.WhereClause.Idx) Allocator.Error!void {
-    try store.addScratch("scratch_where_clauses", idx);
+    try store.addScratch("where_clauses", idx);
 }
 
 /// Returns the current top of the scratch type annotations buffer.
 pub fn scratchTypeAnnoTop(store: *NodeStore) u32 {
-    return store.scratchTop("scratch_type_annos");
+    return store.scratchTop("type_annos");
 }
 
 /// Returns the current top of the scratch where clauses buffer.
 pub fn scratchWhereClauseTop(store: *NodeStore) u32 {
-    return store.scratchTop("scratch_where_clauses");
+    return store.scratchTop("where_clauses");
 }
 
 /// Clears scratch type annotations from the given index.
 pub fn clearScratchTypeAnnosFrom(store: *NodeStore, from: u32) void {
-    store.clearScratchFrom("scratch_type_annos", from);
+    store.clearScratchFrom("type_annos", from);
 }
 
 /// Clears scratch where clauses from the given index.
 pub fn clearScratchWhereClausesFrom(store: *NodeStore, from: u32) void {
-    store.clearScratchFrom("scratch_where_clauses", from);
+    store.clearScratchFrom("where_clauses", from);
 }
 
 /// Creates a span from the scratch type annotations starting at the given index.
 pub fn typeAnnoSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.TypeAnno.Span {
-    return try store.spanFrom("scratch_type_annos", CIR.TypeAnno.Span, start);
+    return try store.spanFrom("type_annos", CIR.TypeAnno.Span, start);
 }
 
 /// Returns a span from the scratch anno record fields starting at the given index.
 pub fn annoRecordFieldSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.TypeAnno.RecordField.Span {
-    return try store.spanFrom("scratch_anno_record_fields", CIR.TypeAnno.RecordField.Span, start);
+    return try store.spanFrom("anno_record_fields", CIR.TypeAnno.RecordField.Span, start);
 }
 
 /// Returns a span from the scratch record fields starting at the given index.
 pub fn recordFieldSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.RecordField.Span {
-    return try store.spanFrom("scratch_record_fields", CIR.RecordField.Span, start);
+    return try store.spanFrom("record_fields", CIR.RecordField.Span, start);
 }
 
 /// Returns a span from the scratch where clauses starting at the given index.
 pub fn whereClauseSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.WhereClause.Span {
-    return try store.spanFrom("scratch_where_clauses", CIR.WhereClause.Span, start);
+    return try store.spanFrom("where_clauses", CIR.WhereClause.Span, start);
 }
 
 /// Returns the current top of the scratch exposed items buffer.
 pub fn scratchExposedItemTop(store: *NodeStore) u32 {
-    return store.scratchTop("scratch_exposed_items");
+    return store.scratchTop("exposed_items");
 }
 
 /// Adds an exposed item to the scratch buffer.
 pub fn addScratchExposedItem(store: *NodeStore, idx: CIR.ExposedItem.Idx) Allocator.Error!void {
-    try store.addScratch("scratch_exposed_items", idx);
+    try store.addScratch("exposed_items", idx);
 }
 
 /// Creates a span from the scratch exposed items starting at the given index.
 pub fn exposedItemSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.ExposedItem.Span {
-    return try store.spanFrom("scratch_exposed_items", CIR.ExposedItem.Span, start);
+    return try store.spanFrom("exposed_items", CIR.ExposedItem.Span, start);
 }
 
 /// Clears scratch exposed items from the given index.
 pub fn clearScratchExposedItemsFrom(store: *NodeStore, start: u32) void {
-    store.clearScratchFrom("scratch_exposed_items", start);
+    store.clearScratchFrom("exposed_items", start);
 }
 
 /// Returns the start position for a new Span of annoRecordFieldIdxs in scratch
 pub fn scratchAnnoRecordFieldTop(store: *NodeStore) u32 {
-    return store.scratchTop("scratch_anno_record_fields");
+    return store.scratchTop("anno_record_fields");
 }
 
 /// Places a new CIR.TypeAnno.RecordField.Idx in the scratch. Will panic on OOM.
 pub fn addScratchAnnoRecordField(store: *NodeStore, idx: CIR.TypeAnno.RecordField.Idx) Allocator.Error!void {
-    try store.addScratch("scratch_anno_record_fields", idx);
+    try store.addScratch("anno_record_fields", idx);
 }
 
 /// Clears any AnnoRecordFieldIds added to scratch from start until the end.
 pub fn clearScratchAnnoRecordFieldsFrom(store: *NodeStore, start: u32) void {
-    store.clearScratchFrom("scratch_anno_record_fields", start);
+    store.clearScratchFrom("anno_record_fields", start);
 }
 
 /// Returns a new AnnoRecordField slice so that the caller can iterate through
@@ -2356,42 +2359,42 @@ pub fn annoRecordFieldSlice(store: *NodeStore, span: CIR.TypeAnno.RecordField.Sp
 
 /// Computes the span of a definition starting from a given index.
 pub fn defSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Def.Span {
-    return try store.spanFrom("scratch_defs", CIR.Def.Span, start);
+    return try store.spanFrom("defs", CIR.Def.Span, start);
 }
 
 /// Retrieves a slice of record destructures from the store.
 pub fn recordDestructSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Pattern.RecordDestruct.Span {
-    return try store.spanFrom("scratch_record_destructs", CIR.Pattern.RecordDestruct.Span, start);
+    return try store.spanFrom("record_destructs", CIR.Pattern.RecordDestruct.Span, start);
 }
 
 /// Returns the current top of the scratch patterns buffer.
 pub fn scratchPatternTop(store: *NodeStore) u32 {
-    return store.scratchTop("scratch_patterns");
+    return store.scratchTop("patterns");
 }
 
 /// Adds a pattern to the scratch patterns list for building spans.
 pub fn addScratchPattern(store: *NodeStore, idx: CIR.Pattern.Idx) Allocator.Error!void {
-    try store.addScratch("scratch_patterns", idx);
+    try store.addScratch("patterns", idx);
 }
 
 /// Returns the current top of the scratch record destructures buffer.
 pub fn scratchRecordDestructTop(store: *NodeStore) u32 {
-    return store.scratchTop("scratch_record_destructs");
+    return store.scratchTop("record_destructs");
 }
 
 /// Adds a record destructure to the scratch record destructures list for building spans.
 pub fn addScratchRecordDestruct(store: *NodeStore, idx: CIR.Pattern.RecordDestruct.Idx) Allocator.Error!void {
-    try store.addScratch("scratch_record_destructs", idx);
+    try store.addScratch("record_destructs", idx);
 }
 
 /// Creates a pattern span from the given start position to the current top of scratch patterns.
 pub fn patternSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Pattern.Span {
-    return try store.spanFrom("scratch_patterns", CIR.Pattern.Span, start);
+    return try store.spanFrom("patterns", CIR.Pattern.Span, start);
 }
 
 /// Clears scratch definitions starting from a specified index.
 pub fn clearScratchDefsFrom(store: *NodeStore, start: u32) void {
-    store.clearScratchFrom("scratch_defs", start);
+    store.clearScratchFrom("defs", start);
 }
 
 /// Creates a slice corresponding to a span.
@@ -2466,17 +2469,17 @@ pub fn lastFromStatements(store: *const NodeStore, span: CIR.Statement.Span) CIR
 
 /// Returns a slice of if branches from the store.
 pub fn scratchIfBranchTop(store: *NodeStore) u32 {
-    return store.scratchTop("scratch_if_branches");
+    return store.scratchTop("if_branches");
 }
 
 /// Adds an if branch to the scratch if branches list for building spans.
 pub fn addScratchIfBranch(store: *NodeStore, if_branch_idx: CIR.Expr.IfBranch.Idx) Allocator.Error!void {
-    try store.addScratch("scratch_if_branches", if_branch_idx);
+    try store.addScratch("if_branches", if_branch_idx);
 }
 
 /// Creates an if branch span from the given start position to the current top of scratch if branches.
 pub fn ifBranchSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Expr.IfBranch.Span {
-    return try store.spanFrom("scratch_if_branches", CIR.Expr.IfBranch.Span, start);
+    return try store.spanFrom("if_branches", CIR.Expr.IfBranch.Span, start);
 }
 
 /// Adds an if branch to the store and returns its index.
@@ -2843,7 +2846,7 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
     _ = try store.regions.append(store.gpa, region);
 
     // append to our scratch so we can get a span later of all our diagnostics
-    try store.addScratch("scratch_diagnostics", @as(CIR.Diagnostic.Idx, @enumFromInt(nid)));
+    try store.addScratch("diagnostics", @as(CIR.Diagnostic.Idx, @enumFromInt(nid)));
 
     return @enumFromInt(nid);
 }
@@ -3149,7 +3152,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
 
 /// Computes the span of a diagnostic starting from a given index.
 pub fn diagnosticSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Diagnostic.Span {
-    return try store.spanFrom("scratch_diagnostics", CIR.Diagnostic.Span, start);
+    return try store.spanFrom("diagnostics", CIR.Diagnostic.Span, start);
 }
 
 /// Ensure the node store has capacity for at least the requested number of
@@ -3196,32 +3199,32 @@ pub fn fillInTypeVarSlotsThru(store: *NodeStore, target_idx: Node.Idx, parent_no
 
 /// Return the current top index for scratch match branches.
 pub fn scratchMatchBranchTop(store: *NodeStore) u32 {
-    return store.scratchTop("scratch_match_branches");
+    return store.scratchTop("match_branches");
 }
 
 /// Add a match branch index to the scratch buffer.
 pub fn addScratchMatchBranch(store: *NodeStore, branch_idx: CIR.Expr.Match.Branch.Idx) Allocator.Error!void {
-    try store.addScratch("scratch_match_branches", branch_idx);
+    try store.addScratch("match_branches", branch_idx);
 }
 
 /// Create a span from the scratch match branches starting at the given index.
 pub fn matchBranchSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Expr.Match.Branch.Span {
-    return try store.spanFrom("scratch_match_branches", CIR.Expr.Match.Branch.Span, start);
+    return try store.spanFrom("match_branches", CIR.Expr.Match.Branch.Span, start);
 }
 
 /// Return the current top index for scratch match branch patterns.
 pub fn scratchMatchBranchPatternTop(store: *NodeStore) u32 {
-    return store.scratchTop("scratch_match_branch_patterns");
+    return store.scratchTop("match_branch_patterns");
 }
 
 /// Add a match branch pattern index to the scratch buffer.
 pub fn addScratchMatchBranchPattern(store: *NodeStore, pattern_idx: CIR.Expr.Match.BranchPattern.Idx) Allocator.Error!void {
-    try store.addScratch("scratch_match_branch_patterns", pattern_idx);
+    try store.addScratch("match_branch_patterns", pattern_idx);
 }
 
 /// Create a span from the scratch match branch patterns starting at the given index.
 pub fn matchBranchPatternSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Expr.Match.BranchPattern.Span {
-    return try store.spanFrom("scratch_match_branch_patterns", CIR.Expr.Match.BranchPattern.Span, start);
+    return try store.spanFrom("match_branch_patterns", CIR.Expr.Match.BranchPattern.Span, start);
 }
 
 /// Serialized representation of NodeStore
@@ -3270,9 +3273,12 @@ pub const Serialized = struct {
 test "NodeStore empty CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
 
     // Create an empty NodeStore
-    var original = try NodeStore.init(gpa);
+    var original = try NodeStore.init(gpa, arena_allocator);
     defer original.deinit();
 
     // Create a temp file
@@ -3313,9 +3319,12 @@ test "NodeStore empty CompactWriter roundtrip" {
 test "NodeStore basic CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
 
     // Create NodeStore and add some nodes
-    var original = try NodeStore.init(gpa);
+    var original = try NodeStore.init(gpa, arena_allocator);
     defer original.deinit();
 
     // Add a simple expression node
@@ -3394,9 +3403,12 @@ test "NodeStore basic CompactWriter roundtrip" {
 test "NodeStore multiple nodes CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
 
     // Create NodeStore with various node types
-    var original = try NodeStore.init(gpa);
+    var original = try NodeStore.init(gpa, arena_allocator);
     defer original.deinit();
 
     // Add expression variable node
@@ -3503,8 +3515,6 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
         try testing.expectEqual(expected_region.end.offset, retrieved_region.end.offset);
     }
 
-    // Verify all scratch arrays are empty
-    try testing.expectEqual(@as(usize, 0), deserialized.scratch_statements.items.items.len);
-    try testing.expectEqual(@as(usize, 0), deserialized.scratch_exprs.items.items.len);
-    try testing.expectEqual(@as(usize, 0), deserialized.scratch_patterns.items.items.len);
+    // Verify scratch is null (deserialized NodeStores don't allocate scratch)
+    try testing.expect(deserialized.scratch == null);
 }

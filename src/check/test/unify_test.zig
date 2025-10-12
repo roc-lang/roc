@@ -79,8 +79,13 @@ const TestEnv = struct {
     /// could pull module_env's initialization out of here, but this results in
     /// slight more verbose setup for each test
     fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
+        // Create arena allocator for ModuleEnv initialization
+        var arena = std.heap.ArenaAllocator.init(gpa);
+        defer arena.deinit();
+        const arena_allocator = arena.allocator();
+
         const module_env = try gpa.create(ModuleEnv);
-        module_env.* = try ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
+        module_env.* = try ModuleEnv.init(gpa, arena_allocator, try gpa.dupe(u8, ""));
         try module_env.initCIRFields(gpa, "Test");
         return .{
             .module_env = module_env,
