@@ -837,7 +837,7 @@ const Formatter = struct {
                     fmt.curr_indent += 1;
                 }
                 var add_newline = false;
-                try fmt.pushAll("\"\"\"");
+                try fmt.pushAll("\\\\");
                 for (fmt.ast.store.exprSlice(s.parts)) |idx| {
                     const e = fmt.ast.store.getExpr(idx);
                     switch (e) {
@@ -847,7 +847,7 @@ const Formatter = struct {
                                 _ = try fmt.flushCommentsBefore(str.region.start - 1);
                                 try fmt.ensureNewline();
                                 try fmt.pushIndent();
-                                try fmt.pushAll("\"\"\"");
+                                try fmt.pushAll("\\\\");
                             }
 
                             add_newline = true;
