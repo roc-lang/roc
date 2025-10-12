@@ -124,6 +124,56 @@ pub fn deinit(store: *NodeStore) void {
     }
 }
 
+// Scratch field accessors - provide clean access without optional unwrapping
+pub inline fn scratchStatements(store: *const NodeStore) *base.Scratch(CIR.Statement.Idx) {
+    return &store.scratch.?.statements;
+}
+pub inline fn scratchExprs(store: *const NodeStore) *base.Scratch(CIR.Expr.Idx) {
+    return &store.scratch.?.exprs;
+}
+pub inline fn scratchRecordFields(store: *const NodeStore) *base.Scratch(CIR.RecordField.Idx) {
+    return &store.scratch.?.record_fields;
+}
+pub inline fn scratchMatchBranches(store: *const NodeStore) *base.Scratch(CIR.Expr.Match.Branch.Idx) {
+    return &store.scratch.?.match_branches;
+}
+pub inline fn scratchMatchBranchPatterns(store: *const NodeStore) *base.Scratch(CIR.Expr.Match.BranchPattern.Idx) {
+    return &store.scratch.?.match_branch_patterns;
+}
+pub inline fn scratchIfBranches(store: *const NodeStore) *base.Scratch(CIR.Expr.IfBranch.Idx) {
+    return &store.scratch.?.if_branches;
+}
+pub inline fn scratchWhereClauses(store: *const NodeStore) *base.Scratch(CIR.WhereClause.Idx) {
+    return &store.scratch.?.where_clauses;
+}
+pub inline fn scratchPatterns(store: *const NodeStore) *base.Scratch(CIR.Pattern.Idx) {
+    return &store.scratch.?.patterns;
+}
+pub inline fn scratchPatternRecordFields(store: *const NodeStore) *base.Scratch(CIR.PatternRecordField.Idx) {
+    return &store.scratch.?.pattern_record_fields;
+}
+pub inline fn scratchRecordDestructs(store: *const NodeStore) *base.Scratch(CIR.Pattern.RecordDestruct.Idx) {
+    return &store.scratch.?.record_destructs;
+}
+pub inline fn scratchTypeAnnos(store: *const NodeStore) *base.Scratch(CIR.TypeAnno.Idx) {
+    return &store.scratch.?.type_annos;
+}
+pub inline fn scratchAnnoRecordFields(store: *const NodeStore) *base.Scratch(CIR.TypeAnno.RecordField.Idx) {
+    return &store.scratch.?.anno_record_fields;
+}
+pub inline fn scratchExposedItems(store: *const NodeStore) *base.Scratch(CIR.ExposedItem.Idx) {
+    return &store.scratch.?.exposed_items;
+}
+pub inline fn scratchDefs(store: *const NodeStore) *base.Scratch(CIR.Def.Idx) {
+    return &store.scratch.?.defs;
+}
+pub inline fn scratchDiagnostics(store: *const NodeStore) *base.Scratch(CIR.Diagnostic.Idx) {
+    return &store.scratch.?.diagnostics;
+}
+pub inline fn scratchCaptures(store: *const NodeStore) *base.Scratch(CIR.Expr.Capture.Idx) {
+    return &store.scratch.?.captures;
+}
+
 /// Relocate all pointers in the NodeStore by the given offset.
 /// This is used when loading a NodeStore from shared memory at a different address.
 pub fn relocate(store: *NodeStore, offset: i64) void {
