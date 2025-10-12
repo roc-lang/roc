@@ -3860,7 +3860,7 @@ fn extractMultilineStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.
 fn canonicalizePattern(
     self: *Self,
     ast_pattern_idx: AST.Pattern.Idx,
-)std.mem.Allocator.Error!?Pattern.Idx {
+) std.mem.Allocator.Error!?Pattern.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 

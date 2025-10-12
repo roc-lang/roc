@@ -356,7 +356,6 @@ pub fn build(b: *std.Build) void {
         serialization_size_step.dependOn(&run_native.step);
     }
 
-
     // Create and add module tests
     const module_tests = roc_modules.createModuleTests(b, target, optimize, zstd, test_filters);
     for (module_tests) |module_test| {
