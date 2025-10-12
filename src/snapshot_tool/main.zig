@@ -689,12 +689,18 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
     };
 }
 
+var debug_allocator: std.heap.DebugAllocator(.{}) = .{
+    .backing_allocator = std.heap.c_allocator,
+};
+
 /// cli entrypoint for snapshot tool
 pub fn main() !void {
-    // Use GeneralPurposeAllocator for command-line parsing and general work
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa_impl.deinit();
-    const gpa = gpa_impl.allocator();
+    // Always use the debug allocator with the snapshot tool to help find allocation bugs.
+    const gpa = debug_allocator.allocator();
+    defer {
+        const mem_state = debug_allocator.deinit();
+        std.debug.assert(mem_state == .ok);
+    }
 
     const args = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, args);
