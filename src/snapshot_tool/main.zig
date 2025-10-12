@@ -1123,6 +1123,9 @@ fn processSnapshotContent(
     }
 
     // Process the content through the compilation pipeline
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
     var module_env = try ModuleEnv.init(allocator, content.source);
     defer module_env.deinit();
 
@@ -1215,7 +1218,7 @@ fn processSnapshotContent(
             const can_stmt_result = try czer.canonicalizeBlockStatement(czer.parse_ir.store.getStatement(ast_stmt_idx), &.{}, 0);
             if (can_stmt_result.canonicalized_stmt) |can_stmt| {
                 // Manually track scratch statements because we aren't using the file entrypoint
-                const scratch_statements_start = can_ir.store.scratch_statements.top();
+                const scratch_statements_start = can_ir.store.scratch.?.statements.top();
                 try can_ir.store.addScratchStatement(can_stmt.idx);
                 can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
             }

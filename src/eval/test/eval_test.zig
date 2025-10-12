@@ -735,9 +735,9 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
     // Test 2: Full serialization and deserialization with interpreter evaluation
     {
-        var arena = std.heap.ArenaAllocator.init(gpa);
-        defer arena.deinit();
-        const arena_alloc = arena.allocator();
+        var serialization_arena = std.heap.ArenaAllocator.init(gpa);
+        defer serialization_arena.deinit();
+        const arena_alloc = serialization_arena.allocator();
 
         var tmp_dir = testing.tmpDir(.{});
         defer tmp_dir.cleanup();

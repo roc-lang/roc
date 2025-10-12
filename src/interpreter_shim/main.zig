@@ -191,12 +191,6 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*Modu
     env_ptr.gpa = std.heap.page_allocator;
     env_ptr.relocate(offset);
 
-    if (env_ptr.module_name.len > 0) {
-        const old_module_ptr = @intFromPtr(env_ptr.module_name.ptr);
-        const new_module_ptr = @as(isize, @intCast(old_module_ptr)) + offset;
-        env_ptr.module_name.ptr = @ptrFromInt(@as(usize, @intCast(new_module_ptr)));
-    }
-
     return env_ptr;
 }
 

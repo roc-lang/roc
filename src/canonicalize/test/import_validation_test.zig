@@ -28,6 +28,8 @@ fn parseAndCanonicalizeSource(
     can: *Can,
 } {
     const parse_env = try allocator.create(ModuleEnv);
+    // Note: We pass allocator for both gpa and arena since the ModuleEnv
+    // will be cleaned up by the caller
     parse_env.* = try ModuleEnv.init(allocator, source);
 
     const ast = try allocator.create(parse.AST);
@@ -50,6 +52,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
+
     // First, create some module environments with exposed items
     var module_envs = std.StringHashMap(*const ModuleEnv).init(allocator);
     defer module_envs.deinit();
@@ -169,6 +172,7 @@ test "import validation - no module_envs provided" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
+
     // Parse source code with import statements
     const source =
         \\module [main]
@@ -464,6 +468,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
+
     // Create module environments with exposed items
     var module_envs = std.StringHashMap(*const ModuleEnv).init(allocator);
     defer module_envs.deinit();
@@ -587,6 +592,7 @@ test "export count safety - ensures safe u16 casting" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
+
     // This test verifies that we check export counts to ensure safe casting to u16
     // The check triggers when exposed_items.len >= maxInt(u16) (65535)
     // This leaves 0 available as a potential sentinel value if needed

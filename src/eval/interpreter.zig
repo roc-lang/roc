@@ -3705,6 +3705,7 @@ test "interpreter: wiring works" {
 // RED: expect Var->Layout slot to work (will fail until implemented)
 test "interpreter: Var->Layout slot caches computed layout" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
@@ -3729,6 +3730,7 @@ test "interpreter: Var->Layout slot caches computed layout" {
 // RED: translating a compile-time str var should produce a runtime str var
 test "interpreter: translateTypeVar for str" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
@@ -3746,6 +3748,7 @@ test "interpreter: translateTypeVar for str" {
 // RED: translating a compile-time concrete int64 should produce a runtime int64
 test "interpreter: translateTypeVar for int64" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
@@ -3771,6 +3774,7 @@ test "interpreter: translateTypeVar for int64" {
 // RED: translating a compile-time concrete f64 should produce a runtime f64
 test "interpreter: translateTypeVar for f64" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
@@ -3796,6 +3800,7 @@ test "interpreter: translateTypeVar for f64" {
 // RED: translating a compile-time tuple (Str, I64) should produce a runtime tuple with same element shapes
 test "interpreter: translateTypeVar for tuple(Str, I64)" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
@@ -3839,6 +3844,7 @@ test "interpreter: translateTypeVar for tuple(Str, I64)" {
 // RED: translating a compile-time record { first: Str, second: I64 } should produce equivalent runtime record
 test "interpreter: translateTypeVar for record {first: Str, second: I64}" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
@@ -3896,6 +3902,7 @@ test "interpreter: translateTypeVar for record {first: Str, second: I64}" {
 // RED: translating a compile-time alias should produce equivalent runtime alias
 test "interpreter: translateTypeVar for alias of Str" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
@@ -3922,6 +3929,7 @@ test "interpreter: translateTypeVar for alias of Str" {
 // RED: translating a compile-time nominal type should produce equivalent runtime nominal
 test "interpreter: translateTypeVar for nominal Point(Str)" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
@@ -3953,6 +3961,7 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
 // RED: translating a compile-time flex var should produce a runtime flex var
 test "interpreter: translateTypeVar for flex var" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
@@ -3968,6 +3977,7 @@ test "interpreter: translateTypeVar for flex var" {
 // RED: translating a compile-time rigid var should produce a runtime rigid var with same ident
 test "interpreter: translateTypeVar for rigid var" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
@@ -3985,6 +3995,7 @@ test "interpreter: translateTypeVar for rigid var" {
 // RED: poly cache miss then hit
 test "interpreter: poly cache insert and lookup" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
@@ -4020,6 +4031,7 @@ test "interpreter: poly cache insert and lookup" {
 // RED: prepareCall should miss without hint, then hit after inserting with hint
 test "interpreter: prepareCall miss then hit" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
@@ -4049,6 +4061,7 @@ test "interpreter: prepareCall miss then hit" {
 // RED: prepareCallWithFuncVar populates cache based on function type
 test "interpreter: prepareCallWithFuncVar populates cache" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
@@ -4078,6 +4091,7 @@ test "interpreter: prepareCallWithFuncVar populates cache" {
 // RED: unification constrains return type for polymorphic (a -> a), when called with Str
 test "interpreter: unification constrains (a->a) with Str" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
