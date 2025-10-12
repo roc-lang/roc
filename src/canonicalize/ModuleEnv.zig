@@ -80,7 +80,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.types.relocate(offset);
     self.external_decls.relocate(offset);
     self.imports.relocate(offset);
-    self.store.relocate(@intCast(offset));
+    // Note: NodeStore.Serialized.deserialize() handles relocation internally, no separate relocate method needed
 
     // Relocate the module_name pointer if it's not empty
     if (self.module_name.len > 0) {

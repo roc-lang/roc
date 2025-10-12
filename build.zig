@@ -20,6 +20,7 @@ pub fn build(b: *std.Build) void {
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
     const playground_step = b.step("playground", "Build the WASM playground");
     const playground_test_step = b.step("test-playground", "Build the integration test suite for the WASM playground");
+    const serialization_size_step = b.step("test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
 
     // general configuration
     const target = blk: {
@@ -317,6 +318,44 @@ pub fn build(b: *std.Build) void {
 
         break :blk install;
     };
+
+    // Add serialization size check
+    // This verifies that Serialized types have the same size on 32-bit and 64-bit platforms
+    // using compile-time assertions
+    {
+        // Build for native - will fail at compile time if sizes don't match expected
+        const size_check_native = b.addExecutable(.{
+            .name = "serialization_size_check_native",
+            .root_source_file = b.path("test/serialization_size_check.zig"),
+            .target = target,
+            .optimize = .Debug,
+        });
+        roc_modules.addAll(size_check_native);
+
+        // Build for wasm32 (32-bit) - will fail at compile time if sizes don't match expected
+        const size_check_wasm32 = b.addExecutable(.{
+            .name = "serialization_size_check_wasm32",
+            .root_source_file = b.path("test/serialization_size_check.zig"),
+            .target = b.resolveTargetQuery(.{
+                .cpu_arch = .wasm32,
+                .os_tag = .freestanding,
+            }),
+            .optimize = .Debug,
+        });
+        size_check_wasm32.entry = .disabled;
+        size_check_wasm32.rdynamic = true;
+        roc_modules.addAll(size_check_wasm32);
+
+        // Run the native version to confirm (wasm32 build is enough to verify 32-bit)
+        const run_native = b.addRunArtifact(size_check_native);
+
+        // The test passes if both executables build successfully (compile-time checks pass)
+        // and the native one runs without error
+        serialization_size_step.dependOn(&size_check_native.step);
+        serialization_size_step.dependOn(&size_check_wasm32.step);
+        serialization_size_step.dependOn(&run_native.step);
+    }
+
 
     // Create and add module tests
     const module_tests = roc_modules.createModuleTests(b, target, optimize, zstd, test_filters);
