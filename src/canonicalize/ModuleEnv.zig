@@ -1366,7 +1366,7 @@ pub fn getSourceLine(self: *const Self, region: Region) ![]const u8 {
 
 /// Serialized representation of ModuleEnv
 pub const Serialized = struct {
-    gpa: std.mem.Allocator, // Serialized as zeros, provided during deserialization
+    gpa: [2]u64, // Reserve space for allocator (vtable ptr + context ptr), provided during deserialization
     common: CommonEnv.Serialized,
     types: TypeStore.Serialized,
     all_defs: CIR.Def.Span,
@@ -1375,7 +1375,7 @@ pub const Serialized = struct {
     builtin_statements: CIR.Statement.Span,
     external_decls: CIR.ExternalDecl.SafeList.Serialized,
     imports: CIR.Import.Store.Serialized,
-    module_name: []const u8, // Serialized as zeros, provided during deserialization
+    module_name: [2]u64, // Reserve space for slice (ptr + len), provided during deserialization
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
     module_kind: ModuleKind,
@@ -1387,9 +1387,6 @@ pub const Serialized = struct {
         allocator: std.mem.Allocator,
         writer: *CompactWriter,
     ) !void {
-        // Set fields that will be provided during deserialization to zeros
-        self.gpa = undefined; // Will be set to zeros below
-
         try self.common.serialize(&env.common, allocator, writer);
         try self.types.serialize(&env.types, allocator, writer);
 
@@ -1407,9 +1404,10 @@ pub const Serialized = struct {
         // Serialize NodeStore
         try self.store.serialize(&env.store, allocator, writer);
 
-        // Set gpa to all zeros; the space needs to be here,
-        // but the value will be set separately during deserialization.
-        @memset(@as([*]u8, @ptrCast(&self.gpa))[0..@sizeOf(@TypeOf(self.gpa))], 0);
+        // Set gpa and module_name to all zeros; the space needs to be here,
+        // but the values will be set separately during deserialization.
+        self.gpa = .{ 0, 0 };
+        self.module_name = .{ 0, 0 };
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
@@ -1429,7 +1427,7 @@ pub const Serialized = struct {
         env.* = Self{
             .gpa = gpa,
             .common = self.common.deserialize(offset, source).*,
-            .types = self.types.deserialize(offset).*,
+            .types = self.types.deserialize(offset, gpa).*,
             .module_kind = self.module_kind,
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
