@@ -53,6 +53,9 @@ jobs:
       - name: package release
         run: ./ci/package_release.sh ${{ env.RELEASE_FOLDER_NAME }}
 
+      - name: Calculate archive hash for security purposes
+        run: ls | grep "roc_nightly.*tar\.gz" | xargs sha256sum
+
       - name: delete everything except the tar
         run: ls | grep -v "roc_nightly.*tar\.gz" | xargs rm -rf
 

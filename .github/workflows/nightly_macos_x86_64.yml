@@ -61,6 +61,9 @@ jobs:
       - name: package release
         run: ./ci/package_release.sh ${{ env.RELEASE_FOLDER_NAME }}
 
+      - name: Calculate archive hash for security purposes
+        run: ls | grep "roc_nightly.*tar\.gz" | xargs sha256sum
+
       - name: Upload artifact. Actually uploading to github releases has to be done manually.
         uses: actions/upload-artifact@v4
         with:
