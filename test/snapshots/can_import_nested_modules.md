@@ -268,17 +268,6 @@ processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
               ^^^^^^^^^^^^^^^^^^^^^^
 
 
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_nested_modules.md:14:46:14:52:**
-```roc
-processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
-```
-                                             ^^^^^^
-
-
 **MODULE NOT IMPORTED**
 There is no module with the name `Config.Parser` imported into this Roc file.
 
@@ -332,17 +321,6 @@ You're attempting to use this module here:
 validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 ```
                ^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_nested_modules.md:23:40:23:46:**
-```roc
-validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
-```
-                                       ^^^^^^
 
 
 **MODULE NOT IMPORTED**
@@ -569,7 +547,9 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(ty-fn @14.15-14.78 (effectful false)
 					(ty-malformed @14.15-14.37)
 					(ty-lookup @14.39-14.42 (name "Str") (builtin))
-					(ty-malformed @14.46-14.52)))))
+					(ty-apply @14.46-14.78 (name "Result") (external (module-idx "3") (target-node-idx "3"))
+						(ty-lookup @14.53-14.56 (name "Str") (builtin))
+						(ty-malformed @14.58-14.77))))))
 	(d-let
 		(p-assign @20.1-20.13 (ident "formatOutput"))
 		(e-lambda @20.16-20.59
@@ -598,10 +578,12 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(declared-type
 				(ty-fn @23.16-23.78 (effectful false)
 					(ty-malformed @23.16-23.36)
-					(ty-malformed @23.40-23.46)))))
-	(s-import @1.1-1.19 (module "json.Parser") (qualifier "json")
+					(ty-apply @23.40-23.78 (name "Result") (external (module-idx "3") (target-node-idx "3"))
+						(ty-malformed @23.47-23.61)
+						(ty-malformed @23.63-23.77))))))
+	(s-import @1.1-1.19 (module "json.Parser")
 		(exposes))
-	(s-import @2.1-2.19 (module "http.Client") (qualifier "http")
+	(s-import @2.1-2.19 (module "http.Client")
 		(exposes)))
 ~~~
 # TYPES

@@ -38,17 +38,6 @@ UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
 UNDECLARED TYPE - type_app_complex_nested.md:12:32:12:36
 # PROBLEMS
 **UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**type_app_complex_nested.md:18:21:18:27:**
-```roc
-ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
-```
-                    ^^^^^^
-
-
-**UNDECLARED TYPE**
 The type _Maybe_ is not declared in this scope.
 
 This type is referenced here:
@@ -79,17 +68,6 @@ This type is referenced here:
 ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
 ```
                                                      ^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**type_app_complex_nested.md:4:18:4:24:**
-```roc
-processComplex : Result(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
-```
-                 ^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -146,17 +124,6 @@ This type is referenced here:
 deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
 ```
              ^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**type_app_complex_nested.md:12:20:12:26:**
-```roc
-deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
-```
-                   ^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -345,7 +312,10 @@ main! = |_| processComplex(Ok([Some(42), None]))
 		(annotation @5.1-5.15
 			(declared-type
 				(ty-fn @4.18-4.73 (effectful false)
-					(ty-malformed @4.18-4.24)
+					(ty-apply @4.18-4.62 (name "Result") (external (module-idx "3") (target-node-idx "3"))
+						(ty-apply @4.25-4.39 (name "List") (builtin)
+							(ty-malformed @4.30-4.35))
+						(ty-malformed @4.41-4.45))
 					(ty-apply @4.66-4.73 (name "List") (builtin)
 						(ty-rigid-var-lookup (ty-rigid-var @4.36-4.37 (name "a"))))))))
 	(d-let
@@ -384,7 +354,10 @@ main! = |_| processComplex(Ok([Some(42), None]))
 			(ty-args
 				(ty-rigid-var @18.13-18.14 (name "a"))
 				(ty-rigid-var @18.16-18.17 (name "b"))))
-		(ty-malformed @18.21-18.27)))
+		(ty-apply @18.21-18.64 (name "Result") (external (module-idx "3") (target-node-idx "3"))
+			(ty-apply @18.28-18.42 (name "List") (builtin)
+				(ty-malformed @18.33-18.38))
+			(ty-malformed @18.44-18.48))))
 ~~~
 # TYPES
 ~~~clojure

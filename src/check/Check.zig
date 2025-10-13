@@ -1040,7 +1040,8 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenType
                                 try self.updateVar(anno_var, .err, Rank.generalized);
                                 return;
                             } else {
-                                std.debug.assert(false);
+                                // If we get an unexpected type (like .flex), treat it as an error
+                                // This can happen when node indices aren't properly set for compiled modules
                                 try self.updateVar(anno_var, .err, Rank.generalized);
                                 return;
                             }

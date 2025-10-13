@@ -10,29 +10,21 @@ foo = Bool.True
 expect foo != Bool.False
 ~~~
 # EXPECTED
-NIL
+INVALID NOMINAL TAG - expect_stmt_top_level.md:1:7:1:16
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**expect_stmt_top_level.md:1:7:1:11:**
+**INVALID NOMINAL TAG**
+I'm having trouble with this nominal tag:
+**expect_stmt_top_level.md:1:7:1:16:**
 ```roc
 foo = Bool.True
 ```
-      ^^^^
+      ^^^^^^^^^
 
+The tag is:
+    _True_
 
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**expect_stmt_top_level.md:3:15:3:19:**
-```roc
-expect foo != Bool.False
-```
-              ^^^^
-
+But the nominal type needs it to be:
+    _EmptyDict_
 
 # TOKENS
 ~~~zig
@@ -62,12 +54,18 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @1.1-1.4 (ident "foo"))
-		(e-runtime-error (tag "undeclared_type")))
+		(e-nominal-external @1.7-1.16
+			(module-idx "2")
+			(target-node-idx "1")
+			(e-tag @1.7-1.16 (name "True"))))
 	(s-expect @3.1-3.25
 		(e-binop @3.8-3.25 (op "ne")
 			(e-lookup-local @3.8-3.11
 				(p-assign @1.1-1.4 (ident "foo")))
-			(e-runtime-error (tag "undeclared_type")))))
+			(e-nominal-external @3.15-3.25
+				(module-idx "2")
+				(target-node-idx "1")
+				(e-tag @3.15-3.25 (name "False"))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -75,5 +73,5 @@ NO CHANGE
 	(defs
 		(patt @1.1-1.4 (type "Error")))
 	(expressions
-		(expr @1.7-1.11 (type "Error"))))
+		(expr @1.7-1.16 (type "Error"))))
 ~~~

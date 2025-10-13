@@ -24,51 +24,66 @@ type=expr
 )
 ~~~
 # EXPECTED
-NIL
+INVALID NOMINAL TAG - binops.md:14:5:14:14
+INVALID NOMINAL TAG - binops.md:14:19:14:29
+INVALID NOMINAL TAG - binops.md:15:5:15:15
+INVALID NOMINAL TAG - binops.md:15:19:15:28
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**binops.md:14:5:14:9:**
+**INVALID NOMINAL TAG**
+I'm having trouble with this nominal tag:
+**binops.md:14:5:14:14:**
 ```roc
     Bool.True and Bool.False,
 ```
-    ^^^^
+    ^^^^^^^^^
 
+The tag is:
+    _True_
 
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
+But the nominal type needs it to be:
+    _EmptyDict_
 
-This type is referenced here:
-**binops.md:14:19:14:23:**
+**INVALID NOMINAL TAG**
+I'm having trouble with this nominal tag:
+**binops.md:14:19:14:29:**
 ```roc
     Bool.True and Bool.False,
 ```
-                  ^^^^
+                  ^^^^^^^^^^
 
+The tag is:
+    _False_
 
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
+But the nominal type needs it to be:
+    _EmptyDict_
 
-This type is referenced here:
-**binops.md:15:5:15:9:**
+**INVALID NOMINAL TAG**
+I'm having trouble with this nominal tag:
+**binops.md:15:5:15:15:**
 ```roc
     Bool.False or Bool.True,
 ```
-    ^^^^
+    ^^^^^^^^^^
 
+The tag is:
+    _False_
 
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
+But the nominal type needs it to be:
+    _EmptyDict_
 
-This type is referenced here:
-**binops.md:15:19:15:23:**
+**INVALID NOMINAL TAG**
+I'm having trouble with this nominal tag:
+**binops.md:15:19:15:28:**
 ```roc
     Bool.False or Bool.True,
 ```
-                  ^^^^
+                  ^^^^^^^^^
 
+The tag is:
+    _True_
+
+But the nominal type needs it to be:
+    _EmptyDict_
 
 # TOKENS
 ~~~zig
@@ -201,16 +216,28 @@ EndOfFile(18:1-18:1),
 			(e-num @13.5-13.6 (value "4"))
 			(e-num @13.10-13.11 (value "2")))
 		(e-binop @14.5-14.29 (op "and")
-			(e-runtime-error (tag "undeclared_type"))
-			(e-runtime-error (tag "undeclared_type")))
+			(e-nominal-external @14.5-14.14
+				(module-idx "2")
+				(target-node-idx "1")
+				(e-tag @14.5-14.14 (name "True")))
+			(e-nominal-external @14.19-14.29
+				(module-idx "2")
+				(target-node-idx "1")
+				(e-tag @14.19-14.29 (name "False"))))
 		(e-binop @15.5-15.28 (op "or")
-			(e-runtime-error (tag "undeclared_type"))
-			(e-runtime-error (tag "undeclared_type")))
+			(e-nominal-external @15.5-15.15
+				(module-idx "2")
+				(target-node-idx "1")
+				(e-tag @15.5-15.15 (name "False")))
+			(e-nominal-external @15.19-15.28
+				(module-idx "2")
+				(target-node-idx "1")
+				(e-tag @15.19-15.28 (name "True"))))
 		(e-binop @16.5-16.14 (op "null_coalesce")
 			(e-tag @16.5-16.9 (name "None"))
 			(e-num @16.13-16.14 (value "0")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-17.2 (type "(Error, Num(_size), Num(_size2), Num(_size3), Num(_size4), Error, Error, Error, Error, Error, Error, Num(_size5), Error, Error, _field)"))
+(expr @1.1-17.2 (type "(Num(_size), Num(_size2), Num(_size3), Num(_size4), Num(_size5), Error, Error, Error, Error, Error, Error, Num(_size6), Error, Error, _field)"))
 ~~~

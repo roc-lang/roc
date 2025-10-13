@@ -10,17 +10,7 @@ create_user! : Str, U32 => { name : Str, age : U32, id : U64, active : Bool }
 # EXPECTED
 NIL
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**type_function_return_record.md:1:72:1:76:**
-```roc
-create_user! : Str, U32 => { name : Str, age : U32, id : U64, active : Bool }
-```
-                                                                       ^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:13),OpColon(1:14-1:15),UpperIdent(1:16-1:19),Comma(1:19-1:20),UpperIdent(1:21-1:24),OpFatArrow(1:25-1:27),OpenCurly(1:28-1:29),LowerIdent(1:30-1:34),OpColon(1:35-1:36),UpperIdent(1:37-1:40),Comma(1:40-1:41),LowerIdent(1:42-1:45),OpColon(1:46-1:47),UpperIdent(1:48-1:51),Comma(1:51-1:52),LowerIdent(1:53-1:55),OpColon(1:56-1:57),UpperIdent(1:58-1:61),Comma(1:61-1:62),LowerIdent(1:63-1:69),OpColon(1:70-1:71),UpperIdent(1:72-1:76),CloseCurly(1:77-1:78),

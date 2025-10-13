@@ -54,7 +54,7 @@ NO CHANGE
 	(d-let
 		(p-assign @3.1-3.5 (ident "main"))
 		(e-num @3.8-3.10 (value "42")))
-	(s-import @1.1-1.42 (module "pf.Stdout") (qualifier "pf")
+	(s-import @1.1-1.42 (module "pf.Stdout")
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false)))))

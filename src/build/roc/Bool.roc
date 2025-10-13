@@ -5,9 +5,21 @@ Bool := [True, False].{
 		Bool.False => Bool.True
 	}
 
-	equals : Bool, Bool -> Bool
-	equals = |a, b| match a {
+	eq : Bool, Bool -> Bool
+	eq = |a, b| match a {
 		Bool.True => b
 		Bool.False => Bool.not(b)
 	}
+
+	ne : Bool, Bool -> Bool
+	ne = |a, b| match a {
+		Bool.True => Bool.not(b)
+		Bool.False => b
+	}
+
+	#encoder : Bool -> Encoder(fmt, [])
+	#	where [fmt implements EncoderFormatting]
+	#encoder =
+
+	#Encoder fmt := List U8, fmt -> List U8 where fmt implements EncoderFormatting
 }

@@ -76,25 +76,25 @@ NO CHANGE
 									(p-assign @1.7-1.8 (ident "b")))
 								(e-closure @1.10-1.39
 									(captures
-										(capture @1.7-1.8 (ident "b"))
-										(capture @1.3-1.4 (ident "a")))
+										(capture @1.3-1.4 (ident "a"))
+										(capture @1.7-1.8 (ident "b")))
 									(e-lambda @1.10-1.39
 										(args
 											(p-assign @1.11-1.12 (ident "c")))
 										(e-closure @1.14-1.39
 											(captures
-												(capture @1.7-1.8 (ident "b"))
+												(capture @1.11-1.12 (ident "c"))
 												(capture @1.3-1.4 (ident "a"))
-												(capture @1.11-1.12 (ident "c")))
+												(capture @1.7-1.8 (ident "b")))
 											(e-lambda @1.14-1.39
 												(args
 													(p-assign @1.15-1.16 (ident "d")))
 												(e-closure @1.18-1.39
 													(captures
-														(capture @1.7-1.8 (ident "b"))
-														(capture @1.3-1.4 (ident "a"))
+														(capture @1.15-1.16 (ident "d"))
 														(capture @1.11-1.12 (ident "c"))
-														(capture @1.15-1.16 (ident "d")))
+														(capture @1.3-1.4 (ident "a"))
+														(capture @1.7-1.8 (ident "b")))
 													(e-lambda @1.18-1.39
 														(args
 															(p-assign @1.19-1.20 (ident "e")))

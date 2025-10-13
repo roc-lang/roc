@@ -46,6 +46,7 @@ combineResults = |result1, result2|
 # EXPECTED
 MODULE NOT FOUND - can_import_type_annotations.md:1:1:1:56
 MODULE NOT FOUND - can_import_type_annotations.md:2:1:2:17
+DUPLICATE DEFINITION - can_import_type_annotations.md:1:1:1:1
 MODULE NOT FOUND - can_import_type_annotations.md:3:1:3:38
 UNDECLARED TYPE - can_import_type_annotations.md:5:18:5:25
 UNDECLARED TYPE - can_import_type_annotations.md:5:29:5:37
@@ -73,6 +74,24 @@ You're attempting to use this module here:
 import json.Json
 ```
 ^^^^^^^^^^^^^^^^
+
+
+**DUPLICATE DEFINITION**
+The name `Result` is being redeclared in this scope.
+
+The redeclaration is here:
+**can_import_type_annotations.md:1:1:1:1:**
+```roc
+import http.Client as Http exposing [Request, Response]
+```
+^
+
+But `Result` was already defined here:
+**can_import_type_annotations.md:1:1:1:1:**
+```roc
+import http.Client as Http exposing [Request, Response]
+```
+^
 
 
 **MODULE NOT FOUND**
@@ -120,17 +139,6 @@ processRequest = |req| Http.defaultResponse
                   ^^^
 
 
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_type_annotations.md:11:29:11:35:**
-```roc
-handleApi : Http.Request -> Result(Http.Response, Json.Error)
-```
-                            ^^^^^^
-
-
 **MODULE NOT IMPORTED**
 There is no module with the name `Json.Parser` imported into this Roc file.
 
@@ -142,17 +150,6 @@ advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error
                  ^^^^^^^^^^^^^^^^^^
 
 
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_type_annotations.md:24:45:24:51:**
-```roc
-advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
-```
-                                            ^^^^^^
-
-
 **MODULE NOT IMPORTED**
 There is no module with the name `Json.Parser` imported into this Roc file.
 
@@ -162,39 +159,6 @@ You're attempting to use this module here:
 advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
 ```
                                                                ^^^^^^^^^^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_type_annotations.md:28:18:28:24:**
-```roc
-combineResults : Result(a, err), Result(b, err) -> Result((a, b), err)
-```
-                 ^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_type_annotations.md:28:34:28:40:**
-```roc
-combineResults : Result(a, err), Result(b, err) -> Result((a, b), err)
-```
-                                 ^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_type_annotations.md:28:52:28:58:**
-```roc
-combineResults : Result(a, err), Result(b, err) -> Result((a, b), err)
-```
-                                                   ^^^^^^
 
 
 # TOKENS
@@ -428,7 +392,7 @@ combineResults = |result1, result2|
 			(args
 				(p-assign @6.19-6.22 (ident "req")))
 			(e-lookup-external @6.24-6.44
-				(module-idx "2")
+				(module-idx "4")
 				(target-node-idx "0")))
 		(annotation @6.1-6.15
 			(declared-type
@@ -442,7 +406,7 @@ combineResults = |result1, result2|
 				(p-assign @9.14-9.19 (ident "input")))
 			(e-call @9.21-9.38
 				(e-lookup-external @9.21-9.31
-					(module-idx "3")
+					(module-idx "5")
 					(target-node-idx "0"))
 				(e-lookup-local @9.32-9.37
 					(p-assign @9.14-9.19 (ident "input")))))
@@ -450,7 +414,7 @@ combineResults = |result1, result2|
 			(declared-type
 				(ty-fn @8.13-8.30 (effectful false)
 					(ty-lookup @8.13-8.16 (name "Str") (builtin))
-					(ty-lookup @8.20-8.30 (name "Value") (external (module-idx "3") (target-node-idx "0")))))))
+					(ty-lookup @8.20-8.30 (name "Value") (external (module-idx "5") (target-node-idx "0")))))))
 	(d-let
 		(p-assign @12.1-12.10 (ident "handleApi"))
 		(e-closure @12.13-18.2
@@ -465,7 +429,7 @@ combineResults = |result1, result2|
 						(p-assign @13.5-13.11 (ident "result"))
 						(e-call @13.14-13.39
 							(e-lookup-external @13.14-13.25
-								(module-idx "3")
+								(module-idx "5")
 								(target-node-idx "0"))
 							(e-dot-access @13.26-13.38 (field "body")
 								(receiver
@@ -486,7 +450,7 @@ combineResults = |result1, result2|
 											(args
 												(e-call @15.24-15.42
 													(e-lookup-external @15.24-15.36
-														(module-idx "2")
+														(module-idx "4")
 														(target-node-idx "0"))
 													(e-lookup-local @15.37-15.41
 														(p-assign @15.12-15.16 (ident "data"))))))))
@@ -502,16 +466,18 @@ combineResults = |result1, result2|
 		(annotation @12.1-12.10
 			(declared-type
 				(ty-fn @11.13-11.62 (effectful false)
-					(ty-lookup @11.13-11.25 (name "Request") (external (module-idx "2") (target-node-idx "0")))
-					(ty-malformed @11.29-11.35)))))
+					(ty-lookup @11.13-11.25 (name "Request") (external (module-idx "4") (target-node-idx "0")))
+					(ty-apply @11.29-11.62 (name "Result") (external (module-idx "3") (target-node-idx "3"))
+						(ty-lookup @11.36-11.49 (name "Response") (external (module-idx "4") (target-node-idx "0")))
+						(ty-lookup @11.51-11.61 (name "Error") (external (module-idx "5") (target-node-idx "0"))))))))
 	(d-let
 		(p-assign @21.1-21.7 (ident "config"))
 		(e-lookup-external @21.10-21.28
-			(module-idx "3")
+			(module-idx "5")
 			(target-node-idx "0"))
 		(annotation @21.1-21.7
 			(declared-type
-				(ty-lookup @20.10-20.21 (name "Config") (external (module-idx "3") (target-node-idx "0"))))))
+				(ty-lookup @20.10-20.21 (name "Config") (external (module-idx "5") (target-node-idx "0"))))))
 	(d-let
 		(p-assign @25.1-25.15 (ident "advancedParser"))
 		(e-lambda @25.18-25.82
@@ -520,7 +486,7 @@ combineResults = |result1, result2|
 				(p-assign @25.33-25.38 (ident "input")))
 			(e-call @25.40-25.82
 				(e-lookup-external @25.40-25.61
-					(module-idx "3")
+					(module-idx "5")
 					(target-node-idx "0"))
 				(e-lookup-local @25.62-25.74
 					(p-assign @25.19-25.31 (ident "parserConfig")))
@@ -531,15 +497,17 @@ combineResults = |result1, result2|
 				(ty-fn @24.18-24.82 (effectful false)
 					(ty-malformed @24.18-24.36)
 					(ty-lookup @24.38-24.41 (name "Str") (builtin))
-					(ty-malformed @24.45-24.51)))))
+					(ty-apply @24.45-24.82 (name "Result") (external (module-idx "3") (target-node-idx "3"))
+						(ty-lookup @24.52-24.62 (name "Value") (external (module-idx "5") (target-node-idx "0")))
+						(ty-malformed @24.64-24.81))))))
 	(d-let
 		(p-assign @29.1-29.15 (ident "combineResults"))
 		(e-closure @29.18-37.6
 			(captures
-				(capture @34.21-34.24 (ident "err"))
-				(capture @36.13-36.16 (ident "err"))
 				(capture @31.12-31.18 (ident "value1"))
-				(capture @33.20-33.26 (ident "value2")))
+				(capture @36.13-36.16 (ident "err"))
+				(capture @33.20-33.26 (ident "value2"))
+				(capture @34.21-34.24 (ident "err")))
 			(e-lambda @29.18-37.6
 				(args
 					(p-assign @29.19-29.26 (ident "result1"))
@@ -595,16 +563,24 @@ combineResults = |result1, result2|
 		(annotation @29.1-29.15
 			(declared-type
 				(ty-fn @28.18-28.71 (effectful false)
-					(ty-malformed @28.18-28.24)
-					(ty-malformed @28.34-28.40)
-					(ty-malformed @28.52-28.58)))))
-	(s-import @1.1-1.56 (module "http.Client") (qualifier "http") (alias "Http")
+					(ty-apply @28.18-28.32 (name "Result") (external (module-idx "3") (target-node-idx "3"))
+						(ty-rigid-var @28.25-28.26 (name "a"))
+						(ty-rigid-var @28.28-28.31 (name "err")))
+					(ty-apply @28.34-28.48 (name "Result") (external (module-idx "3") (target-node-idx "3"))
+						(ty-rigid-var @28.41-28.42 (name "b"))
+						(ty-rigid-var-lookup (ty-rigid-var @28.28-28.31 (name "err"))))
+					(ty-apply @28.52-28.71 (name "Result") (external (module-idx "3") (target-node-idx "3"))
+						(ty-tuple @28.59-28.65
+							(ty-rigid-var-lookup (ty-rigid-var @28.25-28.26 (name "a")))
+							(ty-rigid-var-lookup (ty-rigid-var @28.41-28.42 (name "b"))))
+						(ty-rigid-var-lookup (ty-rigid-var @28.28-28.31 (name "err"))))))))
+	(s-import @1.1-1.56 (module "http.Client")
 		(exposes
 			(exposed (name "Request") (wildcard false))
 			(exposed (name "Response") (wildcard false))))
-	(s-import @2.1-2.17 (module "json.Json") (qualifier "json")
+	(s-import @2.1-2.17 (module "json.Json")
 		(exposes))
-	(s-import @3.1-3.38 (module "utils.Result") (qualifier "utils")
+	(s-import @3.1-3.38 (module "utils.Result")
 		(exposes
 			(exposed (name "Result") (wildcard false)))))
 ~~~
@@ -613,16 +589,16 @@ combineResults = |result1, result2|
 (inferred-types
 	(defs
 		(patt @6.1-6.15 (type "Error -> Error"))
-		(patt @9.1-9.10 (type "Str -> _ret"))
-		(patt @12.1-12.10 (type "_arg -> Error"))
-		(patt @21.1-21.7 (type "_c"))
+		(patt @9.1-9.10 (type "Str -> Error"))
+		(patt @12.1-12.10 (type "Error -> Error"))
+		(patt @21.1-21.7 (type "Error"))
 		(patt @25.1-25.15 (type "Error, Str -> Error"))
 		(patt @29.1-29.15 (type "Error, Error -> Error")))
 	(expressions
 		(expr @6.18-6.44 (type "Error -> Error"))
-		(expr @9.13-9.38 (type "Str -> _ret"))
-		(expr @12.13-18.2 (type "_arg -> Error"))
-		(expr @21.10-21.28 (type "_c"))
+		(expr @9.13-9.38 (type "Str -> Error"))
+		(expr @12.13-18.2 (type "Error -> Error"))
+		(expr @21.10-21.28 (type "Error"))
 		(expr @25.18-25.82 (type "Error, Str -> Error"))
 		(expr @29.18-37.6 (type "Error, Error -> Error"))))
 ~~~

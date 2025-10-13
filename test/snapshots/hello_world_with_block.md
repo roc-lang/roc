@@ -106,11 +106,11 @@ NO CHANGE
 						(e-literal @9.11-9.16 (string "World"))))
 				(e-call @11.2-11.31
 					(e-lookup-external @11.2-11.14
-						(module-idx "2")
+						(module-idx "4")
 						(target-node-idx "0"))
 					(e-string @11.15-11.30
 						(e-literal @11.16-11.29 (string "Hello, world!")))))))
-	(s-import @6.1-6.17 (module "pf.Stdout") (qualifier "pf")
+	(s-import @6.1-6.17 (module "pf.Stdout")
 		(exposes)))
 ~~~
 # TYPES

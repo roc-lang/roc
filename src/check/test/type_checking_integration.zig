@@ -311,7 +311,7 @@ test "check type - let-def polymorphic function is generalized" {
         \\main = {
         \\    id = |x| x
         \\    a = id(42)
-        \\    b = id("hello")
+        \\    _b = id("hello")
         \\    a
         \\}
     ;
@@ -336,6 +336,8 @@ test "check type - polymorphic function function param should be constrained" {
 
 test "check type - basic alias" {
     const source =
+        \\main! = |_| {}
+        \\
         \\MyAlias : Str
         \\
         \\x : MyAlias
@@ -346,6 +348,8 @@ test "check type - basic alias" {
 
 test "check type - alias with arg" {
     const source =
+        \\main! = |_| {}
+        \\
         \\MyListAlias(a) : List(a)
         \\
         \\x : MyListAlias(Num(size))
@@ -368,6 +372,8 @@ test "check type - alias with mismatch arg" {
 
 test "check type - basic nominal" {
     const source =
+        \\main! = |_| {}
+        \\
         \\MyNominal := [MyNominal]
         \\
         \\x : MyNominal
@@ -378,6 +384,8 @@ test "check type - basic nominal" {
 
 test "check type - nominal with tag arg" {
     const source =
+        \\main! = |_| {}
+        \\
         \\MyNominal := [MyNominal(Str)]
         \\
         \\x : MyNominal
@@ -388,6 +396,8 @@ test "check type - nominal with tag arg" {
 
 test "check type - nominal with type and tag arg" {
     const source =
+        \\main! = |_| {}
+        \\
         \\MyNominal(a) := [MyNominal(a)]
         \\
         \\x : MyNominal(U8)
@@ -398,6 +408,8 @@ test "check type - nominal with type and tag arg" {
 
 test "check type - nominal with with rigid vars" {
     const source =
+        \\main! = |_| {}
+        \\
         \\Pair(a) := [Pair(a, a)]
         \\
         \\pairU64 : Pair(U64)
@@ -418,6 +430,8 @@ test "check type - nominal with with rigid vars mismatch" {
 
 test "check type - nominal recursive type" {
     const source =
+        \\main! = |_| {}
+        \\
         \\ConsList(a) := [Nil, Cons(a, ConsList(a))]
         \\
         \\x : ConsList(Str)
@@ -438,6 +452,8 @@ test "check type - nominal recursive type anno mismatch" {
 
 test "check type - two nominal types" {
     const source =
+        \\main! = |_| {}
+        \\
         \\Elem(a) := [Elem(a)]
         \\
         \\ConsList(a) := [Nil, Cons(a, ConsList(a))]
@@ -449,6 +465,8 @@ test "check type - two nominal types" {
 
 test "check type - nominal recursive type no args" {
     const source =
+        \\main! = |_| {}
+        \\
         \\StrConsList := [Nil, Cons(Str, StrConsList)]
         \\
         \\x : StrConsList
@@ -479,6 +497,8 @@ test "check type - nominal w/ polymorphic function with bad args" {
 
 test "check type - nominal w/ polymorphic function" {
     const source =
+        \\main! = |_| {}
+        \\
         \\Pair(a, b) : (a, b)
         \\
         \\swapPair : Pair(a, b) -> Pair(b, a)
@@ -536,7 +556,7 @@ test "check type - if else - qualified bool" {
 test "check type - if else - invalid condition 1" {
     const source =
         \\x : Str
-        \\x = if True "true" else "false"
+        \\x = if 5 "true" else "false"
     ;
     try assertFileTypeCheckFail(source, "INVALID IF CONDITION");
 }
@@ -544,9 +564,9 @@ test "check type - if else - invalid condition 1" {
 test "check type - if else - invalid condition 2" {
     const source =
         \\x : Str
-        \\x = if False "true" else "false"
+        \\x = if 10 "true" else "false"
     ;
-    try assertFileTypeCheckFail(source, "INVALID NOMINAL TAG");
+    try assertFileTypeCheckFail(source, "INVALID IF CONDITION");
 }
 
 test "check type - if else - invalid condition 3" {
@@ -877,8 +897,8 @@ test "check type - patterns list" {
         \\  x = ["a", "b", "c"]
         \\
         \\  match(x) {
-        \\    [.. as b, a]  => b,
-        \\    [a, .. as b]  => b,
+        \\    [.. as b, _a]  => b,
+        \\    [_a, .. as b]  => b,
         \\    []  => [],
         \\  }
         \\}

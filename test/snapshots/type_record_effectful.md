@@ -113,7 +113,7 @@ main! = |_| {}
 				(s-expr @7.5-7.30
 					(e-call @7.5-7.30
 						(e-lookup-external @7.5-7.17
-							(module-idx "2")
+							(module-idx "4")
 							(target-node-idx "0"))
 						(e-dot-access @7.18-7.29 (field "name")
 							(receiver
@@ -138,7 +138,7 @@ main! = |_| {}
 			(args
 				(p-underscore @10.10-10.11))
 			(e-empty_record @10.13-10.15)))
-	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
+	(s-import @3.1-3.17 (module "pf.Stdout")
 		(exposes)))
 ~~~
 # TYPES

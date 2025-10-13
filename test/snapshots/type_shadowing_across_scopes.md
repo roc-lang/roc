@@ -21,7 +21,6 @@ PARSE ERROR - type_shadowing_across_scopes.md:9:5:9:11
 PARSE ERROR - type_shadowing_across_scopes.md:9:24:9:31
 PARSE ERROR - type_shadowing_across_scopes.md:9:31:9:32
 PARSE ERROR - type_shadowing_across_scopes.md:10:1:10:2
-TYPE REDECLARED - type_shadowing_across_scopes.md:1:1:1:31
 MALFORMED TYPE - type_shadowing_across_scopes.md:9:24:9:31
 UNUSED VARIABLE - type_shadowing_across_scopes.md:4:16:4:20
 # PROBLEMS

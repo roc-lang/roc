@@ -529,13 +529,13 @@ main! = |_| {
 		(p-assign @55.1-55.6 (ident "main!"))
 		(e-closure @55.9-65.2
 			(captures
-				(capture @4.1-4.2 (ident "a"))
-				(capture @23.1-23.2 (ident "f"))
 				(capture @7.1-7.9 (ident "identity"))
+				(capture @23.1-23.2 (ident "f"))
+				(capture @4.1-4.2 (ident "a"))
 				(capture @16.1-16.16 (ident "anotherIdentity"))
+				(capture @46.1-46.19 (ident "yetAnotherIdentity"))
 				(capture @20.1-20.8 (ident "combine"))
-				(capture @53.1-53.14 (ident "finalIdentity"))
-				(capture @46.1-46.19 (ident "yetAnotherIdentity")))
+				(capture @53.1-53.14 (ident "finalIdentity")))
 			(e-lambda @55.9-65.2
 				(args
 					(p-underscore @55.10-55.11))

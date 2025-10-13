@@ -49,16 +49,16 @@ NO CHANGE
 	(d-let
 		(p-assign @3.1-3.5 (ident "main"))
 		(e-lookup-external @3.8-3.21
-			(module-idx "2")
+			(module-idx "4")
 			(target-node-idx "0")))
-	(s-import @1.1-1.27 (module "json.Json") (qualifier "json") (alias "MyJson")
+	(s-import @1.1-1.27 (module "json.Json")
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.5 (type "_a")))
+		(patt @3.1-3.5 (type "Error")))
 	(expressions
-		(expr @3.8-3.21 (type "_a"))))
+		(expr @3.8-3.21 (type "Error"))))
 ~~~

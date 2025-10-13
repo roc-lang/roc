@@ -19,7 +19,7 @@ type=expr
 ]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - tag_applications_simple.md:3:5:3:5
+INCOMPATIBLE LIST ELEMENTS - tag_applications_simple.md:9:5:9:5
 # PROBLEMS
 **INCOMPATIBLE LIST ELEMENTS**
 The eighth and ninth elements in this list have incompatible types:

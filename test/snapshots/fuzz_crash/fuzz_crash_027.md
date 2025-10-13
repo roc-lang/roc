@@ -228,7 +228,6 @@ TOO FEW ARGS - fuzz_crash_027.md:21:3:22:4
 INVALID IF CONDITION - fuzz_crash_027.md:50:5:50:5
 TYPE MISMATCH - fuzz_crash_027.md:68:3:68:8
 TYPE MISMATCH - fuzz_crash_027.md:111:2:113:3
-TYPE MISMATCH - fuzz_crash_027.md:143:2:147:3
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.
@@ -650,17 +649,6 @@ This type is referenced here:
 main! : List(String) -> Result({}, _)
 ```
              ^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_027.md:99:25:99:31:**
-```roc
-main! : List(String) -> Result({}, _)
-```
-                        ^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -2051,7 +2039,9 @@ expect {
 				(ty-fn @99.9-99.38 (effectful false)
 					(ty-apply @99.9-99.21 (name "List") (builtin)
 						(ty-malformed @99.14-99.20))
-					(ty-malformed @99.25-99.31)))))
+					(ty-apply @99.25-99.38 (name "Result") (external (module-idx "3") (target-node-idx "3"))
+						(ty-record @99.32-99.34)
+						(ty-underscore @1.1-1.1))))))
 	(d-let
 		(p-assign @151.1-151.6 (ident "empty"))
 		(e-empty_record @151.9-151.11)
@@ -2121,17 +2111,17 @@ expect {
 			(ty-malformed @43.11-43.16)
 			(ty-rigid-var-lookup (ty-rigid-var @43.6-43.7 (name "a")))
 			(ty-malformed @43.26-43.31)))
-	(s-import @4.1-4.38 (module "pf.Stdout") (qualifier "pf")
+	(s-import @4.1-4.38 (module "pf.Stdout")
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "e!") (wildcard false))))
 	(s-import @6.1-8.4 (module "Stdot")
 		(exposes))
-	(s-import @10.1-10.46 (module "pkg.S") (qualifier "pkg")
+	(s-import @10.1-10.46 (module "pkg.S")
 		(exposes
 			(exposed (name "func") (alias "fry") (wildcard false))
 			(exposed (name "Custom") (wildcard true))))
-	(s-import @12.1-12.19 (module "Bae") (alias "Gooe")
+	(s-import @12.1-12.19 (module "Bae")
 		(exposes))
 	(s-import @13.1-14.4 (module "Ba")
 		(exposes))
@@ -2157,13 +2147,13 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @45.1-45.4 (type "b -> Num(_size)"))
+		(patt @45.1-45.4 (type "Bool -> Num(_size)"))
 		(patt @48.1-48.8 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(patt @60.1-60.11 (type "[Red, Blue]_others, _arg -> Error"))
 		(patt @100.1-100.6 (type "List(Error) -> Error"))
 		(patt @151.1-151.6 (type "{}")))
 	(type_decls
-		(alias @15.1-15.41 (type "Map(a, Error)")
+		(alias @15.1-15.41 (type "Map(a, b)")
 			(ty-header @15.1-15.10 (name "Map")
 				(ty-args
 					(ty-rigid-var @15.5-15.6 (name "a"))
@@ -2192,7 +2182,7 @@ expect {
 				(ty-args
 					(ty-rigid-var @43.6-43.7 (name "a"))))))
 	(expressions
-		(expr @45.7-45.28 (type "b -> Num(_size)"))
+		(expr @45.7-45.28 (type "Bool -> Num(_size)"))
 		(expr @48.11-58.2 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(expr @60.14-94.3 (type "[Red, Blue]_others, _arg -> Error"))
 		(expr @100.9-148.2 (type "List(Error) -> Error"))

@@ -17,41 +17,36 @@ isOk = |result| match result {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - nominal_tag_unqualified_with_payload.md:4:12:4:25
-TYPE MISMATCH - nominal_tag_unqualified_with_payload.md:8:5:8:10
+INVALID NOMINAL TAG - nominal_tag_unqualified_with_payload.md:8:14:8:23
+INVALID NOMINAL TAG - nominal_tag_unqualified_with_payload.md:9:15:9:25
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_tag_unqualified_with_payload.md:6:29:6:33:**
-```roc
-isOk : MyResult(ok, err) -> Bool
-```
-                            ^^^^
-
-
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_tag_unqualified_with_payload.md:8:14:8:18:**
+**INVALID NOMINAL TAG**
+I'm having trouble with this nominal tag:
+**nominal_tag_unqualified_with_payload.md:8:14:8:23:**
 ```roc
     Ok(_) => Bool.True
 ```
-             ^^^^
+             ^^^^^^^^^
 
+The tag is:
+    _True_
 
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
+But the nominal type needs it to be:
+    _EmptyDict_
 
-This type is referenced here:
-**nominal_tag_unqualified_with_payload.md:9:15:9:19:**
+**INVALID NOMINAL TAG**
+I'm having trouble with this nominal tag:
+**nominal_tag_unqualified_with_payload.md:9:15:9:25:**
 ```roc
     Err(_) => Bool.False
 ```
-              ^^^^
+              ^^^^^^^^^^
 
+The tag is:
+    _False_
+
+But the nominal type needs it to be:
+    _EmptyDict_
 
 # TOKENS
 ~~~zig
@@ -161,20 +156,26 @@ isOk = |result| match result {
 								(pattern (degenerate false)
 									(p-applied-tag @8.5-8.10)))
 							(value
-								(e-runtime-error (tag "undeclared_type"))))
+								(e-nominal-external @8.14-8.23
+									(module-idx "2")
+									(target-node-idx "1")
+									(e-tag @8.14-8.23 (name "True")))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-applied-tag @9.5-9.11)))
 							(value
-								(e-runtime-error (tag "undeclared_type"))))))))
+								(e-nominal-external @9.15-9.25
+									(module-idx "2")
+									(target-node-idx "1")
+									(e-tag @9.15-9.25 (name "False")))))))))
 		(annotation @7.1-7.5
 			(declared-type
 				(ty-fn @6.8-6.33 (effectful false)
 					(ty-apply @6.8-6.25 (name "MyResult") (local)
 						(ty-rigid-var @6.8-6.25 (name "ok"))
 						(ty-rigid-var @6.8-6.25 (name "err")))
-					(ty-malformed @6.29-6.33)))))
+					(ty-lookup @6.29-6.33 (name "Bool") (external (module-idx "2") (target-node-idx "1")))))))
 	(s-nominal-decl @1.1-1.40
 		(ty-header @1.1-1.18 (name "MyResult")
 			(ty-args

@@ -203,6 +203,7 @@ pub fn init(
 
     // Auto-import builtin modules using the same logic as explicit imports
     // This ensures 100% code sharing between explicit imports and auto-imports
+    // IMPORTANT: Only auto-import specific builtin modules (Bool, Result), not user modules
     if (module_envs) |envs_map| {
         // Create empty exposed items span - processModuleImport will auto-expose the main type for type modules
         const empty_exposed_span = CIR.ExposedItem.Span{
@@ -218,25 +219,27 @@ pub fn init(
             .end = Region.Position.zero(),
         };
 
-        var iter = envs_map.iterator();
-        while (iter.next()) |entry| {
-            const module_name_text = entry.key_ptr.*;
-            const module_name_ident = try env.insertIdent(base.Ident.for_text(module_name_text));
+        // Only auto-import known builtin modules
+        const builtin_modules = [_][]const u8{ "Bool", "Result" };
+        for (builtin_modules) |module_name_text| {
+            if (envs_map.get(module_name_text)) |_| {
+                const module_name_ident = try env.insertIdent(base.Ident.for_text(module_name_text));
 
-            // Use the same alias as the module name for auto-imports
-            const alias = module_name_ident;
+                // Use the same alias as the module name for auto-imports
+                const alias = module_name_ident;
 
-            // Process the import using the shared helper function
-            // This will:
-            // - Get or create Import.Idx
-            // - Introduce module alias to scope
-            // - Process type imports
-            // - Introduce exposed items (including auto-expose for type modules)
-            // - Store import_indices mapping
-            // - Create CIR import statement
-            // - Add imported module to scope
-            // - Check module exists
-            _ = try result.processModuleImport(module_name_ident, alias, empty_exposed_span, auto_import_region);
+                // Process the import using the shared helper function
+                // This will:
+                // - Get or create Import.Idx
+                // - Introduce module alias to scope
+                // - Process type imports
+                // - Introduce exposed items (including auto-expose for type modules)
+                // - Store import_indices mapping
+                // - Create CIR import statement
+                // - Add imported module to scope
+                // - Check module exists
+                _ = try result.processModuleImport(module_name_ident, alias, empty_exposed_span, auto_import_region);
+            }
         }
     }
 
@@ -591,6 +594,12 @@ fn processAssociatedItemsSecondPass(
                                         // Canonicalize with the qualified name and type annotation
                                         const def_idx = try self.canonicalizeAssociatedDeclWithAnno(decl, qualified_idx, type_anno_idx);
                                         try self.env.store.addScratchDef(def_idx);
+
+                                        // Set node index for exposed associated item
+                                        if (self.env.containsExposedById(qualified_idx)) {
+                                            const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                                            try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+                                        }
                                     }
                                 }
                             }
@@ -622,6 +631,12 @@ fn processAssociatedItemsSecondPass(
                         // Canonicalize with the qualified name
                         const def_idx = try self.canonicalizeAssociatedDecl(decl, qualified_idx);
                         try self.env.store.addScratchDef(def_idx);
+
+                        // Set node index for exposed associated item
+                        if (self.env.containsExposedById(qualified_idx)) {
+                            const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                            try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+                        }
                     }
                 } else {
                     // Non-identifier patterns are not supported in associated blocks
@@ -2231,8 +2246,22 @@ pub fn canonicalizeExpr(
                             // Look up the target node index in the module's exposed_items
                             // Need to convert identifier from current module to target module
                             const field_text = self.env.getIdent(ident);
+
+                            // Build the qualified name (e.g., "Bool.not")
+                            const qualified_name_str = try std.fmt.allocPrint(
+                                self.env.gpa,
+                                "{s}.{s}",
+                                .{ module_text, field_text },
+                            );
+                            defer self.env.gpa.free(qualified_name_str);
+
                             const target_node_idx = if (self.module_envs) |envs_map| blk: {
                                 if (envs_map.get(module_text)) |module_env| {
+                                    // Try looking up the qualified name first (e.g., "Bool.not")
+                                    if (module_env.common.findIdent(qualified_name_str)) |qname_ident| {
+                                        break :blk module_env.getExposedNodeIndexById(qname_ident) orelse 0;
+                                    }
+                                    // Fall back to unqualified name
                                     if (module_env.common.findIdent(field_text)) |target_ident| {
                                         break :blk module_env.getExposedNodeIndexById(target_ident) orelse 0;
                                     } else {

@@ -77,17 +77,6 @@ process = |list| "processed"
            ^^^^
 
 
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**underscore_in_regular_annotations.md:16:17:16:23:**
-```roc
-handle_result : Result(_, Str) -> Str
-```
-                ^^^^^^
-
-
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),OpColon(1:6-1:7),Underscore(1:8-1:9),OpArrow(1:10-1:12),Underscore(1:13-1:14),
@@ -342,7 +331,9 @@ transform = |_, b| b
 		(annotation @17.1-17.14
 			(declared-type
 				(ty-fn @16.17-16.38 (effectful false)
-					(ty-malformed @16.17-16.23)
+					(ty-apply @16.17-16.31 (name "Result") (external (module-idx "3") (target-node-idx "3"))
+						(ty-underscore @16.24-16.24)
+						(ty-lookup @16.27-16.30 (name "Str") (builtin)))
 					(ty-lookup @16.35-16.38 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @25.1-25.4 (ident "map"))

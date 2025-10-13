@@ -8,18 +8,21 @@ type=expr
 if Bool.True Ok(0) else Err(1)
 ~~~
 # EXPECTED
-NIL
+INVALID NOMINAL TAG - if_then_else_simple_tag.md:1:4:1:13
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**if_then_else_simple_tag.md:1:4:1:8:**
+**INVALID NOMINAL TAG**
+I'm having trouble with this nominal tag:
+**if_then_else_simple_tag.md:1:4:1:13:**
 ```roc
 if Bool.True Ok(0) else Err(1)
 ```
-   ^^^^
+   ^^^^^^^^^
 
+The tag is:
+    _True_
+
+But the nominal type needs it to be:
+    _EmptyDict_
 
 # TOKENS
 ~~~zig
@@ -46,7 +49,10 @@ NO CHANGE
 (e-if @1.1-1.31
 	(if-branches
 		(if-branch
-			(e-runtime-error (tag "undeclared_type"))
+			(e-nominal-external @1.4-1.13
+				(module-idx "2")
+				(target-node-idx "1")
+				(e-tag @1.4-1.13 (name "True")))
 			(e-tag @1.14-1.19 (name "Ok")
 				(args
 					(e-num @1.17-1.18 (value "0"))))))

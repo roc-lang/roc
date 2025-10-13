@@ -1799,13 +1799,13 @@ expect {
 			(ty-args
 				(ty-rigid-var @32.8-32.9 (name "a"))))
 		(ty-tag-union @32.13-33.2))
-	(s-import @4.1-4.34 (module "pf.Stdout") (qualifier "pf")
+	(s-import @4.1-4.34 (module "pf.Stdout")
 		(exposes
 			(exposed (name "line!") (wildcard false))))
 	(s-import @6.1-8.6 (module "Stdot")
 		(exposes
 			(exposed (name "Cust") (wildcard false))))
-	(s-import @10.1-10.19 (module "Bae") (alias "Gooe")
+	(s-import @10.1-10.19 (module "Bae")
 		(exposes))
 	(s-import @11.1-12.4 (module "Ba")
 		(exposes))
@@ -1831,7 +1831,7 @@ expect {
 		(patt @75.1-75.3 (type "_arg -> [Stdo!(Str)]_others"))
 		(patt @114.1-114.2 (type "{}")))
 	(type_decls
-		(alias @13.1-13.33 (type "Map(a, Error)")
+		(alias @13.1-13.33 (type "Map(a, b)")
 			(ty-header @13.1-13.10 (name "Map")
 				(ty-args
 					(ty-rigid-var @13.5-13.6 (name "a"))

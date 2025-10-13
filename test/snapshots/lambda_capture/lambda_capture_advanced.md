@@ -56,9 +56,9 @@ NO CHANGE
 				(p-assign @1.9-1.10 (ident "c")))
 			(e-closure @1.12-1.29
 				(captures
-					(capture @1.6-1.7 (ident "b"))
+					(capture @1.9-1.10 (ident "c"))
 					(capture @1.3-1.4 (ident "a"))
-					(capture @1.9-1.10 (ident "c")))
+					(capture @1.6-1.7 (ident "b")))
 				(e-lambda @1.12-1.29
 					(args
 						(p-assign @1.13-1.14 (ident "x")))

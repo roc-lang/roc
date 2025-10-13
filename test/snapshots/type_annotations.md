@@ -40,17 +40,6 @@ main! : List(String) -> Result({}, _)
 
 
 **UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**type_annotations.md:5:25:5:31:**
-```roc
-main! : List(String) -> Result({}, _)
-```
-                        ^^^^^^
-
-
-**UNDECLARED TYPE**
 The type _Value_ is not declared in this scope.
 
 This type is referenced here:

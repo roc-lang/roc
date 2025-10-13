@@ -71,6 +71,20 @@ It has the type:
 But I expected it to be:
     _Num(_size)_
 
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**multiline_string_complex.md:40:6:40:8:**
+```roc
+	e: !\\
+```
+	    ^^
+
+It has the type:
+    _Str_
+
+But I expected it to be:
+    _Bool_
+
 # TOKENS
 ~~~zig
 KwPackage(1:1-1:8),
@@ -256,13 +270,13 @@ NO CHANGE
 		(patt @10.1-10.7 (type "Str"))
 		(patt @13.1-13.7 (type "Str"))
 		(patt @17.1-17.7 (type "Str"))
-		(patt @23.1-23.7 (type "{ a: Str, b: (Str, Str), c: List(Str), d: Error, e: Str }"))
+		(patt @23.1-23.7 (type "{ a: Str, b: (Str, Str), c: List(Str), d: Error, e: Error }"))
 		(patt @44.1-44.2 (type "Str")))
 	(expressions
 		(expr @8.10-8.49 (type "Str"))
 		(expr @11.2-11.41 (type "Str"))
 		(expr @13.10-15.13 (type "Str"))
 		(expr @18.2-21.13 (type "Str"))
-		(expr @23.10-42.2 (type "{ a: Str, b: (Str, Str), c: List(Str), d: Error, e: Str }"))
+		(expr @23.10-42.2 (type "{ a: Str, b: (Str, Str), c: List(Str), d: Error, e: Error }"))
 		(expr @44.5-47.2 (type "Str"))))
 ~~~

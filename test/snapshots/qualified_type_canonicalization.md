@@ -63,12 +63,12 @@ MODULE NOT FOUND - qualified_type_canonicalization.md:11:1:11:32
 UNDECLARED TYPE - qualified_type_canonicalization.md:15:19:15:24
 MODULE NOT IMPORTED - qualified_type_canonicalization.md:22:23:22:44
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:23:23:23:32
-MODULE NOT IMPORTED - qualified_type_canonicalization.md:26:14:26:27
 UNDECLARED TYPE - qualified_type_canonicalization.md:31:16:31:21
 UNUSED VARIABLE - qualified_type_canonicalization.md:35:17:35:22
-MODULE NOT IMPORTED - qualified_type_canonicalization.md:39:13:39:26
 MODULE NOT IMPORTED - qualified_type_canonicalization.md:39:55:39:76
+UNDECLARED TYPE - qualified_type_canonicalization.md:42:9:42:15
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:42:27:42:42
+UNDECLARED TYPE - qualified_type_canonicalization.md:43:9:43:15
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:43:28:43:41
 UNUSED VARIABLE - qualified_type_canonicalization.md:43:20:43:23
 # PROBLEMS
@@ -228,28 +228,6 @@ multiLevelQualified = TypeC.new
                       ^^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `Result` imported into this Roc file.
-
-You're attempting to use this module here:
-**qualified_type_canonicalization.md:26:14:26:27:**
-```roc
-resultType : Result.Result(I32, Str)
-```
-             ^^^^^^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**qualified_type_canonicalization.md:27:14:27:20:**
-```roc
-resultType = Result.Ok(42)
-```
-             ^^^^^^
-
-
 **UNDECLARED TYPE**
 The type _Color_ is not declared in this scope.
 
@@ -271,17 +249,6 @@ The unused variable is declared here:
 processColor = |color|
 ```
                 ^^^^^
-
-
-**MODULE NOT IMPORTED**
-There is no module with the name `Result` imported into this Roc file.
-
-You're attempting to use this module here:
-**qualified_type_canonicalization.md:39:13:39:26:**
-```roc
-transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
-```
-            ^^^^^^^^^^^^^
 
 
 **MODULE NOT IMPORTED**
@@ -536,16 +503,16 @@ transform = |result|
 		(e-runtime-error (tag "undeclared_type"))
 		(annotation @15.1-15.16
 			(declared-type
-				(ty-lookup @14.19-14.28 (name "RGB") (external (module-idx "2") (target-node-idx "0"))))))
+				(ty-lookup @14.19-14.28 (name "RGB") (external (module-idx "4") (target-node-idx "0"))))))
 	(d-let
 		(p-assign @19.1-19.17 (ident "aliasedQualified"))
 		(e-nominal-external @19.20-19.43
-			(module-idx "4")
+			(module-idx "6")
 			(target-node-idx "0")
 			(e-tag @19.20-19.43 (name "Default")))
 		(annotation @19.1-19.17
 			(declared-type
-				(ty-lookup @18.20-18.35 (name "DataType") (external (module-idx "4") (target-node-idx "0"))))))
+				(ty-lookup @18.20-18.35 (name "DataType") (external (module-idx "6") (target-node-idx "0"))))))
 	(d-let
 		(p-assign @23.1-23.20 (ident "multiLevelQualified"))
 		(e-runtime-error (tag "ident_not_in_scope"))
@@ -554,10 +521,17 @@ transform = |result|
 				(ty-malformed @22.23-22.44))))
 	(d-let
 		(p-assign @27.1-27.11 (ident "resultType"))
-		(e-runtime-error (tag "undeclared_type"))
+		(e-nominal-external @27.14-27.27
+			(module-idx "3")
+			(target-node-idx "3")
+			(e-tag @27.14-27.27 (name "Ok")
+				(args
+					(e-num @27.24-27.26 (value "42")))))
 		(annotation @27.1-27.11
 			(declared-type
-				(ty-malformed @26.14-26.27))))
+				(ty-apply @26.14-26.37 (name "Result") (external (module-idx "3") (target-node-idx "3"))
+					(ty-lookup @26.28-26.31 (name "I32") (builtin))
+					(ty-lookup @26.33-26.36 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @31.1-31.9 (ident "getColor"))
 		(e-lambda @31.12-31.49
@@ -568,7 +542,7 @@ transform = |result|
 			(declared-type
 				(ty-fn @30.12-30.27 (effectful false)
 					(ty-record @30.12-30.14)
-					(ty-lookup @30.18-30.27 (name "RGB") (external (module-idx "2") (target-node-idx "0")))))))
+					(ty-lookup @30.18-30.27 (name "RGB") (external (module-idx "4") (target-node-idx "0")))))))
 	(d-let
 		(p-assign @35.1-35.13 (ident "processColor"))
 		(e-lambda @35.16-36.22
@@ -579,7 +553,7 @@ transform = |result|
 		(annotation @35.1-35.13
 			(declared-type
 				(ty-fn @34.16-34.32 (effectful false)
-					(ty-lookup @34.16-34.25 (name "RGB") (external (module-idx "2") (target-node-idx "0")))
+					(ty-lookup @34.16-34.25 (name "RGB") (external (module-idx "4") (target-node-idx "0")))
 					(ty-lookup @34.29-34.32 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @40.1-40.10 (ident "transform"))
@@ -613,13 +587,15 @@ transform = |result|
 		(annotation @40.1-40.10
 			(declared-type
 				(ty-fn @39.13-39.76 (effectful false)
-					(ty-malformed @39.13-39.26)
+					(ty-apply @39.13-39.51 (name "Result") (external (module-idx "3") (target-node-idx "3"))
+						(ty-lookup @39.27-39.36 (name "RGB") (external (module-idx "4") (target-node-idx "0")))
+						(ty-lookup @39.38-39.50 (name "Error") (external (module-idx "6") (target-node-idx "0"))))
 					(ty-malformed @39.55-39.76)))))
 	(s-import @9.1-9.13 (module "Color")
 		(exposes))
 	(s-import @10.1-10.15 (module "ModuleA")
 		(exposes))
-	(s-import @11.1-11.32 (module "ExternalModule") (alias "ExtMod")
+	(s-import @11.1-11.32 (module "ExternalModule")
 		(exposes)))
 ~~~
 # TYPES
@@ -631,14 +607,14 @@ transform = |result|
 		(patt @23.1-23.20 (type "Error"))
 		(patt @27.1-27.11 (type "Error"))
 		(patt @31.1-31.9 (type "{  } -> Error"))
-		(patt @35.1-35.13 (type "_arg -> Str"))
+		(patt @35.1-35.13 (type "Error -> Str"))
 		(patt @40.1-40.10 (type "Error -> Error")))
 	(expressions
 		(expr @15.19-15.24 (type "Error"))
 		(expr @19.20-19.43 (type "Error"))
 		(expr @23.23-23.32 (type "Error"))
-		(expr @27.14-27.20 (type "Error"))
+		(expr @27.14-27.27 (type "Error"))
 		(expr @31.12-31.49 (type "{  } -> Error"))
-		(expr @35.16-36.22 (type "_arg -> Str"))
+		(expr @35.16-36.22 (type "Error -> Str"))
 		(expr @40.13-44.6 (type "Error -> Error"))))
 ~~~

@@ -25,51 +25,53 @@ is_ok_ret_bool = |result| match result {
 main! = |_| {}
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - type_tag_union_basic.md:7:39:10:2
+INVALID NOMINAL TAG - type_tag_union_basic.md:14:15:14:24
+INVALID NOMINAL TAG - type_tag_union_basic.md:15:16:15:26
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**type_tag_union_basic.md:6:56:6:60:**
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_tag_union_basic.md:7:39:10:2:**
 ```roc
-is_ok_ret_unqualified_bool : [Ok2(_ok), Err2(_err)] -> Bool
+is_ok_ret_unqualified_bool = |result| match result {
+    Ok2(_) => True
+    Err2(_) => False
+}
 ```
-                                                       ^^^^
 
+It has the type:
+    _[True, False][EmptyDict]_
 
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
+But the type annotation says it should have the type:
+    _Dict_
 
-This type is referenced here:
-**type_tag_union_basic.md:12:46:12:50:**
-```roc
-is_ok_ret_bool : [Ok2(_ok2), Err2(_err2)] -> Bool
-```
-                                             ^^^^
-
-
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**type_tag_union_basic.md:14:15:14:19:**
+**INVALID NOMINAL TAG**
+I'm having trouble with this nominal tag:
+**type_tag_union_basic.md:14:15:14:24:**
 ```roc
     Ok2(_) => Bool.True
 ```
-              ^^^^
+              ^^^^^^^^^
 
+The tag is:
+    _True_
 
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
+But the nominal type needs it to be:
+    _EmptyDict_
 
-This type is referenced here:
-**type_tag_union_basic.md:15:16:15:20:**
+**INVALID NOMINAL TAG**
+I'm having trouble with this nominal tag:
+**type_tag_union_basic.md:15:16:15:26:**
 ```roc
     Err2(_) => Bool.False
 ```
-               ^^^^
+               ^^^^^^^^^^
 
+The tag is:
+    _False_
+
+But the nominal type needs it to be:
+    _EmptyDict_
 
 # TOKENS
 ~~~zig
@@ -251,7 +253,7 @@ main! = |_| {}
 							(ty-rigid-var @6.35-6.38 (name "_ok")))
 						(ty-tag-name @6.41-6.51 (name "Err2")
 							(ty-rigid-var @6.46-6.50 (name "_err"))))
-					(ty-malformed @6.56-6.60)))))
+					(ty-lookup @6.56-6.60 (name "Bool") (external (module-idx "2") (target-node-idx "1")))))))
 	(d-let
 		(p-assign @13.1-13.15 (ident "is_ok_ret_bool"))
 		(e-lambda @13.18-16.2
@@ -268,13 +270,19 @@ main! = |_| {}
 								(pattern (degenerate false)
 									(p-applied-tag @14.5-14.11)))
 							(value
-								(e-runtime-error (tag "undeclared_type"))))
+								(e-nominal-external @14.15-14.24
+									(module-idx "2")
+									(target-node-idx "1")
+									(e-tag @14.15-14.24 (name "True")))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-applied-tag @15.5-15.12)))
 							(value
-								(e-runtime-error (tag "undeclared_type"))))))))
+								(e-nominal-external @15.16-15.26
+									(module-idx "2")
+									(target-node-idx "1")
+									(e-tag @15.16-15.26 (name "False")))))))))
 		(annotation @13.1-13.15
 			(declared-type
 				(ty-fn @12.18-12.50 (effectful false)
@@ -283,7 +291,7 @@ main! = |_| {}
 							(ty-rigid-var @12.23-12.27 (name "_ok2")))
 						(ty-tag-name @12.30-12.41 (name "Err2")
 							(ty-rigid-var @12.35-12.40 (name "_err2"))))
-					(ty-malformed @12.46-12.50)))))
+					(ty-lookup @12.46-12.50 (name "Bool") (external (module-idx "2") (target-node-idx "1")))))))
 	(d-let
 		(p-assign @18.1-18.6 (ident "main!"))
 		(e-lambda @18.9-18.15

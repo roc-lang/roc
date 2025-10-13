@@ -10,17 +10,7 @@ expect Bool.True
 # EXPECTED
 NIL
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**expect_stmt.md:1:8:1:12:**
-```roc
-expect Bool.True
-```
-       ^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwExpect(1:1-1:7),UpperIdent(1:8-1:12),NoSpaceDotUpperIdent(1:12-1:17),
@@ -39,7 +29,10 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(s-expect @1.1-1.17
-		(e-runtime-error (tag "undeclared_type"))))
+		(e-nominal-external @1.8-1.17
+			(module-idx "2")
+			(target-node-idx "1")
+			(e-tag @1.8-1.17 (name "True")))))
 ~~~
 # TYPES
 ~~~clojure

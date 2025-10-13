@@ -138,7 +138,7 @@ main = {
 						(p-assign @5.5-5.12 (ident "encoded")))))
 			(e-lookup-local @7.5-7.12
 				(p-assign @6.5-6.12 (ident "decoded")))))
-	(s-import @1.1-1.43 (module "json.Json") (qualifier "json")
+	(s-import @1.1-1.43 (module "json.Json")
 		(exposes
 			(exposed (name "decode") (wildcard false))
 			(exposed (name "encode") (wildcard false)))))

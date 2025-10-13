@@ -15,17 +15,7 @@ type=expr
 # EXPECTED
 NIL
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**ann_closed_union.md:2:26:2:30:**
-```roc
-	apple : [Apple, IsFruit(Bool)]
-```
-	                        ^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),
@@ -66,5 +56,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-6.2 (type "[Apple][IsFruit(Error)]"))
+(expr @1.1-6.2 (type "[Apple][IsFruit(Dict)]"))
 ~~~

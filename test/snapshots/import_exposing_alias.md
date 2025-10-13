@@ -133,7 +133,7 @@ NO CHANGE
 						(p-assign @5.2-5.9 (ident "encoded")))))
 			(e-lookup-local @7.2-7.9
 				(p-assign @6.2-6.9 (ident "decoded")))))
-	(s-import @1.1-1.65 (module "json.Json") (qualifier "json")
+	(s-import @1.1-1.65 (module "json.Json")
 		(exposes
 			(exposed (name "decode") (alias "fromJson") (wildcard false))
 			(exposed (name "encode") (alias "toJson") (wildcard false)))))

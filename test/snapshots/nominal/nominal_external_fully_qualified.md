@@ -120,7 +120,7 @@ handleResult = |result| {
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-nominal-external @6.9-6.46 (module-idx "2") (target-node-idx "0")
+											(p-nominal-external @6.9-6.46 (module-idx "4") (target-node-idx "0")
 												(p-applied-tag @6.9-6.46))))
 									(value
 										(e-lookup-local @6.50-6.55
@@ -128,7 +128,7 @@ handleResult = |result| {
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-nominal-external @7.9-7.46 (module-idx "2") (target-node-idx "0")
+											(p-nominal-external @7.9-7.46 (module-idx "4") (target-node-idx "0")
 												(p-applied-tag @7.9-7.46))))
 									(value
 										(e-string @7.50-7.74
@@ -136,7 +136,7 @@ handleResult = |result| {
 		(annotation @4.1-4.13
 			(declared-type
 				(ty-fn @3.16-3.60 (effectful false)
-					(ty-apply @3.16-3.53 (name "MyResultType") (external (module-idx "2") (target-node-idx "0"))
+					(ty-apply @3.16-3.53 (name "MyResultType") (external (module-idx "4") (target-node-idx "0"))
 						(ty-lookup @3.44-3.47 (name "Str") (builtin))
 						(ty-lookup @3.49-3.52 (name "I32") (builtin)))
 					(ty-lookup @3.57-3.60 (name "Str") (builtin))))))

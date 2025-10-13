@@ -113,19 +113,19 @@ main! = |_| {
 					(p-assign @8.5-8.11 (ident "result"))
 					(e-call @8.14-8.54
 						(e-lookup-external @8.14-8.23
-							(module-idx "3")
+							(module-idx "5")
 							(target-node-idx "0"))
 						(e-string @8.24-8.53
 							(e-literal @8.25-8.52 (string "Hello from external module!")))))
 				(e-call @9.5-9.25
 					(e-lookup-external @9.5-9.17
-						(module-idx "2")
+						(module-idx "4")
 						(target-node-idx "0"))
 					(e-lookup-local @9.18-9.24
 						(p-assign @8.5-8.11 (ident "result")))))))
-	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
+	(s-import @3.1-3.17 (module "pf.Stdout")
 		(exposes))
-	(s-import @4.1-4.17 (module "json.Json") (qualifier "json")
+	(s-import @4.1-4.17 (module "json.Json")
 		(exposes)))
 ~~~
 # TYPES

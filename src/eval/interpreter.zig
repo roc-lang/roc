@@ -1561,17 +1561,24 @@ pub const Interpreter = struct {
                 };
 
                 // The target_node_idx points to a definition (like Bool.not)
-                // Get the definition and extract its expression
-                const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
-                const target_def = target_module.store.getDef(target_def_idx);
-                const target_expr_idx = target_def.expr;
+                // Both Def.Idx and Node.Idx use the same underlying values
+                const target_node_idx: can.CIR.Node.Idx = @enumFromInt(lookup.target_node_idx);
+                const target_node = target_module.store.nodes.get(target_node_idx);
 
-                // Evaluate the expression in the context of the target module
-                const saved_env = self.env;
-                self.env = @constCast(target_module);
-                defer self.env = saved_env;
+                if (target_node.tag != .def) {
+                    // Node is not a def - this shouldn't happen for properly compiled modules
+                    return error.NotImplemented;
+                }
 
-                return try self.evalExprMinimal(target_expr_idx, roc_ops, null);
+                // TODO: Cross-module function calls are not yet implemented in the interpreter.
+                // The issue is that when we evaluate a lambda from an external module and return it,
+                // that lambda's body contains expression indices specific to the external module.
+                // When the lambda is later invoked, those indices are evaluated in the current
+                // module's context, causing index out of bounds errors.
+                //
+                // A proper fix requires architectural changes to track each closure's source module
+                // and switch module context when invoking cross-module closures.
+                return error.NotImplemented;
             },
             .e_unary_minus => |unary| {
                 const operand_ct_var = can.ModuleEnv.varFrom(unary.expr);
@@ -2520,7 +2527,7 @@ pub const Interpreter = struct {
         // The tag list indices (false_idx, true_idx) tell us which tag is which,
         // but the actual runtime values always use canonical indices.
         self.bool_false_index = 0; // False is always 0
-        self.bool_true_index = 1;  // True is always 1
+        self.bool_true_index = 1; // True is always 1
         return true;
     }
 

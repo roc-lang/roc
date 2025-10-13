@@ -18,17 +18,6 @@ foo = |num| {
 # EXPECTED
 INCOMPATIBLE IF BRANCHES - return_stmt_block_example.md:3:11:3:11
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**return_stmt_block_example.md:1:14:1:20:**
-```roc
-foo : U64 -> Result(Str, [TooBig])
-```
-             ^^^^^^
-
-
 **INCOMPATIBLE IF BRANCHES**
 This `if` has an `else` branch with a different type from it's `then` branch:
 **return_stmt_block_example.md:3:11:**
@@ -153,7 +142,10 @@ foo = |num| {
 			(declared-type
 				(ty-fn @1.7-1.35 (effectful false)
 					(ty-lookup @1.7-1.10 (name "U64") (builtin))
-					(ty-malformed @1.14-1.20))))))
+					(ty-apply @1.14-1.35 (name "Result") (external (module-idx "3") (target-node-idx "3"))
+						(ty-lookup @1.21-1.24 (name "Str") (builtin))
+						(ty-tag-union @1.26-1.34
+							(ty-tag-name @1.27-1.33 (name "TooBig")))))))))
 ~~~
 # TYPES
 ~~~clojure

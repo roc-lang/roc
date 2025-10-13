@@ -8,29 +8,36 @@ type=expr
 (True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
 ~~~
 # EXPECTED
-NIL
+INVALID NOMINAL TAG - tuple_bool.md:1:15:1:24
+INVALID NOMINAL TAG - tuple_bool.md:1:26:1:36
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**tuple_bool.md:1:15:1:19:**
+**INVALID NOMINAL TAG**
+I'm having trouble with this nominal tag:
+**tuple_bool.md:1:15:1:24:**
 ```roc
 (True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
 ```
-              ^^^^
+              ^^^^^^^^^
 
+The tag is:
+    _True_
 
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
+But the nominal type needs it to be:
+    _EmptyDict_
 
-This type is referenced here:
-**tuple_bool.md:1:26:1:30:**
+**INVALID NOMINAL TAG**
+I'm having trouble with this nominal tag:
+**tuple_bool.md:1:26:1:36:**
 ```roc
 (True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
 ```
-                         ^^^^
+                         ^^^^^^^^^^
 
+The tag is:
+    _False_
+
+But the nominal type needs it to be:
+    _EmptyDict_
 
 # TOKENS
 ~~~zig
@@ -67,8 +74,14 @@ NO CHANGE
 	(elems
 		(e-tag @1.2-1.6 (name "True"))
 		(e-tag @1.8-1.13 (name "False"))
-		(e-runtime-error (tag "undeclared_type"))
-		(e-runtime-error (tag "undeclared_type"))
+		(e-nominal-external @1.15-1.24
+			(module-idx "2")
+			(target-node-idx "1")
+			(e-tag @1.15-1.24 (name "True")))
+		(e-nominal-external @1.26-1.36
+			(module-idx "2")
+			(target-node-idx "1")
+			(e-tag @1.26-1.36 (name "False")))
 		(e-unary-not @1.38-1.43
 			(e-tag @1.39-1.43 (name "True")))
 		(e-unary-not @1.45-1.51
@@ -84,5 +97,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.84 (type "([True][False]a, [False]_others, Error, Error, [True][False]a, [True][False]a, [True][False]a, [True][False]a)"))
+(expr @1.1-1.84 (type "([True]_others, [False]_others2, Error, Error, Bool, Bool, Bool, Bool)"))
 ~~~

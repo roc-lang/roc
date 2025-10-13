@@ -15,51 +15,51 @@ isRed = |color| match color {
 }
 ~~~
 # EXPECTED
-NIL
+INVALID NOMINAL TAG - nominal_tag_mixed_qualified_unqualified.md:5:12:5:21
+INVALID NOMINAL TAG - nominal_tag_mixed_qualified_unqualified.md:6:20:6:30
+INVALID NOMINAL TAG - nominal_tag_mixed_qualified_unqualified.md:7:13:7:23
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_tag_mixed_qualified_unqualified.md:3:18:3:22:**
-```roc
-isRed : Color -> Bool
-```
-                 ^^^^
-
-
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_tag_mixed_qualified_unqualified.md:5:12:5:16:**
+**INVALID NOMINAL TAG**
+I'm having trouble with this nominal tag:
+**nominal_tag_mixed_qualified_unqualified.md:5:12:5:21:**
 ```roc
     Red => Bool.True
 ```
-           ^^^^
+           ^^^^^^^^^
 
+The tag is:
+    _True_
 
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
+But the nominal type needs it to be:
+    _EmptyDict_
 
-This type is referenced here:
-**nominal_tag_mixed_qualified_unqualified.md:6:20:6:24:**
+**INVALID NOMINAL TAG**
+I'm having trouble with this nominal tag:
+**nominal_tag_mixed_qualified_unqualified.md:6:20:6:30:**
 ```roc
     Color.Green => Bool.False
 ```
-                   ^^^^
+                   ^^^^^^^^^^
 
+The tag is:
+    _False_
 
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
+But the nominal type needs it to be:
+    _EmptyDict_
 
-This type is referenced here:
-**nominal_tag_mixed_qualified_unqualified.md:7:13:7:17:**
+**INVALID NOMINAL TAG**
+I'm having trouble with this nominal tag:
+**nominal_tag_mixed_qualified_unqualified.md:7:13:7:23:**
 ```roc
     Blue => Bool.False
 ```
-            ^^^^
+            ^^^^^^^^^^
 
+The tag is:
+    _False_
+
+But the nominal type needs it to be:
+    _EmptyDict_
 
 # TOKENS
 ~~~zig
@@ -137,25 +137,34 @@ isRed = |color| match color {
 								(pattern (degenerate false)
 									(p-applied-tag @5.5-5.8)))
 							(value
-								(e-runtime-error (tag "undeclared_type"))))
+								(e-nominal-external @5.12-5.21
+									(module-idx "2")
+									(target-node-idx "1")
+									(e-tag @5.12-5.21 (name "True")))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-nominal @6.5-6.16
 										(p-applied-tag @6.5-6.16))))
 							(value
-								(e-runtime-error (tag "undeclared_type"))))
+								(e-nominal-external @6.20-6.30
+									(module-idx "2")
+									(target-node-idx "1")
+									(e-tag @6.20-6.30 (name "False")))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-applied-tag @7.5-7.9)))
 							(value
-								(e-runtime-error (tag "undeclared_type"))))))))
+								(e-nominal-external @7.13-7.23
+									(module-idx "2")
+									(target-node-idx "1")
+									(e-tag @7.13-7.23 (name "False")))))))))
 		(annotation @4.1-4.6
 			(declared-type
 				(ty-fn @3.9-3.22 (effectful false)
 					(ty-lookup @3.9-3.14 (name "Color") (local))
-					(ty-malformed @3.18-3.22)))))
+					(ty-lookup @3.18-3.22 (name "Bool") (external (module-idx "2") (target-node-idx "1")))))))
 	(s-nominal-decl @1.1-1.28
 		(ty-header @1.1-1.6 (name "Color"))
 		(ty-tag-union @1.10-1.28

@@ -156,6 +156,10 @@ pub fn initWithImport(source: []const u8, other_module_name: []const u8, other_m
     const result_ident = result_module.env.common.findIdent("Result") orelse unreachable;
     try result_module.env.setExposedNodeIndexById(result_ident, @intCast(@intFromEnum(builtin_indices.result_type)));
 
+    // Add Bool and Result to module_envs for auto-importing
+    try module_envs.put("Bool", bool_module.env);
+    try module_envs.put("Result", result_module.env);
+
     // Initialize the ModuleEnv with the CommonEnv
     module_env.* = try ModuleEnv.init(gpa, source);
     errdefer module_env.deinit();
@@ -190,17 +194,48 @@ pub fn initWithImport(source: []const u8, other_module_name: []const u8, other_m
         .result_stmt = result_stmt_in_result_module,
     };
 
-    // Pull out the imported index and insert the module at the correct index
-    std.debug.assert(can.import_indices.size == 1);
-    const import_idx = can.import_indices.get(other_module_name).?;
-    std.debug.assert(@intFromEnum(import_idx) == 0);
+    // Build other_envs array to match the import indices assigned by canonicalizer
+    // The canonicalizer assigns import indices for:
+    // 1. Explicit imports (like "import A")
+    // 2. Auto-imported modules that are actually used (like Bool, Result)
 
-    // Insert other_module at the correct index (0)
-    try other_envs.insert(0, other_module_env);
+    // Determine the size needed for other_envs
+    var max_import_idx: usize = 0;
 
-    // Add Bool and Result as imported modules AFTER the user module
-    try other_envs.append(bool_module.env);
-    try other_envs.append(result_module.env);
+    // Check the user module
+    if (can.import_indices.get(other_module_name)) |idx| {
+        const idx_int = @intFromEnum(idx);
+        if (idx_int > max_import_idx) max_import_idx = idx_int;
+    }
+
+    // Check Bool
+    if (can.import_indices.get("Bool")) |idx| {
+        const idx_int = @intFromEnum(idx);
+        if (idx_int > max_import_idx) max_import_idx = idx_int;
+    }
+
+    // Check Result
+    if (can.import_indices.get("Result")) |idx| {
+        const idx_int = @intFromEnum(idx);
+        if (idx_int > max_import_idx) max_import_idx = idx_int;
+    }
+
+    // Allocate array of the right size, initialized to other_module_env as a safe default
+    try other_envs.resize(max_import_idx + 1);
+    for (other_envs.items) |*item| {
+        item.* = other_module_env; // Safe default
+    }
+
+    // Fill in the correct modules at their import indices
+    if (can.import_indices.get(other_module_name)) |idx| {
+        other_envs.items[@intFromEnum(idx)] = other_module_env;
+    }
+    if (can.import_indices.get("Bool")) |idx| {
+        other_envs.items[@intFromEnum(idx)] = bool_module.env;
+    }
+    if (can.import_indices.get("Result")) |idx| {
+        other_envs.items[@intFromEnum(idx)] = result_module.env;
+    }
 
     // Type Check - Pass all imported modules (Bool, Result, and user module)
     var checker = try Check.init(gpa, &module_env.types, module_env, other_envs.items, &module_env.store.regions, module_common_idents);

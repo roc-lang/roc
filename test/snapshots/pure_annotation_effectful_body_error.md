@@ -87,7 +87,7 @@ NO CHANGE
 				(p-assign @7.17-7.20 (ident "msg")))
 			(e-call @7.22-7.39
 				(e-lookup-external @7.22-7.34
-					(module-idx "2")
+					(module-idx "4")
 					(target-node-idx "0"))
 				(e-lookup-local @7.35-7.38
 					(p-assign @7.17-7.20 (ident "msg")))))
@@ -103,7 +103,7 @@ NO CHANGE
 				(p-assign @7.1-7.13 (ident "bad_function")))
 			(e-string @9.22-9.40
 				(e-literal @9.23-9.39 (string "This should fail")))))
-	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
+	(s-import @3.1-3.17 (module "pf.Stdout")
 		(exposes)))
 ~~~
 # TYPES

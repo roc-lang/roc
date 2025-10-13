@@ -26,7 +26,6 @@ main! = |_| {}
 UNEXPECTED TOKEN IN EXPRESSION - type_var_namespace.md:11:31:11:33
 UNDEFINED VARIABLE - type_var_namespace.md:11:14:11:24
 UNRECOGNIZED SYNTAX - type_var_namespace.md:11:31:11:33
-UNDEFINED VARIABLE - type_var_namespace.md:11:34:11:52
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **|>** is not expected in an expression.
@@ -60,17 +59,6 @@ I don't recognize this syntax.
                               ^^
 
 This might be a syntax error, an unsupported language feature, or a typo.
-
-**UNDEFINED VARIABLE**
-Nothing is named `withDefault` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**type_var_namespace.md:11:34:11:52:**
-```roc
-    result = List.first(list) |> Result.withDefault(elem)
-```
-                                 ^^^^^^^^^^^^^^^^^^
-
 
 # TOKENS
 ~~~zig
@@ -177,7 +165,9 @@ main! = |_| {}
 					(e-runtime-error (tag "expr_not_canonicalized")))
 				(s-expr @11.34-11.58
 					(e-call @11.34-11.58
-						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-lookup-external @11.34-11.52
+							(module-idx "3")
+							(target-node-idx "0"))
 						(e-lookup-local @11.53-11.57
 							(p-assign @7.5-7.9 (ident "elem")))))
 				(e-lookup-local @13.5-13.11

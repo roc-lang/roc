@@ -482,10 +482,10 @@ h = |
 		(p-assign @16.1-16.2 (ident "h"))
 		(e-closure @16.5-29.2
 			(captures
-				(capture @25.6-25.7 (ident "a"))
+				(capture @26.8-26.9 (ident "a"))
 				(capture @27.7-27.8 (ident "a"))
 				(capture @16.1-16.2 (ident "h"))
-				(capture @26.8-26.9 (ident "a"))
+				(capture @25.6-25.7 (ident "a"))
 				(capture @24.7-24.8 (ident "a")))
 			(e-lambda @16.5-29.2
 				(args

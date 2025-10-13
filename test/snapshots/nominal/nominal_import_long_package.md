@@ -161,7 +161,7 @@ red = ... # not implemented
 		(annotation @4.1-4.4
 			(declared-type
 				(ty-malformed @3.7-3.9))))
-	(s-import @1.1-1.21 (module "design.Styles") (qualifier "design")
+	(s-import @1.1-1.21 (module "design.Styles")
 		(exposes)))
 ~~~
 # TYPES

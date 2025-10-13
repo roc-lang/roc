@@ -224,27 +224,27 @@ main = {
 			(s-let @6.5-6.22
 				(p-assign @6.5-6.11 (ident "client"))
 				(e-lookup-external @6.14-6.22
-					(module-idx "3")
+					(module-idx "5")
 					(target-node-idx "0")))
 			(s-let @7.5-7.23
 				(p-assign @7.5-7.11 (ident "parser"))
 				(e-lookup-external @7.14-7.23
-					(module-idx "2")
+					(module-idx "4")
 					(target-node-idx "0")))
 			(s-let @8.5-8.22
 				(p-assign @8.5-8.11 (ident "helper"))
 				(e-lookup-external @8.14-8.22
-					(module-idx "4")
+					(module-idx "6")
 					(target-node-idx "0")))
 			(s-let @11.5-11.25
 				(p-assign @11.5-11.12 (ident "result1"))
 				(e-lookup-external @11.15-11.25
-					(module-idx "2")
+					(module-idx "4")
 					(target-node-idx "0")))
 			(s-let @14.5-14.24
 				(p-assign @14.5-14.12 (ident "result2"))
 				(e-lookup-external @14.15-14.24
-					(module-idx "3")
+					(module-idx "5")
 					(target-node-idx "0")))
 			(s-let @17.5-17.18
 				(p-assign @17.5-17.12 (ident "result3"))
@@ -255,7 +255,7 @@ main = {
 			(s-let @21.5-21.26
 				(p-assign @21.5-21.13 (ident "combined"))
 				(e-lookup-external @21.16-21.26
-					(module-idx "4")
+					(module-idx "6")
 					(target-node-idx "0")))
 			(e-tuple @23.5-32.6
 				(elems
@@ -275,20 +275,20 @@ main = {
 						(p-assign @18.5-18.12 (ident "result4")))
 					(e-lookup-local @31.9-31.17
 						(p-assign @21.5-21.13 (ident "combined")))))))
-	(s-import @1.1-1.17 (module "json.Json") (qualifier "json")
+	(s-import @1.1-1.17 (module "json.Json")
 		(exposes))
-	(s-import @2.1-2.48 (module "http.Client") (qualifier "http") (alias "Http")
+	(s-import @2.1-2.48 (module "http.Client")
 		(exposes
 			(exposed (name "get") (wildcard false))
 			(exposed (name "post") (wildcard false))))
-	(s-import @3.1-3.27 (module "utils.String") (qualifier "utils") (alias "Str")
+	(s-import @3.1-3.27 (module "utils.String")
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.5 (type "(_field, _field2, Error, _field3, _field4, Error, Error, Error)")))
+		(patt @5.1-5.5 (type "(Error, Error, Error, Error, Error, Error, Error, Error)")))
 	(expressions
-		(expr @5.8-33.2 (type "(_field, _field2, Error, _field3, _field4, Error, Error, Error)"))))
+		(expr @5.8-33.2 (type "(Error, Error, Error, Error, Error, Error, Error, Error)"))))
 ~~~

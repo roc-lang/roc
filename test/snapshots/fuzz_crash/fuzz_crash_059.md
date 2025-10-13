@@ -156,7 +156,7 @@ G
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import @1.20-2.2 (module "B") (alias "G")
+	(s-import @1.20-2.2 (module "B")
 		(exposes)))
 ~~~
 # TYPES

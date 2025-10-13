@@ -11,12 +11,12 @@ Result(ok, err) := [Ok(ok), Err(err)].{
 		Err(_) => True
 	}
 
-	#equals : Result(ok, err), Result(ok, err) -> Bool
+	#eq : Result(ok, err), Result(ok, err) -> Bool
 	#	where [
 	#		ok.equals : ok, ok -> Bool,
 	#		err.equals : ok, ok -> Bool,
 	#	]
-	#equals = |a, b| match a {
+	#eq = |a, b| match a {
 	#	Ok(a_val) => {
 	#		match b {
 	#			Ok(b_val) => a_val.equals(b_val)

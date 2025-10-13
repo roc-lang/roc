@@ -58,7 +58,7 @@ NO CHANGE
 		(p-assign @2.1-2.7 (ident "hello!"))
 		(e-call @2.10-2.31
 			(e-lookup-external @2.10-2.22
-				(module-idx "2")
+				(module-idx "4")
 				(target-node-idx "0"))
 			(e-string @2.23-2.30
 				(e-literal @2.24-2.29 (string "Hello")))))
@@ -66,7 +66,7 @@ NO CHANGE
 		(p-assign @3.1-3.6 (ident "world"))
 		(e-string @3.9-3.16
 			(e-literal @3.10-3.15 (string "World"))))
-	(s-import @1.1-1.17 (module "pf.Stdout") (qualifier "pf")
+	(s-import @1.1-1.17 (module "pf.Stdout")
 		(exposes)))
 ~~~
 # TYPES

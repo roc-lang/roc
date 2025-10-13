@@ -656,17 +656,6 @@ main! : List(String) -> Result({}, _)
              ^^^^^^
 
 
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_023.md:143:25:143:31:**
-```roc
-main! : List(String) -> Result({}, _)
-```
-                        ^^^^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `blah` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -2287,7 +2276,7 @@ expect {
 						(e-runtime-error (tag "not_implemented")))
 					(e-call @191.2-195.3
 						(e-lookup-external @191.2-191.14
-							(module-idx "2")
+							(module-idx "4")
 							(target-node-idx "0"))
 						(e-string @192.3-194.18
 							(e-literal @192.4-192.14 (string "How about "))
@@ -2301,7 +2290,9 @@ expect {
 				(ty-fn @143.9-143.38 (effectful false)
 					(ty-apply @143.9-143.21 (name "List") (builtin)
 						(ty-malformed @143.14-143.20))
-					(ty-malformed @143.25-143.31)))))
+					(ty-apply @143.25-143.38 (name "Result") (external (module-idx "3") (target-node-idx "3"))
+						(ty-record @143.32-143.34)
+						(ty-underscore @1.1-1.1))))))
 	(d-let
 		(p-assign @199.1-199.6 (ident "empty"))
 		(e-empty_record @199.9-199.11)
@@ -2399,22 +2390,22 @@ expect {
 			(ty-rigid-var-lookup (ty-rigid-var @63.10-63.11 (name "a")))
 			(ty-apply @63.30-63.38 (name "Maybe") (local)
 				(ty-rigid-var-lookup (ty-rigid-var @63.10-63.11 (name "a"))))))
-	(s-import @4.1-4.42 (module "pf.Stdout") (qualifier "pf")
+	(s-import @4.1-4.42 (module "pf.Stdout")
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false))))
-	(s-import @6.1-12.4 (module "MALFORMED_IMPORT") (qualifier "pf")
+	(s-import @6.1-12.4 (module "MALFORMED_IMPORT")
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false))))
-	(s-import @14.1-14.82 (module "pkg.Something") (qualifier "pkg")
+	(s-import @14.1-14.82 (module "pkg.Something")
 		(exposes
 			(exposed (name "func") (alias "function") (wildcard false))
 			(exposed (name "Type") (alias "ValueCategory") (wildcard false))
 			(exposed (name "Custom") (wildcard true))))
-	(s-import @16.1-16.27 (module "BadName") (alias "GoodName")
+	(s-import @16.1-16.27 (module "BadName")
 		(exposes))
-	(s-import @17.1-20.20 (module "BadNameMultiline") (alias "GoodNameMultiline")
+	(s-import @17.1-20.20 (module "BadNameMultiline")
 		(exposes))
 	(s-expect @140.1-141.11
 		(e-binop @141.2-141.11 (op "eq")
@@ -2438,13 +2429,13 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @65.1-65.16 (type "b -> Num(_size)"))
+		(patt @65.1-65.16 (type "Bool -> Num(_size)"))
 		(patt @68.1-68.8 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(patt @80.1-80.11 (type "[Red][Blue, Green]_others, _arg -> Error"))
 		(patt @144.1-144.6 (type "List(Error) -> Error"))
 		(patt @199.1-199.6 (type "{}")))
 	(type_decls
-		(alias @22.1-22.41 (type "Map(a, Error)")
+		(alias @22.1-22.41 (type "Map(a, b)")
 			(ty-header @22.1-22.10 (name "Map")
 				(ty-args
 					(ty-rigid-var @22.5-22.6 (name "a"))
@@ -2483,7 +2474,7 @@ expect {
 				(ty-args
 					(ty-rigid-var @63.10-63.11 (name "a"))))))
 	(expressions
-		(expr @65.19-65.40 (type "b -> Num(_size)"))
+		(expr @65.19-65.40 (type "Bool -> Num(_size)"))
 		(expr @68.11-78.2 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(expr @80.14-138.3 (type "[Red][Blue, Green]_others, _arg -> Error"))
 		(expr @144.9-196.2 (type "List(Error) -> Error"))

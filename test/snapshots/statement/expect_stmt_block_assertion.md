@@ -12,40 +12,21 @@ foo = |a| {
 }
 ~~~
 # EXPECTED
-NIL
+INVALID NOMINAL TAG - expect_stmt_block_assertion.md:3:17:3:26
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**expect_stmt_block_assertion.md:1:7:1:11:**
-```roc
-foo : Bool -> Bool
-```
-      ^^^^
-
-
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**expect_stmt_block_assertion.md:1:15:1:19:**
-```roc
-foo : Bool -> Bool
-```
-              ^^^^
-
-
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**expect_stmt_block_assertion.md:3:17:3:21:**
+**INVALID NOMINAL TAG**
+I'm having trouble with this nominal tag:
+**expect_stmt_block_assertion.md:3:17:3:26:**
 ```roc
     expect a == Bool.True
 ```
-                ^^^^
+                ^^^^^^^^^
 
+The tag is:
+    _True_
+
+But the nominal type needs it to be:
+    _EmptyDict_
 
 # TOKENS
 ~~~zig
@@ -99,20 +80,23 @@ foo = |a| {
 					(e-binop @3.12-3.26 (op "eq")
 						(e-lookup-local @3.12-3.13
 							(p-assign @2.8-2.9 (ident "a")))
-						(e-runtime-error (tag "undeclared_type"))))
+						(e-nominal-external @3.17-3.26
+							(module-idx "2")
+							(target-node-idx "1")
+							(e-tag @3.17-3.26 (name "True")))))
 				(e-lookup-local @4.5-4.6
 					(p-assign @2.8-2.9 (ident "a")))))
 		(annotation @2.1-2.4
 			(declared-type
 				(ty-fn @1.7-1.19 (effectful false)
-					(ty-malformed @1.7-1.11)
-					(ty-malformed @1.15-1.19))))))
+					(ty-lookup @1.7-1.11 (name "Bool") (external (module-idx "2") (target-node-idx "1")))
+					(ty-lookup @1.15-1.19 (name "Bool") (external (module-idx "2") (target-node-idx "1"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @2.1-2.4 (type "Error -> Error")))
+		(patt @2.1-2.4 (type "Dict -> Dict")))
 	(expressions
-		(expr @2.7-5.2 (type "Error -> Error"))))
+		(expr @2.7-5.2 (type "Dict -> Dict"))))
 ~~~

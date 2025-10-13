@@ -26,12 +26,16 @@ const LoadedModule = struct {
     gpa: std.mem.Allocator,
 
     fn deinit(self: *LoadedModule) void {
-        // Only free the hashmap that was allocated during deserialization
-        // Most other data (like the SafeList contents) points into the buffer
-        self.env.imports.map.deinit(self.gpa);
+        // IMPORTANT: When a module is deserialized from a buffer, all its internal structures
+        // (common, types, external_decls, imports, store) contain pointers INTO the buffer,
+        // not separately allocated memory. Therefore we should NOT call deinit() on any of them.
+        // The only memory we need to free is:
+        // 1. The buffer itself (which contains all the deserialized data)
+        // 2. The env struct itself (which was allocated with create())
 
-        // Free the buffer (the env points into this buffer for most data)
+        // Free the buffer (all data structures point into this buffer)
         self.gpa.free(self.buffer);
+
         // Free the env struct itself
         self.gpa.destroy(self.env);
     }

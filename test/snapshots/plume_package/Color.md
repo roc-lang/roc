@@ -102,17 +102,6 @@ module [
 ```
 
 
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**Color.md:26:14:26:20:**
-```roc
-hex : Str -> Result(Color, [InvalidHex(Str)])
-```
-             ^^^^^^
-
-
 **UNUSED VARIABLE**
 Variable `is_char_in_hex_range` is not used anywhere in your code.
 
@@ -123,17 +112,6 @@ The unused variable is declared here:
     is_char_in_hex_range = |b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F')
 ```
     ^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**Color.md:60:16:60:22:**
-```roc
-named : Str -> Result(Color, [UnknownColor(Str)])
-```
-               ^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -738,13 +716,13 @@ is_named_color = |str| {
 		(p-assign @27.1-27.4 (ident "hex"))
 		(e-closure @27.7-46.2
 			(captures
-				(capture @33.30-33.31 (ident "f"))
 				(capture @33.18-33.19 (ident "b"))
 				(capture @34.13-34.21 (ident "is_valid"))
-				(capture @33.27-33.28 (ident "e"))
+				(capture @33.24-33.25 (ident "d"))
 				(capture @33.21-33.22 (ident "c"))
+				(capture @33.30-33.31 (ident "f"))
 				(capture @33.15-33.16 (ident "a"))
-				(capture @33.24-33.25 (ident "d")))
+				(capture @33.27-33.28 (ident "e")))
 			(e-lambda @27.7-46.2
 				(args
 					(p-assign @27.8-27.11 (ident "str")))
@@ -887,21 +865,25 @@ is_named_color = |str| {
 			(declared-type
 				(ty-fn @26.7-26.46 (effectful false)
 					(ty-lookup @26.7-26.10 (name "Str") (builtin))
-					(ty-malformed @26.14-26.20)))))
+					(ty-apply @26.14-26.46 (name "Result") (external (module-idx "3") (target-node-idx "3"))
+						(ty-lookup @26.21-26.26 (name "Color") (local))
+						(ty-tag-union @26.28-26.45
+							(ty-tag-name @26.29-26.44 (name "InvalidHex")
+								(ty-lookup @26.40-26.43 (name "Str") (builtin)))))))))
 	(d-let
 		(p-assign @49.1-49.7 (ident "to_str"))
 		(e-closure @49.10-54.2
 			(captures
 				(capture @51.19-51.20 (ident "g"))
-				(capture @50.21-50.22 (ident "b"))
-				(capture @51.22-51.23 (ident "b"))
 				(capture @50.15-50.16 (ident "r"))
-				(capture @51.25-51.26 (ident "a"))
-				(capture @53.15-53.20 (ident "inner"))
-				(capture @50.18-50.19 (ident "g"))
 				(capture @51.16-51.17 (ident "r"))
+				(capture @51.22-51.23 (ident "b"))
 				(capture @49.1-49.7 (ident "to_str"))
-				(capture @52.17-52.22 (ident "inner")))
+				(capture @51.25-51.26 (ident "a"))
+				(capture @52.17-52.22 (ident "inner"))
+				(capture @50.21-50.22 (ident "b"))
+				(capture @53.15-53.20 (ident "inner"))
+				(capture @50.18-50.19 (ident "g")))
 			(e-lambda @49.10-54.2
 				(args
 					(p-assign @49.11-49.16 (ident "color")))
@@ -1024,7 +1006,11 @@ is_named_color = |str| {
 			(declared-type
 				(ty-fn @60.9-60.50 (effectful false)
 					(ty-lookup @60.9-60.12 (name "Str") (builtin))
-					(ty-malformed @60.16-60.22)))))
+					(ty-apply @60.16-60.50 (name "Result") (external (module-idx "3") (target-node-idx "3"))
+						(ty-lookup @60.23-60.28 (name "Color") (local))
+						(ty-tag-union @60.30-60.49
+							(ty-tag-name @60.31-60.48 (name "UnknownColor")
+								(ty-lookup @60.44-60.47 (name "Str") (builtin)))))))))
 	(d-let
 		(p-assign @67.1-67.15 (ident "is_named_color"))
 		(e-lambda @67.18-71.2

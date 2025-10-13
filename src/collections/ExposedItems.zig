@@ -175,7 +175,7 @@ pub const ExposedItems = struct {
 
     /// Iterator for all exposed items
     pub const Iterator = struct {
-        // items: []const SortedArrayBuilder(IdentIdx, u16).Entry,
+        items: []const SortedArrayBuilder(IdentIdx, u16).Entry,
         index: usize,
 
         pub fn next(self: *Iterator) ?struct { ident_idx: IdentIdx, node_idx: u16 } {

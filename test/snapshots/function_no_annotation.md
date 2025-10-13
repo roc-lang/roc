@@ -119,7 +119,7 @@ NO CHANGE
 				(p-assign @9.18-9.19 (ident "n")))
 			(e-call @9.21-9.36
 				(e-lookup-external @9.21-9.33
-					(module-idx "2")
+					(module-idx "4")
 					(target-node-idx "0"))
 				(e-lookup-local @9.34-9.35
 					(p-assign @9.18-9.19 (ident "n"))))))
@@ -147,7 +147,7 @@ NO CHANGE
 			(e-lookup-local @14.9-14.17
 				(p-assign @12.1-12.9 (ident "process!")))
 			(e-num @14.18-14.20 (value "42"))))
-	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
+	(s-import @3.1-3.17 (module "pf.Stdout")
 		(exposes)))
 ~~~
 # TYPES
