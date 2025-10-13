@@ -470,49 +470,35 @@ pub const Repl = struct {
         const cir = module_env; // CIR is now just ModuleEnv
         try cir.initCIRFields(self.allocator, "repl");
 
-        // Inject builtin type declarations (Bool and Result)
-        // We loaded builtin_indices.bin at REPL startup (generated at build time via string lookup)
-        // The indices in builtin_indices refer to positions within Bool.bin/Result.bin
-        // When we inject them here, they get NEW indices in the current module
-
-        // Get the Bool type declaration from the loaded module
-        const bool_stmt = self.bool_module.env.store.getStatement(self.builtin_indices.bool_type);
-        const actual_bool_idx = try cir.store.addStatement(bool_stmt, base.Region.zero());
-        _ = try cir.types.fresh(); // Keep types array in sync with nodes/regions
-
-        // Get the Result type declaration from the loaded module
-        const result_stmt = self.result_module.env.store.getStatement(self.builtin_indices.result_type);
-        const actual_result_idx = try cir.store.addStatement(result_stmt, base.Region.zero());
-        _ = try cir.types.fresh(); // Keep types array in sync with nodes/regions
-
-        // Update builtin_statements span to include injected Bool and Result
-        // Use the ACTUAL indices where they landed (not hardcoded!)
-        const start_idx = @intFromEnum(actual_bool_idx);
-        const end_idx = @intFromEnum(actual_result_idx);
-        cir.builtin_statements = .{ .span = .{
-            .start = start_idx,
-            .len = end_idx - start_idx + 1,
-        } };
+        // Get Bool and Result statement indices from the IMPORTED modules (not copied!)
+        // These refer to the actual statements in the Bool/Result modules
+        const bool_stmt_in_bool_module = self.builtin_indices.bool_type;
+        const result_stmt_in_result_module = self.builtin_indices.result_type;
 
         const module_common_idents: Check.CommonIdents = .{
             .module_name = try module_env.insertIdent(base.Ident.for_text("repl")),
             .list = try module_env.insertIdent(base.Ident.for_text("List")),
             .box = try module_env.insertIdent(base.Ident.for_text("Box")),
-            .bool_stmt = actual_bool_idx,
-            .result_stmt = actual_result_idx,
+            .bool_stmt = bool_stmt_in_bool_module,
+            .result_stmt = result_stmt_in_result_module,
         };
 
-        // Create canonicalizer without module_envs since we're injecting instead of importing
-        var czer = Can.init(cir, &parse_ast, null) catch |err| {
+        // Create canonicalizer with Bool and Result modules available for qualified name resolution
+        var module_envs_map = std.StringHashMap(*const ModuleEnv).init(self.allocator);
+        defer module_envs_map.deinit();
+        try module_envs_map.put("Bool", self.bool_module.env);
+        try module_envs_map.put("Result", self.result_module.env);
+
+        var czer = Can.init(cir, &parse_ast, &module_envs_map) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err});
         };
         defer czer.deinit();
 
-        // Register unqualified nominal tags (True, False, Ok, Err) pointing to the actual injected indices
-        try czer.unqualified_nominal_tags.put(self.allocator, "True", actual_bool_idx);
-        try czer.unqualified_nominal_tags.put(self.allocator, "False", actual_bool_idx);
-        try czer.unqualified_nominal_tags.put(self.allocator, "Ok", actual_result_idx);
-        try czer.unqualified_nominal_tags.put(self.allocator, "Err", actual_result_idx);
+        // Register unqualified nominal tags (True, False, Ok, Err) pointing to the Bool/Result modules
+        try czer.unqualified_nominal_tags.put(self.allocator, "True", bool_stmt_in_bool_module);
+        try czer.unqualified_nominal_tags.put(self.allocator, "False", bool_stmt_in_bool_module);
+        try czer.unqualified_nominal_tags.put(self.allocator, "Ok", result_stmt_in_result_module);
+        try czer.unqualified_nominal_tags.put(self.allocator, "Err", result_stmt_in_result_module);
 
         // Since we're always parsing as expressions now, handle them the same way
         const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
@@ -522,8 +508,9 @@ pub const Repl = struct {
         };
         const final_expr_idx = canonical_expr.get_idx();
 
-        // Type check
-        var checker = Check.init(self.allocator, &module_env.types, cir, &.{}, &cir.store.regions, module_common_idents) catch |err| {
+        // Type check - Pass Bool and Result as imported modules
+        const other_modules = [_]*const ModuleEnv{ self.bool_module.env, self.result_module.env };
+        var checker = Check.init(self.allocator, &module_env.types, cir, &other_modules, &cir.store.regions, module_common_idents) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Type check init error: {}", .{err});
         };
         defer checker.deinit();
@@ -533,8 +520,8 @@ pub const Repl = struct {
             return try std.fmt.allocPrint(self.allocator, "Type check expr error: {}", .{err});
         };
 
-        // Create interpreter instance with the actual Bool statement index
-        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, actual_bool_idx) catch |err| {
+        // Create interpreter instance with the Bool statement index from the Bool module
+        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, bool_stmt_in_bool_module) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
         };
         defer interpreter.deinit();

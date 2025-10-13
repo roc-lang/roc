@@ -138,14 +138,18 @@ pub fn initWithImport(source: []const u8, other_module_name: []const u8, other_m
     const module_name = "Test";
     std.debug.assert(!std.mem.eql(u8, module_name, other_module_name));
 
-    // Load builtin modules (following eval.zig pattern)
+    // Load builtin modules as proper imported modules
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
+    const bool_source = "Bool := [True, False].{ not }\n";
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var bool_module = try loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     errdefer bool_module.deinit();
     var result_module = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     errdefer result_module.deinit();
+
+    // Add Bool and Result as imported modules (proper module importing, not statement copying!)
+    try other_envs.append(bool_module.env);
+    try other_envs.append(result_module.env);
 
     // Initialize the ModuleEnv with the CommonEnv
     module_env.* = try ModuleEnv.init(gpa, source);
@@ -163,34 +167,22 @@ pub fn initWithImport(source: []const u8, other_module_name: []const u8, other_m
     // Canonicalize
     try module_env.initCIRFields(gpa, "test");
 
-    // Inject builtin type declarations (Bool and Result) following eval.zig pattern
-    // Use .err content to match the old builtin injection system behavior
-    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
-    const actual_bool_idx = try module_env.addStatementAndTypeVar(bool_stmt, .err, base.Region.zero());
-
-    const result_stmt = result_module.env.store.getStatement(builtin_indices.result_type);
-    const actual_result_idx = try module_env.addStatementAndTypeVar(result_stmt, .err, base.Region.zero());
-
-    // Update builtin_statements span
-    const start_idx = @intFromEnum(actual_bool_idx);
-    const end_idx = @intFromEnum(actual_result_idx);
-    module_env.builtin_statements = .{ .span = .{
-        .start = start_idx,
-        .len = end_idx - start_idx + 1,
-    } };
-
     can.* = try Can.init(module_env, parse_ast, &module_envs);
     errdefer can.deinit();
 
     try can.canonicalizeFile();
     try can.validateForChecking();
 
+    // Get Bool and Result statement indices from the IMPORTED modules (not copied!)
+    const bool_stmt_in_bool_module = builtin_indices.bool_type;
+    const result_stmt_in_result_module = builtin_indices.result_type;
+
     const module_common_idents: Check.CommonIdents = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
         .list = try module_env.insertIdent(base.Ident.for_text("List")),
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
-        .bool_stmt = actual_bool_idx,
-        .result_stmt = actual_result_idx,
+        .bool_stmt = bool_stmt_in_bool_module,
+        .result_stmt = result_stmt_in_result_module,
     };
 
     // Pull out the imported index
@@ -199,7 +191,7 @@ pub fn initWithImport(source: []const u8, other_module_name: []const u8, other_m
     std.debug.assert(@intFromEnum(import_idx) == 0);
     try other_envs.append(other_module_env);
 
-    // Type Check
+    // Type Check - Pass all imported modules (Bool, Result, and user module)
     var checker = try Check.init(gpa, &module_env.types, module_env, other_envs.items, &module_env.store.regions, module_common_idents);
     errdefer checker.deinit();
 
@@ -239,18 +231,22 @@ pub fn init(source: []const u8) !TestEnv {
     errdefer gpa.destroy(can);
 
     const module_envs = std.StringHashMap(*const ModuleEnv).init(gpa);
-    const other_envs = std.ArrayList(*const ModuleEnv).init(gpa);
+    var other_envs = std.ArrayList(*const ModuleEnv).init(gpa);
 
     const module_name = "Test";
 
-    // Load builtin modules (following eval.zig pattern)
+    // Load builtin modules as proper imported modules
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
+    const bool_source = "Bool := [True, False].{ not }\n";
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var bool_module = try loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     errdefer bool_module.deinit();
     var result_module = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     errdefer result_module.deinit();
+
+    // Add Bool and Result as imported modules (proper module importing, not statement copying!)
+    try other_envs.append(bool_module.env);
+    try other_envs.append(result_module.env);
 
     // Initialize the ModuleEnv with the CommonEnv
     module_env.* = try ModuleEnv.init(gpa, source);
@@ -268,42 +264,26 @@ pub fn init(source: []const u8) !TestEnv {
     // Canonicalize
     try module_env.initCIRFields(gpa, "test");
 
-    // Inject builtin type declarations (Bool and Result) following eval.zig pattern
-    // Get the Bool type declaration from the loaded module using the build-time index
-    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
-    const actual_bool_idx = try module_env.store.addStatement(bool_stmt, base.Region.zero());
-    _ = try module_env.types.fresh(); // Keep types array in sync with nodes/regions
-
-    // Get the Result type declaration from the loaded module using the build-time index
-    const result_stmt = result_module.env.store.getStatement(builtin_indices.result_type);
-    const actual_result_idx = try module_env.store.addStatement(result_stmt, base.Region.zero());
-    _ = try module_env.types.fresh(); // Keep types array in sync with nodes/regions
-
-    // Update builtin_statements span to include injected Bool and Result
-    // Use the ACTUAL indices where they landed (not hardcoded!)
-    const start_idx = @intFromEnum(actual_bool_idx);
-    const end_idx = @intFromEnum(actual_result_idx);
-    module_env.builtin_statements = .{ .span = .{
-        .start = start_idx,
-        .len = end_idx - start_idx + 1,
-    } };
-
     can.* = try Can.init(module_env, parse_ast, null);
     errdefer can.deinit();
 
     try can.canonicalizeFile();
     try can.validateForChecking();
 
+    // Get Bool and Result statement indices from the IMPORTED modules (not copied!)
+    const bool_stmt_in_bool_module = builtin_indices.bool_type;
+    const result_stmt_in_result_module = builtin_indices.result_type;
+
     const module_common_idents: Check.CommonIdents = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
         .list = try module_env.insertIdent(base.Ident.for_text("List")),
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
-        .bool_stmt = actual_bool_idx,
-        .result_stmt = actual_result_idx,
+        .bool_stmt = bool_stmt_in_bool_module,
+        .result_stmt = result_stmt_in_result_module,
     };
 
-    // Type Check
-    var checker = try Check.init(gpa, &module_env.types, module_env, &.{}, &module_env.store.regions, module_common_idents);
+    // Type Check - Pass the imported modules (Bool and Result) in other_modules parameter
+    var checker = try Check.init(gpa, &module_env.types, module_env, other_envs.items, &module_env.store.regions, module_common_idents);
     errdefer checker.deinit();
 
     try checker.checkFile();
