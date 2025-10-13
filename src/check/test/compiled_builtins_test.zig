@@ -66,9 +66,8 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
     const base_ptr = @intFromPtr(buffer.ptr);
 
     // Deserialize store separately (returns a pointer that must be freed after copying)
-    const deserialized_store_ptr = try serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa);
+    const deserialized_store_ptr = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa);
     const deserialized_store = deserialized_store_ptr.*;
-    gpa.destroy(deserialized_store_ptr);
 
     env.* = ModuleEnv{
         .gpa = gpa,
@@ -197,9 +196,11 @@ test "compiled builtins - use Set and Dict together" {
     // Inject builtin type declarations (Bool and Result) following TestEnv.zig pattern
     const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
     const actual_bool_idx = try module_env.store.addStatement(bool_stmt, base.Region.zero());
+    _ = try module_env.types.freshFromContent(.err); // Add type variable for Bool
 
     const result_stmt = result_module.env.store.getStatement(builtin_indices.result_type);
     const actual_result_idx = try module_env.store.addStatement(result_stmt, base.Region.zero());
+    _ = try module_env.types.freshFromContent(.err); // Add type variable for Result
 
     // Update builtin_statements span
     const start_idx = @intFromEnum(actual_bool_idx);

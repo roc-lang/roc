@@ -1427,9 +1427,8 @@ pub const Serialized = struct {
         const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
 
         // Deserialize store separately (returns a pointer that must be freed after copying)
-        const deserialized_store_ptr = try self.store.deserialize(offset, gpa);
+        const deserialized_store_ptr = self.store.deserialize(offset, gpa);
         const deserialized_store = deserialized_store_ptr.*;
-        gpa.destroy(deserialized_store_ptr);
 
         env.* = Self{
             .gpa = gpa,

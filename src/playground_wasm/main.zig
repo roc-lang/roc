@@ -959,9 +959,8 @@ fn compileSource(source: []const u8) !CompilerStageData {
             logDebug("loadCompiledModule: imports deserialized successfully\n", .{});
 
             logDebug("loadCompiledModule: About to deserialize store\n", .{});
-            const deserialized_store_ptr = try serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa);
+            const deserialized_store_ptr = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa);
             const deserialized_store = deserialized_store_ptr.*;
-            gpa.destroy(deserialized_store_ptr); // Free the pointer after copying the value
             logDebug("loadCompiledModule: store deserialized successfully\n", .{});
 
             logDebug("loadCompiledModule: All deserialized, constructing ModuleEnv\n", .{});
@@ -1050,7 +1049,8 @@ fn compileSource(source: []const u8) !CompilerStageData {
     logDebug("compileSource: Got Bool statement successfully\n", .{});
 
     logDebug("compileSource: About to add Bool statement and type var to main env\n", .{});
-    const actual_bool_idx = try env.addStatementAndTypeVar(bool_stmt, .err, base.Region.zero());
+    const actual_bool_idx = try env.store.addStatement(bool_stmt, base.Region.zero());
+    _ = try env.types.fresh(); // Keep types array in sync with nodes/regions
     logDebug("compileSource: Bool statement added successfully, idx={}\n", .{@intFromEnum(actual_bool_idx)});
 
     // Get Result statements
@@ -1060,7 +1060,8 @@ fn compileSource(source: []const u8) !CompilerStageData {
     logDebug("compileSource: Got Result statement successfully\n", .{});
 
     logDebug("compileSource: About to add Result statement and type var to main env\n", .{});
-    const actual_result_idx = try env.addStatementAndTypeVar(result_stmt, .err, base.Region.zero());
+    const actual_result_idx = try env.store.addStatement(result_stmt, base.Region.zero());
+    _ = try env.types.fresh(); // Keep types array in sync with nodes/regions
     logDebug("compileSource: Result statement added successfully, idx={}\n", .{@intFromEnum(actual_result_idx)});
     logDebug("compileSource: Builtin injection complete\n", .{});
 

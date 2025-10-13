@@ -21,16 +21,11 @@ test "canonicalize True as Bool" {
     // Get the expression
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    // Check if it's a nominal expression (Bool)
-    try testing.expectEqual(.e_nominal, std.meta.activeTag(expr));
-
-    // The backing expression should be a tag
-    const backing_expr = test_env.module_env.store.getExpr(expr.e_nominal.backing_expr);
-    try testing.expectEqual(.e_tag, std.meta.activeTag(backing_expr));
-    try testing.expectEqual(CIR.Expr.NominalBackingType.tag, expr.e_nominal.backing_type);
+    // Without builtin injection, True is just a tag (not a nominal)
+    try testing.expectEqual(.e_tag, std.meta.activeTag(expr));
 
     // The tag should be "True"
-    const tag_name = test_env.getIdent(backing_expr.e_tag.name);
+    const tag_name = test_env.getIdent(expr.e_tag.name);
     try testing.expectEqualStrings("True", tag_name);
 }
 
@@ -44,16 +39,11 @@ test "canonicalize False as Bool" {
     // Get the expression
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    // Check if it's a nominal expression (Bool)
-    try testing.expectEqual(.e_nominal, std.meta.activeTag(expr));
-
-    // The backing expression should be a tag
-    const backing_expr = test_env.module_env.store.getExpr(expr.e_nominal.backing_expr);
-    try testing.expectEqual(.e_tag, std.meta.activeTag(backing_expr));
-    try testing.expectEqual(CIR.Expr.NominalBackingType.tag, expr.e_nominal.backing_type);
+    // Without builtin injection, False is just a tag (not a nominal)
+    try testing.expectEqual(.e_tag, std.meta.activeTag(expr));
 
     // The tag should be "False"
-    const tag_name = test_env.getIdent(backing_expr.e_tag.name);
+    const tag_name = test_env.getIdent(expr.e_tag.name);
     try testing.expectEqualStrings("False", tag_name);
 }
 

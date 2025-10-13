@@ -677,10 +677,9 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
 
     // Deserialize
     const base_ptr = @intFromPtr(buffer.ptr);
-    // Deserialize store separately (returns a pointer that must be freed after copying)
-    const deserialized_store_ptr = try serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa);
+    // Deserialize store in-place (returns the same pointer, just cast to NodeStore)
+    const deserialized_store_ptr = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa);
     const deserialized_store = deserialized_store_ptr.*;
-    gpa.destroy(deserialized_store_ptr);
 
     env.* = ModuleEnv{
         .gpa = gpa,

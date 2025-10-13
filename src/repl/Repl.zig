@@ -75,16 +75,15 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
     // Deserialize
     const base_ptr = @intFromPtr(buffer.ptr);
 
-    // Deserialize store separately (returns a pointer that must be freed after copying)
-    const deserialized_store_ptr = try serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa);
+    // Deserialize store in-place (returns the same pointer, just cast to NodeStore)
+    const deserialized_store_ptr = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa);
     const deserialized_store = deserialized_store_ptr.*;
-    gpa.destroy(deserialized_store_ptr);
 
     env.* = ModuleEnv{
         .gpa = gpa,
         .common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), source).*,
         .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*, // Pass gpa to types deserialize
-        .module_kind = serialized_ptr.module_kind.toModuleKind(),
+        .module_kind = serialized_ptr.module_kind,
         .all_defs = serialized_ptr.all_defs,
         .all_statements = serialized_ptr.all_statements,
         .exports = serialized_ptr.exports,
@@ -475,14 +474,14 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8, def_ident: ?[]co
     defer result_module.deinit();
 
     // Get the Bool type declaration from the loaded module
-    // Use .err content to match the old builtin injection system behavior
     const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
-    const actual_bool_idx = try cir.addStatementAndTypeVar(bool_stmt, .err, base.Region.zero());
+    const actual_bool_idx = try cir.store.addStatement(bool_stmt, base.Region.zero());
+    _ = try cir.types.fresh(); // Keep types array in sync with nodes/regions
 
     // Get the Result type declaration from the loaded module
-    // Use .err content to match the old builtin injection system behavior
     const result_stmt = result_module.env.store.getStatement(builtin_indices.result_type);
-    const actual_result_idx = try cir.addStatementAndTypeVar(result_stmt, .err, base.Region.zero());
+    const actual_result_idx = try cir.store.addStatement(result_stmt, base.Region.zero());
+    _ = try cir.types.fresh(); // Keep types array in sync with nodes/regions
 
     const common_idents: Check.CommonIdents = .{
         .module_name = try cir.insertIdent(base.Ident.for_text(module_name)),
@@ -886,14 +885,14 @@ test "Repl - minimal interpreter integration" {
     defer result_module.deinit();
 
     // Get the Bool type declaration from the loaded module
-    // Use .err content to match the old builtin injection system behavior
     const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
-    const actual_bool_idx = try cir.addStatementAndTypeVar(bool_stmt, .err, base.Region.zero());
+    const actual_bool_idx = try cir.store.addStatement(bool_stmt, base.Region.zero());
+    _ = try cir.types.fresh(); // Keep types array in sync with nodes/regions
 
     // Get the Result type declaration from the loaded module
-    // Use .err content to match the old builtin injection system behavior
     const result_stmt = result_module.env.store.getStatement(builtin_indices.result_type);
-    const actual_result_idx = try cir.addStatementAndTypeVar(result_stmt, .err, base.Region.zero());
+    const actual_result_idx = try cir.store.addStatement(result_stmt, base.Region.zero());
+    _ = try cir.types.fresh(); // Keep types array in sync with nodes/regions
 
     const module_common_idents: Check.CommonIdents = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("test")),

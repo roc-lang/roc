@@ -70,16 +70,15 @@ pub fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_n
     // Deserialize
     const base_ptr = @intFromPtr(buffer.ptr);
 
-    // Deserialize store separately (returns a pointer that must be freed after copying)
-    const deserialized_store_ptr = try serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa);
+    // Deserialize store in-place (returns the same pointer, just cast to NodeStore)
+    const deserialized_store_ptr = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa);
     const deserialized_store = deserialized_store_ptr.*;
-    gpa.destroy(deserialized_store_ptr);
 
     env.* = ModuleEnv{
         .gpa = gpa,
         .common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), source).*,
         .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*, // Pass gpa to types deserialize
-        .module_kind = serialized_ptr.module_kind.toModuleKind(),
+        .module_kind = serialized_ptr.module_kind,
         .all_defs = serialized_ptr.all_defs,
         .all_statements = serialized_ptr.all_statements,
         .exports = serialized_ptr.exports,
@@ -382,12 +381,13 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     try module_env.initCIRFields(allocator, "test");
 
     // Inject builtin type declarations (Bool and Result) following TestEnv.zig pattern
-    // Use .err content to match the old builtin injection system behavior
     const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
-    const actual_bool_idx = try module_env.addStatementAndTypeVar(bool_stmt, .err, base.Region.zero());
+    const actual_bool_idx = try module_env.store.addStatement(bool_stmt, base.Region.zero());
+    _ = try module_env.types.fresh(); // Keep types array in sync with nodes/regions
 
     const result_stmt = result_module.env.store.getStatement(builtin_indices.result_type);
-    const actual_result_idx = try module_env.addStatementAndTypeVar(result_stmt, .err, base.Region.zero());
+    const actual_result_idx = try module_env.store.addStatement(result_stmt, base.Region.zero());
+    _ = try module_env.types.fresh(); // Keep types array in sync with nodes/regions
 
     // Update builtin_statements span
     const start_idx = @intFromEnum(actual_bool_idx);

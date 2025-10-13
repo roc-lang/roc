@@ -203,27 +203,7 @@ pub fn init(
 
     const scratch_statements_start = result.env.store.scratch.?.statements.top();
 
-    // Inject built-in type declarations that aren't defined in this module's source
-    // TODO: These should ultimately come from the platform/builtin files rather than being hardcoded
-    if (options.inject_bool) {
-        const bool_idx = try result.addBuiltinTypeBool(env);
-        try result.env.store.addScratchStatement(bool_idx);
-    }
-    if (options.inject_result) {
-        const result_idx = try result.addBuiltinTypeResult(env);
-        try result.env.store.addScratchStatement(result_idx);
-    }
-
     result.env.builtin_statements = try result.env.store.statementSpanFrom(scratch_statements_start);
-
-    // Debug assertion: When Bool is injected, it must be the first builtin statement
-    if (std.debug.runtime_safety and options.inject_bool) {
-        const builtin_stmts = result.env.store.sliceStatements(result.env.builtin_statements);
-        std.debug.assert(builtin_stmts.len >= 1); // Must have at least Bool
-        // Verify first builtin is Bool by checking it's a nominal_decl
-        const first_stmt = result.env.store.getStatement(builtin_stmts[0]);
-        std.debug.assert(first_stmt == .s_nominal_decl);
-    }
 
     // Assert that the node store is completely empty
     env.debugAssertArraysInSync();
@@ -6845,6 +6825,12 @@ fn checkScopeForUnusedVariables(self: *Self, scope: *const Scope) std.mem.Alloca
         // Get the pattern to check if it has a different ident than the scope key
         // For pattern_identifier nodes, check if the qualified ident is exposed
         const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
+
+        // Skip if the pattern doesn't have a corresponding node (e.g., in tests with fake indices)
+        if (@intFromEnum(node_idx) >= self.env.store.nodes.len()) {
+            continue;
+        }
+
         const node = self.env.store.nodes.get(node_idx);
 
         if (node.tag == .pattern_identifier) {

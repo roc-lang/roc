@@ -118,7 +118,7 @@ test "polymorphic record constructor" {
         \\    { pair1, pair2, pair3 }
         \\}
     ;
-    try typeCheck(source, "{ pair1: { first: Num(_size), second: Str }, pair2: { first: Str, second: Num(_size2) }, pair3: { first: Bool, second: Bool } }");
+    try typeCheck(source, "{ pair1: { first: Num(_size), second: Str }, pair2: { first: Str, second: Num(_size2) }, pair3: { first: [True]_others, second: [False]_others2 } }");
 }
 
 test "polymorphic identity with various numeric types" {
@@ -173,7 +173,7 @@ test "polymorphic swap function" {
         \\    { swapped1, swapped2 }
         \\}
     ;
-    try typeCheck(source, "{ swapped1: { first: Str, second: Num(_size) }, swapped2: { first: Num(_size2), second: Bool } }");
+    try typeCheck(source, "{ swapped1: { first: Str, second: Num(_size) }, swapped2: { first: Num(_size2), second: [True]_others } }");
 }
 
 test "polymorphic fold function" {

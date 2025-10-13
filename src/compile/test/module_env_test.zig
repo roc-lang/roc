@@ -83,9 +83,8 @@ test "ModuleEnv.Serialized roundtrip" {
     const env = @as(*ModuleEnv, @ptrCast(@alignCast(deserialized_ptr)));
 
     // Deserialize store separately (returns a pointer that must be freed after copying)
-    const deserialized_store_ptr = try deserialized_ptr.store.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), deser_alloc);
+    const deserialized_store_ptr = deserialized_ptr.store.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), deser_alloc);
     const deserialized_store = deserialized_store_ptr.*;
-    deser_alloc.destroy(deserialized_store_ptr);
 
     env.* = ModuleEnv{
         .gpa = gpa,
