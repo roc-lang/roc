@@ -2518,23 +2518,6 @@ pub fn canonicalizeExpr(
 
             // Create span of the new scratch record fields
             const fields_span = try self.env.store.recordFieldSpanFrom(scratch_top);
-            // Create fresh type variables for each record field
-            // The type checker will unify these with the field expression types
-            const cir_fields = self.env.store.sliceRecordFields(fields_span);
-
-            // Create fresh type variables for each field
-            const record_fields_top = self.scratch_record_fields.top();
-
-            for (cir_fields) |cir_field_idx| {
-                const cir_field = self.env.store.getRecordField(cir_field_idx);
-                try self.scratch_record_fields.append(self.env.gpa, types.RecordField{
-                    .name = cir_field.name,
-                    .var_ = @enumFromInt(@intFromEnum(cir_field.value)),
-                });
-            }
-
-            // Shink the scratch array to it's original size
-            self.scratch_record_fields.clearFrom(record_fields_top);
 
             const expr_idx = try self.env.addExpr(CIR.Expr{
                 .e_record = .{
