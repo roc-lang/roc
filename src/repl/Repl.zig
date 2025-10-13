@@ -275,6 +275,9 @@ const ParseResult = union(enum) {
 
 /// Try to parse input as a statement
 fn tryParseStatement(self: *Repl, input: []const u8) !ParseResult {
+    var arena = std.heap.ArenaAllocator.init(self.allocator);
+    defer arena.deinit();
+
     var module_env = try ModuleEnv.init(self.allocator, input);
     defer module_env.deinit();
 
@@ -432,6 +435,9 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8, def_ident: ?[]co
     defer if (need_full_source) self.allocator.free(full_source);
 
     // Create module environment for the expression
+    var arena = std.heap.ArenaAllocator.init(self.allocator);
+    defer arena.deinit();
+
     var module_env = try ModuleEnv.init(self.allocator, full_source);
     defer module_env.deinit();
 
@@ -852,6 +858,9 @@ test "Repl - minimal interpreter integration" {
 
     // Step 1: Create module environment
     const source = "42";
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+
     var module_env = try ModuleEnv.init(gpa, source);
     defer module_env.deinit();
 

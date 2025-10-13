@@ -483,7 +483,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
         .build => |build_args| rocBuild(gpa, build_args),
         .bundle => |bundle_args| rocBundle(gpa, bundle_args),
         .unbundle => |unbundle_args| rocUnbundle(gpa, unbundle_args),
-        .format => |format_args| rocFormat(gpa, arena, format_args),
+        .fmt => |format_args| rocFormat(gpa, arena, format_args),
         .test_cmd => |test_args| rocTest(gpa, test_args),
         .repl => rocRepl(gpa),
         .version => stdout.print("Roc compiler version {s}", .{build_options.compiler_version}),
@@ -1402,6 +1402,10 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
     const basename = std.fs.path.basename(roc_file_path);
     const module_name = try shm_allocator.dupe(u8, basename);
 
+    // Create arena allocator for scratch memory
+    var arena = std.heap.ArenaAllocator.init(shm_allocator);
+    defer arena.deinit();
+
     var env = try ModuleEnv.init(shm_allocator, source);
     env.common.source = source;
     env.module_name = module_name;
@@ -1819,6 +1823,10 @@ fn extractEntrypointsFromPlatform(gpa: std.mem.Allocator, roc_file_path: []const
     const basename = std.fs.path.basename(roc_file_path);
     const module_name = try gpa.dupe(u8, basename);
     defer gpa.free(module_name);
+
+    // Create arena allocator for scratch memory
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
 
     // Create ModuleEnv
     var env = ModuleEnv.init(gpa, source) catch return error.ParseFailed;
@@ -2477,6 +2485,10 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
     const basename = std.fs.path.basename(args.path);
     const module_name = try gpa.dupe(u8, basename);
     defer gpa.free(module_name);
+
+    // Create arena allocator for scratch memory
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
 
     // Create ModuleEnv
     var env = ModuleEnv.init(gpa, source) catch |err| {

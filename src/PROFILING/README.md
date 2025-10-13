@@ -34,7 +34,7 @@ They also lack interactivity and many low level details.
 Flamegraphs are essentially a still frame view into an apps performance.
 
 The tool is simple to run.
-Using it with roc can be as simple as `flamegraph --root -- ./zig-out/bin/roc format /tmp/app.roc`.
+Using it with roc can be as simple as `flamegraph --root -- ./zig-out/bin/roc fmt /tmp/app.roc`.
 
 > Note: `--root` is not always needed, but it generally gives better results.
 
@@ -51,7 +51,7 @@ Samply is a sampling profiler that that uses the [Firefox profiler](https://prof
 I find it to be a richer and nicer default than simple flamegraphs, but it is also more complex.
 Not only do you get a flamegraph, but you get callstacks, can collapse recursive nodes, and are able to view source lines and assembly hit by the sampler.
 
-Using samply is also super simply, just `samply record -- ./zig-out/bin/roc format /tmp/new.roc`.
+Using samply is also super simply, just `samply record -- ./zig-out/bin/roc fmt /tmp/new.roc`.
 
 Here is an example output after searching for `memmove`.
 We can see in the top graph, all the specific times during execution that memmove was using the cpu.
@@ -79,11 +79,11 @@ Often times, it is worth profiling once with `-Dtracy-callstack=false` to have m
 
 Now that I have the compiler built with tracy, I can launch the tracy server on my mac machine to record the result (you can also run it on the same machine if wanted).
 Run `tracy-profiler`, input the correct ip address, and press connect.
-Then run the instrumented version of zig: `./zig-out/bin/roc format /tmp/new.roc`.
+Then run the instrumented version of zig: `./zig-out/bin/roc fmt /tmp/new.roc`.
 Also, run with the root user to capture more information.
 In this case, I ran:
 ```
-sudo ./zig-out/bin/roc format /tmp/new.roc
+sudo ./zig-out/bin/roc fmt /tmp/new.roc
 ```
 
 After that, welcome to a wealth of information:

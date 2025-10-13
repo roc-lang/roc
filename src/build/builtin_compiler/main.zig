@@ -166,6 +166,9 @@ fn compileModule(
     var module_env = try gpa.create(ModuleEnv);
     errdefer gpa.destroy(module_env);
 
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+
     module_env.* = try ModuleEnv.init(gpa, source);
     errdefer module_env.deinit();
 

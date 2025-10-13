@@ -73,8 +73,8 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
     env.* = ModuleEnv{
         .gpa = gpa,
         .common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), source).*,
-        .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*, // Pass gpa to types deserialize
-        .module_kind = serialized_ptr.module_kind.toModuleKind(),
+        .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+        .module_kind = serialized_ptr.module_kind,
         .all_defs = serialized_ptr.all_defs,
         .all_statements = serialized_ptr.all_statements,
         .exports = serialized_ptr.exports,

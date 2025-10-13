@@ -133,6 +133,7 @@ test "record literal uses record_unbound" {
 
 test "record_unbound basic functionality" {
     const gpa = std.testing.allocator;
+
     const source = "{ x: 42, y: 99 }";
 
     // Test that record literals create record_unbound types
@@ -176,6 +177,7 @@ test "record_unbound basic functionality" {
 
 test "record_unbound with multiple fields" {
     const gpa = std.testing.allocator;
+
     const source = "{ a: 123, b: 456, c: 789 }";
 
     var env = try ModuleEnv.init(gpa, source);

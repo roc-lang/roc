@@ -729,6 +729,7 @@ pub const Store = struct {
     /// Serialized representation of types store
     /// Following SafeList.Serialized pattern: NO pointers, NO slices, NO Allocators
     pub const Serialized = struct {
+        gpa: [2]u64, // Reserve space for allocator (vtable ptr + context ptr), provided during deserialization
         slots: SlotStore.Serialized,
         descs: DescStore.Serialized,
         vars: VarSafeList.Serialized,
@@ -750,6 +751,10 @@ pub const Store = struct {
             try self.record_fields.serialize(&store.record_fields, allocator, writer);
             try self.tags.serialize(&store.tags, allocator, writer);
             try self.static_dispatch_constraints.serialize(&store.static_dispatch_constraints, allocator, writer);
+
+            // Set gpa to all zeros; the space needs to be here,
+            // but the value will be set separately during deserialization.
+            self.gpa = .{ 0, 0 };
         }
 
         /// Deserialize this Serialized struct into a Store
@@ -1554,7 +1559,7 @@ test "Store.Serialized roundtrip" {
 
     // Deserialize - Store.Serialized is at the beginning of the buffer
     const deser_ptr = @as(*Store.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = deser_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized = deser_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa);
 
     // Verify the store was deserialized correctly
     try std.testing.expectEqual(@as(usize, 3), deserialized.len());

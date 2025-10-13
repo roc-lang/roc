@@ -184,6 +184,9 @@ pub const Repl = struct {
 
         // Allocate new ModuleEnv on heap
         const new_env = try self.allocator.create(ModuleEnv);
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+
         new_env.* = try ModuleEnv.init(self.allocator, source);
         self.last_module_env = new_env;
         return new_env;
@@ -349,6 +352,9 @@ pub const Repl = struct {
 
     /// Try to parse input as a statement
     fn tryParseStatement(self: *Repl, input: []const u8) !ParseResult {
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+
         var module_env = try ModuleEnv.init(self.allocator, input);
         defer module_env.deinit();
 

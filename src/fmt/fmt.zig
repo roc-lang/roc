@@ -31,7 +31,7 @@ const FormatFlags = enum {
 pub const FormattingResult = struct {
     success: usize,
     failure: usize,
-    /// Only relevant when using `roc format --check`
+    /// Only relevant when using `roc fmt --check`
     unformatted_files: ?std.ArrayList([]const u8),
 
     pub fn deinit(self: *@This()) void {
@@ -51,7 +51,7 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
 
     var success_count: usize = 0;
     var failed_count: usize = 0;
-    // Only used for `roc format --check`. If we aren't doing check, don't bother allocating
+    // Only used for `roc fmt --check`. If we aren't doing check, don't bother allocating
     var unformatted_files = if (check) std.ArrayList([]const u8).init(gpa) else null;
 
     // First try as a directory.
@@ -163,6 +163,9 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
         }
     };
 
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+
     var module_env = try ModuleEnv.init(gpa, contents);
     defer module_env.deinit();
 
@@ -197,6 +200,9 @@ pub fn formatStdin(gpa: std.mem.Allocator) !void {
     const contents = try std.io.getStdIn().readToEndAlloc(gpa, Filesystem.max_file_size);
 
     // ModuleEnv takes ownership of contents
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+
     var module_env = try ModuleEnv.init(gpa, contents);
     defer module_env.deinit();
 
@@ -837,7 +843,7 @@ const Formatter = struct {
                     fmt.curr_indent += 1;
                 }
                 var add_newline = false;
-                try fmt.pushAll("\"\"\"");
+                try fmt.pushAll("\\\\");
                 for (fmt.ast.store.exprSlice(s.parts)) |idx| {
                     const e = fmt.ast.store.getExpr(idx);
                     switch (e) {
@@ -847,7 +853,7 @@ const Formatter = struct {
                                 _ = try fmt.flushCommentsBefore(str.region.start - 1);
                                 try fmt.ensureNewline();
                                 try fmt.pushIndent();
-                                try fmt.pushAll("\"\"\"");
+                                try fmt.pushAll("\\\\");
                             }
 
                             add_newline = true;
@@ -2324,6 +2330,9 @@ pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) 
 }
 
 fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+
     var module_env = try ModuleEnv.init(gpa, input);
     defer module_env.deinit();
 

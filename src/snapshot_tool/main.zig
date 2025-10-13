@@ -685,8 +685,8 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
     env.* = ModuleEnv{
         .gpa = gpa,
         .common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), source).*,
-        .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*, // Pass gpa to types deserialize
-        .module_kind = serialized_ptr.module_kind.toModuleKind(),
+        .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+        .module_kind = serialized_ptr.module_kind,
         .all_defs = serialized_ptr.all_defs,
         .all_statements = serialized_ptr.all_statements,
         .exports = serialized_ptr.exports,
@@ -1139,6 +1139,9 @@ fn processSnapshotContent(
     }
 
     // Process the content through the compilation pipeline
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
     var module_env = try ModuleEnv.init(allocator, content.source);
     defer module_env.deinit();
 
@@ -1260,7 +1263,7 @@ fn processSnapshotContent(
             const can_stmt_result = try czer.canonicalizeBlockStatement(czer.parse_ir.store.getStatement(ast_stmt_idx), &.{}, 0);
             if (can_stmt_result.canonicalized_stmt) |can_stmt| {
                 // Manually track scratch statements because we aren't using the file entrypoint
-                const scratch_statements_start = can_ir.store.scratch_statements.top();
+                const scratch_statements_start = can_ir.store.scratch.?.statements.top();
                 try can_ir.store.addScratchStatement(can_stmt.idx);
                 can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
             }
