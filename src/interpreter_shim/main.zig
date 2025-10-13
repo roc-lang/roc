@@ -187,8 +187,10 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*Modu
     const env_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(header_ptr.module_env_offset));
     const env_ptr: *ModuleEnv = @ptrFromInt(env_addr);
 
-    // Set up the environment
+    // Set up the environment - initialize runtime fields that were placeholders during serialization
     env_ptr.gpa = std.heap.page_allocator;
+    env_ptr.module_name = ""; // Set to empty string since module_name is not stored in shared memory
+    env_ptr.common.source = ""; // Set to empty string since source is not stored in shared memory
     // Note: relocate method was removed - relocation now handled by Serialized.deserialize
     // For shared memory use case, we manually relocate pointers that need adjustment
 
