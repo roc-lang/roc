@@ -728,7 +728,7 @@ pub const Store = struct {
 
     /// Serialized representation of types store
     pub const Serialized = struct {
-        gpa: Allocator,
+        gpa: [2]u64, // Reserve space for allocator (vtable ptr + context ptr), provided during deserialization
         slots: SlotStore.Serialized,
         descs: DescStore.Serialized,
         vars: VarSafeList.Serialized,
@@ -751,12 +751,13 @@ pub const Store = struct {
             try self.tags.serialize(&store.tags, allocator, writer);
             try self.static_dispatch_constraints.serialize(&store.static_dispatch_constraints, allocator, writer);
 
-            // Store the allocator
-            self.gpa = allocator;
+            // Set gpa to all zeros; the space needs to be here,
+            // but the value will be set separately during deserialization.
+            self.gpa = .{ 0, 0 };
         }
 
         /// Deserialize this Serialized struct into a Store
-        pub fn deserialize(self: *Serialized, offset: i64) *Store {
+        pub fn deserialize(self: *Serialized, offset: i64, gpa: Allocator) *Store {
             // types.Store.Serialized should be at least as big as types.Store
             std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Store));
 
@@ -764,7 +765,7 @@ pub const Store = struct {
             const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
 
             store.* = Store{
-                .gpa = self.gpa,
+                .gpa = gpa,
                 .slots = self.slots.deserialize(offset).*,
                 .descs = self.descs.deserialize(offset).*,
                 .vars = self.vars.deserialize(offset).*,
@@ -1557,7 +1558,7 @@ test "Store.Serialized roundtrip" {
 
     // Deserialize - Store.Serialized is at the beginning of the buffer
     const deser_ptr = @as(*Store.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = deser_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized = deser_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa);
 
     // Verify the store was deserialized correctly
     try std.testing.expectEqual(@as(usize, 3), deserialized.len());

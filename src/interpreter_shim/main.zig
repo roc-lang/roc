@@ -183,13 +183,13 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*Modu
         return error.ModuleEnvSetupFailed;
     }
 
-    // Get ModuleEnv pointer from the offset stored in the header
+    // Get ModuleEnv.Serialized pointer from the offset stored in the header
     const env_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(header_ptr.module_env_offset));
-    const env_ptr: *ModuleEnv = @ptrFromInt(env_addr);
+    const serialized_ptr: *ModuleEnv.Serialized = @ptrFromInt(env_addr);
 
-    // Set up the environment
-    env_ptr.gpa = std.heap.page_allocator;
-    env_ptr.relocate(offset);
+    // Deserialize the ModuleEnv, which properly reconstructs runtime fields
+    // Empty strings are used for source and module_name since they're not needed in the interpreter
+    const env_ptr = serialized_ptr.deserialize(offset, std.heap.page_allocator, "", "");
 
     return env_ptr;
 }

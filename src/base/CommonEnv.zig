@@ -96,7 +96,7 @@ pub const Serialized = struct {
     strings: StringLiteral.Store.Serialized,
     exposed_items: ExposedItems.Serialized,
     line_starts: SafeList(u32).Serialized,
-    source: []const u8, // Serialized as zeros, provided during deserialization
+    source: [2]u64, // Reserve space for slice (ptr + len), provided during deserialization
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -105,13 +105,15 @@ pub const Serialized = struct {
         allocator: std.mem.Allocator,
         writer: *CompactWriter,
     ) !void {
-        self.source = ""; // Empty slice
-
         // Serialize each component using its Serialized struct
         try self.idents.serialize(&env.idents, allocator, writer);
         try self.strings.serialize(&env.strings, allocator, writer);
         try self.exposed_items.serialize(&env.exposed_items, allocator, writer);
         try self.line_starts.serialize(&env.line_starts, allocator, writer);
+
+        // Set source to all zeros; the space needs to be here,
+        // but the value will be set separately during deserialization.
+        self.source = .{ 0, 0 };
     }
 
     /// Deserialize a CommonEnv from the buffer, updating the CommonEnv in place

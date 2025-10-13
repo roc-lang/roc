@@ -591,7 +591,8 @@ pub const Import = struct {
 
         pub const Serialized = struct {
             // Placeholder to match Store size - not serialized
-            map: std.AutoHashMapUnmanaged(base.StringLiteral.Idx, Import.Idx) = .{},
+            // Reserve space for hashmap (3 pointers for unmanaged hashmap internals)
+            map: [3]u64 = undefined,
             imports: collections.SafeList(base.StringLiteral.Idx).Serialized,
 
             /// Serialize a Store into this Serialized struct, appending data to the writer
@@ -603,6 +604,10 @@ pub const Import = struct {
             ) std.mem.Allocator.Error!void {
                 // Serialize the imports SafeList
                 try self.imports.serialize(&store.imports, allocator, writer);
+
+                // Set map to all zeros; the space needs to be here,
+                // but the map will be rebuilt during deserialization.
+                self.map = .{ 0, 0, 0 };
                 // Note: The map is not serialized as it's only used for deduplication during insertion
             }
 
