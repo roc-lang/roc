@@ -17,7 +17,8 @@ isOk = |result| match result {
 }
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - nominal_tag_unqualified_with_payload.md:4:12:4:25
+TYPE MISMATCH - nominal_tag_unqualified_with_payload.md:8:5:8:10
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

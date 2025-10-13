@@ -32,7 +32,7 @@ The second and third elements in this list have incompatible types:
     ^^^^^^^^^^^
 
 The second element has this type:
-    _[Some(Num(_size)), None]_others_
+    _[Some(Num(_size)), None][Err(err), Ok(Str)]_
 
 However, the third element has this type:
     _Result(Str, err)_

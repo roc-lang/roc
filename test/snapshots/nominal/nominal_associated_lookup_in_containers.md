@@ -20,9 +20,7 @@ nested : { bar : Foo.Bar, count : U64 }
 nested = { bar: A, count: 1 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - nominal_associated_lookup_in_containers.md:7:9:7:18
-TYPE MISMATCH - nominal_associated_lookup_in_containers.md:10:10:10:15
-TYPE MISMATCH - nominal_associated_lookup_in_containers.md:13:10:13:30
+NIL
 # PROBLEMS
 NIL
 # TOKENS

@@ -226,7 +226,7 @@ UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
 UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
 TOO FEW ARGS - fuzz_crash_027.md:21:3:22:4
 INVALID IF CONDITION - fuzz_crash_027.md:50:5:50:5
-INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
+TYPE MISMATCH - fuzz_crash_027.md:68:3:68:8
 TYPE MISMATCH - fuzz_crash_027.md:111:2:113:3
 TYPE MISMATCH - fuzz_crash_027.md:143:2:147:3
 # PROBLEMS
@@ -868,53 +868,19 @@ Right now, it has the type:
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
-**INCOMPATIBLE MATCH PATTERNS**
-The pattern in the third branch of this `match` differs from previous ones:
-**fuzz_crash_027.md:64:2:**
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_027.md:68:3:68:8:**
 ```roc
-	match a {lue | Red => {
-			x x
-		}
-		Blue		=> 1
 		"foo" => # ent
-00
-		"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
-			=> ment
-
-
-		[1, 2 | 5, 3, .. as rest] => 123
-		[
-ist
-		] => 123
-		3.14 => 314
-		3.14 | 6.28 => 314
-		(1, 2, 3) => 123
-		(1, 2 | 5, 3) => 123
-		{ foo: 1, bar: 2, ..rest } => 12->add(34)
-		{ # Afrd open
-			foo #
-				: #ue
-					1, # Aftd field
-			bar: 2,
-			..} => 12
-		{ foo: 1, bar: 2 | 7 } => 12
-		{
-			foo: 1,
-			} => 12
-		Ok(123) => 121000
-	}
 ```
-  ^^^^^
+		^^^^^
 
-The third pattern has this type:
+It has the type:
     _Str_
 
-But all the previous patterns have this type: 
+But I expected it to be:
     _[Red, Blue]_others_
-
-All patterns in an `match` must have compatible types.
-
-
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -943,7 +909,7 @@ This expression is used in an unexpected way:
 ```
 
 It has the type:
-    _[Stdoline!(Str)]_others_
+    _[Stdoline!(Str)][Err(_d), Ok({  })]_
 
 But the type annotation says it should have the type:
     _Result({  }, _d)_

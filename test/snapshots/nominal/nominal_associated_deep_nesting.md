@@ -22,7 +22,7 @@ deepType : Foo.Level1.Level2.Level3
 deepType = C
 ~~~
 # EXPECTED
-TYPE MISMATCH - nominal_associated_deep_nesting.md:15:12:15:13
+NIL
 # PROBLEMS
 NIL
 # TOKENS

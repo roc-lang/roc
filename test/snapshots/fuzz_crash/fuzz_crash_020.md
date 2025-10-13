@@ -188,7 +188,7 @@ UNDEFINED VARIABLE - fuzz_crash_020.md:120:1:120:2
 UNDEFINED VARIABLE - fuzz_crash_020.md:120:6:120:9
 EXPOSED BUT NOT DEFINED - fuzz_crash_020.md:2:6:2:11
 TOO FEW ARGS - fuzz_crash_020.md:17:3:18:4
-INCOMPATIBLE MATCH PATTERNS - fuzz_crash_020.md:52:2:52:2
+TYPE MISMATCH - fuzz_crash_020.md:58:6:58:11
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `match_branch_missing_arrow`
@@ -857,40 +857,19 @@ The type _List_ expects  argument, but got  instead.
 
 
 
-**INCOMPATIBLE MATCH PATTERNS**
-The pattern in the fourth branch of this `match` differs from previous ones:
-**fuzz_crash_020.md:52:2:**
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_020.md:58:6:58:11:**
 ```roc
-	match a {lue  {
-	x
-		}
-		Blue=> {x
-			}
-	er #ent
 			1	"for" => 20[1, ] # t
-		ment
-		[1, 2, 3,est]123
-		[
-		] 23
-		3.1 314
-		3.14 | 6.28 => 314
-		(1, ) => 123
-		(1, 2, 3)123
-		{ 	} => 12
-		Ok(123) => 12
-	}
 ```
-     ^^^^^
+			 	^^^^^
 
-The fourth pattern has this type:
+It has the type:
     _Str_
 
-But all the previous patterns have this type: 
+But I expected it to be:
     _[Blue]_others_
-
-All patterns in an `match` must have compatible types.
-
-
 
 # TOKENS
 ~~~zig

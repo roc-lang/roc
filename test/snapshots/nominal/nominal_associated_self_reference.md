@@ -21,7 +21,7 @@ external : Foo.Bar
 external = Foo.defaultBar
 ~~~
 # EXPECTED
-TYPE MISMATCH - nominal_associated_self_reference.md:5:18:5:19
+NIL
 # PROBLEMS
 NIL
 # TOKENS

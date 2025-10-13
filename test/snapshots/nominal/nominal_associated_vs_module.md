@@ -15,7 +15,6 @@ useBar = Something
 ~~~
 # EXPECTED
 TYPE MODULE MISSING MATCHING TYPE - nominal_associated_vs_module.md:1:1:7:19
-TYPE MISMATCH - nominal_associated_vs_module.md:7:10:7:19
 # PROBLEMS
 **TYPE MODULE MISSING MATCHING TYPE**
 Type modules must have a type declaration matching the module name.
