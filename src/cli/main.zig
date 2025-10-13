@@ -2510,11 +2510,30 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
                 if (test_result.passed) {
                     try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
                 } else {
-                    if (test_result.error_msg) |msg| {
-                        try stdout.print("\x1b[31mFAIL\x1b[0m: {s}:{} - {s}\n", .{ args.path, region_info.start_line_idx + 1, msg });
-                    } else {
-                        try stdout.print("\x1b[31mFAIL\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
-                    }
+                    // Generate and render a detailed report for this failure
+                    var report = test_runner.createReport(test_result, args.path) catch |err| {
+                        // Fallback to simple message if report generation fails
+                        try stderr.print("\x1b[31mFAIL\x1b[0m: {s}:{}", .{ args.path, region_info.start_line_idx + 1 });
+                        if (test_result.error_msg) |msg| {
+                            try stderr.print(" - {s}", .{msg});
+                        }
+                        try stderr.print(" (report generation failed: {})\n", .{err});
+                        continue;
+                    };
+                    defer report.deinit();
+
+                    // Render the report to terminal
+                    const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+                    const config = reporting.ReportingConfig.initColorTerminal();
+                    try reporting.renderReportToTerminal(&report, stderr.any(), palette, config);
+                }
+            }
+        } else {
+            // Non-verbose mode: just show simple FAIL messages with line numbers
+            for (test_runner.test_results.items) |test_result| {
+                if (!test_result.passed) {
+                    const region_info = env.calcRegionInfo(test_result.region);
+                    try stderr.print("\x1b[31mFAIL\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
                 }
             }
         }
