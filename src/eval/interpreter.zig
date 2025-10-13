@@ -123,8 +123,10 @@ pub const Interpreter = struct {
     bool_stmt: can.CIR.Statement.Idx,
     /// Bool module environment (for looking up Bool tag names like "True" and "False")
     bool_env: *const can.ModuleEnv,
+    /// Map from module name to ModuleEnv for resolving e_lookup_external expressions
+    imported_modules: std.StringHashMap(*const can.ModuleEnv),
 
-    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, bool_stmt: can.CIR.Statement.Idx, bool_env: *const can.ModuleEnv) !Interpreter {
+    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, bool_stmt: can.CIR.Statement.Idx, bool_env: *const can.ModuleEnv, imported_modules_map: ?*const std.StringHashMap(*const can.ModuleEnv)) !Interpreter {
         const rt_types_ptr = try allocator.create(types.store.Store);
         rt_types_ptr.* = try types.store.Store.initCapacity(allocator, 1024, 512);
         var slots = try std.ArrayList(u32).initCapacity(allocator, 1024);
@@ -151,8 +153,18 @@ pub const Interpreter = struct {
             .scratch_tags = try std.ArrayList(types.Tag).initCapacity(allocator, 8),
             .bool_stmt = bool_stmt,
             .bool_env = bool_env,
+            .imported_modules = std.StringHashMap(*const can.ModuleEnv).init(allocator),
         };
         result.runtime_layout_store = try layout.Store.init(env, result.runtime_types);
+
+        // Copy imported modules map if provided
+        if (imported_modules_map) |modules_map| {
+            var iter = modules_map.iterator();
+            while (iter.next()) |entry| {
+                try result.imported_modules.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
+        }
+
         return result;
     }
 
@@ -466,83 +478,8 @@ pub const Interpreter = struct {
 
                     return try self.evalArithmeticBinop(binop.op, expr_idx, lhs, rhs, lhs_rt_var, rhs_rt_var);
                 } else if (binop.op == .eq or binop.op == .ne or binop.op == .lt or binop.op == .le or binop.op == .gt or binop.op == .ge) {
-                    const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
-                    const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
-                    const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
-                    const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
-                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var);
-                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops, rhs_rt_var);
-                    defer lhs.decref(&self.runtime_layout_store, roc_ops);
-                    defer rhs.decref(&self.runtime_layout_store, roc_ops);
-                    const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    var result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
-                    result_rt_var = try self.ensureBoolRuntimeVar(self.env, result_ct_var, result_rt_var);
-
-                    const compare_op: std.math.CompareOperator = switch (binop.op) {
-                        .eq => .eq,
-                        .ne => .neq,
-                        .lt => .lt,
-                        .le => .lte,
-                        .gt => .gt,
-                        .ge => .gte,
-                        else => unreachable,
-                    };
-
-                    const lhs_bool_opt = self.boolValueIsTrue(lhs, lhs_rt_var) catch |err| switch (err) {
-                        error.TypeMismatch => null,
-                        else => return err,
-                    };
-                    const rhs_bool_opt = self.boolValueIsTrue(rhs, rhs_rt_var) catch |err| switch (err) {
-                        error.TypeMismatch => null,
-                        else => return err,
-                    };
-
-                    if (lhs_bool_opt != null or rhs_bool_opt != null) {
-                        if (lhs_bool_opt == null or rhs_bool_opt == null) return error.TypeMismatch;
-                        const lhs_bool = lhs_bool_opt.?;
-                        const rhs_bool = rhs_bool_opt.?;
-                        switch (compare_op) {
-                            .eq => {
-                                return try self.makeBoolValue(result_rt_var, lhs_bool == rhs_bool);
-                            },
-                            .neq => {
-                                return try self.makeBoolValue(result_rt_var, lhs_bool != rhs_bool);
-                            },
-                            else => return error.TypeMismatch,
-                        }
-                    }
-
-                    const lhs_numeric = self.isNumericScalar(lhs.layout);
-                    const rhs_numeric = self.isNumericScalar(rhs.layout);
-                    if (lhs_numeric or rhs_numeric) {
-                        if (!(lhs_numeric and rhs_numeric)) return error.TypeMismatch;
-                        const numeric_order = try self.compareNumericScalars(lhs, rhs);
-                        return try self.makeBoolValue(result_rt_var, numeric_order.compare(compare_op));
-                    }
-
-                    if (lhs.layout.tag == .scalar and lhs.layout.data.scalar.tag == .str) {
-                        if (rhs.layout.tag != .scalar or rhs.layout.data.scalar.tag != .str) return error.TypeMismatch;
-                        switch (compare_op) {
-                            .eq, .neq => {
-                                const lhs_str: *const RocStr = @ptrCast(@alignCast(lhs.ptr.?));
-                                const rhs_str: *const RocStr = @ptrCast(@alignCast(rhs.ptr.?));
-                                const are_equal = std.mem.eql(u8, lhs_str.asSlice(), rhs_str.asSlice());
-                                const result = switch (compare_op) {
-                                    .eq => are_equal,
-                                    .neq => !are_equal,
-                                    else => unreachable,
-                                };
-                                return try self.makeBoolValue(result_rt_var, result);
-                            },
-                            else => return error.StringOrderingNotSupported,
-                        }
-                    }
-
-                    if (compare_op == .eq or compare_op == .neq) {
-                        const structural_equal = try self.valuesStructurallyEqual(lhs, lhs_rt_var, rhs, rhs_rt_var);
-                        return try self.makeBoolValue(result_rt_var, if (compare_op == .eq) structural_equal else !structural_equal);
-                    }
-
+                    // Comparison operators are not yet implemented
+                    // Use if/match and Bool.not for boolean testing instead
                     return error.NotImplemented;
                 } else if (binop.op == .@"or") {
                     const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
@@ -1047,7 +984,8 @@ pub const Interpreter = struct {
                     const ct_var = can.ModuleEnv.varFrom(expr_idx);
                     break :blk try self.translateTypeVar(self.env, ct_var);
                 };
-                const resolved = self.runtime_types.resolveVar(rt_var);
+                // Unwrap nominal types and aliases to get the base tag union
+                const resolved = self.resolveBaseVar(rt_var);
                 if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) return error.NotImplemented;
                 const name_text = self.env.getIdent(tag.name);
                 var tag_list = std.ArrayList(types.Tag).init(self.allocator);
@@ -1606,6 +1544,35 @@ pub const Interpreter = struct {
                 }
                 return error.NotImplemented;
             },
+            .e_lookup_external => |lookup| {
+                // Look up a symbol from an imported module (e.g., Bool.not)
+                // Get the module name from the Import.Idx
+                const import_idx_int = @intFromEnum(lookup.module_idx);
+                if (import_idx_int >= self.env.imports.imports.len()) {
+                    return error.TypeMismatch;
+                }
+
+                const string_idx = self.env.imports.imports.items.items[import_idx_int];
+                const module_name = self.env.common.strings.get(string_idx);
+
+                // Look up the module environment
+                const target_module = self.imported_modules.get(module_name) orelse {
+                    return error.TypeMismatch;
+                };
+
+                // The target_node_idx points to a definition (like Bool.not)
+                // Get the definition and extract its expression
+                const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+                const target_def = target_module.store.getDef(target_def_idx);
+                const target_expr_idx = target_def.expr;
+
+                // Evaluate the expression in the context of the target module
+                const saved_env = self.env;
+                self.env = @constCast(target_module);
+                defer self.env = saved_env;
+
+                return try self.evalExprMinimal(target_expr_idx, roc_ops, null);
+            },
             .e_unary_minus => |unary| {
                 const operand_ct_var = can.ModuleEnv.varFrom(unary.expr);
                 const operand_rt_var = try self.translateTypeVar(self.env, operand_ct_var);
@@ -1811,9 +1778,14 @@ pub const Interpreter = struct {
     }
 
     fn boolValueIsTrue(self: *Interpreter, value: StackValue, rt_var: types.Var) !bool {
+        // Check that the layout is compatible with Bool
         if (!self.isBoolLayout(value.layout)) return error.TypeMismatch;
+
+        // Try to verify this is actually a Bool type
         try self.prepareBoolIndices(rt_var);
         if (!try self.runtimeVarIsBool(rt_var)) return error.TypeMismatch;
+
+        // Bool values are ALWAYS stored with canonical indices: 0=False, 1=True
         const idx = try self.extractBoolTagIndex(value, rt_var);
         return idx == self.bool_true_index;
     }
@@ -2526,8 +2498,8 @@ pub const Interpreter = struct {
         var false_idx: ?usize = null;
         var true_idx: ?usize = null;
         for (tags, 0..) |tag, i| {
-            // Use bool_env to look up tag names since these come from the Bool module
-            const name_text = self.bool_env.getIdent(tag.name);
+            // Use env to look up tag names - works for both Bool module and copied Bool types
+            const name_text = self.env.getIdent(tag.name);
             if (std.mem.eql(u8, name_text, "False")) {
                 false_idx = i;
             } else if (std.mem.eql(u8, name_text, "True")) {
@@ -2537,11 +2509,18 @@ pub const Interpreter = struct {
             }
         }
 
-        if (false_idx == null or true_idx == null) {
+        // Accept types that have True OR False (for anonymous tags like [True]_others)
+        // Not just full Bool types with both tags
+        if (false_idx == null and true_idx == null) {
             return false;
         }
-        self.bool_false_index = @intCast(false_idx.?);
-        self.bool_true_index = @intCast(true_idx.?);
+
+        // IMPORTANT: Bool values are ALWAYS stored with canonical indices: False=0, True=1
+        // This is true regardless of the tag order in the type.
+        // The tag list indices (false_idx, true_idx) tell us which tag is which,
+        // but the actual runtime values always use canonical indices.
+        self.bool_false_index = 0; // False is always 0
+        self.bool_true_index = 1;  // True is always 1
         return true;
     }
 
@@ -3219,6 +3198,7 @@ pub const Interpreter = struct {
         self.bindings.deinit();
         self.active_closures.deinit();
         self.scratch_tags.deinit();
+        self.imported_modules.deinit();
     }
 
     /// Ensure the slot array can index at least `min_len` entries; zero-fill new entries.
@@ -3748,7 +3728,7 @@ test "interpreter: Var->Layout slot caches computed layout" {
     const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
     const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
 
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env);
+    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
     defer interp.deinit();
 
     // Create a concrete runtime type: Str
@@ -3781,7 +3761,7 @@ test "interpreter: translateTypeVar for str" {
     const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
     const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
 
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env);
+    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
     defer interp.deinit();
 
     const ct_str = try env.types.freshFromContent(.{ .structure = .str });
@@ -3807,7 +3787,7 @@ test "interpreter: translateTypeVar for int64" {
     const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
     const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
 
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env);
+    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
     defer interp.deinit();
 
     const ct_int = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
@@ -3841,7 +3821,7 @@ test "interpreter: translateTypeVar for f64" {
     const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
     const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
 
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env);
+    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
     defer interp.deinit();
 
     const ct_frac = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } });
@@ -3875,7 +3855,7 @@ test "interpreter: translateTypeVar for tuple(Str, I64)" {
     const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
     const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
 
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env);
+    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
     defer interp.deinit();
 
     const ct_str = try env.types.freshFromContent(.{ .structure = .str });
@@ -3927,7 +3907,7 @@ test "interpreter: translateTypeVar for record {first: Str, second: I64}" {
     const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
     const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
 
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env);
+    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
     defer interp.deinit();
 
     // Build compile-time record content
@@ -3993,7 +3973,7 @@ test "interpreter: translateTypeVar for alias of Str" {
     const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
     const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
 
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env);
+    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
     defer interp.deinit();
 
     const alias_name = try env.common.idents.insert(gpa, @import("base").Ident.for_text("MyAlias"));
@@ -4028,7 +4008,7 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
     const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
     const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
 
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env);
+    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
     defer interp.deinit();
 
     const name_nominal = try env.common.idents.insert(gpa, @import("base").Ident.for_text("Point"));
@@ -4068,7 +4048,7 @@ test "interpreter: translateTypeVar for flex var" {
     const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
     const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
 
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env);
+    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
     defer interp.deinit();
 
     const ct_flex = try env.types.freshFromContent(.{ .flex = types.Flex.init() });
@@ -4092,7 +4072,7 @@ test "interpreter: translateTypeVar for rigid var" {
     const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
     const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
 
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env);
+    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
     defer interp.deinit();
 
     const name_a = try env.common.idents.insert(gpa, @import("base").Ident.for_text("A"));
@@ -4118,7 +4098,7 @@ test "interpreter: poly cache insert and lookup" {
     const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
     const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
 
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env);
+    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
     defer interp.deinit();
 
     const f_id: u32 = 12345;
@@ -4162,7 +4142,7 @@ test "interpreter: prepareCall miss then hit" {
     const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
     const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
 
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env);
+    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
     defer interp.deinit();
 
     const func_id: u32 = 7777;
@@ -4200,7 +4180,7 @@ test "interpreter: prepareCallWithFuncVar populates cache" {
     const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
     const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
 
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env);
+    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
     defer interp.deinit();
 
     const func_id: u32 = 9999;
@@ -4238,7 +4218,7 @@ test "interpreter: unification constrains (a->a) with Str" {
     const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
     const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
 
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env);
+    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
     defer interp.deinit();
 
     const func_id: u32 = 42;

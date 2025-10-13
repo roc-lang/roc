@@ -138,8 +138,6 @@ test "compiled builtins - use Set and Dict together" {
 
     // Now create a test that uses both Set and Dict
     const test_source =
-        \\module []
-        \\
         \\import Set
         \\import Dict
         \\

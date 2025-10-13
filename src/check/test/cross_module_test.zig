@@ -24,22 +24,18 @@ const unify = @import("../unify.zig").unify;
 
 test "cross-module type checking - monomorphic function passes" {
     const source_a =
-        \\module [id_str] 
-        \\
-        \\id_str : Str -> Str
-        \\id_str = |s| s
+        \\main! : Str -> Str
+        \\main! = |s| s
     ;
     var test_env_a = try TestEnv.init(source_a);
     defer test_env_a.deinit();
     try test_env_a.assertLastDefType("Str -> Str");
 
     const source_b =
-        \\module [] 
-        \\
         \\import A
         \\
         \\main : Str
-        \\main = A.id_str("hello")
+        \\main = A.main!("hello")
     ;
     var test_env_b = try TestEnv.initWithImport(source_b, "A", test_env_a.module_env);
     defer test_env_b.deinit();
@@ -48,22 +44,18 @@ test "cross-module type checking - monomorphic function passes" {
 
 test "cross-module type checking - monomorphic function fails" {
     const source_a =
-        \\module [id_str] 
-        \\
-        \\id_str : Str -> Str
-        \\id_str = |s| s
+        \\main! : Str -> Str
+        \\main! = |s| s
     ;
     var test_env_a = try TestEnv.init(source_a);
     defer test_env_a.deinit();
     try test_env_a.assertLastDefType("Str -> Str");
 
     const source_b =
-        \\module [] 
-        \\
         \\import A
         \\
         \\main : U8
-        \\main = A.id_str(1)
+        \\main = A.main!(1)
     ;
     var test_env_b = try TestEnv.initWithImport(source_b, "A", test_env_a.module_env);
     defer test_env_b.deinit();
@@ -72,22 +64,18 @@ test "cross-module type checking - monomorphic function fails" {
 
 test "cross-module type checking - polymorphic function passes" {
     const source_a =
-        \\module [id] 
-        \\
-        \\id : a -> a
-        \\id = |s| s
+        \\main! : a -> a
+        \\main! = |s| s
     ;
     var test_env_a = try TestEnv.init(source_a);
     defer test_env_a.deinit();
     try test_env_a.assertLastDefType("a -> a");
 
     const source_b =
-        \\module [] 
-        \\
         \\import A
         \\
         \\main : Str
-        \\main = A.id("hello")
+        \\main = A.main!("hello")
     ;
     var test_env_b = try TestEnv.initWithImport(source_b, "A", test_env_a.module_env);
     defer test_env_b.deinit();
@@ -96,25 +84,21 @@ test "cross-module type checking - polymorphic function passes" {
 
 test "cross-module type checking - polymorphic function with multiple uses passes" {
     const source_a =
-        \\module [id] 
-        \\
-        \\id : a -> a
-        \\id = |s| s
+        \\main! : a -> a
+        \\main! = |s| s
     ;
     var test_env_a = try TestEnv.init(source_a);
     defer test_env_a.deinit();
     try test_env_a.assertLastDefType("a -> a");
 
     const source_b =
-        \\module [] 
-        \\
         \\import A
         \\
         \\main : U64
         \\main = {
-        \\  a =  A.id(10)
-        \\  b =  A.id(15)
-        \\  _c =  A.id("Hello")
+        \\  a =  A.main!(10)
+        \\  b =  A.main!(15)
+        \\  _c =  A.main!("Hello")
         \\  a + b
         \\}
     ;

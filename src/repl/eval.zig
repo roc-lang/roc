@@ -525,7 +525,7 @@ pub const Repl = struct {
         };
 
         // Create interpreter instance with the Bool statement index and environment from the Bool module
-        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, bool_stmt_in_bool_module, self.bool_module.env) catch |err| {
+        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, bool_stmt_in_bool_module, self.bool_module.env, &module_envs_map) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
         };
         defer interpreter.deinit();

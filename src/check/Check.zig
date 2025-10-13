@@ -79,6 +79,10 @@ scratch_record_fields: base.Scratch(types_mod.RecordField),
 import_cache: ImportCache,
 /// Maps variables to the expressions that constrained them (for better error regions)
 constraint_origins: std.AutoHashMap(Var, Var),
+/// Copied Bool type from Bool module (for use in if conditions, etc.)
+bool_var: Var,
+/// Copied Result type from Result module (for use in Result operations)
+result_var: Var,
 
 /// A map of rigid variables that we build up during a branch of type checking
 const FreeVar = struct { ident: base.Ident.Idx, var_: Var };
@@ -127,6 +131,8 @@ pub fn init(
         .scratch_record_fields = try base.Scratch(types_mod.RecordField).init(gpa),
         .import_cache = ImportCache{},
         .constraint_origins = std.AutoHashMap(Var, Var).init(gpa),
+        .bool_var = undefined, // Will be initialized in copyBuiltinTypes()
+        .result_var = undefined, // Will be initialized in copyBuiltinTypes()
     };
 }
 
@@ -508,10 +514,52 @@ fn updateVar(self: *Self, target_var: Var, content: types_mod.Content, rank: typ
 
 // file //
 
+/// Copy builtin types (Bool, Result) from their modules into the current module's type store
+/// This is necessary because type variables are module-specific - we can't use Vars from
+/// other modules directly. The Bool and Result types are used in language constructs like
+/// `if` conditions and need to be available in every module's type store.
+fn copyBuiltinTypes(self: *Self) !void {
+    // Find the Bool and Result modules in other_modules
+    var bool_module: ?*const ModuleEnv = null;
+    var result_module: ?*const ModuleEnv = null;
+
+    for (self.other_modules) |module_env| {
+        if (std.mem.eql(u8, module_env.module_name, "Bool")) {
+            bool_module = module_env;
+        } else if (std.mem.eql(u8, module_env.module_name, "Result")) {
+            result_module = module_env;
+        }
+    }
+
+    // Copy Bool type from Bool module
+    if (bool_module) |bool_env| {
+        const bool_stmt_idx = self.common_idents.bool_stmt;
+        const bool_type_var = ModuleEnv.varFrom(bool_stmt_idx);
+        self.bool_var = try self.copyVar(bool_type_var, bool_env);
+    } else {
+        // Fallback: create a fresh var if Bool module not found
+        // This shouldn't happen in normal operation but provides a safe default
+        self.bool_var = try self.types.fresh();
+    }
+
+    // Copy Result type from Result module
+    if (result_module) |result_env| {
+        const result_stmt_idx = self.common_idents.result_stmt;
+        const result_type_var = ModuleEnv.varFrom(result_stmt_idx);
+        self.result_var = try self.copyVar(result_type_var, result_env);
+    } else {
+        // Fallback: create a fresh var if Result module not found
+        self.result_var = try self.types.fresh();
+    }
+}
+
 /// Check the types for all defs
 pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    // Copy builtin types (Bool, Result) into this module's type store
+    try self.copyBuiltinTypes();
 
     // Iterate over the statements, generating types for each type declaration
     const stmts_slice = self.cir.store.sliceStatements(self.cir.all_statements);
@@ -534,6 +582,9 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 
 /// Check an expr for the repl
 pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
+    // Copy builtin types (Bool, Result) into this module's type store
+    try self.copyBuiltinTypes();
+
     // Push the rank for this definition
     try self.var_pool.pushRank();
     defer self.var_pool.popRank();
@@ -1972,6 +2023,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             // Then, we need an instance of the nominal type being referenced
             // E.g. ConList.Cons(...)
             //      ^^^^^^^
+            // Special handling for builtin types (Bool, Result) from external modules
+            // These have Statement.Idx values that point to external modules, not the current module
             const nominal_var = try self.instantiateVar(ModuleEnv.varFrom(nominal.nominal_type_decl), rank, .{ .explicit = expr_region });
             const nominal_resolved = self.types.resolveVar(nominal_var).desc.content;
 
@@ -2184,8 +2237,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                         does_fx = try self.checkExpr(expr_stmt.body, rank, .no_expectation) or does_fx;
                         const stmt_expr: Var = ModuleEnv.varFrom(expr_stmt.body);
 
-                        const bool_var = ModuleEnv.varFrom(self.common_idents.bool_stmt);
-                        _ = try self.unify(bool_var, stmt_expr, rank);
+                        _ = try self.unify(self.bool_var, stmt_expr, rank);
                     },
                     else => {
                         // TODO
@@ -2762,8 +2814,7 @@ fn checkIfElseExpr(
     // Check the condition of the 1st branch
     var does_fx = try self.checkExpr(first_branch.cond, rank, .no_expectation);
     const first_cond_var: Var = ModuleEnv.varFrom(first_branch.cond);
-    const bool_var = ModuleEnv.varFrom(self.common_idents.bool_stmt);
-    const first_cond_result = try self.unify(bool_var, first_cond_var, rank);
+    const first_cond_result = try self.unify(self.bool_var, first_cond_var, rank);
     self.setDetailIfTypeMismatch(first_cond_result, .incompatible_if_cond);
 
     // Then we check the 1st branch's body
@@ -2784,8 +2835,7 @@ fn checkIfElseExpr(
         // Check the branches condition
         does_fx = try self.checkExpr(branch.cond, rank, .no_expectation) or does_fx;
         const cond_var: Var = ModuleEnv.varFrom(branch.cond);
-        const branch_bool_var = ModuleEnv.varFrom(self.common_idents.bool_stmt);
-        const cond_result = try self.unify(branch_bool_var, cond_var, rank);
+        const cond_result = try self.unify(self.bool_var, cond_var, rank);
         self.setDetailIfTypeMismatch(cond_result, .incompatible_if_cond);
 
         // Check the branch body
@@ -2807,8 +2857,7 @@ fn checkIfElseExpr(
                 does_fx = try self.checkExpr(remaining_branch.cond, rank, .no_expectation) or does_fx;
                 const remaining_cond_var: Var = ModuleEnv.varFrom(remaining_branch.cond);
 
-                const fresh_bool = ModuleEnv.varFrom(self.common_idents.bool_stmt);
-                const remaining_cond_result = try self.unify(fresh_bool, remaining_cond_var, rank);
+                const remaining_cond_result = try self.unify(self.bool_var, remaining_cond_var, rank);
                 self.setDetailIfTypeMismatch(remaining_cond_result, .incompatible_if_cond);
 
                 does_fx = try self.checkExpr(remaining_branch.body, rank, .no_expectation) or does_fx;
@@ -2996,12 +3045,9 @@ fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, r
     const operand_var = @as(Var, ModuleEnv.varFrom(unary.expr));
     const result_var = @as(Var, ModuleEnv.varFrom(expr_idx));
 
-    // Create a fresh boolean variable for the operation
-    const bool_var = ModuleEnv.varFrom(self.common_idents.bool_stmt);
-
     // Unify operand and result with the boolean type
-    _ = try self.unify(bool_var, operand_var, rank);
-    _ = try self.unify(bool_var, result_var, rank);
+    _ = try self.unify(self.bool_var, operand_var, rank);
+    _ = try self.unify(self.bool_var, result_var, rank);
 
     return does_fx;
 }
@@ -3079,23 +3125,20 @@ fn checkBinopExpr(
             const result = try self.unify(lhs_var, rhs_var, rank);
 
             if (result.isOk()) {
-                const fresh_bool = ModuleEnv.varFrom(self.common_idents.bool_stmt);
-                try self.types.setVarRedirect(expr_var, fresh_bool);
+                try self.types.setVarRedirect(expr_var, self.bool_var);
             } else {
                 try self.updateVar(expr_var, .err, rank);
             }
         },
         .@"and" => {
-            const lhs_fresh_bool = ModuleEnv.varFrom(self.common_idents.bool_stmt);
-            const lhs_result = try self.unify(lhs_fresh_bool, lhs_var, rank);
+            const lhs_result = try self.unify(self.bool_var, lhs_var, rank);
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
                 .problem_side = .lhs,
                 .binop = .@"and",
             } });
 
-            const rhs_bool = ModuleEnv.varFrom(self.common_idents.bool_stmt);
-            const rhs_result = try self.unify(rhs_bool, rhs_var, rank);
+            const rhs_result = try self.unify(self.bool_var, rhs_var, rank);
             self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
                 .problem_side = .rhs,
@@ -3110,16 +3153,14 @@ fn checkBinopExpr(
             try self.types.setVarRedirect(expr_var, lhs_var);
         },
         .@"or" => {
-            const lhs_fresh_bool = ModuleEnv.varFrom(self.common_idents.bool_stmt);
-            const lhs_result = try self.unify(lhs_fresh_bool, lhs_var, rank);
+            const lhs_result = try self.unify(self.bool_var, lhs_var, rank);
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
                 .problem_side = .lhs,
                 .binop = .@"and",
             } });
 
-            const rhs_bool = ModuleEnv.varFrom(self.common_idents.bool_stmt);
-            const rhs_result = try self.unify(rhs_bool, rhs_var, rank);
+            const rhs_result = try self.unify(self.bool_var, rhs_var, rank);
             self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
                 .problem_side = .rhs,

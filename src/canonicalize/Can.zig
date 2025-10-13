@@ -201,6 +201,45 @@ pub fn init(
     // Top-level scope is not a function boundary
     try result.scopeEnter(gpa, false);
 
+    // Auto-import builtin modules using the same logic as explicit imports
+    // This ensures 100% code sharing between explicit imports and auto-imports
+    if (module_envs) |envs_map| {
+        // Create empty exposed items span - processModuleImport will auto-expose the main type for type modules
+        const empty_exposed_span = CIR.ExposedItem.Span{
+            .span = base.DataSpan{
+                .start = 0,
+                .len = 0,
+            },
+        };
+
+        // Create a zero region for auto-imports (they don't come from source)
+        const auto_import_region = Region{
+            .start = Region.Position.zero(),
+            .end = Region.Position.zero(),
+        };
+
+        var iter = envs_map.iterator();
+        while (iter.next()) |entry| {
+            const module_name_text = entry.key_ptr.*;
+            const module_name_ident = try env.insertIdent(base.Ident.for_text(module_name_text));
+
+            // Use the same alias as the module name for auto-imports
+            const alias = module_name_ident;
+
+            // Process the import using the shared helper function
+            // This will:
+            // - Get or create Import.Idx
+            // - Introduce module alias to scope
+            // - Process type imports
+            // - Introduce exposed items (including auto-expose for type modules)
+            // - Store import_indices mapping
+            // - Create CIR import statement
+            // - Add imported module to scope
+            // - Check module exists
+            _ = try result.processModuleImport(module_name_ident, alias, empty_exposed_span, auto_import_region);
+        }
+    }
+
     const scratch_statements_start = result.env.store.scratch.?.statements.top();
 
     result.env.builtin_statements = try result.env.store.statementSpanFrom(scratch_statements_start);
@@ -1502,6 +1541,73 @@ fn bringIngestedFileIntoScope(
     }
 }
 
+/// Process a module import with common logic shared by explicit imports and auto-imports.
+/// This handles everything after module name and alias resolution.
+fn processModuleImport(
+    self: *Self,
+    module_name: Ident.Idx,
+    alias: Ident.Idx,
+    exposed_items_span: CIR.ExposedItem.Span,
+    import_region: Region,
+) std.mem.Allocator.Error!Statement.Idx {
+    const module_name_text = self.env.getIdent(module_name);
+
+    // 1. Get or create Import.Idx for this module
+    const module_import_idx = try self.env.imports.getOrPut(
+        self.env.gpa,
+        self.env.common.getStringStore(),
+        module_name_text,
+    );
+
+    // 2. Add to scope: alias -> module_name mapping
+    try self.scopeIntroduceModuleAlias(alias, module_name);
+
+    // 3. Process type imports from this module
+    try self.processTypeImports(module_name, alias);
+
+    // 4. Introduce exposed items into scope (includes auto-expose for type modules)
+    try self.introduceExposedItemsIntoScope(exposed_items_span, module_name, alias, import_region);
+
+    // 5. Store the mapping from module name to Import.Idx
+    try self.import_indices.put(self.env.gpa, module_name_text, module_import_idx);
+
+    // 6. Create CIR import statement
+    const cir_import = Statement{
+        .s_import = .{
+            .module_name_tok = module_name,
+            .qualifier_tok = null,
+            .alias_tok = null,
+            .exposes = exposed_items_span,
+        },
+    };
+
+    const import_idx = try self.env.addStatementAndTypeVar(cir_import, Content{ .flex = types.Flex.init() }, import_region);
+    try self.env.store.addScratchStatement(import_idx);
+
+    // 7. Add the module to the current scope so it can be used in qualified lookups
+    const current_scope = self.currentScope();
+    _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
+
+    // 8. Check that this module actually exists, and if not report an error
+    if (self.module_envs) |envs_map| {
+        // Check if the module exists
+        if (!envs_map.contains(module_name_text)) {
+            // Module not found - create diagnostic
+            try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
+                .module_name = module_name,
+                .region = import_region,
+            } });
+        }
+    } else {
+        try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
+            .module_name = module_name,
+            .region = import_region,
+        } });
+    }
+
+    return import_idx;
+}
+
 /// Canonicalize an import statement, handling both top-level file imports and statement imports
 fn canonicalizeImportStatement(
     self: *Self,
@@ -1568,65 +1674,14 @@ fn canonicalizeImportStatement(
     // 2. Determine the alias (either explicit or default to last part)
     const alias = try self.resolveModuleAlias(import_stmt.alias_tok, module_name) orelse return null;
 
-    // 3. Get or create Import.Idx for this module
-    const module_name_text = self.env.getIdent(module_name);
-    const module_import_idx = try self.env.imports.getOrPut(
-        self.env.gpa,
-        self.env.common.getStringStore(),
-        module_name_text,
-    );
-
-    // 4. Add to scope: alias -> module_name mapping
-    try self.scopeIntroduceModuleAlias(alias, module_name);
-
-    // Process type imports from this module
-    try self.processTypeImports(module_name, alias);
-
-    // 5. Convert exposed items to CIR
+    // 3. Convert exposed items to CIR
     const scratch_start = self.env.store.scratchExposedItemTop();
     try self.convertASTExposesToCIR(import_stmt.exposes);
     const cir_exposes = try self.env.store.exposedItemSpanFrom(scratch_start);
     const import_region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
-    try self.introduceExposedItemsIntoScope(cir_exposes, module_name, alias, import_region);
 
-    // 6. Store the mapping from module name to Import.Idx
-    try self.import_indices.put(self.env.gpa, module_name_text, module_import_idx);
-
-    // 7. Create CIR import statement
-    const cir_import = Statement{
-        .s_import = .{
-            .module_name_tok = module_name,
-            .qualifier_tok = if (import_stmt.qualifier_tok) |q_tok| self.parse_ir.tokens.resolveIdentifier(q_tok) else null,
-            .alias_tok = if (import_stmt.alias_tok) |a_tok| self.parse_ir.tokens.resolveIdentifier(a_tok) else null,
-            .exposes = cir_exposes,
-        },
-    };
-
-    const import_idx = try self.env.addStatementAndTypeVar(cir_import, Content{ .flex = types.Flex.init() }, self.parse_ir.tokenizedRegionToRegion(import_stmt.region));
-    try self.env.store.addScratchStatement(import_idx);
-
-    // 8. Add the module to the current scope so it can be used in qualified lookups
-    const current_scope = self.currentScope();
-    _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
-
-    // 9. Check that this module actually exists, and if not report an error
-    if (self.module_envs) |envs_map| {
-        // Check if the module exists
-        if (!envs_map.contains(module_name_text)) {
-            // Module not found - create diagnostic
-            try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
-                .module_name = module_name,
-                .region = import_region,
-            } });
-        }
-    } else {
-        try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
-            .module_name = module_name,
-            .region = import_region,
-        } });
-    }
-
-    return import_idx;
+    // 4. Process the import using shared logic
+    return try self.processModuleImport(module_name, alias, cir_exposes, import_region);
 }
 
 /// Resolve the module alias name from either explicit alias or module name
@@ -3366,61 +3421,105 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
         // then it is an anonymous tag and we can just return it
         return CanonicalizedExpr{ .idx = tag_expr_idx, .free_vars = null };
     } else if (e.qualifiers.span.len == 1) {
-        // If this is a tag with a single, then is it a nominal tag and the qualifier
-        // is the type
+        // If this is a tag with a single qualifier, then it is a nominal tag and the qualifier
+        // is the type name. Check both local type_decls and imported types in exposed_items.
 
-        // Get the last token of the qualifiers
+        // Get the qualifier token
         const qualifier_toks = self.parse_ir.store.tokenSlice(e.qualifiers);
         const type_tok_idx = qualifier_toks[0];
         const type_tok_ident = self.parse_ir.tokens.resolveIdentifier(type_tok_idx) orelse unreachable;
         const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
 
-        // Lookup the type ident in scope
-        const nominal_type_decl_stmt_idx = self.scopeLookupTypeDecl(type_tok_ident) orelse
-            return CanonicalizedExpr{
-                .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .undeclared_type = .{
-                    .name = type_tok_ident,
-                    .region = type_tok_region,
-                } }),
-                .free_vars = null,
-            };
-        switch (self.env.store.getStatement(nominal_type_decl_stmt_idx)) {
-            .s_nominal_decl => {
-                const expr_idx = try self.env.addExprAndTypeVar(CIR.Expr{
-                    .e_nominal = .{
-                        .nominal_type_decl = nominal_type_decl_stmt_idx,
-                        .backing_expr = tag_expr_idx,
-                        .backing_type = .tag,
-                    },
-                }, .err, region);
+        // First, try to lookup the type as a local declaration
+        if (self.scopeLookupTypeDecl(type_tok_ident)) |nominal_type_decl_stmt_idx| {
+            switch (self.env.store.getStatement(nominal_type_decl_stmt_idx)) {
+                .s_nominal_decl => {
+                    const expr_idx = try self.env.addExprAndTypeVar(CIR.Expr{
+                        .e_nominal = .{
+                            .nominal_type_decl = nominal_type_decl_stmt_idx,
+                            .backing_expr = tag_expr_idx,
+                            .backing_type = .tag,
+                        },
+                    }, .err, region);
 
-                const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
+                    const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
+                    return CanonicalizedExpr{
+                        .idx = expr_idx,
+                        .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null,
+                    };
+                },
+                .s_alias_decl => {
+                    return CanonicalizedExpr{
+                        .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .type_alias_but_needed_nominal = .{
+                            .name = type_tok_ident,
+                            .region = type_tok_region,
+                        } }),
+                        .free_vars = null,
+                    };
+                },
+                else => {
+                    const feature = try self.env.insertString("report an error resolved type decl in scope wasn't actually a type decl");
+                    const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+                        .feature = feature,
+                        .region = Region.zero(),
+                    } });
+                    return CanonicalizedExpr{
+                        .idx = malformed_idx,
+                        .free_vars = null,
+                    };
+                },
+            }
+        }
+
+        // Not found locally, check if it's an imported type from exposed_items
+        if (self.scopeLookupExposedItem(type_tok_ident)) |exposed_info| {
+            const module_name = exposed_info.module_name;
+            const module_name_text = self.env.getIdent(module_name);
+
+            // Check if this module is imported in the current scope
+            const import_idx = self.scopeLookupImportedModule(module_name_text) orelse {
                 return CanonicalizedExpr{
-                    .idx = expr_idx,
-                    .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null,
-                };
-            },
-            .s_alias_decl => {
-                return CanonicalizedExpr{
-                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .type_alias_but_needed_nominal = .{
-                        .name = type_tok_ident,
-                        .region = type_tok_region,
+                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .module_not_imported = .{
+                        .module_name = module_name,
+                        .region = region,
                     } }),
                     .free_vars = null,
                 };
-            },
-            else => {
-                const feature = try self.env.insertString("report an error resolved type decl in scope wasn't actually a type decl");
-                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = Region.zero(),
-                } });
-                return CanonicalizedExpr{
-                    .idx = malformed_idx,
-                    .free_vars = null,
-                };
-            },
+            };
+
+            // Look up the target node index in the imported module
+            // Use exposed_info.original_name directly, just like type annotations do
+            const target_node_idx = blk: {
+                const envs_map = self.module_envs orelse break :blk 0;
+                const module_env = envs_map.get(module_name_text) orelse break :blk 0;
+                break :blk module_env.getExposedNodeIndexById(exposed_info.original_name) orelse 0;
+            };
+
+            // Create e_nominal_external for the imported type (target_node_idx can be 0)
+            const expr_idx = try self.env.addExprAndTypeVar(CIR.Expr{
+                .e_nominal_external = .{
+                    .module_idx = import_idx,
+                    .target_node_idx = target_node_idx,
+                    .backing_expr = tag_expr_idx,
+                    .backing_type = .tag,
+                },
+            }, .err, region);
+
+            const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
+            return CanonicalizedExpr{
+                .idx = expr_idx,
+                .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null,
+            };
         }
+
+        // Not found in type_decls or exposed_items - type is undeclared
+        return CanonicalizedExpr{
+            .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .undeclared_type = .{
+                .name = type_tok_ident,
+                .region = type_tok_region,
+            } }),
+            .free_vars = null,
+        };
     } else {
         // Multi-qualified tag (e.g., Foo.Bar.X or Foo.Bar.Baz.X)
         //
@@ -5188,16 +5287,38 @@ fn canonicalizeTypeAnnoBasicType(
             } }, .err, region);
         } else {
             // If it's not a builtin, look up in scope
-            const type_decl_idx = self.scopeLookupTypeDecl(type_name_ident) orelse {
-                return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type = .{
+            if (self.scopeLookupTypeDecl(type_name_ident)) |type_decl_idx| {
+                return try self.env.addTypeAnnoAndTypeVar(CIR.TypeAnno{ .lookup = .{
                     .name = type_name_ident,
-                    .region = type_name_region,
-                } });
-            };
-            return try self.env.addTypeAnnoAndTypeVar(CIR.TypeAnno{ .lookup = .{
+                    .base = .{ .local = .{ .decl_idx = type_decl_idx } },
+                } }, .err, region);
+            }
+
+            // Not in type_decls, check if it's an exposed item from an imported module
+            if (self.scopeLookupExposedItem(type_name_ident)) |exposed_info| {
+                const module_name_text = self.env.getIdent(exposed_info.module_name);
+                if (self.scopeLookupImportedModule(module_name_text)) |import_idx| {
+                    // Get the node index from the imported module
+                    if (self.module_envs) |envs_map| {
+                        if (envs_map.get(module_name_text)) |module_env| {
+                            const target_node_idx = module_env.getExposedNodeIndexById(exposed_info.original_name) orelse 0;
+                            return try self.env.addTypeAnnoAndTypeVar(CIR.TypeAnno{ .lookup = .{
+                                .name = type_name_ident,
+                                .base = .{ .external = .{
+                                    .module_idx = import_idx,
+                                    .target_node_idx = target_node_idx,
+                                } },
+                            } }, .err, region);
+                        }
+                    }
+                }
+            }
+
+            // Not found anywhere - undeclared type
+            return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type = .{
                 .name = type_name_ident,
-                .base = .{ .local = .{ .decl_idx = type_decl_idx } },
-            } }, .err, region);
+                .region = type_name_region,
+            } });
         }
     } else {
         // First, check if this is a qualified name for an associated type (e.g., Foo.Bar)
@@ -6472,7 +6593,7 @@ pub fn scopePop(self: *Self) Scope.Error!Scope {
 }
 
 /// Get the current scope
-fn currentScope(self: *Self) *Scope {
+pub fn currentScope(self: *Self) *Scope {
     std.debug.assert(self.scopes.items.len > 0);
     return &self.scopes.items[self.currentScopeIdx()];
 }
@@ -7100,7 +7221,7 @@ fn scopeLookupExposedItem(self: *const Self, item_name: Ident.Idx) ?Scope.Expose
 }
 
 /// Introduce an exposed item into the current scope
-fn scopeIntroduceExposedItem(self: *Self, item_name: Ident.Idx, item_info: Scope.ExposedItemInfo) std.mem.Allocator.Error!void {
+pub fn scopeIntroduceExposedItem(self: *Self, item_name: Ident.Idx, item_info: Scope.ExposedItemInfo) std.mem.Allocator.Error!void {
     const gpa = self.env.gpa;
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 

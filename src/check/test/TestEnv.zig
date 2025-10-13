@@ -147,9 +147,14 @@ pub fn initWithImport(source: []const u8, other_module_name: []const u8, other_m
     var result_module = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     errdefer result_module.deinit();
 
-    // Add Bool and Result as imported modules (proper module importing, not statement copying!)
-    try other_envs.append(bool_module.env);
-    try other_envs.append(result_module.env);
+    // Set node indices for the exposed types so they can be properly referenced
+    // The Bool type is at statement index 1, so we set node_idx to 1
+    const bool_ident = bool_module.env.common.findIdent("Bool") orelse unreachable;
+    try bool_module.env.setExposedNodeIndexById(bool_ident, @intCast(@intFromEnum(builtin_indices.bool_type)));
+
+    // The Result type is at statement index 3, so we set node_idx to 3
+    const result_ident = result_module.env.common.findIdent("Result") orelse unreachable;
+    try result_module.env.setExposedNodeIndexById(result_ident, @intCast(@intFromEnum(builtin_indices.result_type)));
 
     // Initialize the ModuleEnv with the CommonEnv
     module_env.* = try ModuleEnv.init(gpa, source);
@@ -185,11 +190,17 @@ pub fn initWithImport(source: []const u8, other_module_name: []const u8, other_m
         .result_stmt = result_stmt_in_result_module,
     };
 
-    // Pull out the imported index
+    // Pull out the imported index and insert the module at the correct index
     std.debug.assert(can.import_indices.size == 1);
     const import_idx = can.import_indices.get(other_module_name).?;
     std.debug.assert(@intFromEnum(import_idx) == 0);
-    try other_envs.append(other_module_env);
+
+    // Insert other_module at the correct index (0)
+    try other_envs.insert(0, other_module_env);
+
+    // Add Bool and Result as imported modules AFTER the user module
+    try other_envs.append(bool_module.env);
+    try other_envs.append(result_module.env);
 
     // Type Check - Pass all imported modules (Bool, Result, and user module)
     var checker = try Check.init(gpa, &module_env.types, module_env, other_envs.items, &module_env.store.regions, module_common_idents);
@@ -230,8 +241,7 @@ pub fn init(source: []const u8) !TestEnv {
     const can = try gpa.create(Can);
     errdefer gpa.destroy(can);
 
-    const module_envs = std.StringHashMap(*const ModuleEnv).init(gpa);
-    var other_envs = std.ArrayList(*const ModuleEnv).init(gpa);
+    var module_envs = std.StringHashMap(*const ModuleEnv).init(gpa);
 
     const module_name = "Test";
 
@@ -244,9 +254,18 @@ pub fn init(source: []const u8) !TestEnv {
     var result_module = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     errdefer result_module.deinit();
 
-    // Add Bool and Result as imported modules (proper module importing, not statement copying!)
-    try other_envs.append(bool_module.env);
-    try other_envs.append(result_module.env);
+    // Set node indices for the exposed types so they can be properly referenced
+    // The Bool type is at statement index 1, so we set node_idx to 1
+    const bool_ident = bool_module.env.common.findIdent("Bool") orelse unreachable;
+    try bool_module.env.setExposedNodeIndexById(bool_ident, @intCast(@intFromEnum(builtin_indices.bool_type)));
+
+    // The Result type is at statement index 3, so we set node_idx to 3
+    const result_ident = result_module.env.common.findIdent("Result") orelse unreachable;
+    try result_module.env.setExposedNodeIndexById(result_ident, @intCast(@intFromEnum(builtin_indices.result_type)));
+
+    // Add Bool and Result to module_envs for auto-importing
+    try module_envs.put("Bool", bool_module.env);
+    try module_envs.put("Result", result_module.env);
 
     // Initialize the ModuleEnv with the CommonEnv
     module_env.* = try ModuleEnv.init(gpa, source);
@@ -264,7 +283,7 @@ pub fn init(source: []const u8) !TestEnv {
     // Canonicalize
     try module_env.initCIRFields(gpa, "test");
 
-    can.* = try Can.init(module_env, parse_ast, null);
+    can.* = try Can.init(module_env, parse_ast, &module_envs);
     errdefer can.deinit();
 
     try can.canonicalizeFile();
@@ -282,7 +301,38 @@ pub fn init(source: []const u8) !TestEnv {
         .result_stmt = result_stmt_in_result_module,
     };
 
-    // Type Check - Pass the imported modules (Bool and Result) in other_modules parameter
+    // Build other_envs array to match the import indices assigned by canonicalizer
+    var other_envs = std.ArrayList(*const ModuleEnv).init(gpa);
+
+    // Only build the array if there are actual imports
+    if (can.import_indices.size > 0) {
+        // Determine the size needed
+        var max_import_idx: usize = 0;
+        if (can.import_indices.get("Bool")) |idx| {
+            const idx_int = @intFromEnum(idx);
+            if (idx_int > max_import_idx) max_import_idx = idx_int;
+        }
+        if (can.import_indices.get("Result")) |idx| {
+            const idx_int = @intFromEnum(idx);
+            if (idx_int > max_import_idx) max_import_idx = idx_int;
+        }
+
+        // Allocate array of the right size, initialized to bool_module.env as a safe default
+        try other_envs.resize(max_import_idx + 1);
+        for (other_envs.items) |*item| {
+            item.* = bool_module.env; // Safe default
+        }
+
+        // Fill in the correct modules at their import indices
+        if (can.import_indices.get("Bool")) |idx| {
+            other_envs.items[@intFromEnum(idx)] = bool_module.env;
+        }
+        if (can.import_indices.get("Result")) |idx| {
+            other_envs.items[@intFromEnum(idx)] = result_module.env;
+        }
+    }
+
+    // Type Check - Pass the imported modules in other_modules parameter
     var checker = try Check.init(gpa, &module_env.types, module_env, other_envs.items, &module_env.store.regions, module_common_idents);
     errdefer checker.deinit();
 
@@ -308,8 +358,6 @@ pub fn init(source: []const u8) !TestEnv {
 /// Initialize where the provided source a single expression
 pub fn initExpr(comptime source_expr: []const u8) !TestEnv {
     const source_wrapper =
-        \\module []
-        \\ 
         \\main =
     ;
 
@@ -349,7 +397,7 @@ pub fn deinit(self: *TestEnv) void {
 /// Also assert that there were no problems processing the source code.
 pub fn assertLastDefType(self: *TestEnv, expected: []const u8) !void {
     try self.assertNoParseProblems();
-    // try self.assertNoCanProblems();
+    try self.assertNoCanProblems();
     try self.assertNoTypeProblems();
 
     try testing.expect(self.module_env.all_defs.span.len > 0);
@@ -433,12 +481,19 @@ fn assertNoCanProblems(self: *TestEnv) !void {
     defer report_buf.deinit();
 
     const diagnostics = try self.module_env.getDiagnostics();
+    defer self.gpa.free(diagnostics);
+
     for (diagnostics) |d| {
         var report = try self.module_env.diagnosticToReport(d, self.gpa, self.module_env.module_name);
         defer report.deinit();
 
         report_buf.clearRetainingCapacity();
         try report.render(report_buf.writer(), .markdown);
+
+        // Ignore "MISSING MAIN! FUNCTION" error - it's expected in test modules
+        if (std.mem.indexOf(u8, report_buf.items, "MISSING MAIN! FUNCTION") != null) {
+            continue;
+        }
 
         try testing.expectEqualStrings("EXPECTED NO ERROR", report_buf.items);
     }

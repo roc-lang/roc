@@ -443,6 +443,8 @@ pub fn build(b: *std.Build) void {
         roc_modules.addAll(cli_test);
         cli_test.linkLibrary(zstd.artifact("zstd"));
         add_tracy(b, roc_modules.build_options, cli_test, target, false, flag_enable_tracy);
+        cli_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
+        cli_test.step.dependOn(&write_compiled_builtins.step);
 
         const run_cli_test = b.addRunArtifact(cli_test);
         if (run_args.len != 0) {
