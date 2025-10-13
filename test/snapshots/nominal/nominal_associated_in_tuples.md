@@ -50,20 +50,6 @@ Box : a -> [Box(a)]
                 ^
 
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_associated_in_tuples.md:7:8:7:14:**
-```roc
-pair = (X, Z)
-```
-       ^^^^^^
-
-It has the type:
-    _([X]_others, [Z]_others2)_
-
-But the type annotation says it should have the type:
-    _(Foo.Bar, Foo.Baz)_
-
 **TOO MANY ARGS**
 The type _Box_ expects  argument, but got  instead.
 **nominal_associated_in_tuples.md:11:9:11:21:**
@@ -204,7 +190,7 @@ boxed = Box(X)
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @7.1-7.5 (type "Error"))
+		(patt @7.1-7.5 (type "(Foo.Bar, Foo.Baz)"))
 		(patt @12.1-12.6 (type "Error")))
 	(type_decls
 		(nominal @1.1-4.2 (type "Foo")
@@ -216,6 +202,6 @@ boxed = Box(X)
 		(alias @9.1-9.20 (type "Box")
 			(ty-header @9.1-9.4 (name "Box"))))
 	(expressions
-		(expr @7.8-7.14 (type "Error"))
+		(expr @7.8-7.14 (type "(Foo.Bar, Foo.Baz)"))
 		(expr @12.9-12.15 (type "Error"))))
 ~~~

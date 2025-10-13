@@ -788,6 +788,10 @@ fn Unifier(comptime StoreTypeB: type) type {
 
                             try self.unifyNominalType(vars, a_type, b_type);
                         },
+                        .tag_union => |b_tag_union| {
+                            // Try to unify anonymous tag union (b) with nominal tag union (a)
+                            try self.unifyTagUnionWithNominal(vars, a_type, a_backing_var, a_backing_resolved, b_tag_union, .a_is_nominal);
+                        },
                         else => return error.TypeMismatch,
                     }
                 },
@@ -942,6 +946,16 @@ fn Unifier(comptime StoreTypeB: type) type {
                         },
                         .tag_union => |b_tag_union| {
                             try self.unifyTwoTagUnions(vars, a_tag_union, b_tag_union);
+                        },
+                        .nominal_type => |b_type| {
+                            // Try to unify anonymous tag union (a) with nominal tag union (b)
+                            const b_backing_var = self.types_store.getNominalBackingVar(b_type);
+                            const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
+                            if (b_backing_resolved.desc.content == .err) {
+                                self.merge(vars, vars.a.desc.content);
+                                return;
+                            }
+                            try self.unifyTagUnionWithNominal(vars, b_type, b_backing_var, b_backing_resolved, a_tag_union, .b_is_nominal);
                         },
                         else => return error.TypeMismatch,
                     }
@@ -1871,6 +1885,74 @@ fn Unifier(comptime StoreTypeB: type) type {
             // Note that we *do not* unify backing variable
 
             self.merge(vars, vars.b.desc.content);
+        }
+
+        /// Direction indicates which side is nominal
+        const NominalDirection = enum { a_is_nominal, b_is_nominal };
+
+        /// Unify an anonymous tag union with a nominal tag union.
+        /// The nominal type always "wins" - the result is the nominal type.
+        ///
+        /// This allows writing:
+        ///   Foo := [A, B, C]
+        ///   x : Foo
+        ///   x = A  # [A] unifies with Foo
+        ///
+        /// Algorithm:
+        /// 1. Check that nominal's backing is a tag union
+        /// 2. Unify the anonymous tag union with the nominal's backing tag union
+        ///    (WITHOUT modifying the nominal's backing - similar to unifyNominalType)
+        /// 3. If successful, merge to the nominal type (not the anonymous union)
+        fn unifyTagUnionWithNominal(
+            self: *Self,
+            vars: *const ResolvedVarDescs,
+            nominal_type: NominalType,
+            nominal_backing_var: Var,
+            nominal_backing_resolved: ResolvedVarDesc,
+            anon_tag_union: TagUnion,
+            direction: NominalDirection,
+        ) Error!void {
+            const trace = tracy.trace(@src());
+            defer trace.end();
+
+            _ = nominal_type; // Used for identity in nominal type, but not needed here
+            _ = nominal_backing_var; // We don't unify with backing var directly (see unifyNominalType)
+
+            // Check if the nominal's backing type is a tag union
+            const nominal_backing_content = nominal_backing_resolved.desc.content;
+            if (nominal_backing_content != .structure) {
+                return error.TypeMismatch;
+            }
+
+            const nominal_backing_flat = nominal_backing_content.structure;
+            if (nominal_backing_flat != .tag_union) {
+                // Nominal's backing is not a tag union (could be record, tuple, etc.)
+                // Cannot unify anonymous tag union with non-tag-union nominal
+                return error.TypeMismatch;
+            }
+
+            const nominal_backing_tag_union = nominal_backing_flat.tag_union;
+
+            // Unify the two tag unions directly (without modifying the nominal's backing)
+            // This checks that:
+            // - All tags in the anonymous union exist in the nominal union
+            // - Payload types match
+            // - Extension variables are compatible
+            try self.unifyTwoTagUnions(vars, anon_tag_union, nominal_backing_tag_union);
+
+            // If we get here, unification succeeded!
+            // Merge to the NOMINAL type (not the tag union)
+            // This is the key: the nominal type "wins"
+            switch (direction) {
+                .a_is_nominal => {
+                    // Merge to a (which is the nominal)
+                    self.merge(vars, vars.a.desc.content);
+                },
+                .b_is_nominal => {
+                    // Merge to b (which is the nominal)
+                    self.merge(vars, vars.b.desc.content);
+                },
+            }
         }
 
         /// unify func

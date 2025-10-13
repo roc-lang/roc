@@ -2892,7 +2892,8 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: Rank, match: CIR.Ex
 
     for (first_branch_ptrn_idxs) |branch_ptrn_idx| {
         const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
-        try self.checkPattern(branch_ptrn.pattern, rank, .no_expectation);
+        // Check pattern with cond_var as expectation to allow unqualified tags
+        try self.checkPattern(branch_ptrn.pattern, rank, .{ .expected = .{ .var_ = cond_var, .from_annotation = false } });
         const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
 
         const ptrn_result = try self.unify(cond_var, branch_ptrn_var, rank);
@@ -2914,7 +2915,8 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: Rank, match: CIR.Ex
         for (branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
             // Check the pattern's sub types
             const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
-            try self.checkPattern(branch_ptrn.pattern, rank, .no_expectation);
+            // Check pattern with cond_var as expectation to allow unqualified tags
+            try self.checkPattern(branch_ptrn.pattern, rank, .{ .expected = .{ .var_ = cond_var, .from_annotation = false } });
 
             // Check the pattern against the cond
             const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
@@ -2948,7 +2950,8 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: Rank, match: CIR.Ex
                 for (other_branch_ptrn_idxs, 0..) |other_branch_ptrn_idx, other_cur_ptrn_index| {
                     // Check the pattern's sub types
                     const other_branch_ptrn = self.cir.store.getMatchBranchPattern(other_branch_ptrn_idx);
-                    try self.checkPattern(other_branch_ptrn.pattern, rank, .no_expectation);
+                    // Check pattern with cond_var as expectation to allow unqualified tags
+                    try self.checkPattern(other_branch_ptrn.pattern, rank, .{ .expected = .{ .var_ = cond_var, .from_annotation = false } });
 
                     // Check the pattern against the cond
                     const other_branch_ptrn_var = ModuleEnv.varFrom(other_branch_ptrn.pattern);

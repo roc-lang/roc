@@ -24,50 +24,7 @@ TYPE MISMATCH - nominal_associated_lookup_in_containers.md:7:9:7:18
 TYPE MISMATCH - nominal_associated_lookup_in_containers.md:10:10:10:15
 TYPE MISMATCH - nominal_associated_lookup_in_containers.md:13:10:13:30
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_associated_lookup_in_containers.md:7:9:7:18:**
-```roc
-items = [A, B, C]
-```
-        ^^^^^^^^^
-
-It has the type:
-    _List([A, B, C]_others)_
-
-But the type annotation says it should have the type:
-    _List(Foo.Bar)_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_associated_lookup_in_containers.md:10:10:10:15:**
-```roc
-result = Ok(A)
-```
-         ^^^^^
-
-It has the type:
-    _Result([A]_others, err)_
-
-But the type annotation says it should have the type:
-    _Result(Foo.Bar, Foo.Error)_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_associated_lookup_in_containers.md:13:10:13:30:**
-```roc
-nested = { bar: A, count: 1 }
-```
-         ^^^^^^^^^^^^^^^^^^^^
-
-It has the type:
-    _{ bar: [A]_others, count: Num(_size) }_
-
-But the type annotation says it should have the type:
-    _{ bar: Foo.Bar, count: Num(Int(Unsigned64)) }_
-
-**Hint:** This might be because the numeric literal is either negative or too large to fit in the unsigned type.
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:4),OpColonEqual(1:5-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),CloseSquare(1:17-1:18),Dot(1:18-1:19),OpenCurly(1:19-1:20),
@@ -219,9 +176,9 @@ nested = { bar: A, count: 1 }
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @7.1-7.6 (type "Error"))
-		(patt @10.1-10.7 (type "Error"))
-		(patt @13.1-13.7 (type "Error")))
+		(patt @7.1-7.6 (type "List(Foo.Bar)"))
+		(patt @10.1-10.7 (type "Result(Foo.Bar, Foo.Error)"))
+		(patt @13.1-13.7 (type "{ bar: Foo.Bar, count: Num(Int(Unsigned64)) }")))
 	(type_decls
 		(nominal @1.1-4.2 (type "Foo")
 			(ty-header @1.1-1.4 (name "Foo")))
@@ -230,7 +187,7 @@ nested = { bar: A, count: 1 }
 		(nominal @3.5-3.27 (type "Foo.Error")
 			(ty-header @3.5-3.27 (name "Foo.Error"))))
 	(expressions
-		(expr @7.9-7.18 (type "Error"))
-		(expr @10.10-10.15 (type "Error"))
-		(expr @13.10-13.30 (type "Error"))))
+		(expr @7.9-7.18 (type "List(Foo.Bar)"))
+		(expr @10.10-10.15 (type "Result(Foo.Bar, Foo.Error)"))
+		(expr @13.10-13.30 (type "{ bar: Foo.Bar, count: Num(Int(Unsigned64)) }"))))
 ~~~

@@ -38,20 +38,6 @@ useBar = Something
 ```
 
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_associated_vs_module.md:7:10:7:19:**
-```roc
-useBar = Something
-```
-         ^^^^^^^^^
-
-It has the type:
-    _[Something]_others_
-
-But the type annotation says it should have the type:
-    _Foo.Bar_
-
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:4),OpColonEqual(1:5-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),CloseSquare(1:17-1:18),Dot(1:18-1:19),OpenCurly(1:19-1:20),
@@ -117,12 +103,12 @@ useBar = Something
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @7.1-7.7 (type "Error")))
+		(patt @7.1-7.7 (type "Foo.Bar")))
 	(type_decls
 		(nominal @1.1-3.2 (type "Foo")
 			(ty-header @1.1-1.4 (name "Foo")))
 		(nominal @2.5-2.23 (type "Foo.Bar")
 			(ty-header @2.5-2.23 (name "Foo.Bar"))))
 	(expressions
-		(expr @7.10-7.19 (type "Error"))))
+		(expr @7.10-7.19 (type "Foo.Bar"))))
 ~~~
