@@ -494,11 +494,8 @@ pub const Repl = struct {
         };
         defer czer.deinit();
 
-        // Register unqualified nominal tags (True, False, Ok, Err) pointing to the Bool/Result modules
-        try czer.unqualified_nominal_tags.put(self.allocator, "True", bool_stmt_in_bool_module);
-        try czer.unqualified_nominal_tags.put(self.allocator, "False", bool_stmt_in_bool_module);
-        try czer.unqualified_nominal_tags.put(self.allocator, "Ok", result_stmt_in_result_module);
-        try czer.unqualified_nominal_tags.put(self.allocator, "Err", result_stmt_in_result_module);
+        // NOTE: True/False/Ok/Err are now just anonymous tags that unify with Bool/Result automatically!
+        // No need to register unqualified_nominal_tags - the type system handles it.
 
         // Since we're always parsing as expressions now, handle them the same way
         const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);

@@ -306,29 +306,16 @@ test "Repl - minimal interpreter integration" {
     const cir = &module_env; // CIR is now just ModuleEnv
     try cir.initCIRFields(gpa, "test");
 
-    // Inject builtin type declarations (Bool and Result) following TestEnv.zig pattern
-    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
-    const actual_bool_idx = try module_env.store.addStatement(bool_stmt, base.Region.zero());
-    _ = try module_env.types.fresh(); // Keep types array in sync with nodes/regions
-
-    const result_stmt = result_module.env.store.getStatement(builtin_indices.result_type);
-    const actual_result_idx = try module_env.store.addStatement(result_stmt, base.Region.zero());
-    _ = try module_env.types.fresh(); // Keep types array in sync with nodes/regions
-
-    // Update builtin_statements span
-    const start_idx = @intFromEnum(actual_bool_idx);
-    const end_idx = @intFromEnum(actual_result_idx);
-    module_env.builtin_statements = .{ .span = .{
-        .start = start_idx,
-        .len = end_idx - start_idx + 1,
-    } };
+    // Get Bool and Result statement indices from the IMPORTED modules (not copied!)
+    const bool_stmt_in_bool_module = builtin_indices.bool_type;
+    const result_stmt_in_result_module = builtin_indices.result_type;
 
     const common_idents: Check.CommonIdents = .{
         .module_name = try cir.insertIdent(base.Ident.for_text("test")),
         .list = try cir.insertIdent(base.Ident.for_text("List")),
         .box = try cir.insertIdent(base.Ident.for_text("Box")),
-        .bool_stmt = actual_bool_idx,
-        .result_stmt = actual_result_idx,
+        .bool_stmt = bool_stmt_in_bool_module,
+        .result_stmt = result_stmt_in_result_module,
     };
 
     // Step 4: Canonicalize
@@ -340,14 +327,15 @@ test "Repl - minimal interpreter integration" {
         return error.CanonicalizeError;
     };
 
-    // Step 5: Type check
-    var checker = try Check.init(gpa, &module_env.types, cir, &.{}, &cir.store.regions, common_idents);
+    // Step 5: Type check - Pass Bool and Result as imported modules
+    const other_modules = [_]*const ModuleEnv{ bool_module.env, result_module.env };
+    var checker = try Check.init(gpa, &module_env.types, cir, &other_modules, &cir.store.regions, common_idents);
     defer checker.deinit();
 
     _ = try checker.checkExprRepl(canonical_expr_idx.get_idx());
 
     // Step 6: Create interpreter
-    var interpreter = try Interpreter.init(gpa, &module_env, actual_bool_idx);
+    var interpreter = try Interpreter.init(gpa, &module_env, bool_stmt_in_bool_module);
     defer interpreter.deinit();
 
     // Step 7: Evaluate
