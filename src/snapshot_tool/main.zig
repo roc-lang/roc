@@ -1192,33 +1192,26 @@ fn processSnapshotContent(
     var result_module = try loadCompiledModule(allocator, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
 
-    // Inject Bool and Result type declarations into the current module
-    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
-    const actual_bool_idx = try can_ir.store.addStatement(bool_stmt, base.Region.zero());
-
-    const result_stmt = result_module.env.store.getStatement(builtin_indices.result_type);
-    const actual_result_idx = try can_ir.store.addStatement(result_stmt, base.Region.zero());
-
-    // Update builtin_statements span
-    const start_idx = @intFromEnum(actual_bool_idx);
-    const end_idx = @intFromEnum(actual_result_idx);
-    can_ir.builtin_statements = .{ .span = .{
-        .start = start_idx,
-        .len = end_idx - start_idx + 1,
-    } };
+    // Get Bool and Result statement indices from IMPORTED modules (not copied!)
+    const bool_stmt_in_bool_module = builtin_indices.bool_type;
+    const result_stmt_in_result_module = builtin_indices.result_type;
 
     const common_idents: Check.CommonIdents = .{
         .module_name = try can_ir.insertIdent(base.Ident.for_text(module_name)),
         .list = try can_ir.insertIdent(base.Ident.for_text("List")),
         .box = try can_ir.insertIdent(base.Ident.for_text("Box")),
-        .bool_stmt = actual_bool_idx,
-        .result_stmt = actual_result_idx,
+        .bool_stmt = bool_stmt_in_bool_module,
+        .result_stmt = result_stmt_in_result_module,
     };
 
-    // Auto-inject Set and Dict as available imports (if they're loaded)
-    // This makes them available without needing explicit `import` statements in tests
+    // Create module_envs map for canonicalization (enables qualified calls)
+    // Auto-inject Bool, Result, Set and Dict as available imports
     var module_envs = std.StringHashMap(*const ModuleEnv).init(allocator);
     defer module_envs.deinit();
+
+    // Add Bool and Result to module_envs for qualified name resolution
+    try module_envs.put("Bool", bool_module.env);
+    try module_envs.put("Result", result_module.env);
 
     var dict_import_idx: ?CIR.Import.Idx = null;
     var set_import_idx: ?CIR.Import.Idx = null;
@@ -1280,9 +1273,13 @@ fn processSnapshotContent(
     // Assert that everything is in-sync
     can_ir.debugAssertArraysInSync();
 
-    // Types - include Set and Dict modules if loaded
+    // Types - pass Bool, Result, Set and Dict modules as imported modules
     var builtin_modules = std.ArrayList(*const ModuleEnv).init(allocator);
     defer builtin_modules.deinit();
+
+    // Add Bool and Result as imported modules
+    try builtin_modules.append(bool_module.env);
+    try builtin_modules.append(result_module.env);
 
     if (config.dict_module) |dict_env| {
         try builtin_modules.append(dict_env);

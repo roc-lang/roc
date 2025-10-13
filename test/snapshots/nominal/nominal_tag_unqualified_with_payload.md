@@ -17,35 +17,41 @@ isOk = |result| match result {
 }
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - nominal_tag_unqualified_with_payload.md:4:12:4:25
+TYPE MISMATCH - nominal_tag_unqualified_with_payload.md:8:5:8:10
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_tag_unqualified_with_payload.md:4:12:4:25:**
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
+
+This type is referenced here:
+**nominal_tag_unqualified_with_payload.md:6:29:6:33:**
 ```roc
-myResult = Ok("success")
+isOk : MyResult(ok, err) -> Bool
 ```
-           ^^^^^^^^^^^^^
+                            ^^^^
 
-It has the type:
-    _Result(Str, err)_
 
-But the type annotation says it should have the type:
-    _MyResult(Str, Num(Int(Signed32)))_
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_tag_unqualified_with_payload.md:8:5:8:10:**
+This type is referenced here:
+**nominal_tag_unqualified_with_payload.md:8:14:8:18:**
 ```roc
     Ok(_) => Bool.True
 ```
-    ^^^^^
+             ^^^^
 
-It has the type:
-    _Result(ok, err)_
 
-But I expected it to be:
-    _MyResult(ok, err)_
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
+
+This type is referenced here:
+**nominal_tag_unqualified_with_payload.md:9:15:9:19:**
+```roc
+    Err(_) => Bool.False
+```
+              ^^^^
+
 
 # TOKENS
 ~~~zig
@@ -130,11 +136,10 @@ isOk = |result| match result {
 (can-ir
 	(d-let
 		(p-assign @4.1-4.9 (ident "myResult"))
-		(e-nominal @4.12-4.25 (nominal "Result")
-			(e-tag @4.12-4.25 (name "Ok")
-				(args
-					(e-string @4.15-4.24
-						(e-literal @4.16-4.23 (string "success"))))))
+		(e-tag @4.12-4.25 (name "Ok")
+			(args
+				(e-string @4.15-4.24
+					(e-literal @4.16-4.23 (string "success")))))
 		(annotation @4.1-4.9
 			(declared-type
 				(ty-apply @3.12-3.30 (name "MyResult") (local)
@@ -154,26 +159,22 @@ isOk = |result| match result {
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-nominal @8.5-8.10
-										(p-applied-tag @8.5-8.10))))
+									(p-applied-tag @8.5-8.10)))
 							(value
-								(e-nominal @8.14-8.23 (nominal "Bool")
-									(e-tag @8.14-8.23 (name "True")))))
+								(e-runtime-error (tag "undeclared_type"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-nominal @9.5-9.11
-										(p-applied-tag @9.5-9.11))))
+									(p-applied-tag @9.5-9.11)))
 							(value
-								(e-nominal @9.15-9.25 (nominal "Bool")
-									(e-tag @9.15-9.25 (name "False")))))))))
+								(e-runtime-error (tag "undeclared_type"))))))))
 		(annotation @7.1-7.5
 			(declared-type
 				(ty-fn @6.8-6.33 (effectful false)
 					(ty-apply @6.8-6.25 (name "MyResult") (local)
 						(ty-rigid-var @6.8-6.25 (name "ok"))
 						(ty-rigid-var @6.8-6.25 (name "err")))
-					(ty-lookup @6.29-6.33 (name "Bool") (local))))))
+					(ty-malformed @6.29-6.33)))))
 	(s-nominal-decl @1.1-1.40
 		(ty-header @1.1-1.18 (name "MyResult")
 			(ty-args
@@ -189,8 +190,8 @@ isOk = |result| match result {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.9 (type "Error"))
-		(patt @7.1-7.5 (type "MyResult(ok, err) -> Bool")))
+		(patt @4.1-4.9 (type "MyResult(Str, Num(Int(Signed32)))"))
+		(patt @7.1-7.5 (type "MyResult(ok, err) -> Error")))
 	(type_decls
 		(nominal @1.1-1.40 (type "MyResult(ok, err)")
 			(ty-header @1.1-1.18 (name "MyResult")
@@ -198,6 +199,6 @@ isOk = |result| match result {
 					(ty-rigid-var @1.10-1.12 (name "ok"))
 					(ty-rigid-var @1.14-1.17 (name "err"))))))
 	(expressions
-		(expr @4.12-4.25 (type "Error"))
-		(expr @7.8-10.2 (type "MyResult(ok, err) -> Bool"))))
+		(expr @4.12-4.25 (type "MyResult(Str, Num(Int(Signed32)))"))
+		(expr @7.8-10.2 (type "MyResult(ok, err) -> Error"))))
 ~~~

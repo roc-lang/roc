@@ -201,7 +201,7 @@ fn createInterpreter(env_ptr: *ModuleEnv, roc_ops: *RocOps) ShimError!Interprete
     // Extract bool_stmt from the builtin_statements span (first statement in the span is Bool)
     const bool_stmt: CIR.Statement.Idx = @enumFromInt(env_ptr.builtin_statements.span.start);
 
-    const interpreter = eval.Interpreter.init(allocator, env_ptr, bool_stmt) catch {
+    const interpreter = eval.Interpreter.init(allocator, env_ptr, bool_stmt, env_ptr) catch {
         roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
         return error.InterpreterSetupFailed;
     };

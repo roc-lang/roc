@@ -27,9 +27,16 @@ const ModuleEnv = can.ModuleEnv;
 const ReportBuilder = check.ReportBuilder;
 
 /// Deserialize BuiltinIndices from the binary data generated at build time
-fn deserializeBuiltinIndices(bin_data: []const u8) can.CIR.BuiltinIndices {
-    // The binary data is just the raw bytes of the struct
-    const indices_ptr = @as(*const can.CIR.BuiltinIndices, @ptrCast(@alignCast(bin_data.ptr)));
+fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !can.CIR.BuiltinIndices {
+    // Copy embedded data to properly aligned memory
+    const alignment = @alignOf(can.CIR.BuiltinIndices);
+    const buffer = try gpa.alignedAlloc(u8, alignment, bin_data.len);
+    defer gpa.free(buffer);
+
+    @memcpy(buffer, bin_data);
+
+    // Cast to the structure
+    const indices_ptr = @as(*const can.CIR.BuiltinIndices, @ptrCast(buffer.ptr));
     return indices_ptr.*;
 }
 
@@ -689,7 +696,7 @@ pub const PackageEnv = struct {
 
         // Load builtin indices from the binary data generated at build time
         const compiled_builtins = @import("compiled_builtins");
-        const builtin_indices = deserializeBuiltinIndices(compiled_builtins.builtin_indices_bin);
+        const builtin_indices = try deserializeBuiltinIndices(self.gpa, compiled_builtins.builtin_indices_bin);
 
         const module_common_idents: Check.CommonIdents = .{
             .module_name = try env.insertIdent(base.Ident.for_text("test")),

@@ -13,7 +13,7 @@ myBar : Foo.Bar
 myBar = Something
 ~~~
 # EXPECTED
-TYPE MISMATCH - nominal_associated_lookup_type.md:6:9:6:18
+NIL
 # PROBLEMS
 NIL
 # TOKENS

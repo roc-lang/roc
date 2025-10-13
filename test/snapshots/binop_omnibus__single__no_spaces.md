@@ -73,5 +73,5 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.34 (type "Num(_size)"))
+(expr @1.1-1.34 (type "Error"))
 ~~~

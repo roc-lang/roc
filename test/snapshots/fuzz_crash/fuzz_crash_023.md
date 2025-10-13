@@ -274,7 +274,7 @@ UNUSED VARIABLE - fuzz_crash_023.md:188:2:188:15
 UNUSED VARIABLE - fuzz_crash_023.md:189:2:189:23
 UNDECLARED TYPE - fuzz_crash_023.md:201:9:201:14
 INVALID IF CONDITION - fuzz_crash_023.md:70:5:70:5
-INCOMPATIBLE MATCH PATTERNS - fuzz_crash_023.md:84:2:84:2
+TYPE MISMATCH - fuzz_crash_023.md:99:3:99:8
 TYPE MISMATCH - fuzz_crash_023.md:155:2:157:3
 # PROBLEMS
 **PARSE ERROR**
@@ -897,77 +897,32 @@ tuple : Value((a, b, c))
         ^^^^^
 
 
-**INCOMPATIBLE MATCH PATTERNS**
-The pattern in the fourth branch of this `match` differs from previous ones:
-**fuzz_crash_023.md:84:2:**
+**INVALID IF CONDITION**
+This `if` condition needs to be a _Bool_:
+**fuzz_crash_023.md:70:5:**
 ```roc
-	match a {
-		Blue | Green | Red => {
-			x = 12
-			x
-		}
-		Blue # After pattern in alt
-		| # Before pattern in alt
-			Green
-		| Red # After alt pattern
-			=> {
-				x = 12
-				x
-			}
-		lower # After pattern comment
-			=> 1
-		"foo" => # After arrow comment
-			100
-		"foo" | "bar" => 200
-		[1, 2, 3, .. as rest] # After pattern comment
-			=> # After arrow comment
-				123 # After branch comment
-
-		# Just a random comment
-
-		[1, 2 | 5, 3, .. as rest] => 123
-		[
-			1,
-			2 | 5,
-			3,
-			.. # After DoubleDot
-				as # Before alias
-					rest, # After last pattern in list
-		] => 123
-		3.14 => 314
-		3.14 | 6.28 => 314
-		(1, 2, 3) => 123
-		(1, 2 | 5, 3) => 123
-		{ foo: 1, bar: 2, ..rest } => 12->add(34)
-		{ # After pattern record open
-			foo # After pattern record field name
-				: # Before pattern record field value
-					1, # After pattern record field
-			bar: 2,
-			.. # After spread operator
-				rest, # After last field
-		} => 12
-		{ foo: 1, bar: 2 | 7 } => 12
-		{
-			foo: 1,
-			bar: 2 | 7, # After last record field
-		} => 12
-		Ok(123) => 123
-		Ok(Some(dude)) => dude
-		TwoArgs("hello", Some("world")) => 1000
-	}
+	if num {
 ```
-  ^^^^^
+    ^^^
 
-The fourth pattern has this type:
+Right now, it has the type:
+    _Num(Int(Unsigned64))_
+
+Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_023.md:99:3:99:8:**
+```roc
+		"foo" => # After arrow comment
+```
+		^^^^^
+
+It has the type:
     _Str_
 
-But all the previous patterns have this type: 
+But I expected it to be:
     _[Red][Blue, Green]_others_
-
-All patterns in an `match` must have compatible types.
-
-
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -2483,13 +2438,13 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @65.1-65.16 (type "Num(Int(Unsigned64)) -> Num(_size)"))
+		(patt @65.1-65.16 (type "b -> Num(_size)"))
 		(patt @68.1-68.8 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(patt @80.1-80.11 (type "[Red][Blue, Green]_others, _arg -> Error"))
 		(patt @144.1-144.6 (type "List(Error) -> Error"))
 		(patt @199.1-199.6 (type "{}")))
 	(type_decls
-		(alias @22.1-22.41 (type "Map(a, b)")
+		(alias @22.1-22.41 (type "Map(a, Error)")
 			(ty-header @22.1-22.10 (name "Map")
 				(ty-args
 					(ty-rigid-var @22.5-22.6 (name "a"))
@@ -2528,7 +2483,7 @@ expect {
 				(ty-args
 					(ty-rigid-var @63.10-63.11 (name "a"))))))
 	(expressions
-		(expr @65.19-65.40 (type "Num(Int(Unsigned64)) -> Num(_size)"))
+		(expr @65.19-65.40 (type "b -> Num(_size)"))
 		(expr @68.11-78.2 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(expr @80.14-138.3 (type "[Red][Blue, Green]_others, _arg -> Error"))
 		(expr @144.9-196.2 (type "List(Error) -> Error"))

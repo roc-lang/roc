@@ -38,9 +38,16 @@ const LoadedModule = struct {
 };
 
 /// Deserialize BuiltinIndices from the binary data generated at build time
-fn deserializeBuiltinIndices(bin_data: []const u8) can.CIR.BuiltinIndices {
-    // The binary data is just the raw bytes of the struct
-    const indices_ptr = @as(*const can.CIR.BuiltinIndices, @ptrCast(@alignCast(bin_data.ptr)));
+fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !can.CIR.BuiltinIndices {
+    // Copy embedded data to properly aligned memory
+    const alignment = @alignOf(can.CIR.BuiltinIndices);
+    const buffer = try gpa.alignedAlloc(u8, alignment, bin_data.len);
+    defer gpa.free(buffer);
+
+    @memcpy(buffer, bin_data);
+
+    // Cast to the structure
+    const indices_ptr = @as(*const can.CIR.BuiltinIndices, @ptrCast(buffer.ptr));
     return indices_ptr.*;
 }
 
@@ -121,7 +128,7 @@ pub const Repl = struct {
         const compiled_builtins = @import("compiled_builtins");
 
         // Load builtin indices once at startup (generated at build time)
-        const builtin_indices = deserializeBuiltinIndices(compiled_builtins.builtin_indices_bin);
+        const builtin_indices = try deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
 
         // Load Bool module once at startup
         const bool_source = "Bool := [True, False].{}\n";
@@ -517,8 +524,8 @@ pub const Repl = struct {
             return try std.fmt.allocPrint(self.allocator, "Type check expr error: {}", .{err});
         };
 
-        // Create interpreter instance with the Bool statement index from the Bool module
-        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, bool_stmt_in_bool_module) catch |err| {
+        // Create interpreter instance with the Bool statement index and environment from the Bool module
+        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, bool_stmt_in_bool_module, self.bool_module.env) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
         };
         defer interpreter.deinit();

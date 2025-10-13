@@ -899,7 +899,7 @@ combineResults = |jsonResult, httpStatus|
 		(patt @7.1-7.10 (type "Str -> Error"))
 		(patt @11.1-11.14 (type "Error -> Error"))
 		(patt @21.1-21.12 (type "Error, List(Error) -> Error"))
-		(patt @36.1-36.13 (type "Error -> Error"))
+		(patt @36.1-36.13 (type "Error -> _ret"))
 		(patt @40.1-40.15 (type "Error -> Str"))
 		(patt @48.1-48.15 (type "Error, Error -> Error")))
 	(type_decls
@@ -909,7 +909,7 @@ combineResults = |jsonResult, httpStatus|
 		(expr @7.13-7.38 (type "Str -> Error"))
 		(expr @11.17-17.2 (type "Error -> Error"))
 		(expr @21.15-25.6 (type "Error, List(Error) -> Error"))
-		(expr @36.16-36.48 (type "Error -> Error"))
+		(expr @36.16-36.48 (type "Error -> _ret"))
 		(expr @40.18-44.6 (type "Error -> Str"))
 		(expr @48.18-52.6 (type "Error, Error -> Error"))))
 ~~~

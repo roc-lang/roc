@@ -220,7 +220,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
     const base_ptr = @intFromPtr(buffer.ptr);
 
     // Deserialize store separately (returns a pointer that must be freed after copying)
-    const deserialized_store_ptr = try serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa);
+    const deserialized_store_ptr = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa);
     const deserialized_store = deserialized_store_ptr.*;
     gpa.destroy(deserialized_store_ptr);
 
@@ -228,7 +228,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .gpa = gpa,
         .common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), source).*,
         .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*, // Pass gpa to types deserialize
-        .module_kind = serialized_ptr.module_kind.toModuleKind(),
+        .module_kind = serialized_ptr.module_kind,
         .all_defs = serialized_ptr.all_defs,
         .all_statements = serialized_ptr.all_statements,
         .exports = serialized_ptr.exports,
@@ -1429,30 +1429,26 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
     // Initialize CIR fields in ModuleEnv
     try env.initCIRFields(shm_allocator, module_name);
 
-    // Inject builtin type declarations (Bool and Result)
-    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
-    const actual_bool_idx = try env.store.addStatement(bool_stmt, base.Region.zero());
-    const result_stmt = result_module.env.store.getStatement(builtin_indices.result_type);
-    const actual_result_idx = try env.store.addStatement(result_stmt, base.Region.zero());
-
-    // Update builtin_statements span
-    const start_idx = @intFromEnum(actual_bool_idx);
-    const end_idx = @intFromEnum(actual_result_idx);
-    env.builtin_statements = .{ .span = .{
-        .start = start_idx,
-        .len = end_idx - start_idx + 1,
-    } };
+    // Get Bool and Result statement indices from IMPORTED modules (not copied!)
+    const bool_stmt_in_bool_module = builtin_indices.bool_type;
+    const result_stmt_in_result_module = builtin_indices.result_type;
 
     const common_idents: Check.CommonIdents = .{
         .module_name = try env.insertIdent(base.Ident.for_text("test")),
         .list = try env.insertIdent(base.Ident.for_text("List")),
         .box = try env.insertIdent(base.Ident.for_text("Box")),
-        .bool_stmt = actual_bool_idx,
-        .result_stmt = actual_result_idx,
+        .bool_stmt = bool_stmt_in_bool_module,
+        .result_stmt = result_stmt_in_result_module,
     };
 
-    // Create canonicalizer
-    var canonicalizer = try Can.init(&env, &parse_ast, null);
+    // Create module_envs map for canonicalization (enables qualified calls)
+    var module_envs_map = std.StringHashMap(*const ModuleEnv).init(gpa);
+    defer module_envs_map.deinit();
+    try module_envs_map.put("Bool", bool_module.env);
+    try module_envs_map.put("Result", result_module.env);
+
+    // Create canonicalizer with module_envs_map for qualified name resolution
+    var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map);
 
     // Canonicalize the entire module
     try canonicalizer.canonicalizeFile();
@@ -1482,8 +1478,9 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
         def_indices_ptr[i] = @intFromEnum(def_idx);
     }
 
-    // Type check the module
-    var checker = try Check.init(shm_allocator, &env.types, &env, &.{}, &env.store.regions, common_idents);
+    // Type check the module - pass Bool and Result as imported modules
+    const other_modules = [_]*const ModuleEnv{ bool_module.env, result_module.env };
+    var checker = try Check.init(shm_allocator, &env.types, &env, &other_modules, &env.store.regions, common_idents);
     try checker.checkFile();
 
     // Copy the ModuleEnv to the allocated space
@@ -2523,30 +2520,26 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
     // Initialize CIR fields in ModuleEnv
     try env.initCIRFields(gpa, module_name);
 
-    // Inject builtin type declarations (Bool and Result)
-    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
-    const actual_bool_idx = try env.store.addStatement(bool_stmt, base.Region.zero());
-    const result_stmt = result_module.env.store.getStatement(builtin_indices.result_type);
-    const actual_result_idx = try env.store.addStatement(result_stmt, base.Region.zero());
-
-    // Update builtin_statements span
-    const start_idx = @intFromEnum(actual_bool_idx);
-    const end_idx = @intFromEnum(actual_result_idx);
-    env.builtin_statements = .{ .span = .{
-        .start = start_idx,
-        .len = end_idx - start_idx + 1,
-    } };
+    // Get Bool and Result statement indices from IMPORTED modules (not copied!)
+    const bool_stmt_in_bool_module = builtin_indices.bool_type;
+    const result_stmt_in_result_module = builtin_indices.result_type;
 
     const module_common_idents: Check.CommonIdents = .{
         .module_name = try env.insertIdent(base.Ident.for_text(module_name)),
         .list = try env.insertIdent(base.Ident.for_text("List")),
         .box = try env.insertIdent(base.Ident.for_text("Box")),
-        .bool_stmt = actual_bool_idx,
-        .result_stmt = actual_result_idx,
+        .bool_stmt = bool_stmt_in_bool_module,
+        .result_stmt = result_stmt_in_result_module,
     };
 
-    // Create canonicalizer
-    var canonicalizer = Can.init(&env, &parse_ast, null) catch |err| {
+    // Create module_envs map for canonicalization (enables qualified calls)
+    var module_envs_map = std.StringHashMap(*const ModuleEnv).init(gpa);
+    defer module_envs_map.deinit();
+    try module_envs_map.put("Bool", bool_module.env);
+    try module_envs_map.put("Result", result_module.env);
+
+    // Create canonicalizer with module_envs_map for qualified name resolution
+    var canonicalizer = Can.init(&env, &parse_ast, &module_envs_map) catch |err| {
         try stderr.print("Failed to initialize canonicalizer: {}", .{err});
         std.process.exit(1);
     };
@@ -2564,8 +2557,9 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
         std.process.exit(1);
     };
 
-    // Type check the module
-    var checker = Check.init(gpa, &env.types, &env, &.{}, &env.store.regions, module_common_idents) catch |err| {
+    // Type check the module - pass Bool and Result as imported modules
+    const other_modules = [_]*const ModuleEnv{ bool_module.env, result_module.env };
+    var checker = Check.init(gpa, &env.types, &env, &other_modules, &env.store.regions, module_common_idents) catch |err| {
         try stderr.print("Failed to initialize type checker: {}", .{err});
         std.process.exit(1);
     };
@@ -2576,8 +2570,8 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
         std.process.exit(1);
     };
 
-    // Create test runner infrastructure for test evaluation
-    var test_runner = TestRunner.init(gpa, &env, actual_bool_idx) catch |err| {
+    // Create test runner infrastructure for test evaluation - use statement from Bool module
+    var test_runner = TestRunner.init(gpa, &env, bool_stmt_in_bool_module) catch |err| {
         try stderr.print("Failed to create test runner: {}\n", .{err});
         std.process.exit(1);
     };

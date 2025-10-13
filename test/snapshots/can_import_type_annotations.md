@@ -613,16 +613,16 @@ combineResults = |result1, result2|
 (inferred-types
 	(defs
 		(patt @6.1-6.15 (type "Error -> Error"))
-		(patt @9.1-9.10 (type "Str -> Error"))
-		(patt @12.1-12.10 (type "Error -> Error"))
-		(patt @21.1-21.7 (type "Error"))
+		(patt @9.1-9.10 (type "Str -> _ret"))
+		(patt @12.1-12.10 (type "_arg -> Error"))
+		(patt @21.1-21.7 (type "_c"))
 		(patt @25.1-25.15 (type "Error, Str -> Error"))
 		(patt @29.1-29.15 (type "Error, Error -> Error")))
 	(expressions
 		(expr @6.18-6.44 (type "Error -> Error"))
-		(expr @9.13-9.38 (type "Str -> Error"))
-		(expr @12.13-18.2 (type "Error -> Error"))
-		(expr @21.10-21.28 (type "Error"))
+		(expr @9.13-9.38 (type "Str -> _ret"))
+		(expr @12.13-18.2 (type "_arg -> Error"))
+		(expr @21.10-21.28 (type "_c"))
 		(expr @25.18-25.82 (type "Error, Str -> Error"))
 		(expr @29.18-37.6 (type "Error, Error -> Error"))))
 ~~~

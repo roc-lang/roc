@@ -226,7 +226,7 @@ UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
 UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
 TOO FEW ARGS - fuzz_crash_027.md:21:3:22:4
 INVALID IF CONDITION - fuzz_crash_027.md:50:5:50:5
-INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
+TYPE MISMATCH - fuzz_crash_027.md:68:3:68:8
 TYPE MISMATCH - fuzz_crash_027.md:111:2:113:3
 TYPE MISMATCH - fuzz_crash_027.md:143:2:147:3
 # PROBLEMS
@@ -866,53 +866,32 @@ The type _List_ expects  argument, but got  instead.
 
 
 
-**INCOMPATIBLE MATCH PATTERNS**
-The pattern in the third branch of this `match` differs from previous ones:
-**fuzz_crash_027.md:64:2:**
+**INVALID IF CONDITION**
+This `if` condition needs to be a _Bool_:
+**fuzz_crash_027.md:50:5:**
 ```roc
-	match a {lue | Red => {
-			x x
-		}
-		Blue		=> 1
-		"foo" => # ent
-00
-		"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
-			=> ment
-
-
-		[1, 2 | 5, 3, .. as rest] => 123
-		[
-ist
-		] => 123
-		3.14 => 314
-		3.14 | 6.28 => 314
-		(1, 2, 3) => 123
-		(1, 2 | 5, 3) => 123
-		{ foo: 1, bar: 2, ..rest } => 12->add(34)
-		{ # Afrd open
-			foo #
-				: #ue
-					1, # Aftd field
-			bar: 2,
-			..} => 12
-		{ foo: 1, bar: 2 | 7 } => 12
-		{
-			foo: 1,
-			} => 12
-		Ok(123) => 121000
-	}
+	if num {
 ```
-  ^^^^^
+    ^^^
 
-The third pattern has this type:
+Right now, it has the type:
+    _Num(Int(Unsigned64))_
+
+Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_027.md:68:3:68:8:**
+```roc
+		"foo" => # ent
+```
+		^^^^^
+
+It has the type:
     _Str_
 
-But all the previous patterns have this type: 
+But I expected it to be:
     _[Red, Blue]_others_
-
-All patterns in an `match` must have compatible types.
-
-
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -2178,13 +2157,13 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @45.1-45.4 (type "Num(Int(Unsigned64)) -> Num(_size)"))
+		(patt @45.1-45.4 (type "b -> Num(_size)"))
 		(patt @48.1-48.8 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(patt @60.1-60.11 (type "[Red, Blue]_others, _arg -> Error"))
 		(patt @100.1-100.6 (type "List(Error) -> Error"))
 		(patt @151.1-151.6 (type "{}")))
 	(type_decls
-		(alias @15.1-15.41 (type "Map(a, b)")
+		(alias @15.1-15.41 (type "Map(a, Error)")
 			(ty-header @15.1-15.10 (name "Map")
 				(ty-args
 					(ty-rigid-var @15.5-15.6 (name "a"))
@@ -2213,7 +2192,7 @@ expect {
 				(ty-args
 					(ty-rigid-var @43.6-43.7 (name "a"))))))
 	(expressions
-		(expr @45.7-45.28 (type "Num(Int(Unsigned64)) -> Num(_size)"))
+		(expr @45.7-45.28 (type "b -> Num(_size)"))
 		(expr @48.11-58.2 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(expr @60.14-94.3 (type "[Red, Blue]_others, _arg -> Error"))
 		(expr @100.9-148.2 (type "List(Error) -> Error"))

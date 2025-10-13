@@ -631,7 +631,7 @@ transform = |result|
 		(patt @23.1-23.20 (type "Error"))
 		(patt @27.1-27.11 (type "Error"))
 		(patt @31.1-31.9 (type "{  } -> Error"))
-		(patt @35.1-35.13 (type "Error -> Str"))
+		(patt @35.1-35.13 (type "_arg -> Str"))
 		(patt @40.1-40.10 (type "Error -> Error")))
 	(expressions
 		(expr @15.19-15.24 (type "Error"))
@@ -639,6 +639,6 @@ transform = |result|
 		(expr @23.23-23.32 (type "Error"))
 		(expr @27.14-27.20 (type "Error"))
 		(expr @31.12-31.49 (type "{  } -> Error"))
-		(expr @35.16-36.22 (type "Error -> Str"))
+		(expr @35.16-36.22 (type "_arg -> Str"))
 		(expr @40.13-44.6 (type "Error -> Error"))))
 ~~~

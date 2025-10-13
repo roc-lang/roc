@@ -288,7 +288,7 @@ main = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.5 (type "(Error, Error, Error, Error, Error, Error, Error, Error)")))
+		(patt @5.1-5.5 (type "(_field, _field2, Error, _field3, _field4, Error, Error, Error)")))
 	(expressions
-		(expr @5.8-33.2 (type "(Error, Error, Error, Error, Error, Error, Error, Error)"))))
+		(expr @5.8-33.2 (type "(_field, _field2, Error, _field3, _field4, Error, Error, Error)"))))
 ~~~

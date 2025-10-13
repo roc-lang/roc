@@ -335,7 +335,7 @@ test "Repl - minimal interpreter integration" {
     _ = try checker.checkExprRepl(canonical_expr_idx.get_idx());
 
     // Step 6: Create interpreter
-    var interpreter = try Interpreter.init(gpa, &module_env, bool_stmt_in_bool_module);
+    var interpreter = try Interpreter.init(gpa, &module_env, bool_stmt_in_bool_module, bool_module.env);
     defer interpreter.deinit();
 
     // Step 7: Evaluate

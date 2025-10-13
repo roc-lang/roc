@@ -20,7 +20,50 @@ isRed = |color| match color {
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
+
+This type is referenced here:
+**nominal_tag_qualified_still_works.md:6:18:6:22:**
+```roc
+isRed : Color -> Bool
+```
+                 ^^^^
+
+
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
+
+This type is referenced here:
+**nominal_tag_qualified_still_works.md:8:18:8:22:**
+```roc
+    Color.Red => Bool.True
+```
+                 ^^^^
+
+
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
+
+This type is referenced here:
+**nominal_tag_qualified_still_works.md:9:20:9:24:**
+```roc
+    Color.Green => Bool.False
+```
+                   ^^^^
+
+
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
+
+This type is referenced here:
+**nominal_tag_qualified_still_works.md:10:19:10:23:**
+```roc
+    Color.Blue => Bool.False
+```
+                  ^^^^
+
+
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:6),OpColonEqual(1:7-1:9),OpenSquare(1:10-1:11),UpperIdent(1:11-1:14),Comma(1:14-1:15),UpperIdent(1:16-1:21),Comma(1:21-1:22),UpperIdent(1:23-1:27),CloseSquare(1:27-1:28),
@@ -115,29 +158,26 @@ isRed = |color| match color {
 									(p-nominal @8.5-8.14
 										(p-applied-tag @8.5-8.14))))
 							(value
-								(e-nominal @8.18-8.27 (nominal "Bool")
-									(e-tag @8.18-8.27 (name "True")))))
+								(e-runtime-error (tag "undeclared_type"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-nominal @9.5-9.16
 										(p-applied-tag @9.5-9.16))))
 							(value
-								(e-nominal @9.20-9.30 (nominal "Bool")
-									(e-tag @9.20-9.30 (name "False")))))
+								(e-runtime-error (tag "undeclared_type"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-nominal @10.5-10.15
 										(p-applied-tag @10.5-10.15))))
 							(value
-								(e-nominal @10.19-10.29 (nominal "Bool")
-									(e-tag @10.19-10.29 (name "False")))))))))
+								(e-runtime-error (tag "undeclared_type"))))))))
 		(annotation @7.1-7.6
 			(declared-type
 				(ty-fn @6.9-6.22 (effectful false)
 					(ty-lookup @6.9-6.14 (name "Color") (local))
-					(ty-lookup @6.18-6.22 (name "Bool") (local))))))
+					(ty-malformed @6.18-6.22)))))
 	(s-nominal-decl @1.1-1.28
 		(ty-header @1.1-1.6 (name "Color"))
 		(ty-tag-union @1.10-1.28
@@ -150,11 +190,11 @@ isRed = |color| match color {
 (inferred-types
 	(defs
 		(patt @4.1-4.8 (type "Color"))
-		(patt @7.1-7.6 (type "Color -> Bool")))
+		(patt @7.1-7.6 (type "Color -> Error")))
 	(type_decls
 		(nominal @1.1-1.28 (type "Color")
 			(ty-header @1.1-1.6 (name "Color"))))
 	(expressions
 		(expr @4.11-4.20 (type "Color"))
-		(expr @7.9-11.2 (type "Color -> Bool"))))
+		(expr @7.9-11.2 (type "Color -> Error"))))
 ~~~

@@ -84,5 +84,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.84 (type "([True]_others, [False]_others2, Error, Error, [True][False]a, [True][False]a, [True][False]a, [True][False]a)"))
+(expr @1.1-1.84 (type "([True][False]a, [False]_others, Error, Error, [True][False]a, [True][False]a, [True][False]a, [True][False]a)"))
 ~~~

@@ -407,7 +407,7 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interpreter = try Interpreter.init(testing.allocator, resources.module_env, resources.bool_stmt);
+    var interpreter = try Interpreter.init(testing.allocator, resources.module_env, resources.bool_stmt, resources.bool_module.env);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -709,31 +709,26 @@ test "ModuleEnv serialization and interpreter evaluation" {
     // Initialize CIR fields in ModuleEnv
     try original_env.initCIRFields(gpa, "test");
 
-    // Inject builtin type declarations (Bool and Result) following TestEnv.zig pattern
-    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
-    const actual_bool_idx = try original_env.store.addStatement(bool_stmt, base.Region.zero());
-
-    const result_stmt = result_module.env.store.getStatement(builtin_indices.result_type);
-    const actual_result_idx = try original_env.store.addStatement(result_stmt, base.Region.zero());
-
-    // Update builtin_statements span
-    const start_idx = @intFromEnum(actual_bool_idx);
-    const end_idx = @intFromEnum(actual_result_idx);
-    original_env.builtin_statements = .{ .span = .{
-        .start = start_idx,
-        .len = end_idx - start_idx + 1,
-    } };
+    // Get Bool and Result statement indices from IMPORTED modules (not copied!)
+    const bool_stmt_in_bool_module = builtin_indices.bool_type;
+    const result_stmt_in_result_module = builtin_indices.result_type;
 
     const common_idents: Check.CommonIdents = .{
         .module_name = try original_env.insertIdent(base.Ident.for_text("test")),
         .list = try original_env.insertIdent(base.Ident.for_text("List")),
         .box = try original_env.insertIdent(base.Ident.for_text("Box")),
-        .bool_stmt = actual_bool_idx,
-        .result_stmt = actual_result_idx,
+        .bool_stmt = bool_stmt_in_bool_module,
+        .result_stmt = result_stmt_in_result_module,
     };
 
-    // Create canonicalizer
-    var czer = try Can.init(&original_env, &parse_ast, null);
+    // Create module_envs map for canonicalization (enables qualified calls)
+    var module_envs_map = std.StringHashMap(*const ModuleEnv).init(gpa);
+    defer module_envs_map.deinit();
+    try module_envs_map.put("Bool", bool_module.env);
+    try module_envs_map.put("Result", result_module.env);
+
+    // Create canonicalizer with module_envs_map for qualified name resolution
+    var czer = try Can.init(&original_env, &parse_ast, &module_envs_map);
     defer czer.deinit();
 
     // Canonicalize the expression
@@ -742,15 +737,16 @@ test "ModuleEnv serialization and interpreter evaluation" {
         return error.CanonicalizeFailure;
     };
 
-    // Type check the expression
-    var checker = try Check.init(gpa, &original_env.types, &original_env, &.{}, &original_env.store.regions, common_idents);
+    // Type check the expression - pass Bool and Result as imported modules
+    const other_modules = [_]*const ModuleEnv{ bool_module.env, result_module.env };
+    var checker = try Check.init(gpa, &original_env.types, &original_env, &other_modules, &original_env.store.regions, common_idents);
     defer checker.deinit();
 
     _ = try checker.checkExprRepl(canonicalized_expr_idx.get_idx());
 
     // Test 1: Evaluate with the original ModuleEnv
     {
-        var interpreter = try Interpreter.init(gpa, &original_env, actual_bool_idx);
+        var interpreter = try Interpreter.init(gpa, &original_env, bool_stmt_in_bool_module, bool_module.env);
         defer interpreter.deinit();
 
         const ops = test_env_instance.get_ops();
@@ -814,7 +810,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         // Test 4: Evaluate the same expression using the deserialized ModuleEnv
         // The original expression index should still be valid since the NodeStore structure is preserved
         {
-            var interpreter = try Interpreter.init(gpa, deserialized_env, actual_bool_idx);
+            var interpreter = try Interpreter.init(gpa, deserialized_env, bool_stmt_in_bool_module, bool_module.env);
             defer interpreter.deinit();
 
             const ops = test_env_instance.get_ops();

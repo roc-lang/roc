@@ -20,11 +20,19 @@ nested : { bar : Foo.Bar, count : U64 }
 nested = { bar: A, count: 1 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - nominal_associated_lookup_in_containers.md:7:9:7:18
-TYPE MISMATCH - nominal_associated_lookup_in_containers.md:10:10:10:15
-TYPE MISMATCH - nominal_associated_lookup_in_containers.md:13:10:13:30
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**nominal_associated_lookup_in_containers.md:9:10:9:16:**
+```roc
+result : Result(Foo.Bar, Foo.Error)
+```
+         ^^^^^^
+
+
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:4),OpColonEqual(1:5-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),CloseSquare(1:17-1:18),Dot(1:18-1:19),OpenCurly(1:19-1:20),
@@ -132,15 +140,12 @@ nested = { bar: A, count: 1 }
 					(ty-lookup @6.14-6.21 (name "Foo.Bar") (local))))))
 	(d-let
 		(p-assign @10.1-10.7 (ident "result"))
-		(e-nominal @10.10-10.15 (nominal "Result")
-			(e-tag @10.10-10.15 (name "Ok")
-				(args
-					(e-tag @10.13-10.14 (name "A")))))
+		(e-tag @10.10-10.15 (name "Ok")
+			(args
+				(e-tag @10.13-10.14 (name "A"))))
 		(annotation @10.1-10.7
 			(declared-type
-				(ty-apply @9.10-9.36 (name "Result") (local)
-					(ty-lookup @9.10-9.36 (name "Foo.Bar") (local))
-					(ty-lookup @9.10-9.36 (name "Foo.Error") (local))))))
+				(ty-malformed @9.10-9.16))))
 	(d-let
 		(p-assign @13.1-13.7 (ident "nested"))
 		(e-record @13.10-13.30
@@ -177,7 +182,7 @@ nested = { bar: A, count: 1 }
 (inferred-types
 	(defs
 		(patt @7.1-7.6 (type "List(Foo.Bar)"))
-		(patt @10.1-10.7 (type "Result(Foo.Bar, Foo.Error)"))
+		(patt @10.1-10.7 (type "Error"))
 		(patt @13.1-13.7 (type "{ bar: Foo.Bar, count: Num(Int(Unsigned64)) }")))
 	(type_decls
 		(nominal @1.1-4.2 (type "Foo")
@@ -188,6 +193,6 @@ nested = { bar: A, count: 1 }
 			(ty-header @3.5-3.27 (name "Foo.Error"))))
 	(expressions
 		(expr @7.9-7.18 (type "List(Foo.Bar)"))
-		(expr @10.10-10.15 (type "Result(Foo.Bar, Foo.Error)"))
+		(expr @10.10-10.15 (type "Error"))
 		(expr @13.10-13.30 (type "{ bar: Foo.Bar, count: Num(Int(Unsigned64)) }"))))
 ~~~

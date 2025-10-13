@@ -105,7 +105,7 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: e
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt, resources.bool_module.env);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -132,7 +132,7 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt, resources.bool_module.env);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -157,7 +157,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt, resources.bool_module.env);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -191,7 +191,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt, resources.bool_module.env);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -239,7 +239,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt, resources.bool_module.env);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -282,7 +282,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt, resources.bool_module.env);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -339,15 +339,17 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     checker: *Check,
     expr_idx: CIR.Expr.Idx,
     bool_stmt: CIR.Statement.Idx,
+    bool_module: LoadedModule,
+    result_module: LoadedModule,
 } {
     // Load builtin modules (following TestEnv.zig pattern)
     const builtin_indices = try deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var bool_module = try loadCompiledModule(allocator, compiled_builtins.bool_bin, "Bool", bool_source);
-    defer bool_module.deinit();
+    errdefer bool_module.deinit();
     var result_module = try loadCompiledModule(allocator, compiled_builtins.result_bin, "Result", result_source);
-    defer result_module.deinit();
+    errdefer result_module.deinit();
 
     // Initialize the ModuleEnv
     const module_env = try allocator.create(ModuleEnv);
@@ -356,7 +358,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     module_env.common.source = source;
     try module_env.common.calcLineStarts(module_env.gpa);
 
-    // Parse the source code as an expression
+    // Parse the source code as an expression (following REPL pattern)
     const parse_ast = try allocator.create(parse.AST);
     parse_ast.* = try parse.parseExpr(&module_env.common, module_env.gpa);
 
@@ -380,46 +382,44 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     // Initialize CIR fields in ModuleEnv
     try module_env.initCIRFields(allocator, "test");
 
-    // Inject builtin type declarations (Bool and Result) following TestEnv.zig pattern
-    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
-    const actual_bool_idx = try module_env.store.addStatement(bool_stmt, base.Region.zero());
-    _ = try module_env.types.fresh(); // Keep types array in sync with nodes/regions
+    // Register Bool and Result as imports so they're available for qualified name resolution
+    _ = try module_env.imports.getOrPut(allocator, &module_env.common.strings, "Bool");
+    _ = try module_env.imports.getOrPut(allocator, &module_env.common.strings, "Result");
 
-    const result_stmt = result_module.env.store.getStatement(builtin_indices.result_type);
-    const actual_result_idx = try module_env.store.addStatement(result_stmt, base.Region.zero());
-    _ = try module_env.types.fresh(); // Keep types array in sync with nodes/regions
-
-    // Update builtin_statements span
-    const start_idx = @intFromEnum(actual_bool_idx);
-    const end_idx = @intFromEnum(actual_result_idx);
-    module_env.builtin_statements = .{ .span = .{
-        .start = start_idx,
-        .len = end_idx - start_idx + 1,
-    } };
+    // Get Bool and Result statement indices from IMPORTED modules (not copied!)
+    const bool_stmt_in_bool_module = builtin_indices.bool_type;
+    const result_stmt_in_result_module = builtin_indices.result_type;
 
     const common_idents: Check.CommonIdents = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
         .list = try module_env.insertIdent(base.Ident.for_text("List")),
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
-        .bool_stmt = actual_bool_idx,
-        .result_stmt = actual_result_idx,
+        .bool_stmt = bool_stmt_in_bool_module,
+        .result_stmt = result_stmt_in_result_module,
     };
 
-    // Create czer
-    //
-    const czer = try allocator.create(Can);
-    czer.* = try Can.init(module_env, parse_ast, null);
+    // Create module_envs map for canonicalization (enables qualified calls)
+    var module_envs_map = std.StringHashMap(*const ModuleEnv).init(allocator);
+    defer module_envs_map.deinit();
+    try module_envs_map.put("Bool", bool_module.env);
+    try module_envs_map.put("Result", result_module.env);
 
-    // Canonicalize the expression
+    // Create czer with module_envs_map for qualified name resolution (following REPL pattern)
+    const czer = try allocator.create(Can);
+    czer.* = try Can.init(module_env, parse_ast, &module_envs_map);
+
+    // Canonicalize the expression (following REPL pattern)
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-    const canonical_expr_idx = try czer.canonicalizeExpr(expr_idx) orelse {
+    const canonical_expr = try czer.canonicalizeExpr(expr_idx) orelse {
         // If canonicalization fails, create a runtime error
         const diagnostic_idx = try module_env.store.addDiagnostic(.{ .not_implemented = .{
             .feature = try module_env.insertString("canonicalization failed"),
             .region = base.Region.zero(),
         } });
         const checker = try allocator.create(Check);
-        checker.* = try Check.init(allocator, &module_env.types, module_env, &.{}, &module_env.store.regions, common_idents);
+        // Pass Bool and Result as imported modules
+        const other_modules = [_]*const ModuleEnv{ bool_module.env, result_module.env };
+        checker.* = try Check.init(allocator, &module_env.types, module_env, &other_modules, &module_env.store.regions, common_idents);
         return .{
             .module_env = module_env,
             .parse_ast = parse_ast,
@@ -428,33 +428,44 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
             .expr_idx = try module_env.store.addExpr(.{ .e_runtime_error = .{
                 .diagnostic = diagnostic_idx,
             } }, base.Region.zero()),
-            .bool_stmt = actual_bool_idx,
+            .bool_stmt = bool_stmt_in_bool_module,
+            .bool_module = bool_module,
+            .result_module = result_module,
         };
     };
+    const canonical_expr_idx = canonical_expr.get_idx();
 
-    // Create type checker
+    // Create type checker - pass Bool and Result as imported modules
+    const other_modules = [_]*const ModuleEnv{ bool_module.env, result_module.env };
     const checker = try allocator.create(Check);
-    checker.* = try Check.init(allocator, &module_env.types, module_env, &.{}, &module_env.store.regions, common_idents);
+    checker.* = try Check.init(allocator, &module_env.types, module_env, &other_modules, &module_env.store.regions, common_idents);
 
     // Type check the expression
-    _ = try checker.checkExprRepl(canonical_expr_idx.get_idx());
+    _ = try checker.checkExprRepl(canonical_expr_idx);
 
     return .{
         .module_env = module_env,
         .parse_ast = parse_ast,
         .can = czer,
         .checker = checker,
-        .expr_idx = canonical_expr_idx.get_idx(),
-        .bool_stmt = actual_bool_idx,
+        .expr_idx = canonical_expr_idx,
+        .bool_stmt = bool_stmt_in_bool_module,
+        .bool_module = bool_module,
+        .result_module = result_module,
     };
 }
 
 /// Cleanup resources allocated by parseAndCanonicalizeExpr.
 pub fn cleanupParseAndCanonical(allocator: std.mem.Allocator, resources: anytype) void {
+    // Cast away const since deinit() needs mutable access
+    var bool_module_copy = resources.bool_module;
+    var result_module_copy = resources.result_module;
+    bool_module_copy.deinit();
+    result_module_copy.deinit();
     resources.checker.deinit();
     resources.can.deinit();
     resources.parse_ast.deinit(allocator);
-    // module_env.source is freed by module_env.deinit()
+    // module_env.source is not owned by module_env - don't free it
     resources.module_env.deinit();
     allocator.destroy(resources.checker);
     allocator.destroy(resources.can);
@@ -473,7 +484,7 @@ test "eval tag - already primitive" {
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt, resources.bool_module.env);
     defer interpreter.deinit();
 
     const ops = test_env_instance.get_ops();
@@ -502,7 +513,7 @@ test "interpreter reuse across multiple evaluations" {
         var test_env_instance = TestEnv.init(test_allocator);
         defer test_env_instance.deinit();
 
-        var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt);
+        var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt, resources.bool_module.env);
         defer interpreter.deinit();
 
         const ops = test_env_instance.get_ops();

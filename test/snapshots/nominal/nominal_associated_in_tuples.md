@@ -21,7 +21,6 @@ boxed = Box(X)
 # EXPECTED
 UNDECLARED TYPE VARIABLE - nominal_associated_in_tuples.md:9:7:9:8
 UNDECLARED TYPE VARIABLE - nominal_associated_in_tuples.md:9:17:9:18
-TYPE MISMATCH - nominal_associated_in_tuples.md:7:8:7:14
 TOO MANY ARGS - nominal_associated_in_tuples.md:11:9:11:21
 # PROBLEMS
 **UNDECLARED TYPE VARIABLE**

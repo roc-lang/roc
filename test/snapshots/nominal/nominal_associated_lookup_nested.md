@@ -18,7 +18,7 @@ myNum : U64
 myNum = Foo.Bar.baz
 ~~~
 # EXPECTED
-TYPE MISMATCH - nominal_associated_lookup_nested.md:8:10:8:19
+NIL
 # PROBLEMS
 NIL
 # TOKENS

@@ -229,19 +229,19 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.5 (type "Error"))
-		(patt @9.1-9.10 (type "Error -> Str"))
+		(patt @5.1-5.5 (type "_a"))
+		(patt @9.1-9.10 (type "_arg -> Str"))
 		(patt @13.1-13.15 (type "Error -> Error"))
 		(patt @16.1-16.7 (type "_a"))
 		(patt @19.1-19.7 (type "_a"))
-		(patt @22.1-22.7 (type "Error"))
-		(patt @25.1-25.7 (type "Error")))
+		(patt @22.1-22.7 (type "_a"))
+		(patt @25.1-25.7 (type "_a")))
 	(expressions
-		(expr @5.8-5.31 (type "Error"))
-		(expr @9.13-9.40 (type "Error -> Str"))
+		(expr @5.8-5.31 (type "_a"))
+		(expr @9.13-9.40 (type "_arg -> Str"))
 		(expr @13.18-13.51 (type "Error -> Error"))
 		(expr @16.10-16.28 (type "_a"))
 		(expr @19.10-19.31 (type "_a"))
-		(expr @22.10-22.28 (type "Error"))
-		(expr @25.10-25.49 (type "Error"))))
+		(expr @22.10-22.28 (type "_a"))
+		(expr @25.10-25.49 (type "_a"))))
 ~~~

@@ -1045,47 +1045,34 @@ fn compileSource(source: []const u8) !CompilerStageData {
         return error.NodeIndexOutOfBounds;
     }
 
-    const bool_stmt = bool_module.env.store.getStatement(bool_stmts[0]);
-    logDebug("compileSource: Got Bool statement successfully\n", .{});
-
-    logDebug("compileSource: About to add Bool statement and type var to main env\n", .{});
-    const actual_bool_idx = try env.store.addStatement(bool_stmt, base.Region.zero());
-    _ = try env.types.fresh(); // Keep types array in sync with nodes/regions
-    logDebug("compileSource: Bool statement added successfully, idx={}\n", .{@intFromEnum(actual_bool_idx)});
-
-    // Get Result statements
+    // Get Bool and Result statement indices from IMPORTED modules (not copied!)
+    const bool_stmt_in_bool_module = bool_stmts[0];
     const result_stmts = result_module.env.store.sliceStatements(result_module.env.all_statements);
-    logDebug("compileSource: About to get Result statement from sliced statements\n", .{});
-    const result_stmt = result_module.env.store.getStatement(result_stmts[0]);
-    logDebug("compileSource: Got Result statement successfully\n", .{});
+    const result_stmt_in_result_module = result_stmts[0];
 
-    logDebug("compileSource: About to add Result statement and type var to main env\n", .{});
-    const actual_result_idx = try env.store.addStatement(result_stmt, base.Region.zero());
-    _ = try env.types.fresh(); // Keep types array in sync with nodes/regions
-    logDebug("compileSource: Result statement added successfully, idx={}\n", .{@intFromEnum(actual_result_idx)});
+    logDebug("compileSource: Using Bool statement from Bool module, idx={}\n", .{@intFromEnum(bool_stmt_in_bool_module)});
+    logDebug("compileSource: Using Result statement from Result module, idx={}\n", .{@intFromEnum(result_stmt_in_result_module)});
     logDebug("compileSource: Builtin injection complete\n", .{});
 
     // Store bool_stmt in result for later use (e.g., in test runner)
-    result.bool_stmt = actual_bool_idx;
-
-    // Update builtin_statements span
-    const start_idx = @intFromEnum(actual_bool_idx);
-    const end_idx = @intFromEnum(actual_result_idx);
-    env.builtin_statements = .{ .span = .{
-        .start = start_idx,
-        .len = end_idx - start_idx + 1,
-    } };
+    result.bool_stmt = bool_stmt_in_bool_module;
 
     const module_common_idents: Check.CommonIdents = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("main")),
         .list = try module_env.insertIdent(base.Ident.for_text("List")),
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
-        .bool_stmt = actual_bool_idx,
-        .result_stmt = actual_result_idx,
+        .bool_stmt = bool_stmt_in_bool_module,
+        .result_stmt = result_stmt_in_result_module,
     };
 
+    // Create module_envs map for canonicalization (enables qualified calls)
+    var module_envs_map = std.StringHashMap(*const ModuleEnv).init(allocator);
+    defer module_envs_map.deinit();
+    try module_envs_map.put("Bool", bool_module.env);
+    try module_envs_map.put("Result", result_module.env);
+
     logDebug("compileSource: Starting canonicalization\n", .{});
-    var czer = try Can.init(env, &result.parse_ast.?, null);
+    var czer = try Can.init(env, &result.parse_ast.?, &module_envs_map);
     defer czer.deinit();
 
     czer.canonicalizeFile() catch |err| {
