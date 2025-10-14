@@ -8,16 +8,39 @@ type=file
 F
 ~~~
 # EXPECTED
-MISSING HEADER - fuzz_crash_004.md:1:1:1:2
+PARSE ERROR - fuzz_crash_004.md:2:1:2:1
+MISSING MAIN! FUNCTION - fuzz_crash_004.md:1:1:1:2
 # PROBLEMS
-**MISSING HEADER**
-Roc files must start with a module header.
+**PARSE ERROR**
+Type applications require parentheses around their type arguments.
 
-For example:
-        module [main]
-or for an app:
-        app [main!] { pf: platform "../basic-cli/platform.roc" }
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
+
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Result(a, Str)`
+    `Maybe(List(U64))`
+
+**fuzz_crash_004.md:2:1:2:1:**
+```roc
+
+```
+^
+
+
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
+
+No `main!` function was found.
+
+Add a main! function like:
+`main! = |arg| { ... }`
 **fuzz_crash_004.md:1:1:1:2:**
 ```roc
 F
@@ -33,11 +56,13 @@ EndOfFile(2:1-2:1),
 # PARSE
 ~~~clojure
 (file @1.1-1.2
-	(malformed-header @1.1-1.2 (tag "missing_header"))
-	(statements))
+	(type-module @1.1-1.2)
+	(statements
+		(s-malformed @1.1-1.1 (tag "expected_colon_after_type_annotation"))))
 ~~~
 # FORMATTED
 ~~~roc
+
 ~~~
 # CANONICALIZE
 ~~~clojure

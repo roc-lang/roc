@@ -45,7 +45,7 @@ EndOfFile(5:1-5:1),
 (e-record @1.1-4.2
 	(fields
 		(field (name "answer")
-			(e-int @2.13-2.15 (value "42")))
+			(e-num @2.13-2.15 (value "42")))
 		(field (name "launchTheNukes!")
 			(e-lambda @3.22-3.30
 				(args
@@ -55,5 +55,5 @@ EndOfFile(5:1-5:1),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-4.2 (type "{ answer: Num(_size), launchTheNukes!: _arg -> _ret }"))
+(expr @1.1-4.2 (type "{ answer: Num(_size), launchTheNukes!: {} -> _ret }"))
 ~~~

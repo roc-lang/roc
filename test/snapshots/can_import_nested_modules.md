@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Nested module qualification
-type=file
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-module []
-
 import json.Parser.Config
 import http.Client.Auth as HttpAuth
 import utils.String.Format exposing [padLeft]
@@ -33,38 +31,38 @@ validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 validateAuth = |creds| HttpAuth.validate(creds)
 ~~~
 # EXPECTED
-PARSE ERROR - can_import_nested_modules.md:3:19:3:26
-PARSE ERROR - can_import_nested_modules.md:4:19:4:24
-PARSE ERROR - can_import_nested_modules.md:4:25:4:27
-PARSE ERROR - can_import_nested_modules.md:5:1:5:7
-PARSE ERROR - can_import_nested_modules.md:5:8:5:13
-PARSE ERROR - can_import_nested_modules.md:5:13:5:20
-PARSE ERROR - can_import_nested_modules.md:5:20:5:27
-PARSE ERROR - can_import_nested_modules.md:5:28:5:36
-PARSE ERROR - can_import_nested_modules.md:5:37:5:38
-PARSE ERROR - can_import_nested_modules.md:5:38:5:45
-PARSE ERROR - can_import_nested_modules.md:5:45:5:46
-MODULE NOT FOUND - can_import_nested_modules.md:3:1:3:19
-MODULE NOT FOUND - can_import_nested_modules.md:4:1:4:19
-MODULE NOT IMPORTED - can_import_nested_modules.md:8:15:8:30
-UNDEFINED VARIABLE - can_import_nested_modules.md:9:26:9:41
-MODULE NOT IMPORTED - can_import_nested_modules.md:12:28:12:42
-UNDEFINED VARIABLE - can_import_nested_modules.md:13:29:13:43
-MODULE NOT IMPORTED - can_import_nested_modules.md:16:15:16:37
-MODULE NOT IMPORTED - can_import_nested_modules.md:16:58:16:77
-UNDEFINED VARIABLE - can_import_nested_modules.md:18:5:18:37
-UNDEFINED VARIABLE - can_import_nested_modules.md:22:23:22:30
-UNDEFINED VARIABLE - can_import_nested_modules.md:22:37:22:58
-MODULE NOT IMPORTED - can_import_nested_modules.md:25:16:25:36
-MODULE NOT IMPORTED - can_import_nested_modules.md:25:47:25:61
-MODULE NOT IMPORTED - can_import_nested_modules.md:25:63:25:77
-UNDEFINED VARIABLE - can_import_nested_modules.md:26:24:26:41
+PARSE ERROR - can_import_nested_modules.md:1:19:1:26
+PARSE ERROR - can_import_nested_modules.md:2:19:2:24
+PARSE ERROR - can_import_nested_modules.md:2:25:2:27
+PARSE ERROR - can_import_nested_modules.md:3:1:3:7
+PARSE ERROR - can_import_nested_modules.md:3:8:3:13
+PARSE ERROR - can_import_nested_modules.md:3:13:3:20
+PARSE ERROR - can_import_nested_modules.md:3:20:3:27
+PARSE ERROR - can_import_nested_modules.md:3:28:3:36
+PARSE ERROR - can_import_nested_modules.md:3:37:3:38
+PARSE ERROR - can_import_nested_modules.md:3:38:3:45
+PARSE ERROR - can_import_nested_modules.md:3:45:3:46
+MODULE NOT FOUND - can_import_nested_modules.md:1:1:1:19
+MODULE NOT FOUND - can_import_nested_modules.md:2:1:2:19
+MODULE NOT IMPORTED - can_import_nested_modules.md:6:15:6:30
+UNDEFINED VARIABLE - can_import_nested_modules.md:7:26:7:41
+MODULE NOT IMPORTED - can_import_nested_modules.md:10:28:10:42
+UNDEFINED VARIABLE - can_import_nested_modules.md:11:29:11:43
+MODULE NOT IMPORTED - can_import_nested_modules.md:14:15:14:37
+MODULE NOT IMPORTED - can_import_nested_modules.md:14:58:14:77
+UNDEFINED VARIABLE - can_import_nested_modules.md:16:5:16:37
+UNDEFINED VARIABLE - can_import_nested_modules.md:20:23:20:30
+UNDEFINED VARIABLE - can_import_nested_modules.md:20:37:20:58
+MODULE NOT IMPORTED - can_import_nested_modules.md:23:16:23:36
+MODULE NOT IMPORTED - can_import_nested_modules.md:23:47:23:61
+MODULE NOT IMPORTED - can_import_nested_modules.md:23:63:23:77
+UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**can_import_nested_modules.md:3:19:3:26:**
+**can_import_nested_modules.md:1:19:1:26:**
 ```roc
 import json.Parser.Config
 ```
@@ -75,7 +73,7 @@ import json.Parser.Config
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**can_import_nested_modules.md:4:19:4:24:**
+**can_import_nested_modules.md:2:19:2:24:**
 ```roc
 import http.Client.Auth as HttpAuth
 ```
@@ -86,7 +84,7 @@ import http.Client.Auth as HttpAuth
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**can_import_nested_modules.md:4:25:4:27:**
+**can_import_nested_modules.md:2:25:2:27:**
 ```roc
 import http.Client.Auth as HttpAuth
 ```
@@ -109,7 +107,7 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-**can_import_nested_modules.md:5:1:5:7:**
+**can_import_nested_modules.md:3:1:3:7:**
 ```roc
 import utils.String.Format exposing [padLeft]
 ```
@@ -120,7 +118,7 @@ import utils.String.Format exposing [padLeft]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**can_import_nested_modules.md:5:8:5:13:**
+**can_import_nested_modules.md:3:8:3:13:**
 ```roc
 import utils.String.Format exposing [padLeft]
 ```
@@ -131,7 +129,7 @@ import utils.String.Format exposing [padLeft]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**can_import_nested_modules.md:5:13:5:20:**
+**can_import_nested_modules.md:3:13:3:20:**
 ```roc
 import utils.String.Format exposing [padLeft]
 ```
@@ -142,7 +140,7 @@ import utils.String.Format exposing [padLeft]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**can_import_nested_modules.md:5:20:5:27:**
+**can_import_nested_modules.md:3:20:3:27:**
 ```roc
 import utils.String.Format exposing [padLeft]
 ```
@@ -153,7 +151,7 @@ import utils.String.Format exposing [padLeft]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**can_import_nested_modules.md:5:28:5:36:**
+**can_import_nested_modules.md:3:28:3:36:**
 ```roc
 import utils.String.Format exposing [padLeft]
 ```
@@ -164,7 +162,7 @@ import utils.String.Format exposing [padLeft]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**can_import_nested_modules.md:5:37:5:38:**
+**can_import_nested_modules.md:3:37:3:38:**
 ```roc
 import utils.String.Format exposing [padLeft]
 ```
@@ -175,7 +173,7 @@ import utils.String.Format exposing [padLeft]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**can_import_nested_modules.md:5:38:5:45:**
+**can_import_nested_modules.md:3:38:3:45:**
 ```roc
 import utils.String.Format exposing [padLeft]
 ```
@@ -186,7 +184,7 @@ import utils.String.Format exposing [padLeft]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**can_import_nested_modules.md:5:45:5:46:**
+**can_import_nested_modules.md:3:45:3:46:**
 ```roc
 import utils.String.Format exposing [padLeft]
 ```
@@ -197,7 +195,7 @@ import utils.String.Format exposing [padLeft]
 The module `json.Parser` was not found in this Roc project.
 
 You're attempting to use this module here:
-**can_import_nested_modules.md:3:1:3:19:**
+**can_import_nested_modules.md:1:1:1:19:**
 ```roc
 import json.Parser.Config
 ```
@@ -208,7 +206,7 @@ import json.Parser.Config
 The module `http.Client` was not found in this Roc project.
 
 You're attempting to use this module here:
-**can_import_nested_modules.md:4:1:4:19:**
+**can_import_nested_modules.md:2:1:2:19:**
 ```roc
 import http.Client.Auth as HttpAuth
 ```
@@ -219,7 +217,7 @@ import http.Client.Auth as HttpAuth
 There is no module with the name `Config` imported into this Roc file.
 
 You're attempting to use this module here:
-**can_import_nested_modules.md:8:15:8:30:**
+**can_import_nested_modules.md:6:15:6:30:**
 ```roc
 parseConfig : Config.Settings -> Str
 ```
@@ -230,7 +228,7 @@ parseConfig : Config.Settings -> Str
 Nothing is named `toString` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**can_import_nested_modules.md:9:26:9:41:**
+**can_import_nested_modules.md:7:26:7:41:**
 ```roc
 parseConfig = |settings| Config.toString(settings)
 ```
@@ -241,7 +239,7 @@ parseConfig = |settings| Config.toString(settings)
 There is no module with the name `HttpAuth` imported into this Roc file.
 
 You're attempting to use this module here:
-**can_import_nested_modules.md:12:28:12:42:**
+**can_import_nested_modules.md:10:28:10:42:**
 ```roc
 authenticate : Str, Str -> HttpAuth.Token
 ```
@@ -252,7 +250,7 @@ authenticate : Str, Str -> HttpAuth.Token
 Nothing is named `login` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**can_import_nested_modules.md:13:29:13:43:**
+**can_import_nested_modules.md:11:29:11:43:**
 ```roc
 authenticate = |user, pass| HttpAuth.login(user, pass)
 ```
@@ -260,25 +258,10 @@ authenticate = |user, pass| HttpAuth.login(user, pass)
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `module []
-
-import json.Parser.Config
-import http.Client.Auth as HttpAuth
-import utils.String.Format exposing [padLeft]
-
-# Test multi-level type qualification
-parseConfig : Config.Settings -> Str
-parseConfig = |settings| Config.toString(settings)
-
-# Test multi-level value qualification
-authenticate : Str, Str -> HttpAuth.Token
-authenticate = |user, pass| HttpAuth.login(user, pass)
-
-# Test deeply nested qualification
-processData : Config.Parser` imported into this Roc file.
+There is no module with the name `Config.Parser` imported into this Roc file.
 
 You're attempting to use this module here:
-**can_import_nested_modules.md:16:15:16:37:**
+**can_import_nested_modules.md:14:15:14:37:**
 ```roc
 processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
 ```
@@ -286,25 +269,10 @@ processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `module []
-
-import json.Parser.Config
-import http.Client.Auth as HttpAuth
-import utils.String.Format exposing [padLeft]
-
-# Test multi-level type qualification
-parseConfig : Config.Settings -> Str
-parseConfig = |settings| Config.toString(settings)
-
-# Test multi-level value qualification
-authenticate : Str, Str -> HttpAuth.Token
-authenticate = |user, pass| HttpAuth.login(user, pass)
-
-# Test deeply nested qualification
-processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser` imported into this Roc file.
+There is no module with the name `Config.Parser` imported into this Roc file.
 
 You're attempting to use this module here:
-**can_import_nested_modules.md:16:58:16:77:**
+**can_import_nested_modules.md:14:58:14:77:**
 ```roc
 processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
 ```
@@ -315,7 +283,7 @@ processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
 Nothing is named `parseWith` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**can_import_nested_modules.md:18:5:18:37:**
+**can_import_nested_modules.md:16:5:16:37:**
 ```roc
     Config.Parser.Advanced.parseWith(advancedConfig, input)
 ```
@@ -326,7 +294,7 @@ Is there an `import` or `exposing` missing up-top?
 Nothing is named `padLeft` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**can_import_nested_modules.md:22:23:22:30:**
+**can_import_nested_modules.md:20:23:20:30:**
 ```roc
 formatOutput = |text| padLeft(text, Config.defaultPadding)
 ```
@@ -337,7 +305,7 @@ formatOutput = |text| padLeft(text, Config.defaultPadding)
 Nothing is named `defaultPadding` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**can_import_nested_modules.md:22:37:22:58:**
+**can_import_nested_modules.md:20:37:20:58:**
 ```roc
 formatOutput = |text| padLeft(text, Config.defaultPadding)
 ```
@@ -348,7 +316,7 @@ formatOutput = |text| padLeft(text, Config.defaultPadding)
 There is no module with the name `HttpAuth` imported into this Roc file.
 
 You're attempting to use this module here:
-**can_import_nested_modules.md:25:16:25:36:**
+**can_import_nested_modules.md:23:16:23:36:**
 ```roc
 validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 ```
@@ -359,7 +327,7 @@ validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 There is no module with the name `HttpAuth` imported into this Roc file.
 
 You're attempting to use this module here:
-**can_import_nested_modules.md:25:47:25:61:**
+**can_import_nested_modules.md:23:47:23:61:**
 ```roc
 validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 ```
@@ -370,7 +338,7 @@ validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 There is no module with the name `HttpAuth` imported into this Roc file.
 
 You're attempting to use this module here:
-**can_import_nested_modules.md:25:63:25:77:**
+**can_import_nested_modules.md:23:63:23:77:**
 ```roc
 validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 ```
@@ -381,7 +349,7 @@ validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 Nothing is named `validate` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**can_import_nested_modules.md:26:24:26:41:**
+**can_import_nested_modules.md:24:24:24:41:**
 ```roc
 validateAuth = |creds| HttpAuth.validate(creds)
 ```
@@ -390,120 +358,116 @@ validateAuth = |creds| HttpAuth.validate(creds)
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
-KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:19),NoSpaceDotUpperIdent(3:19-3:26),
-KwImport(4:1-4:7),LowerIdent(4:8-4:12),NoSpaceDotUpperIdent(4:12-4:19),NoSpaceDotUpperIdent(4:19-4:24),KwAs(4:25-4:27),UpperIdent(4:28-4:36),
-KwImport(5:1-5:7),LowerIdent(5:8-5:13),NoSpaceDotUpperIdent(5:13-5:20),NoSpaceDotUpperIdent(5:20-5:27),KwExposing(5:28-5:36),OpenSquare(5:37-5:38),LowerIdent(5:38-5:45),CloseSquare(5:45-5:46),
-LowerIdent(8:1-8:12),OpColon(8:13-8:14),UpperIdent(8:15-8:21),NoSpaceDotUpperIdent(8:21-8:30),OpArrow(8:31-8:33),UpperIdent(8:34-8:37),
-LowerIdent(9:1-9:12),OpAssign(9:13-9:14),OpBar(9:15-9:16),LowerIdent(9:16-9:24),OpBar(9:24-9:25),UpperIdent(9:26-9:32),NoSpaceDotLowerIdent(9:32-9:41),NoSpaceOpenRound(9:41-9:42),LowerIdent(9:42-9:50),CloseRound(9:50-9:51),
-LowerIdent(12:1-12:13),OpColon(12:14-12:15),UpperIdent(12:16-12:19),Comma(12:19-12:20),UpperIdent(12:21-12:24),OpArrow(12:25-12:27),UpperIdent(12:28-12:36),NoSpaceDotUpperIdent(12:36-12:42),
-LowerIdent(13:1-13:13),OpAssign(13:14-13:15),OpBar(13:16-13:17),LowerIdent(13:17-13:21),Comma(13:21-13:22),LowerIdent(13:23-13:27),OpBar(13:27-13:28),UpperIdent(13:29-13:37),NoSpaceDotLowerIdent(13:37-13:43),NoSpaceOpenRound(13:43-13:44),LowerIdent(13:44-13:48),Comma(13:48-13:49),LowerIdent(13:50-13:54),CloseRound(13:54-13:55),
-LowerIdent(16:1-16:12),OpColon(16:13-16:14),UpperIdent(16:15-16:21),NoSpaceDotUpperIdent(16:21-16:28),NoSpaceDotUpperIdent(16:28-16:37),Comma(16:37-16:38),UpperIdent(16:39-16:42),OpArrow(16:43-16:45),UpperIdent(16:46-16:52),NoSpaceOpenRound(16:52-16:53),UpperIdent(16:53-16:56),Comma(16:56-16:57),UpperIdent(16:58-16:64),NoSpaceDotUpperIdent(16:64-16:71),NoSpaceDotUpperIdent(16:71-16:77),CloseRound(16:77-16:78),
-LowerIdent(17:1-17:12),OpAssign(17:13-17:14),OpBar(17:15-17:16),LowerIdent(17:16-17:30),Comma(17:30-17:31),LowerIdent(17:32-17:37),OpBar(17:37-17:38),
-UpperIdent(18:5-18:11),NoSpaceDotUpperIdent(18:11-18:18),NoSpaceDotUpperIdent(18:18-18:27),NoSpaceDotLowerIdent(18:27-18:37),NoSpaceOpenRound(18:37-18:38),LowerIdent(18:38-18:52),Comma(18:52-18:53),LowerIdent(18:54-18:59),CloseRound(18:59-18:60),
-LowerIdent(21:1-21:13),OpColon(21:14-21:15),UpperIdent(21:16-21:19),OpArrow(21:20-21:22),UpperIdent(21:23-21:26),
-LowerIdent(22:1-22:13),OpAssign(22:14-22:15),OpBar(22:16-22:17),LowerIdent(22:17-22:21),OpBar(22:21-22:22),LowerIdent(22:23-22:30),NoSpaceOpenRound(22:30-22:31),LowerIdent(22:31-22:35),Comma(22:35-22:36),UpperIdent(22:37-22:43),NoSpaceDotLowerIdent(22:43-22:58),CloseRound(22:58-22:59),
-LowerIdent(25:1-25:13),OpColon(25:14-25:15),UpperIdent(25:16-25:24),NoSpaceDotUpperIdent(25:24-25:36),OpArrow(25:37-25:39),UpperIdent(25:40-25:46),NoSpaceOpenRound(25:46-25:47),UpperIdent(25:47-25:55),NoSpaceDotUpperIdent(25:55-25:61),Comma(25:61-25:62),UpperIdent(25:63-25:71),NoSpaceDotUpperIdent(25:71-25:77),CloseRound(25:77-25:78),
-LowerIdent(26:1-26:13),OpAssign(26:14-26:15),OpBar(26:16-26:17),LowerIdent(26:17-26:22),OpBar(26:22-26:23),UpperIdent(26:24-26:32),NoSpaceDotLowerIdent(26:32-26:41),NoSpaceOpenRound(26:41-26:42),LowerIdent(26:42-26:47),CloseRound(26:47-26:48),
-EndOfFile(27:1-27:1),
+KwImport(1:1-1:7),LowerIdent(1:8-1:12),NoSpaceDotUpperIdent(1:12-1:19),NoSpaceDotUpperIdent(1:19-1:26),
+KwImport(2:1-2:7),LowerIdent(2:8-2:12),NoSpaceDotUpperIdent(2:12-2:19),NoSpaceDotUpperIdent(2:19-2:24),KwAs(2:25-2:27),UpperIdent(2:28-2:36),
+KwImport(3:1-3:7),LowerIdent(3:8-3:13),NoSpaceDotUpperIdent(3:13-3:20),NoSpaceDotUpperIdent(3:20-3:27),KwExposing(3:28-3:36),OpenSquare(3:37-3:38),LowerIdent(3:38-3:45),CloseSquare(3:45-3:46),
+LowerIdent(6:1-6:12),OpColon(6:13-6:14),UpperIdent(6:15-6:21),NoSpaceDotUpperIdent(6:21-6:30),OpArrow(6:31-6:33),UpperIdent(6:34-6:37),
+LowerIdent(7:1-7:12),OpAssign(7:13-7:14),OpBar(7:15-7:16),LowerIdent(7:16-7:24),OpBar(7:24-7:25),UpperIdent(7:26-7:32),NoSpaceDotLowerIdent(7:32-7:41),NoSpaceOpenRound(7:41-7:42),LowerIdent(7:42-7:50),CloseRound(7:50-7:51),
+LowerIdent(10:1-10:13),OpColon(10:14-10:15),UpperIdent(10:16-10:19),Comma(10:19-10:20),UpperIdent(10:21-10:24),OpArrow(10:25-10:27),UpperIdent(10:28-10:36),NoSpaceDotUpperIdent(10:36-10:42),
+LowerIdent(11:1-11:13),OpAssign(11:14-11:15),OpBar(11:16-11:17),LowerIdent(11:17-11:21),Comma(11:21-11:22),LowerIdent(11:23-11:27),OpBar(11:27-11:28),UpperIdent(11:29-11:37),NoSpaceDotLowerIdent(11:37-11:43),NoSpaceOpenRound(11:43-11:44),LowerIdent(11:44-11:48),Comma(11:48-11:49),LowerIdent(11:50-11:54),CloseRound(11:54-11:55),
+LowerIdent(14:1-14:12),OpColon(14:13-14:14),UpperIdent(14:15-14:21),NoSpaceDotUpperIdent(14:21-14:28),NoSpaceDotUpperIdent(14:28-14:37),Comma(14:37-14:38),UpperIdent(14:39-14:42),OpArrow(14:43-14:45),UpperIdent(14:46-14:52),NoSpaceOpenRound(14:52-14:53),UpperIdent(14:53-14:56),Comma(14:56-14:57),UpperIdent(14:58-14:64),NoSpaceDotUpperIdent(14:64-14:71),NoSpaceDotUpperIdent(14:71-14:77),CloseRound(14:77-14:78),
+LowerIdent(15:1-15:12),OpAssign(15:13-15:14),OpBar(15:15-15:16),LowerIdent(15:16-15:30),Comma(15:30-15:31),LowerIdent(15:32-15:37),OpBar(15:37-15:38),
+UpperIdent(16:5-16:11),NoSpaceDotUpperIdent(16:11-16:18),NoSpaceDotUpperIdent(16:18-16:27),NoSpaceDotLowerIdent(16:27-16:37),NoSpaceOpenRound(16:37-16:38),LowerIdent(16:38-16:52),Comma(16:52-16:53),LowerIdent(16:54-16:59),CloseRound(16:59-16:60),
+LowerIdent(19:1-19:13),OpColon(19:14-19:15),UpperIdent(19:16-19:19),OpArrow(19:20-19:22),UpperIdent(19:23-19:26),
+LowerIdent(20:1-20:13),OpAssign(20:14-20:15),OpBar(20:16-20:17),LowerIdent(20:17-20:21),OpBar(20:21-20:22),LowerIdent(20:23-20:30),NoSpaceOpenRound(20:30-20:31),LowerIdent(20:31-20:35),Comma(20:35-20:36),UpperIdent(20:37-20:43),NoSpaceDotLowerIdent(20:43-20:58),CloseRound(20:58-20:59),
+LowerIdent(23:1-23:13),OpColon(23:14-23:15),UpperIdent(23:16-23:24),NoSpaceDotUpperIdent(23:24-23:36),OpArrow(23:37-23:39),UpperIdent(23:40-23:46),NoSpaceOpenRound(23:46-23:47),UpperIdent(23:47-23:55),NoSpaceDotUpperIdent(23:55-23:61),Comma(23:61-23:62),UpperIdent(23:63-23:71),NoSpaceDotUpperIdent(23:71-23:77),CloseRound(23:77-23:78),
+LowerIdent(24:1-24:13),OpAssign(24:14-24:15),OpBar(24:16-24:17),LowerIdent(24:17-24:22),OpBar(24:22-24:23),UpperIdent(24:24-24:32),NoSpaceDotLowerIdent(24:32-24:41),NoSpaceOpenRound(24:41-24:42),LowerIdent(24:42-24:47),CloseRound(24:47-24:48),
+EndOfFile(25:1-25:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-26.48
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+(file @1.1-24.48
+	(type-module @1.1-1.7)
 	(statements
-		(s-import @3.1-3.19 (raw "json.Parser"))
-		(s-malformed @3.19-3.26 (tag "statement_unexpected_token"))
-		(s-import @4.1-4.19 (raw "http.Client"))
-		(s-malformed @4.19-4.24 (tag "statement_unexpected_token"))
-		(s-malformed @4.25-4.27 (tag "statement_unexpected_token"))
-		(s-malformed @5.1-5.7 (tag "expected_colon_after_type_annotation"))
-		(s-malformed @5.8-5.13 (tag "statement_unexpected_token"))
-		(s-malformed @5.13-5.20 (tag "statement_unexpected_token"))
-		(s-malformed @5.20-5.27 (tag "statement_unexpected_token"))
-		(s-malformed @5.28-5.36 (tag "statement_unexpected_token"))
-		(s-malformed @5.37-5.38 (tag "statement_unexpected_token"))
-		(s-malformed @5.38-5.45 (tag "statement_unexpected_token"))
-		(s-malformed @5.45-5.46 (tag "statement_unexpected_token"))
-		(s-type-anno @8.1-8.37 (name "parseConfig")
-			(ty-fn @8.15-8.37
-				(ty @8.15-8.30 (name "Config.Settings"))
-				(ty @8.34-8.37 (name "Str"))))
-		(s-decl @9.1-9.51
-			(p-ident @9.1-9.12 (raw "parseConfig"))
-			(e-lambda @9.15-9.51
+		(s-import @1.1-1.19 (raw "json.Parser"))
+		(s-malformed @1.19-1.26 (tag "statement_unexpected_token"))
+		(s-import @2.1-2.19 (raw "http.Client"))
+		(s-malformed @2.19-2.24 (tag "statement_unexpected_token"))
+		(s-malformed @2.25-2.27 (tag "statement_unexpected_token"))
+		(s-malformed @3.1-3.7 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @3.8-3.13 (tag "statement_unexpected_token"))
+		(s-malformed @3.13-3.20 (tag "statement_unexpected_token"))
+		(s-malformed @3.20-3.27 (tag "statement_unexpected_token"))
+		(s-malformed @3.28-3.36 (tag "statement_unexpected_token"))
+		(s-malformed @3.37-3.38 (tag "statement_unexpected_token"))
+		(s-malformed @3.38-3.45 (tag "statement_unexpected_token"))
+		(s-malformed @3.45-3.46 (tag "statement_unexpected_token"))
+		(s-type-anno @6.1-6.37 (name "parseConfig")
+			(ty-fn @6.15-6.37
+				(ty @6.15-6.30 (name "Config.Settings"))
+				(ty @6.34-6.37 (name "Str"))))
+		(s-decl @7.1-7.51
+			(p-ident @7.1-7.12 (raw "parseConfig"))
+			(e-lambda @7.15-7.51
 				(args
-					(p-ident @9.16-9.24 (raw "settings")))
-				(e-apply @9.26-9.51
-					(e-ident @9.26-9.41 (raw "Config.toString"))
-					(e-ident @9.42-9.50 (raw "settings")))))
-		(s-type-anno @12.1-12.42 (name "authenticate")
-			(ty-fn @12.16-12.42
-				(ty @12.16-12.19 (name "Str"))
-				(ty @12.21-12.24 (name "Str"))
-				(ty @12.28-12.42 (name "HttpAuth.Token"))))
-		(s-decl @13.1-13.55
-			(p-ident @13.1-13.13 (raw "authenticate"))
-			(e-lambda @13.16-13.55
+					(p-ident @7.16-7.24 (raw "settings")))
+				(e-apply @7.26-7.51
+					(e-ident @7.26-7.41 (raw "Config.toString"))
+					(e-ident @7.42-7.50 (raw "settings")))))
+		(s-type-anno @10.1-10.42 (name "authenticate")
+			(ty-fn @10.16-10.42
+				(ty @10.16-10.19 (name "Str"))
+				(ty @10.21-10.24 (name "Str"))
+				(ty @10.28-10.42 (name "HttpAuth.Token"))))
+		(s-decl @11.1-11.55
+			(p-ident @11.1-11.13 (raw "authenticate"))
+			(e-lambda @11.16-11.55
 				(args
-					(p-ident @13.17-13.21 (raw "user"))
-					(p-ident @13.23-13.27 (raw "pass")))
-				(e-apply @13.29-13.55
-					(e-ident @13.29-13.43 (raw "HttpAuth.login"))
-					(e-ident @13.44-13.48 (raw "user"))
-					(e-ident @13.50-13.54 (raw "pass")))))
-		(s-type-anno @16.1-16.78 (name "processData")
-			(ty-fn @16.15-16.78
-				(ty @16.15-16.37 (name "Config.Parser.Advanced"))
-				(ty @16.39-16.42 (name "Str"))
-				(ty-apply @16.46-16.78
-					(ty @16.46-16.52 (name "Result"))
-					(ty @16.53-16.56 (name "Str"))
-					(ty @16.58-16.77 (name "Config.Parser.Error")))))
-		(s-decl @17.1-18.60
-			(p-ident @17.1-17.12 (raw "processData"))
-			(e-lambda @17.15-18.60
+					(p-ident @11.17-11.21 (raw "user"))
+					(p-ident @11.23-11.27 (raw "pass")))
+				(e-apply @11.29-11.55
+					(e-ident @11.29-11.43 (raw "HttpAuth.login"))
+					(e-ident @11.44-11.48 (raw "user"))
+					(e-ident @11.50-11.54 (raw "pass")))))
+		(s-type-anno @14.1-14.78 (name "processData")
+			(ty-fn @14.15-14.78
+				(ty @14.15-14.37 (name "Config.Parser.Advanced"))
+				(ty @14.39-14.42 (name "Str"))
+				(ty-apply @14.46-14.78
+					(ty @14.46-14.52 (name "Result"))
+					(ty @14.53-14.56 (name "Str"))
+					(ty @14.58-14.77 (name "Config.Parser.Error")))))
+		(s-decl @15.1-16.60
+			(p-ident @15.1-15.12 (raw "processData"))
+			(e-lambda @15.15-16.60
 				(args
-					(p-ident @17.16-17.30 (raw "advancedConfig"))
-					(p-ident @17.32-17.37 (raw "input")))
-				(e-apply @18.5-18.60
-					(e-ident @18.5-18.37 (raw "Config.Parser.Advanced.parseWith"))
-					(e-ident @18.38-18.52 (raw "advancedConfig"))
-					(e-ident @18.54-18.59 (raw "input")))))
-		(s-type-anno @21.1-21.26 (name "formatOutput")
-			(ty-fn @21.16-21.26
-				(ty @21.16-21.19 (name "Str"))
-				(ty @21.23-21.26 (name "Str"))))
-		(s-decl @22.1-22.59
-			(p-ident @22.1-22.13 (raw "formatOutput"))
-			(e-lambda @22.16-22.59
+					(p-ident @15.16-15.30 (raw "advancedConfig"))
+					(p-ident @15.32-15.37 (raw "input")))
+				(e-apply @16.5-16.60
+					(e-ident @16.5-16.37 (raw "Config.Parser.Advanced.parseWith"))
+					(e-ident @16.38-16.52 (raw "advancedConfig"))
+					(e-ident @16.54-16.59 (raw "input")))))
+		(s-type-anno @19.1-19.26 (name "formatOutput")
+			(ty-fn @19.16-19.26
+				(ty @19.16-19.19 (name "Str"))
+				(ty @19.23-19.26 (name "Str"))))
+		(s-decl @20.1-20.59
+			(p-ident @20.1-20.13 (raw "formatOutput"))
+			(e-lambda @20.16-20.59
 				(args
-					(p-ident @22.17-22.21 (raw "text")))
-				(e-apply @22.23-22.59
-					(e-ident @22.23-22.30 (raw "padLeft"))
-					(e-ident @22.31-22.35 (raw "text"))
-					(e-ident @22.37-22.58 (raw "Config.defaultPadding")))))
-		(s-type-anno @25.1-25.78 (name "validateAuth")
-			(ty-fn @25.16-25.78
-				(ty @25.16-25.36 (name "HttpAuth.Credentials"))
-				(ty-apply @25.40-25.78
-					(ty @25.40-25.46 (name "Result"))
-					(ty @25.47-25.61 (name "HttpAuth.Token"))
-					(ty @25.63-25.77 (name "HttpAuth.Error")))))
-		(s-decl @26.1-26.48
-			(p-ident @26.1-26.13 (raw "validateAuth"))
-			(e-lambda @26.16-26.48
+					(p-ident @20.17-20.21 (raw "text")))
+				(e-apply @20.23-20.59
+					(e-ident @20.23-20.30 (raw "padLeft"))
+					(e-ident @20.31-20.35 (raw "text"))
+					(e-ident @20.37-20.58 (raw "Config.defaultPadding")))))
+		(s-type-anno @23.1-23.78 (name "validateAuth")
+			(ty-fn @23.16-23.78
+				(ty @23.16-23.36 (name "HttpAuth.Credentials"))
+				(ty-apply @23.40-23.78
+					(ty @23.40-23.46 (name "Result"))
+					(ty @23.47-23.61 (name "HttpAuth.Token"))
+					(ty @23.63-23.77 (name "HttpAuth.Error")))))
+		(s-decl @24.1-24.48
+			(p-ident @24.1-24.13 (raw "validateAuth"))
+			(e-lambda @24.16-24.48
 				(args
-					(p-ident @26.17-26.22 (raw "creds")))
-				(e-apply @26.24-26.48
-					(e-ident @26.24-26.41 (raw "HttpAuth.validate"))
-					(e-ident @26.42-26.47 (raw "creds")))))))
+					(p-ident @24.17-24.22 (raw "creds")))
+				(e-apply @24.24-24.48
+					(e-ident @24.24-24.41 (raw "HttpAuth.validate"))
+					(e-ident @24.42-24.47 (raw "creds")))))))
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
 import json.Parser
 
 import http.Client
@@ -535,106 +499,106 @@ validateAuth = |creds| HttpAuth.validate(creds)
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @9.1-9.12 (ident "parseConfig"))
-		(e-lambda @9.15-9.51
+		(p-assign @7.1-7.12 (ident "parseConfig"))
+		(e-lambda @7.15-7.51
 			(args
-				(p-assign @9.16-9.24 (ident "settings")))
-			(e-call @9.26-9.51
+				(p-assign @7.16-7.24 (ident "settings")))
+			(e-call @7.26-7.51
 				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local @9.42-9.50
-					(p-assign @9.16-9.24 (ident "settings")))))
-		(annotation @9.1-9.12
+				(e-lookup-local @7.42-7.50
+					(p-assign @7.16-7.24 (ident "settings")))))
+		(annotation @7.1-7.12
 			(declared-type
-				(ty-fn @8.15-8.37 (effectful false)
-					(ty-malformed @8.15-8.30)
-					(ty @8.34-8.37 (name "Str"))))))
+				(ty-fn @6.15-6.37 (effectful false)
+					(ty-malformed @6.15-6.30)
+					(ty-lookup @6.34-6.37 (name "Str") (builtin))))))
 	(d-let
-		(p-assign @13.1-13.13 (ident "authenticate"))
-		(e-lambda @13.16-13.55
+		(p-assign @11.1-11.13 (ident "authenticate"))
+		(e-lambda @11.16-11.55
 			(args
-				(p-assign @13.17-13.21 (ident "user"))
-				(p-assign @13.23-13.27 (ident "pass")))
-			(e-call @13.29-13.55
+				(p-assign @11.17-11.21 (ident "user"))
+				(p-assign @11.23-11.27 (ident "pass")))
+			(e-call @11.29-11.55
 				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local @13.44-13.48
-					(p-assign @13.17-13.21 (ident "user")))
-				(e-lookup-local @13.50-13.54
-					(p-assign @13.23-13.27 (ident "pass")))))
-		(annotation @13.1-13.13
+				(e-lookup-local @11.44-11.48
+					(p-assign @11.17-11.21 (ident "user")))
+				(e-lookup-local @11.50-11.54
+					(p-assign @11.23-11.27 (ident "pass")))))
+		(annotation @11.1-11.13
 			(declared-type
-				(ty-fn @12.16-12.42 (effectful false)
-					(ty @12.16-12.19 (name "Str"))
-					(ty @12.21-12.24 (name "Str"))
-					(ty-malformed @12.28-12.42)))))
+				(ty-fn @10.16-10.42 (effectful false)
+					(ty-lookup @10.16-10.19 (name "Str") (builtin))
+					(ty-lookup @10.21-10.24 (name "Str") (builtin))
+					(ty-malformed @10.28-10.42)))))
 	(d-let
-		(p-assign @17.1-17.12 (ident "processData"))
-		(e-lambda @17.15-18.60
+		(p-assign @15.1-15.12 (ident "processData"))
+		(e-lambda @15.15-16.60
 			(args
-				(p-assign @17.16-17.30 (ident "advancedConfig"))
-				(p-assign @17.32-17.37 (ident "input")))
-			(e-call @18.5-18.60
+				(p-assign @15.16-15.30 (ident "advancedConfig"))
+				(p-assign @15.32-15.37 (ident "input")))
+			(e-call @16.5-16.60
 				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local @18.38-18.52
-					(p-assign @17.16-17.30 (ident "advancedConfig")))
-				(e-lookup-local @18.54-18.59
-					(p-assign @17.32-17.37 (ident "input")))))
-		(annotation @17.1-17.12
+				(e-lookup-local @16.38-16.52
+					(p-assign @15.16-15.30 (ident "advancedConfig")))
+				(e-lookup-local @16.54-16.59
+					(p-assign @15.32-15.37 (ident "input")))))
+		(annotation @15.1-15.12
 			(declared-type
-				(ty-fn @16.15-16.78 (effectful false)
-					(ty-malformed @16.15-16.37)
-					(ty @16.39-16.42 (name "Str"))
-					(ty-apply @16.46-16.78 (symbol "Result")
-						(ty @16.53-16.56 (name "Str"))
-						(ty-malformed @16.58-16.77))))))
+				(ty-fn @14.15-14.78 (effectful false)
+					(ty-malformed @14.15-14.37)
+					(ty-lookup @14.39-14.42 (name "Str") (builtin))
+					(ty-apply @14.46-14.78 (name "Result") (local)
+						(ty-lookup @14.46-14.78 (name "Str") (builtin))
+						(ty-malformed @14.46-14.78))))))
 	(d-let
-		(p-assign @22.1-22.13 (ident "formatOutput"))
-		(e-lambda @22.16-22.59
+		(p-assign @20.1-20.13 (ident "formatOutput"))
+		(e-lambda @20.16-20.59
 			(args
-				(p-assign @22.17-22.21 (ident "text")))
-			(e-call @22.23-22.59
+				(p-assign @20.17-20.21 (ident "text")))
+			(e-call @20.23-20.59
 				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local @22.31-22.35
-					(p-assign @22.17-22.21 (ident "text")))
+				(e-lookup-local @20.31-20.35
+					(p-assign @20.17-20.21 (ident "text")))
 				(e-runtime-error (tag "ident_not_in_scope"))))
-		(annotation @22.1-22.13
+		(annotation @20.1-20.13
 			(declared-type
-				(ty-fn @21.16-21.26 (effectful false)
-					(ty @21.16-21.19 (name "Str"))
-					(ty @21.23-21.26 (name "Str"))))))
+				(ty-fn @19.16-19.26 (effectful false)
+					(ty-lookup @19.16-19.19 (name "Str") (builtin))
+					(ty-lookup @19.23-19.26 (name "Str") (builtin))))))
 	(d-let
-		(p-assign @26.1-26.13 (ident "validateAuth"))
-		(e-lambda @26.16-26.48
+		(p-assign @24.1-24.13 (ident "validateAuth"))
+		(e-lambda @24.16-24.48
 			(args
-				(p-assign @26.17-26.22 (ident "creds")))
-			(e-call @26.24-26.48
+				(p-assign @24.17-24.22 (ident "creds")))
+			(e-call @24.24-24.48
 				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local @26.42-26.47
-					(p-assign @26.17-26.22 (ident "creds")))))
-		(annotation @26.1-26.13
+				(e-lookup-local @24.42-24.47
+					(p-assign @24.17-24.22 (ident "creds")))))
+		(annotation @24.1-24.13
 			(declared-type
-				(ty-fn @25.16-25.78 (effectful false)
-					(ty-malformed @25.16-25.36)
-					(ty-apply @25.40-25.78 (symbol "Result")
-						(ty-malformed @25.47-25.61)
-						(ty-malformed @25.63-25.77))))))
-	(s-import @3.1-3.19 (module "json.Parser") (qualifier "json")
+				(ty-fn @23.16-23.78 (effectful false)
+					(ty-malformed @23.16-23.36)
+					(ty-apply @23.40-23.78 (name "Result") (local)
+						(ty-malformed @23.40-23.78)
+						(ty-malformed @23.40-23.78))))))
+	(s-import @1.1-1.19 (module "json.Parser") (qualifier "json")
 		(exposes))
-	(s-import @4.1-4.19 (module "http.Client") (qualifier "http")
+	(s-import @2.1-2.19 (module "http.Client") (qualifier "http")
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @9.1-9.12 (type "Error -> Str"))
-		(patt @13.1-13.13 (type "Str, Str -> Error"))
-		(patt @17.1-17.12 (type "Error, Str -> Result(Str, Error)"))
-		(patt @22.1-22.13 (type "Str -> Str"))
-		(patt @26.1-26.13 (type "Error -> Result(Error, Error)")))
+		(patt @7.1-7.12 (type "Error -> Str"))
+		(patt @11.1-11.13 (type "Str, Str -> Error"))
+		(patt @15.1-15.12 (type "Error, Str -> Result(Str, Error)"))
+		(patt @20.1-20.13 (type "Str -> Str"))
+		(patt @24.1-24.13 (type "Error -> Result(Error, Error)")))
 	(expressions
-		(expr @9.15-9.51 (type "Error -> Str"))
-		(expr @13.16-13.55 (type "Str, Str -> Error"))
-		(expr @17.15-18.60 (type "Error, Str -> Result(Str, Error)"))
-		(expr @22.16-22.59 (type "Str -> Str"))
-		(expr @26.16-26.48 (type "Error -> Result(Error, Error)"))))
+		(expr @7.15-7.51 (type "Error -> Str"))
+		(expr @11.16-11.55 (type "Str, Str -> Error"))
+		(expr @15.15-16.60 (type "Error, Str -> Result(Str, Error)"))
+		(expr @20.16-20.59 (type "Str -> Str"))
+		(expr @24.16-24.48 (type "Error -> Result(Error, Error)"))))
 ~~~

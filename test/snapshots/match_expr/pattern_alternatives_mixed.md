@@ -116,11 +116,11 @@ NO CHANGE
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-int @2.2-2.3 (value "1")))
+						(p-num @2.2-2.3 (value "1")))
 					(pattern (degenerate false)
-						(p-int @2.6-2.7 (value "2")))
+						(p-num @2.6-2.7 (value "2")))
 					(pattern (degenerate false)
-						(p-int @2.10-2.11 (value "3"))))
+						(p-num @2.10-2.11 (value "3"))))
 				(value
 					(e-string @2.15-2.30
 						(e-literal @2.16-2.29 (string "small numbers")))))
@@ -160,13 +160,13 @@ NO CHANGE
 					(pattern (degenerate false)
 						(p-tuple @6.2-6.8
 							(patterns
-								(p-int @6.3-6.4 (value "0"))
+								(p-num @6.3-6.4 (value "0"))
 								(p-underscore @6.6-6.7))))
 					(pattern (degenerate false)
 						(p-tuple @6.11-6.17
 							(patterns
 								(p-underscore @6.12-6.13)
-								(p-int @6.15-6.16 (value "0"))))))
+								(p-num @6.15-6.16 (value "0"))))))
 				(value
 					(e-string @6.21-6.31
 						(e-literal @6.22-6.30 (string "has zero")))))

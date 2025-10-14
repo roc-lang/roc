@@ -86,6 +86,9 @@ pub const Repl = struct {
 
         // Allocate new ModuleEnv on heap
         const new_env = try self.allocator.create(ModuleEnv);
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+
         new_env.* = try ModuleEnv.init(self.allocator, source);
         self.last_module_env = new_env;
         return new_env;
@@ -247,6 +250,9 @@ pub const Repl = struct {
 
     /// Try to parse input as a statement
     fn tryParseStatement(self: *Repl, input: []const u8) !ParseResult {
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+
         var module_env = try ModuleEnv.init(self.allocator, input);
         defer module_env.deinit();
 
@@ -362,9 +368,14 @@ pub const Repl = struct {
         // Create CIR
         const cir = module_env; // CIR is now just ModuleEnv
         try cir.initCIRFields(self.allocator, "repl");
+        const module_common_idents: Check.CommonIdents = .{
+            .module_name = try module_env.insertIdent(base.Ident.for_text("repl")),
+            .list = try module_env.insertIdent(base.Ident.for_text("List")),
+            .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+        };
 
         // Create canonicalizer
-        var czer = Can.init(cir, &parse_ast, null) catch |err| {
+        var czer = Can.init(cir, &parse_ast, null, .{}) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err});
         };
         defer czer.deinit();
@@ -378,13 +389,13 @@ pub const Repl = struct {
         const final_expr_idx = canonical_expr.get_idx();
 
         // Type check
-        var checker = Check.init(self.allocator, &module_env.types, cir, &.{}, &cir.store.regions) catch |err| {
+        var checker = Check.init(self.allocator, &module_env.types, cir, &.{}, &cir.store.regions, module_common_idents) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Type check init error: {}", .{err});
         };
         defer checker.deinit();
 
         // Check the expression (no need to check defs since we're parsing as expressions)
-        _ = checker.checkExpr(final_expr_idx) catch |err| {
+        _ = checker.checkExprRepl(final_expr_idx) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Type check expr error: {}", .{err});
         };
 

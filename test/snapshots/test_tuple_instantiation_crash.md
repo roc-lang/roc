@@ -16,20 +16,20 @@ swap = |(x, y)| (y, x)
 main = swap(1, 2)
 ~~~
 # EXPECTED
-TYPE MISMATCH - test_tuple_instantiation_crash.md:9:8:9:12
+TYPE MISMATCH - test_tuple_instantiation_crash.md:9:8:9:18
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**test_tuple_instantiation_crash.md:9:8:9:12:**
+**test_tuple_instantiation_crash.md:9:8:9:18:**
 ```roc
 main = swap(1, 2)
 ```
-       ^^^^
+       ^^^^^^^^^^
 
 It has the type:
     _Num(_size), Num(_size2) -> _ret_
 
-But here it's being used as:
+But I expected it to be:
     _(a, b) -> (b, a)_
 
 # TOKENS
@@ -105,18 +105,18 @@ NO CHANGE
 			(declared-type
 				(ty-fn @4.8-4.24 (effectful false)
 					(ty-tuple @4.8-4.14
-						(ty-var @4.9-4.10 (name "a"))
-						(ty-var @4.12-4.13 (name "b")))
+						(ty-rigid-var @4.9-4.10 (name "a"))
+						(ty-rigid-var @4.12-4.13 (name "b")))
 					(ty-tuple @4.18-4.24
-						(ty-var @4.19-4.20 (name "b"))
-						(ty-var @4.22-4.23 (name "a")))))))
+						(ty-rigid-var-lookup (ty-rigid-var @4.12-4.13 (name "b")))
+						(ty-rigid-var-lookup (ty-rigid-var @4.9-4.10 (name "a"))))))))
 	(d-let
 		(p-assign @9.1-9.5 (ident "main"))
 		(e-call @9.8-9.18
 			(e-lookup-local @9.8-9.12
 				(p-assign @5.1-5.5 (ident "swap")))
-			(e-int @9.13-9.14 (value "1"))
-			(e-int @9.16-9.17 (value "2")))))
+			(e-num @9.13-9.14 (value "1"))
+			(e-num @9.16-9.17 (value "2")))))
 ~~~
 # TYPES
 ~~~clojure

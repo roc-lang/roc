@@ -193,8 +193,8 @@ main! = |_| {
 		(annotation @5.1-5.9
 			(declared-type
 				(ty-fn @4.12-4.18 (effectful false)
-					(ty-var @4.12-4.13 (name "a"))
-					(ty-var @4.17-4.18 (name "a"))))))
+					(ty-rigid-var @4.12-4.13 (name "a"))
+					(ty-rigid-var-lookup (ty-rigid-var @4.12-4.13 (name "a")))))))
 	(d-let
 		(p-assign @9.1-9.8 (ident "combine"))
 		(e-lambda @9.11-9.42
@@ -210,11 +210,11 @@ main! = |_| {
 		(annotation @9.1-9.8
 			(declared-type
 				(ty-fn @8.11-8.25 (effectful false)
-					(ty-var @8.11-8.12 (name "a"))
-					(ty-var @8.14-8.15 (name "b"))
+					(ty-rigid-var @8.11-8.12 (name "a"))
+					(ty-rigid-var @8.14-8.15 (name "b"))
 					(ty-tuple @8.19-8.25
-						(ty-var @8.20-8.21 (name "a"))
-						(ty-var @8.23-8.24 (name "b")))))))
+						(ty-rigid-var-lookup (ty-rigid-var @8.11-8.12 (name "a")))
+						(ty-rigid-var-lookup (ty-rigid-var @8.14-8.15 (name "b"))))))))
 	(d-let
 		(p-assign @13.1-13.7 (ident "addOne"))
 		(e-lambda @13.10-13.19
@@ -223,19 +223,19 @@ main! = |_| {
 			(e-binop @13.14-13.19 (op "add")
 				(e-lookup-local @13.14-13.15
 					(p-assign @13.11-13.12 (ident "n")))
-				(e-int @13.18-13.19 (value "1"))))
+				(e-num @13.18-13.19 (value "1"))))
 		(annotation @13.1-13.7
 			(declared-type
 				(ty-fn @12.10-12.20 (effectful false)
-					(ty @12.10-12.13 (name "U64"))
-					(ty @12.17-12.20 (name "U64"))))))
+					(ty-lookup @12.10-12.13 (name "U64") (builtin))
+					(ty-lookup @12.17-12.20 (name "U64") (builtin))))))
 	(d-let
 		(p-assign @15.1-15.6 (ident "main!"))
 		(e-closure @15.9-27.2
 			(captures
-				(capture @13.1-13.7 (ident "addOne"))
+				(capture @9.1-9.8 (ident "combine"))
 				(capture @5.1-5.9 (ident "identity"))
-				(capture @9.1-9.8 (ident "combine")))
+				(capture @13.1-13.7 (ident "addOne")))
 			(e-lambda @15.9-27.2
 				(args
 					(p-underscore @15.10-15.11))
@@ -245,7 +245,7 @@ main! = |_| {
 						(e-call @17.11-17.23
 							(e-lookup-local @17.11-17.19
 								(p-assign @5.1-5.9 (ident "identity")))
-							(e-int @17.20-17.22 (value "42"))))
+							(e-num @17.20-17.22 (value "42"))))
 					(s-let @18.5-18.29
 						(p-assign @18.5-18.9 (ident "text"))
 						(e-call @18.12-18.29
@@ -267,7 +267,7 @@ main! = |_| {
 						(e-call @24.14-24.23
 							(e-lookup-local @24.14-24.20
 								(p-assign @13.1-13.7 (ident "addOne")))
-							(e-int @24.21-24.22 (value "5"))))
+							(e-num @24.21-24.22 (value "5"))))
 					(e-lookup-local @26.5-26.11
 						(p-assign @24.5-24.11 (ident "result"))))))))
 ~~~
@@ -277,11 +277,11 @@ main! = |_| {
 	(defs
 		(patt @5.1-5.9 (type "a -> a"))
 		(patt @9.1-9.8 (type "a, b -> (a, b)"))
-		(patt @13.1-13.7 (type "U64 -> U64"))
-		(patt @15.1-15.6 (type "_arg -> U64")))
+		(patt @13.1-13.7 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(patt @15.1-15.6 (type "_arg -> Num(Int(Unsigned64))")))
 	(expressions
 		(expr @5.12-5.17 (type "a -> a"))
 		(expr @9.11-9.42 (type "a, b -> (a, b)"))
-		(expr @13.10-13.19 (type "U64 -> U64"))
-		(expr @15.9-27.2 (type "_arg -> U64"))))
+		(expr @13.10-13.19 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(expr @15.9-27.2 (type "_arg -> Num(Int(Unsigned64))"))))
 ~~~

@@ -50,7 +50,7 @@ pub fn init(source: []const u8) !TestEnv {
 
     try module_env.initCIRFields(gpa, "test");
 
-    can.* = try Can.init(module_env, parse_ast, null);
+    can.* = try Can.init(module_env, parse_ast, null, .{});
 
     return TestEnv{
         .gpa = gpa,

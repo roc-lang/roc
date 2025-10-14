@@ -46,7 +46,7 @@ pub const Token = struct {
         Float,
         StringStart, // the " that starts a string
         StringEnd, // the " that ends a string
-        MultilineStringStart, // the """ that starts a multiline string
+        MultilineStringStart, // the """ or \\ that starts a multiline string
         StringPart,
         MalformedStringPart, // malformed, but should be treated similar to a StringPart in the parser
         SingleQuote,
@@ -1058,7 +1058,7 @@ const StringKind = enum {
 pub const Tokenizer = struct {
     cursor: Cursor,
     output: TokenizedBuffer,
-    string_interpolation_stack: std.ArrayList(StringKind),
+    string_interpolation_stack: std.array_list.Managed(StringKind),
     env: *CommonEnv,
 
     /// Creates a new Tokenizer.
@@ -1304,8 +1304,12 @@ pub const Tokenizer = struct {
 
                 // Backslash (\)
                 '\\' => {
-                    self.cursor.pos += 1;
-                    try self.pushTokenNormalHere(gpa, .OpBackslash, start);
+                    if (self.cursor.peekAt(1) == '\\') {
+                        try self.tokenizeMultilineStringLiteral(gpa);
+                    } else {
+                        self.cursor.pos += 1;
+                        try self.pushTokenNormalHere(gpa, .OpBackslash, start);
+                    }
                 },
 
                 // Percent (%)
@@ -1532,6 +1536,14 @@ pub const Tokenizer = struct {
         try self.tokenizeStringLikeLiteralBody(gpa, kind, start);
     }
 
+    pub fn tokenizeMultilineStringLiteral(self: *Tokenizer, gpa: std.mem.Allocator) std.mem.Allocator.Error!void {
+        const start = self.cursor.pos;
+        std.debug.assert(self.cursor.peek() == '\\' and self.cursor.peekAt(1) == '\\');
+        self.cursor.pos += 2;
+        try self.pushTokenNormalHere(gpa, .MultilineStringStart, start);
+        try self.tokenizeStringLikeLiteralBody(gpa, .multi_line, start);
+    }
+
     // Moving curly chars to constants because some editors hate them inline.
     const open_curly = '{';
     const close_curly = '}';
@@ -1715,9 +1727,9 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
     }
 }
 
-fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std.mem.Allocator) !std.ArrayList(u8) {
+fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std.mem.Allocator) !std.array_list.Managed(u8) {
     // Create an arraylist to store the new buffer.
-    var buf2 = try std.ArrayList(u8).initCapacity(alloc, buf.len);
+    var buf2 = try std.array_list.Managed(u8).initCapacity(alloc, buf.len);
     errdefer buf2.deinit(alloc);
 
     // Dump back to buffer.
@@ -1818,9 +1830,14 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
                 try buf2.append(alloc, '"');
             },
             .MultilineStringStart => {
-                try buf2.append(alloc, '"');
-                try buf2.append(alloc, '"');
-                try buf2.append(alloc, '"');
+                if (length == 3 and buf[region.start.offset] == '"') {
+                    try buf2.append(alloc, '"');
+                    try buf2.append(alloc, '"');
+                    try buf2.append(alloc, '"');
+                } else {
+                    try buf2.append(alloc, '\\');
+                    try buf2.append(alloc, '\\');
+                }
             },
             .StringPart => {
                 for (0..length) |_| {
@@ -2295,6 +2312,30 @@ test "tokenizer" {
             .CloseStringInterpolation,
             .StringPart,
             .MultilineStringStart,
+            .StringPart,
+        },
+    );
+
+    // Test new \\ multiline string syntax
+    try testTokenization(
+        gpa,
+        "\\\\hello",
+        &[_]Token.Tag{ .MultilineStringStart, .StringPart },
+    );
+    try testTokenization(
+        gpa,
+        "\\\\hello\n\\\\world",
+        &[_]Token.Tag{ .MultilineStringStart, .StringPart, .MultilineStringStart, .StringPart },
+    );
+    try testTokenization(
+        gpa,
+        "\\\\a${b}c",
+        &[_]Token.Tag{
+            .MultilineStringStart,
+            .StringPart,
+            .OpenStringInterpolation,
+            .LowerIdent,
+            .CloseStringInterpolation,
             .StringPart,
         },
     );

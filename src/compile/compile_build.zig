@@ -470,13 +470,15 @@ pub const BuildEnv = struct {
         var header_info = try self.parseHeaderDeps(root_abs);
         defer header_info.deinit(self.gpa);
 
-        // Allow both app and module files
-        if (header_info.kind != .app and header_info.kind != .module) {
+        // Allow app, module, type_module, and default_app files
+        const is_executable = header_info.kind == .app or header_info.kind == .default_app;
+
+        if (!is_executable and header_info.kind != .module and header_info.kind != .type_module) {
             return error.UnsupportedHeader;
         }
 
-        // Create package entry (for both app and module)
-        const pkg_name = if (header_info.kind == .module) "module" else "app";
+        // Create package entry
+        const pkg_name = if (is_executable) "app" else "module";
         const key_pkg = try self.gpa.dupe(u8, pkg_name);
         const pkg_root_file = try self.gpa.dupe(u8, root_abs);
         const pkg_root_dir = try self.gpa.dupe(u8, root_dir);
@@ -643,7 +645,7 @@ pub const BuildEnv = struct {
     // Package graph construction
     // ------------------------
 
-    const PackageKind = enum { app, package, platform, module, hosted };
+    const PackageKind = enum { app, package, platform, module, hosted, type_module, default_app };
 
     const PackageRef = struct {
         name: []const u8, // Package name (alias in workspace)
@@ -864,6 +866,15 @@ pub const BuildEnv = struct {
             .hosted => {
                 info.kind = .hosted;
                 // Hosted headers are like modules but for platform-specific code
+            },
+            .type_module => {
+                info.kind = .type_module;
+                // Type modules are headerless files with a top-level type matching the filename
+                // They don't have package dependencies
+            },
+            .default_app => {
+                info.kind = .default_app;
+                // Default app headers are for REPL-style execution
             },
             else => return error.UnsupportedHeader,
         }

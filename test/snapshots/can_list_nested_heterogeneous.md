@@ -55,7 +55,7 @@ NO CHANGE
 		(e-empty_list @1.2-1.4)
 		(e-list @1.6-1.9
 			(elems
-				(e-int @1.7-1.8 (value "1"))))
+				(e-num @1.7-1.8 (value "1"))))
 		(e-list @1.11-1.20
 			(elems
 				(e-string @1.12-1.19

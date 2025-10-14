@@ -26,7 +26,7 @@ test "record literal uses record_unbound" {
         var ast = try parse.parseExpr(&env.common, gpa);
         defer ast.deinit(gpa);
 
-        var can = try Can.init(&env, &ast, null);
+        var can = try Can.init(&env, &ast, null, .{});
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -63,7 +63,7 @@ test "record literal uses record_unbound" {
         var ast = try parse.parseExpr(&env.common, gpa);
         defer ast.deinit(gpa);
 
-        var can = try Can.init(&env, &ast, null);
+        var can = try Can.init(&env, &ast, null, .{});
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -100,7 +100,7 @@ test "record literal uses record_unbound" {
         var ast = try parse.parseExpr(&env.common, gpa);
         defer ast.deinit(gpa);
 
-        var can = try Can.init(&env, &ast, null);
+        var can = try Can.init(&env, &ast, null, .{});
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -133,6 +133,7 @@ test "record literal uses record_unbound" {
 
 test "record_unbound basic functionality" {
     const gpa = std.testing.allocator;
+
     const source = "{ x: 42, y: 99 }";
 
     // Test that record literals create record_unbound types
@@ -144,7 +145,7 @@ test "record_unbound basic functionality" {
     var ast = try parse.parseExpr(&env.common, gpa);
     defer ast.deinit(gpa);
 
-    var can = try Can.init(&env, &ast, null);
+    var can = try Can.init(&env, &ast, null, .{});
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -176,6 +177,7 @@ test "record_unbound basic functionality" {
 
 test "record_unbound with multiple fields" {
     const gpa = std.testing.allocator;
+
     const source = "{ a: 123, b: 456, c: 789 }";
 
     var env = try ModuleEnv.init(gpa, source);
@@ -187,7 +189,7 @@ test "record_unbound with multiple fields" {
     var ast = try parse.parseExpr(&env.common, gpa);
     defer ast.deinit(gpa);
 
-    var can = try Can.init(&env, &ast, null);
+    var can = try Can.init(&env, &ast, null, .{});
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -248,7 +250,7 @@ test "record with extension variable" {
                 // Check that extension is a flex var (open record)
                 const ext_resolved = env.types.resolveVar(record.ext);
                 switch (ext_resolved.desc.content) {
-                    .flex_var => {
+                    .flex => {
                         // Success! The record has an open extension
                     },
                     else => return error.ExpectedFlexVar,

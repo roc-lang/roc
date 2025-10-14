@@ -88,10 +88,10 @@ main! = |_| {}
 				(ty-fn @3.12-3.40 (effectful false)
 					(ty-record @3.12-3.35
 						(field (field "field")
-							(ty-var @3.21-3.22 (name "a")))
+							(ty-rigid-var @3.21-3.22 (name "a")))
 						(field (field "other")
-							(ty-var @3.31-3.33 (name "_b"))))
-					(ty-var @3.39-3.40 (name "a"))))))
+							(ty-rigid-var @3.31-3.33 (name "_b"))))
+					(ty-rigid-var-lookup (ty-rigid-var @3.21-3.22 (name "a")))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15

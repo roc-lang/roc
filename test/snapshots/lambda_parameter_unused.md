@@ -209,12 +209,12 @@ main! = |_| {
 		(e-lambda @5.7-5.18
 			(args
 				(p-assign @5.8-5.14 (ident "unused")))
-			(e-int @5.16-5.18 (value "42")))
+			(e-num @5.16-5.18 (value "42")))
 		(annotation @5.1-5.4
 			(declared-type
 				(ty-fn @4.7-4.17 (effectful false)
-					(ty @4.7-4.10 (name "U64"))
-					(ty @4.14-4.17 (name "U64"))))))
+					(ty-lookup @4.7-4.10 (name "U64") (builtin))
+					(ty-lookup @4.14-4.17 (name "U64") (builtin))))))
 	(d-let
 		(p-assign @9.1-9.9 (ident "multiply"))
 		(e-lambda @9.12-9.33
@@ -223,23 +223,23 @@ main! = |_| {
 			(e-binop @9.22-9.33 (op "mul")
 				(e-lookup-local @9.22-9.29
 					(p-assign @9.13-9.20 (ident "_factor")))
-				(e-int @9.32-9.33 (value "2"))))
+				(e-num @9.32-9.33 (value "2"))))
 		(annotation @9.1-9.9
 			(declared-type
 				(ty-fn @8.12-8.22 (effectful false)
-					(ty @8.12-8.15 (name "U64"))
-					(ty @8.19-8.22 (name "U64"))))))
+					(ty-lookup @8.12-8.15 (name "U64") (builtin))
+					(ty-lookup @8.19-8.22 (name "U64") (builtin))))))
 	(d-let
 		(p-assign @13.1-13.8 (ident "process"))
 		(e-lambda @13.11-13.23
 			(args
 				(p-assign @13.12-13.18 (ident "_input")))
-			(e-int @13.20-13.23 (value "100")))
+			(e-num @13.20-13.23 (value "100")))
 		(annotation @13.1-13.8
 			(declared-type
 				(ty-fn @12.11-12.21 (effectful false)
-					(ty @12.11-12.14 (name "U64"))
-					(ty @12.18-12.21 (name "U64"))))))
+					(ty-lookup @12.11-12.14 (name "U64") (builtin))
+					(ty-lookup @12.18-12.21 (name "U64") (builtin))))))
 	(d-let
 		(p-assign @17.1-17.7 (ident "double"))
 		(e-lambda @17.10-17.27
@@ -248,20 +248,20 @@ main! = |_| {
 			(e-binop @17.18-17.27 (op "mul")
 				(e-lookup-local @17.18-17.23
 					(p-assign @17.11-17.16 (ident "value")))
-				(e-int @17.26-17.27 (value "2"))))
+				(e-num @17.26-17.27 (value "2"))))
 		(annotation @17.1-17.7
 			(declared-type
 				(ty-fn @16.10-16.20 (effectful false)
-					(ty @16.10-16.13 (name "U64"))
-					(ty @16.17-16.20 (name "U64"))))))
+					(ty-lookup @16.10-16.13 (name "U64") (builtin))
+					(ty-lookup @16.17-16.20 (name "U64") (builtin))))))
 	(d-let
 		(p-assign @19.1-19.6 (ident "main!"))
 		(e-closure @19.9-25.2
 			(captures
-				(capture @5.1-5.4 (ident "add"))
-				(capture @13.1-13.8 (ident "process"))
 				(capture @9.1-9.9 (ident "multiply"))
-				(capture @17.1-17.7 (ident "double")))
+				(capture @5.1-5.4 (ident "add"))
+				(capture @17.1-17.7 (ident "double"))
+				(capture @13.1-13.8 (ident "process")))
 			(e-lambda @19.9-25.2
 				(args
 					(p-underscore @19.10-19.11))
@@ -271,25 +271,25 @@ main! = |_| {
 						(e-call @20.15-20.21
 							(e-lookup-local @20.15-20.18
 								(p-assign @5.1-5.4 (ident "add")))
-							(e-int @20.19-20.20 (value "5"))))
+							(e-num @20.19-20.20 (value "5"))))
 					(s-let @21.5-21.26
 						(p-assign @21.5-21.12 (ident "result2"))
 						(e-call @21.15-21.26
 							(e-lookup-local @21.15-21.23
 								(p-assign @9.1-9.9 (ident "multiply")))
-							(e-int @21.24-21.25 (value "3"))))
+							(e-num @21.24-21.25 (value "3"))))
 					(s-let @22.5-22.25
 						(p-assign @22.5-22.12 (ident "result3"))
 						(e-call @22.15-22.25
 							(e-lookup-local @22.15-22.22
 								(p-assign @13.1-13.8 (ident "process")))
-							(e-int @22.23-22.24 (value "7"))))
+							(e-num @22.23-22.24 (value "7"))))
 					(s-let @23.5-23.24
 						(p-assign @23.5-23.12 (ident "result4"))
 						(e-call @23.15-23.24
 							(e-lookup-local @23.15-23.21
 								(p-assign @17.1-17.7 (ident "double")))
-							(e-int @23.22-23.23 (value "4"))))
+							(e-num @23.22-23.23 (value "4"))))
 					(e-binop @24.5-24.42 (op "add")
 						(e-binop @24.5-24.32 (op "add")
 							(e-binop @24.5-24.22 (op "add")
@@ -306,15 +306,15 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.4 (type "U64 -> U64"))
-		(patt @9.1-9.9 (type "U64 -> U64"))
-		(patt @13.1-13.8 (type "U64 -> U64"))
-		(patt @17.1-17.7 (type "U64 -> U64"))
-		(patt @19.1-19.6 (type "_arg -> Num(_size)")))
+		(patt @5.1-5.4 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(patt @9.1-9.9 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(patt @13.1-13.8 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(patt @17.1-17.7 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(patt @19.1-19.6 (type "_arg -> Num(Int(Unsigned64))")))
 	(expressions
-		(expr @5.7-5.18 (type "U64 -> U64"))
-		(expr @9.12-9.33 (type "U64 -> U64"))
-		(expr @13.11-13.23 (type "U64 -> U64"))
-		(expr @17.10-17.27 (type "U64 -> U64"))
-		(expr @19.9-25.2 (type "_arg -> Num(_size)"))))
+		(expr @5.7-5.18 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(expr @9.12-9.33 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(expr @13.11-13.23 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(expr @17.10-17.27 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(expr @19.9-25.2 (type "_arg -> Num(Int(Unsigned64))"))))
 ~~~

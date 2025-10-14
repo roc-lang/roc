@@ -7,10 +7,10 @@ const DataSpan = @import("DataSpan.zig");
 /// A stack for easily adding and removing index types when doing recursive operations
 pub fn Scratch(comptime T: type) type {
     return struct {
-        items: std.ArrayList(T),
+        items: std.array_list.Managed(T),
 
         const Self = @This();
-        const ArrayList = std.ArrayList(T);
+        const ArrayList = std.array_list.Managed(T);
 
         pub fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
             const items = try ArrayList.initCapacity(gpa, std.math.ceilPowerOfTwoAssert(usize, 64));
@@ -28,9 +28,14 @@ pub fn Scratch(comptime T: type) type {
             return @as(u32, @intCast(self.items.items.len));
         }
 
-        /// Places a new index of type `T` in the scratch.  Will panic on OOM.
+        /// Places a new index of type `T` in the scratch
         pub fn append(self: *Self, gpa: std.mem.Allocator, idx: T) std.mem.Allocator.Error!void {
             try self.items.append(gpa, idx);
+        }
+
+        /// Pop an item of the scratch buffer
+        pub fn pop(self: *Self) ?T {
+            return self.items.pop();
         }
 
         /// Creates slice from the provided indexes
@@ -45,7 +50,7 @@ pub fn Scratch(comptime T: type) type {
 
         /// Creates a new span starting at start.  Moves the items from scratch
         /// to extra_data as appropriate.
-        pub fn spanFromStart(self: *Self, start: u32, gpa: std.mem.Allocator, data: *std.ArrayList(u32)) std.mem.Allocator.Error!DataSpan {
+        pub fn spanFromStart(self: *Self, start: u32, gpa: std.mem.Allocator, data: *std.array_list.Managed(u32)) std.mem.Allocator.Error!DataSpan {
             const end = self.items.len;
             defer self.items.shrinkRetainingCapacity(start);
             var i = @as(usize, @intCast(start));
@@ -61,7 +66,9 @@ pub fn Scratch(comptime T: type) type {
         /// Should be used wherever the scratch items will not be used,
         /// as in when parsing fails.
         pub fn clearFrom(self: *Self, start: u32) void {
-            self.items.shrinkRetainingCapacity(start);
+            if (self.items.items.len > start) {
+                self.items.shrinkRetainingCapacity(start);
+            }
         }
     };
 }

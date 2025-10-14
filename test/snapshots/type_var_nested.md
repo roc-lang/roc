@@ -220,8 +220,8 @@ main = |_| "done"
 		(p-assign @5.1-5.11 (ident "map_result"))
 		(e-closure @5.14-10.2
 			(captures
-				(capture @8.13-8.18 (ident "error"))
-				(capture @7.12-7.17 (ident "value")))
+				(capture @7.12-7.17 (ident "value"))
+				(capture @8.13-8.18 (ident "error")))
 			(e-lambda @5.14-10.2
 				(args
 					(p-assign @5.15-5.21 (ident "result"))
@@ -261,16 +261,16 @@ main = |_| "done"
 		(annotation @5.1-5.11
 			(declared-type
 				(ty-fn @4.14-4.52 (effectful false)
-					(ty-apply @4.14-4.26 (symbol "Result")
-						(ty-var @4.21-4.22 (name "a"))
-						(ty-var @4.24-4.25 (name "e")))
+					(ty-apply @4.14-4.26 (name "Result") (local)
+						(ty-rigid-var @4.14-4.26 (name "a"))
+						(ty-rigid-var @4.14-4.26 (name "e")))
 					(ty-parens @4.28-4.36
 						(ty-fn @4.29-4.35 (effectful false)
-							(ty-var @4.29-4.30 (name "a"))
-							(ty-var @4.34-4.35 (name "b"))))
-					(ty-apply @4.40-4.52 (symbol "Result")
-						(ty-var @4.47-4.48 (name "b"))
-						(ty-var @4.50-4.51 (name "e")))))))
+							(ty-rigid-var-lookup (ty-rigid-var @4.14-4.26 (name "a")))
+							(ty-rigid-var @4.34-4.35 (name "b"))))
+					(ty-apply @4.40-4.52 (name "Result") (local)
+						(ty-rigid-var-lookup (ty-rigid-var @4.34-4.35 (name "b")))
+						(ty-rigid-var-lookup (ty-rigid-var @4.14-4.26 (name "e"))))))))
 	(d-let
 		(p-assign @14.1-14.9 (ident "identity"))
 		(e-lambda @14.12-14.17
@@ -281,8 +281,8 @@ main = |_| "done"
 		(annotation @14.1-14.9
 			(declared-type
 				(ty-fn @13.12-13.18 (effectful false)
-					(ty-var @13.12-13.13 (name "a"))
-					(ty-var @13.17-13.18 (name "a"))))))
+					(ty-rigid-var @13.12-13.13 (name "a"))
+					(ty-rigid-var-lookup (ty-rigid-var @13.12-13.13 (name "a")))))))
 	(d-let
 		(p-assign @18.1-18.10 (ident "make_pair"))
 		(e-lambda @18.13-18.43
@@ -300,25 +300,25 @@ main = |_| "done"
 		(annotation @18.1-18.10
 			(declared-type
 				(ty-fn @17.13-17.44 (effectful false)
-					(ty-var @17.13-17.14 (name "a"))
-					(ty-var @17.16-17.17 (name "b"))
+					(ty-rigid-var @17.13-17.14 (name "a"))
+					(ty-rigid-var @17.16-17.17 (name "b"))
 					(ty-record @17.21-17.44
 						(field (field "first")
-							(ty-var @17.30-17.31 (name "a")))
+							(ty-rigid-var-lookup (ty-rigid-var @17.13-17.14 (name "a"))))
 						(field (field "second")
-							(ty-var @17.41-17.42 (name "b"))))))))
+							(ty-rigid-var-lookup (ty-rigid-var @17.16-17.17 (name "b")))))))))
 	(d-let
 		(p-assign @22.1-22.12 (ident "list_length"))
 		(e-lambda @22.15-22.24
 			(args
 				(p-assign @22.16-22.20 (ident "_lst")))
-			(e-int @22.22-22.24 (value "42")))
+			(e-num @22.22-22.24 (value "42")))
 		(annotation @22.1-22.12
 			(declared-type
 				(ty-fn @21.15-21.30 (effectful false)
-					(ty-apply @21.15-21.23 (symbol "List")
-						(ty-var @21.20-21.22 (name "_a")))
-					(ty @21.27-21.30 (name "U64"))))))
+					(ty-apply @21.15-21.23 (name "List") (builtin)
+						(ty-rigid-var @21.20-21.22 (name "_a")))
+					(ty-lookup @21.27-21.30 (name "U64") (builtin))))))
 	(d-let
 		(p-assign @26.1-26.15 (ident "wrap_in_result"))
 		(e-lambda @26.18-26.39
@@ -335,12 +335,12 @@ main = |_| "done"
 		(annotation @26.1-26.15
 			(declared-type
 				(ty-fn @25.18-25.50 (effectful false)
-					(ty-var @25.18-25.19 (name "a"))
-					(ty-apply @25.23-25.50 (symbol "Result")
-						(ty-apply @25.30-25.44 (symbol "Result")
-							(ty-var @25.37-25.38 (name "a"))
-							(ty @25.40-25.43 (name "Str")))
-						(ty @25.46-25.49 (name "Str")))))))
+					(ty-rigid-var @25.18-25.19 (name "a"))
+					(ty-apply @25.23-25.50 (name "Result") (local)
+						(ty-apply @25.23-25.50 (name "Result") (local)
+							(ty-rigid-var-lookup (ty-rigid-var @25.18-25.19 (name "a")))
+							(ty-lookup @25.30-25.44 (name "Str") (builtin)))
+						(ty-lookup @25.23-25.50 (name "Str") (builtin)))))))
 	(d-let
 		(p-assign @28.1-28.5 (ident "main"))
 		(e-lambda @28.8-28.18
@@ -353,17 +353,17 @@ main = |_| "done"
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.11 (type "Result(a, err), a -> b -> Result(ok, err)"))
+		(patt @5.1-5.11 (type "Result(a, e), a -> b -> Result(b, e)"))
 		(patt @14.1-14.9 (type "a -> a"))
 		(patt @18.1-18.10 (type "a, b -> { first: a, second: b }"))
-		(patt @22.1-22.12 (type "List(_a) -> U64"))
-		(patt @26.1-26.15 (type "a -> Result(Error, err)"))
+		(patt @22.1-22.12 (type "List(_a) -> Num(Int(Unsigned64))"))
+		(patt @26.1-26.15 (type "a -> Result(Result(a, Str), Str)"))
 		(patt @28.1-28.5 (type "_arg -> Str")))
 	(expressions
-		(expr @5.14-10.2 (type "Result(a, err), a -> b -> Result(ok, err)"))
+		(expr @5.14-10.2 (type "Result(a, e), a -> b -> Result(b, e)"))
 		(expr @14.12-14.17 (type "a -> a"))
 		(expr @18.13-18.43 (type "a, b -> { first: a, second: b }"))
-		(expr @22.15-22.24 (type "List(_a) -> U64"))
-		(expr @26.18-26.39 (type "a -> Result(Error, err)"))
+		(expr @22.15-22.24 (type "List(_a) -> Num(Int(Unsigned64))"))
+		(expr @26.18-26.39 (type "a -> Result(Result(a, Str), Str)"))
 		(expr @28.8-28.18 (type "_arg -> Str"))))
 ~~~

@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Import with exposing clause and usage of exposed items
-type=file
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-module [main]
-
 import json.Json exposing [decode, encode]
 
 main = {
@@ -17,73 +15,91 @@ main = {
 }
 ~~~
 # EXPECTED
-MODULE NOT FOUND - import_exposing_basic.md:3:1:3:43
+MODULE NOT FOUND - import_exposing_basic.md:1:1:1:43
+UNDEFINED VARIABLE - import_exposing_basic.md:5:15:5:21
+UNDEFINED VARIABLE - import_exposing_basic.md:6:15:6:21
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `json.Json` was not found in this Roc project.
 
 You're attempting to use this module here:
-**import_exposing_basic.md:3:1:3:43:**
+**import_exposing_basic.md:1:1:1:43:**
 ```roc
 import json.Json exposing [decode, encode]
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named `encode` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**import_exposing_basic.md:5:15:5:21:**
+```roc
+    encoded = encode(data)
+```
+              ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `decode` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**import_exposing_basic.md:6:15:6:21:**
+```roc
+    decoded = decode(encoded)
+```
+              ^^^^^^
+
+
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:13),CloseSquare(1:13-1:14),
-KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:17),KwExposing(3:18-3:26),OpenSquare(3:27-3:28),LowerIdent(3:28-3:34),Comma(3:34-3:35),LowerIdent(3:36-3:42),CloseSquare(3:42-3:43),
-LowerIdent(5:1-5:5),OpAssign(5:6-5:7),OpenCurly(5:8-5:9),
-LowerIdent(6:5-6:9),OpAssign(6:10-6:11),OpenCurly(6:12-6:13),LowerIdent(6:14-6:18),OpColon(6:18-6:19),StringStart(6:20-6:21),StringPart(6:21-6:26),StringEnd(6:26-6:27),Comma(6:27-6:28),LowerIdent(6:29-6:32),OpColon(6:32-6:33),Int(6:34-6:36),CloseCurly(6:37-6:38),
-LowerIdent(7:5-7:12),OpAssign(7:13-7:14),LowerIdent(7:15-7:21),NoSpaceOpenRound(7:21-7:22),LowerIdent(7:22-7:26),CloseRound(7:26-7:27),
-LowerIdent(8:5-8:12),OpAssign(8:13-8:14),LowerIdent(8:15-8:21),NoSpaceOpenRound(8:21-8:22),LowerIdent(8:22-8:29),CloseRound(8:29-8:30),
-LowerIdent(9:5-9:12),
-CloseCurly(10:1-10:2),
-EndOfFile(11:1-11:1),
+KwImport(1:1-1:7),LowerIdent(1:8-1:12),NoSpaceDotUpperIdent(1:12-1:17),KwExposing(1:18-1:26),OpenSquare(1:27-1:28),LowerIdent(1:28-1:34),Comma(1:34-1:35),LowerIdent(1:36-1:42),CloseSquare(1:42-1:43),
+LowerIdent(3:1-3:5),OpAssign(3:6-3:7),OpenCurly(3:8-3:9),
+LowerIdent(4:5-4:9),OpAssign(4:10-4:11),OpenCurly(4:12-4:13),LowerIdent(4:14-4:18),OpColon(4:18-4:19),StringStart(4:20-4:21),StringPart(4:21-4:26),StringEnd(4:26-4:27),Comma(4:27-4:28),LowerIdent(4:29-4:32),OpColon(4:32-4:33),Int(4:34-4:36),CloseCurly(4:37-4:38),
+LowerIdent(5:5-5:12),OpAssign(5:13-5:14),LowerIdent(5:15-5:21),NoSpaceOpenRound(5:21-5:22),LowerIdent(5:22-5:26),CloseRound(5:26-5:27),
+LowerIdent(6:5-6:12),OpAssign(6:13-6:14),LowerIdent(6:15-6:21),NoSpaceOpenRound(6:21-6:22),LowerIdent(6:22-6:29),CloseRound(6:29-6:30),
+LowerIdent(7:5-7:12),
+CloseCurly(8:1-8:2),
+EndOfFile(9:1-9:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-10.2
-	(module @1.1-1.14
-		(exposes @1.8-1.14
-			(exposed-lower-ident @1.9-1.13
-				(text "main"))))
+(file @1.1-8.2
+	(type-module @1.1-1.7)
 	(statements
-		(s-import @3.1-3.43 (raw "json.Json")
+		(s-import @1.1-1.43 (raw "json.Json")
 			(exposing
-				(exposed-lower-ident @3.28-3.34
+				(exposed-lower-ident @1.28-1.34
 					(text "decode"))
-				(exposed-lower-ident @3.36-3.42
+				(exposed-lower-ident @1.36-1.42
 					(text "encode"))))
-		(s-decl @5.1-10.2
-			(p-ident @5.1-5.5 (raw "main"))
-			(e-block @5.8-10.2
+		(s-decl @3.1-8.2
+			(p-ident @3.1-3.5 (raw "main"))
+			(e-block @3.8-8.2
 				(statements
-					(s-decl @6.5-6.38
-						(p-ident @6.5-6.9 (raw "data"))
-						(e-record @6.12-6.38
+					(s-decl @4.5-4.38
+						(p-ident @4.5-4.9 (raw "data"))
+						(e-record @4.12-4.38
 							(field (field "name")
-								(e-string @6.20-6.27
-									(e-string-part @6.21-6.26 (raw "Alice"))))
+								(e-string @4.20-4.27
+									(e-string-part @4.21-4.26 (raw "Alice"))))
 							(field (field "age")
-								(e-int @6.34-6.36 (raw "30")))))
-					(s-decl @7.5-7.27
-						(p-ident @7.5-7.12 (raw "encoded"))
-						(e-apply @7.15-7.27
-							(e-ident @7.15-7.21 (raw "encode"))
-							(e-ident @7.22-7.26 (raw "data"))))
-					(s-decl @8.5-8.30
-						(p-ident @8.5-8.12 (raw "decoded"))
-						(e-apply @8.15-8.30
-							(e-ident @8.15-8.21 (raw "decode"))
-							(e-ident @8.22-8.29 (raw "encoded"))))
-					(e-ident @9.5-9.12 (raw "decoded")))))))
+								(e-int @4.34-4.36 (raw "30")))))
+					(s-decl @5.5-5.27
+						(p-ident @5.5-5.12 (raw "encoded"))
+						(e-apply @5.15-5.27
+							(e-ident @5.15-5.21 (raw "encode"))
+							(e-ident @5.22-5.26 (raw "data"))))
+					(s-decl @6.5-6.30
+						(p-ident @6.5-6.12 (raw "decoded"))
+						(e-apply @6.15-6.30
+							(e-ident @6.15-6.21 (raw "decode"))
+							(e-ident @6.22-6.29 (raw "encoded"))))
+					(e-ident @7.5-7.12 (raw "decoded")))))))
 ~~~
 # FORMATTED
 ~~~roc
-module [main]
-
 import json.Json exposing [decode, encode]
 
 main = {
@@ -97,36 +113,32 @@ main = {
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @5.1-5.5 (ident "main"))
-		(e-block @5.8-10.2
-			(s-let @6.5-6.38
-				(p-assign @6.5-6.9 (ident "data"))
-				(e-record @6.12-6.38
+		(p-assign @3.1-3.5 (ident "main"))
+		(e-block @3.8-8.2
+			(s-let @4.5-4.38
+				(p-assign @4.5-4.9 (ident "data"))
+				(e-record @4.12-4.38
 					(fields
 						(field (name "name")
-							(e-string @6.20-6.27
-								(e-literal @6.21-6.26 (string "Alice"))))
+							(e-string @4.20-4.27
+								(e-literal @4.21-4.26 (string "Alice"))))
 						(field (name "age")
-							(e-int @6.34-6.36 (value "30"))))))
-			(s-let @7.5-7.27
-				(p-assign @7.5-7.12 (ident "encoded"))
-				(e-call @7.15-7.27
-					(e-lookup-external @7.15-7.21
-						(module-idx "0")
-						(target-node-idx "0"))
-					(e-lookup-local @7.22-7.26
-						(p-assign @6.5-6.9 (ident "data")))))
-			(s-let @8.5-8.30
-				(p-assign @8.5-8.12 (ident "decoded"))
-				(e-call @8.15-8.30
-					(e-lookup-external @8.15-8.21
-						(module-idx "0")
-						(target-node-idx "0"))
-					(e-lookup-local @8.22-8.29
-						(p-assign @7.5-7.12 (ident "encoded")))))
-			(e-lookup-local @9.5-9.12
-				(p-assign @8.5-8.12 (ident "decoded")))))
-	(s-import @3.1-3.43 (module "json.Json") (qualifier "json")
+							(e-num @4.34-4.36 (value "30"))))))
+			(s-let @5.5-5.27
+				(p-assign @5.5-5.12 (ident "encoded"))
+				(e-call @5.15-5.27
+					(e-runtime-error (tag "ident_not_in_scope"))
+					(e-lookup-local @5.22-5.26
+						(p-assign @4.5-4.9 (ident "data")))))
+			(s-let @6.5-6.30
+				(p-assign @6.5-6.12 (ident "decoded"))
+				(e-call @6.15-6.30
+					(e-runtime-error (tag "ident_not_in_scope"))
+					(e-lookup-local @6.22-6.29
+						(p-assign @5.5-5.12 (ident "encoded")))))
+			(e-lookup-local @7.5-7.12
+				(p-assign @6.5-6.12 (ident "decoded")))))
+	(s-import @1.1-1.43 (module "json.Json") (qualifier "json")
 		(exposes
 			(exposed (name "decode") (wildcard false))
 			(exposed (name "encode") (wildcard false)))))
@@ -135,7 +147,7 @@ main = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.5 (type "_a")))
+		(patt @3.1-3.5 (type "_a")))
 	(expressions
-		(expr @5.8-10.2 (type "_a"))))
+		(expr @3.8-8.2 (type "_a"))))
 ~~~

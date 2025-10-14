@@ -94,11 +94,11 @@ const ModuleState = struct {
     path: []const u8,
     env: ?ModuleEnv = null,
     phase: Phase = .Parse,
-    imports: std.ArrayList(ModuleId) = .{},
+    imports: std.array_list.Managed(ModuleId) = .{},
     /// External imports qualified via package shorthand (e.g. "cli.Stdout") - still strings as they reference other packages
-    external_imports: std.ArrayList([]const u8) = .{},
-    dependents: std.ArrayList(ModuleId) = .{},
-    reports: std.ArrayList(Report) = .{},
+    external_imports: std.array_list.Managed([]const u8) = .{},
+    dependents: std.array_list.Managed(ModuleId) = .{},
+    reports: std.array_list.Managed(Report) = .{},
     depth: u32 = std.math.maxInt(u32), // min depth from root
     /// DFS visitation color for cycle detection: 0=white (unvisited), 1=gray (visiting), 2=black (finished)
     visit_color: u8 = 0,
@@ -137,10 +137,10 @@ pub const PackageEnv = struct {
     cond: Condition = .{},
 
     // Work queue
-    injector: std.ArrayList(Task) = .{},
+    injector: std.array_list.Managed(Task) = .{},
 
     // Module storage
-    modules: std.ArrayList(ModuleState) = .{},
+    modules: std.array_list.Managed(ModuleState) = .{},
     // String intern table: module name -> module ID
     module_names: std.StringHashMapUnmanaged(ModuleId) = .{},
 
@@ -148,7 +148,7 @@ pub const PackageEnv = struct {
     remaining_modules: usize = 0,
 
     // Track module discovery order and which modules have had their reports emitted
-    discovered: std.ArrayList(ModuleId) = .{},
+    discovered: std.array_list.Managed(ModuleId) = .{},
     emitted: std.bit_set.DynamicBitSetUnmanaged = .{},
 
     // Timing collection (accumulated across all modules)
@@ -497,7 +497,7 @@ pub const PackageEnv = struct {
 
     fn doCanonicalize(self: *PackageEnv, module_id: ModuleId) !void {
         var st = &self.modules.items[module_id];
-        var env = st.env.?;
+        var env = &st.env.?;
 
         // Parse and canonicalize in one step to avoid double parsing
         const parse_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
@@ -511,7 +511,7 @@ pub const PackageEnv = struct {
 
         // canonicalize using the AST
         const canon_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        var czer = try Can.init(&env, &parse_ast, null);
+        var czer = try Can.init(env, &parse_ast, null, .{});
         try czer.canonicalizeFile();
         czer.deinit();
         const canon_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
@@ -541,7 +541,7 @@ pub const PackageEnv = struct {
             const mod_name = env.getString(str_idx);
 
             // Use CIR qualifier metadata instead of heuristic; this allocates nothing and scans only once
-            const qualified = hadQualifiedImport(&env, mod_name);
+            const qualified = hadQualifiedImport(env, mod_name);
 
             if (qualified) {
                 // Qualified imports refer to external packages; track and schedule externally
@@ -680,6 +680,12 @@ pub const PackageEnv = struct {
         var st = &self.modules.items[module_id];
         var env = st.env.?;
 
+        const module_common_idents: Check.CommonIdents = .{
+            .module_name = try env.insertIdent(base.Ident.for_text("test")),
+            .list = try env.insertIdent(base.Ident.for_text("List")),
+            .box = try env.insertIdent(base.Ident.for_text("Box")),
+        };
+
         // Build other_modules array according to env.imports order
         const import_count = env.imports.imports.items.items.len;
         var others = try std.array_list.Managed(*ModuleEnv).initCapacity(self.gpa, import_count);
@@ -710,11 +716,11 @@ pub const PackageEnv = struct {
             }
         }
 
-        var checker = try Check.init(self.gpa, &env.types, &env, others.items, &env.store.regions);
+        var checker = try Check.init(self.gpa, &env.types, &env, others.items, &env.store.regions, module_common_idents);
         defer checker.deinit();
         // Note: checkDefs runs type checking for module
         const check_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        try checker.checkDefs();
+        try checker.checkFile();
         const check_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         if (@import("builtin").target.cpu.arch != .wasm32) {
             self.total_type_checking_ns += @intCast(check_end - check_start);

@@ -207,28 +207,7 @@ simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `module [
-    Color,
-    ModuleA.ModuleB.TypeC,
-    Result,
-    ExternalModule,
-]
-
-import Basics.Result
-import Color
-import ModuleA.ModuleB exposing [TypeC]
-import ExternalModule as ExtMod
-
-# Simple qualified type
-simpleQualified : Color.RGB
-simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
-
-# Aliased qualified type
-aliasedQualified : ExtMod.DataType
-aliasedQualified = ExtMod.DataType.Default
-
-# Multi-level qualified type
-multiLevelQualified : ModuleA.ModuleB` imported into this Roc file.
+There is no module with the name `ModuleA.ModuleB` imported into this Roc file.
 
 You're attempting to use this module here:
 **qualified_type_canonicalization.md:22:23:22:44:**
@@ -295,45 +274,7 @@ transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
 
 
 **MODULE NOT IMPORTED**
-There is no module with the name `module [
-    Color,
-    ModuleA.ModuleB.TypeC,
-    Result,
-    ExternalModule,
-]
-
-import Basics.Result
-import Color
-import ModuleA.ModuleB exposing [TypeC]
-import ExternalModule as ExtMod
-
-# Simple qualified type
-simpleQualified : Color.RGB
-simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
-
-# Aliased qualified type
-aliasedQualified : ExtMod.DataType
-aliasedQualified = ExtMod.DataType.Default
-
-# Multi-level qualified type
-multiLevelQualified : ModuleA.ModuleB.TypeC
-multiLevelQualified = TypeC.new
-
-# Using qualified type with generics
-resultType : Result.Result(I32, Str)
-resultType = Result.Ok(42)
-
-# Function returning qualified type
-getColor : {} -> Color.RGB
-getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
-
-# Function accepting qualified type
-processColor : Color.RGB -> Str
-processColor = |color|
-    "Color processed"
-
-# Multiple qualified types in a function signature
-transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB` imported into this Roc file.
+There is no module with the name `ModuleA.ModuleB` imported into this Roc file.
 
 You're attempting to use this module here:
 **qualified_type_canonicalization.md:39:55:39:76:**
@@ -562,20 +503,16 @@ transform = |result|
 		(e-runtime-error (tag "undeclared_type"))
 		(annotation @15.1-15.16
 			(declared-type
-				(ty-lookup-external @14.19-14.28
-					(module-idx "0")
-					(target-node-idx "0")))))
+				(ty-lookup @14.19-14.28 (name "RGB") (external (module-idx "2") (target-node-idx "0"))))))
 	(d-let
 		(p-assign @19.1-19.17 (ident "aliasedQualified"))
 		(e-nominal-external @19.20-19.43
-			(module-idx "2")
+			(module-idx "4")
 			(target-node-idx "0")
 			(e-tag @19.20-19.43 (name "Default")))
 		(annotation @19.1-19.17
 			(declared-type
-				(ty-lookup-external @18.20-18.35
-					(module-idx "2")
-					(target-node-idx "0")))))
+				(ty-lookup @18.20-18.35 (name "DataType") (external (module-idx "4") (target-node-idx "0"))))))
 	(d-let
 		(p-assign @23.1-23.20 (ident "multiLevelQualified"))
 		(e-runtime-error (tag "ident_not_in_scope"))
@@ -587,7 +524,7 @@ transform = |result|
 		(e-nominal @27.14-27.27 (nominal "Result")
 			(e-tag @27.14-27.27 (name "Ok")
 				(args
-					(e-int @27.24-27.26 (value "42")))))
+					(e-num @27.24-27.26 (value "42")))))
 		(annotation @27.1-27.11
 			(declared-type
 				(ty-malformed @26.14-26.27))))
@@ -601,9 +538,7 @@ transform = |result|
 			(declared-type
 				(ty-fn @30.12-30.27 (effectful false)
 					(ty-record @30.12-30.14)
-					(ty-lookup-external @30.18-30.27
-						(module-idx "0")
-						(target-node-idx "0"))))))
+					(ty-lookup @30.18-30.27 (name "RGB") (external (module-idx "2") (target-node-idx "0")))))))
 	(d-let
 		(p-assign @35.1-35.13 (ident "processColor"))
 		(e-lambda @35.16-36.22
@@ -614,10 +549,8 @@ transform = |result|
 		(annotation @35.1-35.13
 			(declared-type
 				(ty-fn @34.16-34.32 (effectful false)
-					(ty-lookup-external @34.16-34.25
-						(module-idx "0")
-						(target-node-idx "0"))
-					(ty @34.29-34.32 (name "Str"))))))
+					(ty-lookup @34.16-34.25 (name "RGB") (external (module-idx "2") (target-node-idx "0")))
+					(ty-lookup @34.29-34.32 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @40.1-40.10 (ident "transform"))
 		(e-closure @40.13-44.6

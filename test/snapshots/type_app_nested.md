@@ -105,12 +105,12 @@ main! = |_| processNested([])
 		(annotation @4.1-4.14
 			(declared-type
 				(ty-fn @3.17-3.52 (effectful false)
-					(ty-apply @3.17-3.39 (symbol "List")
-						(ty-apply @3.22-3.38 (symbol "Result")
-							(ty @3.29-3.32 (name "Str"))
-							(ty @3.34-3.37 (name "Err"))))
-					(ty-apply @3.43-3.52 (symbol "List")
-						(ty @3.48-3.51 (name "Str")))))))
+					(ty-apply @3.17-3.39 (name "List") (builtin)
+						(ty-apply @3.22-3.38 (name "Result") (local)
+							(ty-lookup @3.22-3.38 (name "Str") (builtin))
+							(ty-malformed @3.22-3.38)))
+					(ty-apply @3.43-3.52 (name "List") (builtin)
+						(ty-lookup @3.48-3.51 (name "Str") (builtin)))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-closure @6.9-6.30
@@ -128,9 +128,9 @@ main! = |_| processNested([])
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.14 (type "List(Result(ok, err)) -> List(Str)"))
+		(patt @4.1-4.14 (type "List(Result(Str, Error)) -> List(Str)"))
 		(patt @6.1-6.6 (type "_arg -> List(Str)")))
 	(expressions
-		(expr @4.17-4.38 (type "List(Result(ok, err)) -> List(Str)"))
+		(expr @4.17-4.38 (type "List(Result(Str, Error)) -> List(Str)"))
 		(expr @6.9-6.30 (type "_arg -> List(Str)"))))
 ~~~

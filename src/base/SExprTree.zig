@@ -146,9 +146,9 @@ const Node = union(enum) {
     BytesRange: struct { begin: u32, end: u32, region: RegionInfo },
 };
 
-children: std.ArrayList(Node),
-data: std.ArrayList(u8),
-stack: std.ArrayList(Node),
+children: std.array_list.Managed(Node),
+data: std.array_list.Managed(u8),
+stack: std.array_list.Managed(Node),
 allocator: std.mem.Allocator,
 
 pub fn init(allocator: std.mem.Allocator) SExprTree {

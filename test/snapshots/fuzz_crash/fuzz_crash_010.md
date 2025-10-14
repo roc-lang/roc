@@ -14,11 +14,11 @@ foo =
 # EXPECTED
 ASCII CONTROL CHARACTER - :0:0:0:0
 UNCLOSED STRING - :0:0:0:0
-MISSING HEADER - fuzz_crash_010.md:1:1:1:2
 PARSE ERROR - fuzz_crash_010.md:1:2:1:3
 PARSE ERROR - fuzz_crash_010.md:1:3:1:4
 PARSE ERROR - fuzz_crash_010.md:1:4:1:5
 PARSE ERROR - fuzz_crash_010.md:2:6:2:7
+MISSING MAIN! FUNCTION - fuzz_crash_010.md:1:1:5:35
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.
@@ -34,24 +34,21 @@ This string is missing a closing quote.
     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**MISSING HEADER**
-Roc files must start with a module header.
-
-For example:
-        module [main]
-or for an app:
-        app [main!] { pf: platform "../basic-cli/platform.roc" }
-
-**fuzz_crash_010.md:1:1:1:2:**
-```roc
-H{o,
-```
-^
-
-
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
+
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+Instead of:
+    **List U8**
+
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Result(a, Str)`
+    `Maybe(List(U64))`
 
 **fuzz_crash_010.md:1:2:1:3:**
 ```roc
@@ -93,6 +90,23 @@ This is an unexpected parsing error. Please check your syntax.
      ^
 
 
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
+
+No `main!` function was found.
+
+Add a main! function like:
+`main! = |arg| { ... }`
+**fuzz_crash_010.md:1:1:5:35:**
+```roc
+H{o,
+    ]
+foo =
+
+    "on        (string 'onmo %')))
+```
+
+
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:3-1:4),Comma(1:4-1:5),
@@ -104,9 +118,9 @@ EndOfFile(6:1-6:1),
 # PARSE
 ~~~clojure
 (file @1.1-5.35
-	(malformed-header @1.1-1.2 (tag "missing_header"))
+	(type-module @1.1-1.2)
 	(statements
-		(s-malformed @1.2-1.3 (tag "statement_unexpected_token"))
+		(s-malformed @1.2-1.3 (tag "expected_colon_after_type_annotation"))
 		(s-malformed @1.3-1.4 (tag "statement_unexpected_token"))
 		(s-malformed @1.4-1.5 (tag "statement_unexpected_token"))
 		(s-malformed @2.6-2.7 (tag "statement_unexpected_token"))

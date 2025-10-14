@@ -48,9 +48,9 @@ EndOfFile(2:1-2:1),
 	(e-record @1.14-1.24
 		(fields
 			(field (name "x")
-				(e-int @1.19-1.22 (value "-10"))))))
+				(e-num @1.19-1.22 (value "-10"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.25 (type "_a"))
+(expr @1.1-1.25 (type "Num(_size)"))
 ~~~

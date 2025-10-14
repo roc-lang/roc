@@ -11,20 +11,17 @@ mule []
 vavar t= '
 ~~~
 # EXPECTED
-MISSING HEADER - fuzz_crash_031.md:1:1:1:5
+PARSE ERROR - fuzz_crash_031.md:1:1:1:5
 PARSE ERROR - fuzz_crash_031.md:1:6:1:7
 PARSE ERROR - fuzz_crash_031.md:1:7:1:8
 PARSE ERROR - fuzz_crash_031.md:4:1:4:6
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_031.md:4:10:4:11
 UNRECOGNIZED SYNTAX - fuzz_crash_031.md:4:10:4:11
+MISSING MAIN! FUNCTION - fuzz_crash_031.md:1:1:4:11
 # PROBLEMS
-**MISSING HEADER**
-Roc files must start with a module header.
-
-For example:
-        module [main]
-or for an app:
-        app [main!] { pf: platform "../basic-cli/platform.roc" }
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 **fuzz_crash_031.md:1:1:1:5:**
 ```roc
@@ -88,6 +85,22 @@ vavar t= '
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
+
+No `main!` function was found.
+
+Add a main! function like:
+`main! = |arg| { ... }`
+**fuzz_crash_031.md:1:1:4:11:**
+```roc
+mule []
+
+#el
+vavar t= '
+```
+
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),OpenSquare(1:6-1:7),CloseSquare(1:7-1:8),
@@ -97,8 +110,9 @@ EndOfFile(5:1-5:1),
 # PARSE
 ~~~clojure
 (file @1.1-4.11
-	(malformed-header @1.1-1.5 (tag "missing_header"))
+	(type-module @1.1-1.5)
 	(statements
+		(s-malformed @1.1-1.5 (tag "statement_unexpected_token"))
 		(s-malformed @1.6-1.7 (tag "statement_unexpected_token"))
 		(s-malformed @1.7-1.8 (tag "statement_unexpected_token"))
 		(s-malformed @4.1-4.6 (tag "statement_unexpected_token"))

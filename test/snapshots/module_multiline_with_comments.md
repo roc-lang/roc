@@ -1,62 +1,112 @@
 # META
 ~~~ini
 description=An empty module with multiline exposes and comments
-type=file
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-module # Comment after module keyword
 	[ # Comment After exposes open
 		something, # Comment after exposed item
 		SomeType, # Comment after final exposed item
 	]
 ~~~
 # EXPECTED
-EXPOSED BUT NOT DEFINED - module_multiline_with_comments.md:3:3:3:12
-EXPOSED BUT NOT DEFINED - module_multiline_with_comments.md:4:3:4:11
+PARSE ERROR - module_multiline_with_comments.md:1:2:1:3
+PARSE ERROR - module_multiline_with_comments.md:2:3:2:12
+PARSE ERROR - module_multiline_with_comments.md:2:12:2:13
+PARSE ERROR - module_multiline_with_comments.md:3:11:3:12
+PARSE ERROR - module_multiline_with_comments.md:4:2:4:3
 # PROBLEMS
-**EXPOSED BUT NOT DEFINED**
-The module header says that `something` is exposed, but it is not defined anywhere in this module.
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
-**module_multiline_with_comments.md:3:3:3:12:**
+**module_multiline_with_comments.md:1:2:1:3:**
+```roc
+	[ # Comment After exposes open
+```
+	^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**module_multiline_with_comments.md:2:3:2:12:**
 ```roc
 		something, # Comment after exposed item
 ```
 		^^^^^^^^^
-You can fix this by either defining `something` in this module, or by removing it from the list of exposed values.
 
-**EXPOSED BUT NOT DEFINED**
-The module header says that `SomeType` is exposed, but it is not defined anywhere in this module.
 
-**module_multiline_with_comments.md:4:3:4:11:**
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**module_multiline_with_comments.md:2:12:2:13:**
+```roc
+		something, # Comment after exposed item
+```
+		         ^
+
+
+**PARSE ERROR**
+Type applications require parentheses around their type arguments.
+
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+Instead of:
+    **List U8**
+
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Result(a, Str)`
+    `Maybe(List(U64))`
+
+**module_multiline_with_comments.md:3:11:3:12:**
 ```roc
 		SomeType, # Comment after final exposed item
 ```
-		^^^^^^^^
-You can fix this by either defining `SomeType` in this module, or by removing it from the list of exposed values.
+		        ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**module_multiline_with_comments.md:4:2:4:3:**
+```roc
+	]
+```
+	^
+
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),
-OpenSquare(2:2-2:3),
-LowerIdent(3:3-3:12),Comma(3:12-3:13),
-UpperIdent(4:3-4:11),Comma(4:11-4:12),
-CloseSquare(5:2-5:3),
-EndOfFile(6:1-6:1),
+OpenSquare(1:2-1:3),
+LowerIdent(2:3-2:12),Comma(2:12-2:13),
+UpperIdent(3:3-3:11),Comma(3:11-3:12),
+CloseSquare(4:2-4:3),
+EndOfFile(5:1-5:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-5.3
-	(module @1.1-5.3
-		(exposes @2.2-5.3
-			(exposed-lower-ident @3.3-3.12
-				(text "something"))
-			(exposed-upper-ident @4.3-4.11 (text "SomeType"))))
-	(statements))
+(file @1.2-4.3
+	(type-module @1.2-1.3)
+	(statements
+		(s-malformed @1.2-1.3 (tag "statement_unexpected_token"))
+		(s-malformed @2.3-2.12 (tag "statement_unexpected_token"))
+		(s-malformed @2.12-2.13 (tag "statement_unexpected_token"))
+		(s-malformed @3.11-3.12 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @4.2-4.3 (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+# Comment After exposes open
+# Comment after final exposed item
 ~~~
 # CANONICALIZE
 ~~~clojure

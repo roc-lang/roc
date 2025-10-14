@@ -164,7 +164,7 @@ match items {
 					(e-binop @2.24-2.33 (op "add")
 						(e-lookup-local @2.24-2.29
 							(p-assign @2.6-2.11 (ident "first")))
-						(e-int @2.32-2.33 (value "1")))))
+						(e-num @2.32-2.33 (value "1")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -177,7 +177,7 @@ match items {
 					(e-binop @3.23-3.31 (op "add")
 						(e-lookup-local @3.23-3.27
 							(p-assign @3.14-3.18 (ident "last")))
-						(e-int @3.30-3.31 (value "2")))))
+						(e-num @3.30-3.31 (value "2")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)

@@ -69,7 +69,7 @@ EndOfFile(7:1-7:1),
 (e-block @1.1-6.2
 	(s-let @2.5-2.11
 		(p-assign @2.5-2.6 (ident "x"))
-		(e-int @2.9-2.11 (value "42")))
+		(e-num @2.9-2.11 (value "42")))
 	(s-let @3.5-3.18
 		(p-assign @3.5-3.8 (ident "str"))
 		(e-string @3.11-3.18
@@ -79,7 +79,7 @@ EndOfFile(7:1-7:1),
 		(e-binop @4.14-4.19 (op "add")
 			(e-lookup-local @4.14-4.15
 				(p-assign @2.5-2.6 (ident "x")))
-			(e-int @4.18-4.19 (value "5"))))
+			(e-num @4.18-4.19 (value "5"))))
 	(e-lookup-local @5.5-5.11
 		(p-assign @4.5-4.11 (ident "result"))))
 ~~~

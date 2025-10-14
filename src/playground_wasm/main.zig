@@ -788,6 +788,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     if (source.len == 0) {
         // Return empty compiler stage data for completely empty input
         var module_env = try allocator.create(ModuleEnv);
+
         module_env.* = try ModuleEnv.init(allocator, source);
         try module_env.common.calcLineStarts(module_env.gpa);
         return CompilerStageData.init(allocator, module_env);
@@ -797,6 +798,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     if (trimmed_source.len == 0) {
         // Return empty compiler stage data for whitespace-only input
         var module_env = try allocator.create(ModuleEnv);
+
         module_env.* = try ModuleEnv.init(allocator, source);
         try module_env.common.calcLineStarts(module_env.gpa);
         return CompilerStageData.init(allocator, module_env);
@@ -807,6 +809,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     // Initialize the ModuleEnv
     var module_env = try allocator.create(ModuleEnv);
+
     module_env.* = try ModuleEnv.init(allocator, source);
     try module_env.common.calcLineStarts(module_env.gpa);
 
@@ -884,7 +887,13 @@ fn compileSource(source: []const u8) !CompilerStageData {
     const env = result.module_env;
     try env.initCIRFields(allocator, "main");
 
-    var czer = try Can.init(env, &result.parse_ast.?, null);
+    const module_common_idents: Check.CommonIdents = .{
+        .module_name = try module_env.insertIdent(base.Ident.for_text("main")),
+        .list = try module_env.insertIdent(base.Ident.for_text("List")),
+        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+    };
+
+    var czer = try Can.init(env, &result.parse_ast.?, null, .{});
     defer czer.deinit();
 
     czer.canonicalizeFile() catch |err| {
@@ -892,6 +901,13 @@ fn compileSource(source: []const u8) !CompilerStageData {
         if (err == error.OutOfMemory) {
             // If we're out of memory here, the state is likely unstable.
             // Propagate this error up to halt compilation gracefully.
+            return err;
+        }
+    };
+
+    czer.validateForChecking() catch |err| {
+        logDebug("compileSource: validateForChecking failed: {}\n", .{err});
+        if (err == error.OutOfMemory) {
             return err;
         }
     };
@@ -918,11 +934,11 @@ fn compileSource(source: []const u8) !CompilerStageData {
         const type_can_ir = result.module_env;
         const empty_modules: []const *ModuleEnv = &.{};
         // Use pointer to the stored CIR to ensure solver references valid memory
-        var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, empty_modules, &type_can_ir.store.regions);
+        var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, empty_modules, &type_can_ir.store.regions, module_common_idents);
         result.solver = solver;
 
-        solver.checkDefs() catch |check_err| {
-            logDebug("compileSource: checkDefs failed: {}\n", .{check_err});
+        solver.checkFile() catch |check_err| {
+            logDebug("compileSource: checkFile failed: {}\n", .{check_err});
             if (check_err == error.OutOfMemory) {
                 // OOM during type checking is critical.
                 // Deinit solver and propagate error.

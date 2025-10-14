@@ -29,8 +29,8 @@ gpa: std.mem.Allocator,
 pos: TokenIdx,
 tok_buf: TokenizedBuffer,
 store: NodeStore,
-scratch_nodes: std.ArrayList(Node.Idx),
-diagnostics: std.ArrayList(AST.Diagnostic),
+scratch_nodes: std.array_list.Managed(Node.Idx),
+diagnostics: std.array_list.Managed(AST.Diagnostic),
 cached_malformed_node: ?Node.Idx,
 nesting_counter: u8,
 
@@ -282,7 +282,10 @@ pub fn parseHeader(self: *Parser) Error!AST.Header.Idx {
             return self.parsePlatformHeader();
         },
         else => {
-            return try self.pushMalformed(AST.Header.Idx, .missing_header, self.pos);
+            // No header keyword found - this is a type module
+            return try self.store.addHeader(.{ .type_module = .{
+                .region = .{ .start = 0, .end = 0 },
+            } });
         },
     }
 }
@@ -927,7 +930,7 @@ pub fn parseExposedItem(self: *Parser) Error!AST.ExposedItem.Idx {
     }
 }
 
-const StatementType = enum { top_level, in_body };
+const StatementType = enum { top_level, in_body, in_associated_block };
 
 /// Parse a top level roc statement
 ///
@@ -1167,7 +1170,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
         // Type Annotation (e.g. `Foo a : (a,a)`)
         .UpperIdent => {
             const start = self.pos;
-            if (statementType == .top_level) {
+            if (statementType == .top_level or statementType == .in_associated_block) {
                 const header = try self.parseTypeHeader();
                 if (self.peek() != .OpColon and self.peek() != .OpColonEqual) {
                     // Point to the unexpected token (e.g., "U8" in "List U8")
@@ -1177,13 +1180,32 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 self.advance();
                 const anno = try self.parseTypeAnno(.not_looking_for_args);
                 const where_clause = try self.parseWhereConstraint();
-                // Use the type annotation's end position if there's no where clause,
-                // otherwise use the current position (after parsing where clause)
+
+                // Check if there's a .{ associated } after the type annotation
+                var associated: ?AST.Associated = null;
+                if (self.peek() == .Dot and self.peekN(1) == .OpenCurly) {
+                    const dot_pos = self.pos;
+                    // Parse the associated items block
+                    self.advance(); // consume .
+                    self.advance(); // consume {
+                    const associated_start = self.pos - 1;
+                    associated = try self.parseStatementOnlyBlock(associated_start);
+
+                    // Report error if this is a type alias
+                    if (kind == .alias) {
+                        try self.pushDiagnostic(.type_alias_cannot_have_associated, .{
+                            .start = dot_pos,
+                            .end = dot_pos + 1,
+                        });
+                    }
+                }
+
                 const statement_idx = try self.store.addStatement(.{ .type_decl = .{
                     .header = header,
                     .anno = anno,
-                    .where = where_clause,
                     .kind = kind,
+                    .where = where_clause,
+                    .associated = associated,
                     .region = .{ .start = start, .end = self.pos },
                 } });
                 return statement_idx;
@@ -2933,6 +2955,50 @@ pub fn parseBlock(self: *Parser, start: u32) Error!AST.Expr.Idx {
         .statements = statements,
         .region = .{ .start = start, .end = self.pos },
     } });
+}
+
+/// Parse a block that contains only statements, no ending expression.
+/// This is used for nominal type associated items like `Foo := [A, B].{ x = 5 }`
+/// {
+///     <stmt1>
+///     ...
+///     <stmtN>
+/// }
+pub fn parseStatementOnlyBlock(self: *Parser, start: u32) Error!AST.Associated {
+    const scratch_top = self.store.scratchStatementTop();
+
+    while (self.peek() != .EndOfFile and self.peek() != .CloseCurly) {
+        const statement_pos = self.pos;
+        const statement = try self.parseStmtByType(.in_associated_block);
+
+        // Check if this is an expression statement (the last statement must not be an expression)
+        const stmt = self.store.getStatement(statement);
+        if (stmt == .expr) {
+            // Check if we're at the closing brace (this would be a final expression)
+            if (self.peek() == .CloseCurly) {
+                try self.pushDiagnostic(.nominal_associated_cannot_have_final_expression, .{
+                    .start = statement_pos,
+                    .end = self.pos,
+                });
+                // Still add it to maintain AST structure
+            }
+        }
+
+        try self.store.addScratchStatement(statement);
+    }
+
+    self.expect(.CloseCurly) catch {
+        try self.pushDiagnostic(.expected_expr_close_curly, .{
+            .start = self.pos,
+            .end = self.pos,
+        });
+    };
+
+    const statements = try self.store.statementSpanFrom(scratch_top);
+    return AST.Associated{
+        .statements = statements,
+        .region = .{ .start = start, .end = self.pos },
+    };
 }
 
 /// Parse a record.

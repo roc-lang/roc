@@ -20,7 +20,7 @@ const NodeStore = @This();
 
 gpa: std.mem.Allocator,
 nodes: Node.List,
-extra_data: std.ArrayList(u32),
+extra_data: std.array_list.Managed(u32),
 scratch_statements: base.Scratch(AST.Statement.Idx),
 scratch_tokens: base.Scratch(Token.Idx),
 scratch_exprs: base.Scratch(AST.Expr.Idx),
@@ -54,7 +54,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
     var store: NodeStore = .{
         .gpa = gpa,
         .nodes = try Node.List.initCapacity(gpa, capacity),
-        .extra_data = try std.ArrayList(u32).initCapacity(gpa, capacity / 2),
+        .extra_data = try std.array_list.Managed(u32).initCapacity(gpa, capacity / 2),
         .scratch_statements = try base.Scratch(AST.Statement.Idx).init(gpa),
         .scratch_tokens = try base.Scratch(Token.Idx).init(gpa),
         .scratch_exprs = try base.Scratch(AST.Expr.Idx).init(gpa),
@@ -239,6 +239,15 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
 
             node.region = platform.region;
         },
+        .type_module => |type_module| {
+            node.tag = .type_module_header;
+            node.region = type_module.region;
+        },
+        .default_app => |default_app| {
+            node.tag = .default_app_header;
+            node.main_token = default_app.main_fn_idx;
+            node.region = default_app.region;
+        },
         .malformed => {
             @panic("Use addMalformed instead");
         },
@@ -390,8 +399,33 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
             node.region = d.region;
             node.data.lhs = @intFromEnum(d.header);
             node.data.rhs = @intFromEnum(d.anno);
-            if (d.where) |w| {
-                node.main_token = @intFromEnum(w);
+
+            // Store optional where and associated in extra_data if either is present
+            if (d.where != null or d.associated != null) {
+                // Format: [where_idx, has_associated, associated_data...]
+                // where_idx is 0 if null, otherwise the Collection.Idx value
+                // has_associated is 0 or 1
+                // associated_data is [statements_start, statements_len, region_start, region_end] if has_associated == 1
+                const extra_start = @as(u32, @intCast(store.extra_data.items.len));
+
+                // Store where clause index (0 if null)
+                const where_idx = if (d.where) |w| @intFromEnum(w) else 0;
+                try store.extra_data.append(store.gpa, where_idx);
+
+                // Store associated data if present
+                if (d.associated) |assoc| {
+                    try store.extra_data.append(store.gpa, 1); // has_associated = 1
+                    try store.extra_data.append(store.gpa, assoc.statements.span.start);
+                    try store.extra_data.append(store.gpa, assoc.statements.span.len);
+                    try store.extra_data.append(store.gpa, assoc.region.start);
+                    try store.extra_data.append(store.gpa, assoc.region.end);
+                } else {
+                    try store.extra_data.append(store.gpa, 0); // has_associated = 0
+                }
+
+                node.main_token = extra_start;
+            } else {
+                node.main_token = 0;
             }
         },
         .type_anno => |a| {
@@ -1013,6 +1047,17 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
                 .region = node.region,
             } };
         },
+        .type_module_header => {
+            return .{ .type_module = .{
+                .region = node.region,
+            } };
+        },
+        .default_app_header => {
+            return .{ .default_app = .{
+                .main_fn_idx = node.main_token,
+                .region = node.region,
+            } };
+        },
         .malformed => {
             return .{ .malformed = .{
                 .reason = @enumFromInt(node.data.lhs),
@@ -1163,21 +1208,71 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
             } };
         },
         .type_decl => {
+            // Read where and associated from extra_data if present (main_token != 0)
+            var where_clause: ?AST.Collection.Idx = null;
+            var associated: ?AST.Associated = null;
+            if (node.main_token != 0) {
+                const extra_start = node.main_token;
+                // Format: [where_idx, has_associated, associated_data...]
+                const where_idx = store.extra_data.items[extra_start];
+                if (where_idx != 0) {
+                    where_clause = @enumFromInt(where_idx);
+                }
+
+                const has_associated = store.extra_data.items[extra_start + 1];
+                if (has_associated == 1) {
+                    const stmt_start = store.extra_data.items[extra_start + 2];
+                    const stmt_len = store.extra_data.items[extra_start + 3];
+                    const reg_start = store.extra_data.items[extra_start + 4];
+                    const reg_end = store.extra_data.items[extra_start + 5];
+                    associated = AST.Associated{
+                        .statements = AST.Statement.Span{ .span = .{ .start = stmt_start, .len = stmt_len } },
+                        .region = .{ .start = reg_start, .end = reg_end },
+                    };
+                }
+            }
+
             return .{ .type_decl = .{
                 .region = node.region,
                 .header = @enumFromInt(node.data.lhs),
                 .anno = @enumFromInt(node.data.rhs),
                 .kind = .alias,
-                .where = if (node.main_token != 0) @enumFromInt(node.main_token) else null,
+                .where = where_clause,
+                .associated = associated,
             } };
         },
         .type_decl_nominal => {
+            // Read where and associated from extra_data if present (main_token != 0)
+            var where_clause: ?AST.Collection.Idx = null;
+            var associated: ?AST.Associated = null;
+            if (node.main_token != 0) {
+                const extra_start = node.main_token;
+                // Format: [where_idx, has_associated, associated_data...]
+                const where_idx = store.extra_data.items[extra_start];
+                if (where_idx != 0) {
+                    where_clause = @enumFromInt(where_idx);
+                }
+
+                const has_associated = store.extra_data.items[extra_start + 1];
+                if (has_associated == 1) {
+                    const stmt_start = store.extra_data.items[extra_start + 2];
+                    const stmt_len = store.extra_data.items[extra_start + 3];
+                    const reg_start = store.extra_data.items[extra_start + 4];
+                    const reg_end = store.extra_data.items[extra_start + 5];
+                    associated = AST.Associated{
+                        .statements = AST.Statement.Span{ .span = .{ .start = stmt_start, .len = stmt_len } },
+                        .region = .{ .start = reg_start, .end = reg_end },
+                    };
+                }
+            }
+
             return .{ .type_decl = .{
                 .region = node.region,
                 .header = @enumFromInt(node.data.lhs),
                 .anno = @enumFromInt(node.data.rhs),
                 .kind = .nominal,
-                .where = if (node.main_token != 0) @enumFromInt(node.main_token) else null,
+                .where = where_clause,
+                .associated = associated,
             } };
         },
         .type_anno => {

@@ -171,8 +171,8 @@ main! = |_| {}
 				(p-assign @4.15-4.16 (ident "g")))
 			(e-closure @4.18-4.29
 				(captures
-					(capture @4.15-4.16 (ident "g"))
-					(capture @4.12-4.13 (ident "f")))
+					(capture @4.12-4.13 (ident "f"))
+					(capture @4.15-4.16 (ident "g")))
 				(e-lambda @4.18-4.29
 					(args
 						(p-assign @4.19-4.20 (ident "x")))
@@ -195,9 +195,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.8 (type "arg -> ret, _arg2 -> ret2 -> _arg3 -> ret3"))
+		(patt @4.1-4.8 (type "a -> b, c -> a -> c -> b"))
 		(patt @6.1-6.6 (type "_arg -> {}")))
 	(expressions
-		(expr @4.11-4.29 (type "arg -> ret, _arg2 -> ret2 -> _arg3 -> ret3"))
+		(expr @4.11-4.29 (type "a -> b, c -> a -> c -> b"))
 		(expr @6.9-6.15 (type "_arg -> {}"))))
 ~~~

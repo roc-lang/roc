@@ -177,6 +177,9 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
         }
     };
 
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+
     var module_env = try ModuleEnv.init(gpa, contents);
     defer module_env.deinit();
 
@@ -212,6 +215,9 @@ pub fn formatStdin(gpa: std.mem.Allocator) !void {
     const contents = try std.fs.File.stdin().readToEndAlloc(gpa, Filesystem.max_file_size);
 
     // ModuleEnv takes ownership of contents
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+
     var module_env = try ModuleEnv.init(gpa, contents);
     defer module_env.deinit();
 
@@ -511,6 +517,23 @@ const Formatter = struct {
                         try fmt.pushIndent();
                     }
                     try fmt.formatWhereConstraint(w, multiline);
+                }
+                if (d.associated) |assoc| {
+                    try fmt.pushAll(".");
+                    try fmt.push('{');
+                    if (assoc.statements.span.len > 0) {
+                        try fmt.ensureNewline();
+                        fmt.curr_indent += 1;
+                        const statements = fmt.ast.store.statementSlice(assoc.statements);
+                        for (statements) |stmt_idx| {
+                            try fmt.pushIndent();
+                            _ = try fmt.formatStatement(stmt_idx);
+                            try fmt.ensureNewline();
+                        }
+                        fmt.curr_indent -= 1;
+                        try fmt.pushIndent();
+                    }
+                    try fmt.push('}');
                 }
             },
             .type_anno => |t| {
@@ -837,7 +860,7 @@ const Formatter = struct {
                     fmt.curr_indent += 1;
                 }
                 var add_newline = false;
-                try fmt.pushAll("\"\"\"");
+                try fmt.pushAll("\\\\");
                 for (fmt.ast.store.exprSlice(s.parts)) |idx| {
                     const e = fmt.ast.store.getExpr(idx);
                     switch (e) {
@@ -847,7 +870,7 @@ const Formatter = struct {
                                 _ = try fmt.flushCommentsBefore(str.region.start - 1);
                                 try fmt.ensureNewline();
                                 try fmt.pushIndent();
-                                try fmt.pushAll("\"\"\"");
+                                try fmt.pushAll("\\\\");
                             }
 
                             add_newline = true;
@@ -1411,7 +1434,7 @@ const Formatter = struct {
                 }
 
                 var platform_field: ?AST.RecordField.Idx = null;
-                var package_fields_list = try std.ArrayList(AST.RecordField.Idx).initCapacity(fmt.ast.store.gpa, 10);
+                var package_fields_list = try std.array_list.Managed(AST.RecordField.Idx).initCapacity(fmt.ast.store.gpa, 10);
                 const packages_slice = fmt.ast.store.recordFieldSlice(.{ .span = packages.span });
                 for (packages_slice) |package_idx| {
                     if (package_idx == a.platform_idx) {
@@ -1643,6 +1666,8 @@ const Formatter = struct {
                     Formatter.formatRecordField,
                 );
             },
+            .type_module => {},
+            .default_app => {},
             .malformed => {},
         }
     }
@@ -2322,6 +2347,9 @@ pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) 
 }
 
 fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+
     var module_env = try ModuleEnv.init(gpa, input);
     defer module_env.deinit();
 

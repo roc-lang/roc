@@ -161,8 +161,8 @@ pub const Dir = struct {
         dir: *Dir,
         gpa: std.mem.Allocator,
         string_arena: *std.heap.ArenaAllocator,
-    ) !std.ArrayList([]const u8) {
-        var files = std.ArrayList([]const u8){};
+    ) !std.array_list.Managed([]const u8) {
+        var files = std.array_list.Managed([]const u8){};
         errdefer files.deinit(gpa);
 
         var walker = try dir.dir.walk(gpa);

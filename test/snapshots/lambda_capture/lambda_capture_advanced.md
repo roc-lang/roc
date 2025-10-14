@@ -57,8 +57,8 @@ NO CHANGE
 			(e-closure @1.12-1.29
 				(captures
 					(capture @1.9-1.10 (ident "c"))
-					(capture @1.3-1.4 (ident "a"))
-					(capture @1.6-1.7 (ident "b")))
+					(capture @1.6-1.7 (ident "b"))
+					(capture @1.3-1.4 (ident "a")))
 				(e-lambda @1.12-1.29
 					(args
 						(p-assign @1.13-1.14 (ident "x")))
@@ -73,10 +73,10 @@ NO CHANGE
 								(p-assign @1.9-1.10 (ident "c"))))
 						(e-lookup-local @1.28-1.29
 							(p-assign @1.13-1.14 (ident "x")))))))
-		(e-int @1.31-1.33 (value "10"))
-		(e-int @1.35-1.37 (value "20"))
-		(e-int @1.39-1.40 (value "5")))
-	(e-int @1.42-1.43 (value "7")))
+		(e-num @1.31-1.33 (value "10"))
+		(e-num @1.35-1.37 (value "20"))
+		(e-num @1.39-1.40 (value "5")))
+	(e-num @1.42-1.43 (value "7")))
 ~~~
 # TYPES
 ~~~clojure

@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Example of a nominal tag union import from a package
-type=file
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-module [blue]
-
 # import the Color module from styles package as CC
 import styles.Color as CC
 
@@ -15,13 +13,13 @@ blue : CC.Color
 blue = CC.Color.RGB(0,0,255)
 ~~~
 # EXPECTED
-MODULE NOT FOUND - nominal_tag_package_import.md:4:1:4:26
+MODULE NOT FOUND - nominal_tag_package_import.md:2:1:2:26
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `styles.Color` was not found in this Roc project.
 
 You're attempting to use this module here:
-**nominal_tag_package_import.md:4:1:4:26:**
+**nominal_tag_package_import.md:2:1:2:26:**
 ```roc
 import styles.Color as CC
 ```
@@ -30,35 +28,30 @@ import styles.Color as CC
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:13),CloseSquare(1:13-1:14),
-KwImport(4:1-4:7),LowerIdent(4:8-4:14),NoSpaceDotUpperIdent(4:14-4:20),KwAs(4:21-4:23),UpperIdent(4:24-4:26),
-LowerIdent(7:1-7:5),OpColon(7:6-7:7),UpperIdent(7:8-7:10),NoSpaceDotUpperIdent(7:10-7:16),
-LowerIdent(8:1-8:5),OpAssign(8:6-8:7),UpperIdent(8:8-8:10),NoSpaceDotUpperIdent(8:10-8:16),NoSpaceDotUpperIdent(8:16-8:20),NoSpaceOpenRound(8:20-8:21),Int(8:21-8:22),Comma(8:22-8:23),Int(8:23-8:24),Comma(8:24-8:25),Int(8:25-8:28),CloseRound(8:28-8:29),
-EndOfFile(9:1-9:1),
+KwImport(2:1-2:7),LowerIdent(2:8-2:14),NoSpaceDotUpperIdent(2:14-2:20),KwAs(2:21-2:23),UpperIdent(2:24-2:26),
+LowerIdent(5:1-5:5),OpColon(5:6-5:7),UpperIdent(5:8-5:10),NoSpaceDotUpperIdent(5:10-5:16),
+LowerIdent(6:1-6:5),OpAssign(6:6-6:7),UpperIdent(6:8-6:10),NoSpaceDotUpperIdent(6:10-6:16),NoSpaceDotUpperIdent(6:16-6:20),NoSpaceOpenRound(6:20-6:21),Int(6:21-6:22),Comma(6:22-6:23),Int(6:23-6:24),Comma(6:24-6:25),Int(6:25-6:28),CloseRound(6:28-6:29),
+EndOfFile(7:1-7:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-8.29
-	(module @1.1-1.14
-		(exposes @1.8-1.14
-			(exposed-lower-ident @1.9-1.13
-				(text "blue"))))
+(file @2.1-6.29
+	(type-module @2.1-2.7)
 	(statements
-		(s-import @4.1-4.26 (raw "styles.Color") (alias "CC"))
-		(s-type-anno @7.1-7.16 (name "blue")
-			(ty @7.8-7.16 (name "CC.Color")))
-		(s-decl @8.1-8.29
-			(p-ident @8.1-8.5 (raw "blue"))
-			(e-apply @8.8-8.29
-				(e-tag @8.8-8.20 (raw "CC.Color.RGB"))
-				(e-int @8.21-8.22 (raw "0"))
-				(e-int @8.23-8.24 (raw "0"))
-				(e-int @8.25-8.28 (raw "255"))))))
+		(s-import @2.1-2.26 (raw "styles.Color") (alias "CC"))
+		(s-type-anno @5.1-5.16 (name "blue")
+			(ty @5.8-5.16 (name "CC.Color")))
+		(s-decl @6.1-6.29
+			(p-ident @6.1-6.5 (raw "blue"))
+			(e-apply @6.8-6.29
+				(e-tag @6.8-6.20 (raw "CC.Color.RGB"))
+				(e-int @6.21-6.22 (raw "0"))
+				(e-int @6.23-6.24 (raw "0"))
+				(e-int @6.25-6.28 (raw "255"))))))
 ~~~
 # FORMATTED
 ~~~roc
-module [blue]
-
+# import the Color module from styles package as CC
 # import the Color module from styles package as CC
 import styles.Color as CC
 
@@ -70,28 +63,26 @@ blue = CC.Color.RGB(0, 0, 255)
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @8.1-8.5 (ident "blue"))
-		(e-nominal-external @8.8-8.29
-			(module-idx "0")
+		(p-assign @6.1-6.5 (ident "blue"))
+		(e-nominal-external @6.8-6.29
+			(module-idx "2")
 			(target-node-idx "0")
-			(e-tag @8.8-8.29 (name "RGB")
+			(e-tag @6.8-6.29 (name "RGB")
 				(args
-					(e-int @8.21-8.22 (value "0"))
-					(e-int @8.23-8.24 (value "0"))
-					(e-int @8.25-8.28 (value "255")))))
-		(annotation @8.1-8.5
+					(e-num @6.21-6.22 (value "0"))
+					(e-num @6.23-6.24 (value "0"))
+					(e-num @6.25-6.28 (value "255")))))
+		(annotation @6.1-6.5
 			(declared-type
-				(ty-lookup-external @7.8-7.16
-					(module-idx "0")
-					(target-node-idx "0")))))
-	(s-import @4.1-4.26 (module "styles.Color") (qualifier "styles") (alias "CC")
+				(ty-lookup @5.8-5.16 (name "Color") (external (module-idx "2") (target-node-idx "0"))))))
+	(s-import @2.1-2.26 (module "styles.Color") (qualifier "styles") (alias "CC")
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @8.1-8.5 (type "Error")))
+		(patt @6.1-6.5 (type "Error")))
 	(expressions
-		(expr @8.8-8.29 (type "Error"))))
+		(expr @6.8-6.29 (type "Error"))))
 ~~~

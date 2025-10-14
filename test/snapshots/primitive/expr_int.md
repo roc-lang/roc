@@ -1,11 +1,10 @@
 # META
 ~~~ini
 description=A primitive
-type=file
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-module [foo]
 foo = 42
 ~~~
 # EXPECTED
@@ -14,21 +13,17 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),
-LowerIdent(2:1-2:4),OpAssign(2:5-2:6),Int(2:7-2:9),
-EndOfFile(3:1-3:1),
+LowerIdent(1:1-1:4),OpAssign(1:5-1:6),Int(1:7-1:9),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-2.9
-	(module @1.1-1.13
-		(exposes @1.8-1.13
-			(exposed-lower-ident @1.9-1.12
-				(text "foo"))))
+(file @1.1-1.9
+	(type-module @1.1-1.4)
 	(statements
-		(s-decl @2.1-2.9
-			(p-ident @2.1-2.4 (raw "foo"))
-			(e-int @2.7-2.9 (raw "42")))))
+		(s-decl @1.1-1.9
+			(p-ident @1.1-1.4 (raw "foo"))
+			(e-int @1.7-1.9 (raw "42")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -38,14 +33,14 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @2.1-2.4 (ident "foo"))
-		(e-int @2.7-2.9 (value "42"))))
+		(p-assign @1.1-1.4 (ident "foo"))
+		(e-num @1.7-1.9 (value "42"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @2.1-2.4 (type "Num(_size)")))
+		(patt @1.1-1.4 (type "Num(_size)")))
 	(expressions
-		(expr @2.7-2.9 (type "Num(_size)"))))
+		(expr @1.7-1.9 (type "Num(_size)"))))
 ~~~

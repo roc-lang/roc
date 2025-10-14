@@ -77,8 +77,8 @@ NO CHANGE
 		(annotation @8.1-8.11
 			(declared-type
 				(ty-fn @7.14-7.24 (effectful false)
-					(ty @7.14-7.17 (name "Str"))
-					(ty @7.21-7.24 (name "Str")))))))
+					(ty-lookup @7.14-7.17 (name "Str") (builtin))
+					(ty-lookup @7.21-7.24 (name "Str") (builtin)))))))
 ~~~
 # TYPES
 ~~~clojure

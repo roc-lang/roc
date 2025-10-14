@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Test error propagation - aliases that reference error types should not propagate errors
-type=file
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-module []
-
 BadBase := _
 
 GoodAlias := BadBase
@@ -16,47 +14,60 @@ value = "test"
 ~~~
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - test_error_propagation.md:1:1:1:1
+TYPE MISMATCH - test_error_propagation.md:6:9:6:15
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
 
 **test_error_propagation.md:1:1:1:1:**
 ```roc
-module []
+BadBase := _
 ```
 ^
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**test_error_propagation.md:6:9:6:15:**
+```roc
+value = "test"
+```
+        ^^^^^^
+
+It has the type:
+    _Str_
+
+But the type annotation says it should have the type:
+    _GoodAlias_
+
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
-UpperIdent(3:1-3:8),OpColonEqual(3:9-3:11),Underscore(3:12-3:13),
-UpperIdent(5:1-5:10),OpColonEqual(5:11-5:13),UpperIdent(5:14-5:21),
-LowerIdent(7:1-7:6),OpColon(7:7-7:8),UpperIdent(7:9-7:18),
-LowerIdent(8:1-8:6),OpAssign(8:7-8:8),StringStart(8:9-8:10),StringPart(8:10-8:14),StringEnd(8:14-8:15),
-EndOfFile(9:1-9:1),
+UpperIdent(1:1-1:8),OpColonEqual(1:9-1:11),Underscore(1:12-1:13),
+UpperIdent(3:1-3:10),OpColonEqual(3:11-3:13),UpperIdent(3:14-3:21),
+LowerIdent(5:1-5:6),OpColon(5:7-5:8),UpperIdent(5:9-5:18),
+LowerIdent(6:1-6:6),OpAssign(6:7-6:8),StringStart(6:9-6:10),StringPart(6:10-6:14),StringEnd(6:14-6:15),
+EndOfFile(7:1-7:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-8.15
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+(file @1.1-6.15
+	(type-module @1.1-1.8)
 	(statements
-		(s-type-decl @3.1-3.13
-			(header @3.1-3.8 (name "BadBase")
+		(s-type-decl @1.1-1.13
+			(header @1.1-1.8 (name "BadBase")
 				(args))
 			(_))
-		(s-type-decl @5.1-5.21
-			(header @5.1-5.10 (name "GoodAlias")
+		(s-type-decl @3.1-3.21
+			(header @3.1-3.10 (name "GoodAlias")
 				(args))
-			(ty @5.14-5.21 (name "BadBase")))
-		(s-type-anno @7.1-7.18 (name "value")
-			(ty @7.9-7.18 (name "GoodAlias")))
-		(s-decl @8.1-8.15
-			(p-ident @8.1-8.6 (raw "value"))
-			(e-string @8.9-8.15
-				(e-string-part @8.10-8.14 (raw "test"))))))
+			(ty @3.14-3.21 (name "BadBase")))
+		(s-type-anno @5.1-5.18 (name "value")
+			(ty @5.9-5.18 (name "GoodAlias")))
+		(s-decl @6.1-6.15
+			(p-ident @6.1-6.6 (raw "value"))
+			(e-string @6.9-6.15
+				(e-string-part @6.10-6.14 (raw "test"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -66,29 +77,29 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @8.1-8.6 (ident "value"))
-		(e-string @8.9-8.15
-			(e-literal @8.10-8.14 (string "test")))
-		(annotation @8.1-8.6
+		(p-assign @6.1-6.6 (ident "value"))
+		(e-string @6.9-6.15
+			(e-literal @6.10-6.14 (string "test")))
+		(annotation @6.1-6.6
 			(declared-type
-				(ty @7.9-7.18 (name "GoodAlias")))))
-	(s-nominal-decl @3.1-3.13
-		(ty-header @3.1-3.8 (name "BadBase"))
+				(ty-lookup @5.9-5.18 (name "GoodAlias") (local)))))
+	(s-nominal-decl @1.1-1.13
+		(ty-header @1.1-1.8 (name "BadBase"))
 		(ty-underscore @1.1-1.1))
-	(s-nominal-decl @5.1-5.21
-		(ty-header @5.1-5.10 (name "GoodAlias"))
-		(ty @5.14-5.21 (name "BadBase"))))
+	(s-nominal-decl @3.1-3.21
+		(ty-header @3.1-3.10 (name "GoodAlias"))
+		(ty-lookup @3.14-3.21 (name "BadBase") (local))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @8.1-8.6 (type "Error")))
+		(patt @6.1-6.6 (type "Error")))
 	(type_decls
-		(nominal @3.1-3.13 (type "Error")
-			(ty-header @3.1-3.8 (name "BadBase")))
-		(nominal @5.1-5.21 (type "Error")
-			(ty-header @5.1-5.10 (name "GoodAlias"))))
+		(nominal @1.1-1.13 (type "BadBase")
+			(ty-header @1.1-1.8 (name "BadBase")))
+		(nominal @3.1-3.21 (type "GoodAlias")
+			(ty-header @3.1-3.10 (name "GoodAlias"))))
 	(expressions
-		(expr @8.9-8.15 (type "Error"))))
+		(expr @6.9-6.15 (type "Error"))))
 ~~~

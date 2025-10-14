@@ -182,8 +182,8 @@ NO CHANGE
 		(annotation @18.1-18.14
 			(declared-type
 				(ty-fn @17.17-17.30 (effectful false)
-					(ty @17.17-17.23 (name "Result"))
-					(ty @17.27-17.30 (name "Str"))))))
+					(ty-lookup @17.17-17.23 (name "Result") (local))
+					(ty-lookup @17.27-17.30 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @22.1-22.15 (ident "handleResponse"))
 		(e-lambda @22.18-22.39
@@ -194,8 +194,8 @@ NO CHANGE
 		(annotation @22.1-22.15
 			(declared-type
 				(ty-fn @21.18-21.33 (effectful false)
-					(ty @21.18-21.26 (name "Response"))
-					(ty @21.30-21.33 (name "Str"))))))
+					(ty-lookup @21.18-21.26 (name "Response") (local))
+					(ty-lookup @21.30-21.33 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @24.1-24.6 (ident "main!"))
 		(e-lambda @24.9-24.15
@@ -205,47 +205,47 @@ NO CHANGE
 	(s-alias-decl @4.1-4.37
 		(ty-header @4.1-4.7 (name "Status"))
 		(ty-tag-union @4.10-4.37
-			(ty @4.11-4.18 (name "Loading"))
-			(ty @4.20-4.28 (name "Complete"))
-			(ty @4.30-4.36 (name "Failed"))))
+			(ty-tag-name @4.11-4.18 (name "Loading"))
+			(ty-tag-name @4.20-4.28 (name "Complete"))
+			(ty-tag-name @4.30-4.36 (name "Failed"))))
 	(s-alias-decl @7.1-7.55
 		(ty-header @7.1-7.7 (name "Result"))
 		(ty-tag-union @7.10-7.55
-			(ty-apply @7.11-7.23 (symbol "Success")
-				(ty @7.19-7.22 (name "Str")))
-			(ty-apply @7.25-7.35 (symbol "Error")
-				(ty @7.31-7.34 (name "Str")))
-			(ty-apply @7.37-7.54 (symbol "Warning")
-				(ty @7.45-7.48 (name "Str"))
-				(ty @7.50-7.53 (name "I32")))))
+			(ty-tag-name @7.11-7.23 (name "Success")
+				(ty-lookup @7.19-7.22 (name "Str") (builtin)))
+			(ty-tag-name @7.25-7.35 (name "Error")
+				(ty-lookup @7.31-7.34 (name "Str") (builtin)))
+			(ty-tag-name @7.37-7.54 (name "Warning")
+				(ty-lookup @7.45-7.48 (name "Str") (builtin))
+				(ty-lookup @7.50-7.53 (name "I32") (builtin)))))
 	(s-alias-decl @10.1-10.50
 		(ty-header @10.1-10.9 (name "Response"))
 		(ty-tag-union @10.12-10.50
-			(ty-apply @10.13-10.23 (symbol "Ok")
-				(ty @10.16-10.22 (name "Result")))
-			(ty @10.25-10.37 (name "NetworkError"))
-			(ty @10.39-10.49 (name "ParseError"))))
+			(ty-tag-name @10.13-10.23 (name "Ok")
+				(ty-lookup @10.16-10.22 (name "Result") (local)))
+			(ty-tag-name @10.25-10.37 (name "NetworkError"))
+			(ty-tag-name @10.39-10.49 (name "ParseError"))))
 	(s-alias-decl @13.1-13.52
 		(ty-header @13.1-13.10 (name "UserState"))
 		(ty-tag-union @13.13-13.52
-			(ty-apply @13.14-13.25 (symbol "Active")
-				(ty @13.21-13.24 (name "Str")))
-			(ty @13.27-13.35 (name "Inactive"))
-			(ty-apply @13.37-13.51 (symbol "Suspended")
-				(ty @13.47-13.50 (name "Str")))))
+			(ty-tag-name @13.14-13.25 (name "Active")
+				(ty-lookup @13.21-13.24 (name "Str") (builtin)))
+			(ty-tag-name @13.27-13.35 (name "Inactive"))
+			(ty-tag-name @13.37-13.51 (name "Suspended")
+				(ty-lookup @13.47-13.50 (name "Str") (builtin)))))
 	(s-alias-decl @14.1-14.58
 		(ty-header @14.1-14.16 (name "ConnectionState"))
 		(ty-tag-union @14.19-14.58
-			(ty @14.20-14.26 (name "Active"))
-			(ty @14.28-14.40 (name "Disconnected"))
-			(ty-apply @14.42-14.57 (symbol "Connecting")
-				(ty @14.53-14.56 (name "Str"))))))
+			(ty-tag-name @14.20-14.26 (name "Active"))
+			(ty-tag-name @14.28-14.40 (name "Disconnected"))
+			(ty-tag-name @14.42-14.57 (name "Connecting")
+				(ty-lookup @14.53-14.56 (name "Str") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @18.1-18.14 (type "Result -> Str"))
+		(patt @18.1-18.14 (type "Result(ok, err) -> Str"))
 		(patt @22.1-22.15 (type "Response -> Str"))
 		(patt @24.1-24.6 (type "_arg -> {}")))
 	(type_decls
@@ -260,7 +260,7 @@ NO CHANGE
 		(alias @14.1-14.58 (type "ConnectionState")
 			(ty-header @14.1-14.16 (name "ConnectionState"))))
 	(expressions
-		(expr @18.17-18.38 (type "Result -> Str"))
+		(expr @18.17-18.38 (type "Result(ok, err) -> Str"))
 		(expr @22.18-22.39 (type "Response -> Str"))
 		(expr @24.9-24.15 (type "_arg -> {}"))))
 ~~~

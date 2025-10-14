@@ -38,15 +38,15 @@ NO CHANGE
 	(elems
 		(e-list @1.2-1.8
 			(elems
-				(e-int @1.3-1.4 (value "1"))
-				(e-int @1.6-1.7 (value "2"))))
+				(e-num @1.3-1.4 (value "1"))
+				(e-num @1.6-1.7 (value "2"))))
 		(e-list @1.10-1.16
 			(elems
-				(e-int @1.11-1.12 (value "3"))
-				(e-int @1.14-1.15 (value "4"))))
+				(e-num @1.11-1.12 (value "3"))
+				(e-num @1.14-1.15 (value "4"))))
 		(e-list @1.18-1.21
 			(elems
-				(e-int @1.19-1.20 (value "5"))))))
+				(e-num @1.19-1.20 (value "5"))))))
 ~~~
 # TYPES
 ~~~clojure

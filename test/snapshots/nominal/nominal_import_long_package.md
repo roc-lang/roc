@@ -1,31 +1,29 @@
 # META
 ~~~ini
 description=Example of importing a nominal tag union from a module within a package, and renaming it using `as`
-type=file
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-module [red]
-
 import design.Styles.Color exposing [Encoder as CE]
 
 red : CE
 red = ... # not implemented
 ~~~
 # EXPECTED
-PARSE ERROR - nominal_import_long_package.md:3:21:3:27
-PARSE ERROR - nominal_import_long_package.md:3:28:3:36
-PARSE ERROR - nominal_import_long_package.md:3:37:3:38
-PARSE ERROR - nominal_import_long_package.md:3:46:3:48
-PARSE ERROR - nominal_import_long_package.md:3:51:3:52
-MODULE NOT FOUND - nominal_import_long_package.md:3:1:3:21
-UNDECLARED TYPE - nominal_import_long_package.md:5:7:5:9
+PARSE ERROR - nominal_import_long_package.md:1:21:1:27
+PARSE ERROR - nominal_import_long_package.md:1:28:1:36
+PARSE ERROR - nominal_import_long_package.md:1:37:1:38
+PARSE ERROR - nominal_import_long_package.md:1:46:1:48
+PARSE ERROR - nominal_import_long_package.md:1:51:1:52
+MODULE NOT FOUND - nominal_import_long_package.md:1:1:1:21
+UNDECLARED TYPE - nominal_import_long_package.md:3:7:3:9
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**nominal_import_long_package.md:3:21:3:27:**
+**nominal_import_long_package.md:1:21:1:27:**
 ```roc
 import design.Styles.Color exposing [Encoder as CE]
 ```
@@ -36,7 +34,7 @@ import design.Styles.Color exposing [Encoder as CE]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**nominal_import_long_package.md:3:28:3:36:**
+**nominal_import_long_package.md:1:28:1:36:**
 ```roc
 import design.Styles.Color exposing [Encoder as CE]
 ```
@@ -47,7 +45,7 @@ import design.Styles.Color exposing [Encoder as CE]
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**nominal_import_long_package.md:3:37:3:38:**
+**nominal_import_long_package.md:1:37:1:38:**
 ```roc
 import design.Styles.Color exposing [Encoder as CE]
 ```
@@ -70,7 +68,7 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-**nominal_import_long_package.md:3:46:3:48:**
+**nominal_import_long_package.md:1:46:1:48:**
 ```roc
 import design.Styles.Color exposing [Encoder as CE]
 ```
@@ -93,7 +91,7 @@ Other valid examples:
     `Result(a, Str)`
     `Maybe(List(U64))`
 
-**nominal_import_long_package.md:3:51:3:52:**
+**nominal_import_long_package.md:1:51:1:52:**
 ```roc
 import design.Styles.Color exposing [Encoder as CE]
 ```
@@ -104,7 +102,7 @@ import design.Styles.Color exposing [Encoder as CE]
 The module `design.Styles` was not found in this Roc project.
 
 You're attempting to use this module here:
-**nominal_import_long_package.md:3:1:3:21:**
+**nominal_import_long_package.md:1:1:1:21:**
 ```roc
 import design.Styles.Color exposing [Encoder as CE]
 ```
@@ -115,7 +113,7 @@ import design.Styles.Color exposing [Encoder as CE]
 The type _CE_ is not declared in this scope.
 
 This type is referenced here:
-**nominal_import_long_package.md:5:7:5:9:**
+**nominal_import_long_package.md:3:7:3:9:**
 ```roc
 red : CE
 ```
@@ -124,36 +122,30 @@ red : CE
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),
-KwImport(3:1-3:7),LowerIdent(3:8-3:14),NoSpaceDotUpperIdent(3:14-3:21),NoSpaceDotUpperIdent(3:21-3:27),KwExposing(3:28-3:36),OpenSquare(3:37-3:38),UpperIdent(3:38-3:45),KwAs(3:46-3:48),UpperIdent(3:49-3:51),CloseSquare(3:51-3:52),
-LowerIdent(5:1-5:4),OpColon(5:5-5:6),UpperIdent(5:7-5:9),
-LowerIdent(6:1-6:4),OpAssign(6:5-6:6),TripleDot(6:7-6:10),
-EndOfFile(7:1-7:1),
+KwImport(1:1-1:7),LowerIdent(1:8-1:14),NoSpaceDotUpperIdent(1:14-1:21),NoSpaceDotUpperIdent(1:21-1:27),KwExposing(1:28-1:36),OpenSquare(1:37-1:38),UpperIdent(1:38-1:45),KwAs(1:46-1:48),UpperIdent(1:49-1:51),CloseSquare(1:51-1:52),
+LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:9),
+LowerIdent(4:1-4:4),OpAssign(4:5-4:6),TripleDot(4:7-4:10),
+EndOfFile(5:1-5:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-6.10
-	(module @1.1-1.13
-		(exposes @1.8-1.13
-			(exposed-lower-ident @1.9-1.12
-				(text "red"))))
+(file @1.1-4.10
+	(type-module @1.1-1.7)
 	(statements
-		(s-import @3.1-3.21 (raw "design.Styles"))
-		(s-malformed @3.21-3.27 (tag "statement_unexpected_token"))
-		(s-malformed @3.28-3.36 (tag "statement_unexpected_token"))
-		(s-malformed @3.37-3.38 (tag "statement_unexpected_token"))
-		(s-malformed @3.46-3.48 (tag "expected_colon_after_type_annotation"))
-		(s-malformed @3.51-3.52 (tag "expected_colon_after_type_annotation"))
-		(s-type-anno @5.1-5.9 (name "red")
-			(ty @5.7-5.9 (name "CE")))
-		(s-decl @6.1-6.10
-			(p-ident @6.1-6.4 (raw "red"))
+		(s-import @1.1-1.21 (raw "design.Styles"))
+		(s-malformed @1.21-1.27 (tag "statement_unexpected_token"))
+		(s-malformed @1.28-1.36 (tag "statement_unexpected_token"))
+		(s-malformed @1.37-1.38 (tag "statement_unexpected_token"))
+		(s-malformed @1.46-1.48 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @1.51-1.52 (tag "expected_colon_after_type_annotation"))
+		(s-type-anno @3.1-3.9 (name "red")
+			(ty @3.7-3.9 (name "CE")))
+		(s-decl @4.1-4.10
+			(p-ident @4.1-4.4 (raw "red"))
 			(e-ellipsis))))
 ~~~
 # FORMATTED
 ~~~roc
-module [red]
-
 import design.Styles
 
 
@@ -164,19 +156,19 @@ red = ... # not implemented
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @6.1-6.4 (ident "red"))
+		(p-assign @4.1-4.4 (ident "red"))
 		(e-not-implemented @1.1-1.1)
-		(annotation @6.1-6.4
+		(annotation @4.1-4.4
 			(declared-type
-				(ty @5.7-5.9 (name "CE")))))
-	(s-import @3.1-3.21 (module "design.Styles") (qualifier "design")
+				(ty-malformed @3.7-3.9))))
+	(s-import @1.1-1.21 (module "design.Styles") (qualifier "design")
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.4 (type "Error")))
+		(patt @4.1-4.4 (type "Error")))
 	(expressions
 		(expr @1.1-1.1 (type "Error"))))
 ~~~

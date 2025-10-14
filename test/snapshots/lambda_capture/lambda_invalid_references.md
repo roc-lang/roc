@@ -73,5 +73,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.14 (type "Num(_size) -> _arg -> Num(_size2)"))
+(expr @1.1-1.14 (type "Error -> _arg -> Error"))
 ~~~

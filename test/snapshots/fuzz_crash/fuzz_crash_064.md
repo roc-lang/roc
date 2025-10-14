@@ -8,16 +8,15 @@ type=file
 
 ~~~
 # EXPECTED
-MISSING HEADER - fuzz_crash_064.md:2:1:2:1
+MISSING MAIN! FUNCTION - fuzz_crash_064.md:2:1:2:1
 # PROBLEMS
-**MISSING HEADER**
-Roc files must start with a module header.
+**MISSING MAIN! FUNCTION**
+Default app modules must have a `main!` function.
 
-For example:
-        module [main]
-or for an app:
-        app [main!] { pf: platform "../basic-cli/platform.roc" }
+No `main!` function was found.
 
+Add a main! function like:
+`main! = |arg| { ... }`
 **fuzz_crash_064.md:2:1:2:1:**
 ```roc
 
@@ -32,7 +31,7 @@ EndOfFile(2:1-2:1),
 # PARSE
 ~~~clojure
 (file @2.1-2.1
-	(malformed-header @2.1-2.1 (tag "missing_header"))
+	(type-module @2.1-2.1)
 	(statements))
 ~~~
 # FORMATTED

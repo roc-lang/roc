@@ -84,10 +84,12 @@ test "ModuleEnv.Serialized roundtrip" {
     env.* = ModuleEnv{
         .gpa = gpa,
         .common = deserialized_ptr.common.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), source).*,
-        .types = deserialized_ptr.types.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
+        .types = deserialized_ptr.types.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa).*,
+        .module_kind = deserialized_ptr.module_kind,
         .all_defs = deserialized_ptr.all_defs,
         .all_statements = deserialized_ptr.all_statements,
         .exports = deserialized_ptr.exports,
+        .builtin_statements = deserialized_ptr.builtin_statements,
         .external_decls = deserialized_ptr.external_decls.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
         .imports = deserialized_ptr.imports.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), deser_alloc).*,
         .module_name = "TestModule",

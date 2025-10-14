@@ -1,49 +1,24 @@
 # META
 ~~~ini
 description=An empty module with singleline exposes
-type=file
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-module [something, SomeType]
+
 ~~~
 # EXPECTED
-EXPOSED BUT NOT DEFINED - module_nonempty_single.md:1:9:1:18
-EXPOSED BUT NOT DEFINED - module_nonempty_single.md:1:20:1:28
+NIL
 # PROBLEMS
-**EXPOSED BUT NOT DEFINED**
-The module header says that `something` is exposed, but it is not defined anywhere in this module.
-
-**module_nonempty_single.md:1:9:1:18:**
-```roc
-module [something, SomeType]
-```
-        ^^^^^^^^^
-You can fix this by either defining `something` in this module, or by removing it from the list of exposed values.
-
-**EXPOSED BUT NOT DEFINED**
-The module header says that `SomeType` is exposed, but it is not defined anywhere in this module.
-
-**module_nonempty_single.md:1:20:1:28:**
-```roc
-module [something, SomeType]
-```
-                   ^^^^^^^^
-You can fix this by either defining `SomeType` in this module, or by removing it from the list of exposed values.
-
+NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:18),Comma(1:18-1:19),UpperIdent(1:20-1:28),CloseSquare(1:28-1:29),
 EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.29
-	(module @1.1-1.29
-		(exposes @1.8-1.29
-			(exposed-lower-ident @1.9-1.18
-				(text "something"))
-			(exposed-upper-ident @1.20-1.28 (text "SomeType"))))
+(file @2.1-2.1
+	(type-module @2.1-2.1)
 	(statements))
 ~~~
 # FORMATTED

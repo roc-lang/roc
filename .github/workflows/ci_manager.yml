@@ -32,6 +32,7 @@ jobs:
               - 'build.zig.zon'
               - '.github/workflows/ci_zig.yml'
               - '.github/workflows/ci_cross_compile.yml'
+              - '.github/actions/flaky-retry/action.yml'
               - 'ci/zig_lints.sh'
       - uses: dorny/paths-filter@v3
         id: other_filter
@@ -48,6 +49,7 @@ jobs:
               - '!build.zig.zon'
               - '!.github/workflows/ci_zig.yml'
               - '!.github/workflows/ci_cross_compile.yml'
+              - '!.github/actions/flaky-retry/action.yml'
               - '!ci/zig_lints.sh'
               # Files that ci manager workflows should not run on.
               - '!.gitignore'

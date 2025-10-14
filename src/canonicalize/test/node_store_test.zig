@@ -54,6 +54,7 @@ fn rand_region() base.Region {
 
 test "NodeStore round trip - Statements" {
     const gpa = testing.allocator;
+
     var store = try NodeStore.init(gpa);
     defer store.deinit();
 
@@ -175,6 +176,7 @@ test "NodeStore round trip - Statements" {
 
 test "NodeStore round trip - Expressions" {
     const gpa = testing.allocator;
+
     var store = try NodeStore.init(gpa);
     defer store.deinit();
 
@@ -182,25 +184,30 @@ test "NodeStore round trip - Expressions" {
     defer expressions.deinit();
 
     try expressions.append(CIR.Expr{
-        .e_int = .{
+        .e_num = .{
             .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
+            .kind = .i128,
         },
     });
     try expressions.append(CIR.Expr{
-        .e_frac_f32 = .{ .value = rand.random().float(f32) },
+        .e_frac_f32 = .{ .value = rand.random().float(f32), .has_suffix = false },
     });
     try expressions.append(CIR.Expr{
-        .e_frac_f64 = .{ .value = rand.random().float(f64) },
+        .e_frac_f64 = .{ .value = rand.random().float(f64), .has_suffix = false },
     });
     try expressions.append(CIR.Expr{
-        .e_frac_dec = .{
+        .e_dec = .{
             .value = RocDec{ .num = 314 },
+            .has_suffix = false,
         },
     });
     try expressions.append(CIR.Expr{
         .e_dec_small = .{
-            .numerator = rand.random().int(i16),
-            .denominator_power_of_ten = rand.random().int(u8),
+            .value = .{
+                .numerator = rand.random().int(i16),
+                .denominator_power_of_ten = rand.random().int(u8),
+            },
+            .has_suffix = false,
         },
     });
     try expressions.append(CIR.Expr{
@@ -227,7 +234,6 @@ test "NodeStore round trip - Expressions" {
     });
     try expressions.append(CIR.Expr{
         .e_list = .{
-            .elem_var = rand_idx(TypeVar),
             .elems = CIR.Expr.Span{ .span = rand_span() },
         },
     });
@@ -251,6 +257,7 @@ test "NodeStore round trip - Expressions" {
     });
     try expressions.append(CIR.Expr{
         .e_call = .{
+            .func = rand_idx(CIR.Expr.Idx),
             .args = CIR.Expr.Span{ .span = rand_span() },
             .called_via = CalledVia.apply,
         },
@@ -347,8 +354,9 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(CIR.Expr{
-        .e_frac_dec = .{
+        .e_dec = .{
             .value = RocDec{ .num = 123456789 },
+            .has_suffix = false,
         },
     });
     try expressions.append(CIR.Expr{
@@ -385,6 +393,7 @@ test "NodeStore round trip - Expressions" {
 
 test "NodeStore round trip - Diagnostics" {
     const gpa = testing.allocator;
+
     var store = try NodeStore.init(gpa);
     defer store.deinit();
 
@@ -543,6 +552,70 @@ test "NodeStore round trip - Diagnostics" {
 
     try diagnostics.append(CIR.Diagnostic{
         .where_clause_not_allowed_in_type_decl = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .type_module_missing_matching_type = .{
+            .module_name = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .default_app_missing_main = .{
+            .module_name = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .default_app_wrong_arity = .{
+            .arity = 2,
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .cannot_import_default_app = .{
+            .module_name = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .execution_requires_app_or_default_app = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .type_name_case_mismatch = .{
+            .module_name = rand_ident_idx(),
+            .type_name = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .module_header_deprecated = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .redundant_expose_main_type = .{
+            .type_name = rand_ident_idx(),
+            .module_name = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .invalid_main_type_rename_in_exposing = .{
+            .type_name = rand_ident_idx(),
+            .alias = rand_ident_idx(),
             .region = rand_region(),
         },
     });
@@ -732,6 +805,7 @@ test "NodeStore round trip - Diagnostics" {
 
 test "NodeStore round trip - TypeAnno" {
     const gpa = testing.allocator;
+
     var store = try NodeStore.init(gpa);
     defer store.deinit();
 
@@ -741,14 +815,37 @@ test "NodeStore round trip - TypeAnno" {
     // Test all TypeAnno variants to ensure complete coverage
     try type_annos.append(CIR.TypeAnno{
         .apply = .{
-            .symbol = rand_ident_idx(),
+            .name = rand_ident_idx(),
+            .base = .{ .builtin = .dec },
+            .args = CIR.TypeAnno.Span{ .span = rand_span() },
+        },
+    });
+    try type_annos.append(CIR.TypeAnno{
+        .apply = .{
+            .name = rand_ident_idx(),
+            .base = .{ .local = .{ .decl_idx = @enumFromInt(10) } },
+            .args = CIR.TypeAnno.Span{ .span = rand_span() },
+        },
+    });
+    try type_annos.append(CIR.TypeAnno{
+        .apply = .{
+            .name = rand_ident_idx(),
+            .base = .{ .external = .{
+                .module_idx = rand_idx(CIR.Import.Idx),
+                .target_node_idx = rand.random().int(u16),
+            } },
             .args = CIR.TypeAnno.Span{ .span = rand_span() },
         },
     });
 
     try type_annos.append(CIR.TypeAnno{
-        .ty_var = .{
+        .rigid_var = .{
             .name = rand_ident_idx(),
+        },
+    });
+    try type_annos.append(CIR.TypeAnno{
+        .rigid_var_lookup = .{
+            .ref = rand_idx(CIR.TypeAnno.Idx),
         },
     });
 
@@ -757,14 +854,24 @@ test "NodeStore round trip - TypeAnno" {
     });
 
     try type_annos.append(CIR.TypeAnno{
-        .ty = .{
-            .symbol = rand_ident_idx(),
+        .lookup = .{
+            .name = rand_ident_idx(),
+            .base = .{ .builtin = .dec },
         },
     });
-
     try type_annos.append(CIR.TypeAnno{
-        .ty = .{
-            .symbol = rand_ident_idx(),
+        .lookup = .{
+            .name = rand_ident_idx(),
+            .base = .{ .local = .{ .decl_idx = @enumFromInt(10) } },
+        },
+    });
+    try type_annos.append(CIR.TypeAnno{
+        .lookup = .{
+            .name = rand_ident_idx(),
+            .base = .{ .external = .{
+                .module_idx = rand_idx(CIR.Import.Idx),
+                .target_node_idx = rand.random().int(u16),
+            } },
         },
     });
 
@@ -772,6 +879,13 @@ test "NodeStore round trip - TypeAnno" {
         .tag_union = .{
             .tags = CIR.TypeAnno.Span{ .span = rand_span() },
             .ext = rand_idx(CIR.TypeAnno.Idx),
+        },
+    });
+
+    try type_annos.append(CIR.TypeAnno{
+        .tag = .{
+            .name = rand_ident_idx(),
+            .args = CIR.TypeAnno.Span{ .span = rand_span() },
         },
     });
 
@@ -802,19 +916,6 @@ test "NodeStore round trip - TypeAnno" {
     });
 
     try type_annos.append(CIR.TypeAnno{
-        .ty = .{
-            .symbol = rand_ident_idx(),
-        },
-    });
-
-    try type_annos.append(CIR.TypeAnno{
-        .ty_lookup_external = .{
-            .module_idx = rand_idx(CIR.Import.Idx),
-            .target_node_idx = rand.random().int(u16),
-        },
-    });
-
-    try type_annos.append(CIR.TypeAnno{
         .malformed = .{
             .diagnostic = rand_idx(CIR.Diagnostic.Idx),
         },
@@ -833,8 +934,13 @@ test "NodeStore round trip - TypeAnno" {
         };
     }
 
+    // We have extra tests for:
+    // * apply -> 2
+    // * lookup -> 2
+    const extra_test_count = 4;
+
     const actual_test_count = type_annos.items.len;
-    if (actual_test_count < NodeStore.MODULEENV_TYPE_ANNO_NODE_COUNT) {
+    if (actual_test_count - extra_test_count < NodeStore.MODULEENV_TYPE_ANNO_NODE_COUNT) {
         std.debug.print("CIR.TypeAnno test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.MODULEENV_TYPE_ANNO_NODE_COUNT, actual_test_count });
         std.debug.print("Please add test cases for missing type annotation variants.\n", .{});
         return error.IncompleteTypeAnnoTestCoverage;
@@ -843,6 +949,7 @@ test "NodeStore round trip - TypeAnno" {
 
 test "NodeStore round trip - Pattern" {
     const gpa = testing.allocator;
+
     var store = try NodeStore.init(gpa);
     defer store.deinit();
 
@@ -884,15 +991,11 @@ test "NodeStore round trip - Pattern" {
     });
     try patterns.append(CIR.Pattern{
         .record_destructure = .{
-            .whole_var = rand_idx(TypeVar),
-            .ext_var = rand_idx(TypeVar),
             .destructs = CIR.Pattern.RecordDestruct.Span{ .span = rand_span() },
         },
     });
     try patterns.append(CIR.Pattern{
         .list = .{
-            .list_var = rand_idx(TypeVar),
-            .elem_var = rand_idx(TypeVar),
             .patterns = CIR.Pattern.Span{ .span = rand_span() },
             .rest_info = .{ .index = rand.random().int(u32), .pattern = rand_idx(CIR.Pattern.Idx) },
         },
@@ -903,22 +1006,27 @@ test "NodeStore round trip - Pattern" {
         },
     });
     try patterns.append(CIR.Pattern{
-        .int_literal = .{
+        .num_literal = .{
             .value = CIR.IntValue{
                 .bytes = @bitCast(rand.random().int(i128)),
                 .kind = .i128,
             },
+            .kind = .int_unbound,
         },
     });
     try patterns.append(CIR.Pattern{
         .small_dec_literal = .{
-            .numerator = rand.random().int(i16),
-            .denominator_power_of_ten = rand.random().int(u8),
+            .value = .{
+                .numerator = rand.random().int(i16),
+                .denominator_power_of_ten = rand.random().int(u8),
+            },
+            .has_suffix = true,
         },
     });
     try patterns.append(CIR.Pattern{
         .dec_literal = .{
             .value = RocDec.fromU64(rand.random().int(u64)),
+            .has_suffix = false,
         },
     });
     try patterns.append(CIR.Pattern{

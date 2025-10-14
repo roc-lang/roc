@@ -27,7 +27,6 @@ UNEXPECTED TOKEN IN EXPRESSION - type_var_namespace.md:11:31:11:33
 UNDEFINED VARIABLE - type_var_namespace.md:11:14:11:24
 UNRECOGNIZED SYNTAX - type_var_namespace.md:11:31:11:33
 UNDEFINED VARIABLE - type_var_namespace.md:11:34:11:52
-TYPE MISMATCH - type_var_namespace.md:5:18:14:2
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **|>** is not expected in an expression.
@@ -72,28 +71,6 @@ Is there an `import` or `exposing` missing up-top?
 ```
                                  ^^^^^^^^^^^^^^^^^^
 
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_var_namespace.md:5:18:14:2:**
-```roc
-process = |list| {
-    # value identifier named 'elem' is allowed - different namespace from type variable
-    elem = 42
-
-    # type variable 'elem' still refers to the function annotation's type parameter
-    result : elem
-    result = List.first(list) |> Result.withDefault(elem)
-
-    result
-}
-```
-
-The type annotation says it should have the type:
-    _elem_
-
-But here it's being used as:
-    _elem_
 
 # TOKENS
 ~~~zig
@@ -189,9 +166,7 @@ main! = |_| {}
 			(e-block @5.18-14.2
 				(s-let @7.5-7.14
 					(p-assign @7.5-7.9 (ident "elem"))
-					(e-int @7.12-7.14 (value "42")))
-				(s-type-anno @10.5-10.18 (name "result")
-					(ty-var @10.14-10.18 (name "elem")))
+					(e-num @7.12-7.14 (value "42")))
 				(s-let @11.5-11.30
 					(p-assign @11.5-11.11 (ident "result"))
 					(e-call @11.14-11.30
@@ -210,9 +185,9 @@ main! = |_| {}
 		(annotation @5.1-5.8
 			(declared-type
 				(ty-fn @4.11-4.29 (effectful false)
-					(ty-apply @4.11-4.21 (symbol "List")
-						(ty-var @4.16-4.20 (name "elem")))
-					(ty-var @4.25-4.29 (name "elem"))))))
+					(ty-apply @4.11-4.21 (name "List") (builtin)
+						(ty-rigid-var @4.16-4.20 (name "elem")))
+					(ty-rigid-var-lookup (ty-rigid-var @4.16-4.20 (name "elem")))))))
 	(d-let
 		(p-assign @16.1-16.6 (ident "main!"))
 		(e-lambda @16.9-16.15
@@ -224,9 +199,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.8 (type "List(elem) -> Error"))
+		(patt @5.1-5.8 (type "List(elem) -> elem"))
 		(patt @16.1-16.6 (type "_arg -> {}")))
 	(expressions
-		(expr @5.11-14.2 (type "List(elem) -> Error"))
+		(expr @5.11-14.2 (type "List(elem) -> elem"))
 		(expr @16.9-16.15 (type "_arg -> {}"))))
 ~~~

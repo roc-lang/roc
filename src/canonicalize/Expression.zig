@@ -43,21 +43,25 @@ const Self = Expr;
 
 /// An expression in the Roc language.
 pub const Expr = union(enum) {
-    /// An integer literal with a specific value.
+    /// An number literal with a specific value.
     /// Represents whole numbers in various bases (decimal, hex, octal, binary).
     ///
     /// ```roc
-    /// 42          # Decimal integer
+    /// 42          # Decimal number
     /// 0xFF        # Hexadecimal integer
     /// 0o755       # Octal integer
     /// 0b1010      # Binary integer
+    /// 42u8        # Decimal number with type suffix
+    /// 42f32        # Decimal number with type suffix
     /// ```
-    e_int: struct {
+    e_num: struct {
         value: CIR.IntValue,
+        kind: CIR.NumKind,
     },
     /// A 32-bit floating-point literal.
     e_frac_f32: struct {
         value: f32,
+        has_suffix: bool, // If the value had a `f32` suffix
     },
     /// A 64-bit floating-point literal.
     /// Used for approximate decimal representations when F64 type is explicitly required for increased performance.
@@ -68,6 +72,7 @@ pub const Expr = union(enum) {
     /// ```
     e_frac_f64: struct {
         value: f64,
+        has_suffix: bool, // If the value had a `f64` suffix
     },
     /// A high-precision decimal literal.
     /// Used for exact decimal arithmetic without floating-point precision issues.
@@ -77,8 +82,9 @@ pub const Expr = union(enum) {
     /// 3.14159265358979323846    # High precision decimal
     /// 0.1 + 0.2                 # Equals exactly 0.3 (not 0.30000000000000004)
     /// ```
-    e_frac_dec: struct {
+    e_dec: struct {
         value: RocDec,
+        has_suffix: bool, // If the value had a `dec` suffix
     },
     /// A small decimal literal stored as a rational number (numerator/10^denominator).
     /// Memory-efficient representation for common decimal values.
@@ -90,8 +96,8 @@ pub const Expr = union(enum) {
     /// 42.0    # Stored as numerator=420, denominator_power_of_ten=1 (420/10)
     /// ```
     e_dec_small: struct {
-        numerator: i16,
-        denominator_power_of_ten: u8,
+        value: CIR.SmallDecValue,
+        has_suffix: bool, // If the value had a `dec` suffix
     },
     // A single segment of a string literal
     // a single string may be made up of a span sequential segments
@@ -127,7 +133,6 @@ pub const Expr = union(enum) {
     /// ["one", "two", "three"]
     /// ```
     e_list: struct {
-        elem_var: TypeVar,
         elems: Expr.Span,
     },
     /// Empty list constant `[]`
@@ -162,6 +167,7 @@ pub const Expr = union(enum) {
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
     e_call: struct {
+        func: Expr.Idx,
         args: Expr.Span,
         called_via: CalledVia,
     },
@@ -466,15 +472,14 @@ pub const Expr = union(enum) {
 
     pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, expr_idx: Self.Idx) std.mem.Allocator.Error!void {
         switch (self.*) {
-            .e_int => |int_expr| {
+            .e_num => |int_expr| {
                 const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-int");
+                try tree.pushStaticAtom("e-num");
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                const value_i128: i128 = @bitCast(int_expr.value.bytes);
                 var value_buf: [40]u8 = undefined;
-                const value_str = std.fmt.bufPrint(&value_buf, "{}", .{value_i128}) catch "fmt_error";
+                const value_str = int_expr.value.bufPrint(&value_buf) catch unreachable;
                 try tree.pushStringPair("value", value_str);
 
                 const attrs = tree.beginNode();
@@ -516,7 +521,7 @@ pub const Expr = union(enum) {
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
-            .e_frac_dec => |e| {
+            .e_dec => |e| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-frac-dec");
                 const region = ir.store.getExprRegion(expr_idx);
@@ -542,15 +547,15 @@ pub const Expr = union(enum) {
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
                 var num_buf: [32]u8 = undefined;
-                const num_str = std.fmt.bufPrint(&num_buf, "{}", .{e.numerator}) catch "fmt_error";
+                const num_str = std.fmt.bufPrint(&num_buf, "{}", .{e.value.numerator}) catch "fmt_error";
                 try tree.pushStringPair("numerator", num_str);
 
                 var denom_buf: [32]u8 = undefined;
-                const denom_str = std.fmt.bufPrint(&denom_buf, "{}", .{e.denominator_power_of_ten}) catch "fmt_error";
+                const denom_str = std.fmt.bufPrint(&denom_buf, "{}", .{e.value.denominator_power_of_ten}) catch "fmt_error";
                 try tree.pushStringPair("denominator-power-of-ten", denom_str);
 
-                const numerator_f64: f64 = @floatFromInt(e.numerator);
-                const denominator_f64: f64 = std.math.pow(f64, 10, @floatFromInt(e.denominator_power_of_ten));
+                const numerator_f64: f64 = @floatFromInt(e.value.numerator);
+                const denominator_f64: f64 = std.math.pow(f64, 10, @floatFromInt(e.value.denominator_power_of_ten));
                 const value_f64 = numerator_f64 / denominator_f64;
 
                 var value_buf: [512]u8 = undefined;
@@ -714,12 +719,10 @@ pub const Expr = union(enum) {
 
                 const all_exprs = ir.store.exprSlice(c.args);
 
-                if (all_exprs.len > 0) {
-                    try ir.store.getExpr(all_exprs[0]).pushToSExprTree(ir, tree, all_exprs[0]);
-                }
+                try ir.store.getExpr(c.func).pushToSExprTree(ir, tree, c.func);
 
-                if (all_exprs.len > 1) {
-                    for (all_exprs[1..]) |arg_idx| {
+                if (all_exprs.len > 0) {
+                    for (all_exprs[0..]) |arg_idx| {
                         try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
                     }
                 }

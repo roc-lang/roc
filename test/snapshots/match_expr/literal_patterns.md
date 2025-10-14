@@ -110,7 +110,7 @@ match Answer {
 					(pattern (degenerate false)
 						(p-applied-tag @2.5-2.11)))
 				(value
-					(e-int @2.15-2.16 (value "1"))))
+					(e-num @2.15-2.16 (value "1"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -123,13 +123,13 @@ match Answer {
 					(pattern (degenerate false)
 						(p-applied-tag @4.5-4.13)))
 				(value
-					(e-int @4.17-4.18 (value "3"))))
+					(e-num @4.17-4.18 (value "3"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-int @5.5-5.7 (value "10"))))
+						(p-num @5.5-5.7 (value "10"))))
 				(value
-					(e-int @5.11-5.12 (value "4")))))))
+					(e-num @5.11-5.12 (value "4")))))))
 ~~~
 # TYPES
 ~~~clojure

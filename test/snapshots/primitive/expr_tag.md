@@ -1,11 +1,10 @@
 # META
 ~~~ini
 description=A primitive
-type=file
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-module [foo]
 foo = FortyTwo
 ~~~
 # EXPECTED
@@ -14,21 +13,17 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),
-LowerIdent(2:1-2:4),OpAssign(2:5-2:6),UpperIdent(2:7-2:15),
-EndOfFile(3:1-3:1),
+LowerIdent(1:1-1:4),OpAssign(1:5-1:6),UpperIdent(1:7-1:15),
+EndOfFile(2:1-2:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-2.15
-	(module @1.1-1.13
-		(exposes @1.8-1.13
-			(exposed-lower-ident @1.9-1.12
-				(text "foo"))))
+(file @1.1-1.15
+	(type-module @1.1-1.4)
 	(statements
-		(s-decl @2.1-2.15
-			(p-ident @2.1-2.4 (raw "foo"))
-			(e-tag @2.7-2.15 (raw "FortyTwo")))))
+		(s-decl @1.1-1.15
+			(p-ident @1.1-1.4 (raw "foo"))
+			(e-tag @1.7-1.15 (raw "FortyTwo")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -38,14 +33,14 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @2.1-2.4 (ident "foo"))
-		(e-tag @2.7-2.15 (name "FortyTwo"))))
+		(p-assign @1.1-1.4 (ident "foo"))
+		(e-tag @1.7-1.15 (name "FortyTwo"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @2.1-2.4 (type "[FortyTwo]_others")))
+		(patt @1.1-1.4 (type "[FortyTwo]_others")))
 	(expressions
-		(expr @2.7-2.15 (type "[FortyTwo]_others"))))
+		(expr @1.7-1.15 (type "[FortyTwo]_others"))))
 ~~~

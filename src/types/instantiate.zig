@@ -10,6 +10,7 @@ const collections = @import("collections");
 
 const TypesStore = @import("store.zig").Store;
 const Var = @import("types.zig").Var;
+const Flex = @import("types.zig").Flex;
 const Content = @import("types.zig").Content;
 const FlatType = @import("types.zig").FlatType;
 const Alias = @import("types.zig").Alias;
@@ -22,6 +23,7 @@ const Num = @import("types.zig").Num;
 const NominalType = @import("types.zig").NominalType;
 const Tuple = @import("types.zig").Tuple;
 const Rank = @import("types.zig").Rank;
+const Mark = @import("types.zig").Mark;
 const Ident = base.Ident;
 
 /// Type to manage instantiation.
@@ -30,194 +32,188 @@ const Ident = base.Ident;
 ///
 /// This type does not own any of it's fields – it's a convenience wrapper to
 /// making threading it's field through all the recursive functions easier
-pub const Instantiate = struct {
+pub const Instantiator = struct {
     // not owned
     store: *TypesStore,
     idents: *const base.Ident.Store,
-    seen_vars_subs: *SeenVars,
+    var_map: *std.AutoHashMap(Var, Var),
+
+    current_rank: Rank = Rank.top_level,
+    rigid_behavior: RigidBehavior,
+
+    /// The mode to use when instantiating
+    pub const RigidBehavior = union(enum) {
+        /// In this mode, all rigids are instantiated as new flex vars
+        /// Note that the the rigid var structure will be preserved.
+        /// E.g. `a -> a`, `a` will reference the same new rigid var
+        fresh_flex,
+
+        /// In this mode, all rigids are instantiated as new rigid variables
+        /// Note that the the rigid var structure will be preserved.
+        /// E.g. `a -> a`, `a` will reference the same new flex var
+        fresh_rigid,
+
+        /// In this mode, all rigids  we be substituted with values in the provided map.
+        /// If a rigid var is not in the map, then that variable will be set to
+        /// `.err` & in debug mode it will error
+        substitute_rigids: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
+    };
 
     const Self = @This();
-
-    pub const IdentVar = struct { ident: []const u8, var_: Var };
-    pub const RigidToFlexSubs = base.Scratch(IdentVar);
-
-    pub const SeenVars = std.AutoHashMap(Var, Var);
-
-    // general //
-
-    pub fn init(
-        store: *TypesStore,
-        idents: *const base.Ident.Store,
-        seen_vars_subs: *SeenVars,
-    ) Self {
-        return .{
-            .store = store,
-            .idents = idents,
-            .seen_vars_subs = seen_vars_subs,
-        };
-    }
-    // rigid vars //
-
-    /// Check if, for the provided rigid var ident, we have a variable to substitute
-    fn getRigidVarSub(rigid_vars_subs: *RigidToFlexSubs, ident: []const u8) ?Var {
-        for (rigid_vars_subs.items.items) |elem| {
-            if (std.mem.eql(u8, ident, elem.ident)) {
-                return elem.var_;
-            }
-        }
-        return null;
-    }
-
-    // instantiation //
-
-    pub const Ctx = struct {
-        rigid_var_subs: *RigidToFlexSubs,
-        current_rank: Rank = Rank.top_level,
-    };
 
     // instantiation //
 
     /// Instantiate a variable
-    ///
-    /// The caller provides a map that's used to substitute rigid variables,
-    /// as depending on the context this map should contain vars from an
-    /// annotation, or not
-    pub fn instantiateVar(self: *Self, initial_var: Var, ctx: *Ctx) std.mem.Allocator.Error!Var {
+    pub fn instantiateVar(
+        self: *Self,
+        initial_var: Var,
+    ) std.mem.Allocator.Error!Var {
         const resolved = self.store.resolveVar(initial_var);
         const resolved_var = resolved.var_;
 
         // Check if we've already instantiated this variable
-        if (self.seen_vars_subs.get(resolved_var)) |fresh_var| {
+        if (self.var_map.get(resolved_var)) |fresh_var| {
             return fresh_var;
         }
 
         switch (resolved.desc.content) {
-            .rigid_var => |ident| {
-                // Get the ident of the rigid var
-                const ident_bytes = self.getIdent(ident);
-
-                if (Self.getRigidVarSub(ctx.rigid_var_subs, ident_bytes)) |existing_flex_var| {
-                    try self.seen_vars_subs.put(resolved_var, existing_flex_var);
-                    return existing_flex_var;
-                } else {
-                    // Create a new flex variable for this rigid variable name
-                    const fresh_var = try self.store.freshFromContentWithRank(Content{ .flex_var = ident }, ctx.current_rank);
-                    try ctx.rigid_var_subs.append(self.store.gpa, .{ .ident = ident_bytes, .var_ = fresh_var });
-
-                    // Remember this substitution for recursive references
-                    try self.seen_vars_subs.put(resolved_var, fresh_var);
-
-                    return fresh_var;
-                }
-            },
-            else => {
-                const fresh_content = try self.instantiateContent(resolved.desc.content, ctx);
-
-                // Create a fresh variable with the instantiated content
-                const fresh_var = try self.store.freshFromContentWithRank(fresh_content, ctx.current_rank);
+            .rigid => |rigid| {
+                // If this var is rigid, then create a new var depending on the
+                // provided behavior
+                const fresh_var = blk: {
+                    switch (self.rigid_behavior) {
+                        .fresh_rigid => {
+                            break :blk try self.store.freshFromContentWithRank(
+                                Content{ .rigid = rigid },
+                                self.current_rank,
+                            );
+                        },
+                        .fresh_flex => {
+                            break :blk try self.store.freshFromContentWithRank(
+                                Content{ .flex = Flex.init().withName(rigid.name) },
+                                self.current_rank,
+                            );
+                        },
+                        .substitute_rigids => |rigid_subs| {
+                            if (rigid_subs.get(rigid.name)) |existing_flex| {
+                                break :blk existing_flex;
+                            } else {
+                                std.debug.assert(false);
+                                break :blk try self.store.freshFromContentWithRank(
+                                    .err,
+                                    self.current_rank,
+                                );
+                            }
+                        },
+                    }
+                };
 
                 // Remember this substitution for recursive references
-                try self.seen_vars_subs.put(resolved_var, fresh_var);
+                try self.var_map.put(resolved_var, fresh_var);
+
+                return fresh_var;
+            },
+            else => {
+                // Remember this substitution for recursive references
+                // IMPORTANT: This has to be inserted _before_ we recurse into `instantiateContent`
+                const fresh_var = try self.store.fresh();
+                try self.var_map.put(resolved_var, fresh_var);
+
+                // Generate the content
+                const fresh_content = try self.instantiateContent(resolved.desc.content);
+
+                // Update the placeholder fresh var with the real content
+                try self.store.setVarDesc(
+                    fresh_var,
+                    .{
+                        .content = fresh_content,
+                        .rank = self.current_rank,
+                        .mark = Mark.none,
+                    },
+                );
 
                 return fresh_var;
             },
         }
     }
 
-    fn instantiateContent(self: *Self, content: Content, ctx: *Ctx) std.mem.Allocator.Error!Content {
+    fn instantiateContent(self: *Self, content: Content) std.mem.Allocator.Error!Content {
         return switch (content) {
-            .flex_var => |maybe_ident| Content{ .flex_var = maybe_ident },
-            // .rigid_var => |maybe_ident| Content{ .rigid_var = maybe_ident },
-            .rigid_var => unreachable,
+            .flex => |maybe_ident| Content{ .flex = maybe_ident },
+            // .rigid => |maybe_ident| Content{ .rigid = maybe_ident },
+            .rigid => unreachable,
             .alias => |alias| {
                 // Instantiate the structure recursively
-                const fresh_alias = try self.instantiateAlias(alias, ctx);
-                return Content{ .alias = fresh_alias };
+                return try self.instantiateAlias(alias);
             },
             .structure => |flat_type| blk: {
                 // Instantiate the structure recursively
-                const fresh_flat_type = try self.instantiateFlatType(flat_type, ctx);
+                const fresh_flat_type = try self.instantiateFlatType(flat_type);
                 break :blk Content{ .structure = fresh_flat_type };
             },
             .err => Content.err,
         };
     }
 
-    fn instantiateAlias(self: *Self, alias: Alias, ctx: *Ctx) std.mem.Allocator.Error!Alias {
+    fn instantiateAlias(self: *Self, alias: Alias) std.mem.Allocator.Error!Content {
         var fresh_vars = std.array_list.Managed(Var).init(self.store.gpa);
         defer fresh_vars.deinit();
 
-        const backing_var = self.store.getAliasBackingVar(alias);
-        const fresh_backing_var = try self.instantiateVar(backing_var, ctx);
-        try fresh_vars.append(fresh_backing_var);
-
         var iter = self.store.iterAliasArgs(alias);
         while (iter.next()) |arg_var| {
-            const fresh_elem = try self.instantiateVar(arg_var, ctx);
+            const fresh_elem = try self.instantiateVar(arg_var);
             try fresh_vars.append(fresh_elem);
         }
 
-        const fresh_vars_range = try self.store.appendVars(fresh_vars.items);
-        return Alias{
-            .ident = alias.ident,
-            .vars = .{ .nonempty = fresh_vars_range },
-        };
+        const backing_var = self.store.getAliasBackingVar(alias);
+        const fresh_backing_var = try self.instantiateVar(backing_var);
+
+        return self.store.mkAlias(alias.ident, fresh_backing_var, fresh_vars.items);
     }
 
-    fn instantiateFlatType(self: *Self, flat_type: FlatType, ctx: *Ctx) std.mem.Allocator.Error!FlatType {
+    fn instantiateFlatType(self: *Self, flat_type: FlatType) std.mem.Allocator.Error!FlatType {
         return switch (flat_type) {
             .str => FlatType.str,
-            .box => |box_var| FlatType{ .box = try self.instantiateVar(box_var, ctx) },
-            .list => |list_var| FlatType{ .list = try self.instantiateVar(list_var, ctx) },
+            .box => |box_var| FlatType{ .box = try self.instantiateVar(box_var) },
+            .list => |list_var| FlatType{ .list = try self.instantiateVar(list_var) },
             .list_unbound => FlatType.list_unbound,
-            .tuple => |tuple| FlatType{ .tuple = try self.instantiateTuple(tuple, ctx) },
-            .num => |num| FlatType{ .num = try self.instantiateNum(num, ctx) },
-            .nominal_type => |nominal| FlatType{ .nominal_type = try self.instantiateNominalType(nominal, ctx) },
-            .fn_pure => |func| FlatType{ .fn_pure = try self.instantiateFunc(func, ctx) },
-            .fn_effectful => |func| FlatType{ .fn_effectful = try self.instantiateFunc(func, ctx) },
-            .fn_unbound => |func| FlatType{ .fn_unbound = try self.instantiateFunc(func, ctx) },
-            .record => |record| FlatType{ .record = try self.instantiateRecord(record, ctx) },
-            .record_unbound => |fields| FlatType{ .record_unbound = try self.instantiateRecordFields(fields, ctx) },
-            .record_poly => |poly| blk: {
-                const fresh_record = try self.instantiateRecord(poly.record, ctx);
-                const fresh_ext = try self.instantiateVar(poly.var_, ctx);
-                break :blk FlatType{ .record_poly = .{ .record = fresh_record, .var_ = fresh_ext } };
-            },
+            .tuple => |tuple| FlatType{ .tuple = try self.instantiateTuple(tuple) },
+            .num => |num| FlatType{ .num = try self.instantiateNum(num) },
+            .nominal_type => |nominal| FlatType{ .nominal_type = try self.instantiateNominalType(nominal) },
+            .fn_pure => |func| FlatType{ .fn_pure = try self.instantiateFunc(func) },
+            .fn_effectful => |func| FlatType{ .fn_effectful = try self.instantiateFunc(func) },
+            .fn_unbound => |func| FlatType{ .fn_unbound = try self.instantiateFunc(func) },
+            .record => |record| FlatType{ .record = try self.instantiateRecord(record) },
+            .record_unbound => |fields| FlatType{ .record_unbound = try self.instantiateRecordFields(fields) },
             .empty_record => FlatType.empty_record,
-            .tag_union => |tag_union| FlatType{ .tag_union = try self.instantiateTagUnion(tag_union, ctx) },
+            .tag_union => |tag_union| FlatType{ .tag_union = try self.instantiateTagUnion(tag_union) },
             .empty_tag_union => FlatType.empty_tag_union,
         };
     }
 
-    fn instantiateNominalType(self: *Self, nominal: NominalType, ctx: *Ctx) std.mem.Allocator.Error!NominalType {
+    fn instantiateNominalType(self: *Self, nominal: NominalType) std.mem.Allocator.Error!NominalType {
+        const backing_var = self.store.getNominalBackingVar(nominal);
+        const fresh_backing_var = try self.instantiateVar(backing_var);
+
         var fresh_vars = std.array_list.Managed(Var).init(self.store.gpa);
         defer fresh_vars.deinit();
 
-        const backing_var = self.store.getNominalBackingVar(nominal);
-        const fresh_backing_var = try self.instantiateVar(backing_var, ctx);
-        try fresh_vars.append(fresh_backing_var);
-
         var iter = self.store.iterNominalArgs(nominal);
         while (iter.next()) |arg_var| {
-            const fresh_elem = try self.instantiateVar(arg_var, ctx);
+            const fresh_elem = try self.instantiateVar(arg_var);
             try fresh_vars.append(fresh_elem);
         }
 
-        const fresh_vars_range = try self.store.appendVars(fresh_vars.items);
-        return NominalType{
-            .ident = nominal.ident,
-            .vars = .{ .nonempty = fresh_vars_range },
-            .origin_module = nominal.origin_module,
-        };
+        return (try self.store.mkNominal(nominal.ident, fresh_backing_var, fresh_vars.items, nominal.origin_module)).structure.nominal_type;
     }
 
-    fn instantiateTuple(self: *Self, tuple: Tuple, ctx: *Ctx) std.mem.Allocator.Error!Tuple {
+    fn instantiateTuple(self: *Self, tuple: Tuple) std.mem.Allocator.Error!Tuple {
         const elems_slice = self.store.sliceVars(tuple.elems);
         var fresh_elems = std.array_list.Managed(Var).init(self.store.gpa);
         defer fresh_elems.deinit();
 
         for (elems_slice) |elem_var| {
-            const fresh_elem = try self.instantiateVar(elem_var, ctx);
+            const fresh_elem = try self.instantiateVar(elem_var);
             try fresh_elems.append(fresh_elem);
         }
 
@@ -225,11 +221,11 @@ pub const Instantiate = struct {
         return Tuple{ .elems = fresh_elems_range };
     }
 
-    fn instantiateNum(self: *Self, num: Num, ctx: *Ctx) std.mem.Allocator.Error!Num {
+    fn instantiateNum(self: *Self, num: Num) std.mem.Allocator.Error!Num {
         return switch (num) {
-            .num_poly => |poly| Num{ .num_poly = .{ .var_ = try self.instantiateVar(poly.var_, ctx), .requirements = poly.requirements } },
-            .int_poly => |poly| Num{ .int_poly = .{ .var_ = try self.instantiateVar(poly.var_, ctx), .requirements = poly.requirements } },
-            .frac_poly => |poly| Num{ .frac_poly = .{ .var_ = try self.instantiateVar(poly.var_, ctx), .requirements = poly.requirements } },
+            .num_poly => |poly_var| Num{ .num_poly = try self.instantiateVar(poly_var) },
+            .int_poly => |poly_var| Num{ .int_poly = try self.instantiateVar(poly_var) },
+            .frac_poly => |poly_var| Num{ .frac_poly = try self.instantiateVar(poly_var) },
             // Concrete types remain unchanged
             .int_precision => |precision| Num{ .int_precision = precision },
             .frac_precision => |precision| Num{ .frac_precision = precision },
@@ -240,17 +236,17 @@ pub const Instantiate = struct {
         };
     }
 
-    fn instantiateFunc(self: *Self, func: Func, ctx: *Ctx) std.mem.Allocator.Error!Func {
+    fn instantiateFunc(self: *Self, func: Func) std.mem.Allocator.Error!Func {
         const args_slice = self.store.sliceVars(func.args);
         var fresh_args = std.array_list.Managed(Var).init(self.store.gpa);
         defer fresh_args.deinit();
 
         for (args_slice) |arg_var| {
-            const fresh_arg = try self.instantiateVar(arg_var, ctx);
+            const fresh_arg = try self.instantiateVar(arg_var);
             try fresh_args.append(fresh_arg);
         }
 
-        const fresh_ret = try self.instantiateVar(func.ret, ctx);
+        const fresh_ret = try self.instantiateVar(func.ret);
         const fresh_args_range = try self.store.appendVars(fresh_args.items);
         return Func{
             .args = fresh_args_range,
@@ -259,14 +255,14 @@ pub const Instantiate = struct {
         };
     }
 
-    fn instantiateRecordFields(self: *Self, fields: RecordField.SafeMultiList.Range, ctx: *Ctx) std.mem.Allocator.Error!RecordField.SafeMultiList.Range {
+    fn instantiateRecordFields(self: *Self, fields: RecordField.SafeMultiList.Range) std.mem.Allocator.Error!RecordField.SafeMultiList.Range {
         const fields_slice = self.store.getRecordFieldsSlice(fields);
 
         var fresh_fields = std.array_list.Managed(RecordField).init(self.store.gpa);
         defer fresh_fields.deinit();
 
         for (fields_slice.items(.name), fields_slice.items(.var_)) |name, type_var| {
-            const fresh_type = try self.instantiateVar(type_var, ctx);
+            const fresh_type = try self.instantiateVar(type_var);
             _ = try fresh_fields.append(RecordField{
                 .name = name,
                 .var_ = fresh_type,
@@ -276,14 +272,14 @@ pub const Instantiate = struct {
         return try self.store.appendRecordFields(fresh_fields.items);
     }
 
-    fn instantiateRecord(self: *Self, record: Record, ctx: *Ctx) std.mem.Allocator.Error!Record {
+    fn instantiateRecord(self: *Self, record: Record) std.mem.Allocator.Error!Record {
         const fields_slice = self.store.getRecordFieldsSlice(record.fields);
 
         var fresh_fields = std.array_list.Managed(RecordField).init(self.store.gpa);
         defer fresh_fields.deinit();
 
         for (fields_slice.items(.name), fields_slice.items(.var_)) |name, type_var| {
-            const fresh_type = try self.instantiateVar(type_var, ctx);
+            const fresh_type = try self.instantiateVar(type_var);
             _ = try fresh_fields.append(RecordField{
                 .name = name,
                 .var_ = fresh_type,
@@ -293,11 +289,11 @@ pub const Instantiate = struct {
         const fields_range = try self.store.appendRecordFields(fresh_fields.items);
         return Record{
             .fields = fields_range,
-            .ext = try self.instantiateVar(record.ext, ctx),
+            .ext = try self.instantiateVar(record.ext),
         };
     }
 
-    fn instantiateTagUnion(self: *Self, tag_union: TagUnion, ctx: *Ctx) std.mem.Allocator.Error!TagUnion {
+    fn instantiateTagUnion(self: *Self, tag_union: TagUnion) std.mem.Allocator.Error!TagUnion {
         const tags_slice = self.store.getTagsSlice(tag_union.tags);
 
         var fresh_tags = std.array_list.Managed(Tag).init(self.store.gpa);
@@ -309,7 +305,7 @@ pub const Instantiate = struct {
 
             const args_slice = self.store.sliceVars(tag_args);
             for (args_slice) |arg_var| {
-                const fresh_arg = try self.instantiateVar(arg_var, ctx);
+                const fresh_arg = try self.instantiateVar(arg_var);
                 try fresh_args.append(fresh_arg);
             }
 
@@ -324,7 +320,7 @@ pub const Instantiate = struct {
         const tags_range = try self.store.appendTags(fresh_tags.items);
         return TagUnion{
             .tags = tags_range,
-            .ext = try self.instantiateVar(tag_union.ext, ctx),
+            .ext = try self.instantiateVar(tag_union.ext),
         };
     }
 

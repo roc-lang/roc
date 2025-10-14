@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=Variable scoping with var keyword
-type=file
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-module []
-
 # Test var redeclaration (should produce shadowing warning)
 redeclareTest = |_| {
 	var x_ = 5
@@ -18,20 +16,20 @@ redeclareTest = |_| {
 result = redeclareTest({})
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - can_var_scoping_var_redeclaration.md:6:2:6:13
+DUPLICATE DEFINITION - can_var_scoping_var_redeclaration.md:4:2:4:13
 # PROBLEMS
 **DUPLICATE DEFINITION**
 The name `x_` is being redeclared in this scope.
 
 The redeclaration is here:
-**can_var_scoping_var_redeclaration.md:6:2:6:13:**
+**can_var_scoping_var_redeclaration.md:4:2:4:13:**
 ```roc
 	var x_ = 10 # Redeclare var - should warn but proceed
 ```
 	^^^^^^^^^^^
 
 But `x_` was already defined here:
-**can_var_scoping_var_redeclaration.md:5:2:5:12:**
+**can_var_scoping_var_redeclaration.md:3:2:3:12:**
 ```roc
 	var x_ = 5
 ```
@@ -40,81 +38,88 @@ But `x_` was already defined here:
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
-LowerIdent(4:1-4:14),OpAssign(4:15-4:16),OpBar(4:17-4:18),Underscore(4:18-4:19),OpBar(4:19-4:20),OpenCurly(4:21-4:22),
-KwVar(5:2-5:5),LowerIdent(5:6-5:8),OpAssign(5:9-5:10),Int(5:11-5:12),
-KwVar(6:2-6:5),LowerIdent(6:6-6:8),OpAssign(6:9-6:10),Int(6:11-6:13),
-LowerIdent(7:2-7:4),OpAssign(7:5-7:6),Int(7:7-7:9),
-LowerIdent(8:2-8:4),
-CloseCurly(9:1-9:2),
-LowerIdent(11:1-11:7),OpAssign(11:8-11:9),LowerIdent(11:10-11:23),NoSpaceOpenRound(11:23-11:24),OpenCurly(11:24-11:25),CloseCurly(11:25-11:26),CloseRound(11:26-11:27),
-EndOfFile(12:1-12:1),
+LowerIdent(2:1-2:14),OpAssign(2:15-2:16),OpBar(2:17-2:18),Underscore(2:18-2:19),OpBar(2:19-2:20),OpenCurly(2:21-2:22),
+KwVar(3:2-3:5),LowerIdent(3:6-3:8),OpAssign(3:9-3:10),Int(3:11-3:12),
+KwVar(4:2-4:5),LowerIdent(4:6-4:8),OpAssign(4:9-4:10),Int(4:11-4:13),
+LowerIdent(5:2-5:4),OpAssign(5:5-5:6),Int(5:7-5:9),
+LowerIdent(6:2-6:4),
+CloseCurly(7:1-7:2),
+LowerIdent(9:1-9:7),OpAssign(9:8-9:9),LowerIdent(9:10-9:23),NoSpaceOpenRound(9:23-9:24),OpenCurly(9:24-9:25),CloseCurly(9:25-9:26),CloseRound(9:26-9:27),
+EndOfFile(10:1-10:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-11.27
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+(file @2.1-9.27
+	(type-module @2.1-2.14)
 	(statements
-		(s-decl @4.1-9.2
-			(p-ident @4.1-4.14 (raw "redeclareTest"))
-			(e-lambda @4.17-9.2
+		(s-decl @2.1-7.2
+			(p-ident @2.1-2.14 (raw "redeclareTest"))
+			(e-lambda @2.17-7.2
 				(args
 					(p-underscore))
-				(e-block @4.21-9.2
+				(e-block @2.21-7.2
 					(statements
-						(s-var @5.2-5.12 (name "x_")
-							(e-int @5.11-5.12 (raw "5")))
-						(s-var @6.2-6.13 (name "x_")
-							(e-int @6.11-6.13 (raw "10")))
-						(s-decl @7.2-7.9
-							(p-ident @7.2-7.4 (raw "x_"))
-							(e-int @7.7-7.9 (raw "15")))
-						(e-ident @8.2-8.4 (raw "x_"))))))
-		(s-decl @11.1-11.27
-			(p-ident @11.1-11.7 (raw "result"))
-			(e-apply @11.10-11.27
-				(e-ident @11.10-11.23 (raw "redeclareTest"))
-				(e-record @11.24-11.26)))))
+						(s-var @3.2-3.12 (name "x_")
+							(e-int @3.11-3.12 (raw "5")))
+						(s-var @4.2-4.13 (name "x_")
+							(e-int @4.11-4.13 (raw "10")))
+						(s-decl @5.2-5.9
+							(p-ident @5.2-5.4 (raw "x_"))
+							(e-int @5.7-5.9 (raw "15")))
+						(e-ident @6.2-6.4 (raw "x_"))))))
+		(s-decl @9.1-9.27
+			(p-ident @9.1-9.7 (raw "result"))
+			(e-apply @9.10-9.27
+				(e-ident @9.10-9.23 (raw "redeclareTest"))
+				(e-record @9.24-9.26)))))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+# Test var redeclaration (should produce shadowing warning)
+# Test var redeclaration (should produce shadowing warning)
+redeclareTest = |_| {
+	var x_ = 5
+	var x_ = 10 # Redeclare var - should warn but proceed
+	x_ = 15 # Reassign - should work without warning
+	x_
+}
+
+result = redeclareTest({})
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @4.1-4.14 (ident "redeclareTest"))
-		(e-lambda @4.17-9.2
+		(p-assign @2.1-2.14 (ident "redeclareTest"))
+		(e-lambda @2.17-7.2
 			(args
-				(p-underscore @4.18-4.19))
-			(e-block @4.21-9.2
-				(s-var @5.2-5.12
-					(p-assign @5.2-5.12 (ident "x_"))
-					(e-int @5.11-5.12 (value "5")))
-				(s-var @6.2-6.13
-					(p-assign @6.2-6.13 (ident "x_"))
-					(e-int @6.11-6.13 (value "10")))
-				(s-reassign @7.2-7.4
-					(p-assign @6.2-6.13 (ident "x_"))
-					(e-int @7.7-7.9 (value "15")))
-				(e-lookup-local @8.2-8.4
-					(p-assign @6.2-6.13 (ident "x_"))))))
+				(p-underscore @2.18-2.19))
+			(e-block @2.21-7.2
+				(s-var @3.2-3.12
+					(p-assign @3.2-3.12 (ident "x_"))
+					(e-num @3.11-3.12 (value "5")))
+				(s-var @4.2-4.13
+					(p-assign @4.2-4.13 (ident "x_"))
+					(e-num @4.11-4.13 (value "10")))
+				(s-reassign @5.2-5.4
+					(p-assign @4.2-4.13 (ident "x_"))
+					(e-num @5.7-5.9 (value "15")))
+				(e-lookup-local @6.2-6.4
+					(p-assign @4.2-4.13 (ident "x_"))))))
 	(d-let
-		(p-assign @11.1-11.7 (ident "result"))
-		(e-call @11.10-11.27
-			(e-lookup-local @11.10-11.23
-				(p-assign @4.1-4.14 (ident "redeclareTest")))
-			(e-empty_record @11.24-11.26))))
+		(p-assign @9.1-9.7 (ident "result"))
+		(e-call @9.10-9.27
+			(e-lookup-local @9.10-9.23
+				(p-assign @2.1-2.14 (ident "redeclareTest")))
+			(e-empty_record @9.24-9.26))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.14 (type "_arg -> Num(_size)"))
-		(patt @11.1-11.7 (type "Num(_size)")))
+		(patt @2.1-2.14 (type "_arg -> Num(_size)"))
+		(patt @9.1-9.7 (type "Num(_size)")))
 	(expressions
-		(expr @4.17-9.2 (type "_arg -> Num(_size)"))
-		(expr @11.10-11.27 (type "Num(_size)"))))
+		(expr @2.17-7.2 (type "_arg -> Num(_size)"))
+		(expr @9.10-9.27 (type "Num(_size)"))))
 ~~~

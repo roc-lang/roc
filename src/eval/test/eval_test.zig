@@ -709,9 +709,14 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
     // Initialize CIR fields in ModuleEnv
     try original_env.initCIRFields(gpa, "test");
+    const common_idents: Check.CommonIdents = .{
+        .module_name = try original_env.insertIdent(base.Ident.for_text("test")),
+        .list = try original_env.insertIdent(base.Ident.for_text("List")),
+        .box = try original_env.insertIdent(base.Ident.for_text("Box")),
+    };
 
     // Create canonicalizer
-    var czer = try Can.init(&original_env, &parse_ast, null);
+    var czer = try Can.init(&original_env, &parse_ast, null, .{});
     defer czer.deinit();
 
     // Canonicalize the expression
@@ -721,10 +726,10 @@ test "ModuleEnv serialization and interpreter evaluation" {
     };
 
     // Type check the expression
-    var checker = try Check.init(gpa, &original_env.types, &original_env, &.{}, &original_env.store.regions);
+    var checker = try Check.init(gpa, &original_env.types, &original_env, &.{}, &original_env.store.regions, common_idents);
     defer checker.deinit();
 
-    _ = try checker.checkExpr(canonicalized_expr_idx.get_idx());
+    _ = try checker.checkExprRepl(canonicalized_expr_idx.get_idx());
 
     // Test 1: Evaluate with the original ModuleEnv
     {
@@ -741,9 +746,9 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
     // Test 2: Full serialization and deserialization with interpreter evaluation
     {
-        var arena = std.heap.ArenaAllocator.init(gpa);
-        defer arena.deinit();
-        const arena_alloc = arena.allocator();
+        var serialization_arena = std.heap.ArenaAllocator.init(gpa);
+        defer serialization_arena.deinit();
+        const arena_alloc = serialization_arena.allocator();
 
         var tmp_dir = testing.tmpDir(.{});
         defer tmp_dir.cleanup();

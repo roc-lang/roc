@@ -228,6 +228,7 @@ test "NodeStore round trip - Statement" {
             .kind = AST.TypeDeclKind.nominal,
             .region = rand_region(),
             .where = rand_idx(AST.Collection.Idx),
+            .associated = null,
         },
     });
     try statements.append(AST.Statement{

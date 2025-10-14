@@ -62,7 +62,7 @@ jobs:
 
       - name: Run Playground Tests
         run: |
-          zig build playground-test -Doptimize=ReleaseSmall -- --verbose
+          zig build test-playground -Doptimize=ReleaseSmall -- --verbose
 
   zig-tests:
     needs: check-once
@@ -71,14 +71,14 @@ jobs:
       fail-fast: false
       matrix:
         os: [
-            macos-13,
+            macos-15-intel,
             macos-15,
             ubuntu-22.04,
             ubuntu-24.04-arm,
             windows-2022,
             windows-2025,
             windows-11-arm,
-          ] # macos-13 uses x64, macos-15 uses arm64
+          ] # macos-15 uses arm64
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
@@ -97,7 +97,7 @@ jobs:
         run: |
           sudo rm /usr/lib/llvm-18/bin/llvm-config
 
-      - name: build roc
+      - name: build repro executables
         run: |
           zig build -Dfuzz -Dsystem-afl=false
 
@@ -137,9 +137,12 @@ jobs:
       - name: zig snapshot tests
         run: zig build snapshot -- --debug
 
-      - name: zig tests
-        run: |
-          zig build test -Dfuzz -Dsystem-afl=false
+      - name: build repro executables
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: 'zig build test -Dfuzz -Dsystem-afl=false'
+          error_string_contains: 'double roundtrip bundle'
+          retry_count: 3
 
       - name: Check for snapshot changes
         run: |

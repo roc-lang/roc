@@ -20,7 +20,7 @@ const CompactWriter = @import("CompactWriter.zig");
 /// This is more efficient when we know we won't have duplicates
 pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
     return struct {
-        entries: std.ArrayList(Entry) = .{},
+        entries: std.array_list.Managed(Entry) = .{},
         sorted: bool = true,
 
         const Self = @This();

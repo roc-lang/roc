@@ -306,11 +306,16 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
 
     // Initialize CIR fields in ModuleEnv
     try module_env.initCIRFields(allocator, "test");
+    const common_idents: Check.CommonIdents = .{
+        .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
+        .list = try module_env.insertIdent(base.Ident.for_text("List")),
+        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+    };
 
     // Create czer
     //
     const czer = try allocator.create(Can);
-    czer.* = try Can.init(module_env, parse_ast, null);
+    czer.* = try Can.init(module_env, parse_ast, null, .{});
 
     // Canonicalize the expression
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
@@ -321,7 +326,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
             .region = base.Region.zero(),
         } });
         const checker = try allocator.create(Check);
-        checker.* = try Check.init(allocator, &module_env.types, module_env, &.{}, &module_env.store.regions);
+        checker.* = try Check.init(allocator, &module_env.types, module_env, &.{}, &module_env.store.regions, common_idents);
         return .{
             .module_env = module_env,
             .parse_ast = parse_ast,
@@ -335,33 +340,10 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
 
     // Create type checker
     const checker = try allocator.create(Check);
-    checker.* = try Check.init(allocator, &module_env.types, module_env, &.{}, &module_env.store.regions);
+    checker.* = try Check.init(allocator, &module_env.types, module_env, &.{}, &module_env.store.regions, common_idents);
 
     // Type check the expression
-    _ = try checker.checkExpr(canonical_expr_idx.get_idx());
-
-    // WORKAROUND: The type checker doesn't set types for binop expressions yet.
-    // For numeric binops, manually set the type to match the operands.
-    const expr = module_env.store.getExpr(canonical_expr_idx.get_idx());
-    if (expr == .e_binop) {
-        const binop = expr.e_binop;
-        // For arithmetic ops, use the type of the left operand
-        switch (binop.op) {
-            .add, .sub, .mul, .div, .rem, .pow, .div_trunc => {
-                const left_var = @as(types.Var, @enumFromInt(@intFromEnum(binop.lhs)));
-                const left_resolved = module_env.types.resolveVar(left_var);
-                const result_var = @as(types.Var, @enumFromInt(@intFromEnum(canonical_expr_idx.get_idx())));
-                try module_env.types.setVarContent(result_var, left_resolved.desc.content);
-            },
-            .lt, .gt, .le, .ge, .eq, .ne => {
-                // Comparison ops return Bool
-                const result_var = @as(types.Var, @enumFromInt(@intFromEnum(canonical_expr_idx.get_idx())));
-                const bool_content = try module_env.types.mkBool(allocator, &module_env.common.idents, @enumFromInt(0));
-                try module_env.types.setVarContent(result_var, bool_content);
-            },
-            else => {},
-        }
-    }
+    _ = try checker.checkExprRepl(canonical_expr_idx.get_idx());
 
     return .{
         .module_env = module_env,

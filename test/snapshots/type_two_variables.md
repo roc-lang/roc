@@ -89,11 +89,11 @@ NO CHANGE
 			(declared-type
 				(ty-fn @3.8-3.24 (effectful false)
 					(ty-tuple @3.8-3.14
-						(ty-var @3.9-3.10 (name "a"))
-						(ty-var @3.12-3.13 (name "b")))
+						(ty-rigid-var @3.9-3.10 (name "a"))
+						(ty-rigid-var @3.12-3.13 (name "b")))
 					(ty-tuple @3.18-3.24
-						(ty-var @3.19-3.20 (name "b"))
-						(ty-var @3.22-3.23 (name "a")))))))
+						(ty-rigid-var-lookup (ty-rigid-var @3.12-3.13 (name "b")))
+						(ty-rigid-var-lookup (ty-rigid-var @3.9-3.10 (name "a"))))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15

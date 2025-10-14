@@ -117,7 +117,7 @@ NO CHANGE
 						(e-string @7.18-7.25
 							(e-literal @7.19-7.24 (string "Alice"))))
 					(field (name "age")
-						(e-int @7.32-7.34 (value "30"))))))
+						(e-num @7.32-7.34 (value "30"))))))
 		(field (name "address")
 			(e-record @8.11-15.3
 				(fields
@@ -152,5 +152,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-23.2 (type "{ person: { name: Str, age: Num(_size) }, address: { street: Str, city: Str, coordinates: { lat: Frac(_size2), lng: Frac(_size3) } }, contact: { email: Str, phone: { home: Str, work: Str } } }"))
+(expr @1.1-23.2 (type "{ address: { city: Str, coordinates: { lat: Num(Frac(_size)), lng: Num(Frac(_size2)) }, street: Str }, contact: { email: Str, phone: { home: Str, work: Str } }, person: { age: Num(_size3), name: Str }, Error }"))
 ~~~

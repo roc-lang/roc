@@ -19,6 +19,8 @@ const compile = @import("compile");
 const fmt = @import("fmt");
 const repl = @import("repl");
 const eval_mod = @import("eval");
+const collections = @import("collections");
+const compiled_builtins = @import("compiled_builtins");
 
 const Repl = repl.Repl;
 const CrashContext = eval_mod.CrashContext;
@@ -644,6 +646,66 @@ fn extractSectionInfo(content: []const u8, section_name: []const u8) ?struct { s
     return .{ .start = start_idx, .end = next_section_idx };
 }
 
+/// Wrapper for a loaded compiled builtin module that tracks the buffer
+const LoadedModule = struct {
+    env: *ModuleEnv,
+    buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT) u8,
+    gpa: std.mem.Allocator,
+
+    fn deinit(self: *LoadedModule) void {
+        // Only free the hashmap that was allocated during deserialization
+        // Most other data (like the SafeList contents) points into the buffer
+        self.env.imports.map.deinit(self.gpa);
+
+        // Free the buffer (the env points into this buffer for most data)
+        self.gpa.free(self.buffer);
+        // Free the env struct itself
+        self.gpa.destroy(self.env);
+    }
+};
+
+/// Load a compiled ModuleEnv from embedded binary data
+fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) !LoadedModule {
+    // Copy the embedded data to properly aligned memory
+    // CompactWriter requires specific alignment for serialization
+    const CompactWriter = collections.CompactWriter;
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
+    @memcpy(buffer, bin_data);
+
+    // Cast to the serialized structure
+    const serialized_ptr = @as(
+        *ModuleEnv.Serialized,
+        @ptrCast(@alignCast(buffer.ptr)),
+    );
+
+    const env = try gpa.create(ModuleEnv);
+    errdefer gpa.destroy(env);
+
+    // Deserialize
+    const base_ptr = @intFromPtr(buffer.ptr);
+    env.* = ModuleEnv{
+        .gpa = gpa,
+        .common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), source).*,
+        .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+        .module_kind = serialized_ptr.module_kind,
+        .all_defs = serialized_ptr.all_defs,
+        .all_statements = serialized_ptr.all_statements,
+        .exports = serialized_ptr.exports,
+        .builtin_statements = serialized_ptr.builtin_statements,
+        .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
+        .imports = serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+        .module_name = module_name,
+        .diagnostics = serialized_ptr.diagnostics,
+        .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+    };
+
+    return LoadedModule{
+        .env = env,
+        .buffer = buffer,
+        .gpa = gpa,
+    };
+}
+
 /// cli entrypoint for snapshot tool
 pub fn main() !void {
     // Use GeneralPurposeAllocator for command-line parsing and general work
@@ -773,12 +835,23 @@ pub fn main() !void {
         }
     }
 
+    // Load compiled builtin modules (Set and Dict)
+    const dict_source = "Dict := [EmptyDict].{}\n";
+    var dict_loaded = try loadCompiledModule(gpa, compiled_builtins.dict_bin, "Dict", dict_source);
+    defer dict_loaded.deinit();
+
+    const set_source = "import Dict\n\nSet := [EmptySet(Dict)].{}\n";
+    var set_loaded = try loadCompiledModule(gpa, compiled_builtins.set_bin, "Set", set_source);
+    defer set_loaded.deinit();
+
     const config = Config{
         .maybe_fuzz_corpus_path = maybe_fuzz_corpus_path,
         .generate_html = generate_html,
         .expected_section_command = expected_section_command,
         .output_section_command = output_section_command,
         .trace_eval = trace_eval,
+        .dict_module = dict_loaded.env,
+        .set_module = set_loaded.env,
     };
 
     if (config.maybe_fuzz_corpus_path != null) {
@@ -786,7 +859,6 @@ pub fn main() !void {
         try std.fs.cwd().makePath(config.maybe_fuzz_corpus_path.?);
     }
     const snapshots_dir = "test/snapshots";
-    var timer = std.time.Timer.start() catch unreachable;
 
     // Stage 1: Collect work items
     var work_list = WorkList.init(gpa);
@@ -807,18 +879,8 @@ pub fn main() !void {
         try collectWorkItems(gpa, snapshots_dir, &work_list);
     }
 
-    const collect_duration_ms = timer.read() / std.time.ns_per_ms;
-    log("collected {d} work items in {d} ms", .{ work_list.items.len, collect_duration_ms });
-
     // Stage 2: Process work items (in parallel or single-threaded)
     const result = try processWorkItems(gpa, work_list, max_threads, debug_mode, &config);
-
-    const duration_ms = timer.read() / std.time.ns_per_ms;
-
-    std.log.debug(
-        "collected {d} items in {d} ms, processed {d} snapshots in {d} ms.",
-        .{ work_list.items.len, collect_duration_ms, result.success, duration_ms },
-    );
 
     if (result.failed > 0) {
         std.log.err("Failed to process {d} snapshots.", .{result.failed});
@@ -827,12 +889,23 @@ pub fn main() !void {
 }
 
 fn checkSnapshotExpectations(gpa: Allocator) !bool {
+    // Load compiled builtin modules (Set and Dict)
+    const dict_source = "Dict := [EmptyDict].{}\n";
+    var dict_loaded = try loadCompiledModule(gpa, compiled_builtins.dict_bin, "Dict", dict_source);
+    defer dict_loaded.deinit();
+
+    const set_source = "import Dict\n\nSet := [EmptySet(Dict)].{}\n";
+    var set_loaded = try loadCompiledModule(gpa, compiled_builtins.set_bin, "Set", set_source);
+    defer set_loaded.deinit();
+
     const config = Config{
         .maybe_fuzz_corpus_path = null,
         .generate_html = false,
         .expected_section_command = .check,
         .output_section_command = .check,
         .disable_updates = true,
+        .dict_module = dict_loaded.env,
+        .set_module = set_loaded.env,
     };
     const snapshots_dir = "test/snapshots";
     var work_list = WorkList.init(gpa);
@@ -1067,6 +1140,9 @@ fn processSnapshotContent(
     }
 
     // Process the content through the compilation pipeline
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
     var module_env = try ModuleEnv.init(allocator, content.source);
     defer module_env.deinit();
 
@@ -1083,27 +1159,70 @@ fn processSnapshotContent(
         .platform => try parse.parse(&module_env.common, allocator),
         .app => try parse.parse(&module_env.common, allocator),
         .repl => unreachable, // Handled above
+        .snippet => try parse.parse(&module_env.common, allocator),
     };
     defer parse_ast.deinit(allocator);
 
     parse_ast.store.emptyScratch();
 
-    // Extract module name from output path
-    const basename = std.fs.path.basename(output_path);
-    const module_name = if (std.mem.lastIndexOfScalar(u8, basename, '.')) |dot_idx|
-        basename[0..dot_idx]
-    else
-        basename;
+    // Extract module name from custom filename if provided, otherwise from output path
+    const module_name = if (content.meta.filename) |custom_filename|
+        // Strip .roc extension if present
+        if (std.mem.lastIndexOfScalar(u8, custom_filename, '.')) |dot_idx|
+            custom_filename[0..dot_idx]
+        else
+            custom_filename
+    else blk: {
+        const basename = std.fs.path.basename(output_path);
+        break :blk if (std.mem.lastIndexOfScalar(u8, basename, '.')) |dot_idx|
+            basename[0..dot_idx]
+        else
+            basename;
+    };
     var can_ir = &module_env; // ModuleEnv contains the canonical IR
     try can_ir.initCIRFields(allocator, module_name);
 
-    var czer = try Can.init(can_ir, &parse_ast, null);
+    const common_idents: Check.CommonIdents = .{
+        .module_name = try can_ir.insertIdent(base.Ident.for_text(module_name)),
+        .list = try can_ir.insertIdent(base.Ident.for_text("List")),
+        .box = try can_ir.insertIdent(base.Ident.for_text("Box")),
+    };
+
+    // Auto-inject Set and Dict as available imports (if they're loaded)
+    // This makes them available without needing explicit `import` statements in tests
+    var module_envs = std.StringHashMap(*const ModuleEnv).init(allocator);
+    defer module_envs.deinit();
+
+    var dict_import_idx: ?CIR.Import.Idx = null;
+    var set_import_idx: ?CIR.Import.Idx = null;
+
+    if (config.dict_module) |dict_env| {
+        dict_import_idx = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Dict");
+        try module_envs.put("Dict", dict_env);
+    }
+    if (config.set_module) |set_env| {
+        set_import_idx = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Set");
+        try module_envs.put("Set", set_env);
+    }
+
+    var czer = try Can.init(can_ir, &parse_ast, &module_envs, .{});
     defer czer.deinit();
+
+    // Register auto-injected imports with the canonicalizer so it knows they're already imported
+    if (dict_import_idx) |idx| {
+        try czer.import_indices.put(allocator, "Dict", idx);
+    }
+    if (set_import_idx) |idx| {
+        try czer.import_indices.put(allocator, "Set", idx);
+    }
 
     var maybe_expr_idx: ?Can.CanonicalizedExpr = null;
 
     switch (content.meta.node_type) {
-        .file => try czer.canonicalizeFile(),
+        .file => {
+            try czer.canonicalizeFile();
+            try czer.validateForChecking();
+        },
         .header => {
             // TODO: implement canonicalize_header when available
         },
@@ -1113,39 +1232,45 @@ fn processSnapshotContent(
         },
         .statement => {
             const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
-
-            var last_anno: ?Can.StmtTypeAnno = null;
-            const can_stmt_result = try czer.canonicalizeStatement(ast_stmt_idx, &last_anno);
-            switch (can_stmt_result) {
-                .import_stmt => {
-                    // After we process import statements, there's no
-                    // need to include then in the canonicalize IR
-                },
-                .stmt => |can_stmt| {
-                    // Manually track scratch statements because we aren't using the file entrypoint
-                    const scratch_statements_start = can_ir.store.scratch_statements.top();
-                    try can_ir.store.addScratchStatement(can_stmt.idx);
-                    can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
-                },
+            const can_stmt_result = try czer.canonicalizeBlockStatement(czer.parse_ir.store.getStatement(ast_stmt_idx), &.{}, 0);
+            if (can_stmt_result.canonicalized_stmt) |can_stmt| {
+                // Manually track scratch statements because we aren't using the file entrypoint
+                const scratch_statements_start = can_ir.store.scratch.?.statements.top();
+                try can_ir.store.addScratchStatement(can_stmt.idx);
+                can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
             }
         },
         .package => try czer.canonicalizeFile(),
         .platform => try czer.canonicalizeFile(),
         .app => try czer.canonicalizeFile(),
         .repl => unreachable, // Handled above
+        .snippet => {
+            // Snippet - just canonicalize without validation
+            try czer.canonicalizeFile();
+        },
     }
 
     // Assert that everything is in-sync
     can_ir.debugAssertArraysInSync();
 
-    // Types
-    const empty_modules: []const *ModuleEnv = &.{};
+    // Types - include Set and Dict modules if loaded
+    var builtin_modules = std.array_list.Managed(*const ModuleEnv).init(allocator);
+    defer builtin_modules.deinit();
+
+    if (config.dict_module) |dict_env| {
+        try builtin_modules.append(dict_env);
+    }
+    if (config.set_module) |set_env| {
+        try builtin_modules.append(set_env);
+    }
+
     var solver = try Check.init(
         allocator,
         &can_ir.types,
         can_ir,
-        empty_modules,
+        builtin_modules.items,
         &can_ir.store.regions,
+        common_idents,
     );
     defer solver.deinit();
 
@@ -1153,9 +1278,9 @@ fn processSnapshotContent(
     solver.debugAssertArraysInSync();
 
     if (maybe_expr_idx) |expr_idx| {
-        _ = try solver.checkExpr(expr_idx.idx);
+        _ = try solver.checkExprRepl(expr_idx.idx);
     } else {
-        try solver.checkDefs();
+        try solver.checkFile();
     }
 
     // Cache round-trip validation - ensure ModuleCache serialization/deserialization works
@@ -1305,6 +1430,9 @@ const Config = struct {
     output_section_command: UpdateCommand,
     disable_updates: bool = false, // Disable updates for check mode
     trace_eval: bool = false,
+    // Compiled builtin modules (Set and Dict) loaded at startup
+    dict_module: ?*const ModuleEnv = null,
+    set_module: ?*const ModuleEnv = null,
 };
 
 const ProcessResult = struct {
@@ -1525,6 +1653,7 @@ pub const NodeType = enum {
     platform,
     app,
     repl,
+    snippet,
 
     pub const HEADER = "header";
     pub const EXPR = "expr";
@@ -1534,6 +1663,7 @@ pub const NodeType = enum {
     pub const PLATFORM = "platform";
     pub const APP = "app";
     pub const REPL = "repl";
+    pub const SNIPPET = "snippet";
 
     fn fromString(str: []const u8) !NodeType {
         if (std.mem.eql(u8, str, HEADER)) return .header;
@@ -1544,6 +1674,7 @@ pub const NodeType = enum {
         if (std.mem.eql(u8, str, PLATFORM)) return .platform;
         if (std.mem.eql(u8, str, APP)) return .app;
         if (std.mem.eql(u8, str, REPL)) return .repl;
+        if (std.mem.eql(u8, str, SNIPPET)) return .snippet;
         return Error.InvalidNodeType;
     }
 
@@ -1557,6 +1688,7 @@ pub const NodeType = enum {
             .platform => "platform",
             .app => "app",
             .repl => "repl",
+            .snippet => "snippet",
         };
     }
 };
@@ -1564,6 +1696,7 @@ pub const NodeType = enum {
 const Meta = struct {
     description: []const u8,
     node_type: NodeType,
+    filename: ?[]const u8 = null,
 
     const DESC_START: []const u8 = "description=";
     const TYPE_START: []const u8 = "type=";
@@ -1572,19 +1705,27 @@ const Meta = struct {
         var lines = std.mem.splitScalar(u8, text, '\n');
         var desc: []const u8 = "";
         var node_type: NodeType = .file;
+        var filename: ?[]const u8 = null;
         while (true) {
             var line = lines.next() orelse break;
             if (std.mem.startsWith(u8, line, DESC_START)) {
                 desc = line[(DESC_START.len)..];
             } else if (std.mem.startsWith(u8, line, TYPE_START)) {
                 const ty = line[(TYPE_START.len)..];
-                node_type = try NodeType.fromString(ty);
+                // Check if there's a colon indicating a custom filename
+                if (std.mem.indexOfScalar(u8, ty, ':')) |colon_idx| {
+                    node_type = try NodeType.fromString(ty[0..colon_idx]);
+                    filename = ty[colon_idx + 1 ..];
+                } else {
+                    node_type = try NodeType.fromString(ty);
+                }
             }
         }
 
         return .{
             .description = desc,
             .node_type = node_type,
+            .filename = filename,
         };
     }
 
@@ -1594,6 +1735,10 @@ const Meta = struct {
         try writer.writeAll("\n");
         try writer.writeAll(TYPE_START);
         try writer.writeAll(self.node_type.toString());
+        if (self.filename) |fname| {
+            try writer.writeAll(":");
+            try writer.writeAll(fname);
+        }
     }
 
     test "Meta.fromString - only description" {
@@ -2044,6 +2189,10 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
             // REPL doesn't use parse trees
             return;
         },
+        .snippet => {
+            const file = parse_ast.store.getFile();
+            try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
+        },
     }
 
     // Only generate section if we have content on the stack
@@ -2106,6 +2255,9 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
         .repl => {
             // REPL doesn't use formatting
             return;
+        },
+        .snippet => {
+            try fmt.formatAst(parse_ast.*, formatted.writer().any());
         },
     }
 

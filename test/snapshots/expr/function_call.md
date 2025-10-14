@@ -41,8 +41,8 @@ NO CHANGE
 ~~~clojure
 (e-call @1.1-1.10
 	(e-runtime-error (tag "ident_not_in_scope"))
-	(e-int @1.5-1.6 (value "5"))
-	(e-int @1.8-1.9 (value "3")))
+	(e-num @1.5-1.6 (value "5"))
+	(e-num @1.8-1.9 (value "3")))
 ~~~
 # TYPES
 ~~~clojure

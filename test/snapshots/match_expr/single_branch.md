@@ -62,9 +62,9 @@ match value {
 					(e-binop @2.10-2.15 (op "add")
 						(e-lookup-local @2.10-2.11
 							(p-assign @2.5-2.6 (ident "x")))
-						(e-int @2.14-2.15 (value "1"))))))))
+						(e-num @2.14-2.15 (value "1"))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-3.2 (type "Num(_size)"))
+(expr @1.1-3.2 (type "Error"))
 ~~~

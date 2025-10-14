@@ -87,14 +87,14 @@ NO CHANGE
 				(p-assign @7.17-7.20 (ident "msg")))
 			(e-call @7.22-7.39
 				(e-lookup-external @7.22-7.34
-					(module-idx "0")
+					(module-idx "2")
 					(target-node-idx "0"))
 				(e-lookup-local @7.35-7.38
 					(p-assign @7.17-7.20 (ident "msg")))))
 		(annotation @7.1-7.13
 			(declared-type
 				(ty-fn @6.16-6.25 (effectful false)
-					(ty @6.16-6.19 (name "Str"))
+					(ty-lookup @6.16-6.19 (name "Str") (builtin))
 					(ty-record @6.23-6.25)))))
 	(d-let
 		(p-assign @9.1-9.6 (ident "main!"))

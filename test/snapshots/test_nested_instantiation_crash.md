@@ -31,11 +31,11 @@ composed = |n| get_value(make_record(n))
 ```
                ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The type annotation says it should have the type:
-    _Str_
-
-But here it's being used as:
+It has the type:
     _List(a)_
+
+But the type annotation says it should have the type:
+    _Str_
 
 # TOKENS
 ~~~zig
@@ -156,12 +156,12 @@ answer = composed([42])
 		(annotation @6.1-6.12
 			(declared-type
 				(ty-fn @5.15-5.42 (effectful false)
-					(ty-var @5.15-5.16 (name "a"))
+					(ty-rigid-var @5.15-5.16 (name "a"))
 					(ty-record @5.20-5.42
 						(field (field "value")
-							(ty-var @5.29-5.30 (name "a")))
+							(ty-rigid-var-lookup (ty-rigid-var @5.15-5.16 (name "a"))))
 						(field (field "tag")
-							(ty @5.37-5.40 (name "Str"))))))))
+							(ty-lookup @5.37-5.40 (name "Str") (builtin))))))))
 	(d-let
 		(p-assign @9.1-9.10 (ident "get_value"))
 		(e-lambda @9.13-9.24
@@ -176,16 +176,16 @@ answer = composed([42])
 				(ty-fn @8.13-8.40 (effectful false)
 					(ty-record @8.13-8.35
 						(field (field "value")
-							(ty-var @8.22-8.23 (name "a")))
+							(ty-rigid-var @8.22-8.23 (name "a")))
 						(field (field "tag")
-							(ty @8.30-8.33 (name "Str"))))
-					(ty-var @8.39-8.40 (name "a"))))))
+							(ty-lookup @8.30-8.33 (name "Str") (builtin))))
+					(ty-rigid-var-lookup (ty-rigid-var @8.22-8.23 (name "a")))))))
 	(d-let
 		(p-assign @12.1-12.9 (ident "composed"))
 		(e-closure @12.12-12.41
 			(captures
-				(capture @6.1-6.12 (ident "make_record"))
-				(capture @9.1-9.10 (ident "get_value")))
+				(capture @9.1-9.10 (ident "get_value"))
+				(capture @6.1-6.12 (ident "make_record")))
 			(e-lambda @12.12-12.41
 				(args
 					(p-assign @12.13-12.14 (ident "n")))
@@ -200,9 +200,9 @@ answer = composed([42])
 		(annotation @12.1-12.9
 			(declared-type
 				(ty-fn @11.12-11.26 (effectful false)
-					(ty-apply @11.12-11.19 (symbol "List")
-						(ty-var @11.17-11.18 (name "a")))
-					(ty @11.23-11.26 (name "Str"))))))
+					(ty-apply @11.12-11.19 (name "List") (builtin)
+						(ty-rigid-var @11.17-11.18 (name "a")))
+					(ty-lookup @11.23-11.26 (name "Str") (builtin))))))
 	(d-let
 		(p-assign @14.1-14.7 (ident "answer"))
 		(e-call @14.10-14.24
@@ -210,19 +210,19 @@ answer = composed([42])
 				(p-assign @12.1-12.9 (ident "composed")))
 			(e-list @14.19-14.23
 				(elems
-					(e-int @14.20-14.22 (value "42")))))))
+					(e-num @14.20-14.22 (value "42")))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.12 (type "a -> { tag: Error, value: a }"))
-		(patt @9.1-9.10 (type "{ tag: Error, value: a } -> a"))
+		(patt @6.1-6.12 (type "a -> { tag: Str, value: a }"))
+		(patt @9.1-9.10 (type "{ tag: Str, value: a } -> a"))
 		(patt @12.1-12.9 (type "List(a) -> Error"))
 		(patt @14.1-14.7 (type "Error")))
 	(expressions
-		(expr @6.15-6.44 (type "a -> { tag: Error, value: a }"))
-		(expr @9.13-9.24 (type "{ tag: Error, value: a } -> a"))
+		(expr @6.15-6.44 (type "a -> { tag: Str, value: a }"))
+		(expr @9.13-9.24 (type "{ tag: Str, value: a } -> a"))
 		(expr @12.12-12.41 (type "List(a) -> Error"))
 		(expr @14.10-14.24 (type "Error"))))
 ~~~

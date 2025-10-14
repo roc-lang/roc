@@ -79,14 +79,14 @@ EndOfFile(5:1-5:1),
 (e-block @1.1-4.2
 	(s-let @2.5-2.10
 		(p-assign @2.5-2.6 (ident "x"))
-		(e-int @2.9-2.10 (value "5")))
+		(e-num @2.9-2.10 (value "5")))
 	(e-call @3.5-3.16
 		(e-lambda @3.6-3.11
 			(args
 				(p-assign @3.7-3.8 (ident "x")))
 			(e-lookup-local @3.10-3.11
 				(p-assign @3.7-3.8 (ident "x"))))
-		(e-int @3.13-3.15 (value "10"))))
+		(e-num @3.13-3.15 (value "10"))))
 ~~~
 # TYPES
 ~~~clojure

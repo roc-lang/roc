@@ -1,12 +1,10 @@
 # META
 ~~~ini
 description=fuzz crash
-type=file
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-module []
-
 foo : U64
 bar : Thing(a, b, _)
 biz : (a, b, c)
@@ -17,9 +15,9 @@ tag_tuple : Value((a, b, c))
 ~~~
 # EXPECTED
 ASCII CONTROL CHARACTER - :0:0:0:0
-UNDECLARED TYPE - fuzz_crash_048.md:4:7:4:12
-UNDECLARED TYPE - fuzz_crash_048.md:8:14:8:20
-UNDECLARED TYPE - fuzz_crash_048.md:9:13:9:18
+UNDECLARED TYPE - fuzz_crash_048.md:2:7:2:12
+UNDECLARED TYPE - fuzz_crash_048.md:6:14:6:20
+UNDECLARED TYPE - fuzz_crash_048.md:7:13:7:18
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.
@@ -30,7 +28,7 @@ ASCII control characters are not allowed in Roc source code.
 The type _Thing_ is not declared in this scope.
 
 This type is referenced here:
-**fuzz_crash_048.md:4:7:4:12:**
+**fuzz_crash_048.md:2:7:2:12:**
 ```roc
 bar : Thing(a, b, _)
 ```
@@ -41,7 +39,7 @@ bar : Thing(a, b, _)
 The type _String_ is not declared in this scope.
 
 This type is referenced here:
-**fuzz_crash_048.md:8:14:8:20:**
+**fuzz_crash_048.md:6:14:6:20:**
 ```roc
 main! : List(String) -> Result({}, _)
 ```
@@ -52,7 +50,7 @@ main! : List(String) -> Result({}, _)
 The type _Value_ is not declared in this scope.
 
 This type is referenced here:
-**fuzz_crash_048.md:9:13:9:18:**
+**fuzz_crash_048.md:7:13:7:18:**
 ```roc
 tag_tuple : Value((a, b, c))
 ```
@@ -61,61 +59,57 @@ tag_tuple : Value((a, b, c))
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),
-LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:10),
-LowerIdent(4:1-4:4),OpColon(4:5-4:6),UpperIdent(4:7-4:12),NoSpaceOpenRound(4:12-4:13),LowerIdent(4:13-4:14),Comma(4:14-4:15),LowerIdent(4:16-4:17),Comma(4:17-4:18),Underscore(4:19-4:20),CloseRound(4:20-4:21),
-LowerIdent(5:1-5:4),OpColon(5:5-5:6),OpenRound(5:7-5:8),LowerIdent(5:8-5:9),Comma(5:9-5:10),LowerIdent(5:11-5:12),Comma(5:12-5:13),LowerIdent(5:14-5:15),CloseRound(5:15-5:16),
-LowerIdent(6:1-6:8),OpColon(6:9-6:10),OpenRound(6:11-6:12),
-UpperIdent(7:1-7:3),Comma(7:3-7:4),UpperIdent(7:5-7:8),OpArrow(7:9-7:11),UpperIdent(7:12-7:15),CloseRound(7:15-7:16),
-LowerIdent(8:1-8:6),OpColon(8:7-8:8),UpperIdent(8:9-8:13),NoSpaceOpenRound(8:13-8:14),UpperIdent(8:14-8:20),CloseRound(8:20-8:21),OpArrow(8:22-8:24),UpperIdent(8:25-8:31),NoSpaceOpenRound(8:31-8:32),OpenCurly(8:32-8:33),CloseCurly(8:33-8:34),Comma(8:34-8:35),Underscore(8:36-8:37),CloseRound(8:37-8:38),
-LowerIdent(9:1-9:10),OpColon(9:11-9:12),UpperIdent(9:13-9:18),NoSpaceOpenRound(9:18-9:19),NoSpaceOpenRound(9:19-9:20),LowerIdent(9:20-9:21),Comma(9:21-9:22),LowerIdent(9:23-9:24),Comma(9:24-9:25),LowerIdent(9:26-9:27),CloseRound(9:27-9:28),CloseRound(9:28-9:29),
-EndOfFile(10:1-10:1),
+LowerIdent(1:1-1:4),OpColon(1:5-1:6),UpperIdent(1:7-1:10),
+LowerIdent(2:1-2:4),OpColon(2:5-2:6),UpperIdent(2:7-2:12),NoSpaceOpenRound(2:12-2:13),LowerIdent(2:13-2:14),Comma(2:14-2:15),LowerIdent(2:16-2:17),Comma(2:17-2:18),Underscore(2:19-2:20),CloseRound(2:20-2:21),
+LowerIdent(3:1-3:4),OpColon(3:5-3:6),OpenRound(3:7-3:8),LowerIdent(3:8-3:9),Comma(3:9-3:10),LowerIdent(3:11-3:12),Comma(3:12-3:13),LowerIdent(3:14-3:15),CloseRound(3:15-3:16),
+LowerIdent(4:1-4:8),OpColon(4:9-4:10),OpenRound(4:11-4:12),
+UpperIdent(5:1-5:3),Comma(5:3-5:4),UpperIdent(5:5-5:8),OpArrow(5:9-5:11),UpperIdent(5:12-5:15),CloseRound(5:15-5:16),
+LowerIdent(6:1-6:6),OpColon(6:7-6:8),UpperIdent(6:9-6:13),NoSpaceOpenRound(6:13-6:14),UpperIdent(6:14-6:20),CloseRound(6:20-6:21),OpArrow(6:22-6:24),UpperIdent(6:25-6:31),NoSpaceOpenRound(6:31-6:32),OpenCurly(6:32-6:33),CloseCurly(6:33-6:34),Comma(6:34-6:35),Underscore(6:36-6:37),CloseRound(6:37-6:38),
+LowerIdent(7:1-7:10),OpColon(7:11-7:12),UpperIdent(7:13-7:18),NoSpaceOpenRound(7:18-7:19),NoSpaceOpenRound(7:19-7:20),LowerIdent(7:20-7:21),Comma(7:21-7:22),LowerIdent(7:23-7:24),Comma(7:24-7:25),LowerIdent(7:26-7:27),CloseRound(7:27-7:28),CloseRound(7:28-7:29),
+EndOfFile(8:1-8:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-9.29
-	(module @1.1-1.10
-		(exposes @1.8-1.10))
+(file @1.1-7.29
+	(type-module @1.1-1.4)
 	(statements
-		(s-type-anno @3.1-3.10 (name "foo")
-			(ty @3.7-3.10 (name "U64")))
-		(s-type-anno @4.1-4.21 (name "bar")
-			(ty-apply @4.7-4.21
-				(ty @4.7-4.12 (name "Thing"))
-				(ty-var @4.13-4.14 (raw "a"))
-				(ty-var @4.16-4.17 (raw "b"))
+		(s-type-anno @1.1-1.10 (name "foo")
+			(ty @1.7-1.10 (name "U64")))
+		(s-type-anno @2.1-2.21 (name "bar")
+			(ty-apply @2.7-2.21
+				(ty @2.7-2.12 (name "Thing"))
+				(ty-var @2.13-2.14 (raw "a"))
+				(ty-var @2.16-2.17 (raw "b"))
 				(_)))
-		(s-type-anno @5.1-5.16 (name "biz")
-			(ty-tuple @5.7-5.16
-				(ty-var @5.8-5.9 (raw "a"))
-				(ty-var @5.11-5.12 (raw "b"))
-				(ty-var @5.14-5.15 (raw "c"))))
-		(s-type-anno @6.1-7.16 (name "add_one")
-			(ty-fn @7.1-7.15
-				(ty @7.1-7.3 (name "U8"))
-				(ty @7.5-7.8 (name "U16"))
-				(ty @7.12-7.15 (name "U32"))))
-		(s-type-anno @8.1-8.38 (name "main!")
-			(ty-fn @8.9-8.38
-				(ty-apply @8.9-8.21
-					(ty @8.9-8.13 (name "List"))
-					(ty @8.14-8.20 (name "String")))
-				(ty-apply @8.25-8.38
-					(ty @8.25-8.31 (name "Result"))
-					(ty-record @8.32-8.34)
+		(s-type-anno @3.1-3.16 (name "biz")
+			(ty-tuple @3.7-3.16
+				(ty-var @3.8-3.9 (raw "a"))
+				(ty-var @3.11-3.12 (raw "b"))
+				(ty-var @3.14-3.15 (raw "c"))))
+		(s-type-anno @4.1-5.16 (name "add_one")
+			(ty-fn @5.1-5.15
+				(ty @5.1-5.3 (name "U8"))
+				(ty @5.5-5.8 (name "U16"))
+				(ty @5.12-5.15 (name "U32"))))
+		(s-type-anno @6.1-6.38 (name "main!")
+			(ty-fn @6.9-6.38
+				(ty-apply @6.9-6.21
+					(ty @6.9-6.13 (name "List"))
+					(ty @6.14-6.20 (name "String")))
+				(ty-apply @6.25-6.38
+					(ty @6.25-6.31 (name "Result"))
+					(ty-record @6.32-6.34)
 					(_))))
-		(s-type-anno @9.1-9.29 (name "tag_tuple")
-			(ty-apply @9.13-9.29
-				(ty @9.13-9.18 (name "Value"))
-				(ty-tuple @9.19-9.28
-					(ty-var @9.20-9.21 (raw "a"))
-					(ty-var @9.23-9.24 (raw "b"))
-					(ty-var @9.26-9.27 (raw "c")))))))
+		(s-type-anno @7.1-7.29 (name "tag_tuple")
+			(ty-apply @7.13-7.29
+				(ty @7.13-7.18 (name "Value"))
+				(ty-tuple @7.19-7.28
+					(ty-var @7.20-7.21 (raw "a"))
+					(ty-var @7.23-7.24 (raw "b"))
+					(ty-var @7.26-7.27 (raw "c")))))))
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
 foo : U64
 bar : Thing(a, b, _)
 biz : (a, b, c)

@@ -48,7 +48,7 @@ NO CHANGE
 		(if-branch
 			(e-binop @1.4-1.9 (op "gt")
 				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-int @1.8-1.9 (value "5")))
+				(e-num @1.8-1.9 (value "5")))
 			(e-string @1.10-1.15
 				(e-literal @1.11-1.14 (string "big")))))
 	(if-else

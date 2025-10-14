@@ -188,7 +188,7 @@ match data {
 							(rest-at (index 0)
 								(p-assign @2.8-2.8 (ident "items"))))))
 				(value
-					(e-int @2.18-2.19 (value "1"))))
+					(e-num @2.18-2.19 (value "1"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)

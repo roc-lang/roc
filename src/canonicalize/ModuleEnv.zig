@@ -29,6 +29,18 @@ const TypeStore = types_mod.Store;
 
 const Self = @This();
 
+/// The kind of module being canonicalized, set during header processing
+pub const ModuleKind = union(enum) {
+    type_module: Ident.Idx, // Holds the main type identifier for type modules
+    default_app,
+    app,
+    package,
+    platform,
+    hosted,
+    deprecated_module,
+    malformed,
+};
+
 gpa: std.mem.Allocator,
 
 common: CommonEnv,
@@ -37,12 +49,16 @@ types: TypeStore,
 // ===== Module compilation fields =====
 // NOTE: These fields are populated during canonicalization and preserved for later use
 
+/// The kind of module (type_module, app, etc.) - set during canonicalization
+module_kind: ModuleKind,
 /// All the definitions in the module (populated by canonicalization)
 all_defs: CIR.Def.Span,
 /// All the top-level statements in the module (populated by canonicalization)
 all_statements: CIR.Statement.Span,
 /// Definitions that are exported by this module (populated by canonicalization)
 exports: CIR.Def.Span,
+/// All builtin stmts (temporary until module imports are working)
+builtin_statements: CIR.Statement.Span,
 /// All external declarations referenced in this module
 external_decls: CIR.ExternalDecl.SafeList,
 /// Store for interned module imports
@@ -56,12 +72,32 @@ diagnostics: CIR.Diagnostic.Span,
 /// Uses an efficient data structure, and provides helpers for storing and retrieving nodes.
 store: NodeStore,
 
+/// Relocate all pointers in the ModuleEnv by the given offset.
+/// This is used when loading a ModuleEnv from shared memory at a different address.
+pub fn relocate(self: *Self, offset: isize) void {
+    // Relocate all sub-structures that contain pointers
+    self.common.relocate(offset);
+    self.types.relocate(offset);
+    self.external_decls.relocate(offset);
+    self.imports.relocate(offset);
+    // Note: NodeStore.Serialized.deserialize() handles relocation internally, no separate relocate method needed
+
+    // Relocate the module_name pointer if it's not empty
+    if (self.module_name.len > 0) {
+        const old_ptr = @intFromPtr(self.module_name.ptr);
+        const new_ptr = @as(isize, @intCast(old_ptr)) + offset;
+        self.module_name.ptr = @ptrFromInt(@as(usize, @intCast(new_ptr)));
+    }
+}
+
 /// Initialize the compilation fields in an existing ModuleEnv
 pub fn initCIRFields(self: *Self, gpa: std.mem.Allocator, module_name: []const u8) !void {
     _ = gpa; // unused since we don't create new allocations
+    self.module_kind = undefined; // Set during canonicalization
     self.all_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.all_statements = .{ .span = .{ .start = 0, .len = 0 } };
     self.exports = .{ .span = .{ .start = 0, .len = 0 } };
+    self.builtin_statements = .{ .span = .{ .start = 0, .len = 0 } };
     // Note: external_decls already exists from ModuleEnv.init(), so we don't create a new one
     self.imports = CIR.Import.Store.init();
     self.module_name = module_name;
@@ -82,9 +118,11 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .gpa = gpa,
         .common = try CommonEnv.init(gpa, source),
         .types = try TypeStore.initCapacity(gpa, 2048, 512),
+        .module_kind = undefined, // Set during canonicalization
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .exports = .{ .span = .{ .start = 0, .len = 0 } },
+        .builtin_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = try CIR.ExternalDecl.SafeList.initCapacity(gpa, 16),
         .imports = CIR.Import.Store.init(),
         .module_name = "", // Will be set later during canonicalization
@@ -956,6 +994,331 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .type_module_missing_matching_type => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "TYPE MODULE MISSING MATCHING TYPE", .runtime_error);
+
+            const module_name_bytes = self.getIdent(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+
+            try report.document.addReflowingText("Type modules must have a type declaration matching the module name.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addText("This file is named ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(".roc, but no top-level type declaration named ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(" was found.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Add either:");
+            try report.document.addLineBreak();
+            const nominal_msg = try std.fmt.allocPrint(allocator, "{s} := ...", .{module_name_bytes});
+            defer allocator.free(nominal_msg);
+            const owned_nominal = try report.addOwnedString(nominal_msg);
+            try report.document.addInlineCode(owned_nominal);
+            try report.document.addReflowingText(" (nominal type)");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("or:");
+            try report.document.addLineBreak();
+            const alias_msg = try std.fmt.allocPrint(allocator, "{s} : ...", .{module_name_bytes});
+            defer allocator.free(alias_msg);
+            const owned_alias = try report.addOwnedString(alias_msg);
+            try report.document.addInlineCode(owned_alias);
+            try report.document.addReflowingText(" (type alias)");
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .default_app_missing_main => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "MISSING MAIN! FUNCTION", .runtime_error);
+
+            try report.document.addReflowingText("Default app modules must have a ");
+            try report.document.addInlineCode("main!");
+            try report.document.addReflowingText(" function.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addText("No ");
+            try report.document.addInlineCode("main!");
+            try report.document.addReflowingText(" function was found.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Add a main! function like:");
+            try report.document.addLineBreak();
+            try report.document.addInlineCode("main! = |arg| { ... }");
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .default_app_wrong_arity => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "MAIN! SHOULD TAKE 1 ARGUMENT", .runtime_error);
+
+            try report.document.addInlineCode("main!");
+            try report.document.addReflowingText(" is defined but has the wrong number of arguments. ");
+            try report.document.addInlineCode("main!");
+            try report.document.addReflowingText(" should take 1 argument.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            const arity_msg = try std.fmt.allocPrint(allocator, "{d}", .{data.arity});
+            defer allocator.free(arity_msg);
+            const owned_arity = try report.addOwnedString(arity_msg);
+            try report.document.addText("Found ");
+            try report.document.addInlineCode(owned_arity);
+            try report.document.addReflowingText(" arguments.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Change it to:");
+            try report.document.addLineBreak();
+            try report.document.addInlineCode("main! = |arg| { ... }");
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .cannot_import_default_app => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "CANNOT IMPORT DEFAULT APP", .runtime_error);
+
+            const module_name_bytes = self.getIdent(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+
+            try report.document.addReflowingText("You cannot import a default app module.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addText("The module ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(" is a default app module and cannot be imported.");
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .execution_requires_app_or_default_app => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "EXECUTION REQUIRES APP OR DEFAULT APP", .runtime_error);
+
+            try report.document.addReflowingText("This file cannot be executed because it is not an app or default-app module.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Add either:");
+            try report.document.addLineBreak();
+            try report.document.addInlineCode("app");
+            try report.document.addReflowingText(" header at the top of the file");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("or:");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("a ");
+            try report.document.addInlineCode("main!");
+            try report.document.addReflowingText(" function with 1 argument (for default-app)");
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .type_name_case_mismatch => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "TYPE NAME CASE MISMATCH", .runtime_error);
+
+            const module_name_bytes = self.getIdent(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+            const type_name_bytes = self.getIdent(data.type_name);
+            const type_name = try report.addOwnedString(type_name_bytes);
+
+            try report.document.addReflowingText("Type module name must match the type declaration.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addText("This file is named ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(".roc, but the type is named ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Make sure the type name matches the filename exactly (case-sensitive).");
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .module_header_deprecated => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "MODULE HEADER DEPRECATED", .warning);
+
+            try report.document.addReflowingText("The ");
+            try report.document.addInlineCode("module");
+            try report.document.addReflowingText(" header is deprecated.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Remove the ");
+            try report.document.addInlineCode("module");
+            try report.document.addReflowingText(" header and ensure your file defines a type that matches the filename.");
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .warning_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .redundant_expose_main_type => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "REDUNDANT EXPOSE", .warning);
+
+            const type_name_bytes = self.getIdent(data.type_name);
+            const type_name = try report.addOwnedString(type_name_bytes);
+            const module_name_bytes = self.getIdent(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+
+            try report.document.addReflowingText("Redundantly exposing ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(" when importing ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("The type ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(" is automatically exposed when importing a type module.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Remove ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(" from the exposing clause.");
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .warning_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .invalid_main_type_rename_in_exposing => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "INVALID TYPE RENAME", .runtime_error);
+
+            const type_name_bytes = self.getIdent(data.type_name);
+            const type_name = try report.addOwnedString(type_name_bytes);
+            const alias_bytes = self.getIdent(data.alias);
+            const alias = try report.addOwnedString(alias_bytes);
+
+            try report.document.addReflowingText("Cannot rename ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(" to ");
+            try report.document.addInlineCode(alias);
+            try report.document.addReflowingText(" in the exposing clause.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("To rename both the module and its main type, use ");
+            try report.document.addInlineCode("as");
+            try report.document.addReflowingText(" at the module level:");
+            try report.document.addLineBreak();
+
+            const example_msg = try std.fmt.allocPrint(allocator, "import ModuleName as {s}", .{alias_bytes});
+            defer allocator.free(example_msg);
+            const owned_example = try report.addOwnedString(example_msg);
+            try report.document.addInlineCode(owned_example);
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         else => {
             // For unhandled diagnostics, create a generic report
             const diagnostic_name = @tagName(diagnostic);
@@ -1001,73 +1364,21 @@ pub fn getSourceLine(self: *const Self, region: Region) ![]const u8 {
     return self.common.getSourceLine(region);
 }
 
-/// Serialize this ModuleEnv to the given CompactWriter.
-/// IMPORTANT: The returned pointer points to memory inside the writer!
-/// Attempting to dereference this pointer or calling any methods on it
-/// is illegal behavior!
-pub fn serialize(
-    self: *const Self,
-    allocator: std.mem.Allocator,
-    writer: *CompactWriter,
-) std.mem.Allocator.Error!*const Self {
-    // First, write the ModuleEnv struct itself
-    const offset_self = try writer.appendAlloc(allocator, Self);
-
-    // Then serialize the sub-structures and update the struct
-    offset_self.* = .{
-        .gpa = undefined, // Will be set when deserializing
-        .common = (try self.common.serialize(allocator, writer)).*,
-        .types = (try self.types.serialize(allocator, writer)).*,
-        .all_defs = self.all_defs,
-        .all_statements = self.all_statements,
-        .exports = self.exports,
-        .external_decls = (try self.external_decls.serialize(allocator, writer)).*,
-        .imports = (try self.imports.serialize(allocator, writer)).*,
-        .module_name = "", // Will be set when deserializing
-        .diagnostics = self.diagnostics,
-        .store = (try self.store.serialize(allocator, writer)).*,
-    };
-
-    // set gpa to all zeros, so that what we write to the file is deterministic
-    @memset(@as([*]u8, @ptrCast(&offset_self.gpa))[0..@sizeOf(@TypeOf(offset_self.gpa))], 0);
-
-    return @constCast(offset_self);
-}
-
-/// Add the given offset to the memory addresses of all pointers in `self`.
-/// IMPORTANT: The gpa, source, and module_name fields must be manually set before calling this function.
-pub fn relocate(self: *Self, offset: isize) void {
-    // IMPORTANT: gpa, and module_name are not relocated - they should be set manually before calling relocate
-
-    // Relocate all sub-structures
-    self.common.relocate(offset);
-    self.types.relocate(offset);
-
-    // Note: all_defs and all_statements are just spans with numeric values, no pointers to relocate
-
-    self.external_decls.relocate(offset);
-    // self.imports is deserialized separately, so no need to relocate here
-
-    // Note: module_name is not relocated - it should be set manually
-
-    // Note: diagnostics is just a span with numeric values, no pointers to relocate
-
-    self.store.relocate(offset);
-}
-
 /// Serialized representation of ModuleEnv
 pub const Serialized = struct {
-    gpa: std.mem.Allocator, // Serialized as zeros, provided during deserialization
+    gpa: [2]u64, // Reserve space for allocator (vtable ptr + context ptr), provided during deserialization
     common: CommonEnv.Serialized,
     types: TypeStore.Serialized,
     all_defs: CIR.Def.Span,
     all_statements: CIR.Statement.Span,
     exports: CIR.Def.Span,
+    builtin_statements: CIR.Statement.Span,
     external_decls: CIR.ExternalDecl.SafeList.Serialized,
     imports: CIR.Import.Store.Serialized,
-    module_name: []const u8, // Serialized as zeros, provided during deserialization
+    module_name: [2]u64, // Reserve space for slice (ptr + len), provided during deserialization
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
+    module_kind: ModuleKind,
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -1076,9 +1387,6 @@ pub const Serialized = struct {
         allocator: std.mem.Allocator,
         writer: *CompactWriter,
     ) !void {
-        // Set fields that will be provided during deserialization to zeros
-        self.gpa = undefined; // Will be set to zeros below
-
         try self.common.serialize(&env.common, allocator, writer);
         try self.types.serialize(&env.types, allocator, writer);
 
@@ -1086,6 +1394,7 @@ pub const Serialized = struct {
         self.all_defs = env.all_defs;
         self.all_statements = env.all_statements;
         self.exports = env.exports;
+        self.builtin_statements = env.builtin_statements;
 
         try self.external_decls.serialize(&env.external_decls, allocator, writer);
         try self.imports.serialize(&env.imports, allocator, writer);
@@ -1095,9 +1404,10 @@ pub const Serialized = struct {
         // Serialize NodeStore
         try self.store.serialize(&env.store, allocator, writer);
 
-        // Set gpa to all zeros; the space needs to be here,
-        // but the value will be set separately during deserialization.
-        @memset(@as([*]u8, @ptrCast(&self.gpa))[0..@sizeOf(@TypeOf(self.gpa))], 0);
+        // Set gpa and module_name to all zeros; the space needs to be here,
+        // but the values will be set separately during deserialization.
+        self.gpa = .{ 0, 0 };
+        self.module_name = .{ 0, 0 };
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
@@ -1117,10 +1427,12 @@ pub const Serialized = struct {
         env.* = Self{
             .gpa = gpa,
             .common = self.common.deserialize(offset, source).*,
-            .types = self.types.deserialize(offset).*,
+            .types = self.types.deserialize(offset, gpa).*,
+            .module_kind = self.module_kind,
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
             .exports = self.exports,
+            .builtin_statements = self.builtin_statements,
             .external_decls = self.external_decls.deserialize(offset).*,
             .imports = self.imports.deserialize(offset, gpa).*,
             .module_name = module_name,
@@ -1822,6 +2134,11 @@ pub fn insertString(self: *Self, string: []const u8) std.mem.Allocator.Error!Str
 
 /// Returns a mutable reference to the identifier store.
 pub fn getIdentStore(self: *Self) *Ident.Store {
+    return &self.common.idents;
+}
+
+/// Returns an immutable reference to the identifier store.
+pub fn getIdentStoreConst(self: *const Self) *const Ident.Store {
     return &self.common.idents;
 }
 

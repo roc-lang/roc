@@ -39,9 +39,9 @@ NO CHANGE
 ~~~clojure
 (e-list @1.1-5.2
 	(elems
-		(e-int @2.2-2.3 (value "1"))
-		(e-int @3.2-3.3 (value "2"))
-		(e-int @4.2-4.3 (value "3"))))
+		(e-num @2.2-2.3 (value "1"))
+		(e-num @3.2-3.3 (value "2"))
+		(e-num @4.2-4.3 (value "3"))))
 ~~~
 # TYPES
 ~~~clojure

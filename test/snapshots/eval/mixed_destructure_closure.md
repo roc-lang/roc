@@ -102,19 +102,19 @@ EndOfFile(2:1-2:1),
 	(e-record @1.53-1.88
 		(fields
 			(field (name "a")
-				(e-int @1.58-1.59 (value "1")))
+				(e-num @1.58-1.59 (value "1")))
 			(field (name "x")
 				(e-tuple @1.64-1.70
 					(elems
-						(e-int @1.65-1.66 (value "2"))
-						(e-int @1.68-1.69 (value "3")))))
+						(e-num @1.65-1.66 (value "2"))
+						(e-num @1.68-1.69 (value "3")))))
 			(field (name "y")
 				(e-record @1.75-1.87
 					(fields
 						(field (name "d")
-							(e-int @1.79-1.80 (value "4")))
+							(e-num @1.79-1.80 (value "4")))
 						(field (name "e")
-							(e-int @1.85-1.86 (value "5")))))))))
+							(e-num @1.85-1.86 (value "5")))))))))
 ~~~
 # TYPES
 ~~~clojure

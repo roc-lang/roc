@@ -19,6 +19,7 @@ const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
 const TypeVar = types.Var;
 const Expr = CIR.Expr;
+const Statement = CIR.Statement;
 const IntValue = CIR.IntValue;
 const RocDec = builtins.RocDec;
 
@@ -32,28 +33,44 @@ pub const TypeAnno = union(enum) {
     ///
     /// Examples: `List(Str)`, `Dict(String, Int)`, `Result(a, b)`
     apply: Apply,
-    /// Type application: applying a type constructor to arguments.
-    ///
-    /// Examples: `OtherModule.MyMap(String, Int)`
-    apply_external: ApplyExternal,
     /// Type variable: a placeholder type that can be unified with other types.
     ///
     /// Examples: `a`, `b`, `elem` in generic type signatures
-    ty_var: struct {
+    rigid_var: struct {
         name: Ident.Idx, // The variable name (e.g., "a", "b")
+    },
+    /// A rigid var that references another
+    ///
+    /// Examples:
+    ///
+    ///   MyAlias(a) = List(a)
+    /// rigid_var ^         ^ rigid_var_lookup
+    ///
+    /// myFunction : a -> a
+    ///    rigid_var ^    ^ rigid_var_lookup
+    rigid_var_lookup: struct {
+        ref: TypeAnno.Idx, // The variable name (e.g., "a", "b")
     },
     /// Inferred type `_`
     underscore: void,
     /// Basic type identifier: a concrete type name without arguments.
     ///
     /// Examples: `Str`, `U64`, `Bool`
-    ty: struct {
-        symbol: Ident.Idx, // The type name
+    lookup: struct {
+        name: Ident.Idx, // The type name
+        base: LocalOrExternal,
     },
     /// Tag union type: a union of tags, possibly with payloads.
     ///
     /// Examples: `[Some(a), None]`, `[Red, Green, Blue]`, `[Cons(a, (List a)), Nil]`
     tag_union: TagUnion,
+    /// A tag in a gat union
+    ///
+    /// Examples: `Some(a)`, `None`
+    tag: struct {
+        name: Ident.Idx, // The tag name
+        args: TypeAnno.Span, // The tag arguments
+    },
     /// Tuple type: a fixed-size collection of heterogeneous types.
     ///
     /// Examples: `(Str, U64)`, `(a, b, c)`
@@ -72,13 +89,6 @@ pub const TypeAnno = union(enum) {
     parens: struct {
         anno: TypeAnno.Idx, // The type inside the parentheses
     },
-    /// External type lookup: references a type from another module via external declaration.
-    ///
-    /// Examples: `Json.Value`, `Http.Request` - types that will be resolved when dependencies are available
-    ty_lookup_external: struct {
-        module_idx: CIR.Import.Idx,
-        target_node_idx: u16,
-    },
     /// Malformed type annotation: represents a type that couldn't be parsed correctly.
     /// This follows the "Inform Don't Block" principle - compilation continues with
     /// an error marker that will be reported to the user.
@@ -96,9 +106,41 @@ pub const TypeAnno = union(enum) {
                 try tree.pushStaticAtom("ty-apply");
                 const region = ir.store.getTypeAnnoRegion(type_anno_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPair("symbol", ir.getIdentText(a.symbol));
-                const attrs = tree.beginNode();
+                try tree.pushStringPair("name", ir.getIdentText(a.name));
 
+                switch (a.base) {
+                    .builtin => |_| {
+                        const field_begin = tree.beginNode();
+                        try tree.pushStaticAtom("builtin");
+                        const field_attrs = tree.beginNode();
+                        try tree.endNode(field_begin, field_attrs);
+                    },
+                    .local => |_| {
+                        const field_begin = tree.beginNode();
+                        try tree.pushStaticAtom("local");
+                        const field_attrs = tree.beginNode();
+                        try tree.endNode(field_begin, field_attrs);
+                    },
+                    .external => |external| {
+                        const ext_begin = tree.beginNode();
+                        try tree.pushStaticAtom("external");
+
+                        // Add module index
+                        var buf: [32]u8 = undefined;
+                        const module_idx_str = std.fmt.bufPrint(&buf, "{}", .{@intFromEnum(external.module_idx)}) catch unreachable;
+                        try tree.pushStringPair("module-idx", module_idx_str);
+
+                        // Add target node index
+                        var buf2: [32]u8 = undefined;
+                        const target_idx_str = std.fmt.bufPrint(&buf2, "{}", .{external.target_node_idx}) catch unreachable;
+                        try tree.pushStringPair("target-node-idx", target_idx_str);
+
+                        const field_attrs = tree.beginNode();
+                        try tree.endNode(ext_begin, field_attrs);
+                    },
+                }
+
+                const attrs = tree.beginNode();
                 const args_slice = ir.store.sliceTypeAnnos(a.args);
                 for (args_slice) |arg_idx| {
                     try ir.store.getTypeAnno(arg_idx).pushToSExprTree(ir, tree, arg_idx);
@@ -106,31 +148,19 @@ pub const TypeAnno = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .apply_external => |a| {
+            .rigid_var => |tv| {
                 const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-apply-external");
-                const region = ir.store.getTypeAnnoRegion(type_anno_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                const attrs = tree.beginNode();
-
-                // Add module index
-                var buf: [32]u8 = undefined;
-                const module_idx_str = std.fmt.bufPrint(&buf, "{}", .{@intFromEnum(a.module_idx)}) catch unreachable;
-                try tree.pushStringPair("module-idx", module_idx_str);
-
-                // Add target node index
-                var buf2: [32]u8 = undefined;
-                const target_idx_str = std.fmt.bufPrint(&buf2, "{}", .{a.target_node_idx}) catch unreachable;
-                try tree.pushStringPair("target-node-idx", target_idx_str);
-
-                try tree.endNode(begin, attrs);
-            },
-            .ty_var => |tv| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-var");
+                try tree.pushStaticAtom("ty-rigid-var");
                 const region = ir.store.getTypeAnnoRegion(type_anno_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 try tree.pushStringPair("name", ir.getIdentText(tv.name));
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .rigid_var_lookup => |rv_lookup| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("ty-rigid-var-lookup");
+                try ir.store.getTypeAnno(rv_lookup.ref).pushToSExprTree(ir, tree, rv_lookup.ref);
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -142,12 +172,45 @@ pub const TypeAnno = union(enum) {
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
-            .ty => |t| {
+            .lookup => |t| {
                 const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty");
+                try tree.pushStaticAtom("ty-lookup");
                 const region = ir.store.getTypeAnnoRegion(type_anno_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPair("name", ir.getIdentText(t.symbol));
+                try tree.pushStringPair("name", ir.getIdentText(t.name));
+
+                switch (t.base) {
+                    .builtin => |_| {
+                        const field_begin = tree.beginNode();
+                        try tree.pushStaticAtom("builtin");
+                        const field_attrs = tree.beginNode();
+                        try tree.endNode(field_begin, field_attrs);
+                    },
+                    .local => |_| {
+                        const field_begin = tree.beginNode();
+                        try tree.pushStaticAtom("local");
+                        const field_attrs = tree.beginNode();
+                        try tree.endNode(field_begin, field_attrs);
+                    },
+                    .external => |external| {
+                        const ext_begin = tree.beginNode();
+                        try tree.pushStaticAtom("external");
+
+                        // Add module index
+                        var buf: [32]u8 = undefined;
+                        const module_idx_str = std.fmt.bufPrint(&buf, "{}", .{@intFromEnum(external.module_idx)}) catch unreachable;
+                        try tree.pushStringPair("module-idx", module_idx_str);
+
+                        // Add target node index
+                        var buf2: [32]u8 = undefined;
+                        const target_idx_str = std.fmt.bufPrint(&buf2, "{}", .{external.target_node_idx}) catch unreachable;
+                        try tree.pushStringPair("target-node-idx", target_idx_str);
+
+                        const field_attrs = tree.beginNode();
+                        try tree.endNode(ext_begin, field_attrs);
+                    },
+                }
+
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -167,6 +230,21 @@ pub const TypeAnno = union(enum) {
                     try ir.store.getTypeAnno(open_idx).pushToSExprTree(ir, tree, open_idx);
                 }
 
+                try tree.endNode(begin, attrs);
+            },
+            .tag => |t| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("ty-tag-name");
+                const region = ir.store.getTypeAnnoRegion(type_anno_idx);
+
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("name", ir.getIdentText(t.name));
+
+                const attrs = tree.beginNode();
+                const args_slice = ir.store.sliceTypeAnnos(t.args);
+                for (args_slice) |tag_idx| {
+                    try ir.store.getTypeAnno(tag_idx).pushToSExprTree(ir, tree, tag_idx);
+                }
                 try tree.endNode(begin, attrs);
             },
             .tuple => |t| {
@@ -234,25 +312,6 @@ pub const TypeAnno = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .ty_lookup_external => |tle| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-lookup-external");
-                const region = ir.store.getTypeAnnoRegion(type_anno_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                const attrs = tree.beginNode();
-
-                // Add module index
-                var buf: [32]u8 = undefined;
-                const module_idx_str = std.fmt.bufPrint(&buf, "{}", .{@intFromEnum(tle.module_idx)}) catch unreachable;
-                try tree.pushStringPair("module-idx", module_idx_str);
-
-                // Add target node index
-                var buf2: [32]u8 = undefined;
-                const target_idx_str = std.fmt.bufPrint(&buf2, "{}", .{tle.target_node_idx}) catch unreachable;
-                try tree.pushStringPair("target-node-idx", target_idx_str);
-
-                try tree.endNode(begin, attrs);
-            },
             .malformed => |_| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("ty-malformed");
@@ -273,16 +332,25 @@ pub const TypeAnno = union(enum) {
         pub const Span = struct { span: DataSpan };
     };
 
-    /// A type application in a type annotation
-    pub const Apply = struct {
-        symbol: Ident.Idx, // The type constructor being applied (e.g., "List", "Dict")
-        args: TypeAnno.Span, // The type arguments (e.g., [Str], [String, Int])
+    /// Either a locally declare type, or an external type
+    pub const LocalOrExternal = union(enum) {
+        builtin: Builtin,
+        local: struct {
+            decl_idx: Statement.Idx,
+        },
+        external: struct {
+            module_idx: CIR.Import.Idx,
+            target_node_idx: u16,
+        },
+
+        // Just the tag of this union enum
+        pub const Tag = std.meta.Tag(@This());
     };
 
-    /// A type application of an external type in a type annotation
-    pub const ApplyExternal = struct {
-        module_idx: CIR.Import.Idx,
-        target_node_idx: u16,
+    /// A type application in a type annotation
+    pub const Apply = struct {
+        name: Ident.Idx, // The type name
+        base: LocalOrExternal, // Reference to the type
         args: TypeAnno.Span, // The type arguments (e.g., [Str], [String, Int])
     };
 
@@ -307,5 +375,76 @@ pub const TypeAnno = union(enum) {
     /// A tuple in a type annotation
     pub const Tuple = struct {
         elems: TypeAnno.Span, // The types of each tuple element
+    };
+
+    /// A builtin type
+    pub const Builtin = enum {
+        str,
+        list,
+        box,
+        num,
+        frac,
+        int,
+        u8,
+        u16,
+        u32,
+        u64,
+        u128,
+        i8,
+        i16,
+        i32,
+        i64,
+        i128,
+        f32,
+        f64,
+        dec,
+
+        /// Convert a builtin type to it's name
+        pub fn toBytes(self: @This()) []const u8 {
+            switch (self) {
+                .str => return "Str",
+                .list => return "List",
+                .box => return "Box",
+                .num => return "Num",
+                .frac => return "Frac",
+                .int => return "Int",
+                .u8 => return "U8",
+                .u16 => return "U16",
+                .u32 => return "U32",
+                .u64 => return "U64",
+                .u128 => return "U128",
+                .i8 => return "I8",
+                .i16 => return "I16",
+                .i32 => return "I32",
+                .i64 => return "I64",
+                .i128 => return "I128",
+                .f32 => return "F32",
+                .f64 => return "F64",
+                .dec => return "Dec",
+            }
+        }
+
+        /// Convert a type name string to the corresponding builtin type
+        pub fn fromBytes(bytes: []const u8) ?@This() {
+            if (std.mem.eql(u8, bytes, "Str")) return .str;
+            if (std.mem.eql(u8, bytes, "List")) return .list;
+            if (std.mem.eql(u8, bytes, "Num")) return .num;
+            if (std.mem.eql(u8, bytes, "Frac")) return .frac;
+            if (std.mem.eql(u8, bytes, "Int")) return .int;
+            if (std.mem.eql(u8, bytes, "U8")) return .u8;
+            if (std.mem.eql(u8, bytes, "U16")) return .u16;
+            if (std.mem.eql(u8, bytes, "U32")) return .u32;
+            if (std.mem.eql(u8, bytes, "U64")) return .u64;
+            if (std.mem.eql(u8, bytes, "U128")) return .u128;
+            if (std.mem.eql(u8, bytes, "I8")) return .i8;
+            if (std.mem.eql(u8, bytes, "I16")) return .i16;
+            if (std.mem.eql(u8, bytes, "I32")) return .i32;
+            if (std.mem.eql(u8, bytes, "I64")) return .i64;
+            if (std.mem.eql(u8, bytes, "I128")) return .i128;
+            if (std.mem.eql(u8, bytes, "F32")) return .f32;
+            if (std.mem.eql(u8, bytes, "F64")) return .f64;
+            if (std.mem.eql(u8, bytes, "Dec")) return .dec;
+            return null;
+        }
     };
 };

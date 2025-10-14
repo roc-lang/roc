@@ -74,7 +74,7 @@ NO CHANGE
 			(e-block @1.9-3.2
 				(e-tag @2.2-2.3 (name "A")))))
 	(if-else
-		(e-int @3.8-3.9 (value "2"))))
+		(e-num @3.8-3.9 (value "2"))))
 ~~~
 # TYPES
 ~~~clojure

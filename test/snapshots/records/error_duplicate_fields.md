@@ -83,12 +83,12 @@ NO CHANGE
 			(e-string @1.9-1.16
 				(e-literal @1.10-1.15 (string "Alice"))))
 		(field (name "age")
-			(e-int @1.23-1.25 (value "30")))
+			(e-num @1.23-1.25 (value "30")))
 		(field (name "email")
 			(e-string @1.47-1.66
 				(e-literal @1.48-1.65 (string "alice@example.com"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.77 (type "{ name: Str, age: Num(_size), email: Str }"))
+(expr @1.1-1.77 (type "{ age: Num(_size), email: Str, name: Str }"))
 ~~~

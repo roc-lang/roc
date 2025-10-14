@@ -1,30 +1,28 @@
 # META
 ~~~ini
 description=Type redeclaration in same scope should produce error
-type=file
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-module [Maybe]
-
 Maybe(a) : [Some(a), None]
 Maybe(a) : [Ok(a), Err]
 ~~~
 # EXPECTED
-TYPE REDECLARED - type_redeclaration_same_scope.md:4:1:4:24
+TYPE REDECLARED - type_redeclaration_same_scope.md:2:1:2:24
 # PROBLEMS
 **TYPE REDECLARED**
 The type _Maybe_ is being redeclared.
 
 The redeclaration is here:
-**type_redeclaration_same_scope.md:4:1:4:24:**
+**type_redeclaration_same_scope.md:2:1:2:24:**
 ```roc
 Maybe(a) : [Ok(a), Err]
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^
 
 But _Maybe_ was already declared here:
-**type_redeclaration_same_scope.md:3:1:3:27:**
+**type_redeclaration_same_scope.md:1:1:1:27:**
 ```roc
 Maybe(a) : [Some(a), None]
 ```
@@ -33,38 +31,35 @@ Maybe(a) : [Some(a), None]
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:14),CloseSquare(1:14-1:15),
-UpperIdent(3:1-3:6),NoSpaceOpenRound(3:6-3:7),LowerIdent(3:7-3:8),CloseRound(3:8-3:9),OpColon(3:10-3:11),OpenSquare(3:12-3:13),UpperIdent(3:13-3:17),NoSpaceOpenRound(3:17-3:18),LowerIdent(3:18-3:19),CloseRound(3:19-3:20),Comma(3:20-3:21),UpperIdent(3:22-3:26),CloseSquare(3:26-3:27),
-UpperIdent(4:1-4:6),NoSpaceOpenRound(4:6-4:7),LowerIdent(4:7-4:8),CloseRound(4:8-4:9),OpColon(4:10-4:11),OpenSquare(4:12-4:13),UpperIdent(4:13-4:15),NoSpaceOpenRound(4:15-4:16),LowerIdent(4:16-4:17),CloseRound(4:17-4:18),Comma(4:18-4:19),UpperIdent(4:20-4:23),CloseSquare(4:23-4:24),
-EndOfFile(5:1-5:1),
+UpperIdent(1:1-1:6),NoSpaceOpenRound(1:6-1:7),LowerIdent(1:7-1:8),CloseRound(1:8-1:9),OpColon(1:10-1:11),OpenSquare(1:12-1:13),UpperIdent(1:13-1:17),NoSpaceOpenRound(1:17-1:18),LowerIdent(1:18-1:19),CloseRound(1:19-1:20),Comma(1:20-1:21),UpperIdent(1:22-1:26),CloseSquare(1:26-1:27),
+UpperIdent(2:1-2:6),NoSpaceOpenRound(2:6-2:7),LowerIdent(2:7-2:8),CloseRound(2:8-2:9),OpColon(2:10-2:11),OpenSquare(2:12-2:13),UpperIdent(2:13-2:15),NoSpaceOpenRound(2:15-2:16),LowerIdent(2:16-2:17),CloseRound(2:17-2:18),Comma(2:18-2:19),UpperIdent(2:20-2:23),CloseSquare(2:23-2:24),
+EndOfFile(3:1-3:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-4.24
-	(module @1.1-1.15
-		(exposes @1.8-1.15
-			(exposed-upper-ident @1.9-1.14 (text "Maybe"))))
+(file @1.1-2.24
+	(type-module @1.1-1.6)
 	(statements
-		(s-type-decl @3.1-3.27
-			(header @3.1-3.9 (name "Maybe")
+		(s-type-decl @1.1-1.27
+			(header @1.1-1.9 (name "Maybe")
 				(args
-					(ty-var @3.7-3.8 (raw "a"))))
-			(ty-tag-union @3.12-3.27
+					(ty-var @1.7-1.8 (raw "a"))))
+			(ty-tag-union @1.12-1.27
 				(tags
-					(ty-apply @3.13-3.20
-						(ty @3.13-3.17 (name "Some"))
-						(ty-var @3.18-3.19 (raw "a")))
-					(ty @3.22-3.26 (name "None")))))
-		(s-type-decl @4.1-4.24
-			(header @4.1-4.9 (name "Maybe")
+					(ty-apply @1.13-1.20
+						(ty @1.13-1.17 (name "Some"))
+						(ty-var @1.18-1.19 (raw "a")))
+					(ty @1.22-1.26 (name "None")))))
+		(s-type-decl @2.1-2.24
+			(header @2.1-2.9 (name "Maybe")
 				(args
-					(ty-var @4.7-4.8 (raw "a"))))
-			(ty-tag-union @4.12-4.24
+					(ty-var @2.7-2.8 (raw "a"))))
+			(ty-tag-union @2.12-2.24
 				(tags
-					(ty-apply @4.13-4.18
-						(ty @4.13-4.15 (name "Ok"))
-						(ty-var @4.16-4.17 (raw "a")))
-					(ty @4.20-4.23 (name "Err")))))))
+					(ty-apply @2.13-2.18
+						(ty @2.13-2.15 (name "Ok"))
+						(ty-var @2.16-2.17 (raw "a")))
+					(ty @2.20-2.23 (name "Err")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -73,35 +68,35 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-alias-decl @3.1-3.27
-		(ty-header @3.1-3.9 (name "Maybe")
+	(s-alias-decl @1.1-1.27
+		(ty-header @1.1-1.9 (name "Maybe")
 			(ty-args
-				(ty-var @3.7-3.8 (name "a"))))
-		(ty-tag-union @3.12-3.27
-			(ty-apply @3.13-3.20 (symbol "Some")
-				(ty-var @3.18-3.19 (name "a")))
-			(ty @3.22-3.26 (name "None"))))
-	(s-alias-decl @4.1-4.24
-		(ty-header @4.1-4.9 (name "Maybe")
+				(ty-rigid-var @1.7-1.8 (name "a"))))
+		(ty-tag-union @1.12-1.27
+			(ty-tag-name @1.13-1.20 (name "Some")
+				(ty-rigid-var-lookup (ty-rigid-var @1.7-1.8 (name "a"))))
+			(ty-tag-name @1.22-1.26 (name "None"))))
+	(s-alias-decl @2.1-2.24
+		(ty-header @2.1-2.9 (name "Maybe")
 			(ty-args
-				(ty-var @4.7-4.8 (name "a"))))
-		(ty-tag-union @4.12-4.24
-			(ty-apply @4.13-4.18 (symbol "Ok")
-				(ty-var @4.16-4.17 (name "a")))
-			(ty @4.20-4.23 (name "Err")))))
+				(ty-rigid-var @2.7-2.8 (name "a"))))
+		(ty-tag-union @2.12-2.24
+			(ty-tag-name @2.13-2.18 (name "Ok")
+				(ty-rigid-var-lookup (ty-rigid-var @2.7-2.8 (name "a"))))
+			(ty-tag-name @2.20-2.23 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @3.1-3.27 (type "Maybe(a)")
-			(ty-header @3.1-3.9 (name "Maybe")
+		(alias @1.1-1.27 (type "Maybe(a)")
+			(ty-header @1.1-1.9 (name "Maybe")
 				(ty-args
-					(ty-var @3.7-3.8 (name "a")))))
-		(alias @4.1-4.24 (type "Maybe(a)")
-			(ty-header @4.1-4.9 (name "Maybe")
+					(ty-rigid-var @1.7-1.8 (name "a")))))
+		(alias @2.1-2.24 (type "Maybe(a)")
+			(ty-header @2.1-2.9 (name "Maybe")
 				(ty-args
-					(ty-var @4.7-4.8 (name "a"))))))
+					(ty-rigid-var @2.7-2.8 (name "a"))))))
 	(expressions))
 ~~~

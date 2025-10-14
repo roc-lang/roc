@@ -152,7 +152,7 @@ match items {
 						(p-list @5.5-5.7
 							(patterns))))
 				(value
-					(e-int @5.11-5.12 (value "0")))))))
+					(e-num @5.11-5.12 (value "0")))))))
 ~~~
 # TYPES
 ~~~clojure
