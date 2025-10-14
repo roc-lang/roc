@@ -10,7 +10,7 @@
         },
         .roc_deps_aarch64_macos_none = .{
             .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.15.1/aarch64-macos-none.tar.xz?response-content-disposition=attachment",
-            .hash = "122044a065bfe8f6286901b110a1b0b5a764f9fcb2d142a5eeb3423527e95419427",
+            .hash = "N-V-__8AAJuttw4mNdQg3ig107ac4uyAhcFPznGHmpnmX58C",
             .lazy = true,
         },
         .roc_deps_aarch64_linux_musl = .{

@@ -9,25 +9,24 @@ const c = @cImport({
     @cInclude("zstd.h");
 });
 
-const Writer = std.io.Writer;
-const Error = Writer.Error;
+const WriterError = std.io.Writer.Error;
 
 /// A writer that compresses data with zstd and computes a hash incrementally
 pub const CompressingHashWriter = struct {
     allocator_ptr: *std.mem.Allocator,
     ctx: *c.ZSTD_CCtx,
     hasher: std.crypto.hash.Blake3,
-    output_writer: *Writer,
+    output_writer: *std.io.Writer,
     out_buffer: []u8,
     finished: bool,
-    interface: Writer,
+    interface: std.io.Writer,
 
     const Self = @This();
 
     pub fn init(
         allocator_ptr: *std.mem.Allocator,
         compression_level: c_int,
-        output_writer: *Writer,
+        output_writer: *std.io.Writer,
         allocForZstd: *const fn (?*anyopaque, usize) callconv(.c) ?*anyopaque,
         freeForZstd: *const fn (?*anyopaque, ?*anyopaque) callconv(.c) void,
     ) !Self {
@@ -76,17 +75,17 @@ pub const CompressingHashWriter = struct {
         self.allocator_ptr.free(self.interface.buffer);
     }
 
-    fn flush(w: *Writer) Error!void {
+    fn flush(w: *std.io.Writer) WriterError!void {
         const self: *Self = @alignCast(@fieldParentPtr("interface", w));
-        if (self.finished and w.end != 0) return Error.WriteFailed;
+        if (self.finished and w.end != 0) return WriterError.WriteFailed;
         _ = self.compressAndHash(w.buffer[0..w.end], false) catch return error.WriteFailed;
         w.end = 0;
         return;
     }
 
-    fn drain(w: *Writer, data: []const []const u8, splat: usize) Error!usize {
+    fn drain(w: *std.io.Writer, data: []const []const u8, splat: usize) WriterError!usize {
         const self: *Self = @alignCast(@fieldParentPtr("interface", w));
-        if (self.finished) return Error.WriteFailed;
+        if (self.finished) return WriterError.WriteFailed;
         _ = self.compressAndHash(w.buffer[0..w.end], false) catch return error.WriteFailed;
         w.end = 0;
         if (data.len == 0) return 0;
@@ -105,7 +104,7 @@ pub const CompressingHashWriter = struct {
         return written;
     }
 
-    fn compressAndHash(self: *Self, data: []const u8, end_stream: bool) Error!usize {
+    fn compressAndHash(self: *Self, data: []const u8, end_stream: bool) WriterError!usize {
         var in_buf = c.ZSTD_inBuffer{ .src = data.ptr, .size = data.len, .pos = 0 };
         const mode: c_uint = if (end_stream) c.ZSTD_e_end else c.ZSTD_e_continue;
         while (in_buf.pos < in_buf.size or end_stream) {
@@ -113,7 +112,7 @@ pub const CompressingHashWriter = struct {
 
             const remaining = c.ZSTD_compressStream2(self.ctx, &out_buf, &in_buf, mode);
             if (c.ZSTD_isError(remaining) != 0) {
-                return Error.WriteFailed;
+                return WriterError.WriteFailed;
             }
 
             if (out_buf.pos > 0) {
@@ -127,7 +126,7 @@ pub const CompressingHashWriter = struct {
         return 0;
     }
 
-    pub fn finish(self: *Self) Error!void {
+    pub fn finish(self: *Self) WriterError!void {
         if (self.finished) return;
         _ = self.compressAndHash(self.interface.buffer[0..self.interface.end], true) catch return error.WriteFailed;
         self.interface.end = 0;
