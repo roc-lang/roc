@@ -11,6 +11,9 @@ const types_mod = @import("types");
 
 const TypesStore = types_mod.Store;
 const Var = types_mod.Var;
+const Flex = types_mod.Flex;
+const Rigid = types_mod.Rigid;
+const StaticDispatchConstraint = types_mod.StaticDispatchConstraint;
 const Content = types_mod.Content;
 const FlatType = types_mod.FlatType;
 const Alias = types_mod.Alias;
@@ -74,12 +77,129 @@ fn copyContent(
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Content {
     return switch (content) {
-        .flex => |flex| Content{ .flex = flex },
-        .rigid => |rigid| Content{ .rigid = rigid },
+        .flex => |flex| Content{ .flex = try copyFlex(source_store, dest_store, flex, var_mapping, source_idents, dest_idents, allocator) },
+        .rigid => |rigid| Content{ .rigid = try copyRigid(source_store, dest_store, rigid, var_mapping, source_idents, dest_idents, allocator) },
         .alias => |alias| Content{ .alias = try copyAlias(source_store, dest_store, alias, var_mapping, source_idents, dest_idents, allocator) },
         .structure => |flat_type| Content{ .structure = try copyFlatType(source_store, dest_store, flat_type, var_mapping, source_idents, dest_idents, allocator) },
         .err => Content.err,
     };
+}
+
+fn copyFlex(
+    source_store: *const TypesStore,
+    dest_store: *TypesStore,
+    source_flex: Flex,
+    var_mapping: *VarMapping,
+    source_idents: *const base.Ident.Store,
+    dest_idents: *base.Ident.Store,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!Flex {
+    // Translate the type name ident
+    const mb_translated_name = blk: {
+        if (source_flex.name) |name_ident| {
+            const name_bytes = source_idents.getText(name_ident);
+            const translated_name = try dest_idents.insert(allocator, base.Ident.for_text(name_bytes));
+            break :blk translated_name;
+        } else {
+            break :blk null;
+        }
+    };
+
+    // Copy the constraints
+    const dest_constraints_range = try copyStaticDispatchConstraints(
+        source_store,
+        dest_store,
+        source_flex.constraints,
+        var_mapping,
+        source_idents,
+        dest_idents,
+        allocator,
+    );
+
+    return Flex{
+        .name = mb_translated_name,
+        .constraints = dest_constraints_range,
+    };
+}
+
+fn copyRigid(
+    source_store: *const TypesStore,
+    dest_store: *TypesStore,
+    source_rigid: Rigid,
+    var_mapping: *VarMapping,
+    source_idents: *const base.Ident.Store,
+    dest_idents: *base.Ident.Store,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!Rigid {
+    // Translate the type name ident
+    const name_bytes = source_idents.getText(source_rigid.name);
+    const translated_name = try dest_idents.insert(allocator, base.Ident.for_text(name_bytes));
+
+    // Copy the constraints
+    const dest_constraints_range = try copyStaticDispatchConstraints(
+        source_store,
+        dest_store,
+        source_rigid.constraints,
+        var_mapping,
+        source_idents,
+        dest_idents,
+        allocator,
+    );
+
+    return Rigid{
+        .name = translated_name,
+        .constraints = dest_constraints_range,
+    };
+}
+
+fn copyStaticDispatchConstraints(
+    source_store: *const TypesStore,
+    dest_store: *TypesStore,
+    source_constraints: StaticDispatchConstraint.SafeList.Range,
+    var_mapping: *VarMapping,
+    source_idents: *const base.Ident.Store,
+    dest_idents: *base.Ident.Store,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!StaticDispatchConstraint.SafeList.Range {
+    const source_constraints_len = source_constraints.len();
+    if (source_constraints_len == 0) {
+        return StaticDispatchConstraint.SafeList.Range.empty();
+    } else {
+        // Setup tmp state
+        var dest_constraints = try std.ArrayList(StaticDispatchConstraint).initCapacity(dest_store.gpa, source_constraints_len);
+        defer dest_constraints.deinit();
+
+        var dest_fn_args = try std.ArrayList(Var).initCapacity(dest_store.gpa, 8);
+        defer dest_fn_args.deinit();
+
+        // Iterate over the constraints
+        for (source_store.sliceStaticDispatchConstraints(source_constraints)) |source_constraint| {
+            dest_fn_args.clearRetainingCapacity();
+
+            // Translate the fn name
+            const fn_name_bytes = source_idents.getText(source_constraint.fn_name);
+            const translated_fn_name = try dest_idents.insert(allocator, base.Ident.for_text(fn_name_bytes));
+
+            // Copy the args
+            for (source_store.sliceVars(source_constraint.fn_args.nonempty)) |source_fn_arg| {
+                const dest_arg = try copyVar(source_store, dest_store, source_fn_arg, var_mapping, source_idents, dest_idents, allocator);
+                try dest_fn_args.append(dest_arg);
+            }
+            const dest_args_range = try dest_store.appendVars(dest_fn_args.items);
+
+            // Copy the ret
+            const dest_ret = try copyVar(source_store, dest_store, source_constraint.fn_ret, var_mapping, source_idents, dest_idents, allocator);
+
+            try dest_constraints.append(StaticDispatchConstraint{
+                .fn_name = translated_fn_name,
+                .fn_args = .{ .nonempty = dest_args_range },
+                .fn_ret = dest_ret,
+            });
+        }
+
+        const dest_constraints_range = try dest_store.appendStaticDispatchConstraints(dest_constraints.items);
+        return dest_constraints_range;
+    }
 }
 
 fn copyAlias(
@@ -91,7 +211,6 @@ fn copyAlias(
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Alias {
-
     // Translate the type name ident
     const type_name_str = source_idents.getText(source_alias.ident.ident_idx);
     const translated_ident = try dest_idents.insert(allocator, base.Ident.for_text(type_name_str));
