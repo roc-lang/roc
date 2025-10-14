@@ -10,15 +10,15 @@ import I1 exposing [I11, I12,]
 import I2 exposing [I21 as Ias1, I22 as Ias2,]
 
 # Where constraint
-A(a) : a where module(a).a1 : (a, a,) -> Str, module(a).a2 : (a, a,) -> Str,
-B(b) : b where module(b).b1 : (b, b,) -> Str, module(b).b2 : (b, b,) -> Str,
+A(a) : a where [a.a1 : (a, a,) -> Str, a.a2 : (a, a,) -> Str,]
+B(b) : b where [b.b1 : (b, b,) -> Str, b.b2 : (b, b,) -> Str,]
 
 C(a, b,) : (a, b,)
 D(a, b,) : C(a, b,)
 E : { a : Str, b : Str, }
 F : [A, B,]
 
-g : e -> e where module(e).A, module(e).B,
+g : e -> e where [e.A, e.B,]
 
 h = |x, y,| {
 	h1 = { h11: x, h12: x, h13: { h131: x, h132: y, }, }
@@ -36,8 +36,8 @@ h = |x, y,| {
 }
 ~~~
 # EXPECTED
-WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:6:1:6:77
-WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:7:1:7:77
+WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:6:1:6:63
+WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:7:1:7:63
 MODULE NOT FOUND - everything.md:2:1:2:31
 MODULE NOT FOUND - everything.md:3:1:3:47
 UNUSED VARIABLE - everything.md:24:10:24:11
@@ -54,22 +54,22 @@ UNUSED VARIABLE - everything.md:21:2:21:4
 You cannot define a `where` clause inside a type declaration.
 
 You're attempting do this here:
-**everything.md:6:1:6:77:**
+**everything.md:6:1:6:63:**
 ```roc
-A(a) : a where module(a).a1 : (a, a,) -> Str, module(a).a2 : (a, a,) -> Str,
+A(a) : a where [a.a1 : (a, a,) -> Str, a.a2 : (a, a,) -> Str,]
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
 
 You're attempting do this here:
-**everything.md:7:1:7:77:**
+**everything.md:7:1:7:63:**
 ```roc
-B(b) : b where module(b).b1 : (b, b,) -> Str, module(b).b2 : (b, b,) -> Str,
+B(b) : b where [b.b1 : (b, b,) -> Str, b.b2 : (b, b,) -> Str,]
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **MODULE NOT FOUND**
@@ -206,13 +206,13 @@ The unused variable is declared here:
 ~~~zig
 KwImport(2:1-2:7),UpperIdent(2:8-2:10),KwExposing(2:11-2:19),OpenSquare(2:20-2:21),UpperIdent(2:21-2:24),Comma(2:24-2:25),UpperIdent(2:26-2:29),Comma(2:29-2:30),CloseSquare(2:30-2:31),
 KwImport(3:1-3:7),UpperIdent(3:8-3:10),KwExposing(3:11-3:19),OpenSquare(3:20-3:21),UpperIdent(3:21-3:24),KwAs(3:25-3:27),UpperIdent(3:28-3:32),Comma(3:32-3:33),UpperIdent(3:34-3:37),KwAs(3:38-3:40),UpperIdent(3:41-3:45),Comma(3:45-3:46),CloseSquare(3:46-3:47),
-UpperIdent(6:1-6:2),NoSpaceOpenRound(6:2-6:3),LowerIdent(6:3-6:4),CloseRound(6:4-6:5),OpColon(6:6-6:7),LowerIdent(6:8-6:9),KwWhere(6:10-6:15),KwModule(6:16-6:22),NoSpaceOpenRound(6:22-6:23),LowerIdent(6:23-6:24),CloseRound(6:24-6:25),NoSpaceDotLowerIdent(6:25-6:28),OpColon(6:29-6:30),OpenRound(6:31-6:32),LowerIdent(6:32-6:33),Comma(6:33-6:34),LowerIdent(6:35-6:36),Comma(6:36-6:37),CloseRound(6:37-6:38),OpArrow(6:39-6:41),UpperIdent(6:42-6:45),Comma(6:45-6:46),KwModule(6:47-6:53),NoSpaceOpenRound(6:53-6:54),LowerIdent(6:54-6:55),CloseRound(6:55-6:56),NoSpaceDotLowerIdent(6:56-6:59),OpColon(6:60-6:61),OpenRound(6:62-6:63),LowerIdent(6:63-6:64),Comma(6:64-6:65),LowerIdent(6:66-6:67),Comma(6:67-6:68),CloseRound(6:68-6:69),OpArrow(6:70-6:72),UpperIdent(6:73-6:76),Comma(6:76-6:77),
-UpperIdent(7:1-7:2),NoSpaceOpenRound(7:2-7:3),LowerIdent(7:3-7:4),CloseRound(7:4-7:5),OpColon(7:6-7:7),LowerIdent(7:8-7:9),KwWhere(7:10-7:15),KwModule(7:16-7:22),NoSpaceOpenRound(7:22-7:23),LowerIdent(7:23-7:24),CloseRound(7:24-7:25),NoSpaceDotLowerIdent(7:25-7:28),OpColon(7:29-7:30),OpenRound(7:31-7:32),LowerIdent(7:32-7:33),Comma(7:33-7:34),LowerIdent(7:35-7:36),Comma(7:36-7:37),CloseRound(7:37-7:38),OpArrow(7:39-7:41),UpperIdent(7:42-7:45),Comma(7:45-7:46),KwModule(7:47-7:53),NoSpaceOpenRound(7:53-7:54),LowerIdent(7:54-7:55),CloseRound(7:55-7:56),NoSpaceDotLowerIdent(7:56-7:59),OpColon(7:60-7:61),OpenRound(7:62-7:63),LowerIdent(7:63-7:64),Comma(7:64-7:65),LowerIdent(7:66-7:67),Comma(7:67-7:68),CloseRound(7:68-7:69),OpArrow(7:70-7:72),UpperIdent(7:73-7:76),Comma(7:76-7:77),
+UpperIdent(6:1-6:2),NoSpaceOpenRound(6:2-6:3),LowerIdent(6:3-6:4),CloseRound(6:4-6:5),OpColon(6:6-6:7),LowerIdent(6:8-6:9),KwWhere(6:10-6:15),OpenSquare(6:16-6:17),LowerIdent(6:17-6:18),NoSpaceDotLowerIdent(6:18-6:21),OpColon(6:22-6:23),OpenRound(6:24-6:25),LowerIdent(6:25-6:26),Comma(6:26-6:27),LowerIdent(6:28-6:29),Comma(6:29-6:30),CloseRound(6:30-6:31),OpArrow(6:32-6:34),UpperIdent(6:35-6:38),Comma(6:38-6:39),LowerIdent(6:40-6:41),NoSpaceDotLowerIdent(6:41-6:44),OpColon(6:45-6:46),OpenRound(6:47-6:48),LowerIdent(6:48-6:49),Comma(6:49-6:50),LowerIdent(6:51-6:52),Comma(6:52-6:53),CloseRound(6:53-6:54),OpArrow(6:55-6:57),UpperIdent(6:58-6:61),Comma(6:61-6:62),CloseSquare(6:62-6:63),
+UpperIdent(7:1-7:2),NoSpaceOpenRound(7:2-7:3),LowerIdent(7:3-7:4),CloseRound(7:4-7:5),OpColon(7:6-7:7),LowerIdent(7:8-7:9),KwWhere(7:10-7:15),OpenSquare(7:16-7:17),LowerIdent(7:17-7:18),NoSpaceDotLowerIdent(7:18-7:21),OpColon(7:22-7:23),OpenRound(7:24-7:25),LowerIdent(7:25-7:26),Comma(7:26-7:27),LowerIdent(7:28-7:29),Comma(7:29-7:30),CloseRound(7:30-7:31),OpArrow(7:32-7:34),UpperIdent(7:35-7:38),Comma(7:38-7:39),LowerIdent(7:40-7:41),NoSpaceDotLowerIdent(7:41-7:44),OpColon(7:45-7:46),OpenRound(7:47-7:48),LowerIdent(7:48-7:49),Comma(7:49-7:50),LowerIdent(7:51-7:52),Comma(7:52-7:53),CloseRound(7:53-7:54),OpArrow(7:55-7:57),UpperIdent(7:58-7:61),Comma(7:61-7:62),CloseSquare(7:62-7:63),
 UpperIdent(9:1-9:2),NoSpaceOpenRound(9:2-9:3),LowerIdent(9:3-9:4),Comma(9:4-9:5),LowerIdent(9:6-9:7),Comma(9:7-9:8),CloseRound(9:8-9:9),OpColon(9:10-9:11),OpenRound(9:12-9:13),LowerIdent(9:13-9:14),Comma(9:14-9:15),LowerIdent(9:16-9:17),Comma(9:17-9:18),CloseRound(9:18-9:19),
 UpperIdent(10:1-10:2),NoSpaceOpenRound(10:2-10:3),LowerIdent(10:3-10:4),Comma(10:4-10:5),LowerIdent(10:6-10:7),Comma(10:7-10:8),CloseRound(10:8-10:9),OpColon(10:10-10:11),UpperIdent(10:12-10:13),NoSpaceOpenRound(10:13-10:14),LowerIdent(10:14-10:15),Comma(10:15-10:16),LowerIdent(10:17-10:18),Comma(10:18-10:19),CloseRound(10:19-10:20),
 UpperIdent(11:1-11:2),OpColon(11:3-11:4),OpenCurly(11:5-11:6),LowerIdent(11:7-11:8),OpColon(11:9-11:10),UpperIdent(11:11-11:14),Comma(11:14-11:15),LowerIdent(11:16-11:17),OpColon(11:18-11:19),UpperIdent(11:20-11:23),Comma(11:23-11:24),CloseCurly(11:25-11:26),
 UpperIdent(12:1-12:2),OpColon(12:3-12:4),OpenSquare(12:5-12:6),UpperIdent(12:6-12:7),Comma(12:7-12:8),UpperIdent(12:9-12:10),Comma(12:10-12:11),CloseSquare(12:11-12:12),
-LowerIdent(14:1-14:2),OpColon(14:3-14:4),LowerIdent(14:5-14:6),OpArrow(14:7-14:9),LowerIdent(14:10-14:11),KwWhere(14:12-14:17),KwModule(14:18-14:24),NoSpaceOpenRound(14:24-14:25),LowerIdent(14:25-14:26),CloseRound(14:26-14:27),NoSpaceDotUpperIdent(14:27-14:29),Comma(14:29-14:30),KwModule(14:31-14:37),NoSpaceOpenRound(14:37-14:38),LowerIdent(14:38-14:39),CloseRound(14:39-14:40),NoSpaceDotUpperIdent(14:40-14:42),Comma(14:42-14:43),
+LowerIdent(14:1-14:2),OpColon(14:3-14:4),LowerIdent(14:5-14:6),OpArrow(14:7-14:9),LowerIdent(14:10-14:11),KwWhere(14:12-14:17),OpenSquare(14:18-14:19),LowerIdent(14:19-14:20),NoSpaceDotUpperIdent(14:20-14:22),Comma(14:22-14:23),LowerIdent(14:24-14:25),NoSpaceDotUpperIdent(14:25-14:27),Comma(14:27-14:28),CloseSquare(14:28-14:29),
 LowerIdent(16:1-16:2),OpAssign(16:3-16:4),OpBar(16:5-16:6),LowerIdent(16:6-16:7),Comma(16:7-16:8),LowerIdent(16:9-16:10),Comma(16:10-16:11),OpBar(16:11-16:12),OpenCurly(16:13-16:14),
 LowerIdent(17:2-17:4),OpAssign(17:5-17:6),OpenCurly(17:7-17:8),LowerIdent(17:9-17:12),OpColon(17:12-17:13),LowerIdent(17:14-17:15),Comma(17:15-17:16),LowerIdent(17:17-17:20),OpColon(17:20-17:21),LowerIdent(17:22-17:23),Comma(17:23-17:24),LowerIdent(17:25-17:28),OpColon(17:28-17:29),OpenCurly(17:30-17:31),LowerIdent(17:32-17:36),OpColon(17:36-17:37),LowerIdent(17:38-17:39),Comma(17:39-17:40),LowerIdent(17:41-17:45),OpColon(17:45-17:46),LowerIdent(17:47-17:48),Comma(17:48-17:49),CloseCurly(17:50-17:51),Comma(17:51-17:52),CloseCurly(17:53-17:54),
 LowerIdent(18:2-18:4),OpAssign(18:5-18:6),LowerIdent(18:7-18:8),NoSpaceOpenRound(18:8-18:9),LowerIdent(18:9-18:10),Comma(18:10-18:11),LowerIdent(18:12-18:13),Comma(18:13-18:14),CloseRound(18:14-18:15),
@@ -241,12 +241,12 @@ EndOfFile(30:1-30:1),
 			(exposing
 				(exposed-upper-ident @3.21-3.32 (text "I21") (as "Ias1"))
 				(exposed-upper-ident @3.34-3.45 (text "I22") (as "Ias2"))))
-		(s-type-decl @6.1-6.77
+		(s-type-decl @6.1-6.63
 			(header @6.1-6.5 (name "A")
 				(args
 					(ty-var @6.3-6.4 (raw "a"))))
 			(ty-var @6.8-6.9 (raw "a")))
-		(s-type-decl @7.1-7.77
+		(s-type-decl @7.1-7.63
 			(header @7.1-7.5 (name "B")
 				(args
 					(ty-var @7.3-7.4 (raw "b"))))
@@ -283,13 +283,13 @@ EndOfFile(30:1-30:1),
 				(tags
 					(ty @12.6-12.7 (name "A"))
 					(ty @12.9-12.10 (name "B")))))
-		(s-type-anno @14.1-14.43 (name "g")
+		(s-type-anno @14.1-14.29 (name "g")
 			(ty-fn @14.5-14.11
 				(ty-var @14.5-14.6 (raw "e"))
 				(ty-var @14.10-14.11 (raw "e")))
 			(where
-				(alias @14.18-14.29 (module-of "e") (name "A"))
-				(alias @14.31-14.42 (module-of "e") (name "B"))))
+				(alias @14.19-14.22 (module-of "e") (name "A"))
+				(alias @14.24-14.27 (module-of "e") (name "B"))))
 		(s-decl @16.1-29.2
 			(p-ident @16.1-16.2 (raw "h"))
 			(e-lambda @16.5-29.2
@@ -376,24 +376,24 @@ import I2 exposing [
 # Where constraint
 A(a) : a
 	where
-		module(a).a1 : (
+		[a.a1 : (
 			a,
 			a,
 		) -> Str,
-		module(a).a2 : (
+		a.a2 : (
 			a,
 			a,
-		) -> Str
+		) -> Str]
 B(b) : b
 	where
-		module(b).b1 : (
+		[b.b1 : (
 			b,
 			b,
 		) -> Str,
-		module(b).b2 : (
+		b.b2 : (
 			b,
 			b,
-		) -> Str
+		) -> Str]
 
 C(
 	a,
@@ -418,7 +418,10 @@ F : [
 	B,
 ]
 
-g : e -> e where module(e).A, module(e).B
+g : e -> e
+	where
+		[e.A,
+		e.B]
 
 h = |
 	x,
@@ -578,12 +581,12 @@ h = |
 									(value
 										(e-lookup-local @27.18-27.19
 											(p-assign @27.7-27.8 (ident "a"))))))))))))
-	(s-alias-decl @6.1-6.77
+	(s-alias-decl @6.1-6.63
 		(ty-header @6.1-6.5 (name "A")
 			(ty-args
 				(ty-rigid-var @6.3-6.4 (name "a"))))
 		(ty-rigid-var-lookup (ty-rigid-var @6.3-6.4 (name "a"))))
-	(s-alias-decl @7.1-7.77
+	(s-alias-decl @7.1-7.63
 		(ty-header @7.1-7.5 (name "B")
 			(ty-args
 				(ty-rigid-var @7.3-7.4 (name "b"))))
@@ -624,15 +627,15 @@ h = |
 		(exposes
 			(exposed (name "I21") (alias "Ias1") (wildcard false))
 			(exposed (name "I22") (alias "Ias2") (wildcard false))))
-	(s-type-anno @14.1-14.43 (name "g")
+	(s-type-anno @14.1-14.29 (name "g")
 		(ty-fn @14.5-14.11 (effectful false)
 			(ty-rigid-var @14.5-14.6 (name "e"))
 			(ty-rigid-var-lookup (ty-rigid-var @14.5-14.6 (name "e"))))
 		(where
-			(alias @14.18-14.29 (module-of "e") (ident "A"))
-			(alias @14.31-14.42 (module-of "e") (ident "B"))))
-	(ext-decl @14.18-14.29 (ident "module(e).A") (kind "type"))
-	(ext-decl @14.31-14.42 (ident "module(e).B") (kind "type")))
+			(alias @14.19-14.22 (module-of "e") (ident "A"))
+			(alias @14.24-14.27 (module-of "e") (ident "B"))))
+	(ext-decl @14.19-14.22 (ident "e.A") (kind "type"))
+	(ext-decl @14.24-14.27 (ident "e.B") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure
@@ -640,11 +643,11 @@ h = |
 	(defs
 		(patt @16.1-16.2 (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j, [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j -> c")))
 	(type_decls
-		(alias @6.1-6.77 (type "A(a)")
+		(alias @6.1-6.63 (type "A(a)")
 			(ty-header @6.1-6.5 (name "A")
 				(ty-args
 					(ty-rigid-var @6.3-6.4 (name "a")))))
-		(alias @7.1-7.77 (type "B(b)")
+		(alias @7.1-7.63 (type "B(b)")
 			(ty-header @7.1-7.5 (name "B")
 				(ty-args
 					(ty-rigid-var @7.3-7.4 (name "b")))))

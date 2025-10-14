@@ -5,7 +5,7 @@ type=snippet
 ~~~
 # SOURCE
 ~~~roc
-convert : a -> b where module(a).to_b : a -> b
+convert : a -> b where [a.to_b : a -> b]
 convert = |a| a.to_b()
 ~~~
 # EXPECTED
@@ -14,7 +14,7 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:8),OpColon(1:9-1:10),LowerIdent(1:11-1:12),OpArrow(1:13-1:15),LowerIdent(1:16-1:17),KwWhere(1:18-1:23),KwModule(1:24-1:30),NoSpaceOpenRound(1:30-1:31),LowerIdent(1:31-1:32),CloseRound(1:32-1:33),NoSpaceDotLowerIdent(1:33-1:38),OpColon(1:39-1:40),LowerIdent(1:41-1:42),OpArrow(1:43-1:45),LowerIdent(1:46-1:47),
+LowerIdent(1:1-1:8),OpColon(1:9-1:10),LowerIdent(1:11-1:12),OpArrow(1:13-1:15),LowerIdent(1:16-1:17),KwWhere(1:18-1:23),OpenSquare(1:24-1:25),LowerIdent(1:25-1:26),NoSpaceDotLowerIdent(1:26-1:31),OpColon(1:32-1:33),LowerIdent(1:34-1:35),OpArrow(1:36-1:38),LowerIdent(1:39-1:40),CloseSquare(1:40-1:41),
 LowerIdent(2:1-2:8),OpAssign(2:9-2:10),OpBar(2:11-2:12),LowerIdent(2:12-2:13),OpBar(2:13-2:14),LowerIdent(2:15-2:16),NoSpaceDotLowerIdent(2:16-2:21),NoSpaceOpenRound(2:21-2:22),CloseRound(2:22-2:23),
 EndOfFile(3:1-3:1),
 ~~~
@@ -23,15 +23,15 @@ EndOfFile(3:1-3:1),
 (file @1.1-2.23
 	(type-module @1.1-1.8)
 	(statements
-		(s-type-anno @1.1-1.47 (name "convert")
+		(s-type-anno @1.1-1.41 (name "convert")
 			(ty-fn @1.11-1.17
 				(ty-var @1.11-1.12 (raw "a"))
 				(ty-var @1.16-1.17 (raw "b")))
 			(where
-				(method @1.24-1.47 (module-of "a") (name "to_b")
+				(method @1.25-1.40 (module-of "a") (name "to_b")
 					(args
-						(ty-var @1.41-1.42 (raw "a")))
-					(ty-var @1.46-1.47 (raw "b")))))
+						(ty-var @1.34-1.35 (raw "a")))
+					(ty-var @1.39-1.40 (raw "b")))))
 		(s-decl @2.1-2.23
 			(p-ident @2.1-2.8 (raw "convert"))
 			(e-lambda @2.11-2.23
@@ -64,16 +64,16 @@ NO CHANGE
 				(ty-fn @1.11-1.17 (effectful false)
 					(ty-rigid-var @1.11-1.12 (name "a"))
 					(ty-rigid-var @1.16-1.17 (name "b"))))))
-	(s-type-anno @1.1-1.47 (name "convert")
+	(s-type-anno @1.1-1.41 (name "convert")
 		(ty-fn @1.11-1.17 (effectful false)
 			(ty-rigid-var @1.11-1.12 (name "a"))
 			(ty-rigid-var @1.16-1.17 (name "b")))
 		(where
-			(method @1.24-1.47 (module-of "a") (ident "to_b")
+			(method @1.25-1.40 (module-of "a") (ident "to_b")
 				(args
 					(ty-rigid-var-lookup (ty-rigid-var @1.11-1.12 (name "a"))))
 				(ty-rigid-var-lookup (ty-rigid-var @1.16-1.17 (name "b"))))))
-	(ext-decl @1.24-1.47 (ident "module(a).to_b") (kind "value")))
+	(ext-decl @1.25-1.40 (ident "a.to_b") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

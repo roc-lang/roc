@@ -36,10 +36,93 @@ h = |x, y| {
 }
 ~~~
 # EXPECTED
-WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:6:1:6:74
-WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:7:1:7:74
+WHERE CLAUSE ERROR - everything.md:6:10:6:15
+PARSE ERROR - everything.md:6:16:6:22
+PARSE ERROR - everything.md:6:22:6:23
+PARSE ERROR - everything.md:6:23:6:24
+PARSE ERROR - everything.md:6:24:6:25
+PARSE ERROR - everything.md:6:25:6:28
+PARSE ERROR - everything.md:6:29:6:30
+PARSE ERROR - everything.md:6:31:6:32
+PARSE ERROR - everything.md:6:32:6:33
+PARSE ERROR - everything.md:6:33:6:34
+PARSE ERROR - everything.md:6:35:6:36
+PARSE ERROR - everything.md:6:36:6:37
+PARSE ERROR - everything.md:6:38:6:40
+PARSE ERROR - everything.md:6:44:6:45
+PARSE ERROR - everything.md:6:46:6:52
+PARSE ERROR - everything.md:6:52:6:53
+PARSE ERROR - everything.md:6:53:6:54
+PARSE ERROR - everything.md:6:54:6:55
+PARSE ERROR - everything.md:6:55:6:58
+PARSE ERROR - everything.md:6:59:6:60
+PARSE ERROR - everything.md:6:61:6:62
+PARSE ERROR - everything.md:6:62:6:63
+PARSE ERROR - everything.md:6:63:6:64
+PARSE ERROR - everything.md:6:65:6:66
+PARSE ERROR - everything.md:6:66:6:67
+PARSE ERROR - everything.md:6:68:6:70
+PARSE ERROR - everything.md:7:1:7:2
+PARSE ERROR - everything.md:7:2:7:3
+PARSE ERROR - everything.md:7:3:7:4
+PARSE ERROR - everything.md:7:4:7:5
+PARSE ERROR - everything.md:7:6:7:7
+PARSE ERROR - everything.md:7:8:7:9
+PARSE ERROR - everything.md:7:10:7:15
+PARSE ERROR - everything.md:7:16:7:22
+PARSE ERROR - everything.md:7:22:7:23
+PARSE ERROR - everything.md:7:23:7:24
+PARSE ERROR - everything.md:7:24:7:25
+PARSE ERROR - everything.md:7:25:7:28
+PARSE ERROR - everything.md:7:29:7:30
+PARSE ERROR - everything.md:7:31:7:32
+PARSE ERROR - everything.md:7:32:7:33
+PARSE ERROR - everything.md:7:33:7:34
+PARSE ERROR - everything.md:7:35:7:36
+PARSE ERROR - everything.md:7:36:7:37
+PARSE ERROR - everything.md:7:38:7:40
+PARSE ERROR - everything.md:7:44:7:45
+PARSE ERROR - everything.md:7:46:7:52
+PARSE ERROR - everything.md:7:52:7:53
+PARSE ERROR - everything.md:7:53:7:54
+PARSE ERROR - everything.md:7:54:7:55
+PARSE ERROR - everything.md:7:55:7:58
+PARSE ERROR - everything.md:7:59:7:60
+PARSE ERROR - everything.md:7:61:7:62
+PARSE ERROR - everything.md:7:62:7:63
+PARSE ERROR - everything.md:7:63:7:64
+PARSE ERROR - everything.md:7:65:7:66
+PARSE ERROR - everything.md:7:66:7:67
+PARSE ERROR - everything.md:7:68:7:70
+PARSE ERROR - everything.md:9:1:9:2
+PARSE ERROR - everything.md:9:2:9:3
+PARSE ERROR - everything.md:9:3:9:4
+PARSE ERROR - everything.md:9:4:9:5
+PARSE ERROR - everything.md:9:6:9:7
+PARSE ERROR - everything.md:9:7:9:8
+PARSE ERROR - everything.md:9:9:9:10
+PARSE ERROR - everything.md:9:11:9:12
+PARSE ERROR - everything.md:9:12:9:13
+PARSE ERROR - everything.md:9:13:9:14
+PARSE ERROR - everything.md:9:15:9:16
+PARSE ERROR - everything.md:9:16:9:17
+WHERE CLAUSE ERROR - everything.md:14:12:14:17
+PARSE ERROR - everything.md:14:18:14:24
+PARSE ERROR - everything.md:14:24:14:25
+PARSE ERROR - everything.md:14:25:14:26
+PARSE ERROR - everything.md:14:26:14:27
+PARSE ERROR - everything.md:14:27:14:29
+PARSE ERROR - everything.md:14:29:14:30
+PARSE ERROR - everything.md:14:31:14:37
+PARSE ERROR - everything.md:14:37:14:38
+PARSE ERROR - everything.md:14:38:14:39
+PARSE ERROR - everything.md:14:39:14:40
+PARSE ERROR - everything.md:14:40:14:42
+WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:6:1:6:15
+UNDECLARED TYPE - everything.md:10:11:10:12
 MODULE NOT FOUND - everything.md:2:1:2:30
 MODULE NOT FOUND - everything.md:3:1:3:46
+MALFORMED WHERE CLAUSE - everything.md:14:12:14:17
 UNUSED VARIABLE - everything.md:24:10:24:11
 UNUSED VARIABLE - everything.md:25:9:25:10
 UNUSED VARIABLE - everything.md:26:11:26:12
@@ -50,26 +133,988 @@ UNUSED VARIABLE - everything.md:19:2:19:4
 UNUSED VARIABLE - everything.md:20:2:20:4
 UNUSED VARIABLE - everything.md:21:2:21:4
 # PROBLEMS
-**WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
-You cannot define a `where` clause inside a type declaration.
+**WHERE CLAUSE ERROR**
+Expected an opening bracket **[** after `where`.
+Where clauses should look like:     where [a.method : Type]
 
-You're attempting do this here:
-**everything.md:6:1:6:74:**
+**everything.md:6:10:6:15:**
 ```roc
 A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+         ^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:6:16:6:22:**
+```roc
+A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
+```
+               ^^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:6:22:6:23:**
+```roc
+A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
+```
+                     ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:6:23:6:24:**
+```roc
+A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
+```
+                      ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:6:24:6:25:**
+```roc
+A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
+```
+                       ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:6:25:6:28:**
+```roc
+A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
+```
+                        ^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:6:29:6:30:**
+```roc
+A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
+```
+                            ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:6:31:6:32:**
+```roc
+A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
+```
+                              ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:6:32:6:33:**
+```roc
+A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
+```
+                               ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:6:33:6:34:**
+```roc
+A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
+```
+                                ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:6:35:6:36:**
+```roc
+A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
+```
+                                  ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:6:36:6:37:**
+```roc
+A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
+```
+                                   ^
+
+
+**PARSE ERROR**
+Function types with multiple arrows need parentheses.
+
+Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
+        a -> (b -> c) for a **curried** function (a function that **returns** another function)
+        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
+
+**everything.md:6:38:6:40:**
+```roc
+A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
+```
+                                     ^^
+
+
+**PARSE ERROR**
+Type applications require parentheses around their type arguments.
+
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+Instead of:
+    **List U8**
+
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Result(a, Str)`
+    `Maybe(List(U64))`
+
+**everything.md:6:44:6:45:**
+```roc
+A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
+```
+                                           ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:6:46:6:52:**
+```roc
+A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
+```
+                                             ^^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:6:52:6:53:**
+```roc
+A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
+```
+                                                   ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:6:53:6:54:**
+```roc
+A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
+```
+                                                    ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:6:54:6:55:**
+```roc
+A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
+```
+                                                     ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:6:55:6:58:**
+```roc
+A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
+```
+                                                      ^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:6:59:6:60:**
+```roc
+A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
+```
+                                                          ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:6:61:6:62:**
+```roc
+A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
+```
+                                                            ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:6:62:6:63:**
+```roc
+A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
+```
+                                                             ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:6:63:6:64:**
+```roc
+A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
+```
+                                                              ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:6:65:6:66:**
+```roc
+A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
+```
+                                                                ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:6:66:6:67:**
+```roc
+A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
+```
+                                                                 ^
+
+
+**PARSE ERROR**
+Function types with multiple arrows need parentheses.
+
+Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
+        a -> (b -> c) for a **curried** function (a function that **returns** another function)
+        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
+
+**everything.md:6:68:6:70:**
+```roc
+A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
+```
+                                                                   ^^
+
+
+**PARSE ERROR**
+Type applications require parentheses around their type arguments.
+
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+Instead of:
+    **List U8**
+
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Result(a, Str)`
+    `Maybe(List(U64))`
+
+**everything.md:7:1:7:2:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:2:7:3:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+ ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:3:7:4:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+  ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:4:7:5:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+   ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:6:7:7:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+     ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:8:7:9:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+       ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:10:7:15:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+         ^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:16:7:22:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+               ^^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:22:7:23:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+                     ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:23:7:24:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+                      ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:24:7:25:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+                       ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:25:7:28:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+                        ^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:29:7:30:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+                            ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:31:7:32:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+                              ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:32:7:33:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+                               ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:33:7:34:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+                                ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:35:7:36:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+                                  ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:36:7:37:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+                                   ^
+
+
+**PARSE ERROR**
+Function types with multiple arrows need parentheses.
+
+Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
+        a -> (b -> c) for a **curried** function (a function that **returns** another function)
+        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
+
+**everything.md:7:38:7:40:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+                                     ^^
+
+
+**PARSE ERROR**
+Type applications require parentheses around their type arguments.
+
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+Instead of:
+    **List U8**
+
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Result(a, Str)`
+    `Maybe(List(U64))`
+
+**everything.md:7:44:7:45:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+                                           ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:46:7:52:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+                                             ^^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:52:7:53:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+                                                   ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:53:7:54:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+                                                    ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:54:7:55:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+                                                     ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:55:7:58:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+                                                      ^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:59:7:60:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+                                                          ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:61:7:62:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+                                                            ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:62:7:63:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+                                                             ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:63:7:64:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+                                                              ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:65:7:66:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+                                                                ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:7:66:7:67:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+                                                                 ^
+
+
+**PARSE ERROR**
+Function types with multiple arrows need parentheses.
+
+Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
+        a -> (b -> c) for a **curried** function (a function that **returns** another function)
+        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
+
+**everything.md:7:68:7:70:**
+```roc
+B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+```
+                                                                   ^^
+
+
+**PARSE ERROR**
+Type applications require parentheses around their type arguments.
+
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+Instead of:
+    **List U8**
+
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Result(a, Str)`
+    `Maybe(List(U64))`
+
+**everything.md:9:1:9:2:**
+```roc
+C(a, b) : (a, b)
+```
+^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:9:2:9:3:**
+```roc
+C(a, b) : (a, b)
+```
+ ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:9:3:9:4:**
+```roc
+C(a, b) : (a, b)
+```
+  ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:9:4:9:5:**
+```roc
+C(a, b) : (a, b)
+```
+   ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:9:6:9:7:**
+```roc
+C(a, b) : (a, b)
+```
+     ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:9:7:9:8:**
+```roc
+C(a, b) : (a, b)
+```
+      ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:9:9:9:10:**
+```roc
+C(a, b) : (a, b)
+```
+        ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:9:11:9:12:**
+```roc
+C(a, b) : (a, b)
+```
+          ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:9:12:9:13:**
+```roc
+C(a, b) : (a, b)
+```
+           ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:9:13:9:14:**
+```roc
+C(a, b) : (a, b)
+```
+            ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:9:15:9:16:**
+```roc
+C(a, b) : (a, b)
+```
+              ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:9:16:9:17:**
+```roc
+C(a, b) : (a, b)
+```
+               ^
+
+
+**WHERE CLAUSE ERROR**
+Expected an opening bracket **[** after `where`.
+Where clauses should look like:     where [a.method : Type]
+
+**everything.md:14:12:14:17:**
+```roc
+g : e -> e where module(e).A, module(e).B
+```
+           ^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:14:18:14:24:**
+```roc
+g : e -> e where module(e).A, module(e).B
+```
+                 ^^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:14:24:14:25:**
+```roc
+g : e -> e where module(e).A, module(e).B
+```
+                       ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:14:25:14:26:**
+```roc
+g : e -> e where module(e).A, module(e).B
+```
+                        ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:14:26:14:27:**
+```roc
+g : e -> e where module(e).A, module(e).B
+```
+                         ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:14:27:14:29:**
+```roc
+g : e -> e where module(e).A, module(e).B
+```
+                          ^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:14:29:14:30:**
+```roc
+g : e -> e where module(e).A, module(e).B
+```
+                            ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:14:31:14:37:**
+```roc
+g : e -> e where module(e).A, module(e).B
+```
+                              ^^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:14:37:14:38:**
+```roc
+g : e -> e where module(e).A, module(e).B
+```
+                                    ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:14:38:14:39:**
+```roc
+g : e -> e where module(e).A, module(e).B
+```
+                                     ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:14:39:14:40:**
+```roc
+g : e -> e where module(e).A, module(e).B
+```
+                                      ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**everything.md:14:40:14:42:**
+```roc
+g : e -> e where module(e).A, module(e).B
+```
+                                       ^^
 
 
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
 
 You're attempting do this here:
-**everything.md:7:1:7:74:**
+**everything.md:6:1:6:15:**
 ```roc
-B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _C_ is not declared in this scope.
+
+This type is referenced here:
+**everything.md:10:11:10:12:**
+```roc
+D(a, b) : C(a, b)
+```
+          ^
 
 
 **MODULE NOT FOUND**
@@ -93,6 +1138,17 @@ import I2 exposing [I21 as Ias1, I22 as Ias2]
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+
+**MALFORMED WHERE CLAUSE**
+This where clause could not be parsed correctly.
+
+**everything.md:14:12:14:17:**
+```roc
+g : e -> e where module(e).A, module(e).B
+```
+           ^^^^^
+
+Check the syntax of your where clause.
 
 **UNUSED VARIABLE**
 Variable `b` is not used anywhere in your code.
@@ -241,24 +1297,80 @@ EndOfFile(30:1-30:1),
 			(exposing
 				(exposed-upper-ident @3.21-3.32 (text "I21") (as "Ias1"))
 				(exposed-upper-ident @3.34-3.45 (text "I22") (as "Ias2"))))
-		(s-type-decl @6.1-6.74
+		(s-type-decl @6.1-6.15
 			(header @6.1-6.5 (name "A")
 				(args
 					(ty-var @6.3-6.4 (raw "a"))))
 			(ty-var @6.8-6.9 (raw "a")))
-		(s-type-decl @7.1-7.74
-			(header @7.1-7.5 (name "B")
-				(args
-					(ty-var @7.3-7.4 (raw "b"))))
-			(ty-var @7.8-7.9 (raw "b")))
-		(s-type-decl @9.1-9.17
-			(header @9.1-9.8 (name "C")
-				(args
-					(ty-var @9.3-9.4 (raw "a"))
-					(ty-var @9.6-9.7 (raw "b"))))
-			(ty-tuple @9.11-9.17
-				(ty-var @9.12-9.13 (raw "a"))
-				(ty-var @9.15-9.16 (raw "b"))))
+		(s-malformed @6.16-6.22 (tag "statement_unexpected_token"))
+		(s-malformed @6.22-6.23 (tag "statement_unexpected_token"))
+		(s-malformed @6.23-6.24 (tag "statement_unexpected_token"))
+		(s-malformed @6.24-6.25 (tag "statement_unexpected_token"))
+		(s-malformed @6.25-6.28 (tag "statement_unexpected_token"))
+		(s-malformed @6.29-6.30 (tag "statement_unexpected_token"))
+		(s-malformed @6.31-6.32 (tag "statement_unexpected_token"))
+		(s-malformed @6.32-6.33 (tag "statement_unexpected_token"))
+		(s-malformed @6.33-6.34 (tag "statement_unexpected_token"))
+		(s-malformed @6.35-6.36 (tag "statement_unexpected_token"))
+		(s-malformed @6.36-6.37 (tag "statement_unexpected_token"))
+		(s-malformed @6.38-6.40 (tag "multi_arrow_needs_parens"))
+		(s-malformed @6.44-6.45 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @6.46-6.52 (tag "statement_unexpected_token"))
+		(s-malformed @6.52-6.53 (tag "statement_unexpected_token"))
+		(s-malformed @6.53-6.54 (tag "statement_unexpected_token"))
+		(s-malformed @6.54-6.55 (tag "statement_unexpected_token"))
+		(s-malformed @6.55-6.58 (tag "statement_unexpected_token"))
+		(s-malformed @6.59-6.60 (tag "statement_unexpected_token"))
+		(s-malformed @6.61-6.62 (tag "statement_unexpected_token"))
+		(s-malformed @6.62-6.63 (tag "statement_unexpected_token"))
+		(s-malformed @6.63-6.64 (tag "statement_unexpected_token"))
+		(s-malformed @6.65-6.66 (tag "statement_unexpected_token"))
+		(s-malformed @6.66-6.67 (tag "statement_unexpected_token"))
+		(s-malformed @6.68-6.70 (tag "multi_arrow_needs_parens"))
+		(s-malformed @7.1-7.2 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @7.2-7.3 (tag "statement_unexpected_token"))
+		(s-malformed @7.3-7.4 (tag "statement_unexpected_token"))
+		(s-malformed @7.4-7.5 (tag "statement_unexpected_token"))
+		(s-malformed @7.6-7.7 (tag "statement_unexpected_token"))
+		(s-malformed @7.8-7.9 (tag "statement_unexpected_token"))
+		(s-malformed @7.10-7.15 (tag "statement_unexpected_token"))
+		(s-malformed @7.16-7.22 (tag "statement_unexpected_token"))
+		(s-malformed @7.22-7.23 (tag "statement_unexpected_token"))
+		(s-malformed @7.23-7.24 (tag "statement_unexpected_token"))
+		(s-malformed @7.24-7.25 (tag "statement_unexpected_token"))
+		(s-malformed @7.25-7.28 (tag "statement_unexpected_token"))
+		(s-malformed @7.29-7.30 (tag "statement_unexpected_token"))
+		(s-malformed @7.31-7.32 (tag "statement_unexpected_token"))
+		(s-malformed @7.32-7.33 (tag "statement_unexpected_token"))
+		(s-malformed @7.33-7.34 (tag "statement_unexpected_token"))
+		(s-malformed @7.35-7.36 (tag "statement_unexpected_token"))
+		(s-malformed @7.36-7.37 (tag "statement_unexpected_token"))
+		(s-malformed @7.38-7.40 (tag "multi_arrow_needs_parens"))
+		(s-malformed @7.44-7.45 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @7.46-7.52 (tag "statement_unexpected_token"))
+		(s-malformed @7.52-7.53 (tag "statement_unexpected_token"))
+		(s-malformed @7.53-7.54 (tag "statement_unexpected_token"))
+		(s-malformed @7.54-7.55 (tag "statement_unexpected_token"))
+		(s-malformed @7.55-7.58 (tag "statement_unexpected_token"))
+		(s-malformed @7.59-7.60 (tag "statement_unexpected_token"))
+		(s-malformed @7.61-7.62 (tag "statement_unexpected_token"))
+		(s-malformed @7.62-7.63 (tag "statement_unexpected_token"))
+		(s-malformed @7.63-7.64 (tag "statement_unexpected_token"))
+		(s-malformed @7.65-7.66 (tag "statement_unexpected_token"))
+		(s-malformed @7.66-7.67 (tag "statement_unexpected_token"))
+		(s-malformed @7.68-7.70 (tag "multi_arrow_needs_parens"))
+		(s-malformed @9.1-9.2 (tag "expected_colon_after_type_annotation"))
+		(s-malformed @9.2-9.3 (tag "statement_unexpected_token"))
+		(s-malformed @9.3-9.4 (tag "statement_unexpected_token"))
+		(s-malformed @9.4-9.5 (tag "statement_unexpected_token"))
+		(s-malformed @9.6-9.7 (tag "statement_unexpected_token"))
+		(s-malformed @9.7-9.8 (tag "statement_unexpected_token"))
+		(s-malformed @9.9-9.10 (tag "statement_unexpected_token"))
+		(s-malformed @9.11-9.12 (tag "statement_unexpected_token"))
+		(s-malformed @9.12-9.13 (tag "statement_unexpected_token"))
+		(s-malformed @9.13-9.14 (tag "statement_unexpected_token"))
+		(s-malformed @9.15-9.16 (tag "statement_unexpected_token"))
+		(s-malformed @9.16-9.17 (tag "statement_unexpected_token"))
 		(s-type-decl @10.1-10.18
 			(header @10.1-10.8 (name "D")
 				(args
@@ -283,13 +1395,23 @@ EndOfFile(30:1-30:1),
 				(tags
 					(ty @12.6-12.7 (name "A"))
 					(ty @12.9-12.10 (name "B")))))
-		(s-type-anno @14.1-14.42 (name "g")
+		(s-type-anno @14.1-14.17 (name "g")
 			(ty-fn @14.5-14.11
 				(ty-var @14.5-14.6 (raw "e"))
 				(ty-var @14.10-14.11 (raw "e")))
 			(where
-				(alias @14.18-14.29 (module-of "e") (name "A"))
-				(alias @14.31-14.42 (module-of "e") (name "B"))))
+				(malformed @14.12-14.17 (reason "where_expected_open_bracket"))))
+		(s-malformed @14.18-14.24 (tag "statement_unexpected_token"))
+		(s-malformed @14.24-14.25 (tag "statement_unexpected_token"))
+		(s-malformed @14.25-14.26 (tag "statement_unexpected_token"))
+		(s-malformed @14.26-14.27 (tag "statement_unexpected_token"))
+		(s-malformed @14.27-14.29 (tag "statement_unexpected_token"))
+		(s-malformed @14.29-14.30 (tag "statement_unexpected_token"))
+		(s-malformed @14.31-14.37 (tag "statement_unexpected_token"))
+		(s-malformed @14.37-14.38 (tag "statement_unexpected_token"))
+		(s-malformed @14.38-14.39 (tag "statement_unexpected_token"))
+		(s-malformed @14.39-14.40 (tag "statement_unexpected_token"))
+		(s-malformed @14.40-14.42 (tag "statement_unexpected_token"))
 		(s-decl @16.1-29.2
 			(p-ident @16.1-16.2 (raw "h"))
 			(e-lambda @16.5-29.2
@@ -368,15 +1490,17 @@ import I1 exposing [I11, I12]
 import I2 exposing [I21 as Ias1, I22 as Ias2]
 
 # Where constraint
-A(a) : a where module(a).a1 : (a, a) -> Str, module(a).a2 : (a, a) -> Str
-B(b) : b where module(b).b1 : (b, b) -> Str, module(b).b2 : (b, b) -> Str
+A(a) : a where []
 
-C(a, b) : (a, b)
+
+
+
 D(a, b) : C(a, b)
 E : { a : Str, b : Str }
 F : [A, B]
 
-g : e -> e where module(e).A, module(e).B
+g : e -> e where []
+
 
 h = |x, y| {
 	h1 = { h11: x, h12: x, h13: { h131: x, h132: y } }
@@ -400,11 +1524,11 @@ h = |x, y| {
 		(p-assign @16.1-16.2 (ident "h"))
 		(e-closure @16.5-29.2
 			(captures
+				(capture @25.6-25.7 (ident "a"))
 				(capture @27.7-27.8 (ident "a"))
-				(capture @26.8-26.9 (ident "a"))
-				(capture @24.7-24.8 (ident "a"))
 				(capture @16.1-16.2 (ident "h"))
-				(capture @25.6-25.7 (ident "a")))
+				(capture @26.8-26.9 (ident "a"))
+				(capture @24.7-24.8 (ident "a")))
 			(e-lambda @16.5-29.2
 				(args
 					(p-assign @16.6-16.7 (ident "x"))
@@ -496,32 +1620,17 @@ h = |x, y| {
 									(value
 										(e-lookup-local @27.17-27.18
 											(p-assign @27.7-27.8 (ident "a"))))))))))))
-	(s-alias-decl @6.1-6.74
+	(s-alias-decl @6.1-6.15
 		(ty-header @6.1-6.5 (name "A")
 			(ty-args
 				(ty-rigid-var @6.3-6.4 (name "a"))))
 		(ty-rigid-var-lookup (ty-rigid-var @6.3-6.4 (name "a"))))
-	(s-alias-decl @7.1-7.74
-		(ty-header @7.1-7.5 (name "B")
-			(ty-args
-				(ty-rigid-var @7.3-7.4 (name "b"))))
-		(ty-rigid-var-lookup (ty-rigid-var @7.3-7.4 (name "b"))))
-	(s-alias-decl @9.1-9.17
-		(ty-header @9.1-9.8 (name "C")
-			(ty-args
-				(ty-rigid-var @9.3-9.4 (name "a"))
-				(ty-rigid-var @9.6-9.7 (name "b"))))
-		(ty-tuple @9.11-9.17
-			(ty-rigid-var-lookup (ty-rigid-var @9.3-9.4 (name "a")))
-			(ty-rigid-var-lookup (ty-rigid-var @9.6-9.7 (name "b")))))
 	(s-alias-decl @10.1-10.18
 		(ty-header @10.1-10.8 (name "D")
 			(ty-args
 				(ty-rigid-var @10.3-10.4 (name "a"))
 				(ty-rigid-var @10.6-10.7 (name "b"))))
-		(ty-apply @10.11-10.18 (name "C") (local)
-			(ty-rigid-var-lookup (ty-rigid-var @10.3-10.4 (name "a")))
-			(ty-rigid-var-lookup (ty-rigid-var @10.6-10.7 (name "b")))))
+		(ty-malformed @10.11-10.12))
 	(s-alias-decl @11.1-11.25
 		(ty-header @11.1-11.2 (name "E"))
 		(ty-record @11.5-11.25
@@ -542,15 +1651,12 @@ h = |x, y| {
 		(exposes
 			(exposed (name "I21") (alias "Ias1") (wildcard false))
 			(exposed (name "I22") (alias "Ias2") (wildcard false))))
-	(s-type-anno @14.1-14.42 (name "g")
+	(s-type-anno @14.1-14.17 (name "g")
 		(ty-fn @14.5-14.11 (effectful false)
 			(ty-rigid-var @14.5-14.6 (name "e"))
 			(ty-rigid-var-lookup (ty-rigid-var @14.5-14.6 (name "e"))))
 		(where
-			(alias @14.18-14.29 (module-of "e") (ident "A"))
-			(alias @14.31-14.42 (module-of "e") (ident "B"))))
-	(ext-decl @14.18-14.29 (ident "module(e).A") (kind "type"))
-	(ext-decl @14.31-14.42 (ident "module(e).B") (kind "type")))
+			(malformed @14.12-14.17))))
 ~~~
 # TYPES
 ~~~clojure
@@ -558,19 +1664,10 @@ h = |x, y| {
 	(defs
 		(patt @16.1-16.2 (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j, [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j -> c")))
 	(type_decls
-		(alias @6.1-6.74 (type "A(a)")
+		(alias @6.1-6.15 (type "A(a)")
 			(ty-header @6.1-6.5 (name "A")
 				(ty-args
 					(ty-rigid-var @6.3-6.4 (name "a")))))
-		(alias @7.1-7.74 (type "B(b)")
-			(ty-header @7.1-7.5 (name "B")
-				(ty-args
-					(ty-rigid-var @7.3-7.4 (name "b")))))
-		(alias @9.1-9.17 (type "C(a, b)")
-			(ty-header @9.1-9.8 (name "C")
-				(ty-args
-					(ty-rigid-var @9.3-9.4 (name "a"))
-					(ty-rigid-var @9.6-9.7 (name "b")))))
 		(alias @10.1-10.18 (type "D(a, b)")
 			(ty-header @10.1-10.8 (name "D")
 				(ty-args

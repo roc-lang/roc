@@ -642,31 +642,34 @@ const Formatter = struct {
 
         try fmt.pushAll("where");
 
+        // Add opening bracket
+        if (clauses_are_multiline) {
+            try fmt.ensureNewline();
+            fmt.curr_indent += 1;
+            try fmt.pushIndent();
+            try fmt.push('[');
+        } else {
+            try fmt.pushAll(" [");
+        }
+
         for (clause_slice, 0..) |clause, i| {
             if (clauses_are_multiline) {
                 const clause_region = fmt.nodeRegion(@intFromEnum(clause));
                 _ = try fmt.flushCommentsBefore(clause_region.start);
             }
-            if (i == 0) {
-                if (clauses_are_multiline) {
-                    fmt.curr_indent += 1;
-                } else {
-                    try fmt.push(' ');
-                }
-            }
-            if (clauses_are_multiline) {
-                try fmt.ensureNewline();
-                try fmt.pushIndent();
-            }
-            try fmt.formatWhereClause(clause);
-            if (i < clause_slice.len - 1) {
+            if (i > 0) {
                 if (clauses_are_multiline) {
                     try fmt.push(',');
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
                 } else {
                     try fmt.pushAll(", ");
                 }
             }
+            try fmt.formatWhereClause(clause);
         }
+
+        try fmt.push(']');
     }
 
     fn formatIdent(fmt: *Formatter, ident: Token.Idx, qualifier: ?Token.Idx) !void {
@@ -1736,7 +1739,7 @@ const Formatter = struct {
         const multiline = fmt.nodeWillBeMultiline(AST.WhereClause.Idx, idx);
         switch (clause) {
             .mod_method => |c| {
-                try fmt.pushAll("module(");
+                // Format as: a.method : Type
                 if (multiline and try fmt.flushCommentsBefore(c.var_tok)) {
                     fmt.curr_indent = start_indent + 1;
                     try fmt.pushIndent();
@@ -1746,7 +1749,6 @@ const Formatter = struct {
                     fmt.curr_indent = start_indent;
                     try fmt.pushIndent();
                 }
-                try fmt.push(')');
                 try fmt.push('.');
                 try fmt.pushTokenText(c.name_tok);
                 try fmt.pushAll(" :");
@@ -1797,7 +1799,7 @@ const Formatter = struct {
                 _ = try fmt.formatTypeAnno(c.ret_anno);
             },
             .mod_alias => |c| {
-                try fmt.pushAll("module(");
+                // Format as: a.TypeAlias
                 if (multiline and try fmt.flushCommentsBefore(c.var_tok)) {
                     fmt.curr_indent = start_indent + 1;
                     try fmt.pushIndent();
@@ -1807,7 +1809,6 @@ const Formatter = struct {
                     fmt.curr_indent = start_indent;
                     try fmt.pushIndent();
                 }
-                try fmt.push(')');
                 try fmt.push('.');
                 try fmt.pushTokenText(c.name_tok);
             },

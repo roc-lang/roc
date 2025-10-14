@@ -243,14 +243,10 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .expr_unexpected_token => "UNEXPECTED TOKEN IN EXPRESSION",
         .import_must_be_top_level => "IMPORT MUST BE TOP LEVEL",
         .expected_expr_close_square_or_comma => "LIST NOT CLOSED",
-        .where_expected_mod_open => "WHERE CLAUSE ERROR",
+        .where_expected_open_bracket => "WHERE CLAUSE ERROR",
+        .where_expected_close_bracket => "WHERE CLAUSE ERROR",
         .where_expected_var => "WHERE CLAUSE ERROR",
-        .where_expected_mod_close => "WHERE CLAUSE ERROR",
-        .where_expected_arg_open => "WHERE CLAUSE ERROR",
-        .where_expected_arg_close => "WHERE CLAUSE ERROR",
-        .where_expected_method_arrow => "WHERE CLAUSE ERROR",
         .where_expected_method_or_alias_name => "WHERE CLAUSE ERROR",
-        .where_expected_module => "WHERE CLAUSE ERROR",
         .where_expected_colon => "WHERE CLAUSE ERROR",
         .where_expected_constraints => "WHERE CLAUSE ERROR",
         .no_else => "IF WITHOUT ELSE",
@@ -421,44 +417,28 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addIndent(1);
             try report.document.addAnnotated("Maybe(List(U64))", .dimmed);
         },
-        .where_expected_mod_open => {
-            try report.document.addReflowingText("Expected an opening parenthesis after ");
-            try report.document.addKeyword("module");
-            try report.document.addText(" in this where clause.");
+        .where_expected_open_bracket => {
+            try report.document.addReflowingText("Expected an opening bracket ");
+            try report.document.addAnnotated("[", .emphasized);
+            try report.document.addText(" after ");
+            try report.document.addKeyword("where");
+            try report.document.addText(".");
             try report.document.addLineBreak();
-            try report.document.addText("Module constraints should look like: ");
-            try report.document.addCodeBlock("module(a).method : Type");
+            try report.document.addText("Where clauses should look like: ");
+            try report.document.addCodeBlock("where [a.method : Type]");
+        },
+        .where_expected_close_bracket => {
+            try report.document.addReflowingText("Expected a closing bracket ");
+            try report.document.addAnnotated("]", .emphasized);
+            try report.document.addText(" after the where clause constraints.");
+            try report.document.addLineBreak();
+            try report.document.addText("Where clauses should look like: ");
+            try report.document.addCodeBlock("where [a.method : Type]");
         },
         .where_expected_var => {
             try report.document.addReflowingText("Expected a type variable name here.");
             try report.document.addLineBreak();
             try report.document.addReflowingText("Type variables are lowercase identifiers that represent types.");
-        },
-        .where_expected_mod_close => {
-            try report.document.addReflowingText("Expected a closing parenthesis after the type variable in this module constraint.");
-            try report.document.addLineBreak();
-            try report.document.addText("Module constraints should look like: ");
-            try report.document.addCodeBlock("module(a).method : Type");
-        },
-        .where_expected_arg_open => {
-            try report.document.addReflowingText("Expected an opening parenthesis for the method arguments.");
-            try report.document.addLineBreak();
-            try report.document.addText("Method constraints should look like: ");
-            try report.document.addCodeBlock("module(a).method : args -> ret");
-        },
-        .where_expected_arg_close => {
-            try report.document.addReflowingText("Expected a closing parenthesis after the method arguments.");
-            try report.document.addLineBreak();
-            try report.document.addText("Method constraints should look like: ");
-            try report.document.addCodeBlock("module(a).method : args -> ret");
-        },
-        .where_expected_method_arrow => {
-            try report.document.addReflowingText("Expected an arrow ");
-            try report.document.addAnnotated("->", .emphasized);
-            try report.document.addText(" after the method arguments.");
-            try report.document.addLineBreak();
-            try report.document.addText("Method constraints should look like: ");
-            try report.document.addCodeBlock("module(a).method : args -> ret");
         },
         .where_expected_method_or_alias_name => {
             try report.document.addReflowingText("Expected a method name or type alias after the dot.");
@@ -467,26 +447,11 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addLineBreak();
             try report.document.addIndent(1);
             try report.document.addText("• Method constraints: ");
-            try report.document.addCodeBlock("module(a).method : args -> ret");
+            try report.document.addCodeBlock("a.method : args -> ret");
             try report.document.addLineBreak();
             try report.document.addIndent(1);
             try report.document.addText("• Type aliases: ");
-            try report.document.addCodeBlock("module(a).SomeTypeAlias");
-        },
-        .where_expected_module => {
-            try report.document.addReflowingText("Expected ");
-            try report.document.addKeyword("module");
-            try report.document.addText(" at the start of this where clause constraint.");
-            try report.document.addLineBreak();
-            try report.document.addText("Where clauses can contain:");
-            try report.document.addLineBreak();
-            try report.document.addIndent(1);
-            try report.document.addText("• Method constraints: ");
-            try report.document.addCodeBlock("module(a).method : Type");
-            try report.document.addLineBreak();
-            try report.document.addIndent(1);
-            try report.document.addText("• Type aliases: ");
-            try report.document.addCodeBlock("module(a).SomeType");
+            try report.document.addCodeBlock("a.SomeTypeAlias");
         },
         .where_expected_colon => {
             try report.document.addReflowingText("Expected a colon ");
@@ -496,7 +461,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addReflowingText("Method constraints require a colon to separate the method name from its type.");
             try report.document.addLineBreak();
             try report.document.addText("For example: ");
-            try report.document.addCodeBlock("module(a).method : a -> b");
+            try report.document.addCodeBlock("a.method : a -> b");
         },
         .where_expected_constraints => {
             try report.document.addReflowingText("A ");
@@ -508,7 +473,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addText("For example:");
             try report.document.addLineBreak();
             try report.document.addIndent(1);
-            try report.document.addCodeBlock("module(a).method : a -> b");
+            try report.document.addCodeBlock("where [a.method : a -> b]");
         },
         .match_branch_wrong_arrow => {
             try report.document.addReflowingText("Match branches use `=>` instead of `->`.");
@@ -680,14 +645,10 @@ pub const Diagnostic = struct {
         expected_expr_record_field_name,
         expected_ty_apply_close_round,
         expected_expr_apply_close_round,
-        where_expected_mod_open,
+        where_expected_open_bracket,
+        where_expected_close_bracket,
         where_expected_var,
-        where_expected_mod_close,
-        where_expected_arg_open,
-        where_expected_arg_close,
-        where_expected_method_arrow,
         where_expected_method_or_alias_name,
-        where_expected_module,
         where_expected_colon,
         where_expected_constraints,
         import_must_be_top_level,
@@ -2164,9 +2125,9 @@ pub const WhereClause = union(enum) {
     ///
     /// Examples:
     /// ```roc
-    /// convert : a -> b where module(a).to_b : a -> b
-    /// decode : List(U8) -> a where module(a).decode : List(U8) -> a
-    /// hash : a -> U64 where module(a).hash : a -> U64
+    /// convert : a -> b where [a.to_b : a -> b]
+    /// decode : List(U8) -> a where [a.decode : List(U8) -> a]
+    /// hash : a -> U64 where [a.hash : a -> U64]
     /// ```
     mod_method: struct {
         var_tok: Token.Idx,
@@ -2183,9 +2144,9 @@ pub const WhereClause = union(enum) {
     ///
     /// Example:
     /// ```roc
-    /// Sort(a) : a where  module(a).order(elem, elem) -> [LT, EQ, GT]
+    /// Sort(a) : a where [a.order : elem, elem -> [LT, EQ, GT]]
     ///
-    /// sort : List(elem) -> List(elem) where module(elem).Sort
+    /// sort : List(elem) -> List(elem) where [elem.Sort]
     /// ```
     mod_alias: struct {
         var_tok: Token.Idx,
