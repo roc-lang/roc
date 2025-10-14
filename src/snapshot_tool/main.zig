@@ -918,16 +918,6 @@ fn checkSnapshotExpectations(gpa: Allocator) !bool {
     var fail_count: usize = 0;
 
     for (work_list.items) |work_item| {
-        // TODO: fuzz_crash_049.md causes a segfault in pushTypesToSExprTree during TYPES generation
-        // This is a pre-existing bug where malformed parse state creates invalid type structures
-        // The standalone tool works fine, but after 1107 tests, some accumulated state triggers the crash
-        // Need to fix pushTypesToSExprTree to handle corrupted type data more defensively
-        // Tracked in NEXT_STEPS.md under "Issue 1: Segfault in fuzz_crash_049.md"
-        if (std.mem.indexOf(u8, work_item.path, "fuzz_crash_049") != null) {
-            std.debug.print("Skipping fuzz_crash_049.md due to known segfault in pushTypesToSExprTree\n", .{});
-            continue;
-        }
-
         const success = switch (work_item.kind) {
             .snapshot_file => processSnapshotFile(gpa, work_item.path, &config) catch false,
             .multi_file_snapshot => blk: {
@@ -2464,23 +2454,10 @@ fn generateTypesSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx:
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
 
-
-    // Try to push types, but if it fails, generate an error message instead of crashing
-    can_ir.pushTypesToSExprTree(maybe_expr_idx, &tree) catch |err| {
-        std.debug.print("ERROR: pushTypesToSExprTree failed with error: {}\n", .{err});
-        // Generate a placeholder TYPES section indicating the error
-        try output.begin_section("TYPES");
-        try output.begin_code_block("clojure");
-        try output.md_writer.writeAll("ERROR: Failed to generate types section\n");
-        try output.end_code_block();
-        try output.end_section();
-        return;
-    };
-
+    try can_ir.pushTypesToSExprTree(maybe_expr_idx, &tree);
 
     try output.begin_section("TYPES");
     try output.begin_code_block("clojure");
-
     try tree.toStringPretty(output.md_writer.any());
 
     try output.md_writer.writeAll("\n");

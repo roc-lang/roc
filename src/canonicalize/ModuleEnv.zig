@@ -1943,7 +1943,8 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
 
         // Iterate through all definitions to extract pattern types
         const defs_slice = self.store.sliceDefs(self.all_defs);
-        for (defs_slice) |def_idx| {
+        for (defs_slice, 0..) |def_idx, i| {
+            _ = i;
             const def = self.store.getDef(def_idx);
 
             // Only process assign patterns - skip destructuring patterns

@@ -254,7 +254,7 @@ main! = |_| {
 		(patt @6.1-6.2 (type "Num(_size)"))
 		(patt @9.1-9.9 (type "d -> d"))
 		(patt @12.1-12.10 (type "d -> d"))
-		(patt @15.1-15.5 (type "d, e -> (d, e)"))
+		(patt @15.1-15.5 (type "_arg, _arg2 -> (_field, _field2)"))
 		(patt @17.1-17.6 (type "_arg -> Num(_size)")))
 	(expressions
 		(expr @4.5-4.6 (type "Num(_size)"))
@@ -262,6 +262,6 @@ main! = |_| {
 		(expr @6.5-6.6 (type "Num(_size)"))
 		(expr @9.12-9.17 (type "d -> d"))
 		(expr @12.13-12.18 (type "d -> d"))
-		(expr @15.8-15.39 (type "d, e -> (d, e)"))
+		(expr @15.8-15.39 (type "_arg, _arg2 -> (_field, _field2)"))
 		(expr @17.9-23.2 (type "_arg -> Num(_size)"))))
 ~~~

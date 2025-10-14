@@ -121,7 +121,7 @@ pub const TestRunner = struct {
         return TestRunner{
             .allocator = allocator,
             .env = cir,
-            .interpreter = try Interpreter.init(allocator, cir, bool_stmt, cir),
+            .interpreter = try Interpreter.init(allocator, cir, bool_stmt, cir, null),
             .crash = CrashContext.init(allocator),
             .roc_ops = null,
             .test_results = std.ArrayList(TestResult).init(allocator),

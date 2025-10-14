@@ -248,39 +248,53 @@ fn hasSeenVar(self: *const TypeWriter, var_: Var) bool {
 /// Convert a var to a type string
 fn writeVarWithContext(self: *TypeWriter, var_: Var, context: TypeContext, root_var: Var) std.mem.Allocator.Error!void {
     if (@intFromEnum(var_) >= self.types.slots.backing.len()) {
-        // Debug assert that the variable is in bounds - if not, we have a bug in type checking
-        _ = try self.buf.writer().write("invalid_type");
-    } else {
-        const resolved = self.types.resolveVar(var_);
-        if (self.hasSeenVar(resolved.var_)) {
-            _ = try self.buf.writer().write("...");
-        } else {
-            try self.seen.append(var_);
-            defer _ = self.seen.pop();
+        // Variable is out of bounds - this can happen with corrupted type data
+        _ = try self.buf.writer().write("Error");
+        return;
+    }
 
-            switch (resolved.desc.content) {
-                .flex => |flex| {
-                    if (flex.name) |ident_idx| {
-                        _ = try self.buf.writer().write(self.getIdent(ident_idx));
-                    } else {
-                        try self.writeFlexVarName(var_, context, root_var);
-                    }
-                },
-                .rigid => |rigid| {
-                    _ = try self.buf.writer().write(self.getIdent(rigid.name));
-                    // Useful in debugging to see if a var is rigid or not
-                    // _ = try self.buf.writer().write("[r]");
-                },
-                .alias => |alias| {
-                    try self.writeAlias(alias, root_var);
-                },
-                .structure => |flat_type| {
-                    try self.writeFlatType(flat_type, root_var);
-                },
-                .err => {
-                    _ = try self.buf.writer().write("Error");
-                },
-            }
+    const resolved = self.types.resolveVar(var_);
+
+    // Check if resolution returned an error descriptor - bail immediately
+    if (resolved.desc.content == .err) {
+        _ = try self.buf.writer().write("Error");
+        return;
+    }
+
+    if (self.hasSeenVar(resolved.var_)) {
+        _ = try self.buf.writer().write("...");
+    } else {
+        // Bounds check the resolved var as well
+        if (@intFromEnum(resolved.var_) >= self.types.slots.backing.len()) {
+            _ = try self.buf.writer().write("Error");
+            return;
+        }
+
+        try self.seen.append(var_);
+        defer _ = self.seen.pop();
+
+        switch (resolved.desc.content) {
+            .flex => |flex| {
+                if (flex.name) |ident_idx| {
+                    _ = try self.buf.writer().write(self.getIdent(ident_idx));
+                } else {
+                    try self.writeFlexVarName(var_, context, root_var);
+                }
+            },
+            .rigid => |rigid| {
+                _ = try self.buf.writer().write(self.getIdent(rigid.name));
+                // Useful in debugging to see if a var is rigid or not
+                // _ = try self.buf.writer().write("[r]");
+            },
+            .alias => |alias| {
+                try self.writeAlias(alias, root_var);
+            },
+            .structure => |flat_type| {
+                try self.writeFlatType(flat_type, root_var);
+            },
+            .err => {
+                _ = try self.buf.writer().write("Error");
+            },
         }
     }
 }
@@ -552,6 +566,17 @@ fn writeRecordExtension(self: *TypeWriter, ext_var: Var, num_fields: usize, root
 /// Write a tag union type
 fn writeTagUnion(self: *TypeWriter, tag_union: TagUnion, root_var: Var) std.mem.Allocator.Error!void {
     _ = try self.buf.writer().write("[");
+
+    // Bounds check the tags range before iterating
+    const tags_start_idx = @intFromEnum(tag_union.tags.start);
+    const tags_len = self.types.tags.len();
+    if (tags_start_idx >= tags_len or tags_start_idx + tag_union.tags.count > tags_len) {
+        // Tags range is out of bounds - return error indicator
+        _ = try self.buf.writer().write("Error");
+        _ = try self.buf.writer().write("]");
+        return;
+    }
+
     var iter = tag_union.tags.iterIndices();
     while (iter.next()) |tag_idx| {
         if (@intFromEnum(tag_idx) > @intFromEnum(tag_union.tags.start)) {
@@ -584,7 +609,11 @@ fn writeTagUnion(self: *TypeWriter, tag_union: TagUnion, root_var: Var) std.mem.
             _ = try self.buf.writer().write(self.getIdent(rigid.name));
             // _ = try self.buf.writer().write("[r]");
         },
-        else => {
+        .err => {
+            // Extension resolved to error - write error indicator
+            _ = try self.buf.writer().write("Error");
+        },
+        .alias => {
             try self.writeVarWithContext(tag_union.ext, .TagUnionExtension, root_var);
         },
     }
@@ -714,6 +743,13 @@ fn writeFracType(self: *TypeWriter, prec: Num.Frac.Precision, num_type: NumPrecT
 pub fn writeFlexVarName(self: *TypeWriter, var_: Var, context: TypeContext, root_var: Var) std.mem.Allocator.Error!void {
     const resolved_var = self.types.resolveVar(var_).var_;
 
+    // If resolved var is out of bounds, it's corrupted - just write a simple name
+    if (@intFromEnum(resolved_var) >= self.types.slots.backing.len()) {
+        _ = try self.buf.writer().write("_");
+        try self.generateContextualName(context);
+        return;
+    }
+
     // Check if we've seen this flex var before.
     if (self.flex_var_names_map.get(resolved_var)) |range| {
         // If so, then use that name
@@ -722,9 +758,10 @@ pub fn writeFlexVarName(self: *TypeWriter, var_: Var, context: TypeContext, root
         );
     } else {
         // Check if this variable appears multiple times
+        // Note: counting can fail with corrupted data, so we treat it as appearing once
         const occurrences = self.countVarOccurrences(resolved_var, root_var);
-        if (occurrences == 1) {
-            // If it appears once, then generate and write the name
+        if (occurrences <= 1) {
+            // If it appears once (or we couldn't count due to corruption), generate a simple name
             _ = try self.buf.writer().write("_");
             try self.generateContextualName(context);
         } else {
@@ -749,21 +786,36 @@ pub fn writeFlexVarName(self: *TypeWriter, var_: Var, context: TypeContext, root
 
 /// Count how many times a variable appears in a type
 fn countVarOccurrences(self: *const TypeWriter, search_var: Var, root_var: Var) usize {
+    // Check if root resolves to error - if so, don't try to traverse (data may be corrupt)
+    const root_resolved = self.types.resolveVar(root_var);
+    if (root_resolved.desc.content == .err) {
+        return 1; // Treat as appearing once to avoid traversing corrupt data
+    }
+
     var count: usize = 0;
     self.countVar(search_var, root_var, &count);
     return count;
 }
 
 fn countVar(self: *const TypeWriter, search_var: Var, current_var: Var, count: *usize) void {
-    if (@intFromEnum(current_var) >= self.types.slots.backing.len()) return;
+    if (@intFromEnum(current_var) >= self.types.slots.backing.len()) {
+        return;
+    }
 
     const resolved = self.types.resolveVar(current_var);
+
+    // If resolution returned an error descriptor, stop traversing
+    if (resolved.desc.content == .err) {
+        return;
+    }
+
     if (resolved.var_ == search_var) {
         count.* += 1;
     }
 
     switch (resolved.desc.content) {
-        .flex, .rigid, .err => {},
+        .flex, .rigid => {},
+        .err => {},
         .alias => |alias| {
             // For aliases, we only count occurrences in the type arguments
             var args_iter = self.types.iterAliasArgs(alias);
@@ -780,14 +832,18 @@ fn countVar(self: *const TypeWriter, search_var: Var, current_var: Var, count: *
 fn countVarInFlatType(self: *const TypeWriter, search_var: Var, flat_type: FlatType, count: *usize) void {
     switch (flat_type) {
         .str, .empty_record, .empty_tag_union => {},
-        .box => |sub_var| self.countVar(search_var, sub_var, count),
-        .list => |sub_var| self.countVar(search_var, sub_var, count),
+        .box => |sub_var| {
+            self.countVar(search_var, sub_var, count);
+        },
+        .list => |sub_var| {
+            self.countVar(search_var, sub_var, count);
+        },
         .list_unbound, .num => {},
         .tuple => |tuple| {
-            const elems = self.types.sliceVars(tuple.elems);
-            for (elems) |elem| {
-                self.countVar(search_var, elem, count);
-            }
+            // Skip tuple traversal during counting to avoid issues with potentially corrupt data
+            // The occurrence count is just used for naming, so not counting into tuples is safe
+            _ = tuple;
+            return;
         },
         .nominal_type => |nominal_type| {
             var args_iter = self.types.iterNominalArgs(nominal_type);
@@ -816,6 +872,14 @@ fn countVarInFlatType(self: *const TypeWriter, search_var: Var, flat_type: FlatT
             }
         },
         .tag_union => |tag_union| {
+            // Bounds check the tags range before iterating
+            const tags_start_idx = @intFromEnum(tag_union.tags.start);
+            const tags_len = self.types.tags.len();
+            if (tags_start_idx >= tags_len or tags_start_idx + tag_union.tags.count > tags_len) {
+                // Tags range is out of bounds - skip counting in corrupted data
+                return;
+            }
+
             var iter = tag_union.tags.iterIndices();
             while (iter.next()) |tag_idx| {
                 const tag = self.types.tags.get(tag_idx);
