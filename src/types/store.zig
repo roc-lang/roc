@@ -484,7 +484,7 @@ pub const Store = struct {
         return try self.tags.appendSlice(self.gpa, slice);
     }
 
-    /// Append static dispatch contraints to the backing list, returning the range
+    /// Append static dispatch constraints to the backing list, returning the range
     pub fn appendStaticDispatchConstraints(self: *Self, s: []const StaticDispatchConstraint) std.mem.Allocator.Error!StaticDispatchConstraint.SafeList.Range {
         return try self.static_dispatch_constraints.appendSlice(self.gpa, s);
     }

@@ -80,7 +80,7 @@ scratch_record_fields: base.Scratch(types_mod.RecordField),
 import_cache: ImportCache,
 /// Maps variables to the expressions that constrained them (for better error regions)
 constraint_origins: std.AutoHashMap(Var, Var),
-/// Deferred static dispatch constriants - accumulated during type checking,
+/// Deferred static dispatch constraints - accumulated during type checking,
 /// then solved for at the end
 deferred_static_dispatch_constraints: DeferredConstraintCheck.SafeList,
 

@@ -2996,6 +2996,7 @@ pub const UnifyErrCtx = union(enum) {
     invalid_tag_union_ext: Var,
 };
 
+/// A list of constraint that should apply to concrete type
 pub const DeferredConstraintCheck = struct {
     constrained_var: Var,
     concrete_var: Var,

@@ -124,7 +124,7 @@ pub const Instantiator = struct {
                 // Copy the rigid var's constraints
                 const fresh_constraints = try self.instantiateStaticDispatchConstraints(rigid.constraints);
 
-                // Copy the rigid var's contraints
+                // Copy the rigid var's constraints
                 const fresh_content = switch (fresh_type) {
                     .flex => Content{ .flex = Flex{ .name = rigid.name, .constraints = fresh_constraints } },
                     .rigid => Content{ .rigid = Rigid{ .name = rigid.name, .constraints = fresh_constraints } },
