@@ -2165,10 +2165,19 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                         const check_mode = blk: {
                             if (decl_stmt.anno) |anno_idx| {
                                 const annotation = self.cir.store.getAnnotation(anno_idx);
+
+                                // Generate the annotation type var in-place
+                                self.seen_annos.clearRetainingCapacity();
                                 try self.generateAnnoTypeInPlace(annotation.type_anno, .annotation);
+
+                                // Update the outer anno to redirect to the inner anno
                                 const anno_var = ModuleEnv.varFrom(anno_idx);
+                                const type_anno_var = ModuleEnv.varFrom(annotation.type_anno);
+                                try self.types.setVarRedirect(anno_var, type_anno_var);
+
+                                // Return the expectation
                                 break :blk Expected{
-                                    .expected = .{ .var_ = anno_var, .from_annotation = true },
+                                    .expected = .{ .var_ = type_anno_var, .from_annotation = true },
                                 };
                             } else {
                                 break :blk Expected.no_expectation;
