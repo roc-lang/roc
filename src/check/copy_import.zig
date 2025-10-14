@@ -41,18 +41,18 @@ pub fn copyVar(
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Var {
+    const resolved = source_store.resolveVar(source_var);
+
     // Check if we've already copied this variable
-    if (var_mapping.get(source_var)) |dest_var| {
+    if (var_mapping.get(resolved.var_)) |dest_var| {
         return dest_var;
     }
-
-    const resolved = source_store.resolveVar(source_var);
 
     // Create a placeholder variable first to break cycles
     const placeholder_var = try dest_store.fresh();
 
     // Record the mapping immediately to handle recursive types
-    try var_mapping.put(source_var, placeholder_var);
+    try var_mapping.put(resolved.var_, placeholder_var);
 
     // Now copy the content (which may recursively reference this variable)
     const dest_content = try copyContent(source_store, dest_store, resolved.desc.content, var_mapping, source_idents, dest_idents, allocator);
@@ -439,31 +439,15 @@ fn copyStaticDispatchConstraints(
         var dest_constraints = try std.array_list.Managed(StaticDispatchConstraint).initCapacity(dest_store.gpa, source_constraints_len);
         defer dest_constraints.deinit();
 
-        var dest_fn_args = try std.array_list.Managed(Var).initCapacity(dest_store.gpa, 8);
-        defer dest_fn_args.deinit();
-
         // Iterate over the constraints
         for (source_store.sliceStaticDispatchConstraints(source_constraints)) |source_constraint| {
-            dest_fn_args.clearRetainingCapacity();
-
             // Translate the fn name
             const fn_name_bytes = source_idents.getText(source_constraint.fn_name);
             const translated_fn_name = try dest_idents.insert(allocator, base.Ident.for_text(fn_name_bytes));
 
-            // Copy the args
-            for (source_store.sliceVars(source_constraint.fn_args.nonempty)) |source_fn_arg| {
-                const dest_arg = try copyVar(source_store, dest_store, source_fn_arg, var_mapping, source_idents, dest_idents, allocator);
-                try dest_fn_args.append(dest_arg);
-            }
-            const dest_args_range = try dest_store.appendVars(dest_fn_args.items);
-
-            // Copy the ret
-            const dest_ret = try copyVar(source_store, dest_store, source_constraint.fn_ret, var_mapping, source_idents, dest_idents, allocator);
-
             try dest_constraints.append(StaticDispatchConstraint{
                 .fn_name = translated_fn_name,
-                .fn_args = .{ .nonempty = dest_args_range },
-                .fn_ret = dest_ret,
+                .fn_var = try copyVar(source_store, dest_store, source_constraint.fn_var, var_mapping, source_idents, dest_idents, allocator),
             });
         }
 

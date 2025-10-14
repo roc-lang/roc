@@ -684,9 +684,9 @@ h = |x, y| {
 		(e-closure
 			(captures
 				(capture (ident "a"))
+				(capture (ident "a"))
+				(capture (ident "a"))
 				(capture (ident "h"))
-				(capture (ident "a"))
-				(capture (ident "a"))
 				(capture (ident "a")))
 			(e-lambda
 				(args
@@ -824,22 +824,13 @@ h = |x, y| {
 	(s-import (module "I2")
 		(exposes
 			(exposed (name "I21") (alias "Ias1") (wildcard false))
-			(exposed (name "I22") (alias "Ias2") (wildcard false))))
-	(s-type-anno (name "g")
-		(ty-fn (effectful false)
-			(ty-rigid-var (name "e"))
-			(ty-rigid-var-lookup (ty-rigid-var (name "e"))))
-		(where
-			(alias (module-of "e") (ident "A"))
-			(alias (module-of "e") (ident "B"))))
-	(ext-decl (ident "e.A") (kind "type"))
-	(ext-decl (ident "e.B") (kind "type")))
+			(exposed (name "I22") (alias "Ias2") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "[Z1((c, _field)), Z2(c, _d), Z3({ a: c, b: _field }), Z4(List(c))]_others, [Z1((c, _field2)), Z2(c, _f), Z3({ a: c, b: _field2 }), Z4(List(c))]_others2 -> c")))
+		(patt (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j, [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j -> c")))
 	(type_decls
 		(alias (type "A(a)")
 			(ty-header (name "A")
@@ -864,5 +855,5 @@ h = |x, y| {
 		(alias (type "F")
 			(ty-header (name "F"))))
 	(expressions
-		(expr (type "[Z1((c, _field)), Z2(c, _d), Z3({ a: c, b: _field }), Z4(List(c))]_others, [Z1((c, _field2)), Z2(c, _f), Z3({ a: c, b: _field2 }), Z4(List(c))]_others2 -> c"))))
+		(expr (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j, [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j -> c"))))
 ~~~

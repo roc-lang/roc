@@ -197,10 +197,9 @@ processColor = |color| {
 									(e-nominal (nominal "LocalStatus")
 										(e-tag (name "Pending"))))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-underscore)
-					(ty-lookup (name "LocalStatus") (local))))))
+			(ty-fn (effectful false)
+				(ty-underscore)
+				(ty-lookup (name "LocalStatus") (local)))))
 	(s-nominal-decl
 		(ty-header (name "LocalStatus"))
 		(ty-tag-union

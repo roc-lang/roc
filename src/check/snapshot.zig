@@ -18,6 +18,7 @@ const SnapshotContentList = collections.SafeList(SnapshotContent);
 const SnapshotContentIdxSafeList = collections.SafeList(SnapshotContentIdx);
 const SnapshotRecordFieldSafeList = collections.SafeMultiList(SnapshotRecordField);
 const SnapshotTagSafeList = collections.SafeMultiList(SnapshotTag);
+const SnapshotStaticDispatchContraintSafeList = collections.SafeList(SnapshotStaticDispatchContraint);
 const MkSafeMultiList = collections.SafeMultiList;
 
 const Var = types.Var;
@@ -48,11 +49,13 @@ pub const Store = struct {
     content_indexes: SnapshotContentIdxSafeList,
     record_fields: SnapshotRecordFieldSafeList,
     tags: SnapshotTagSafeList,
+    static_dispatch_constraints: SnapshotStaticDispatchContraintSafeList,
 
     // Scratch
     scratch_content: base.Scratch(SnapshotContentIdx),
     scratch_tags: base.Scratch(SnapshotTag),
     scratch_record_fields: base.Scratch(SnapshotRecordField),
+    scratch_static_dispatch_constraints: base.Scratch(SnapshotStaticDispatchContraint),
 
     pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
         return .{
@@ -62,9 +65,11 @@ pub const Store = struct {
             .content_indexes = try SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
             .record_fields = try SnapshotRecordFieldSafeList.initCapacity(gpa, 256),
             .tags = try SnapshotTagSafeList.initCapacity(gpa, 256),
+            .static_dispatch_constraints = try SnapshotStaticDispatchContraintSafeList.initCapacity(gpa, 64),
             .scratch_content = try base.Scratch(SnapshotContentIdx).init(gpa),
             .scratch_tags = try base.Scratch(SnapshotTag).init(gpa),
             .scratch_record_fields = try base.Scratch(SnapshotRecordField).init(gpa),
+            .scratch_static_dispatch_constraints = try base.Scratch(SnapshotStaticDispatchContraint).init(gpa),
         };
     }
 
@@ -74,9 +79,11 @@ pub const Store = struct {
         self.content_indexes.deinit(self.gpa);
         self.record_fields.deinit(self.gpa);
         self.tags.deinit(self.gpa);
+        self.static_dispatch_constraints.deinit(self.gpa);
         self.scratch_content.deinit();
         self.scratch_tags.deinit();
         self.scratch_record_fields.deinit();
+        self.scratch_static_dispatch_constraints.deinit();
     }
 
     /// Create a deep snapshot from a Var, storing it in this SnapshotStore
@@ -107,16 +114,29 @@ pub const Store = struct {
 
     fn deepCopyContent(self: *Self, store: *const TypesStore, var_: types.Var, content: Content) std.mem.Allocator.Error!SnapshotContentIdx {
         const deep_content = switch (content) {
-            .flex => |flex| SnapshotContent{
-                .flex = .{ .ident = flex.name, .var_ = var_ },
-            },
-            .rigid => |rigid| SnapshotContent{ .rigid = rigid.name },
+            .flex => |flex| SnapshotContent{ .flex = try self.deepCopyFlex(store, var_, flex) },
+            .rigid => |rigid| SnapshotContent{ .rigid = try self.deepCopyRigid(store, rigid) },
             .alias => |alias| SnapshotContent{ .alias = try self.deepCopyAlias(store, alias) },
             .structure => |flat_type| SnapshotContent{ .structure = try self.deepCopyFlatType(store, flat_type) },
             .err => SnapshotContent.err,
         };
 
         return try self.contents.append(self.gpa, deep_content);
+    }
+
+    fn deepCopyFlex(self: *Self, store: *const TypesStore, var_: types.Var, flex: types.Flex) std.mem.Allocator.Error!SnapshotFlex {
+        return SnapshotFlex{
+            .name = flex.name,
+            .var_ = var_,
+            .constraints = try self.deepCopyStaticDispatchConstraintRange(store, flex.constraints),
+        };
+    }
+
+    fn deepCopyRigid(self: *Self, store: *const TypesStore, rigid: types.Rigid) std.mem.Allocator.Error!SnapshotRigid {
+        return SnapshotRigid{
+            .name = rigid.name,
+            .constraints = try self.deepCopyStaticDispatchConstraintRange(store, rigid.constraints),
+        };
     }
 
     fn deepCopyFlatType(self: *Self, store: *const TypesStore, flat_type: types.FlatType) std.mem.Allocator.Error!SnapshotFlatType {
@@ -388,6 +408,32 @@ pub const Store = struct {
         };
     }
 
+    fn deepCopyStaticDispatchConstraintRange(
+        self: *Self,
+        store: *const TypesStore,
+        range: types.StaticDispatchConstraint.SafeList.Range,
+    ) std.mem.Allocator.Error!SnapshotStaticDispatchContraintSafeList.Range {
+        const scratch_top = self.scratch_static_dispatch_constraints.top();
+        defer self.scratch_static_dispatch_constraints.clearFrom(scratch_top);
+
+        for (store.sliceStaticDispatchConstraints(range)) |constraint| {
+            try self.scratch_static_dispatch_constraints.append(try self.deepCopyStaticDispatchConstraint(store, constraint));
+        }
+
+        return self.static_dispatch_constraints.appendSlice(self.gpa, self.scratch_static_dispatch_constraints.sliceFromStart(scratch_top));
+    }
+
+    fn deepCopyStaticDispatchConstraint(
+        self: *Self,
+        store: *const TypesStore,
+        constraint: types.StaticDispatchConstraint,
+    ) std.mem.Allocator.Error!SnapshotStaticDispatchContraint {
+        return SnapshotStaticDispatchContraint{
+            .fn_name = constraint.fn_name,
+            .fn_content = try self.deepCopyVar(store, constraint.fn_var),
+        };
+    }
+
     // Getter methods (similar to Store)
     pub fn sliceVars(self: *const Self, range: SnapshotContentIdxSafeList.Range) []const SnapshotContentIdx {
         return self.content_indexes.sliceRange(range);
@@ -397,6 +443,10 @@ pub const Store = struct {
         return self.record_fields.sliceRange(range);
     }
 
+    pub fn sliceStaticDispatchConstraints(self: *const Self, range: SnapshotStaticDispatchContraintSafeList.Range) SnapshotStaticDispatchContraintSafeList.Slice {
+        return self.static_dispatch_constraints.sliceRange(range);
+    }
+
     pub fn getContent(self: *const Self, idx: SnapshotContentIdx) SnapshotContent {
         return self.contents.get(idx).*;
     }
@@ -404,12 +454,25 @@ pub const Store = struct {
 
 /// Snapshot types (no Var references!)
 pub const SnapshotContent = union(enum) {
-    flex: struct { ident: ?Ident.Idx, var_: Var },
-    rigid: Ident.Idx,
+    flex: SnapshotFlex,
+    rigid: SnapshotRigid,
     alias: SnapshotAlias,
     structure: SnapshotFlatType,
     recursive,
     err,
+};
+
+/// TODO
+pub const SnapshotFlex = struct {
+    name: ?Ident.Idx,
+    var_: Var,
+    constraints: SnapshotStaticDispatchContraintSafeList.Range,
+};
+
+/// TODO
+pub const SnapshotRigid = struct {
+    name: Ident.Idx,
+    constraints: SnapshotStaticDispatchContraintSafeList.Range,
 };
 
 /// TODO
@@ -494,6 +557,12 @@ pub const SnapshotTag = struct {
     args: SnapshotContentIdxSafeList.Range, // Range into SnapshotStore.tag_args
 };
 
+/// TODO
+pub const SnapshotStaticDispatchContraint = struct {
+    fn_name: Ident.Idx,
+    fn_content: SnapshotContentIdx, // Index into SnapshotStore.contents
+};
+
 const TypeContext = enum {
     General,
     NumContent,
@@ -521,6 +590,8 @@ pub const SnapshotWriter = struct {
     name_counters: std.EnumMap(TypeContext, u32),
     flex_var_names_map: std.AutoHashMap(Var, FlexVarNameRange),
     flex_var_names: std.array_list.Managed(u8),
+    static_dispatch_constraints: std.array_list.Managed(SnapshotStaticDispatchContraint),
+    count_seen_idxs: std.array_list.Managed(SnapshotContentIdx),
 
     const FlexVarNameRange = struct { start: usize, end: usize };
 
@@ -536,6 +607,8 @@ pub const SnapshotWriter = struct {
             .name_counters = std.EnumMap(TypeContext, u32).init(.{}),
             .flex_var_names_map = std.AutoHashMap(Var, FlexVarNameRange).init(gpa),
             .flex_var_names = std.array_list.Managed(u8).init(gpa),
+            .static_dispatch_constraints = std.array_list.Managed(SnapshotStaticDispatchContraint).init(gpa),
+            .count_seen_idxs = std.array_list.Managed(SnapshotContentIdx).init(gpa),
         };
     }
 
@@ -558,6 +631,8 @@ pub const SnapshotWriter = struct {
             .name_counters = std.EnumMap(TypeContext, u32).init(.{}),
             .flex_var_names_map = std.AutoHashMap(Var, FlexVarNameRange).init(gpa),
             .flex_var_names = std.array_list.Managed(u8).init(gpa),
+            .static_dispatch_constraints = std.array_list.Managed(SnapshotStaticDispatchContraint).init(gpa),
+            .count_seen_idxs = try std.array_list.Managed(SnapshotContentIdx).init(gpa),
         };
     }
 
@@ -565,6 +640,8 @@ pub const SnapshotWriter = struct {
         self.buf.deinit();
         self.flex_var_names_map.deinit();
         self.flex_var_names.deinit();
+        self.static_dispatch_constraints.deinit();
+        self.count_seen_idxs.deinit();
     }
 
     pub fn resetContext(self: *Self) void {
@@ -573,6 +650,8 @@ pub const SnapshotWriter = struct {
         self.buf.clearRetainingCapacity();
         self.flex_var_names_map.clearRetainingCapacity();
         self.flex_var_names.clearRetainingCapacity();
+        self.static_dispatch_constraints.clearRetainingCapacity();
+        self.count_seen_idxs.clearRetainingCapacity();
     }
 
     pub fn get(self: *const Self) []const u8 {
@@ -692,25 +771,69 @@ pub const SnapshotWriter = struct {
         self.name_counters.put(context, counter + 1);
     }
 
+    /// Convert a content to a type string
+    pub fn write(self: *Self, idx: SnapshotContentIdx) Allocator.Error!void {
+        try self.writeWithContext(idx, .General, idx);
+
+        if (self.static_dispatch_constraints.items.len > 0) {
+            _ = try self.buf.writer().write(" where [");
+            for (self.static_dispatch_constraints.items) |constraint| {
+                // TODO: Find a better way to do this
+                const dispatcher = blk: {
+                    const fn_resolved = self.snapshots.getContent(constraint.fn_content);
+                    std.debug.assert(fn_resolved == .structure);
+
+                    const fn_args = switch (fn_resolved.structure) {
+                        .fn_effectful => |func| func.args,
+                        .fn_pure => |func| func.args,
+                        .fn_unbound => |func| func.args,
+                        else => {
+                            std.debug.assert(false);
+                            continue;
+                        },
+                    };
+                    std.debug.assert(fn_args.len() > 0);
+
+                    break :blk self.snapshots.sliceVars(fn_args)[0];
+                };
+
+                try self.writeWithContext(idx, .General, dispatcher);
+                _ = try self.buf.writer().write(".");
+                _ = try self.buf.writer().write(self.idents.getText(constraint.fn_name));
+                _ = try self.buf.writer().write(" : ");
+                try self.writeWithContext(idx, .General, constraint.fn_content);
+            }
+            _ = try self.buf.writer().write("]");
+        }
+    }
+
     /// Count how many times a content appears in a type
     /// Convert a content to a type string with context
-    pub fn writeWithContext(self: *Self, idx: SnapshotContentIdx, context: TypeContext, root_idx: SnapshotContentIdx) Allocator.Error!void {
+    fn writeWithContext(self: *Self, idx: SnapshotContentIdx, context: TypeContext, root_idx: SnapshotContentIdx) Allocator.Error!void {
         const content = self.snapshots.contents.get(idx);
         return self.writeContent(content.*, context, idx, root_idx);
     }
 
     /// Convert a content to a type string
-    pub fn writeContent(self: *Self, content: SnapshotContent, context: TypeContext, content_idx: SnapshotContentIdx, root_idx: SnapshotContentIdx) Allocator.Error!void {
+    fn writeContent(self: *Self, content: SnapshotContent, context: TypeContext, content_idx: SnapshotContentIdx, root_idx: SnapshotContentIdx) Allocator.Error!void {
         switch (content) {
             .flex => |flex| {
-                if (flex.ident) |ident_idx| {
+                if (flex.name) |ident_idx| {
                     _ = try self.buf.writer().write(self.idents.getText(ident_idx));
                 } else {
                     _ = try self.writeFlexVarName(flex.var_, content_idx, context, root_idx);
                 }
+
+                for (self.snapshots.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
+                    try self.static_dispatch_constraints.append(constraint);
+                }
             },
-            .rigid => |rigid_name| {
-                _ = try self.buf.writer().write(self.idents.getText(rigid_name));
+            .rigid => |rigid| {
+                _ = try self.buf.writer().write(self.idents.getText(rigid.name));
+
+                for (self.snapshots.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                    try self.static_dispatch_constraints.append(constraint);
+                }
             },
             .alias => |alias| {
                 try self.writeAlias(alias, root_idx);
@@ -728,7 +851,7 @@ pub const SnapshotWriter = struct {
     }
 
     /// Write an alias type
-    pub fn writeAlias(self: *Self, alias: SnapshotAlias, root_idx: SnapshotContentIdx) Allocator.Error!void {
+    fn writeAlias(self: *Self, alias: SnapshotAlias, root_idx: SnapshotContentIdx) Allocator.Error!void {
         _ = try self.buf.writer().write(self.idents.getText(alias.ident.ident_idx));
 
         const vars = self.snapshots.sliceVars(alias.vars);
@@ -743,7 +866,7 @@ pub const SnapshotWriter = struct {
     }
 
     /// Convert a flat type to a type string
-    pub fn writeFlatType(self: *Self, flat_type: SnapshotFlatType, root_idx: SnapshotContentIdx) Allocator.Error!void {
+    fn writeFlatType(self: *Self, flat_type: SnapshotFlatType, root_idx: SnapshotContentIdx) Allocator.Error!void {
         switch (flat_type) {
             .str => {
                 _ = try self.buf.writer().write("Str");
@@ -800,7 +923,7 @@ pub const SnapshotWriter = struct {
     }
 
     /// Write a tuple type
-    pub fn writeTuple(self: *Self, tuple: SnapshotTuple, root_idx: SnapshotContentIdx) Allocator.Error!void {
+    fn writeTuple(self: *Self, tuple: SnapshotTuple, root_idx: SnapshotContentIdx) Allocator.Error!void {
         const elems = self.snapshots.sliceVars(tuple.elems);
         _ = try self.buf.writer().write("(");
         for (elems, 0..) |elem, i| {
@@ -841,13 +964,8 @@ pub const SnapshotWriter = struct {
         }
     }
 
-    /// Convert a content to a type string
-    pub fn write(self: *Self, idx: SnapshotContentIdx) Allocator.Error!void {
-        try self.writeWithContext(idx, .General, idx);
-    }
-
     /// Write a function type with a specific arrow
-    pub fn writeFuncWithArrow(self: *Self, func: SnapshotFunc, arrow: []const u8, root_idx: SnapshotContentIdx) Allocator.Error!void {
+    fn writeFuncWithArrow(self: *Self, func: SnapshotFunc, arrow: []const u8, root_idx: SnapshotContentIdx) Allocator.Error!void {
         const args = self.snapshots.sliceVars(func.args);
 
         // Write arguments
@@ -868,7 +986,7 @@ pub const SnapshotWriter = struct {
     }
 
     /// Write a record type
-    pub fn writeRecord(self: *Self, record: SnapshotRecord, root_idx: SnapshotContentIdx) Allocator.Error!void {
+    fn writeRecord(self: *Self, record: SnapshotRecord, root_idx: SnapshotContentIdx) Allocator.Error!void {
         _ = try self.buf.writer().write("{ ");
 
         const fields_slice = self.snapshots.record_fields.sliceRange(record.fields);
@@ -907,7 +1025,7 @@ pub const SnapshotWriter = struct {
     }
 
     /// Write record fields without extension
-    pub fn writeRecordFields(self: *Self, fields: SnapshotRecordFieldSafeList.Range, root_idx: SnapshotContentIdx) Allocator.Error!void {
+    fn writeRecordFields(self: *Self, fields: SnapshotRecordFieldSafeList.Range, root_idx: SnapshotContentIdx) Allocator.Error!void {
         if (fields.isEmpty()) {
             _ = try self.buf.writer().write("{}");
             return;
@@ -934,7 +1052,7 @@ pub const SnapshotWriter = struct {
     }
 
     /// Write a tag union
-    pub fn writeTagUnion(self: *Self, tag_union: SnapshotTagUnion, root_idx: SnapshotContentIdx) Allocator.Error!void {
+    fn writeTagUnion(self: *Self, tag_union: SnapshotTagUnion, root_idx: SnapshotContentIdx) Allocator.Error!void {
         _ = try self.buf.writer().write("[");
         var iter = tag_union.tags.iterIndices();
         while (iter.next()) |tag_idx| {
@@ -951,10 +1069,14 @@ pub const SnapshotWriter = struct {
         // Show extension variable if it's not empty
         switch (self.snapshots.contents.get(tag_union.ext).*) {
             .flex => |flex| {
-                if (flex.ident) |ident_idx| {
+                if (flex.name) |ident_idx| {
                     _ = try self.buf.writer().write(self.idents.getText(ident_idx));
                 } else {
                     _ = try self.writeFlexVarName(flex.var_, tag_union.ext, .TagUnionExtension, root_idx);
+                }
+
+                for (self.snapshots.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
+                    try self.static_dispatch_constraints.append(constraint);
                 }
             },
             .structure => |flat_type| switch (flat_type) {
@@ -963,8 +1085,12 @@ pub const SnapshotWriter = struct {
                     try self.writeWithContext(tag_union.ext, .TagUnionExtension, root_idx);
                 },
             },
-            .rigid => |rigid_name| {
-                _ = try self.buf.writer().write(self.idents.getText(rigid_name));
+            .rigid => |rigid| {
+                _ = try self.buf.writer().write(self.idents.getText(rigid.name));
+
+                for (self.snapshots.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                    try self.static_dispatch_constraints.append(constraint);
+                }
             },
             else => {
                 try self.writeWithContext(tag_union.ext, .TagUnionExtension, root_idx);
@@ -987,7 +1113,7 @@ pub const SnapshotWriter = struct {
     }
 
     /// Convert a num type to a type string
-    pub fn writeNum(self: *Self, num: SnapshotNum, root_idx: SnapshotContentIdx) Allocator.Error!void {
+    fn writeNum(self: *Self, num: SnapshotNum, root_idx: SnapshotContentIdx) Allocator.Error!void {
         switch (num) {
             .num_poly => |sub_var| {
                 _ = try self.buf.writer().write("Num(");
@@ -1093,7 +1219,7 @@ pub const SnapshotWriter = struct {
     }
 
     /// Generate a name for a flex var that may appear multiple times in the type
-    pub fn writeFlexVarName(self: *Self, flex_var: Var, _: SnapshotContentIdx, context: TypeContext, root_idx: SnapshotContentIdx) std.mem.Allocator.Error!void {
+    fn writeFlexVarName(self: *Self, flex_var: Var, _: SnapshotContentIdx, context: TypeContext, root_idx: SnapshotContentIdx) std.mem.Allocator.Error!void {
         // Check if we've seen this flex var before.
         if (self.flex_var_names_map.get(flex_var)) |range| {
             // If so, then use that name
@@ -1103,7 +1229,7 @@ pub const SnapshotWriter = struct {
         } else {
 
             // Check if this variable appears multiple times
-            const occurrences = self.countOccurrences(flex_var, root_idx);
+            const occurrences = try self.countOccurrences(flex_var, root_idx);
 
             if (occurrences == 1) {
                 // If it appears once, then generate the contextual name
@@ -1129,70 +1255,99 @@ pub const SnapshotWriter = struct {
         }
     }
 
-    fn countOccurrences(self: *const Self, search_flex_var: Var, root_idx: SnapshotContentIdx) usize {
+    fn countOccurrences(self: *Self, search_flex_var: Var, root_idx: SnapshotContentIdx) std.mem.Allocator.Error!usize {
+        self.count_seen_idxs.clearRetainingCapacity();
+
         var count: usize = 0;
-        self.countContent(search_flex_var, root_idx, &count);
+        try self.countContent(search_flex_var, root_idx, &count);
         return count;
     }
 
-    fn countContent(self: *const Self, search_flex_var: Var, current_idx: SnapshotContentIdx, count: *usize) void {
+    fn countContent(self: *Self, search_flex_var: Var, current_idx: SnapshotContentIdx, count: *usize) std.mem.Allocator.Error!void {
         const content = self.snapshots.contents.get(current_idx);
+
+        // First, check if this is the var we are counting
         switch (content.*) {
             .flex => |cur_flex| {
                 if (search_flex_var == cur_flex.var_) {
                     count.* += 1;
                 }
             },
-            .rigid, .recursive, .err => {},
+            else => {},
+        }
+
+        // Then, before we recurse, check if we've already seen this var and
+        // if so, return. (Avoids infintely counting a recursive type)
+        for (self.count_seen_idxs.items) |seen| {
+            if (seen == current_idx) return;
+        }
+
+        // Record that we've seen this var
+        try self.count_seen_idxs.append(current_idx);
+        defer _ = self.count_seen_idxs.pop();
+
+        // Then recurse
+        switch (content.*) {
+            .flex => |cur_flex| {
+                for (self.snapshots.sliceStaticDispatchConstraints(cur_flex.constraints)) |constraint| {
+                    try self.countContent(search_flex_var, constraint.fn_content, count);
+                }
+            },
+            .rigid => |cur_rigid| {
+                for (self.snapshots.sliceStaticDispatchConstraints(cur_rigid.constraints)) |constraint| {
+                    try self.countContent(search_flex_var, constraint.fn_content, count);
+                }
+            },
             .alias => |alias| {
                 const args = self.snapshots.sliceVars(alias.vars);
                 for (args) |arg_idx| {
-                    self.countContent(search_flex_var, arg_idx, count);
+                    try self.countContent(search_flex_var, arg_idx, count);
                 }
             },
             .structure => |flat_type| {
-                self.countInFlatType(search_flex_var, flat_type, count);
+                try self.countInFlatType(search_flex_var, flat_type, count);
             },
+            .recursive, .err => {},
         }
     }
 
-    fn countInFlatType(self: *const Self, search_flex_var: Var, flat_type: SnapshotFlatType, count: *usize) void {
+    fn countInFlatType(self: *Self, search_flex_var: Var, flat_type: SnapshotFlatType, count: *usize) std.mem.Allocator.Error!void {
         switch (flat_type) {
             .str, .empty_record, .empty_tag_union => {},
-            .box => |sub_idx| self.countContent(search_flex_var, sub_idx, count),
-            .list => |sub_idx| self.countContent(search_flex_var, sub_idx, count),
+            .box => |sub_idx| try self.countContent(search_flex_var, sub_idx, count),
+            .list => |sub_idx| try self.countContent(search_flex_var, sub_idx, count),
             .list_unbound, .num => {},
             .tuple => |tuple| {
                 const elems = self.snapshots.sliceVars(tuple.elems);
                 for (elems) |elem| {
-                    self.countContent(search_flex_var, elem, count);
+                    try self.countContent(search_flex_var, elem, count);
                 }
             },
             .nominal_type => |nominal_type| {
                 const args = self.snapshots.sliceVars(nominal_type.vars);
                 // Skip the first var which is the nominal type's backing var
                 for (args[1..]) |arg_idx| {
-                    self.countContent(search_flex_var, arg_idx, count);
+                    try self.countContent(search_flex_var, arg_idx, count);
                 }
             },
             .fn_pure, .fn_effectful, .fn_unbound => |func| {
                 const args = self.snapshots.sliceVars(func.args);
                 for (args) |arg| {
-                    self.countContent(search_flex_var, arg, count);
+                    try self.countContent(search_flex_var, arg, count);
                 }
-                self.countContent(search_flex_var, func.ret, count);
+                try self.countContent(search_flex_var, func.ret, count);
             },
             .record => |record| {
                 const fields = self.snapshots.record_fields.sliceRange(record.fields);
                 for (fields.items(.content)) |field_content| {
-                    self.countContent(search_flex_var, field_content, count);
+                    try self.countContent(search_flex_var, field_content, count);
                 }
-                self.countContent(search_flex_var, record.ext, count);
+                try self.countContent(search_flex_var, record.ext, count);
             },
             .record_unbound => |fields| {
                 const fields_slice = self.snapshots.record_fields.sliceRange(fields);
                 for (fields_slice.items(.content)) |field_content| {
-                    self.countContent(search_flex_var, field_content, count);
+                    try self.countContent(search_flex_var, field_content, count);
                 }
             },
             .tag_union => |tag_union| {
@@ -1201,10 +1356,10 @@ pub const SnapshotWriter = struct {
                     const tag = self.snapshots.tags.get(tag_idx);
                     const args = self.snapshots.sliceVars(tag.args);
                     for (args) |arg_idx| {
-                        self.countContent(search_flex_var, arg_idx, count);
+                        try self.countContent(search_flex_var, arg_idx, count);
                     }
                 }
-                self.countContent(search_flex_var, tag_union.ext, count);
+                try self.countContent(search_flex_var, tag_union.ext, count);
             },
         }
     }

@@ -249,10 +249,9 @@ NO CHANGE
 				(e-lookup-local
 					(p-assign (ident "data")))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "InvalidType") (external (module-idx "4") (target-node-idx "0")))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "InvalidType") (external (module-idx "4") (target-node-idx "0")))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "processRequest"))
 		(e-lambda
@@ -260,10 +259,9 @@ NO CHANGE
 				(p-assign (ident "req")))
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-malformed)
-					(ty-malformed)))))
+			(ty-fn (effectful false)
+				(ty-malformed)
+				(ty-malformed))))
 	(d-let
 		(p-assign (ident "result"))
 		(e-call

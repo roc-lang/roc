@@ -76,7 +76,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .exports = serialized_ptr.exports,
         .builtin_statements = serialized_ptr.builtin_statements,
         .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
-        .imports = serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+        .imports = (try serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa)).*,
         .module_name = module_name,
         .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
         .diagnostics = serialized_ptr.diagnostics,
@@ -95,14 +95,14 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
 /// This makes them available for cross-module imports
 fn exposeAllDefs(module_env: *ModuleEnv) !void {
     const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
-    for (defs_slice, 0..) |def_idx, i| {
+    for (defs_slice) |def_idx| {
         const def = module_env.store.getDef(def_idx);
 
         // Get the pattern to find the identifier
         const pattern = module_env.store.getPattern(def.pattern);
         if (pattern == .assign) {
             const ident_idx = pattern.assign.ident;
-            const def_idx_u16: u16 = @intCast(i);
+            const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
             try module_env.setExposedNodeIndexById(ident_idx, def_idx_u16);
         }
     }
@@ -192,7 +192,7 @@ pub fn initWithImport(source: []const u8, other_module_name: []const u8, other_m
     parse_ast.store.emptyScratch();
 
     // Canonicalize
-    try module_env.initCIRFields(gpa, "test");
+    try module_env.initCIRFields(gpa, module_name);
 
     can.* = try Can.init(module_env, parse_ast, &module_envs);
     errdefer can.deinit();
@@ -340,7 +340,7 @@ pub fn init(source: []const u8) !TestEnv {
     parse_ast.store.emptyScratch();
 
     // Canonicalize
-    try module_env.initCIRFields(gpa, "test");
+    try module_env.initCIRFields(gpa, module_name);
 
     can.* = try Can.init(module_env, parse_ast, &module_envs);
     errdefer can.deinit();
@@ -451,6 +451,42 @@ pub fn deinit(self: *TestEnv) void {
     // Clean up loaded builtin modules
     self.bool_module.deinit();
     self.result_module.deinit();
+}
+
+/// Get the inferred type of the last declaration and compare it to the provided
+/// expected type string.
+///
+/// Also assert that there were no problems processing the source code.
+pub fn assertDefType(self: *TestEnv, target_def_name: []const u8, expected: []const u8) !void {
+    try self.assertNoParseProblems();
+    // try self.assertNoCanProblems();
+    try self.assertNoTypeProblems();
+
+    try testing.expect(self.module_env.all_defs.span.len > 0);
+
+    const idents = self.module_env.getIdentStoreConst();
+    const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);
+    for (defs_slice) |def_idx| {
+        const def = self.module_env.store.getDef(def_idx);
+        const ptrn = self.module_env.store.getPattern(def.pattern);
+
+        switch (ptrn) {
+            .assign => |assign| {
+                const def_name = idents.getText(assign.ident);
+                if (std.mem.eql(u8, target_def_name, def_name)) {
+                    try testing.expectEqualStrings(
+                        expected,
+                        try self.type_writer.writeGet(ModuleEnv.varFrom(def_idx)),
+                    );
+                    return;
+                }
+            },
+            else => {
+                return error.TestUnexpectedResult;
+            },
+        }
+    }
+    return error.TestUnexpectedResult;
 }
 
 /// Get the inferred type of the last declaration and compare it to the provided

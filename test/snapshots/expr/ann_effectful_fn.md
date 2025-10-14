@@ -59,6 +59,10 @@ EndOfFile,
 # CANONICALIZE
 ~~~clojure
 (e-block
+	(s-type-anno (name "launchTheNukes")
+		(ty-fn (effectful true)
+			(ty-record)
+			(ty-lookup (name "Result") (external (module-idx "3") (target-node-idx "3")))))
 	(s-expr
 		(e-tag (name "Bool")))
 	(s-expr

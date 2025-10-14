@@ -125,10 +125,9 @@ AnotherType : SomeModule.MissingType
 				(e-string
 					(e-literal (string "processed")))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-malformed)
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-malformed)
+				(ty-lookup (name "Str") (builtin)))))
 	(s-alias-decl
 		(ty-header (name "MyType"))
 		(ty-malformed))

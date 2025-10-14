@@ -72,10 +72,9 @@ NO CHANGE
 					(p-assign (ident "x")))
 				(e-num (value "2"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "I64") (builtin))
-					(ty-lookup (name "I64") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "I64") (builtin))
+				(ty-lookup (name "I64") (builtin)))))
 	(d-let
 		(p-assign (ident "addTwoF64"))
 		(e-lambda
@@ -86,10 +85,9 @@ NO CHANGE
 					(p-assign (ident "x")))
 				(e-dec-small (numerator "20") (denominator-power-of-ten "1") (value "2"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "F64") (builtin))
-					(ty-lookup (name "F64") (builtin)))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "F64") (builtin))
+				(ty-lookup (name "F64") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure

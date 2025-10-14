@@ -618,12 +618,16 @@ EndOfFile,
 # CANONICALIZE
 ~~~clojure
 (e-block
+	(s-type-anno (name "_privateField")
+		(ty-malformed))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
+	(s-type-anno (name "field_")
+		(ty-malformed))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
@@ -655,6 +659,8 @@ EndOfFile,
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
+	(s-type-anno (name "special")
+		(ty-malformed))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr

@@ -151,19 +151,17 @@ boxed = Box(X)
 				(e-tag (name "X"))
 				(e-tag (name "Z"))))
 		(annotation
-			(declared-type
-				(ty-tuple
-					(ty-lookup (name "Foo.Bar") (local))
-					(ty-lookup (name "Foo.Baz") (local))))))
+			(ty-tuple
+				(ty-lookup (name "Foo.Bar") (local))
+				(ty-lookup (name "Foo.Baz") (local)))))
 	(d-let
 		(p-assign (ident "boxed"))
 		(e-tag (name "Box")
 			(args
 				(e-tag (name "X"))))
 		(annotation
-			(declared-type
-				(ty-apply (name "Box") (local)
-					(ty-lookup (name "Foo.Bar") (local))))))
+			(ty-apply (name "Box") (local)
+				(ty-lookup (name "Foo.Bar") (local)))))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
 		(ty-tag-union

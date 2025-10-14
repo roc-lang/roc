@@ -211,10 +211,9 @@ main! = |_| {
 				(p-assign (ident "unused")))
 			(e-num (value "42")))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "U64") (builtin))
-					(ty-lookup (name "U64") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "U64") (builtin))
+				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "multiply"))
 		(e-lambda
@@ -225,10 +224,9 @@ main! = |_| {
 					(p-assign (ident "_factor")))
 				(e-num (value "2"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "U64") (builtin))
-					(ty-lookup (name "U64") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "U64") (builtin))
+				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "process"))
 		(e-lambda
@@ -236,10 +234,9 @@ main! = |_| {
 				(p-assign (ident "_input")))
 			(e-num (value "100")))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "U64") (builtin))
-					(ty-lookup (name "U64") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "U64") (builtin))
+				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "double"))
 		(e-lambda
@@ -250,17 +247,16 @@ main! = |_| {
 					(p-assign (ident "value")))
 				(e-num (value "2"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "U64") (builtin))
-					(ty-lookup (name "U64") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "U64") (builtin))
+				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-closure
 			(captures
 				(capture (ident "process"))
-				(capture (ident "add"))
 				(capture (ident "multiply"))
+				(capture (ident "add"))
 				(capture (ident "double")))
 			(e-lambda
 				(args

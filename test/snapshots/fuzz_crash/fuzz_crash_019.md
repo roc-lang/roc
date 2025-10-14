@@ -1838,8 +1838,12 @@ expect {
 		(exposes))
 	(s-import (module "Ba")
 		(exposes))
+	(s-type-anno (name "line")
+		(ty-tuple))
 	(s-expect
 		(e-runtime-error (tag "ident_not_in_scope")))
+	(s-type-anno (name "t")
+		(ty-malformed))
 	(s-expect
 		(e-block
 			(s-expr

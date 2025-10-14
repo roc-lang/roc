@@ -1753,10 +1753,9 @@ expect {
 							(e-lookup-local
 								(p-assign (ident "other"))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "U64") (builtin))
-					(ty-lookup (name "U64") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "U64") (builtin))
+				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "match_time"))
 		(e-lambda
@@ -2087,19 +2086,17 @@ expect {
 										(p-assign (ident "number"))))
 								(e-literal (string " as a"))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "List") (builtin)
-						(ty-malformed))
-					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
-						(ty-record)
-						(ty-underscore))))))
+			(ty-fn (effectful false)
+				(ty-apply (name "List") (builtin)
+					(ty-malformed))
+				(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
+					(ty-record)
+					(ty-underscore)))))
 	(d-let
 		(p-assign (ident "empty"))
 		(e-empty_record)
 		(annotation
-			(declared-type
-				(ty-record))))
+			(ty-record)))
 	(s-alias-decl
 		(ty-header (name "Map")
 			(ty-args
@@ -2177,10 +2174,16 @@ expect {
 		(exposes))
 	(s-import (module "Ba")
 		(exposes))
+	(s-type-anno (name "line")
+		(ty-tuple
+			(ty-malformed)
+			(ty-malformed)))
 	(s-expect
 		(e-binop (op "eq")
 			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-num (value "1"))))
+	(s-type-anno (name "tuple")
+		(ty-malformed))
 	(s-expect
 		(e-block
 			(s-let

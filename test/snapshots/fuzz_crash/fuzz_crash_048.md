@@ -120,7 +120,29 @@ tag_tuple : Value((a, b, c))
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(s-type-anno (name "foo")
+		(ty-lookup (name "U64") (builtin)))
+	(s-type-anno (name "bar")
+		(ty-malformed))
+	(s-type-anno (name "biz")
+		(ty-tuple
+			(ty-rigid-var (name "a"))
+			(ty-rigid-var (name "b"))
+			(ty-rigid-var (name "c"))))
+	(s-type-anno (name "add_one")
+		(ty-parens
+			(ty-fn (effectful false)
+				(ty-lookup (name "U8") (builtin))
+				(ty-lookup (name "U16") (builtin))
+				(ty-lookup (name "U32") (builtin)))))
+	(s-type-anno (name "main!")
+		(ty-fn (effectful false)
+			(ty-apply (name "List") (builtin)
+				(ty-malformed))
+			(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
+				(ty-record)
+				(ty-underscore)))))
 ~~~
 # TYPES
 ~~~clojure

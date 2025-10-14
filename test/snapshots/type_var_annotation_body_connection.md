@@ -100,10 +100,9 @@ main! = |_| {}
 				(e-lookup-local
 					(p-assign (ident "thing")))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-rigid-var (name "a"))
-					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "a"))
+				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda

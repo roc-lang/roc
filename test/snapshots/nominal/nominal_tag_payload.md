@@ -98,19 +98,17 @@ NO CHANGE
 						(e-lookup-local
 							(p-assign (ident "a")))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-rigid-var (name "a"))
-					(ty-apply (name "Maybe") (local)
-						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "a"))
+				(ty-apply (name "Maybe") (local)
+					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
 		(p-assign (ident "none1"))
 		(e-nominal (nominal "Maybe")
 			(e-tag (name "None")))
 		(annotation
-			(declared-type
-				(ty-apply (name "Maybe") (local)
-					(ty-rigid-var (name "_a"))))))
+			(ty-apply (name "Maybe") (local)
+				(ty-rigid-var (name "_a")))))
 	(d-let
 		(p-assign (ident "some2"))
 		(e-lambda

@@ -149,6 +149,10 @@ pub const Statement = union(enum) {
     /// ```roc
     /// print! : Str => Result({}, [IOErr])
     /// ```
+    ///
+    /// Typically an annotation will be stored on the `Def` and will not be
+    /// in the tree independently. But if there is an annotation without a
+    /// corrosponding we represent it with this node
     s_type_anno: struct {
         name: Ident.Idx,
         anno: CIR.TypeAnno.Idx,

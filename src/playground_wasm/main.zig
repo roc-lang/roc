@@ -945,7 +945,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
             // Use the built-in deserialize method instead of manually deserializing each field
             // This ensures proper offset calculations when the struct layout changes
             logDebug("loadCompiledModule: About to deserialize ModuleEnv\n", .{});
-            module_env_ptr.* = serialized_ptr.deserialize(@as(i64, @intCast(base_ptr)), gpa, module_source, module_name_param).*;
+            module_env_ptr.* = (try serialized_ptr.deserialize(@as(i64, @intCast(base_ptr)), gpa, module_source, module_name_param)).*;
             logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});
 
             logDebug("loadCompiledModule: Returning LoadedModule\n", .{});

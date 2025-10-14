@@ -182,11 +182,10 @@ main! = |_| {}
 				(e-lookup-local
 					(p-assign (ident "result")))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "List") (builtin)
-						(ty-rigid-var (name "elem")))
-					(ty-rigid-var-lookup (ty-rigid-var (name "elem")))))))
+			(ty-fn (effectful false)
+				(ty-apply (name "List") (builtin)
+					(ty-rigid-var (name "elem")))
+				(ty-rigid-var-lookup (ty-rigid-var (name "elem"))))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda

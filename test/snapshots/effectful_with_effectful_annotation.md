@@ -102,10 +102,9 @@ NO CHANGE
 				(e-lookup-local
 					(p-assign (ident "msg")))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful true)
-					(ty-lookup (name "Str") (builtin))
-					(ty-record)))))
+			(ty-fn (effectful true)
+				(ty-lookup (name "Str") (builtin))
+				(ty-record))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-call
