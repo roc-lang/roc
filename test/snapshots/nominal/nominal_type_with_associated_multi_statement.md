@@ -1,7 +1,7 @@
 # META
 ~~~ini
 description=Nominal type with multi-statement associated items
-type=snippet
+type=file:Foo.roc
 ~~~
 # SOURCE
 ~~~roc
@@ -59,6 +59,15 @@ Foo := [A, B, C].{
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(d-let
+		(p-assign @2.5-2.10 (ident "Foo.x"))
+		(e-num @2.9-2.10 (value "5")))
+	(d-let
+		(p-assign @3.5-3.11 (ident "Foo.y"))
+		(e-num @3.9-3.11 (value "10")))
+	(d-let
+		(p-assign @4.5-4.11 (ident "Foo.z"))
+		(e-num @4.9-4.11 (value "15")))
 	(s-nominal-decl @1.1-5.2
 		(ty-header @1.1-1.4 (name "Foo"))
 		(ty-tag-union @1.8-1.17
@@ -69,9 +78,15 @@ Foo := [A, B, C].{
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs)
+	(defs
+		(patt @2.5-2.10 (type "Num(_size)"))
+		(patt @3.5-3.11 (type "Num(_size)"))
+		(patt @4.5-4.11 (type "Num(_size)")))
 	(type_decls
 		(nominal @1.1-5.2 (type "Foo")
 			(ty-header @1.1-1.4 (name "Foo"))))
-	(expressions))
+	(expressions
+		(expr @2.9-2.10 (type "Num(_size)"))
+		(expr @3.9-3.11 (type "Num(_size)"))
+		(expr @4.9-4.11 (type "Num(_size)"))))
 ~~~

@@ -28,6 +28,8 @@ fn parseAndCanonicalizeSource(
     can: *Can,
 } {
     const parse_env = try allocator.create(ModuleEnv);
+    // Note: We pass allocator for both gpa and arena since the ModuleEnv
+    // will be cleaned up by the caller
     parse_env.* = try ModuleEnv.init(allocator, source);
 
     const ast = try allocator.create(parse.AST);
@@ -37,7 +39,7 @@ fn parseAndCanonicalizeSource(
     try parse_env.initCIRFields(allocator, "Test");
 
     const can = try allocator.create(Can);
-    can.* = try Can.init(parse_env, ast, module_envs);
+    can.* = try Can.init(parse_env, ast, module_envs, .{});
 
     return .{
         .parse_env = parse_env,
@@ -50,6 +52,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
+
     // First, create some module environments with exposed items
     var module_envs = std.StringHashMap(*const ModuleEnv).init(allocator);
     defer module_envs.deinit();
@@ -116,7 +119,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     // Initialize CIR fields
     try parse_env.initCIRFields(allocator, "Test");
     // Canonicalize with module validation
-    var can = try Can.init(parse_env, &ast, &module_envs);
+    var can = try Can.init(parse_env, &ast, &module_envs, .{});
     defer can.deinit();
     _ = try can.canonicalizeFile();
     // Collect all diagnostics
@@ -169,6 +172,7 @@ test "import validation - no module_envs provided" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
+
     // Parse source code with import statements
     const source =
         \\module [main]
@@ -190,7 +194,7 @@ test "import validation - no module_envs provided" {
     try parse_env.initCIRFields(allocator, "Test");
     // Create czer
     //  with null module_envs
-    var can = try Can.init(parse_env, &ast, null);
+    var can = try Can.init(parse_env, &ast, null, .{});
     defer can.deinit();
     _ = try can.canonicalizeFile();
     const diagnostics = try parse_env.getDiagnostics();
@@ -464,6 +468,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
+
     // Create module environments with exposed items
     var module_envs = std.StringHashMap(*const ModuleEnv).init(allocator);
     defer module_envs.deinit();
@@ -587,6 +592,7 @@ test "export count safety - ensures safe u16 casting" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
+
     // This test verifies that we check export counts to ensure safe casting to u16
     // The check triggers when exposed_items.len >= maxInt(u16) (65535)
     // This leaves 0 available as a potential sentinel value if needed

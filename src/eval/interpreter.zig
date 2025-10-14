@@ -939,7 +939,17 @@ pub const Interpreter = struct {
                 const ct_var = can.ModuleEnv.varFrom(expr_idx);
                 const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
                 const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
-                const backing_rt_var = if (nom.nominal_type_decl == can.Can.BUILTIN_BOOL)
+                // Check if this is Bool by comparing against the first builtin statement
+                const builtin_stmts_slice = self.env.store.sliceStatements(self.env.builtin_statements);
+                const bool_decl_idx = if (builtin_stmts_slice.len > 0) blk: {
+                    // Debug assertion: when we have builtins, first must be Bool (a nominal type)
+                    if (std.debug.runtime_safety) {
+                        const stmt = self.env.store.getStatement(builtin_stmts_slice[0]);
+                        std.debug.assert(stmt == .s_nominal_decl);
+                    }
+                    break :blk builtin_stmts_slice[0];
+                } else can.Can.BUILTIN_BOOL;
+                const backing_rt_var = if (nom.nominal_type_decl == bool_decl_idx)
                     try self.getCanonicalBoolRuntimeVar()
                 else switch (nominal_resolved.desc.content) {
                     .structure => |st| switch (st) {
@@ -2523,7 +2533,15 @@ pub const Interpreter = struct {
 
     fn getCanonicalBoolRuntimeVar(self: *Interpreter) !types.Var {
         if (self.canonical_bool_rt_var) |cached| return cached;
-        const bool_decl_idx = can.Can.BUILTIN_BOOL;
+        // Look up Bool's actual index from builtin_statements (should be first)
+        const builtin_stmts_slice = self.env.store.sliceStatements(self.env.builtin_statements);
+        std.debug.assert(builtin_stmts_slice.len >= 1); // Must have at least Bool
+        const bool_decl_idx = builtin_stmts_slice[0]; // Bool is always the first builtin
+        // Debug assertion: verify this is a nominal type declaration
+        if (std.debug.runtime_safety) {
+            const stmt = self.env.store.getStatement(bool_decl_idx);
+            std.debug.assert(stmt == .s_nominal_decl);
+        }
         const ct_var = can.ModuleEnv.varFrom(bool_decl_idx);
         const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
         const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
@@ -3316,7 +3334,7 @@ pub const Interpreter = struct {
                                             const next_type = module.types.resolveVar(var_).desc.content;
                                             if (next_type == .structure and next_type.structure == .num) {
                                                 num = next_type.structure.num;
-                                            } else if (next_type == .flex_var) {
+                                            } else if (next_type == .flex) {
                                                 break :prec .{ .int = types.Num.Int.Precision.default };
                                             } else {
                                                 return Error.InvalidNumExt;
@@ -3326,7 +3344,7 @@ pub const Interpreter = struct {
                                             const next_type = module.types.resolveVar(var_).desc.content;
                                             if (next_type == .structure and next_type.structure == .num) {
                                                 num = next_type.structure.num;
-                                            } else if (next_type == .flex_var) {
+                                            } else if (next_type == .flex) {
                                                 break :prec .{ .int = types.Num.Int.Precision.default };
                                             } else {
                                                 return Error.InvalidNumExt;
@@ -3336,7 +3354,7 @@ pub const Interpreter = struct {
                                             const next_type = module.types.resolveVar(var_).desc.content;
                                             if (next_type == .structure and next_type.structure == .num) {
                                                 num = next_type.structure.num;
-                                            } else if (next_type == .flex_var) {
+                                            } else if (next_type == .flex) {
                                                 break :prec .{ .frac = types.Num.Frac.Precision.default };
                                             } else {
                                                 return Error.InvalidNumExt;
@@ -3393,7 +3411,7 @@ pub const Interpreter = struct {
                             break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .list = rt_elem } });
                         },
                         .list_unbound => {
-                            const elem_var = try self.runtime_types.freshFromContent(.{ .flex_var = null });
+                            const elem_var = try self.runtime_types.freshFromContent(.{ .flex = types.Flex.init() });
                             break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .list = elem_var } });
                         },
                         .record => |rec| {
@@ -3504,12 +3522,12 @@ pub const Interpreter = struct {
                     const content = try self.runtime_types.mkAlias(alias.ident, rt_backing, buf);
                     break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                 },
-                .flex_var => |id_opt| {
-                    const content: types.Content = .{ .flex_var = id_opt };
+                .flex => |flex| {
+                    const content: types.Content = .{ .flex = flex };
                     break :blk try self.runtime_types.freshFromContent(content);
                 },
-                .rigid_var => |ident| {
-                    const content: types.Content = .{ .rigid_var = ident };
+                .rigid => |rigid| {
+                    const content: types.Content = .{ .rigid = rigid };
                     break :blk try self.runtime_types.freshFromContent(content);
                 },
                 .err => {
@@ -3561,8 +3579,8 @@ pub const Interpreter = struct {
                 .alias => |alias| {
                     current_ext = module.types.getAliasBackingVar(alias);
                 },
-                .flex_var => break,
-                .rigid_var => break,
+                .flex => break,
+                .rigid => break,
                 else => {
                     // TODO: Don't use unreachable here
                     unreachable;
@@ -3687,6 +3705,7 @@ test "interpreter: wiring works" {
 // RED: expect Var->Layout slot to work (will fail until implemented)
 test "interpreter: Var->Layout slot caches computed layout" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
@@ -3711,6 +3730,7 @@ test "interpreter: Var->Layout slot caches computed layout" {
 // RED: translating a compile-time str var should produce a runtime str var
 test "interpreter: translateTypeVar for str" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
@@ -3728,6 +3748,7 @@ test "interpreter: translateTypeVar for str" {
 // RED: translating a compile-time concrete int64 should produce a runtime int64
 test "interpreter: translateTypeVar for int64" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
@@ -3753,6 +3774,7 @@ test "interpreter: translateTypeVar for int64" {
 // RED: translating a compile-time concrete f64 should produce a runtime f64
 test "interpreter: translateTypeVar for f64" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
@@ -3778,6 +3800,7 @@ test "interpreter: translateTypeVar for f64" {
 // RED: translating a compile-time tuple (Str, I64) should produce a runtime tuple with same element shapes
 test "interpreter: translateTypeVar for tuple(Str, I64)" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
@@ -3821,6 +3844,7 @@ test "interpreter: translateTypeVar for tuple(Str, I64)" {
 // RED: translating a compile-time record { first: Str, second: I64 } should produce equivalent runtime record
 test "interpreter: translateTypeVar for record {first: Str, second: I64}" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
@@ -3878,6 +3902,7 @@ test "interpreter: translateTypeVar for record {first: Str, second: I64}" {
 // RED: translating a compile-time alias should produce equivalent runtime alias
 test "interpreter: translateTypeVar for alias of Str" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
@@ -3904,6 +3929,7 @@ test "interpreter: translateTypeVar for alias of Str" {
 // RED: translating a compile-time nominal type should produce equivalent runtime nominal
 test "interpreter: translateTypeVar for nominal Point(Str)" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
@@ -3935,21 +3961,23 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
 // RED: translating a compile-time flex var should produce a runtime flex var
 test "interpreter: translateTypeVar for flex var" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
     var interp = try Interpreter.init(gpa, &env);
     defer interp.deinit();
 
-    const ct_flex = try env.types.freshFromContent(.{ .flex_var = null });
+    const ct_flex = try env.types.freshFromContent(.{ .flex = types.Flex.init() });
     const rt_var = try interp.translateTypeVar(&env, ct_flex);
     const resolved = interp.runtime_types.resolveVar(rt_var);
-    try std.testing.expect(resolved.desc.content == .flex_var);
+    try std.testing.expect(resolved.desc.content == .flex);
 }
 
 // RED: translating a compile-time rigid var should produce a runtime rigid var with same ident
 test "interpreter: translateTypeVar for rigid var" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
@@ -3957,16 +3985,17 @@ test "interpreter: translateTypeVar for rigid var" {
     defer interp.deinit();
 
     const name_a = try env.common.idents.insert(gpa, @import("base").Ident.for_text("A"));
-    const ct_rigid = try env.types.freshFromContent(.{ .rigid_var = name_a });
+    const ct_rigid = try env.types.freshFromContent(.{ .rigid = types.Rigid.init(name_a) });
     const rt_var = try interp.translateTypeVar(&env, ct_rigid);
     const resolved = interp.runtime_types.resolveVar(rt_var);
-    try std.testing.expect(resolved.desc.content == .rigid_var);
-    try std.testing.expectEqual(name_a, resolved.desc.content.rigid_var);
+    try std.testing.expect(resolved.desc.content == .rigid);
+    try std.testing.expectEqual(name_a, resolved.desc.content.rigid.name);
 }
 
 // RED: poly cache miss then hit
 test "interpreter: poly cache insert and lookup" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
@@ -4002,6 +4031,7 @@ test "interpreter: poly cache insert and lookup" {
 // RED: prepareCall should miss without hint, then hit after inserting with hint
 test "interpreter: prepareCall miss then hit" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
@@ -4031,6 +4061,7 @@ test "interpreter: prepareCall miss then hit" {
 // RED: prepareCallWithFuncVar populates cache based on function type
 test "interpreter: prepareCallWithFuncVar populates cache" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
@@ -4060,6 +4091,7 @@ test "interpreter: prepareCallWithFuncVar populates cache" {
 // RED: unification constrains return type for polymorphic (a -> a), when called with Str
 test "interpreter: unification constrains (a->a) with Str" {
     const gpa = std.testing.allocator;
+
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
@@ -4068,7 +4100,7 @@ test "interpreter: unification constrains (a->a) with Str" {
 
     const func_id: u32 = 42;
     // runtime flex var 'a'
-    const a = try interp.runtime_types.freshFromContent(.{ .flex_var = null });
+    const a = try interp.runtime_types.freshFromContent(.{ .flex = types.Flex.init() });
     const func_content = try interp.runtime_types.mkFuncPure(&.{a}, a);
     const func_var = try interp.runtime_types.register(.{ .content = func_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
 

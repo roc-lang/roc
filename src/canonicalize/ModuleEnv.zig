@@ -72,6 +72,24 @@ diagnostics: CIR.Diagnostic.Span,
 /// Uses an efficient data structure, and provides helpers for storing and retrieving nodes.
 store: NodeStore,
 
+/// Relocate all pointers in the ModuleEnv by the given offset.
+/// This is used when loading a ModuleEnv from shared memory at a different address.
+pub fn relocate(self: *Self, offset: isize) void {
+    // Relocate all sub-structures that contain pointers
+    self.common.relocate(offset);
+    self.types.relocate(offset);
+    self.external_decls.relocate(offset);
+    self.imports.relocate(offset);
+    // Note: NodeStore.Serialized.deserialize() handles relocation internally, no separate relocate method needed
+
+    // Relocate the module_name pointer if it's not empty
+    if (self.module_name.len > 0) {
+        const old_ptr = @intFromPtr(self.module_name.ptr);
+        const new_ptr = @as(isize, @intCast(old_ptr)) + offset;
+        self.module_name.ptr = @ptrFromInt(@as(usize, @intCast(new_ptr)));
+    }
+}
+
 /// Initialize the compilation fields in an existing ModuleEnv
 pub fn initCIRFields(self: *Self, gpa: std.mem.Allocator, module_name: []const u8) !void {
     _ = gpa; // unused since we don't create new allocations
@@ -1346,65 +1364,9 @@ pub fn getSourceLine(self: *const Self, region: Region) ![]const u8 {
     return self.common.getSourceLine(region);
 }
 
-/// Serialize this ModuleEnv to the given CompactWriter.
-/// IMPORTANT: The returned pointer points to memory inside the writer!
-/// Attempting to dereference this pointer or calling any methods on it
-/// is illegal behavior!
-pub fn serialize(
-    self: *const Self,
-    allocator: std.mem.Allocator,
-    writer: *CompactWriter,
-) std.mem.Allocator.Error!*const Self {
-    // First, write the ModuleEnv struct itself
-    const offset_self = try writer.appendAlloc(allocator, Self);
-
-    // Then serialize the sub-structures and update the struct
-    offset_self.* = .{
-        .gpa = undefined, // Will be set when deserializing
-        .common = (try self.common.serialize(allocator, writer)).*,
-        .types = (try self.types.serialize(allocator, writer)).*,
-        .module_kind = self.module_kind,
-        .all_defs = self.all_defs,
-        .all_statements = self.all_statements,
-        .exports = self.exports,
-        .builtin_statements = self.builtin_statements,
-        .external_decls = (try self.external_decls.serialize(allocator, writer)).*,
-        .imports = (try self.imports.serialize(allocator, writer)).*,
-        .module_name = "", // Will be set when deserializing
-        .diagnostics = self.diagnostics,
-        .store = (try self.store.serialize(allocator, writer)).*,
-    };
-
-    // set gpa to all zeros, so that what we write to the file is deterministic
-    @memset(@as([*]u8, @ptrCast(&offset_self.gpa))[0..@sizeOf(@TypeOf(offset_self.gpa))], 0);
-
-    return @constCast(offset_self);
-}
-
-/// Add the given offset to the memory addresses of all pointers in `self`.
-/// IMPORTANT: The gpa, source, and module_name fields must be manually set before calling this function.
-pub fn relocate(self: *Self, offset: isize) void {
-    // IMPORTANT: gpa, and module_name are not relocated - they should be set manually before calling relocate
-
-    // Relocate all sub-structures
-    self.common.relocate(offset);
-    self.types.relocate(offset);
-
-    // Note: all_defs and all_statements are just spans with numeric values, no pointers to relocate
-
-    self.external_decls.relocate(offset);
-    // self.imports is deserialized separately, so no need to relocate here
-
-    // Note: module_name is not relocated - it should be set manually
-
-    // Note: diagnostics is just a span with numeric values, no pointers to relocate
-
-    self.store.relocate(offset);
-}
-
 /// Serialized representation of ModuleEnv
 pub const Serialized = struct {
-    gpa: std.mem.Allocator, // Serialized as zeros, provided during deserialization
+    gpa: [2]u64, // Reserve space for allocator (vtable ptr + context ptr), provided during deserialization
     common: CommonEnv.Serialized,
     types: TypeStore.Serialized,
     all_defs: CIR.Def.Span,
@@ -1413,7 +1375,7 @@ pub const Serialized = struct {
     builtin_statements: CIR.Statement.Span,
     external_decls: CIR.ExternalDecl.SafeList.Serialized,
     imports: CIR.Import.Store.Serialized,
-    module_name: []const u8, // Serialized as zeros, provided during deserialization
+    module_name: [2]u64, // Reserve space for slice (ptr + len), provided during deserialization
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
     module_kind: ModuleKind,
@@ -1425,9 +1387,6 @@ pub const Serialized = struct {
         allocator: std.mem.Allocator,
         writer: *CompactWriter,
     ) !void {
-        // Set fields that will be provided during deserialization to zeros
-        self.gpa = undefined; // Will be set to zeros below
-
         try self.common.serialize(&env.common, allocator, writer);
         try self.types.serialize(&env.types, allocator, writer);
 
@@ -1445,9 +1404,10 @@ pub const Serialized = struct {
         // Serialize NodeStore
         try self.store.serialize(&env.store, allocator, writer);
 
-        // Set gpa to all zeros; the space needs to be here,
-        // but the value will be set separately during deserialization.
-        @memset(@as([*]u8, @ptrCast(&self.gpa))[0..@sizeOf(@TypeOf(self.gpa))], 0);
+        // Set gpa and module_name to all zeros; the space needs to be here,
+        // but the values will be set separately during deserialization.
+        self.gpa = .{ 0, 0 };
+        self.module_name = .{ 0, 0 };
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
@@ -1467,7 +1427,7 @@ pub const Serialized = struct {
         env.* = Self{
             .gpa = gpa,
             .common = self.common.deserialize(offset, source).*,
-            .types = self.types.deserialize(offset).*,
+            .types = self.types.deserialize(offset, gpa).*,
             .module_kind = self.module_kind,
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,

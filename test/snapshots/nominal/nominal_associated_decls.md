@@ -64,23 +64,33 @@ Foo := [Whatever].{
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(d-let
+		(p-assign @3.9-3.16 (ident "Foo.Bar.baz"))
+		(e-num @3.15-3.16 (value "5")))
+	(d-let
+		(p-assign @5.5-5.13 (ident "Foo.blah"))
+		(e-num @5.12-5.13 (value "6")))
 	(s-nominal-decl @1.1-6.2
 		(ty-header @1.1-1.4 (name "Foo"))
 		(ty-tag-union @1.8-1.18
 			(ty-tag-name @1.9-1.17 (name "Whatever"))))
 	(s-nominal-decl @2.5-4.6
-		(ty-header @2.5-2.8 (name "Bar"))
+		(ty-header @2.5-4.6 (name "Foo.Bar"))
 		(ty-tag-union @2.12-2.23
 			(ty-tag-name @2.13-2.22 (name "Something")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs)
+	(defs
+		(patt @3.9-3.16 (type "Num(_size)"))
+		(patt @5.5-5.13 (type "Num(_size)")))
 	(type_decls
 		(nominal @1.1-6.2 (type "Foo")
 			(ty-header @1.1-1.4 (name "Foo")))
-		(nominal @2.5-4.6 (type "Bar")
-			(ty-header @2.5-2.8 (name "Bar"))))
-	(expressions))
+		(nominal @2.5-4.6 (type "Foo.Bar")
+			(ty-header @2.5-4.6 (name "Foo.Bar"))))
+	(expressions
+		(expr @3.15-3.16 (type "Num(_size)"))
+		(expr @5.12-5.13 (type "Num(_size)"))))
 ~~~

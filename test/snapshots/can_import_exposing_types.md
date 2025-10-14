@@ -624,7 +624,7 @@ combineResults = |jsonResult, httpStatus|
 				(p-assign @7.14-7.19 (ident "input")))
 			(e-call @7.21-7.38
 				(e-lookup-external @7.21-7.31
-					(module-idx "0")
+					(module-idx "2")
 					(target-node-idx "0"))
 				(e-lookup-local @7.32-7.37
 					(p-assign @7.14-7.19 (ident "input")))))
@@ -649,7 +649,7 @@ combineResults = |jsonResult, httpStatus|
 						(p-assign @12.5-12.11 (ident "result"))
 						(e-call @12.14-12.35
 							(e-lookup-external @12.14-12.25
-								(module-idx "0")
+								(module-idx "2")
 								(target-node-idx "0"))
 							(e-dot-access @12.26-12.34 (field "body")
 								(receiver
@@ -669,7 +669,7 @@ combineResults = |jsonResult, httpStatus|
 									(value
 										(e-call @14.22-14.36
 											(e-lookup-external @14.22-14.29
-												(module-idx "1")
+												(module-idx "3")
 												(target-node-idx "0"))
 											(e-lookup-local @14.30-14.35
 												(p-assign @14.12-14.17 (ident "value"))))))
@@ -681,7 +681,7 @@ combineResults = |jsonResult, httpStatus|
 									(value
 										(e-call @15.23-15.45
 											(e-lookup-external @15.23-15.38
-												(module-idx "1")
+												(module-idx "3")
 												(target-node-idx "0"))
 											(e-lookup-local @15.39-15.44
 												(p-assign @15.13-15.18 (ident "error"))))))))))))
@@ -708,7 +708,7 @@ combineResults = |jsonResult, httpStatus|
 							(p-assign @24.10-24.11 (ident "v")))
 						(e-call @24.13-24.41
 							(e-lookup-external @24.13-24.30
-								(module-idx "0")
+								(module-idx "2")
 								(target-node-idx "0"))
 							(e-lookup-local @24.31-24.37
 								(p-assign @21.16-21.22 (ident "config")))
@@ -731,7 +731,7 @@ combineResults = |jsonResult, httpStatus|
 				(p-assign @36.17-36.23 (ident "config")))
 			(e-call @36.25-36.48
 				(e-lookup-external @36.25-36.40
-					(module-idx "1")
+					(module-idx "3")
 					(target-node-idx "0"))
 				(e-lookup-local @36.41-36.47
 					(p-assign @36.17-36.23 (ident "config")))))
@@ -739,7 +739,7 @@ combineResults = |jsonResult, httpStatus|
 			(declared-type
 				(ty-fn @35.16-35.37 (effectful false)
 					(ty-malformed @35.16-35.22)
-					(ty-lookup @35.26-35.37 (name "Client") (external (module-idx "1") (target-node-idx "0")))))))
+					(ty-lookup @35.26-35.37 (name "Client") (external (module-idx "3") (target-node-idx "0")))))))
 	(d-let
 		(p-assign @40.1-40.15 (ident "handleResponse"))
 		(e-closure @40.18-44.6
@@ -765,7 +765,7 @@ combineResults = |jsonResult, httpStatus|
 								(value
 									(e-call @42.23-42.50
 										(e-lookup-external @42.23-42.42
-											(module-idx "1")
+											(module-idx "3")
 											(target-node-idx "0"))
 										(e-lookup-local @42.43-42.49
 											(p-assign @42.12-42.18 (ident "status"))))))
@@ -814,7 +814,7 @@ combineResults = |jsonResult, httpStatus|
 														(field (name "body")
 															(e-call @50.33-50.51
 																(e-lookup-external @50.33-50.44
-																	(module-idx "0")
+																	(module-idx "2")
 																	(target-node-idx "0"))
 																(e-lookup-local @50.45-50.50
 																	(p-assign @50.12-50.17 (ident "value")))))

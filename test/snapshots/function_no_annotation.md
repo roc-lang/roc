@@ -119,7 +119,7 @@ NO CHANGE
 				(p-assign @9.18-9.19 (ident "n")))
 			(e-call @9.21-9.36
 				(e-lookup-external @9.21-9.33
-					(module-idx "0")
+					(module-idx "2")
 					(target-node-idx "0"))
 				(e-lookup-local @9.34-9.35
 					(p-assign @9.18-9.19 (ident "n"))))))

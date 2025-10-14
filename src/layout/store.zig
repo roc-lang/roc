@@ -582,8 +582,8 @@ pub const Store = struct {
                 .alias => |alias| {
                     current_ext = self.types_store.getAliasBackingVar(alias);
                 },
-                .flex_var => |_| break,
-                .rigid_var => |_| break,
+                .flex => |_| break,
+                .rigid => |_| break,
                 else => return LayoutError.InvalidRecordExtension,
             }
         }
@@ -860,7 +860,7 @@ pub const Store = struct {
                     },
                     .list => |elem_var| {
                         const elem_content = self.types_store.resolveVar(elem_var).desc.content;
-                        if (elem_content == .flex_var or elem_content == .rigid_var) {
+                        if (elem_content == .flex or elem_content == .rigid) {
                             // For unbound lists (empty lists), use list of zero-sized type
                             const layout = Layout.listOfZst();
                             const idx = try self.insertLayout(layout);
@@ -927,7 +927,7 @@ pub const Store = struct {
                                     const next_type = self.types_store.resolveVar(var_).desc.content;
                                     if (next_type == .structure and next_type.structure == .num) {
                                         num = next_type.structure.num;
-                                    } else if (next_type == .flex_var) {
+                                    } else if (next_type == .flex) {
                                         break :flat_type Layout.int(types.Num.Int.Precision.default);
                                     } else {
                                         return LayoutError.InvalidRecordExtension;
@@ -937,7 +937,7 @@ pub const Store = struct {
                                     const next_type = self.types_store.resolveVar(var_).desc.content;
                                     if (next_type == .structure and next_type.structure == .num) {
                                         num = next_type.structure.num;
-                                    } else if (next_type == .flex_var) {
+                                    } else if (next_type == .flex) {
                                         break :flat_type Layout.int(types.Num.Int.Precision.default);
                                     } else {
                                         return LayoutError.InvalidRecordExtension;
@@ -947,7 +947,7 @@ pub const Store = struct {
                                     const next_type = self.types_store.resolveVar(var_).desc.content;
                                     if (next_type == .structure and next_type.structure == .num) {
                                         num = next_type.structure.num;
-                                    } else if (next_type == .flex_var) {
+                                    } else if (next_type == .flex) {
                                         break :flat_type Layout.frac(types.Num.Frac.Precision.default);
                                     } else {
                                         return LayoutError.InvalidRecordExtension;
@@ -1297,7 +1297,7 @@ pub const Store = struct {
                         return LayoutError.ZeroSizedType;
                     },
                 },
-                .flex_var => |_| blk: {
+                .flex => |_| blk: {
                     // First, check if this flex var is mapped in the TypeScope
                     if (type_scope.lookup(current.var_)) |mapped_var| {
                         // Found a mapping, resolve the mapped variable and continue
@@ -1318,8 +1318,7 @@ pub const Store = struct {
                     // For now, default to I64 for numeric flex vars.
                     break :blk Layout.int(.i64);
                 },
-                .rigid_var => |ident| blk: {
-                    _ = ident;
+                .rigid => |_| blk: {
                     // First, check if this rigid var is mapped in the TypeScope
                     if (type_scope.lookup(current.var_)) |mapped_var| {
                         // Found a mapping, resolve the mapped variable and continue

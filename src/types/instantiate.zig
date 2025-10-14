@@ -10,6 +10,7 @@ const collections = @import("collections");
 
 const TypesStore = @import("store.zig").Store;
 const Var = @import("types.zig").Var;
+const Flex = @import("types.zig").Flex;
 const Content = @import("types.zig").Content;
 const FlatType = @import("types.zig").FlatType;
 const Alias = @import("types.zig").Alias;
@@ -76,26 +77,26 @@ pub const Instantiator = struct {
         }
 
         switch (resolved.desc.content) {
-            .rigid_var => |ident| {
+            .rigid => |rigid| {
                 // If this var is rigid, then create a new var depending on the
                 // provided behavior
                 const fresh_var = blk: {
                     switch (self.rigid_behavior) {
                         .fresh_rigid => {
                             break :blk try self.store.freshFromContentWithRank(
-                                Content{ .rigid_var = ident },
+                                Content{ .rigid = rigid },
                                 self.current_rank,
                             );
                         },
                         .fresh_flex => {
                             break :blk try self.store.freshFromContentWithRank(
-                                Content{ .flex_var = ident },
+                                Content{ .flex = Flex.init().withName(rigid.name) },
                                 self.current_rank,
                             );
                         },
-                        .substitute_rigids => |rigid_var_subs| {
-                            if (rigid_var_subs.get(ident)) |existing_flex_var| {
-                                break :blk existing_flex_var;
+                        .substitute_rigids => |rigid_subs| {
+                            if (rigid_subs.get(rigid.name)) |existing_flex| {
+                                break :blk existing_flex;
                             } else {
                                 std.debug.assert(false);
                                 break :blk try self.store.freshFromContentWithRank(
@@ -138,9 +139,9 @@ pub const Instantiator = struct {
 
     fn instantiateContent(self: *Self, content: Content) std.mem.Allocator.Error!Content {
         return switch (content) {
-            .flex_var => |maybe_ident| Content{ .flex_var = maybe_ident },
-            // .rigid_var => |maybe_ident| Content{ .rigid_var = maybe_ident },
-            .rigid_var => unreachable,
+            .flex => |maybe_ident| Content{ .flex = maybe_ident },
+            // .rigid => |maybe_ident| Content{ .rigid = maybe_ident },
+            .rigid => unreachable,
             .alias => |alias| {
                 // Instantiate the structure recursively
                 return try self.instantiateAlias(alias);

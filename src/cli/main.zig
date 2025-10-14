@@ -427,7 +427,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
         .build => |build_args| rocBuild(gpa, build_args),
         .bundle => |bundle_args| rocBundle(gpa, bundle_args),
         .unbundle => |unbundle_args| rocUnbundle(gpa, unbundle_args),
-        .format => |format_args| rocFormat(gpa, arena, format_args),
+        .fmt => |format_args| rocFormat(gpa, arena, format_args),
         .test_cmd => |test_args| rocTest(gpa, test_args),
         .repl => rocRepl(gpa),
         .version => stdout.print("Roc compiler version {s}", .{build_options.compiler_version}),
@@ -1346,6 +1346,10 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
     const basename = std.fs.path.basename(roc_file_path);
     const module_name = try shm_allocator.dupe(u8, basename);
 
+    // Create arena allocator for scratch memory
+    var arena = std.heap.ArenaAllocator.init(shm_allocator);
+    defer arena.deinit();
+
     var env = try ModuleEnv.init(shm_allocator, source);
     env.common.source = source;
     env.module_name = module_name;
@@ -1366,7 +1370,7 @@ pub fn setupSharedMemoryWithModuleEnv(gpa: std.mem.Allocator, roc_file_path: []c
     };
 
     // Create canonicalizer
-    var canonicalizer = try Can.init(&env, &parse_ast, null);
+    var canonicalizer = try Can.init(&env, &parse_ast, null, .{});
 
     // Canonicalize the entire module
     try canonicalizer.canonicalizeFile();
@@ -1737,6 +1741,10 @@ fn extractEntrypointsFromPlatform(gpa: std.mem.Allocator, roc_file_path: []const
     const basename = std.fs.path.basename(roc_file_path);
     const module_name = try gpa.dupe(u8, basename);
     defer gpa.free(module_name);
+
+    // Create arena allocator for scratch memory
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
 
     // Create ModuleEnv
     var env = ModuleEnv.init(gpa, source) catch return error.ParseFailed;
@@ -2396,6 +2404,10 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
     const module_name = try gpa.dupe(u8, basename);
     defer gpa.free(module_name);
 
+    // Create arena allocator for scratch memory
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+
     // Create ModuleEnv
     var env = ModuleEnv.init(gpa, source) catch |err| {
         try stderr.print("Failed to initialize module environment: {}", .{err});
@@ -2427,7 +2439,7 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
     try env.initCIRFields(gpa, module_name);
 
     // Create canonicalizer
-    var canonicalizer = Can.init(&env, &parse_ast, null) catch |err| {
+    var canonicalizer = Can.init(&env, &parse_ast, null, .{}) catch |err| {
         try stderr.print("Failed to initialize canonicalizer: {}", .{err});
         std.process.exit(1);
     };
@@ -2498,11 +2510,30 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
                 if (test_result.passed) {
                     try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
                 } else {
-                    if (test_result.error_msg) |msg| {
-                        try stdout.print("\x1b[31mFAIL\x1b[0m: {s}:{} - {s}\n", .{ args.path, region_info.start_line_idx + 1, msg });
-                    } else {
-                        try stdout.print("\x1b[31mFAIL\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
-                    }
+                    // Generate and render a detailed report for this failure
+                    var report = test_runner.createReport(test_result, args.path) catch |err| {
+                        // Fallback to simple message if report generation fails
+                        try stderr.print("\x1b[31mFAIL\x1b[0m: {s}:{}", .{ args.path, region_info.start_line_idx + 1 });
+                        if (test_result.error_msg) |msg| {
+                            try stderr.print(" - {s}", .{msg});
+                        }
+                        try stderr.print(" (report generation failed: {})\n", .{err});
+                        continue;
+                    };
+                    defer report.deinit();
+
+                    // Render the report to terminal
+                    const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+                    const config = reporting.ReportingConfig.initColorTerminal();
+                    try reporting.renderReportToTerminal(&report, stderr.any(), palette, config);
+                }
+            }
+        } else {
+            // Non-verbose mode: just show simple FAIL messages with line numbers
+            for (test_runner.test_results.items) |test_result| {
+                if (!test_result.passed) {
+                    const region_info = env.calcRegionInfo(test_result.region);
+                    try stderr.print("\x1b[31mFAIL\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
                 }
             }
         }
@@ -2666,6 +2697,118 @@ const BuildAppError = std.mem.Allocator.Error || std.fs.File.OpenError || std.fs
     Unseekable,
     CurrentWorkingDirectoryUnlinked,
 };
+
+/// Result from checking a file that preserves the BuildEnv for further processing (e.g., docs generation)
+const CheckResultWithBuildEnv = struct {
+    check_result: CheckResult,
+    build_env: BuildEnv,
+
+    /// Free allocated memory including the BuildEnv
+    pub fn deinit(self: *CheckResultWithBuildEnv, gpa: Allocator) void {
+        self.check_result.deinit(gpa);
+        self.build_env.deinit();
+    }
+};
+
+/// Check a Roc file using BuildEnv and preserve the BuildEnv for further processing
+fn checkFileWithBuildEnvPreserved(
+    gpa: Allocator,
+    filepath: []const u8,
+    collect_timing: bool,
+    cache_config: CacheConfig,
+) BuildAppError!CheckResultWithBuildEnv {
+    _ = collect_timing; // Timing is always collected by BuildEnv
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    // Initialize BuildEnv in single-threaded mode for checking
+    var build_env = BuildEnv.init(gpa, .single_threaded, 1);
+    build_env.compiler_version = build_options.compiler_version;
+    // Note: We do NOT defer build_env.deinit() here because we're returning it
+
+    // Set up cache manager if caching is enabled
+    if (cache_config.enabled) {
+        const cache_manager = try gpa.create(CacheManager);
+        cache_manager.* = CacheManager.init(gpa, cache_config, Filesystem.default());
+        build_env.setCacheManager(cache_manager);
+        // Note: BuildEnv.deinit() will clean up the cache manager when caller calls deinit
+    }
+
+    // Build the file (works for both app and module files)
+    build_env.build(filepath) catch |err| {
+        return err;
+    };
+
+    // Force processing to ensure canonicalization happens
+    var sched_iter = build_env.schedulers.iterator();
+    if (sched_iter.next()) |sched_entry| {
+        const package_env = sched_entry.value_ptr.*;
+        if (package_env.modules.items.len > 0) {
+            const module_name = package_env.modules.items[0].name;
+
+            // Keep processing until the module is done
+            var max_iterations: u32 = 20;
+            while (max_iterations > 0) : (max_iterations -= 1) {
+                const phase = package_env.modules.items[0].phase;
+                if (phase == .Done) break;
+
+                package_env.processModuleByName(module_name) catch |err| {
+                    std.debug.print("Error processing module: {}\n", .{err});
+                    break;
+                };
+            }
+        }
+    }
+
+    // Drain all reports
+    const drained = try build_env.drainReports();
+
+    // Count errors and warnings
+    var error_count: u32 = 0;
+    var warning_count: u32 = 0;
+
+    for (drained) |mod| {
+        for (mod.reports) |report| {
+            switch (report.severity) {
+                .info => {},
+                .runtime_error, .fatal => error_count += 1,
+                .warning => warning_count += 1,
+            }
+        }
+    }
+
+    // Convert BuildEnv drained reports to our format
+    var reports = try gpa.alloc(DrainedReport, drained.len);
+    for (drained, 0..) |mod, i| {
+        reports[i] = .{
+            .file_path = try gpa.dupe(u8, mod.abs_path),
+            .reports = try gpa.dupe(reporting.Report, mod.reports),
+        };
+    }
+
+    // Free the original drained reports
+    // Note: abs_path is owned by BuildEnv, reports are moved to our array
+    gpa.free(drained);
+
+    // Get timing information from BuildEnv
+    const timing = if (builtin.target.cpu.arch == .wasm32)
+        CheckTimingInfo{}
+    else
+        build_env.getTimingInfo();
+
+    const check_result = CheckResult{
+        .reports = reports,
+        .timing = timing,
+        .was_cached = false, // BuildEnv doesn't currently expose cache info
+        .error_count = error_count,
+        .warning_count = warning_count,
+    };
+
+    return CheckResultWithBuildEnv{
+        .check_result = check_result,
+        .build_env = build_env,
+    };
+}
 
 /// Check a Roc file using the BuildEnv system
 fn checkFileWithBuildEnv(
@@ -2853,10 +2996,760 @@ fn printTimingBreakdown(writer: anytype, timing: ?CheckTimingInfo) void {
     }
 }
 
+/// Start an HTTP server to serve the generated documentation
+fn serveDocumentation(gpa: Allocator, docs_dir: []const u8) !void {
+    const stdout = std.io.getStdOut().writer();
+
+    const address = try std.net.Address.parseIp("127.0.0.1", 8080);
+    var server = try address.listen(.{
+        .reuse_address = true,
+    });
+    defer server.deinit();
+
+    stdout.print("Visit http://localhost:8080 to view the docs at ./{s}/\n", .{docs_dir}) catch {};
+    stdout.print("Press Ctrl+C to stop the server\n", .{}) catch {};
+
+    while (true) {
+        const connection = try server.accept();
+        handleConnection(gpa, connection, docs_dir) catch |err| {
+            std.debug.print("Error handling connection: {}\n", .{err});
+        };
+    }
+}
+
+/// Handle a single HTTP connection
+fn handleConnection(gpa: Allocator, connection: std.net.Server.Connection, docs_dir: []const u8) !void {
+    defer connection.stream.close();
+
+    var buffer: [4096]u8 = undefined;
+    const bytes_read = try connection.stream.read(&buffer);
+
+    if (bytes_read == 0) return;
+
+    const request = buffer[0..bytes_read];
+
+    // Parse the request line (e.g., "GET /path HTTP/1.1")
+    var lines = std.mem.splitSequence(u8, request, "\r\n");
+    const request_line = lines.next() orelse return;
+
+    var parts = std.mem.splitSequence(u8, request_line, " ");
+    const method = parts.next() orelse return;
+    const path = parts.next() orelse return;
+
+    if (!std.mem.eql(u8, method, "GET")) {
+        try sendResponse(connection.stream, "405 Method Not Allowed", "text/plain", "Method Not Allowed");
+        return;
+    }
+
+    // Determine the file path to serve
+    const file_path = try resolveFilePath(gpa, docs_dir, path);
+    defer gpa.free(file_path);
+
+    // Try to open and serve the file
+    const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
+        if (err == error.FileNotFound) {
+            try sendResponse(connection.stream, "404 Not Found", "text/plain", "File Not Found");
+        } else {
+            try sendResponse(connection.stream, "500 Internal Server Error", "text/plain", "Internal Server Error");
+        }
+        return;
+    };
+    defer file.close();
+
+    // Read file contents
+    const file_content = try file.readToEndAlloc(gpa, 10 * 1024 * 1024); // 10MB max
+    defer gpa.free(file_content);
+
+    // Determine content type
+    const content_type = getContentType(file_path);
+
+    // Send response
+    try sendResponse(connection.stream, "200 OK", content_type, file_content);
+}
+
+/// Resolve the file path based on the URL path
+fn resolveFilePath(gpa: Allocator, docs_dir: []const u8, url_path: []const u8) ![]const u8 {
+    // Remove leading slash
+    const clean_path = if (url_path.len > 0 and url_path[0] == '/')
+        url_path[1..]
+    else
+        url_path;
+
+    // If path is empty or ends with /, serve index.html
+    if (clean_path.len == 0 or clean_path[clean_path.len - 1] == '/') {
+        return try std.fmt.allocPrint(gpa, "{s}/{s}index.html", .{ docs_dir, clean_path });
+    }
+
+    // Check if the path has a file extension (contains a dot in the last component)
+    const last_slash = std.mem.lastIndexOfScalar(u8, clean_path, '/') orelse 0;
+    const last_component = clean_path[last_slash..];
+    const has_extension = std.mem.indexOfScalar(u8, last_component, '.') != null;
+
+    if (has_extension) {
+        // Path has extension, serve the file directly
+        return try std.fmt.allocPrint(gpa, "{s}/{s}", .{ docs_dir, clean_path });
+    } else {
+        // No extension, serve index.html from that directory
+        return try std.fmt.allocPrint(gpa, "{s}/{s}/index.html", .{ docs_dir, clean_path });
+    }
+}
+
+/// Get content type based on file extension
+fn getContentType(file_path: []const u8) []const u8 {
+    if (std.mem.endsWith(u8, file_path, ".html")) {
+        return "text/html; charset=utf-8";
+    } else if (std.mem.endsWith(u8, file_path, ".css")) {
+        return "text/css";
+    } else if (std.mem.endsWith(u8, file_path, ".js")) {
+        return "application/javascript";
+    } else if (std.mem.endsWith(u8, file_path, ".json")) {
+        return "application/json";
+    } else if (std.mem.endsWith(u8, file_path, ".png")) {
+        return "image/png";
+    } else if (std.mem.endsWith(u8, file_path, ".jpg") or std.mem.endsWith(u8, file_path, ".jpeg")) {
+        return "image/jpeg";
+    } else if (std.mem.endsWith(u8, file_path, ".svg")) {
+        return "image/svg+xml";
+    } else {
+        return "text/plain";
+    }
+}
+
+/// Send an HTTP response
+fn sendResponse(stream: std.net.Stream, status: []const u8, content_type: []const u8, body: []const u8) !void {
+    var response_buffer: [8192]u8 = undefined;
+    const response = try std.fmt.bufPrint(
+        &response_buffer,
+        "HTTP/1.1 {s}\r\n" ++
+            "Content-Type: {s}\r\n" ++
+            "Content-Length: {d}\r\n" ++
+            "Connection: close\r\n" ++
+            "\r\n",
+        .{ status, content_type, body.len },
+    );
+
+    try stream.writeAll(response);
+    try stream.writeAll(body);
+}
+
 fn rocDocs(gpa: Allocator, args: cli_args.DocsArgs) !void {
-    _ = gpa;
-    _ = args;
-    fatal("docs not implemented", .{});
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const stdout = std.io.getStdOut().writer();
+    const stderr = std.io.getStdErr().writer();
+    const stderr_writer = stderr.any();
+
+    var timer = try std.time.Timer.start();
+
+    // Set up cache configuration based on command line args
+    const cache_config = CacheConfig{
+        .enabled = !args.no_cache,
+        .verbose = args.verbose,
+    };
+
+    // Use BuildEnv to check the file, preserving the BuildEnv for docs generation
+    var result_with_env = checkFileWithBuildEnvPreserved(
+        gpa,
+        args.path,
+        args.time,
+        cache_config,
+    ) catch |err| {
+        handleProcessFileError(err, stderr, args.path);
+    };
+
+    // Clean up when we're done - this includes the BuildEnv and all module envs
+    defer result_with_env.deinit(gpa);
+
+    const check_result = &result_with_env.check_result;
+    const elapsed = timer.read();
+
+    // Handle cached results vs fresh compilation results differently
+    if (check_result.was_cached) {
+        // For cached results, use the stored diagnostic counts
+        const total_errors = check_result.error_count;
+        const total_warnings = check_result.warning_count;
+
+        if (total_errors > 0 or total_warnings > 0) {
+            stderr.print("Found {} error(s) and {} warning(s) in ", .{
+                total_errors,
+                total_warnings,
+            }) catch {};
+            formatElapsedTime(stderr, elapsed) catch {};
+            stderr.print(" for {s} (note module loaded from cache, use --no-cache to display Errors and Warnings.).", .{args.path}) catch {};
+            std.process.exit(1);
+        }
+    } else {
+        // For fresh compilation, process and display reports normally
+        var has_errors = false;
+
+        // Render reports grouped by module
+        for (check_result.reports) |module| {
+            for (module.reports) |*report| {
+
+                // Render the diagnostic report to stderr
+                reporting.renderReportToTerminal(report, stderr_writer, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
+                    stderr.print("Error rendering diagnostic report: {}", .{render_err}) catch {};
+                    // Fallback to just printing the title
+                    stderr.print("  {s}", .{report.title}) catch {};
+                };
+
+                if (report.severity == .fatal or report.severity == .runtime_error) {
+                    has_errors = true;
+                }
+            }
+        }
+
+        if (check_result.error_count > 0 or check_result.warning_count > 0) {
+            stderr.writeAll("\n") catch {};
+            stderr.print("Found {} error(s) and {} warning(s) in ", .{
+                check_result.error_count,
+                check_result.warning_count,
+            }) catch {};
+            formatElapsedTime(stderr, elapsed) catch {};
+            stderr.print(" for {s}.", .{args.path}) catch {};
+
+            if (check_result.error_count > 0) {
+                std.process.exit(1);
+            }
+        }
+    }
+
+    // Print timing breakdown if requested
+    if (args.time) {
+        printTimingBreakdown(stdout, if (builtin.target.cpu.arch == .wasm32) null else check_result.timing);
+    }
+
+    // Generate documentation for all packages and modules
+    try generateDocs(gpa, &result_with_env.build_env, args.path, args.output);
+
+    stdout.print("\nDocumentation generation complete for {s}\n", .{args.path}) catch {};
+
+    // Start HTTP server if --serve flag is enabled
+    if (args.serve) {
+        try serveDocumentation(gpa, args.output);
+    }
+}
+
+/// Associated item (type or value) within a module or type
+pub const AssociatedItem = struct {
+    name: []const u8,
+    children: []AssociatedItem, // Nested associated items (for types with associated items)
+
+    fn deinit(self: AssociatedItem, gpa: Allocator) void {
+        gpa.free(self.name);
+        for (self.children) |child| {
+            child.deinit(gpa);
+        }
+        gpa.free(self.children);
+    }
+};
+
+/// Information about an imported module
+pub const ModuleInfo = struct {
+    name: []const u8, // e.g., "Foo" or "foo.Bar"
+    link_path: []const u8, // e.g., "Foo" or "foo/Bar"
+    associated_items: []AssociatedItem, // Types and values defined in this module
+
+    fn deinit(self: ModuleInfo, gpa: Allocator) void {
+        gpa.free(self.name);
+        gpa.free(self.link_path);
+        for (self.associated_items) |item| {
+            item.deinit(gpa);
+        }
+        gpa.free(self.associated_items);
+    }
+};
+
+/// Recursively write associated items as nested <ul> elements
+fn writeAssociatedItems(writer: anytype, items: []const AssociatedItem, indent_level: usize) !void {
+    // Write opening <ul>
+    try writer.writeByteNTimes(' ', indent_level * 2);
+    try writer.writeAll("<ul>\n");
+
+    for (items) |item| {
+        // Write <li> with item name
+        try writer.writeByteNTimes(' ', (indent_level + 1) * 2);
+        try writer.print("<li>{s}\n", .{item.name});
+
+        // Recursively write children if any
+        if (item.children.len > 0) {
+            try writeAssociatedItems(writer, item.children, indent_level + 2);
+        }
+
+        // Close <li>
+        try writer.writeByteNTimes(' ', (indent_level + 1) * 2);
+        try writer.writeAll("</li>\n");
+    }
+
+    // Write closing </ul>
+    try writer.writeByteNTimes(' ', indent_level * 2);
+    try writer.writeAll("</ul>\n");
+}
+
+/// Generate HTML index file for a package or app
+pub fn generatePackageIndex(
+    gpa: Allocator,
+    output_path: []const u8,
+    module_path: []const u8,
+    package_shorthands: []const []const u8,
+    imported_modules: []const ModuleInfo,
+) !void {
+    // Create output directory if it doesn't exist
+    std.fs.cwd().makePath(output_path) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+
+    // Create index.html file
+    const index_path = try std.fs.path.join(gpa, &[_][]const u8{ output_path, "index.html" });
+    defer gpa.free(index_path);
+
+    const file = try std.fs.cwd().createFile(index_path, .{});
+    defer file.close();
+
+    const writer = file.writer();
+
+    // Write HTML header
+    try writer.writeAll("<!DOCTYPE html>\n<html>\n<head>\n");
+    try writer.writeAll("  <meta charset=\"UTF-8\">\n");
+    try writer.writeAll("  <title>Documentation</title>\n");
+    try writer.writeAll("</head>\n<body>\n");
+
+    // Write module path as h1
+    try writer.print("  <h1>{s}</h1>\n", .{module_path});
+
+    // Write sidebar with imported modules if any
+    if (imported_modules.len > 0) {
+        try writer.writeAll("  <ul class='sidebar'>\n");
+        for (imported_modules) |mod_info| {
+            try writer.print("    <li>\n      <a href=\"{s}\">{s}</a>\n", .{ mod_info.link_path, mod_info.name });
+
+            // Write nested associated items if any
+            if (mod_info.associated_items.len > 0) {
+                try writeAssociatedItems(writer, mod_info.associated_items, 3);
+            }
+
+            try writer.writeAll("    </li>\n");
+        }
+        try writer.writeAll("  </ul>\n");
+    }
+
+    // Write links to package dependencies if any exist
+    if (package_shorthands.len > 0) {
+        try writer.writeAll("  <ul>\n");
+        for (package_shorthands) |shorthand| {
+            try writer.print("    <li><a href=\"{s}\">{s}</a></li>\n", .{ shorthand, shorthand });
+        }
+        try writer.writeAll("  </ul>\n");
+    }
+
+    try writer.writeAll("</body>\n</html>\n");
+}
+
+/// Generate HTML index file for a module
+pub fn generateModuleIndex(
+    gpa: Allocator,
+    output_path: []const u8,
+    module_name: []const u8,
+) !void {
+    // Create output directory if it doesn't exist
+    std.fs.cwd().makePath(output_path) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+
+    // Create index.html file
+    const index_path = try std.fs.path.join(gpa, &[_][]const u8{ output_path, "index.html" });
+    defer gpa.free(index_path);
+
+    const file = try std.fs.cwd().createFile(index_path, .{});
+    defer file.close();
+
+    const writer = file.writer();
+
+    // Write HTML header
+    try writer.writeAll("<!DOCTYPE html>\n<html>\n<head>\n");
+    try writer.writeAll("  <meta charset=\"UTF-8\">\n");
+    try writer.print("  <title>{s}</title>\n", .{module_name});
+    try writer.writeAll("</head>\n<body>\n");
+
+    // Write module name as h1
+    try writer.print("  <h1>{s}</h1>\n", .{module_name});
+
+    try writer.writeAll("</body>\n</html>\n");
+}
+
+/// Extract associated items from a record expression (recursively)
+fn extractRecordAssociatedItems(
+    gpa: Allocator,
+    module_env: *const ModuleEnv,
+    record_fields: can.CIR.RecordField.Span,
+) ![]AssociatedItem {
+    var items = std.ArrayList(AssociatedItem).init(gpa);
+    errdefer {
+        for (items.items) |item| {
+            item.deinit(gpa);
+        }
+        items.deinit();
+    }
+
+    const fields_slice = module_env.store.sliceRecordFields(record_fields);
+    for (fields_slice) |field_idx| {
+        const field = module_env.store.getRecordField(field_idx);
+        const field_name = try gpa.dupe(u8, module_env.getIdentText(field.name));
+        errdefer gpa.free(field_name);
+
+        // Check if the field value is a nominal type (has nested associated items)
+        const field_expr = module_env.store.getExpr(field.value);
+        const children = switch (field_expr) {
+            .e_nominal => |nom| blk: {
+                // Get the nominal type's backing expression
+                const backing_expr = module_env.store.getExpr(nom.backing_expr);
+                break :blk switch (backing_expr) {
+                    .e_record => |rec| try extractRecordAssociatedItems(gpa, module_env, rec.fields),
+                    else => try gpa.alloc(AssociatedItem, 0),
+                };
+            },
+            else => try gpa.alloc(AssociatedItem, 0),
+        };
+
+        try items.append(.{
+            .name = field_name,
+            .children = children,
+        });
+    }
+
+    return try items.toOwnedSlice();
+}
+
+/// Extract associated items from a module's exports
+fn extractAssociatedItems(
+    gpa: Allocator,
+    module_env: *const ModuleEnv,
+) ![]AssociatedItem {
+    var items = std.ArrayList(AssociatedItem).init(gpa);
+    errdefer {
+        for (items.items) |item| {
+            item.deinit(gpa);
+        }
+        items.deinit();
+    }
+
+    // Get all exported definitions
+    const exports_slice = module_env.store.sliceDefs(module_env.exports);
+
+    // If no exports, try all_defs (for modules that are still being processed)
+    const defs_slice = if (exports_slice.len == 0)
+        module_env.store.sliceDefs(module_env.all_defs)
+    else
+        exports_slice;
+
+    for (defs_slice) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+
+        // Get the pattern to find the name
+        const pattern = module_env.store.getPattern(def.pattern);
+
+        // Extract name from pattern (could be assign, nominal, etc.)
+        const name_ident_opt = switch (pattern) {
+            .assign => |a| a.ident,
+            .nominal => |n| blk: {
+                // For nominal types, we need to get the statement and extract the header
+                const stmt = module_env.store.getStatement(n.nominal_type_decl);
+                break :blk switch (stmt) {
+                    .s_nominal_decl => |decl| module_env.store.getTypeHeader(decl.header).name,
+                    else => continue,
+                };
+            },
+            else => continue,
+        };
+
+        const name = try gpa.dupe(u8, module_env.getIdentText(name_ident_opt));
+        errdefer gpa.free(name);
+
+        // Extract nested associated items if this is a nominal type with a record
+        const children = switch (pattern) {
+            .nominal => blk: {
+                // For nominal types, look at the expression to find associated items
+                const expr = module_env.store.getExpr(def.expr);
+                break :blk switch (expr) {
+                    .e_nominal => |nom_expr| blk2: {
+                        const backing = module_env.store.getExpr(nom_expr.backing_expr);
+                        break :blk2 switch (backing) {
+                            .e_record => |record| try extractRecordAssociatedItems(gpa, module_env, record.fields),
+                            else => try gpa.alloc(AssociatedItem, 0),
+                        };
+                    },
+                    else => try gpa.alloc(AssociatedItem, 0),
+                };
+            },
+            else => try gpa.alloc(AssociatedItem, 0),
+        };
+
+        try items.append(.{
+            .name = name,
+            .children = children,
+        });
+    }
+
+    return try items.toOwnedSlice();
+}
+
+/// Generate documentation for the root and all its dependencies and imported modules
+fn generateDocs(
+    gpa: Allocator,
+    build_env: *compile.BuildEnv,
+    module_path: []const u8,
+    base_output_dir: []const u8,
+) !void {
+    // First, determine if this is an app or other kind
+    var pkg_iter = build_env.packages.iterator();
+    const first_pkg = if (pkg_iter.next()) |entry| entry.value_ptr.* else return;
+
+    const is_app = first_pkg.kind == .app;
+
+    if (is_app) {
+        // For apps, collect all imported modules and generate sidebar
+        try generateAppDocs(gpa, build_env, module_path, base_output_dir);
+    } else {
+        // For packages, just generate package dependency docs
+        try generatePackageDocs(gpa, build_env, module_path, base_output_dir, "");
+    }
+}
+
+/// Generate docs for an app module
+fn generateAppDocs(
+    gpa: Allocator,
+    build_env: *compile.BuildEnv,
+    module_path: []const u8,
+    base_output_dir: []const u8,
+) !void {
+    // Collect all imported modules (both local and from packages)
+    var modules_map = std.StringHashMap(ModuleInfo).init(gpa);
+    defer {
+        var it = modules_map.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.deinit(gpa);
+        }
+        modules_map.deinit();
+    }
+
+    // Get the root package
+    var pkg_iter = build_env.packages.iterator();
+    const first_pkg = if (pkg_iter.next()) |entry| entry.value_ptr.* else return;
+
+    // Iterate through schedulers to get modules
+    var sched_iter = build_env.schedulers.iterator();
+    while (sched_iter.next()) |sched_entry| {
+        const package_name = sched_entry.key_ptr.*;
+        const package_env = sched_entry.value_ptr.*;
+
+        // Iterate through modules in this package
+        for (package_env.modules.items) |module_state| {
+            // Process external imports (e.g., "cli.Stdout")
+            for (module_state.external_imports.items) |ext_import| {
+                // Parse the import (e.g., "cli.Stdout" -> package="cli", module="Stdout")
+                if (std.mem.indexOfScalar(u8, ext_import, '.')) |dot_index| {
+                    const pkg_shorthand = ext_import[0..dot_index];
+                    const module_name = ext_import[dot_index + 1 ..];
+
+                    // Create full name and link path
+                    const full_name = try gpa.dupe(u8, ext_import);
+                    const link_path = try std.fmt.allocPrint(gpa, "{s}/{s}", .{ pkg_shorthand, module_name });
+
+                    const empty_items = [_]AssociatedItem{};
+                    const mod_info = ModuleInfo{
+                        .name = full_name,
+                        .link_path = link_path,
+                        .associated_items = &empty_items,
+                    };
+
+                    // Add to map (deduplicates automatically)
+                    const gop = try modules_map.getOrPut(full_name);
+                    if (!gop.found_existing) {
+                        gop.value_ptr.* = mod_info;
+                    } else {
+                        // Free the duplicates
+                        gpa.free(full_name);
+                        gpa.free(link_path);
+                    }
+
+                    // Generate index.html for this module
+                    const module_output_dir = try std.fs.path.join(gpa, &[_][]const u8{ base_output_dir, pkg_shorthand, module_name });
+                    defer gpa.free(module_output_dir);
+                    generateModuleIndex(gpa, module_output_dir, ext_import) catch |err| {
+                        std.debug.print("Warning: failed to generate module index for {s}: {}\n", .{ ext_import, err });
+                    };
+                }
+            }
+
+            // Process local imports (non-external modules in the same package)
+            for (module_state.imports.items) |import_id| {
+                if (import_id < package_env.modules.items.len) {
+                    const imported_module = package_env.modules.items[import_id];
+                    const module_name = imported_module.name;
+
+                    // Skip if this is the root module itself
+                    if (std.mem.eql(u8, module_name, "main")) continue;
+
+                    // Only include if it's a local module (not from a package)
+                    if (std.mem.eql(u8, package_name, first_pkg.name)) {
+                        const full_name = try gpa.dupe(u8, module_name);
+                        const link_path = try gpa.dupe(u8, module_name);
+
+                        // Extract associated items from the module if it has an env
+                        const associated_items = if (imported_module.env) |*mod_env|
+                            try extractAssociatedItems(gpa, mod_env)
+                        else
+                            try gpa.alloc(AssociatedItem, 0);
+
+                        const mod_info = ModuleInfo{
+                            .name = full_name,
+                            .link_path = link_path,
+                            .associated_items = associated_items,
+                        };
+
+                        const gop = try modules_map.getOrPut(full_name);
+                        if (!gop.found_existing) {
+                            gop.value_ptr.* = mod_info;
+                        } else {
+                            // Free the duplicates
+                            gpa.free(full_name);
+                            gpa.free(link_path);
+                            for (associated_items) |item| {
+                                item.deinit(gpa);
+                            }
+                            gpa.free(associated_items);
+                        }
+
+                        // Generate index.html for this local module
+                        const module_output_dir = try std.fs.path.join(gpa, &[_][]const u8{ base_output_dir, module_name });
+                        defer gpa.free(module_output_dir);
+                        generateModuleIndex(gpa, module_output_dir, module_name) catch |err| {
+                            std.debug.print("Warning: failed to generate module index for {s}: {}\n", .{ module_name, err });
+                        };
+                    }
+                }
+            }
+        }
+    }
+
+    // Convert map to sorted list
+    var modules_list = std.ArrayList(ModuleInfo).init(gpa);
+    defer modules_list.deinit();
+    var map_iter = modules_map.iterator();
+    while (map_iter.next()) |entry| {
+        try modules_list.append(entry.value_ptr.*);
+    }
+
+    // Collect package shorthands
+    var shorthands_list = std.ArrayList([]const u8).init(gpa);
+    defer {
+        for (shorthands_list.items) |item| gpa.free(item);
+        shorthands_list.deinit();
+    }
+
+    var shorthand_iter = first_pkg.shorthands.iterator();
+    while (shorthand_iter.next()) |sh_entry| {
+        const shorthand = try gpa.dupe(u8, sh_entry.key_ptr.*);
+        try shorthands_list.append(shorthand);
+    }
+
+    // Generate root index.html
+    try generatePackageIndex(gpa, base_output_dir, module_path, shorthands_list.items, modules_list.items);
+
+    // Generate package dependency docs recursively
+    shorthand_iter = first_pkg.shorthands.iterator();
+    while (shorthand_iter.next()) |sh_entry| {
+        const shorthand = sh_entry.key_ptr.*;
+        const dep_ref = sh_entry.value_ptr.*;
+
+        generatePackageDocs(gpa, build_env, dep_ref.root_file, base_output_dir, shorthand) catch |err| {
+            std.debug.print("Warning: failed to generate docs for package {s}: {}\n", .{ shorthand, err });
+        };
+    }
+}
+
+/// Recursively generate documentation for a package and its dependencies
+fn generatePackageDocs(
+    gpa: Allocator,
+    build_env: *compile.BuildEnv,
+    module_path: []const u8,
+    base_output_dir: []const u8,
+    relative_path: []const u8,
+) error{OutOfMemory}!void {
+    const output_dir = if (relative_path.len == 0)
+        try gpa.dupe(u8, base_output_dir)
+    else
+        try std.fs.path.join(gpa, &[_][]const u8{ base_output_dir, relative_path });
+    defer gpa.free(output_dir);
+
+    var shorthands_list = std.ArrayList([]const u8).init(gpa);
+    defer {
+        for (shorthands_list.items) |item| gpa.free(item);
+        shorthands_list.deinit();
+    }
+
+    var pkg_iter = build_env.packages.iterator();
+    while (pkg_iter.next()) |entry| {
+        const pkg = entry.value_ptr;
+
+        var shorthand_iter = pkg.shorthands.iterator();
+        while (shorthand_iter.next()) |sh_entry| {
+            const shorthand = try gpa.dupe(u8, sh_entry.key_ptr.*);
+            try shorthands_list.append(shorthand);
+        }
+
+        shorthand_iter = pkg.shorthands.iterator();
+        while (shorthand_iter.next()) |sh_entry| {
+            const shorthand = sh_entry.key_ptr.*;
+
+            const dep_relative_path = if (relative_path.len == 0)
+                try gpa.dupe(u8, shorthand)
+            else
+                try std.fs.path.join(gpa, &[_][]const u8{ relative_path, shorthand });
+            defer gpa.free(dep_relative_path);
+
+            const dep_ref = sh_entry.value_ptr.*;
+            generatePackageDocs(gpa, build_env, dep_ref.root_file, base_output_dir, dep_relative_path) catch |err| {
+                std.debug.print("Warning: failed to generate docs for {s}: {}\n", .{ shorthand, err });
+            };
+        }
+
+        break;
+    }
+
+    // For standalone modules, extract and display their exports
+    var module_infos = std.ArrayList(ModuleInfo).init(gpa);
+    defer {
+        for (module_infos.items) |mod| mod.deinit(gpa);
+        module_infos.deinit();
+    }
+
+    // Get the module's exports if it's a standalone module
+    var sched_iter = build_env.schedulers.iterator();
+    while (sched_iter.next()) |sched_entry| {
+        const package_env = sched_entry.value_ptr.*;
+
+        // Check ALL modules in this package
+        for (package_env.modules.items) |module_state| {
+            if (module_state.env) |*mod_env| {
+                const associated_items = try extractAssociatedItems(gpa, mod_env);
+                const mod_name = try gpa.dupe(u8, module_state.name);
+
+                try module_infos.append(.{
+                    .name = mod_name,
+                    .link_path = try gpa.dupe(u8, ""),
+                    .associated_items = associated_items,
+                });
+            }
+        }
+    }
+
+    generatePackageIndex(gpa, output_dir, module_path, shorthands_list.items, module_infos.items) catch |err| {
+        std.debug.print("Warning: failed to generate index for {s}: {}\n", .{ module_path, err });
+    };
 }
 
 /// Log a fatal error and exit the process with a non-zero code.

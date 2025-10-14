@@ -43,6 +43,8 @@ main = {
 MODULE NOT FOUND - can_import_comprehensive.md:1:1:1:17
 MODULE NOT FOUND - can_import_comprehensive.md:2:1:2:48
 MODULE NOT FOUND - can_import_comprehensive.md:3:1:3:27
+UNDEFINED VARIABLE - can_import_comprehensive.md:17:15:17:18
+UNDEFINED VARIABLE - can_import_comprehensive.md:18:15:18:19
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `json.Json` was not found in this Roc project.
@@ -75,6 +77,28 @@ You're attempting to use this module here:
 import utils.String as Str
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `get` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_comprehensive.md:17:15:17:18:**
+```roc
+    result3 = get
+```
+              ^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `post` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_comprehensive.md:18:15:18:19:**
+```roc
+    result4 = post
+```
+              ^^^^
 
 
 # TOKENS
@@ -200,42 +224,38 @@ main = {
 			(s-let @6.5-6.22
 				(p-assign @6.5-6.11 (ident "client"))
 				(e-lookup-external @6.14-6.22
-					(module-idx "1")
+					(module-idx "3")
 					(target-node-idx "0")))
 			(s-let @7.5-7.23
 				(p-assign @7.5-7.11 (ident "parser"))
 				(e-lookup-external @7.14-7.23
-					(module-idx "0")
+					(module-idx "2")
 					(target-node-idx "0")))
 			(s-let @8.5-8.22
 				(p-assign @8.5-8.11 (ident "helper"))
 				(e-lookup-external @8.14-8.22
-					(module-idx "2")
+					(module-idx "4")
 					(target-node-idx "0")))
 			(s-let @11.5-11.25
 				(p-assign @11.5-11.12 (ident "result1"))
 				(e-lookup-external @11.15-11.25
-					(module-idx "0")
+					(module-idx "2")
 					(target-node-idx "0")))
 			(s-let @14.5-14.24
 				(p-assign @14.5-14.12 (ident "result2"))
 				(e-lookup-external @14.15-14.24
-					(module-idx "1")
+					(module-idx "3")
 					(target-node-idx "0")))
 			(s-let @17.5-17.18
 				(p-assign @17.5-17.12 (ident "result3"))
-				(e-lookup-external @17.15-17.18
-					(module-idx "1")
-					(target-node-idx "0")))
+				(e-runtime-error (tag "ident_not_in_scope")))
 			(s-let @18.5-18.19
 				(p-assign @18.5-18.12 (ident "result4"))
-				(e-lookup-external @18.15-18.19
-					(module-idx "1")
-					(target-node-idx "0")))
+				(e-runtime-error (tag "ident_not_in_scope")))
 			(s-let @21.5-21.26
 				(p-assign @21.5-21.13 (ident "combined"))
 				(e-lookup-external @21.16-21.26
-					(module-idx "2")
+					(module-idx "4")
 					(target-node-idx "0")))
 			(e-tuple @23.5-32.6
 				(elems

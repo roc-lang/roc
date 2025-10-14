@@ -12,31 +12,30 @@ const CompactWriter = collections.CompactWriter;
 test "Import.Store deduplicates module names" {
     const testing = std.testing;
     const gpa = testing.allocator;
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
 
     // Create a string store for interning module names
-    var string_store = try StringLiteral.Store.initCapacityBytes(arena_allocator, 1024);
+    var string_store = try StringLiteral.Store.initCapacityBytes(gpa, 1024);
+    defer string_store.deinit(gpa);
 
     // Create import store
     var store = Import.Store.init();
+    defer store.deinit(gpa);
 
     // Add the same module name multiple times - should deduplicate
-    const idx1 = try store.getOrPut(arena_allocator, &string_store, "test.Module");
-    const idx2 = try store.getOrPut(arena_allocator, &string_store, "test.Module");
+    const idx1 = try store.getOrPut(gpa, &string_store, "test.Module");
+    const idx2 = try store.getOrPut(gpa, &string_store, "test.Module");
 
     // Should get the same index
     try testing.expectEqual(idx1, idx2);
     try testing.expectEqual(@as(usize, 1), store.imports.len());
 
     // Add a different module - should create a new entry
-    const idx3 = try store.getOrPut(arena_allocator, &string_store, "other.Module");
+    const idx3 = try store.getOrPut(gpa, &string_store, "other.Module");
     try testing.expect(idx3 != idx1);
     try testing.expectEqual(@as(usize, 2), store.imports.len());
 
     // Add the first module name again - should still return original index
-    const idx4 = try store.getOrPut(arena_allocator, &string_store, "test.Module");
+    const idx4 = try store.getOrPut(gpa, &string_store, "test.Module");
     try testing.expectEqual(idx1, idx4);
     try testing.expectEqual(@as(usize, 2), store.imports.len());
 
@@ -50,13 +49,9 @@ test "Import.Store deduplicates module names" {
 test "Import.Store empty CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
 
     // Create an empty Store
     var original = Import.Store.init();
-    // No deinit needed, arena will handle it.
 
     // Create a temp file
     var tmp_dir = testing.tmpDir(.{});
@@ -66,13 +61,13 @@ test "Import.Store empty CompactWriter roundtrip" {
     defer file.close();
 
     var writer = CompactWriter.init();
-    defer writer.deinit(arena_allocator);
+    defer writer.deinit(gpa);
 
-    const serialized = try writer.appendAlloc(arena_allocator, Import.Store.Serialized);
-    try serialized.serialize(&original, arena_allocator, &writer);
+    const serialized = try writer.appendAlloc(gpa, Import.Store.Serialized);
+    try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file);
+    try writer.writeGather(gpa, file);
 
     // Read back
     try file.seekTo(0);
@@ -81,7 +76,7 @@ test "Import.Store empty CompactWriter roundtrip" {
 
     // Cast to Serialized and deserialize
     const serialized_ptr = @as(*Import.Store.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), arena_allocator);
+    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa);
 
     // Verify empty
     try testing.expectEqual(@as(usize, 0), deserialized.imports.len());
@@ -91,22 +86,21 @@ test "Import.Store empty CompactWriter roundtrip" {
 test "Import.Store basic CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
 
     // Create a mock module env with string store
-    var string_store = try StringLiteral.Store.initCapacityBytes(arena_allocator, 1024);
+    var string_store = try StringLiteral.Store.initCapacityBytes(gpa, 1024);
+    defer string_store.deinit(gpa);
 
     const MockEnv = struct { strings: *StringLiteral.Store };
     const mock_env = MockEnv{ .strings = &string_store };
 
     // Create original store and add some imports
     var original = Import.Store.init();
+    defer original.deinit(gpa);
 
-    const idx1 = try original.getOrPut(arena_allocator, mock_env.strings, "json.Json");
-    const idx2 = try original.getOrPut(arena_allocator, mock_env.strings, "core.List");
-    const idx3 = try original.getOrPut(arena_allocator, mock_env.strings, "my.Module");
+    const idx1 = try original.getOrPut(gpa, mock_env.strings, "json.Json");
+    const idx2 = try original.getOrPut(gpa, mock_env.strings, "core.List");
+    const idx3 = try original.getOrPut(gpa, mock_env.strings, "my.Module");
 
     // Verify indices
     try testing.expectEqual(@as(u32, 0), @intFromEnum(idx1));
@@ -121,13 +115,13 @@ test "Import.Store basic CompactWriter roundtrip" {
     defer file.close();
 
     var writer = CompactWriter.init();
-    defer writer.deinit(arena_allocator);
+    defer writer.deinit(gpa);
 
-    const serialized = try writer.appendAlloc(arena_allocator, Import.Store.Serialized);
-    try serialized.serialize(&original, arena_allocator, &writer);
+    const serialized = try writer.appendAlloc(gpa, Import.Store.Serialized);
+    try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file);
+    try writer.writeGather(gpa, file);
 
     // Read back
     try file.seekTo(0);
@@ -136,7 +130,8 @@ test "Import.Store basic CompactWriter roundtrip" {
 
     // Cast to Serialized and deserialize
     const serialized_ptr: *Import.Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), arena_allocator);
+    var deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa);
+    defer deserialized.map.deinit(gpa);
 
     // Verify the imports are accessible
     try testing.expectEqual(@as(usize, 3), deserialized.imports.len());
@@ -157,22 +152,21 @@ test "Import.Store basic CompactWriter roundtrip" {
 test "Import.Store duplicate imports CompactWriter roundtrip" {
     const testing = std.testing;
     const gpa = testing.allocator;
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
 
     // Create a mock module env with string store
-    var string_store = try StringLiteral.Store.initCapacityBytes(arena_allocator, 1024);
+    var string_store = try StringLiteral.Store.initCapacityBytes(gpa, 1024);
+    defer string_store.deinit(gpa);
 
     const MockEnv = struct { strings: *StringLiteral.Store };
     const mock_env = MockEnv{ .strings = &string_store };
 
     // Create store with duplicate imports
     var original = Import.Store.init();
+    defer original.deinit(gpa);
 
-    const idx1 = try original.getOrPut(arena_allocator, mock_env.strings, "test.Module");
-    const idx2 = try original.getOrPut(arena_allocator, mock_env.strings, "another.Module");
-    const idx3 = try original.getOrPut(arena_allocator, mock_env.strings, "test.Module"); // duplicate
+    const idx1 = try original.getOrPut(gpa, mock_env.strings, "test.Module");
+    const idx2 = try original.getOrPut(gpa, mock_env.strings, "another.Module");
+    const idx3 = try original.getOrPut(gpa, mock_env.strings, "test.Module"); // duplicate
 
     // Verify deduplication worked
     try testing.expectEqual(idx1, idx3);
@@ -186,13 +180,13 @@ test "Import.Store duplicate imports CompactWriter roundtrip" {
     defer file.close();
 
     var writer = CompactWriter.init();
-    defer writer.deinit(arena_allocator);
+    defer writer.deinit(gpa);
 
-    const serialized = try writer.appendAlloc(arena_allocator, Import.Store.Serialized);
-    try serialized.serialize(&original, arena_allocator, &writer);
+    const serialized = try writer.appendAlloc(gpa, Import.Store.Serialized);
+    try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(arena_allocator, file);
+    try writer.writeGather(gpa, file);
 
     // Read back
     try file.seekTo(0);
@@ -201,7 +195,8 @@ test "Import.Store duplicate imports CompactWriter roundtrip" {
 
     // Cast to Serialized and deserialize
     const serialized_ptr: *Import.Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), arena_allocator);
+    var deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa);
+    defer deserialized.map.deinit(gpa);
 
     // Verify correct number of imports
     try testing.expectEqual(@as(usize, 2), deserialized.imports.len());

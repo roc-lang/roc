@@ -11,7 +11,7 @@ pub const CliArgs = union(enum) {
     run: RunArgs,
     check: CheckArgs,
     build: BuildArgs,
-    format: FormatArgs,
+    fmt: FormatArgs,
     test_cmd: TestArgs,
     bundle: BundleArgs,
     unbundle: UnbundleArgs,
@@ -24,7 +24,7 @@ pub const CliArgs = union(enum) {
 
     pub fn deinit(self: CliArgs, gpa: mem.Allocator) void {
         switch (self) {
-            .format => |fmt| gpa.free(fmt.paths),
+            .fmt => |fmt| gpa.free(fmt.paths),
             .run => |run| gpa.free(run.app_args),
             .bundle => |bundle| gpa.free(bundle.paths),
             .unbundle => |unbundle| gpa.free(unbundle.paths),
@@ -117,9 +117,13 @@ pub const UnbundleArgs = struct {
 
 /// Arguments for `roc docs`
 pub const DocsArgs = struct {
-    path: []const u8, // the main.roc file to base the generation on
-    output: []const u8, // the path to the output directory for the generated docs
-    root_dir: ?[]const u8 = null, // the prefix to be used in generated links in the docs
+    path: []const u8, // the path of the roc file to generate docs for
+    main: ?[]const u8 = null, // the path to a roc file with an app header to be used to resolved dependencies
+    output: []const u8 = "generated-docs", // the output directory for generated documentation
+    time: bool = false, // whether to print timing information
+    no_cache: bool = false, // disable cache
+    verbose: bool = false, // enable verbose output
+    serve: bool = false, // start an HTTP server after generating docs
 };
 
 /// Parse a list of arguments.
@@ -130,7 +134,7 @@ pub fn parse(gpa: mem.Allocator, args: []const []const u8) !CliArgs {
     if (mem.eql(u8, args[0], "build")) return parseBuild(args[1..]);
     if (mem.eql(u8, args[0], "bundle")) return try parseBundle(gpa, args[1..]);
     if (mem.eql(u8, args[0], "unbundle")) return try parseUnbundle(gpa, args[1..]);
-    if (mem.eql(u8, args[0], "format")) return try parseFormat(gpa, args[1..]);
+    if (mem.eql(u8, args[0], "fmt")) return try parseFormat(gpa, args[1..]);
     if (mem.eql(u8, args[0], "test")) return parseTest(args[1..]);
     if (mem.eql(u8, args[0], "repl")) return parseRepl(args[1..]);
     if (mem.eql(u8, args[0], "version")) return parseVersion(args[1..]);
@@ -154,7 +158,7 @@ const main_help =
     \\  unbundle         Extract files from compressed .tar.zst archives
     \\  test             Run all top-level `expect`s in a main module and any modules it imports
     \\  repl             Launch the interactive Read Eval Print Loop (REPL)
-    \\  format           Format a .roc file or the .roc files contained in a directory using standard Roc formatting
+    \\  fmt              Format a .roc file or the .roc files contained in a directory using standard Roc formatting
     \\  version          Print the Roc compiler's version
     \\  check            Check the code for problems, but don't build or run it
     \\  docs             Generate documentation for a Roc package or platform
@@ -429,7 +433,7 @@ fn parseFormat(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.E
             return CliArgs{ .help = 
             \\Format a .roc file or the .roc files contained in a directory using standard Roc formatting
             \\
-            \\Usage: roc format [OPTIONS] [DIRECTORY_OR_FILES]
+            \\Usage: roc fmt [OPTIONS] [DIRECTORY_OR_FILES]
             \\
             \\Arguments:
             \\  [DIRECTORY_OR_FILES]
@@ -454,7 +458,7 @@ fn parseFormat(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.E
     if (paths.items.len == 0) {
         try paths.append("main.roc");
     }
-    return CliArgs{ .format = FormatArgs{ .paths = try paths.toOwnedSlice(), .stdin = stdin, .check = check } };
+    return CliArgs{ .fmt = FormatArgs{ .paths = try paths.toOwnedSlice(), .stdin = stdin, .check = check } };
 }
 
 fn parseTest(args: []const []const u8) CliArgs {
@@ -565,9 +569,14 @@ fn parseLicenses(args: []const []const u8) CliArgs {
 }
 
 fn parseDocs(args: []const []const u8) CliArgs {
-    var output: ?[]const u8 = null;
-    var root_dir: ?[]const u8 = null;
     var path: ?[]const u8 = null;
+    var main: ?[]const u8 = null;
+    var output: ?[]const u8 = null;
+    var time: bool = false;
+    var no_cache: bool = false;
+    var verbose: bool = false;
+    var serve: bool = false;
+
     for (args) |arg| {
         if (isHelpFlag(arg)) {
             return CliArgs{ .help = 
@@ -576,26 +585,38 @@ fn parseDocs(args: []const []const u8) CliArgs {
             \\Usage: roc docs [OPTIONS] [ROC_FILE]
             \\
             \\Arguments:
-            \\  [ROC_FILE]  The package's main .roc file [default: main.roc]
+            \\  [ROC_FILE]  The .roc file to generate docs for [default: main.roc]
             \\
             \\Options:
-            \\      --output=<output>      Output directory for the generated documentation files. [default: generated-docs]
-            \\      --root-dir=<root-dir>  Set a root directory path to be used as a prefix for URL links in the generated documentation files.
-            \\  -h, --help                 Print help
+            \\      --main=<main>    The .roc file of the main app/package module to resolve dependencies from
+            \\      --output=<dir>   Output directory for generated documentation [default: generated-docs]
+            \\      --serve          Start an HTTP server to view the documentation
+            \\      --time           Print timing information for each compilation phase. Will not print anything if everything is cached.
+            \\      --no-cache       Disable caching
+            \\      --verbose        Enable verbose output including cache statistics
+            \\  -h, --help           Print help
             \\
         };
+        } else if (mem.startsWith(u8, arg, "--main")) {
+            if (getFlagValue(arg)) |value| {
+                main = value;
+            } else {
+                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--main" } } };
+            }
         } else if (mem.startsWith(u8, arg, "--output")) {
             if (getFlagValue(arg)) |value| {
                 output = value;
             } else {
                 return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--output" } } };
             }
-        } else if (mem.startsWith(u8, arg, "--root-dir")) {
-            if (getFlagValue(arg)) |value| {
-                root_dir = value;
-            } else {
-                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--root-dir" } } };
-            }
+        } else if (mem.eql(u8, arg, "--serve")) {
+            serve = true;
+        } else if (mem.eql(u8, arg, "--time")) {
+            time = true;
+        } else if (mem.eql(u8, arg, "--no-cache")) {
+            no_cache = true;
+        } else if (mem.eql(u8, arg, "--verbose")) {
+            verbose = true;
         } else {
             if (path != null) {
                 return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "docs", .arg = arg } } };
@@ -604,7 +625,7 @@ fn parseDocs(args: []const []const u8) CliArgs {
         }
     }
 
-    return CliArgs{ .docs = DocsArgs{ .path = path orelse "main.roc", .output = output orelse "generated-docs", .root_dir = root_dir } };
+    return CliArgs{ .docs = DocsArgs{ .path = path orelse "main.roc", .main = main, .output = output orelse "generated-docs", .time = time, .no_cache = no_cache, .verbose = verbose, .serve = serve } };
 }
 
 fn parseRun(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
@@ -800,61 +821,61 @@ test "roc build" {
     }
 }
 
-test "roc format" {
+test "roc fmt" {
     const gpa = testing.allocator;
     {
-        const result = try parse(gpa, &[_][]const u8{"format"});
+        const result = try parse(gpa, &[_][]const u8{"fmt"});
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("main.roc", result.format.paths[0]);
-        try testing.expect(!result.format.stdin);
-        try testing.expect(!result.format.check);
+        try testing.expectEqualStrings("main.roc", result.fmt.paths[0]);
+        try testing.expect(!result.fmt.stdin);
+        try testing.expect(!result.fmt.check);
     }
     {
-        const result = try parse(gpa, &[_][]const u8{ "format", "--check" });
+        const result = try parse(gpa, &[_][]const u8{ "fmt", "--check" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("main.roc", result.format.paths[0]);
-        try testing.expect(!result.format.stdin);
-        try testing.expect(result.format.check);
+        try testing.expectEqualStrings("main.roc", result.fmt.paths[0]);
+        try testing.expect(!result.fmt.stdin);
+        try testing.expect(result.fmt.check);
     }
     {
-        const result = try parse(gpa, &[_][]const u8{ "format", "--stdin" });
+        const result = try parse(gpa, &[_][]const u8{ "fmt", "--stdin" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("main.roc", result.format.paths[0]);
-        try testing.expect(result.format.stdin);
-        try testing.expect(!result.format.check);
+        try testing.expectEqualStrings("main.roc", result.fmt.paths[0]);
+        try testing.expect(result.fmt.stdin);
+        try testing.expect(!result.fmt.check);
     }
     {
-        const result = try parse(gpa, &[_][]const u8{ "format", "--stdin", "--check", "foo.roc" });
+        const result = try parse(gpa, &[_][]const u8{ "fmt", "--stdin", "--check", "foo.roc" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("foo.roc", result.format.paths[0]);
-        try testing.expect(result.format.stdin);
-        try testing.expect(result.format.check);
+        try testing.expectEqualStrings("foo.roc", result.fmt.paths[0]);
+        try testing.expect(result.fmt.stdin);
+        try testing.expect(result.fmt.check);
     }
     {
-        const result = try parse(gpa, &[_][]const u8{ "format", "foo.roc", "bar.roc" });
+        const result = try parse(gpa, &[_][]const u8{ "fmt", "foo.roc", "bar.roc" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("foo.roc", result.format.paths[0]);
-        try testing.expectEqualStrings("bar.roc", result.format.paths[1]);
+        try testing.expectEqualStrings("foo.roc", result.fmt.paths[0]);
+        try testing.expectEqualStrings("bar.roc", result.fmt.paths[1]);
     }
     {
-        const result = try parse(gpa, &[_][]const u8{ "format", "-h" });
+        const result = try parse(gpa, &[_][]const u8{ "fmt", "-h" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = try parse(gpa, &[_][]const u8{ "format", "--help" });
+        const result = try parse(gpa, &[_][]const u8{ "fmt", "--help" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = try parse(gpa, &[_][]const u8{ "format", "foo.roc", "--help" });
+        const result = try parse(gpa, &[_][]const u8{ "fmt", "foo.roc", "--help" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = try parse(gpa, &[_][]const u8{ "format", "--thisisactuallyafile" });
+        const result = try parse(gpa, &[_][]const u8{ "fmt", "--thisisactuallyafile" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("--thisisactuallyafile", result.format.paths[0]);
+        try testing.expectEqualStrings("--thisisactuallyafile", result.fmt.paths[0]);
     }
 }
 
@@ -1018,20 +1039,34 @@ test "roc docs" {
         const result = try parse(gpa, &[_][]const u8{"docs"});
         defer result.deinit(gpa);
         try testing.expectEqualStrings("main.roc", result.docs.path);
+        try testing.expectEqual(null, result.docs.main);
         try testing.expectEqualStrings("generated-docs", result.docs.output);
-        try testing.expectEqual(null, result.docs.root_dir);
+        try testing.expectEqual(false, result.docs.time);
+        try testing.expectEqual(false, result.docs.no_cache);
+        try testing.expectEqual(false, result.docs.verbose);
     }
     {
-        const result = try parse(gpa, &[_][]const u8{ "docs", "foo/bar.roc", "--root-dir=/root/dir", "--output=my_output_dir" });
+        const result = try parse(gpa, &[_][]const u8{ "docs", "foo.roc" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("foo/bar.roc", result.docs.path);
-        try testing.expectEqualStrings("my_output_dir", result.docs.output);
-        try testing.expectEqualStrings("/root/dir", result.docs.root_dir.?);
+        try testing.expectEqualStrings("foo.roc", result.docs.path);
+        try testing.expectEqualStrings("generated-docs", result.docs.output);
     }
     {
-        const result = try parse(gpa, &[_][]const u8{ "docs", "foo.roc", "--madeup" });
+        const result = try parse(gpa, &[_][]const u8{ "docs", "--main=mymain.roc", "foo.roc" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("--madeup", result.problem.unexpected_argument.arg);
+        try testing.expectEqualStrings("foo.roc", result.docs.path);
+        try testing.expectEqualStrings("mymain.roc", result.docs.main.?);
+    }
+    {
+        const result = try parse(gpa, &[_][]const u8{ "docs", "--output=my-docs", "foo.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("foo.roc", result.docs.path);
+        try testing.expectEqualStrings("my-docs", result.docs.output);
+    }
+    {
+        const result = try parse(gpa, &[_][]const u8{ "docs", "foo.roc", "bar.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("bar.roc", result.problem.unexpected_argument.arg);
     }
     {
         const result = try parse(gpa, &[_][]const u8{ "docs", "-h" });
@@ -1047,6 +1082,29 @@ test "roc docs" {
         const result = try parse(gpa, &[_][]const u8{ "docs", "foo.roc", "--help" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+    {
+        const result = try parse(gpa, &[_][]const u8{ "docs", "--time" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("main.roc", result.docs.path);
+        try testing.expectEqual(true, result.docs.time);
+    }
+    {
+        const result = try parse(gpa, &[_][]const u8{ "docs", "foo.roc", "--time", "--main=bar.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("foo.roc", result.docs.path);
+        try testing.expectEqualStrings("bar.roc", result.docs.main.?);
+        try testing.expectEqual(true, result.docs.time);
+    }
+    {
+        const result = try parse(gpa, &[_][]const u8{ "docs", "--no-cache" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(true, result.docs.no_cache);
+    }
+    {
+        const result = try parse(gpa, &[_][]const u8{ "docs", "--verbose" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(true, result.docs.verbose);
     }
 }
 

@@ -15,6 +15,9 @@ idents: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx),
 aliases: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx),
 /// Maps type names to their type declaration statements
 type_decls: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Statement.Idx),
+/// Maps unqualified type names to their fully qualified Statement.Idx (for associated types)
+/// Example: within Foo's associated block, "Bar" -> statement for "Foo.Bar"
+type_aliases: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Statement.Idx),
 /// Maps type variables to their type annotation indices
 type_vars: std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx),
 /// Maps module alias names to their full module names
@@ -31,6 +34,7 @@ pub fn init(is_function_boundary: bool) Scope {
         .idents = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx){},
         .aliases = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx){},
         .type_decls = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Statement.Idx){},
+        .type_aliases = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Statement.Idx){},
         .type_vars = std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx){},
         .module_aliases = std.AutoHashMapUnmanaged(Ident.Idx, Ident.Idx){},
         .exposed_items = std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo){},
@@ -44,6 +48,7 @@ pub fn deinit(self: *Scope, gpa: std.mem.Allocator) void {
     self.idents.deinit(gpa);
     self.aliases.deinit(gpa);
     self.type_decls.deinit(gpa);
+    self.type_aliases.deinit(gpa);
     self.type_vars.deinit(gpa);
     self.module_aliases.deinit(gpa);
     self.exposed_items.deinit(gpa);
@@ -246,6 +251,22 @@ pub fn lookupTypeDecl(scope: *const Scope, name: Ident.Idx) TypeLookupResult {
         }
     }
     return TypeLookupResult{ .not_found = {} };
+}
+
+/// Look up an unqualified type alias (for associated types)
+pub fn lookupTypeAlias(scope: *const Scope, name: Ident.Idx) ?CIR.Statement.Idx {
+    return scope.type_aliases.get(name);
+}
+
+/// Introduce an unqualified type alias (for associated types)
+/// Maps an unqualified name to a fully qualified type declaration
+pub fn introduceTypeAlias(
+    scope: *Scope,
+    gpa: std.mem.Allocator,
+    unqualified_name: Ident.Idx,
+    qualified_type_decl: CIR.Statement.Idx,
+) !void {
+    try scope.type_aliases.put(gpa, unqualified_name, qualified_type_decl);
 }
 
 /// Update an existing type declaration in the scope

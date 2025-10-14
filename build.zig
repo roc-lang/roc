@@ -20,11 +20,22 @@ pub fn build(b: *std.Build) void {
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
     const playground_step = b.step("playground", "Build the WASM playground");
     const playground_test_step = b.step("test-playground", "Build the integration test suite for the WASM playground");
+    const serialization_size_step = b.step("test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
 
     // general configuration
-    const target = b.standardTargetOptions(.{ .default_target = .{
-        .abi = if (builtin.target.os.tag == .linux) .musl else null,
-    } });
+    const target = blk: {
+        var default_target_query: std.Target.Query = .{
+            .abi = if (builtin.target.os.tag == .linux) .musl else null,
+        };
+
+        // Use baseline x86_64 CPU for Valgrind compatibility on CI (Valgrind 3.18.1 doesn't support AVX-512)
+        const is_ci = std.process.getEnvVarOwned(b.allocator, "CI") catch null;
+        if (is_ci != null and builtin.target.cpu.arch == .x86_64 and builtin.target.os.tag == .linux) {
+            default_target_query.cpu_model = .{ .explicit = &std.Target.x86.cpu.x86_64 };
+        }
+
+        break :blk b.standardTargetOptions(.{ .default_target = default_target_query });
+    };
     const optimize = b.standardOptimizeOption(.{});
     const strip = b.option(bool, "strip", "Omit debug information");
     const no_bin = b.option(bool, "no-bin", "Skip emitting binaries (important for fast incremental compilation)") orelse false;
@@ -79,10 +90,167 @@ pub fn build(b: *std.Build) void {
 
     const roc_modules = modules.RocModules.create(b, build_options, zstd);
 
-    // add main roc exe
     const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd) orelse return;
     roc_modules.addAll(roc_exe);
     install_and_run(b, no_bin, roc_exe, roc_step, run_step, run_args);
+
+    // Build-time compiler for builtin .roc modules with caching
+    //
+    // Changes to .roc files in src/build/roc/ are automatically detected and trigger recompilation.
+    // However, if you modify the compiler itself (e.g., parse, can, check modules) and want those
+    // changes reflected in the builtin .bin files, you need to run: zig build rebuild-builtins
+    //
+    // We cache the builtin compiler executable to avoid ~doubling normal build times.
+    // CI always rebuilds from scratch, so it's not affected by this caching.
+
+    // Discover all .roc files in src/build/roc/
+    const roc_files = discoverBuiltinRocFiles(b) catch |err| {
+        std.debug.print("Failed to discover builtin .roc files: {}\n", .{err});
+        return;
+    };
+
+    // Check if we need to rebuild builtins by comparing .roc and .bin file timestamps
+    const should_rebuild_builtins = blk: {
+        for (roc_files) |roc_path| {
+            // Get the base name (e.g., "Dict" from "src/build/roc/Dict.roc")
+            const roc_basename = std.fs.path.basename(roc_path);
+            const name_without_ext = roc_basename[0 .. roc_basename.len - 4]; // Remove ".roc"
+
+            // Check if corresponding .bin file exists and is up-to-date
+            const bin_path = b.fmt("zig-out/builtins/{s}.bin", .{name_without_ext});
+
+            const roc_stat = std.fs.cwd().statFile(roc_path) catch break :blk true;
+            const bin_stat = std.fs.cwd().statFile(bin_path) catch break :blk true;
+
+            // If .roc file is newer than .bin file, rebuild
+            if (roc_stat.mtime > bin_stat.mtime) {
+                break :blk true;
+            }
+        }
+
+        // All .bin files exist and are up-to-date
+        break :blk false;
+    };
+
+    const write_compiled_builtins = b.addWriteFiles();
+
+    if (should_rebuild_builtins) {
+        // Build and run the compiler
+        const builtin_compiler_exe = b.addExecutable(.{
+            .name = "builtin_compiler",
+            .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
+            .target = b.graph.host, // this runs at build time on the *host* machine!
+            .optimize = .Debug, // No need to optimize - only compiles builtin modules
+            // Note: libc linking is handled by add_tracy below (required when tracy is enabled)
+        });
+
+        // Add only the minimal modules needed for parsing/checking
+        builtin_compiler_exe.root_module.addImport("base", roc_modules.base);
+        builtin_compiler_exe.root_module.addImport("collections", roc_modules.collections);
+        builtin_compiler_exe.root_module.addImport("types", roc_modules.types);
+        builtin_compiler_exe.root_module.addImport("parse", roc_modules.parse);
+        builtin_compiler_exe.root_module.addImport("can", roc_modules.can);
+        builtin_compiler_exe.root_module.addImport("check", roc_modules.check);
+        builtin_compiler_exe.root_module.addImport("reporting", roc_modules.reporting);
+        builtin_compiler_exe.root_module.addImport("builtins", roc_modules.builtins);
+
+        // Add tracy support (required by parse/can/check modules)
+        add_tracy(b, roc_modules.build_options, builtin_compiler_exe, b.graph.host, false, flag_enable_tracy);
+
+        // Run the builtin compiler to generate .bin files in zig-out/builtins/
+        const run_builtin_compiler = b.addRunArtifact(builtin_compiler_exe);
+
+        // Add all .roc files as explicit file inputs so Zig's cache tracks them
+        for (roc_files) |roc_path| {
+            run_builtin_compiler.addFileArg(b.path(roc_path));
+        }
+
+        write_compiled_builtins.step.dependOn(&run_builtin_compiler.step);
+
+        // Copy all generated .bin files from zig-out to build cache
+        for (roc_files) |roc_path| {
+            const roc_basename = std.fs.path.basename(roc_path);
+            const name_without_ext = roc_basename[0 .. roc_basename.len - 4];
+            const bin_filename = b.fmt("{s}.bin", .{name_without_ext});
+
+            _ = write_compiled_builtins.addCopyFile(
+                .{ .cwd_relative = b.fmt("zig-out/builtins/{s}", .{bin_filename}) },
+                bin_filename,
+            );
+        }
+    } else {
+        // Use existing .bin files from zig-out/builtins/
+        for (roc_files) |roc_path| {
+            const roc_basename = std.fs.path.basename(roc_path);
+            const name_without_ext = roc_basename[0 .. roc_basename.len - 4];
+            const bin_filename = b.fmt("{s}.bin", .{name_without_ext});
+
+            _ = write_compiled_builtins.addCopyFile(
+                .{ .cwd_relative = b.fmt("zig-out/builtins/{s}", .{bin_filename}) },
+                bin_filename,
+            );
+        }
+    }
+
+    // Generate compiled_builtins.zig dynamically based on discovered .roc files
+    const builtins_source_str = generateCompiledBuiltinsSource(b, roc_files) catch |err| {
+        std.debug.print("Failed to generate compiled_builtins.zig: {}\n", .{err});
+        return;
+    };
+
+    const compiled_builtins_source = write_compiled_builtins.add(
+        "compiled_builtins.zig",
+        builtins_source_str,
+    );
+
+    const compiled_builtins_module = b.createModule(.{
+        .root_source_file = compiled_builtins_source,
+    });
+
+    // Manual rebuild command: zig build rebuild-builtins
+    // Use this after making compiler changes to ensure those changes are reflected in builtins
+    const rebuild_builtins_step = b.step(
+        "rebuild-builtins",
+        "Force rebuild of all builtin modules (*.roc -> *.bin)",
+    );
+
+    // Discover .roc files again for the rebuild command
+    const roc_files_force = discoverBuiltinRocFiles(b) catch |err| {
+        std.debug.print("Failed to discover .roc files for rebuild: {}\n", .{err});
+        return;
+    };
+
+    // Always build and run the compiler for this command
+    const builtin_compiler_exe_force = b.addExecutable(.{
+        .name = "builtin_compiler",
+        .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+
+    builtin_compiler_exe_force.root_module.addImport("base", roc_modules.base);
+    builtin_compiler_exe_force.root_module.addImport("collections", roc_modules.collections);
+    builtin_compiler_exe_force.root_module.addImport("types", roc_modules.types);
+    builtin_compiler_exe_force.root_module.addImport("parse", roc_modules.parse);
+    builtin_compiler_exe_force.root_module.addImport("can", roc_modules.can);
+    builtin_compiler_exe_force.root_module.addImport("check", roc_modules.check);
+    builtin_compiler_exe_force.root_module.addImport("reporting", roc_modules.reporting);
+    builtin_compiler_exe_force.root_module.addImport("builtins", roc_modules.builtins);
+
+    add_tracy(b, roc_modules.build_options, builtin_compiler_exe_force, b.graph.host, false, flag_enable_tracy);
+
+    const run_builtin_compiler_force = b.addRunArtifact(builtin_compiler_exe_force);
+
+    // Add all discovered .roc files as inputs
+    for (roc_files_force) |roc_path| {
+        run_builtin_compiler_force.addFileArg(b.path(roc_path));
+    }
+
+    rebuild_builtins_step.dependOn(&run_builtin_compiler_force.step);
+
+    // Add the compiled builtins module to roc exe and make it depend on the builtins being ready
+    roc_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    roc_exe.step.dependOn(&write_compiled_builtins.step);
 
     // Add snapshot tool
     const snapshot_exe = b.addExecutable(.{
@@ -93,6 +261,8 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     roc_modules.addAll(snapshot_exe);
+    snapshot_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    snapshot_exe.step.dependOn(&write_compiled_builtins.step);
     add_tracy(b, roc_modules.build_options, snapshot_exe, target, false, flag_enable_tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step, run_args);
 
@@ -149,9 +319,52 @@ pub fn build(b: *std.Build) void {
         break :blk install;
     };
 
+    // Add serialization size check
+    // This verifies that Serialized types have the same size on 32-bit and 64-bit platforms
+    // using compile-time assertions
+    {
+        // Build for native - will fail at compile time if sizes don't match expected
+        const size_check_native = b.addExecutable(.{
+            .name = "serialization_size_check_native",
+            .root_source_file = b.path("test/serialization_size_check.zig"),
+            .target = target,
+            .optimize = .Debug,
+        });
+        roc_modules.addAll(size_check_native);
+
+        // Build for wasm32 (32-bit) - will fail at compile time if sizes don't match expected
+        const size_check_wasm32 = b.addExecutable(.{
+            .name = "serialization_size_check_wasm32",
+            .root_source_file = b.path("test/serialization_size_check.zig"),
+            .target = b.resolveTargetQuery(.{
+                .cpu_arch = .wasm32,
+                .os_tag = .freestanding,
+            }),
+            .optimize = .Debug,
+        });
+        size_check_wasm32.entry = .disabled;
+        size_check_wasm32.rdynamic = true;
+        roc_modules.addAll(size_check_wasm32);
+
+        // Run the native version to confirm (wasm32 build is enough to verify 32-bit)
+        const run_native = b.addRunArtifact(size_check_native);
+
+        // The test passes if both executables build successfully (compile-time checks pass)
+        // and the native one runs without error
+        serialization_size_step.dependOn(&size_check_native.step);
+        serialization_size_step.dependOn(&size_check_wasm32.step);
+        serialization_size_step.dependOn(&run_native.step);
+    }
+
     // Create and add module tests
     const module_tests = roc_modules.createModuleTests(b, target, optimize, zstd, test_filters);
     for (module_tests) |module_test| {
+        // Add compiled builtins to check module tests
+        if (std.mem.eql(u8, module_test.test_step.name, "check")) {
+            module_test.test_step.root_module.addImport("compiled_builtins", compiled_builtins_module);
+            module_test.test_step.step.dependOn(&write_compiled_builtins.step);
+        }
+
         if (run_args.len != 0) {
             module_test.run_step.addArgs(run_args);
         }
@@ -184,6 +397,8 @@ pub fn build(b: *std.Build) void {
             .filters = test_filters,
         });
         roc_modules.addAll(snapshot_test);
+        snapshot_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
+        snapshot_test.step.dependOn(&write_compiled_builtins.step);
         add_tracy(b, roc_modules.build_options, snapshot_test, target, false, flag_enable_tracy);
 
         const run_snapshot_test = b.addRunArtifact(snapshot_test);
@@ -305,6 +520,44 @@ pub fn build(b: *std.Build) void {
 
 const ModuleTest = modules.ModuleTest;
 
+fn discoverBuiltinRocFiles(b: *std.Build) ![]const []const u8 {
+    var builtin_roc_dir = try std.fs.cwd().openDir("src/build/roc", .{ .iterate = true });
+    defer builtin_roc_dir.close();
+
+    var roc_files = std.ArrayList([]const u8).init(b.allocator);
+    errdefer roc_files.deinit();
+
+    var iter = builtin_roc_dir.iterate();
+    while (try iter.next()) |entry| {
+        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".roc")) {
+            const full_path = b.fmt("src/build/roc/{s}", .{entry.name});
+            try roc_files.append(full_path);
+        }
+    }
+
+    return roc_files.toOwnedSlice();
+}
+
+fn generateCompiledBuiltinsSource(b: *std.Build, roc_files: []const []const u8) ![]const u8 {
+    var builtins_source = std.ArrayList(u8).init(b.allocator);
+    errdefer builtins_source.deinit();
+    const writer = builtins_source.writer();
+
+    for (roc_files) |roc_path| {
+        const roc_basename = std.fs.path.basename(roc_path);
+        const name_without_ext = roc_basename[0 .. roc_basename.len - 4];
+        // Use lowercase with underscore for the identifier
+        const lower_name = try std.ascii.allocLowerString(b.allocator, name_without_ext);
+
+        try writer.print("pub const {s}_bin = @embedFile(\"{s}.bin\");\n", .{
+            lower_name,
+            name_without_ext,
+        });
+    }
+
+    return builtins_source.toOwnedSlice();
+}
+
 fn add_fuzz_target(
     b: *std.Build,
     fuzz: bool,
@@ -328,6 +581,10 @@ fn add_fuzz_target(
         // Work around instrumentation bugs on mac without giving up perf on linux.
         .optimize = if (target.result.os.tag == .macos) .Debug else .ReleaseSafe,
     });
+    // Required for fuzzing.
+    fuzz_obj.root_module.link_libc = true;
+    fuzz_obj.root_module.stack_check = false;
+
     roc_modules.addAll(fuzz_obj);
     add_tracy(b, roc_modules.build_options, fuzz_obj, target, false, tracy);
 
@@ -350,7 +607,7 @@ fn add_fuzz_target(
         b.default_step.dependOn(fuzz_step);
 
         const afl = b.lazyImport(@This(), "afl_kit") orelse return;
-        const fuzz_exe = afl.addInstrumentedExe(b, target, .ReleaseSafe, &.{}, use_system_afl, fuzz_obj) orelse return;
+        const fuzz_exe = afl.addInstrumentedExe(b, target, .ReleaseSafe, &.{}, use_system_afl, fuzz_obj, &.{"-lm"}) orelse return;
         const install_fuzz = b.addInstallBinFile(fuzz_exe, name_exe);
         fuzz_step.dependOn(&install_fuzz.step);
         b.getInstallStep().dependOn(&install_fuzz.step);

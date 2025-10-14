@@ -153,8 +153,8 @@ pub const Mark = enum(u32) {
 pub const Content = union(enum) {
     const Self = @This();
 
-    flex_var: ?Ident.Idx,
-    rigid_var: Ident.Idx,
+    flex: Flex,
+    rigid: Rigid,
     alias: Alias,
     structure: FlatType,
     err,
@@ -204,6 +204,57 @@ pub const Content = union(enum) {
             },
             else => return null,
         }
+    }
+};
+
+// flex //
+
+/// A flex var, with optional static dispatch constraints
+pub const Flex = struct {
+    name: ?Ident.Idx,
+    constraints: StaticDispatchConstraint.SafeMultiList.Range,
+
+    pub fn init() Flex {
+        return .{
+            .name = null,
+            .constraints = StaticDispatchConstraint.SafeMultiList.Range.empty(),
+        };
+    }
+
+    pub fn withName(self: Flex, name: ?Ident.Idx) Flex {
+        return .{
+            .name = name,
+            .constraints = self.constraints,
+        };
+    }
+
+    pub fn withConstraints(self: Flex, constraints: StaticDispatchConstraint.SafeMultiList.Range) Flex {
+        return .{
+            .name = self.name,
+            .constraints = constraints,
+        };
+    }
+};
+
+// rigid //
+
+/// A rigid var, with optional static dispatch constraints
+pub const Rigid = struct {
+    name: Ident.Idx,
+    constraints: StaticDispatchConstraint.SafeMultiList.Range,
+
+    pub fn init(name: Ident.Idx) Rigid {
+        return .{
+            .name = name,
+            .constraints = StaticDispatchConstraint.SafeMultiList.Range.empty(),
+        };
+    }
+
+    pub fn withConstraints(self: Rigid, constraints: StaticDispatchConstraint.SafeMultiList.Range) Rigid {
+        return .{
+            .name = self.name,
+            .constraints = constraints,
+        };
     }
 };
 
@@ -352,8 +403,17 @@ pub const Num = union(enum) {
         // The lowest number of bits that can represent the decimal value of the Int literal  *excluding* its sign.
         bits_needed: u8,
 
+        // True if the literal is an exact power of two (e.g., 1, 2, 4, ..., 2^k) on a boundary of a signed int.
+        // This is crucial to allow the single negative boundary value −2^(N−1) when bits_needed == N.
+        // When unifying multiple literals, we AND this flag to remain conservative.
+        is_minimum_signed: bool,
+
         pub fn init() @This() {
-            return .{ .sign_needed = false, .bits_needed = 0 };
+            return .{
+                .sign_needed = false,
+                .bits_needed = 0,
+                .is_minimum_signed = false,
+            };
         }
 
         /// Unifies two IntRequirements, returning the most restrictive combination
@@ -361,6 +421,30 @@ pub const Num = union(enum) {
             return IntRequirements{
                 .sign_needed = self.sign_needed or other.sign_needed,
                 .bits_needed = @max(self.bits_needed, other.bits_needed),
+                .is_minimum_signed = self.is_minimum_signed and other.is_minimum_signed,
+            };
+        }
+
+        /// Create Requirements from a u128 value and whether it's negated
+        pub fn fromIntLiteral(val: u128, is_negated: bool) IntRequirements {
+            const bits_need = Int.BitsNeeded.fromValue(val);
+            return IntRequirements{
+                .sign_needed = is_negated,
+                .bits_needed = bits_need.toBits(),
+                .is_minimum_signed = is_negated and IntRequirements.isMinimumSigned(val),
+            };
+        }
+
+        /// Check if a value is a minimum signed value.
+        /// These need special consideration
+        pub fn isMinimumSigned(val: u128) bool {
+            return switch (val) {
+                @as(u128, @intCast(std.math.maxInt(i8))) + 1 => true,
+                @as(u128, @intCast(std.math.maxInt(i16))) + 1 => true,
+                @as(u128, @intCast(std.math.maxInt(i32))) + 1 => true,
+                @as(u128, @intCast(std.math.maxInt(i64))) + 1 => true,
+                @as(u128, @intCast(std.math.maxInt(i128))) + 1 => true,
+                else => false,
             };
         }
     };
@@ -847,3 +931,24 @@ test "BitsNeeded.fromValue calculates correct bits for various values" {
     try std.testing.expectEqual(@as(u8, 65), BitsNeeded.@"65_to_127".toBits());
     try std.testing.expectEqual(@as(u8, 128), BitsNeeded.@"128".toBits());
 }
+
+// content //
+
+/// Represents a static dispatch constraints on a variable
+///
+/// sort  : List(a) -> List(a) where [a.ord : a -> Ord]
+///
+/// TODO: This is WIP, likely to change during real implementation
+pub const StaticDispatchConstraint = struct {
+    const Self = @This();
+
+    /// the dispatch fn name
+    fn_name: Ident.Idx,
+    /// the dispatch fn args
+    fn_args: Var.SafeList.NonEmptyRange,
+    /// the dispatch fn ret
+    fn_ret: Var,
+
+    /// A safe multi list of static dispatch constraints
+    pub const SafeMultiList = MkSafeMultiList(Self);
+};

@@ -401,7 +401,7 @@ pub const IntValue = struct {
 
     /// Calculate the int requirements of an IntValue
     /// TODO: Review, claude generated
-    pub fn toIntRequirements(self: IntValue) types_mod.Num.Int.Requirements {
+    pub fn toIntRequirements(self: IntValue) types_mod.Num.IntRequirements {
         var is_negated = false;
         var u128_val: u128 = undefined;
 
@@ -436,9 +436,10 @@ pub const IntValue = struct {
         // This makes the bit calculation work correctly with the "n-1 bits for magnitude" rule
         const adjusted_val = if (is_minimum_signed) u128_val - 1 else u128_val;
         const bits_needed = types_mod.Num.Int.BitsNeeded.fromValue(adjusted_val);
-        return types_mod.Num.Int.Requirements{
+        return types_mod.Num.IntRequirements{
             .sign_needed = is_negated and u128_val != 0, // -0 doesn't need a sign
-            .bits_needed = bits_needed,
+            .bits_needed = bits_needed.toBits(),
+            .is_minimum_signed = is_minimum_signed,
         };
     }
 
@@ -590,7 +591,8 @@ pub const Import = struct {
 
         pub const Serialized = struct {
             // Placeholder to match Store size - not serialized
-            map: std.AutoHashMapUnmanaged(base.StringLiteral.Idx, Import.Idx) = .{},
+            // Reserve space for hashmap (3 pointers for unmanaged hashmap internals)
+            map: [3]u64 = undefined,
             imports: collections.SafeList(base.StringLiteral.Idx).Serialized,
 
             /// Serialize a Store into this Serialized struct, appending data to the writer
@@ -602,6 +604,10 @@ pub const Import = struct {
             ) std.mem.Allocator.Error!void {
                 // Serialize the imports SafeList
                 try self.imports.serialize(&store.imports, allocator, writer);
+
+                // Set map to all zeros; the space needs to be here,
+                // but the map will be rebuilt during deserialization.
+                self.map = .{ 0, 0, 0 };
                 // Note: The map is not serialized as it's only used for deduplication during insertion
             }
 

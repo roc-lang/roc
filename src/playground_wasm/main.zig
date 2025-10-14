@@ -786,6 +786,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     if (source.len == 0) {
         // Return empty compiler stage data for completely empty input
         var module_env = try allocator.create(ModuleEnv);
+
         module_env.* = try ModuleEnv.init(allocator, source);
         try module_env.common.calcLineStarts(module_env.gpa);
         return CompilerStageData.init(allocator, module_env);
@@ -795,6 +796,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     if (trimmed_source.len == 0) {
         // Return empty compiler stage data for whitespace-only input
         var module_env = try allocator.create(ModuleEnv);
+
         module_env.* = try ModuleEnv.init(allocator, source);
         try module_env.common.calcLineStarts(module_env.gpa);
         return CompilerStageData.init(allocator, module_env);
@@ -805,6 +807,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     // Initialize the ModuleEnv
     var module_env = try allocator.create(ModuleEnv);
+
     module_env.* = try ModuleEnv.init(allocator, source);
     try module_env.common.calcLineStarts(module_env.gpa);
 
@@ -892,7 +895,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
     };
 
-    var czer = try Can.init(env, &result.parse_ast.?, null);
+    var czer = try Can.init(env, &result.parse_ast.?, null, .{});
     defer czer.deinit();
 
     czer.canonicalizeFile() catch |err| {
