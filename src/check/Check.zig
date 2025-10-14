@@ -22,6 +22,7 @@ const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 const Region = base.Region;
+const DeferredConstraintCheck = unifier.DeferredConstraintCheck;
 const Func = types_mod.Func;
 const Var = types_mod.Var;
 const Flex = types_mod.Flex;
@@ -81,7 +82,7 @@ import_cache: ImportCache,
 constraint_origins: std.AutoHashMap(Var, Var),
 /// Deferred static dispatch constriants - accumulated during type checking,
 /// then solved for at the end
-deferred_static_dispatch_constraints: std.AutoHashMap(Var, types_mod.StaticDispatchConstraint.SafeList.Range),
+deferred_static_dispatch_constraints: DeferredConstraintCheck.SafeList,
 
 /// A map of rigid variables that we build up during a branch of type checking
 const FreeVar = struct { ident: base.Ident.Idx, var_: Var };
@@ -126,7 +127,7 @@ pub fn init(
         .scratch_record_fields = try base.Scratch(types_mod.RecordField).init(gpa),
         .import_cache = ImportCache{},
         .constraint_origins = std.AutoHashMap(Var, Var).init(gpa),
-        .deferred_static_dispatch_constraints = std.AutoHashMap(Var, types_mod.StaticDispatchConstraint.SafeList.Range).init(gpa),
+        .deferred_static_dispatch_constraints = try DeferredConstraintCheck.SafeList.initCapacity(gpa, 128),
     };
 }
 
@@ -148,7 +149,7 @@ pub fn deinit(self: *Self) void {
     self.scratch_record_fields.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
     self.constraint_origins.deinit();
-    self.deferred_static_dispatch_constraints.deinit();
+    self.deferred_static_dispatch_constraints.deinit(self.gpa);
 }
 
 /// Assert that type vars and regions in sync
@@ -239,6 +240,10 @@ pub fn unify(self: *Self, a: Var, b: Var, rank: Rank) std.mem.Allocator.Error!un
 
     for (self.unify_scratch.fresh_vars.items.items) |fresh_var| {
         try self.var_pool.addVarToRank(fresh_var, rank);
+    }
+
+    for (self.unify_scratch.deferred_constraints.items.items) |deferred_constraint| {
+        _ = try self.deferred_static_dispatch_constraints.append(self.gpa, deferred_constraint);
     }
 
     return result;
