@@ -272,10 +272,14 @@ pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) !void {
 
 fn renderReportToMarkdownBuffer(buf: *std.array_list.Managed(u8), report: anytype) !void {
     buf.clearRetainingCapacity();
-    var generic_writer = buf.writer();
-    var adapter = generic_writer.adaptToNewApi(&.{});
-    report.render(&adapter.new_interface, .markdown) catch |err| switch (err) {
-        error.WriteFailed => return adapter.err.?,
+    var unmanaged = buf.moveToUnmanaged();
+    defer buf.* = unmanaged.toManaged(buf.allocator);
+
+    var writer_alloc = std.Io.Writer.Allocating.fromArrayList(buf.allocator, &unmanaged);
+    defer unmanaged = writer_alloc.toArrayList();
+
+    report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
+        error.WriteFailed => return error.OutOfMemory,
         else => return err,
     };
 }
