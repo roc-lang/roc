@@ -359,10 +359,7 @@ fn sendMessageToWasm(wasm_interface: *const WasmInterface, allocator: std.mem.Al
     const response_json_slice = response_slice[0..null_terminator_idx];
 
     // Parse JSON response
-    const parsed_response = std.json.parseFromSlice(WasmResponse, allocator, response_json_slice, .{
-        .allocate = .alloc_always,
-    }) catch |err| {
-        logDebug("[ERROR] Failed to parse JSON response: {}. JSON was: {s}\n", .{ err, response_json_slice });
+    const parsed_response = parseWasmResponseJson(allocator, response_json_slice) catch |err| {
         // Free the WASM string before returning error
         _ = wasm_interface.module_instance.invoke(wasm_interface.freeWasmString_handle, &[_]bytebox.Val{bytebox.Val{ .I32 = @intCast(response_ptr) }}, &[_]bytebox.Val{}, .{}) catch {};
         return err;
@@ -374,6 +371,47 @@ fn sendMessageToWasm(wasm_interface: *const WasmInterface, allocator: std.mem.Al
     };
 
     return parsed_response.value;
+}
+
+fn parseWasmResponseJson(allocator: std.mem.Allocator, response_json_slice: []const u8) !std.json.Parsed(WasmResponse) {
+    const parse_options = std.json.ParseOptions{
+        .allocate = .alloc_always,
+    };
+
+    return std.json.parseFromSlice(WasmResponse, allocator, response_json_slice, parse_options) catch |err| {
+        if (err != error.SyntaxError) {
+            logDebug("[ERROR] Failed to parse JSON response: {}. JSON was: {s}\n", .{ err, response_json_slice });
+            logDebug("[ERROR] JSON bytes: {x}\n", .{response_json_slice});
+            return err;
+        }
+
+        logDebug("[WARNING] JSON response contained invalid bytes; attempting to sanitize. Parse error: {}\n", .{err});
+        logDebug("[WARNING] Raw JSON bytes: {x}\n", .{response_json_slice});
+
+        var sanitized = try allocator.dupe(u8, response_json_slice);
+        defer allocator.free(sanitized);
+
+        var replacements: usize = 0;
+        for (sanitized, 0..) |byte, idx| {
+            if (byte >= 0x80) {
+                sanitized[idx] = '?';
+                replacements += 1;
+            }
+        }
+
+        if (replacements == 0) {
+            logDebug("[ERROR] No high-bit bytes detected while attempting to sanitize JSON.\n", .{});
+            return err;
+        }
+
+        logDebug("[WARNING] Replaced {} invalid byte(s) in WASM response JSON before retrying parse.\n", .{replacements});
+
+        return std.json.parseFromSlice(WasmResponse, allocator, sanitized, parse_options) catch |retry_err| {
+            logDebug("[ERROR] Failed to parse sanitized JSON response: {}. Sanitized JSON: {s}\n", .{ retry_err, sanitized });
+            logDebug("[ERROR] Sanitized JSON bytes: {x}\n", .{sanitized});
+            return retry_err;
+        };
+    };
 }
 
 /// Initialize WASM module and interface
