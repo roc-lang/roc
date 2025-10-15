@@ -164,8 +164,9 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
 inline fn ensureTypeStoreIsFilled(self: *Self) Allocator.Error!void {
     const region_nodes: usize = @intCast(self.regions.len());
     const type_nodes: usize = @intCast(self.types.len());
+    try self.types.ensureTotalCapacity(region_nodes);
     for (type_nodes..region_nodes) |_| {
-        _ = try self.types.fresh();
+        _ = self.types.appendFromContentAssumeCapacity(.err);
     }
 }
 

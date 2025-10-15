@@ -184,6 +184,13 @@ pub const Store = struct {
         }
     }
 
+    /// Create a new variable with the provided content assuming there is capacity
+    pub fn appendFromContentAssumeCapacity(self: *Self, content: Content) Var {
+        const desc_idx = self.descs.appendAssumeCapacity(.{ .content = content, .rank = Rank.top_level, .mark = Mark.none });
+        const slot_idx = self.slots.appendAssumeCapacity(.{ .root = desc_idx });
+        return Self.slotIdxToVar(slot_idx);
+    }
+
     // setting variables //
 
     /// Set a type variable to the provided content
@@ -964,9 +971,9 @@ const SlotStore = struct {
         return @enumFromInt(@intFromEnum(safe_idx));
     }
 
-    /// Insert a value into the store
-    fn appendAssumeCapacity(self: *Self, gpa: Allocator, typ: Slot) std.mem.Allocator.Error!Idx {
-        const safe_idx = try self.backing.append(gpa, typ);
+    /// Insert a value into the store assuming there is capacity
+    fn appendAssumeCapacity(self: *Self, typ: Slot) Idx {
+        const safe_idx = self.backing.appendAssumeCapacity(typ);
         return @enumFromInt(@intFromEnum(safe_idx));
     }
 
@@ -1065,6 +1072,12 @@ const DescStore = struct {
     /// Insert a value into the store
     fn insert(self: *Self, gpa: Allocator, typ: Desc) std.mem.Allocator.Error!Idx {
         const safe_idx = try self.backing.append(gpa, typ);
+        return @enumFromInt(@intFromEnum(safe_idx));
+    }
+
+    /// Appends a value to the store assuming there is capacity
+    fn appendAssumeCapacity(self: *Self, typ: Desc) Idx {
+        const safe_idx = self.backing.appendAssumeCapacity(typ);
         return @enumFromInt(@intFromEnum(safe_idx));
     }
 
