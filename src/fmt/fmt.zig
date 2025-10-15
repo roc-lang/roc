@@ -316,8 +316,18 @@ const Formatter = struct {
     pub fn formatFile(fmt: *Formatter) !void {
         fmt.ast.store.emptyScratch();
         const file = fmt.ast.store.getFile();
+        const header = fmt.ast.store.getHeader(file.header);
         const header_region = fmt.ast.store.nodes.items.items(.region)[@intFromEnum(file.header)];
-        _ = try fmt.flushCommentsBefore(header_region.start);
+        // Only flush comments before the header if it has its own tokens.
+        // type_module, default_app, and malformed headers share the first statement's token,
+        // so flushing here would duplicate the whitespace handling.
+        const header_has_own_tokens = switch (header) {
+            .type_module, .default_app, .malformed => false,
+            else => true,
+        };
+        if (header_has_own_tokens) {
+            _ = try fmt.flushCommentsBefore(header_region.start);
+        }
         _ = try fmt.formatHeader(file.header);
         const statement_slice = fmt.ast.store.statementSlice(file.statements);
         for (statement_slice) |s| {

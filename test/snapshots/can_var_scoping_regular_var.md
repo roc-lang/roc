@@ -122,26 +122,7 @@ EndOfFile(20:1-20:1),
 ~~~
 # FORMATTED
 ~~~roc
-# Regular function with var usage
-# Regular function with var usage
-processItems = |items| {
-	var count_ = 0
-	var total_ = 0
-
-	# Reassign vars within same function - should work
-	count_ = count_ + 1
-	total_ = total_ + 10
-
-	# Nested function - var reassignment should fail across function boundary
-	nestedFunc = |_| {
-		count_ = count_ + 5 # Should cause error - different function
-		total_ = total_ * 2 # Should cause error - different function
-		count_
-	}
-
-	result = nestedFunc({})
-	total_ + result
-}
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

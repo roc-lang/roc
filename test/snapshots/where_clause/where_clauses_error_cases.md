@@ -161,7 +161,6 @@ EndOfFile(12:1-12:1),
 # FORMATTED
 ~~~roc
 # Missing colon in constraint
-# Missing colon in constraint
 broken_fn1 : a -> b
 	where []
 

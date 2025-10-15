@@ -82,18 +82,7 @@ EndOfFile(12:1-12:1),
 ~~~
 # FORMATTED
 ~~~roc
-# First declare a type
-# First declare a type
-Foo : U64
-
-# Try to redeclare the same type (should error)
-Foo : Str
-
-# Declare another type that uses an undeclared type
-Bar : SomeUndeclaredType
-
-# Declare a type that properly uses a declared type
-Baz : Foo
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

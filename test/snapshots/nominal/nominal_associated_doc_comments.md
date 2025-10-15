@@ -53,7 +53,6 @@ EndOfFile(9:1-9:1),
 # FORMATTED
 ~~~roc
 # # Top-level type documentation
-# # Top-level type documentation
 Foo := [Whatever].{
 	Bar := [X, Y, Z]
 	defaultBar = Foo.Bar.X

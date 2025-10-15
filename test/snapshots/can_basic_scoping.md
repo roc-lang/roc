@@ -93,7 +93,6 @@ EndOfFile(15:1-15:1),
 # FORMATTED
 ~~~roc
 # Top-level variables
-# Top-level variables
 x = 5
 y = 10
 

@@ -1647,7 +1647,6 @@ EndOfFile(109:1-109:1),
 # FORMATTED
 ~~~roc
 # Import exposing
-# Import exposing
 import I1 exposing [
 	I11,
 	I12,
