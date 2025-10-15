@@ -132,16 +132,16 @@ pub fn deinit(self: *Self) void {
     self.snapshots.deinit();
     self.unify_scratch.deinit();
     self.occurs_scratch.deinit();
-    self.anno_free_vars.deinit(self.gpa);
-    self.decl_free_vars.deinit(self.gpa);
+    self.anno_free_vars.deinit();
+    self.decl_free_vars.deinit();
     self.seen_annos.deinit();
     self.var_pool.deinit();
     self.generalizer.deinit();
     self.var_map.deinit();
     self.rigid_var_substitutions.deinit(self.gpa);
-    self.scratch_vars.deinit(self.gpa);
-    self.scratch_tags.deinit(self.gpa);
-    self.scratch_record_fields.deinit(self.gpa);
+    self.scratch_vars.deinit();
+    self.scratch_tags.deinit();
+    self.scratch_record_fields.deinit();
     self.import_cache.deinit(self.gpa);
     self.constraint_origins.deinit();
 }
@@ -1105,7 +1105,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenType
                 const tag_vars_slice: []Var = @ptrCast(tag_anno_args_slice);
 
                 // Add the processed tag to scratch
-                try self.scratch_tags.append(self.gpa, try self.types.mkTag(
+                try self.scratch_tags.append(try self.types.mkTag(
                     tag.name,
                     tag_vars_slice,
                 ));
@@ -1147,7 +1147,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenType
                 const record_field_var = ModuleEnv.varFrom(rec_field.ty);
 
                 // Add the processed tag to scratch
-                try self.scratch_record_fields.append(self.gpa, types_mod.RecordField{
+                try self.scratch_record_fields.append(types_mod.RecordField{
                     .name = rec_field.name,
                     .var_ = record_field_var,
                 });
@@ -1592,7 +1592,7 @@ fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx, rank: types_mod.Rank,
                 try self.types.setVarRedirect(destruct_var, field_pattern_var);
 
                 // Append it to the scratch records array
-                try self.scratch_record_fields.append(self.gpa, types_mod.RecordField{
+                try self.scratch_record_fields.append(types_mod.RecordField{
                     .name = destruct.label,
                     .var_ = ModuleEnv.varFrom(destruct_var),
                 });
@@ -1930,7 +1930,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                 does_fx = try self.checkExpr(field.value, rank, .no_expectation) or does_fx;
 
                 // Append it to the scratch records array
-                try self.scratch_record_fields.append(self.gpa, types_mod.RecordField{
+                try self.scratch_record_fields.append(types_mod.RecordField{
                     .name = field.name,
                     .var_ = ModuleEnv.varFrom(field.value),
                 });
@@ -2770,7 +2770,7 @@ fn checkIfElseExpr(
     if_expr_idx: CIR.Expr.Idx,
     expr_region: Region,
     rank: types_mod.Rank,
-    if_: std.meta.FieldType(CIR.Expr, .e_if),
+    if_: @FieldType(CIR.Expr, @tagName(.e_if)),
 ) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();

@@ -99,26 +99,28 @@ pub const c = struct {
 // Platform-specific shared memory implementation
 const is_windows = builtin.target.os.tag == .windows;
 
-var stdout_file_writer: std.fs.File.Writer = .{
-    .interface = std.fs.File.Writer.initInterface(&.{}),
-    .file = if (is_windows) undefined else std.fs.File.stdout(),
-    .mode = .streaming,
-};
+var stdout_buffer: [4096]u8 = undefined;
+var stdout_writer: std.fs.File.Writer = undefined;
+var stdout_initialized = false;
 
-var stderr_file_writer: std.fs.File.Writer = .{
-    .interface = std.fs.File.Writer.initInterface(&.{}),
-    .file = if (is_windows) undefined else std.fs.File.stderr(),
-    .mode = .streaming,
-};
+var stderr_buffer: [4096]u8 = undefined;
+var stderr_writer: std.fs.File.Writer = undefined;
+var stderr_initialized = false;
 
 fn stdoutWriter() *std.Io.Writer {
-    if (is_windows) stdout_file_writer.file = std.fs.File.stdout();
-    return &stdout_file_writer.interface;
+    if (is_windows or !stdout_initialized) {
+        stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+        stdout_initialized = true;
+    }
+    return &stdout_writer.interface;
 }
 
 fn stderrWriter() *std.Io.Writer {
-    if (is_windows) stderr_file_writer.file = std.fs.File.stderr();
-    return &stderr_file_writer.interface;
+    if (is_windows or !stderr_initialized) {
+        stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+        stderr_initialized = true;
+    }
+    return &stderr_writer.interface;
 }
 
 // POSIX shared memory functions
@@ -2553,7 +2555,7 @@ fn rocTest(gpa: Allocator, args: cli_args.TestArgs) !void {
                     // Render the report to terminal
                     const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
                     const config = reporting.ReportingConfig.initColorTerminal();
-                    try reporting.renderReportToTerminal(&report, stderr.any(), palette, config);
+                    try reporting.renderReportToTerminal(&report, stderr, palette, config);
                 }
             }
         } else {
@@ -3025,7 +3027,7 @@ fn printTimingBreakdown(writer: anytype, timing: ?CheckTimingInfo) void {
 
 /// Start an HTTP server to serve the generated documentation
 fn serveDocumentation(gpa: Allocator, docs_dir: []const u8) !void {
-    const stdout = std.io.getStdOut().writer();
+    const stdout = stdoutWriter();
 
     const address = try std.net.Address.parseIp("127.0.0.1", 8080);
     var server = try address.listen(.{
@@ -3163,9 +3165,8 @@ fn rocDocs(gpa: Allocator, args: cli_args.DocsArgs) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
-    const stderr_writer = stderr.any();
+    const stdout = stdoutWriter();
+    const stderr = stderrWriter();
 
     var timer = try std.time.Timer.start();
 
@@ -3215,7 +3216,7 @@ fn rocDocs(gpa: Allocator, args: cli_args.DocsArgs) !void {
             for (module.reports) |*report| {
 
                 // Render the diagnostic report to stderr
-                reporting.renderReportToTerminal(report, stderr_writer, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
+                reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
                     stderr.print("Error rendering diagnostic report: {}", .{render_err}) catch {};
                     // Fallback to just printing the title
                     stderr.print("  {s}", .{report.title}) catch {};
@@ -3291,12 +3292,12 @@ pub const ModuleInfo = struct {
 /// Recursively write associated items as nested <ul> elements
 fn writeAssociatedItems(writer: anytype, items: []const AssociatedItem, indent_level: usize) !void {
     // Write opening <ul>
-    try writer.writeByteNTimes(' ', indent_level * 2);
+    try writer.splatByteAll(' ', indent_level * 2);
     try writer.writeAll("<ul>\n");
 
     for (items) |item| {
         // Write <li> with item name
-        try writer.writeByteNTimes(' ', (indent_level + 1) * 2);
+        try writer.splatByteAll(' ', (indent_level + 1) * 2);
         try writer.print("<li>{s}\n", .{item.name});
 
         // Recursively write children if any
@@ -3305,12 +3306,12 @@ fn writeAssociatedItems(writer: anytype, items: []const AssociatedItem, indent_l
         }
 
         // Close <li>
-        try writer.writeByteNTimes(' ', (indent_level + 1) * 2);
+        try writer.splatByteAll(' ', (indent_level + 1) * 2);
         try writer.writeAll("</li>\n");
     }
 
     // Write closing </ul>
-    try writer.writeByteNTimes(' ', indent_level * 2);
+    try writer.splatByteAll(' ', indent_level * 2);
     try writer.writeAll("</ul>\n");
 }
 
@@ -3335,7 +3336,9 @@ pub fn generatePackageIndex(
     const file = try std.fs.cwd().createFile(index_path, .{});
     defer file.close();
 
-    const writer = file.writer();
+    var file_buffer: [4096]u8 = undefined;
+    var file_writer = file.writer(&file_buffer);
+    const writer = &file_writer.interface;
 
     // Write HTML header
     try writer.writeAll("<!DOCTYPE html>\n<html>\n<head>\n");
@@ -3372,6 +3375,7 @@ pub fn generatePackageIndex(
     }
 
     try writer.writeAll("</body>\n</html>\n");
+    try writer.flush();
 }
 
 /// Generate HTML index file for a module
@@ -3393,7 +3397,9 @@ pub fn generateModuleIndex(
     const file = try std.fs.cwd().createFile(index_path, .{});
     defer file.close();
 
-    const writer = file.writer();
+    var file_buffer: [4096]u8 = undefined;
+    var file_writer = file.writer(&file_buffer);
+    const writer = &file_writer.interface;
 
     // Write HTML header
     try writer.writeAll("<!DOCTYPE html>\n<html>\n<head>\n");
@@ -3405,6 +3411,7 @@ pub fn generateModuleIndex(
     try writer.print("  <h1>{s}</h1>\n", .{module_name});
 
     try writer.writeAll("</body>\n</html>\n");
+    try writer.flush();
 }
 
 /// Extract associated items from a record expression (recursively)

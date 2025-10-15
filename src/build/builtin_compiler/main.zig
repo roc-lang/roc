@@ -66,8 +66,11 @@ pub fn main() !void {
     // This is critical for the compiler's hardcoded BUILTIN_BOOL constant
     const bool_type_idx = bool_env.all_statements.span.start;
     if (bool_type_idx != 2) {
-        const stderr = std.io.getStdErr().writer();
+        var stderr_buffer: [256]u8 = undefined;
+        var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+        const stderr = &stderr_writer.interface;
         try stderr.print("WARNING: Expected Bool at index 2, but got {}!\n", .{bool_type_idx});
+        try stderr.flush();
         return error.UnexpectedBoolIndex;
     }
 

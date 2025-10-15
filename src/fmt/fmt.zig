@@ -1441,9 +1441,9 @@ const Formatter = struct {
                         platform_field = package_idx;
                         continue;
                     }
-                    try package_fields_list.append(fmt.ast.store.gpa, package_idx);
+                    try package_fields_list.append(package_idx);
                 }
-                const package_fields = try package_fields_list.toOwnedSlice(fmt.ast.store.gpa);
+                const package_fields = try package_fields_list.toOwnedSlice();
                 defer fmt.ast.store.gpa.free(package_fields);
 
                 if (platform_field) |field_idx| {

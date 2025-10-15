@@ -111,8 +111,8 @@ pub fn appendRegionInfoToSexprTree(self: *const AST, env: *const CommonEnv, tree
 pub fn deinit(self: *AST, gpa: std.mem.Allocator) void {
     defer self.tokens.deinit(gpa);
     defer self.store.deinit();
-    defer self.tokenize_diagnostics.deinit(gpa);
-    defer self.parse_diagnostics.deinit(gpa);
+    defer self.tokenize_diagnostics.deinit();
+    defer self.parse_diagnostics.deinit();
 }
 
 /// Convert a tokenize diagnostic to a Report for rendering

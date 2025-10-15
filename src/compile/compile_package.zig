@@ -94,11 +94,11 @@ const ModuleState = struct {
     path: []const u8,
     env: ?ModuleEnv = null,
     phase: Phase = .Parse,
-    imports: std.array_list.Managed(ModuleId) = .{},
+    imports: std.array_list.Managed(ModuleId),
     /// External imports qualified via package shorthand (e.g. "cli.Stdout") - still strings as they reference other packages
-    external_imports: std.array_list.Managed([]const u8) = .{},
-    dependents: std.array_list.Managed(ModuleId) = .{},
-    reports: std.array_list.Managed(Report) = .{},
+    external_imports: std.array_list.Managed([]const u8),
+    dependents: std.array_list.Managed(ModuleId),
+    reports: std.array_list.Managed(Report),
     depth: u32 = std.math.maxInt(u32), // min depth from root
     /// DFS visitation color for cycle detection: 0=white (unvisited), 1=gray (visiting), 2=black (finished)
     visit_color: u8 = 0,
@@ -107,13 +107,24 @@ const ModuleState = struct {
 
     fn deinit(self: *ModuleState, gpa: Allocator) void {
         if (self.env) |*e| e.deinit();
-        self.imports.deinit(gpa);
-        self.external_imports.deinit(gpa);
-        self.dependents.deinit(gpa);
+        self.imports.deinit();
+        self.external_imports.deinit();
+        self.dependents.deinit();
         // Free reports
         for (self.reports.items) |*r| r.deinit();
-        self.reports.deinit(gpa);
+        self.reports.deinit();
         gpa.free(self.path);
+    }
+
+    fn init(gpa: Allocator, name: []const u8, path: []const u8) ModuleState {
+        return .{
+            .name = name,
+            .path = path,
+            .imports = std.array_list.Managed(ModuleId).init(gpa),
+            .external_imports = std.array_list.Managed([]const u8).init(gpa),
+            .dependents = std.array_list.Managed(ModuleId).init(gpa),
+            .reports = std.array_list.Managed(Report).init(gpa),
+        };
     }
 };
 
@@ -137,10 +148,10 @@ pub const PackageEnv = struct {
     cond: Condition = .{},
 
     // Work queue
-    injector: std.array_list.Managed(Task) = .{},
+    injector: std.array_list.Managed(Task),
 
     // Module storage
-    modules: std.array_list.Managed(ModuleState) = .{},
+    modules: std.array_list.Managed(ModuleState),
     // String intern table: module name -> module ID
     module_names: std.StringHashMapUnmanaged(ModuleId) = .{},
 
@@ -148,7 +159,7 @@ pub const PackageEnv = struct {
     remaining_modules: usize = 0,
 
     // Track module discovery order and which modules have had their reports emitted
-    discovered: std.array_list.Managed(ModuleId) = .{},
+    discovered: std.array_list.Managed(ModuleId),
     emitted: std.bit_set.DynamicBitSetUnmanaged = .{},
 
     // Timing collection (accumulated across all modules)
@@ -159,7 +170,19 @@ pub const PackageEnv = struct {
     total_check_diagnostics_ns: u64 = 0,
 
     pub fn init(gpa: Allocator, package_name: []const u8, root_dir: []const u8, mode: Mode, max_threads: usize, sink: ReportSink, schedule_hook: ScheduleHook, compiler_version: []const u8) PackageEnv {
-        return .{ .gpa = gpa, .package_name = package_name, .root_dir = root_dir, .mode = mode, .max_threads = max_threads, .sink = sink, .schedule_hook = schedule_hook, .compiler_version = compiler_version };
+        return .{
+            .gpa = gpa,
+            .package_name = package_name,
+            .root_dir = root_dir,
+            .mode = mode,
+            .max_threads = max_threads,
+            .sink = sink,
+            .schedule_hook = schedule_hook,
+            .compiler_version = compiler_version,
+            .injector = std.array_list.Managed(Task).init(gpa),
+            .modules = std.array_list.Managed(ModuleState).init(gpa),
+            .discovered = std.array_list.Managed(ModuleId).init(gpa),
+        };
     }
 
     pub fn initWithResolver(
@@ -183,6 +206,9 @@ pub const PackageEnv = struct {
             .resolver = resolver,
             .schedule_hook = schedule_hook,
             .compiler_version = compiler_version,
+            .injector = std.array_list.Managed(Task).init(gpa),
+            .modules = std.array_list.Managed(ModuleState).init(gpa),
+            .discovered = std.array_list.Managed(ModuleId).init(gpa),
         };
     }
 
@@ -191,7 +217,7 @@ pub const PackageEnv = struct {
         for (self.modules.items) |*ms| {
             ms.deinit(self.gpa);
         }
-        self.modules.deinit(self.gpa);
+        self.modules.deinit();
 
         // Free interned strings
         var it = self.module_names.iterator();
@@ -200,8 +226,8 @@ pub const PackageEnv = struct {
         }
         self.module_names.deinit(self.gpa);
 
-        self.injector.deinit(self.gpa);
-        self.discovered.deinit(self.gpa);
+        self.injector.deinit();
+        self.discovered.deinit();
         self.emitted.deinit(self.gpa);
     }
 
@@ -310,8 +336,8 @@ pub const PackageEnv = struct {
             // This is a new module
             const owned_path = try self.gpa.dupe(u8, path);
             const owned_name = self.module_names.getKey(name).?; // We just interned it
-            try self.modules.append(self.gpa, .{ .name = owned_name, .path = owned_path });
-            try self.discovered.append(self.gpa, module_id);
+            try self.modules.append(ModuleState.init(self.gpa, owned_name, owned_path));
+            try self.discovered.append(module_id);
 
             // Invoke scheduling hook for new module discovery/scheduling
             self.schedule_hook.onSchedule(self.schedule_hook.ctx, self.package_name, owned_name, owned_path, 0);
@@ -356,7 +382,7 @@ pub const PackageEnv = struct {
             self.schedule_hook.onSchedule(self.schedule_hook.ctx, self.package_name, st.name, st.path, st.depth);
         } else {
             // Default behavior: use internal injector
-            try self.injector.append(self.gpa, .{ .module_id = module_id });
+            try self.injector.append(.{ .module_id = module_id });
             if (@import("builtin").target.cpu.arch != .wasm32) self.cond.signal();
         }
     }
@@ -525,7 +551,7 @@ pub const PackageEnv = struct {
         defer self.gpa.free(diags);
         for (diags) |d| {
             const report = try env.diagnosticToReport(d, self.gpa, st.path);
-            try st.reports.append(self.gpa, report);
+            try st.reports.append(report);
         }
         const canon_diag_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         if (@import("builtin").target.cpu.arch != .wasm32) {
@@ -545,7 +571,7 @@ pub const PackageEnv = struct {
 
             if (qualified) {
                 // Qualified imports refer to external packages; track and schedule externally
-                try st.external_imports.append(self.gpa, mod_name);
+                try st.external_imports.append(mod_name);
                 if (self.resolver) |r| r.scheduleExternal(r.ctx, self.package_name, mod_name);
                 // External dependencies are resolved by the workspace; skip local scheduling/cycle detection
                 continue;
@@ -555,13 +581,13 @@ pub const PackageEnv = struct {
             const import_path = try self.resolveModulePath(mod_name);
             const child_id = try self.ensureModule(mod_name, import_path);
             const existed = child_id < self.modules.items.len - 1;
-            try st.imports.append(self.gpa, child_id);
+            try st.imports.append(child_id);
             // parent depth + 1
             try self.setDepthIfSmaller(child_id, st.depth + 1);
 
             // Cycle detection for local deps
             var child = &self.modules.items[child_id];
-            try child.dependents.append(self.gpa, module_id);
+            try child.dependents.append(module_id);
 
             if (child.visit_color == 1 or child_id == module_id) {
                 // Build a report on the current module describing the cycle
@@ -593,7 +619,7 @@ pub const PackageEnv = struct {
                 }
 
                 // Store the report on both modules for clarity
-                try st.reports.append(self.gpa, rep);
+                try st.reports.append(rep);
                 // Duplicate for child as well so it gets emitted too
                 var rep_child = Report.init(self.gpa, "Import cycle detected", .runtime_error);
                 const child_msg = try rep_child.addOwnedString("This module participates in an import cycle. Cycles between modules are not allowed.");
@@ -604,7 +630,7 @@ pub const PackageEnv = struct {
                 try rep_child.document.addText(" -> ");
                 try rep_child.document.addAnnotated(mod_name, .emphasized);
                 try rep_child.document.addLineBreak();
-                try child.reports.append(self.gpa, rep_child);
+                try child.reports.append(rep_child);
 
                 // Mark both Done and adjust counters
                 if (st.phase != .Done) {
@@ -732,7 +758,7 @@ pub const PackageEnv = struct {
         defer rb.deinit();
         for (checker.problems.problems.items) |prob| {
             const rep = rb.build(prob) catch continue;
-            try st.reports.append(self.gpa, rep);
+            try st.reports.append(rep);
         }
         const check_diag_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         if (@import("builtin").target.cpu.arch != .wasm32) {

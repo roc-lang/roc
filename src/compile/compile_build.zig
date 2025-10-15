@@ -23,6 +23,7 @@ const ModuleEnv = can.ModuleEnv;
 const PackageEnv = @import("compile_package.zig").PackageEnv;
 const ModuleTimingInfo = @import("compile_package.zig").TimingInfo;
 const ImportResolver = @import("compile_package.zig").ImportResolver;
+const ScheduleHook = @import("compile_package.zig").ScheduleHook;
 const CacheManager = @import("cache_manager.zig").CacheManager;
 
 // Threading features aren't available when targeting WebAssembly,
@@ -1011,20 +1012,21 @@ pub const BuildEnv = struct {
             try self.schedule_ctxs.append(sc);
 
             const sched = try self.gpa.create(PackageEnv);
-            sched.* = PackageEnv{
-                .gpa = self.gpa,
-                .package_name = name,
-                .root_dir = pkg.root_dir,
-                .mode = self.mode,
-                .max_threads = self.max_threads,
-                .sink = .{ .ctx = ps, .emitFn = PkgSinkCtx.emit },
-                .resolver = resolver,
-                .schedule_hook = if (builtin.target.cpu.arch != .wasm32 and self.mode == .multi_threaded)
-                    .{ .ctx = &self.global_queue, .onSchedule = GlobalQueue.hookOnSchedule }
-                else
-                    .{ .ctx = sc, .onSchedule = ScheduleCtx.onSchedule },
-                .compiler_version = self.compiler_version,
-            };
+            const schedule_hook: ScheduleHook = if (builtin.target.cpu.arch != .wasm32 and self.mode == .multi_threaded)
+                ScheduleHook{ .ctx = &self.global_queue, .onSchedule = GlobalQueue.hookOnSchedule }
+            else
+                ScheduleHook{ .ctx = sc, .onSchedule = ScheduleCtx.onSchedule };
+            sched.* = PackageEnv.initWithResolver(
+                self.gpa,
+                name,
+                pkg.root_dir,
+                self.mode,
+                self.max_threads,
+                .{ .ctx = ps, .emitFn = PkgSinkCtx.emit },
+                resolver,
+                schedule_hook,
+                self.compiler_version,
+            );
 
             const key = try self.gpa.dupe(u8, name);
             try self.schedulers.put(self.gpa, key, sched);

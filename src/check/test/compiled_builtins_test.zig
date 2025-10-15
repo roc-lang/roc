@@ -18,7 +18,7 @@ const compiled_builtins = @import("compiled_builtins");
 /// Wrapper for a loaded compiled module that tracks the buffer
 const LoadedModule = struct {
     env: *ModuleEnv,
-    buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT) u8,
+    buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
     gpa: std.mem.Allocator,
 
     fn deinit(self: *LoadedModule) void {

@@ -70,13 +70,13 @@ pub const Store = struct {
 
     pub fn deinit(self: *Self) void {
         self.contents.deinit(self.gpa);
-        self.seen_vars.deinit(self.gpa);
+        self.seen_vars.deinit();
         self.content_indexes.deinit(self.gpa);
         self.record_fields.deinit(self.gpa);
         self.tags.deinit(self.gpa);
-        self.scratch_content.deinit(self.gpa);
-        self.scratch_tags.deinit(self.gpa);
-        self.scratch_record_fields.deinit(self.gpa);
+        self.scratch_content.deinit();
+        self.scratch_tags.deinit();
+        self.scratch_record_fields.deinit();
     }
 
     /// Create a deep snapshot from a Var, storing it in this SnapshotStore
@@ -99,7 +99,7 @@ pub const Store = struct {
         }
 
         // If not, add it to the seen list
-        try self.seen_vars.append(self.gpa, resolved.var_);
+        try self.seen_vars.append(resolved.var_);
         defer _ = self.seen_vars.pop();
 
         return try self.deepCopyContent(store, resolved.var_, resolved.desc.content);
@@ -158,7 +158,7 @@ pub const Store = struct {
         var arg_iter = store.iterAliasArgs(alias);
         while (arg_iter.next()) |arg_var| {
             const deep_arg = try self.deepCopyVar(store, arg_var);
-            _ = try self.scratch_content.append(self.gpa, deep_arg);
+            try self.scratch_content.append(deep_arg);
         }
 
         // Append scratch to backing array, and shrink scratch
@@ -181,7 +181,7 @@ pub const Store = struct {
         // Iterate and append to scratch array
         for (elems_slice) |elem_var| {
             const deep_elem = try self.deepCopyVar(store, elem_var);
-            _ = try self.scratch_content.append(self.gpa, deep_elem);
+            try self.scratch_content.append(deep_elem);
         }
 
         // Append scratch to backing array, and shrink scratch
@@ -241,13 +241,13 @@ pub const Store = struct {
         // Add backing var (must be first)
         const backing_var = store.getNominalBackingVar(nominal_type);
         const deep_var = try self.deepCopyVar(store, backing_var);
-        _ = try self.scratch_content.append(self.gpa, deep_var);
+        try self.scratch_content.append(deep_var);
 
         // Add args after
         var arg_iter = store.iterNominalArgs(nominal_type);
         while (arg_iter.next()) |arg_var| {
             const deep_arg = try self.deepCopyVar(store, arg_var);
-            _ = try self.scratch_content.append(self.gpa, deep_arg);
+            try self.scratch_content.append(deep_arg);
         }
 
         // Append scratch to backing array, and shrink scratch
@@ -270,7 +270,7 @@ pub const Store = struct {
         // Iterate and append directly
         for (args_slice) |arg_var| {
             const deep_arg = try self.deepCopyVar(store, arg_var);
-            _ = try self.scratch_content.append(self.gpa, deep_arg);
+            try self.scratch_content.append(deep_arg);
         }
 
         // Append scratch to backing array, and shrink scratch
@@ -300,7 +300,7 @@ pub const Store = struct {
                 .content = deep_field_content,
             };
 
-            _ = try self.scratch_record_fields.append(self.gpa, snapshot_field);
+            try self.scratch_record_fields.append(snapshot_field);
         }
 
         // Append scratch to backing array, and shrink scratch
@@ -326,7 +326,7 @@ pub const Store = struct {
                 .content = deep_field_content,
             };
 
-            _ = try self.scratch_record_fields.append(self.gpa, snapshot_field);
+            try self.scratch_record_fields.append(snapshot_field);
         }
 
         // Append scratch to backing array, and shrink scratch
@@ -359,7 +359,7 @@ pub const Store = struct {
             // Iterate over tag arguments and append to scratch array
             for (tag_args_slice) |tag_arg_var| {
                 const deep_tag_arg = try self.deepCopyVar(store, tag_arg_var);
-                _ = try self.scratch_content.append(self.gpa, deep_tag_arg);
+                try self.scratch_content.append(deep_tag_arg);
             }
 
             // Append scratch to backing array, and shrink scratch
@@ -372,7 +372,7 @@ pub const Store = struct {
                 .args = tag_args_range,
             };
 
-            _ = try self.scratch_tags.append(self.gpa, snapshot_tag);
+            try self.scratch_tags.append(snapshot_tag);
         }
 
         // Append scratch tags to backing array, and shrink scratch

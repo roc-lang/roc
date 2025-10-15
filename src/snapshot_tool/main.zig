@@ -649,7 +649,7 @@ fn extractSectionInfo(content: []const u8, section_name: []const u8) ?struct { s
 /// Wrapper for a loaded compiled builtin module that tracks the buffer
 const LoadedModule = struct {
     env: *ModuleEnv,
-    buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT) u8,
+    buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
     gpa: std.mem.Allocator,
 
     fn deinit(self: *LoadedModule) void {
@@ -2257,7 +2257,7 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
             return;
         },
         .snippet => {
-            try fmt.formatAst(parse_ast.*, formatted.writer().any());
+            try fmt.formatAst(parse_ast.*, &formatted.writer);
         },
     }
 

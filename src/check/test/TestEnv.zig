@@ -270,6 +270,16 @@ pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) !void {
     try testing.expectEqualStrings(expected, report.title);
 }
 
+fn renderReportToMarkdownBuffer(buf: *std.array_list.Managed(u8), report: anytype) !void {
+    buf.clearRetainingCapacity();
+    var generic_writer = buf.writer();
+    var adapter = generic_writer.adaptToNewApi(&.{});
+    report.render(&adapter.new_interface, .markdown) catch |err| switch (err) {
+        error.WriteFailed => return adapter.err.?,
+        else => return err,
+    };
+}
+
 fn assertNoParseProblems(self: *TestEnv) !void {
     if (self.parse_ast.hasErrors()) {
         var report_buf = try std.array_list.Managed(u8).initCapacity(self.gpa, 256);
@@ -279,9 +289,7 @@ fn assertNoParseProblems(self: *TestEnv) !void {
             var report = try self.parse_ast.tokenizeDiagnosticToReport(tok_diag, self.gpa);
             defer report.deinit();
 
-            report_buf.clearRetainingCapacity();
-            try report.render(report_buf.writer(), .markdown);
-
+            try renderReportToMarkdownBuffer(&report_buf, &report);
             try testing.expectEqualStrings("EXPECTED NO ERROR", report_buf.items);
         }
 
@@ -289,9 +297,7 @@ fn assertNoParseProblems(self: *TestEnv) !void {
             var report = try self.parse_ast.parseDiagnosticToReport(&self.module_env.common, diag, self.gpa, self.module_env.module_name);
             defer report.deinit();
 
-            report_buf.clearRetainingCapacity();
-            try report.render(report_buf.writer(), .markdown);
-
+            try renderReportToMarkdownBuffer(&report_buf, &report);
             try testing.expectEqualStrings("EXPECTED NO ERROR", report_buf.items);
         }
     }
@@ -306,9 +312,7 @@ fn assertNoCanProblems(self: *TestEnv) !void {
         var report = try self.module_env.diagnosticToReport(d, self.gpa, self.module_env.module_name);
         defer report.deinit();
 
-        report_buf.clearRetainingCapacity();
-        try report.render(report_buf.writer(), .markdown);
-
+        try renderReportToMarkdownBuffer(&report_buf, &report);
         try testing.expectEqualStrings("EXPECTED NO ERROR", report_buf.items);
     }
 }
@@ -324,9 +328,7 @@ fn assertNoTypeProblems(self: *TestEnv) !void {
         var report = try report_builder.build(problem);
         defer report.deinit();
 
-        report_buf.clearRetainingCapacity();
-        try report.render(report_buf.writer(), .markdown);
-
+        try renderReportToMarkdownBuffer(&report_buf, &report);
         try testing.expectEqualStrings("EXPECTED NO ERROR", report_buf.items);
     }
 

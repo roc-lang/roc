@@ -143,7 +143,7 @@ pub fn deinit(
 ) void {
     const gpa = self.env.gpa;
 
-    self.type_vars_scope.deinit(gpa);
+    self.type_vars_scope.deinit();
     self.exposed_scope.deinit(gpa);
     self.exposed_ident_texts.deinit(gpa);
     self.exposed_type_texts.deinit(gpa);
@@ -155,20 +155,20 @@ pub fn deinit(
     }
 
     self.scopes.deinit(gpa);
-    self.function_regions.deinit(gpa);
+    self.function_regions.deinit();
 
     self.var_function_regions.deinit(gpa);
     self.var_patterns.deinit(gpa);
     self.used_patterns.deinit(gpa);
-    self.scratch_vars.deinit(gpa);
-    self.scratch_idents.deinit(gpa);
-    self.scratch_type_var_validation.deinit(gpa);
-    self.scratch_type_var_problems.deinit(gpa);
-    self.scratch_record_fields.deinit(gpa);
-    self.scratch_seen_record_fields.deinit(gpa);
+    self.scratch_vars.deinit();
+    self.scratch_idents.deinit();
+    self.scratch_type_var_validation.deinit();
+    self.scratch_type_var_problems.deinit();
+    self.scratch_record_fields.deinit();
+    self.scratch_seen_record_fields.deinit();
     self.import_indices.deinit(gpa);
-    self.scratch_tags.deinit(gpa);
-    self.scratch_free_vars.deinit(gpa);
+    self.scratch_tags.deinit();
+    self.scratch_free_vars.deinit();
 }
 
 /// Options for initializing the canonicalizer.
@@ -195,7 +195,7 @@ pub fn init(
         .env = env,
         .parse_ir = parse_ir,
         .scopes = .{},
-        .function_regions = std.array_list.Managed(Region){},
+        .function_regions = std.array_list.Managed(Region).init(gpa),
         .var_function_regions = std.AutoHashMapUnmanaged(Pattern.Idx, Region){},
         .var_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .used_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
@@ -2336,7 +2336,7 @@ pub fn canonicalizeExpr(
                             } }, .err, region);
 
                             const free_vars_start = self.scratch_free_vars.top();
-                            try self.scratch_free_vars.append(self.env.gpa, found_pattern_idx);
+                            try self.scratch_free_vars.append(found_pattern_idx);
                             const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
                             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
                         },
@@ -2409,7 +2409,7 @@ pub fn canonicalizeExpr(
                         } }, .err, region);
 
                         const free_vars_start = self.scratch_free_vars.top();
-                        try self.scratch_free_vars.append(self.env.gpa, found_pattern_idx);
+                        try self.scratch_free_vars.append(found_pattern_idx);
                         const free_vars_slice = self.scratch_free_vars.slice(free_vars_start, self.scratch_free_vars.top());
                         return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
                     },
@@ -2926,14 +2926,14 @@ pub fn canonicalizeExpr(
 
                     if (!found_duplicate) {
                         // First occurrence of this field name
-                        try self.scratch_seen_record_fields.append(self.env.gpa, SeenRecordField{
+                        try self.scratch_seen_record_fields.append(SeenRecordField{
                             .ident = field_name_ident,
                             .region = field_name_region,
                         });
 
                         // Only canonicalize and include non-duplicate fields
                         if (try self.canonicalizeRecordField(field)) |can_field_idx| {
-                            try self.env.store.scratch.?.record_fields.append(self.env.gpa, can_field_idx);
+                            try self.env.store.scratch.?.record_fields.append(can_field_idx);
                         }
                     } else {
                         // TODO: Add diagnostic on duplicate record field
@@ -2941,7 +2941,7 @@ pub fn canonicalizeExpr(
                 } else {
                     // Field name couldn't be resolved, still try to canonicalize
                     if (try self.canonicalizeRecordField(field)) |can_field_idx| {
-                        try self.env.store.scratch.?.record_fields.append(self.env.gpa, can_field_idx);
+                        try self.env.store.scratch.?.record_fields.append(can_field_idx);
                     }
                 }
             }
@@ -2960,7 +2960,7 @@ pub fn canonicalizeExpr(
 
             for (cir_fields) |cir_field_idx| {
                 const cir_field = self.env.store.getRecordField(cir_field_idx);
-                try self.scratch_record_fields.append(self.env.gpa, types.RecordField{
+                try self.scratch_record_fields.append(types.RecordField{
                     .name = cir_field.name,
                     .var_ = @enumFromInt(@intFromEnum(cir_field.value)),
                 });
@@ -2996,18 +2996,17 @@ pub fn canonicalizeExpr(
             defer self.scopeExit(self.env.gpa) catch {};
 
             // args
-            const gpa = self.env.gpa;
-            const args_start = self.env.store.scratch.?.patterns.top();
+                    const args_start = self.env.store.scratch.?.patterns.top();
             for (self.parse_ir.store.patternSlice(e.args)) |arg_pattern_idx| {
                 if (try self.canonicalizePattern(arg_pattern_idx)) |pattern_idx| {
-                    try self.env.store.scratch.?.patterns.append(gpa, pattern_idx);
+                    try self.env.store.scratch.?.patterns.append(pattern_idx);
                 } else {
                     const arg = self.parse_ir.store.getPattern(arg_pattern_idx);
                     const arg_region = self.parse_ir.tokenizedRegionToRegion(arg.to_tokenized_region());
                     const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .pattern_arg_invalid = .{
                         .region = arg_region,
                     } });
-                    try self.env.store.scratch.?.patterns.append(gpa, malformed_idx);
+                    try self.env.store.scratch.?.patterns.append(malformed_idx);
                 }
             }
             const args_span = try self.env.store.patternSpanFrom(args_start);
@@ -3103,7 +3102,7 @@ pub fn canonicalizeExpr(
             const lambda_free_vars_start = self.scratch_free_vars.top();
             var cap_it = captures_set.iterator();
             while (cap_it.next()) |entry| {
-                try self.scratch_free_vars.append(self.env.gpa, entry.key_ptr.*);
+                try self.scratch_free_vars.append(entry.key_ptr.*);
             }
             const free_vars_slice = self.scratch_free_vars.slice(lambda_free_vars_start, self.scratch_free_vars.top());
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_slice.len > 0) free_vars_slice else null };
@@ -4176,8 +4175,7 @@ fn canonicalizePattern(
             return try self.canonicalizeSingleQuote(e.region, e.token, Pattern.Idx);
         },
         .tag => |e| {
-            const gpa = self.env.gpa;
-            const tag_name = self.parse_ir.tokens.resolveIdentifier(e.tag_tok) orelse return null;
+                    const tag_name = self.parse_ir.tokens.resolveIdentifier(e.tag_tok) orelse return null;
             const tag_name_text = self.parse_ir.env.getIdent(tag_name);
 
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
@@ -4186,14 +4184,14 @@ fn canonicalizePattern(
             const patterns_start = self.env.store.scratch.?.patterns.top();
             for (self.parse_ir.store.patternSlice(e.args)) |sub_ast_pattern_idx| {
                 if (try self.canonicalizePattern(sub_ast_pattern_idx)) |idx| {
-                    try self.env.store.scratch.?.patterns.append(gpa, idx);
+                    try self.env.store.scratch.?.patterns.append(idx);
                 } else {
                     const arg = self.parse_ir.store.getPattern(sub_ast_pattern_idx);
                     const arg_region = self.parse_ir.tokenizedRegionToRegion(arg.to_tokenized_region());
                     const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .pattern_arg_invalid = .{
                         .region = arg_region,
                     } });
-                    try self.env.store.scratch.?.patterns.append(gpa, malformed_idx);
+                    try self.env.store.scratch.?.patterns.append(malformed_idx);
                 }
             }
             const args = try self.env.store.patternSpanFrom(patterns_start);
@@ -4488,8 +4486,7 @@ fn canonicalizePattern(
         },
         .list => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-            const gpa = self.env.gpa;
-
+        
             // Mark the start of scratch patterns for non-rest patterns only
             const scratch_top = self.env.store.scratchPatternTop();
 
@@ -4565,13 +4562,13 @@ fn canonicalizePattern(
                 } else {
                     // Regular pattern - canonicalize it and add to scratch patterns
                     if (try self.canonicalizePattern(pattern_idx)) |canonicalized| {
-                        try self.env.store.scratch.?.patterns.append(gpa, canonicalized);
+                        try self.env.store.scratch.?.patterns.append(canonicalized);
                     } else {
                         const pattern_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.to_tokenized_region());
                         const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .pattern_not_canonicalized = .{
                             .region = pattern_region,
                         } });
-                        try self.env.store.scratch.?.patterns.append(gpa, malformed_idx);
+                        try self.env.store.scratch.?.patterns.append(malformed_idx);
                     }
                 }
             }
@@ -4694,7 +4691,7 @@ fn canonicalizePattern(
 
 /// Enter a function boundary by pushing its region onto the stack
 fn enterFunction(self: *Self, region: Region) std.mem.Allocator.Error!void {
-    try self.function_regions.append(self.env.gpa, region);
+    try self.function_regions.append(region);
 }
 
 /// Exit a function boundary by popping from the stack
@@ -5027,16 +5024,16 @@ fn scopeIntroduceVar(
     }
 }
 
-fn collectTypeVarProblems(ident: Ident.Idx, is_single_use: bool, ast_anno: AST.TypeAnno.Idx, gpa: std.mem.Allocator, scratch: *base.Scratch(TypeVarProblem)) void {
+fn collectTypeVarProblems(ident: Ident.Idx, is_single_use: bool, ast_anno: AST.TypeAnno.Idx, scratch: *base.Scratch(TypeVarProblem)) std.mem.Allocator.Error!void {
     // Warn for type variables with trailing underscores
     if (ident.attributes.reassignable) {
-        scratch.append(gpa, .{ .ident = ident, .problem = .type_var_ending_in_underscore, .ast_anno = ast_anno });
+        try scratch.append(.{ .ident = ident, .problem = .type_var_ending_in_underscore, .ast_anno = ast_anno });
     }
 
     // Should start with underscore but doesn't, or should not start with underscore but does.
     if (is_single_use != ident.attributes.ignored) {
         const problem_type: TypeVarProblemKind = if (is_single_use) .unused_type_var else .type_var_marked_unused;
-        scratch.append(gpa, .{ .ident = ident, .problem = problem_type, .ast_anno = ast_anno });
+        try scratch.append(.{ .ident = ident, .problem = problem_type, .ast_anno = ast_anno });
     }
 }
 
@@ -5108,7 +5105,7 @@ fn processCollectedTypeVars(self: *Self) std.mem.Allocator.Error!void {
         // Collect problems for this type variable
         const is_single_use = !found_another;
         // Use a dummy AST annotation index since we don't have the context
-        collectTypeVarProblems(first_ident, is_single_use, @enumFromInt(0), self.env.gpa, &self.scratch_type_var_problems);
+        try collectTypeVarProblems(first_ident, is_single_use, @enumFromInt(0), &self.scratch_type_var_problems);
     }
 
     // Report any problems we found
@@ -5193,7 +5190,7 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
             switch (self.scopeLookupTypeVar(name_ident)) {
                 .found => |found_anno_idx| {
                     // Track this type variable for underscore validation
-                    try self.scratch_type_var_validation.append(self.env.gpa, name_ident);
+                    try self.scratch_type_var_validation.append(name_ident);
 
                     return try self.env.addTypeAnnoAndTypeVarRedirect(.{ .rigid_var_lookup = .{
                         .ref = found_anno_idx,
@@ -5205,7 +5202,7 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
                         // into the scope
                         .inline_anno => {
                             // Track this type variable for underscore validation
-                            try self.scratch_type_var_validation.append(self.env.gpa, name_ident);
+                            try self.scratch_type_var_validation.append(name_ident);
 
                             const content = types.Content{ .rigid = types.Rigid.init(name_ident) };
                             const new_anno_idx = try self.env.addTypeAnnoAndTypeVar(.{ .rigid_var = .{
@@ -5251,7 +5248,7 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
             switch (self.scopeLookupTypeVar(name_ident)) {
                 .found => |found_anno_idx| {
                     // Track this type variable for underscore validation
-                    try self.scratch_type_var_validation.append(self.env.gpa, name_ident);
+                    try self.scratch_type_var_validation.append(name_ident);
 
                     return try self.env.addTypeAnnoAndTypeVarRedirect(.{ .rigid_var_lookup = .{
                         .ref = found_anno_idx,
@@ -5263,7 +5260,7 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
                         // into the scope
                         .inline_anno => {
                             // Track this type variable for underscore validation
-                            try self.scratch_type_var_validation.append(self.env.gpa, name_ident);
+                            try self.scratch_type_var_validation.append(name_ident);
 
                             const content = types.Content{ .rigid = types.Rigid.init(name_ident) };
                             const new_anno_idx = try self.env.addTypeAnnoAndTypeVar(.{ .rigid_var = .{
@@ -5576,7 +5573,7 @@ fn canonicalizeTypeAnnoTuple(
             try self.env.store.addScratchTypeAnno(canonicalized_elem_idx);
 
             const elem_var = ModuleEnv.varFrom(canonicalized_elem_idx);
-            try self.scratch_vars.append(self.env.gpa, elem_var);
+            try self.scratch_vars.append(elem_var);
         }
         const annos = try self.env.store.typeAnnoSpanFrom(scratch_top);
 
@@ -5635,7 +5632,7 @@ fn canonicalizeTypeAnnoRecord(
             );
             try self.env.store.addScratchAnnoRecordField(field_cir_idx);
 
-            try self.scratch_record_fields.append(self.env.gpa, types.RecordField{
+            try self.scratch_record_fields.append(types.RecordField{
                 .name = malformed_ident,
                 .var_ = ModuleEnv.varFrom(field_cir_idx),
             });
@@ -5658,7 +5655,7 @@ fn canonicalizeTypeAnnoRecord(
         );
         try self.env.store.addScratchAnnoRecordField(field_cir_idx);
 
-        try self.scratch_record_fields.append(self.env.gpa, types.RecordField{
+        try self.scratch_record_fields.append(types.RecordField{
             .name = field_name,
             .var_ = ModuleEnv.varFrom(field_cir_idx),
         });
@@ -5730,7 +5727,7 @@ fn canonicalizeTypeAnnoTagUnion(
                 else => unreachable,
             }
         };
-        try self.scratch_tags.append(self.env.gpa, tag);
+        try self.scratch_tags.append(tag);
     }
 
     const tag_anno_idxs = try self.env.store.typeAnnoSpanFrom(scratch_annos_top);
@@ -6182,7 +6179,7 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
     const captures_start = self.scratch_free_vars.top();
     var cap_it = captures.iterator();
     while (cap_it.next()) |entry| {
-        try self.scratch_free_vars.append(self.env.gpa, entry.key_ptr.*);
+        try self.scratch_free_vars.append(entry.key_ptr.*);
     }
     const captures_slice = self.scratch_free_vars.slice(captures_start, self.scratch_free_vars.top());
 
@@ -6623,7 +6620,7 @@ fn scopeIntroduceTypeVar(self: *Self, name_ident: Ident.Idx, type_var_anno: Type
         }
     }
 
-    try self.type_vars_scope.append(self.env.gpa, TypeVarScope{ .ident = name_ident, .anno_idx = type_var_anno });
+    try self.type_vars_scope.append(TypeVarScope{ .ident = name_ident, .anno_idx = type_var_anno });
     return .success;
 }
 
@@ -6746,7 +6743,7 @@ fn extractTypeVarIdentsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, iden
                 for (self.scratch_idents.sliceFromStart(idents_start_idx)) |existing| {
                     if (existing.idx == ident.idx) return; // Already added
                 }
-                _ = try self.scratch_idents.append(self.env.gpa, ident);
+                try self.scratch_idents.append(ident);
             }
         },
         .underscore_type_var => |underscore_ty_var| {
@@ -6755,7 +6752,7 @@ fn extractTypeVarIdentsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, iden
                 for (self.scratch_idents.sliceFromStart(idents_start_idx)) |existing| {
                     if (existing.idx == ident.idx) return; // Already added
                 }
-                try self.scratch_idents.append(self.env.gpa, ident);
+                try self.scratch_idents.append(ident);
             }
         },
         .apply => |apply| {
@@ -7060,6 +7057,7 @@ fn scopeIntroduceTypeDecl(
     region: Region,
 ) std.mem.Allocator.Error!void {
     const gpa = self.env.gpa;
+
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
     // Check for shadowing in parent scopes
@@ -7215,6 +7213,7 @@ fn scopeLookupModule(self: *const Self, alias_name: Ident.Idx) ?Ident.Idx {
 /// Introduce a module alias into scope
 fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Ident.Idx) std.mem.Allocator.Error!void {
     const gpa = self.env.gpa;
+
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
     // Simplified introduction without parent lookup for now
@@ -7287,6 +7286,7 @@ fn scopeLookupExposedItem(self: *const Self, item_name: Ident.Idx) ?Scope.Expose
 /// Introduce an exposed item into the current scope
 fn scopeIntroduceExposedItem(self: *Self, item_name: Ident.Idx, item_info: Scope.ExposedItemInfo) std.mem.Allocator.Error!void {
     const gpa = self.env.gpa;
+
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
     // Simplified introduction without parent lookup for now

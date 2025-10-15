@@ -44,8 +44,8 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
         .pos = 0,
         .tok_buf = tokens,
         .store = store,
-        .scratch_nodes = .{},
-        .diagnostics = .{},
+        .scratch_nodes = std.array_list.Managed(Node.Idx).init(gpa),
+        .diagnostics = std.array_list.Managed(AST.Diagnostic).init(gpa),
         .cached_malformed_node = null,
         .nesting_counter = MAX_NESTING_LEVELS,
     };
@@ -53,7 +53,7 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
 
 /// Deinit the parser.  The buffer of tokens and the store are still owned by the caller.
 pub fn deinit(parser: *Parser) void {
-    parser.scratch_nodes.deinit(parser.gpa);
+    parser.scratch_nodes.deinit();
 
     // diagnostics will be kept and passed to the following compiler stage
     // to be deinitialized by the caller when no longer required
@@ -67,7 +67,7 @@ fn test_parser(source: []const u8, run: fn (parser: Parser) TestError!void) Test
     tokenizer.tokenize();
     const tok_result = tokenizer.finalize_and_deinit();
     defer tok_result.tokens.deinit();
-    const parser = Parser.init(std.testing.allocator, tok_result.tokens);
+    const parser = try Parser.init(tok_result.tokens, std.testing.allocator);
     defer parser.store.deinit();
     defer parser.scratch_nodes.deinit();
     defer parser.diagnostics.deinit();
@@ -140,7 +140,7 @@ fn unnest(self: *Parser) void {
 /// add a diagnostic error
 pub fn pushDiagnostic(self: *Parser, tag: AST.Diagnostic.Tag, region: AST.TokenizedRegion) Error!void {
     if (self.diagnostics.items.len < MAX_PARSE_DIAGNOSTICS) {
-        try self.diagnostics.append(self.gpa, .{ .tag = tag, .region = region });
+        try self.diagnostics.append(.{ .tag = tag, .region = region });
     }
 }
 /// add a malformed token
@@ -165,7 +165,7 @@ pub fn pushMalformed(self: *Parser, comptime T: type, tag: AST.Diagnostic.Tag, s
         // AST node should span the entire malformed expression
         const ast_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
 
-        try self.diagnostics.append(self.gpa, .{
+        try self.diagnostics.append(.{
             .tag = tag,
             .region = diagnostic_region,
         });
@@ -1338,7 +1338,7 @@ fn parseWhereConstraint(self: *Parser) Error!?AST.Collection.Idx {
         const ast_region = AST.TokenizedRegion{ .start = where_start, .end = where_end };
 
         // Add the diagnostic
-        try self.diagnostics.append(self.gpa, .{
+        try self.diagnostics.append(.{
             .tag = .where_expected_constraints,
             .region = diagnostic_region,
         });

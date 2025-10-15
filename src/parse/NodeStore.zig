@@ -88,18 +88,18 @@ const scratch_90th_percentile_capacity = std.math.ceilPowerOfTwoAssert(usize, 64
 /// method.
 pub fn deinit(store: *NodeStore) void {
     store.nodes.deinit(store.gpa);
-    store.extra_data.deinit(store.gpa);
-    store.scratch_statements.deinit(store.gpa);
-    store.scratch_tokens.deinit(store.gpa);
-    store.scratch_exprs.deinit(store.gpa);
-    store.scratch_patterns.deinit(store.gpa);
-    store.scratch_record_fields.deinit(store.gpa);
-    store.scratch_pattern_record_fields.deinit(store.gpa);
-    store.scratch_match_branches.deinit(store.gpa);
-    store.scratch_type_annos.deinit(store.gpa);
-    store.scratch_anno_record_fields.deinit(store.gpa);
-    store.scratch_exposed_items.deinit(store.gpa);
-    store.scratch_where_clauses.deinit(store.gpa);
+    store.extra_data.deinit();
+    store.scratch_statements.deinit();
+    store.scratch_tokens.deinit();
+    store.scratch_exprs.deinit();
+    store.scratch_patterns.deinit();
+    store.scratch_record_fields.deinit();
+    store.scratch_pattern_record_fields.deinit();
+    store.scratch_match_branches.deinit();
+    store.scratch_type_annos.deinit();
+    store.scratch_anno_record_fields.deinit();
+    store.scratch_exposed_items.deinit();
+    store.scratch_where_clauses.deinit();
 }
 
 /// Ensures that all scratch buffers in the store
@@ -160,7 +160,7 @@ pub fn addMalformed(store: *NodeStore, comptime T: type, reason: Diagnostic.Tag,
 
 /// Adds a file node to the store.
 pub fn addFile(store: *NodeStore, file: AST.File) std.mem.Allocator.Error!void {
-    try store.extra_data.append(store.gpa, @intFromEnum(file.header));
+    try store.extra_data.append(@intFromEnum(file.header));
     store.nodes.set(@enumFromInt(0), .{
         .tag = .root,
         .main_token = 0,
@@ -204,7 +204,7 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
             node.data.rhs = @intFromEnum(app.packages);
             node.region = app.region;
 
-            try store.extra_data.append(store.gpa, @intFromEnum(app.platform_idx));
+            try store.extra_data.append(@intFromEnum(app.platform_idx));
         },
         .module => |mod| {
             node.tag = .module_header;
@@ -227,11 +227,11 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
             node.main_token = platform.name;
 
             const ed_start = store.extra_data.items.len;
-            try store.extra_data.append(store.gpa, @intFromEnum(platform.requires_rigids));
-            try store.extra_data.append(store.gpa, @intFromEnum(platform.requires_signatures));
-            try store.extra_data.append(store.gpa, @intFromEnum(platform.exposes));
-            try store.extra_data.append(store.gpa, @intFromEnum(platform.packages));
-            try store.extra_data.append(store.gpa, @intFromEnum(platform.provides));
+            try store.extra_data.append(@intFromEnum(platform.requires_rigids));
+            try store.extra_data.append(@intFromEnum(platform.requires_signatures));
+            try store.extra_data.append(@intFromEnum(platform.exposes));
+            try store.extra_data.append(@intFromEnum(platform.packages));
+            try store.extra_data.append(@intFromEnum(platform.provides));
             const ed_len = store.extra_data.items.len - ed_start;
 
             node.data.lhs = @intCast(ed_start);
@@ -376,16 +376,16 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
             // Store all import data in a flat format:
             // [exposes.span.start, exposes.span.len, qualifier_tok?, alias_tok?]
             const data_start = @as(u32, @intCast(store.extra_data.items.len));
-            try store.extra_data.append(store.gpa, i.exposes.span.start);
-            try store.extra_data.append(store.gpa, i.exposes.span.len);
+            try store.extra_data.append(i.exposes.span.start);
+            try store.extra_data.append(i.exposes.span.len);
 
             if (i.qualifier_tok) |tok| {
                 rhs.qualified = 1;
-                try store.extra_data.append(store.gpa, tok);
+                try store.extra_data.append(tok);
             }
             if (i.alias_tok) |tok| {
                 rhs.aliased = 1;
-                try store.extra_data.append(store.gpa, tok);
+                try store.extra_data.append(tok);
             }
 
             node.data.rhs = @as(u32, @bitCast(rhs));
@@ -410,17 +410,17 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
 
                 // Store where clause index (0 if null)
                 const where_idx = if (d.where) |w| @intFromEnum(w) else 0;
-                try store.extra_data.append(store.gpa, where_idx);
+                try store.extra_data.append(where_idx);
 
                 // Store associated data if present
                 if (d.associated) |assoc| {
-                    try store.extra_data.append(store.gpa, 1); // has_associated = 1
-                    try store.extra_data.append(store.gpa, assoc.statements.span.start);
-                    try store.extra_data.append(store.gpa, assoc.statements.span.len);
-                    try store.extra_data.append(store.gpa, assoc.region.start);
-                    try store.extra_data.append(store.gpa, assoc.region.end);
+                    try store.extra_data.append(1); // has_associated = 1
+                    try store.extra_data.append(assoc.statements.span.start);
+                    try store.extra_data.append(assoc.statements.span.len);
+                    try store.extra_data.append(assoc.region.start);
+                    try store.extra_data.append(assoc.region.end);
                 } else {
-                    try store.extra_data.append(store.gpa, 0); // has_associated = 0
+                    try store.extra_data.append(0); // has_associated = 0
                 }
 
                 node.main_token = extra_start;
@@ -464,9 +464,9 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) std.mem.Allocator.Err
         },
         .tag => |t| {
             const data_start = @as(u32, @intCast(store.extra_data.items.len));
-            try store.extra_data.append(store.gpa, t.args.span.len);
-            try store.extra_data.append(store.gpa, t.qualifiers.span.start);
-            try store.extra_data.append(store.gpa, t.qualifiers.span.len);
+            try store.extra_data.append(t.args.span.len);
+            try store.extra_data.append(t.qualifiers.span.start);
+            try store.extra_data.append(t.qualifiers.span.len);
 
             node.tag = .tag_patt;
             node.region = t.region;
@@ -617,12 +617,12 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             // Store all record data in flat format:
             // [fields.span.start, fields.span.len, ext_or_zero]
             const data_start = @as(u32, @intCast(store.extra_data.items.len));
-            try store.extra_data.append(store.gpa, r.fields.span.start);
-            try store.extra_data.append(store.gpa, r.fields.span.len);
+            try store.extra_data.append(r.fields.span.start);
+            try store.extra_data.append(r.fields.span.len);
 
             // Store ext value or 0 for null
             const ext_value = if (r.ext) |ext| @intFromEnum(ext) else 0;
-            try store.extra_data.append(store.gpa, ext_value);
+            try store.extra_data.append(ext_value);
 
             node.data.lhs = data_start;
             node.data.rhs = 0; // Not used
@@ -633,7 +633,7 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.data.lhs = l.args.span.start;
             node.data.rhs = l.args.span.len;
             const body_idx = store.extra_data.items.len;
-            try store.extra_data.append(store.gpa, @intFromEnum(l.body));
+            try store.extra_data.append(@intFromEnum(l.body));
             node.main_token = @as(u32, @intCast(body_idx));
         },
         .apply => |app| {
@@ -642,7 +642,7 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.data.lhs = app.args.span.start;
             node.data.rhs = app.args.span.len;
             const fn_ed_idx = store.extra_data.items.len;
-            try store.extra_data.append(store.gpa, @intFromEnum(app.@"fn"));
+            try store.extra_data.append(@intFromEnum(app.@"fn"));
             node.main_token = @as(u32, @intCast(fn_ed_idx));
         },
         .record_updater => |_| {},
@@ -684,8 +684,8 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.region = i.region;
             node.data.lhs = @intFromEnum(i.condition);
             node.data.rhs = @as(u32, @intCast(store.extra_data.items.len));
-            try store.extra_data.append(store.gpa, @intFromEnum(i.then));
-            try store.extra_data.append(store.gpa, @intFromEnum(i.@"else"));
+            try store.extra_data.append(@intFromEnum(i.then));
+            try store.extra_data.append(@intFromEnum(i.@"else"));
         },
         .match => |m| {
             node.tag = .match;
@@ -693,7 +693,7 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.data.lhs = m.branches.span.start;
             node.data.rhs = m.branches.span.len;
             const expr_idx = store.extra_data.items.len;
-            try store.extra_data.append(store.gpa, @intFromEnum(m.expr));
+            try store.extra_data.append(@intFromEnum(m.expr));
             node.main_token = @as(u32, @intCast(expr_idx));
         },
         .ident => |id| {
@@ -854,9 +854,9 @@ pub fn addWhereClause(store: *NodeStore, clause: AST.WhereClause) std.mem.Alloca
             node.region = c.region;
             node.main_token = c.var_tok;
             const ed_start = store.extra_data.items.len;
-            try store.extra_data.append(store.gpa, c.name_tok);
-            try store.extra_data.append(store.gpa, @intFromEnum(c.args));
-            try store.extra_data.append(store.gpa, @intFromEnum(c.ret_anno));
+            try store.extra_data.append(c.name_tok);
+            try store.extra_data.append(@intFromEnum(c.args));
+            try store.extra_data.append(@intFromEnum(c.ret_anno));
             node.data.lhs = @intCast(ed_start);
         },
         .mod_alias => |c| {
@@ -921,8 +921,8 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
             // Store all tag_union data in flat format:
             // [tags.span.start, tags.span.len, open_anno?]
             const data_start = @as(u32, @intCast(store.extra_data.items.len));
-            try store.extra_data.append(store.gpa, tu.tags.span.start);
-            try store.extra_data.append(store.gpa, tu.tags.span.len);
+            try store.extra_data.append(tu.tags.span.start);
+            try store.extra_data.append(tu.tags.span.len);
 
             var rhs = AST.TypeAnno.TagUnionRhs{
                 .open = 0,
@@ -930,7 +930,7 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
             };
             if (tu.open_anno) |a| {
                 rhs.open = 1;
-                try store.extra_data.append(store.gpa, @intFromEnum(a));
+                try store.extra_data.append(@intFromEnum(a));
             }
 
             node.data.lhs = data_start;
@@ -957,7 +957,7 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
                 .args_len = @intCast(f.args.span.len), // We hope a function has less than 2.147b args
             });
             const ret_idx = store.extra_data.items.len;
-            try store.extra_data.append(store.gpa, @intFromEnum(f.ret));
+            try store.extra_data.append(@intFromEnum(f.ret));
             node.main_token = @intCast(ret_idx);
         },
         .parens => |p| {
@@ -1862,7 +1862,7 @@ pub fn scratchExprTop(store: *NodeStore) u32 {
 
 /// Places a new AST.Expr.Idx in the scratch.
 pub fn addScratchExpr(store: *NodeStore, idx: AST.Expr.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_exprs.append(store.gpa, idx);
+    try store.scratch_exprs.append(idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
@@ -1874,7 +1874,7 @@ pub fn exprSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.E
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     std.debug.assert(end >= i);
     while (i < end) {
-        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_exprs.items.items[i]));
+        try store.extra_data.append(@intFromEnum(store.scratch_exprs.items.items[i]));
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -1900,7 +1900,7 @@ pub fn scratchStatementTop(store: *NodeStore) u32 {
 
 /// Places a new AST.Statement.Idx in the scratch.
 pub fn addScratchStatement(store: *NodeStore, idx: AST.Statement.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_statements.append(store.gpa, idx);
+    try store.scratch_statements.append(idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
@@ -1912,7 +1912,7 @@ pub fn statementSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     std.debug.assert(end >= i);
     while (i < end) {
-        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_statements.items.items[i]));
+        try store.extra_data.append(@intFromEnum(store.scratch_statements.items.items[i]));
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -1938,7 +1938,7 @@ pub fn scratchPatternTop(store: *NodeStore) u32 {
 
 /// Places a new AST.Pattern.Idx in the scratch.
 pub fn addScratchPattern(store: *NodeStore, idx: AST.Pattern.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_patterns.append(store.gpa, idx);
+    try store.scratch_patterns.append(idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
@@ -1950,7 +1950,7 @@ pub fn patternSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AS
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     std.debug.assert(end >= i);
     while (i < end) {
-        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_patterns.items.items[i]));
+        try store.extra_data.append(@intFromEnum(store.scratch_patterns.items.items[i]));
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -1986,7 +1986,7 @@ pub fn scratchPatternRecordFieldTop(store: *NodeStore) u32 {
 
 /// Places a new AST.PatternRecordField.Idx in the scratch.
 pub fn addScratchPatternRecordField(store: *NodeStore, idx: AST.PatternRecordField.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_pattern_record_fields.append(store.gpa, idx);
+    try store.scratch_pattern_record_fields.append(idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
@@ -1997,7 +1997,7 @@ pub fn patternRecordFieldSpanFrom(store: *NodeStore, start: u32) std.mem.Allocat
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_pattern_record_fields.items.items[i]));
+        try store.extra_data.append(@intFromEnum(store.scratch_pattern_record_fields.items.items[i]));
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -2022,7 +2022,7 @@ pub fn scratchRecordFieldTop(store: *NodeStore) u32 {
 
 /// Places a new AST.RecordField.Idx in the scratch.
 pub fn addScratchRecordField(store: *NodeStore, idx: AST.RecordField.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_record_fields.append(store.gpa, idx);
+    try store.scratch_record_fields.append(idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
@@ -2033,7 +2033,7 @@ pub fn recordFieldSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Erro
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_record_fields.items.items[i]));
+        try store.extra_data.append(@intFromEnum(store.scratch_record_fields.items.items[i]));
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -2053,7 +2053,7 @@ pub fn scratchMatchBranchTop(store: *NodeStore) u32 {
 
 /// Places a new AST.WhenBranch.Idx in the scratch.
 pub fn addScratchMatchBranch(store: *NodeStore, idx: AST.MatchBranch.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_match_branches.append(store.gpa, idx);
+    try store.scratch_match_branches.append(idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
@@ -2064,7 +2064,7 @@ pub fn matchBranchSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Erro
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_match_branches.items.items[i]));
+        try store.extra_data.append(@intFromEnum(store.scratch_match_branches.items.items[i]));
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -2090,7 +2090,7 @@ pub fn scratchTypeAnnoTop(store: *NodeStore) u32 {
 
 /// Places a new AST.TypeAnno.Idx in the scratch.
 pub fn addScratchTypeAnno(store: *NodeStore, idx: AST.TypeAnno.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_type_annos.append(store.gpa, idx);
+    try store.scratch_type_annos.append(idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
@@ -2101,7 +2101,7 @@ pub fn typeAnnoSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!A
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_type_annos.items.items[i]));
+        try store.extra_data.append(@intFromEnum(store.scratch_type_annos.items.items[i]));
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -2127,7 +2127,7 @@ pub fn scratchAnnoRecordFieldTop(store: *NodeStore) u32 {
 
 /// Places a new AST.AnnoRecordField.Idx in the scratch.
 pub fn addScratchAnnoRecordField(store: *NodeStore, idx: AST.AnnoRecordField.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_anno_record_fields.append(store.gpa, idx);
+    try store.scratch_anno_record_fields.append(idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
@@ -2138,7 +2138,7 @@ pub fn annoRecordFieldSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_anno_record_fields.items.items[i]));
+        try store.extra_data.append(@intFromEnum(store.scratch_anno_record_fields.items.items[i]));
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -2164,7 +2164,7 @@ pub fn scratchTokenTop(store: *NodeStore) u32 {
 
 /// Places a new Token.Idx in the scratch.
 pub fn addScratchToken(store: *NodeStore, idx: Token.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_tokens.append(store.gpa, idx);
+    try store.scratch_tokens.append(idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
@@ -2175,7 +2175,7 @@ pub fn tokenSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!Toke
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        try store.extra_data.append(store.gpa, store.scratch_tokens.items.items[i]);
+        try store.extra_data.append(store.scratch_tokens.items.items[i]);
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -2201,7 +2201,7 @@ pub fn scratchExposedItemTop(store: *NodeStore) u32 {
 
 /// Places a new AST.ExposedItem.Idx in the scratch.
 pub fn addScratchExposedItem(store: *NodeStore, idx: AST.ExposedItem.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_exposed_items.append(store.gpa, idx);
+    try store.scratch_exposed_items.append(idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
@@ -2212,7 +2212,7 @@ pub fn exposedItemSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Erro
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_exposed_items.items.items[i]));
+        try store.extra_data.append(@intFromEnum(store.scratch_exposed_items.items.items[i]));
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -2238,7 +2238,7 @@ pub fn scratchWhereClauseTop(store: *NodeStore) u32 {
 
 /// Places a new AST.WhereClause.Idx in the scratch.
 pub fn addScratchWhereClause(store: *NodeStore, idx: AST.WhereClause.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_where_clauses.append(store.gpa, idx);
+    try store.scratch_where_clauses.append(idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
@@ -2249,7 +2249,7 @@ pub fn whereClauseSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Erro
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_where_clauses.items.items[i]));
+        try store.extra_data.append(@intFromEnum(store.scratch_where_clauses.items.items[i]));
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
