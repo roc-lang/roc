@@ -161,7 +161,6 @@ EndOfFile(18:1-18:1),
 # FORMATTED
 ~~~roc
 # Function with 8 arguments where several types must match (a appears in positions 1, 3, 5, 7)
-# Function with 8 arguments where several types must match (a appears in positions 1, 3, 5, 7)
 multi_arg_fn : a, b, a, c, a, d, a, e -> (a, b, c, d, e)
 multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8|
 	(x1, x2, x4, x6, x8)

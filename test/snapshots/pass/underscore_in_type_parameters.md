@@ -144,7 +144,6 @@ EndOfFile(15:1-15:1),
 # FORMATTED
 ~~~roc
 # Type with underscore in parameter position
-# Type with underscore in parameter position
 MyType(_) : Str
 
 # Type with underscore and regular parameter

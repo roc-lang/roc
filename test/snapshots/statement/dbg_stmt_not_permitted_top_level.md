@@ -44,11 +44,7 @@ EndOfFile(5:1-5:1),
 ~~~
 # FORMATTED
 ~~~roc
-# not permitted
-# not permitted
-dbg "foo"
-
-foo = ...
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

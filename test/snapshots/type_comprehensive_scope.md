@@ -251,7 +251,6 @@ EndOfFile(37:1-37:1),
 # FORMATTED
 ~~~roc
 # Built-in types should work
-# Built-in types should work
 MyU64 : U64
 MyString : Str
 MyBool : Bool

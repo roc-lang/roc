@@ -87,14 +87,7 @@ EndOfFile(8:1-8:1),
 ~~~
 # FORMATTED
 ~~~roc
-# Annotation says it takes and returns strings, but implementation uses number addition
-# Annotation says it takes and returns strings, but implementation uses number addition
-string_function : Str -> Str
-string_function = |x| x + 42
-
-# Annotation says function returns I64, but implementation returns Frac(_prec)
-wrong_type_function : I64 -> I64
-wrong_type_function = |x| x * 3.14
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

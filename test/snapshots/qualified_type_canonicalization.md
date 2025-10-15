@@ -455,8 +455,6 @@ EndOfFile(45:1-45:1),
 # FORMATTED
 ~~~roc
 
-
-
 import Color
 import ModuleA
 

@@ -75,16 +75,7 @@ EndOfFile(10:1-10:1),
 ~~~
 # FORMATTED
 ~~~roc
-# Test var redeclaration (should produce shadowing warning)
-# Test var redeclaration (should produce shadowing warning)
-redeclareTest = |_| {
-	var x_ = 5
-	var x_ = 10 # Redeclare var - should warn but proceed
-	x_ = 15 # Reassign - should work without warning
-	x_
-}
-
-result = redeclareTest({})
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

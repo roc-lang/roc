@@ -52,7 +52,6 @@ EndOfFile(7:1-7:1),
 # FORMATTED
 ~~~roc
 # import the Color module from styles package as CC
-# import the Color module from styles package as CC
 import styles.Color as CC
 
 # instantiating an RGB nominal tab union from the styles.Color module

@@ -43,19 +43,7 @@ EndOfFile(9:1-9:1),
 ~~~
 # FORMATTED
 ~~~roc
-# This module exposes foo, bar, MyType, and OtherType
-# but only implements foo and MyType
-# This should generate "exposed but not implemented" errors for bar and OtherType
-# Also tests redundant exposed entries for foo and MyType
-
-# This module exposes foo, bar, MyType, and OtherType
-# but only implements foo and MyType
-# This should generate "exposed but not implemented" errors for bar and OtherType
-# Also tests redundant exposed entries for foo and MyType
-
-foo = 42
-
-MyType : [A, B, C]
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

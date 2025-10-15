@@ -40,7 +40,6 @@ EndOfFile(3:1-3:1),
 # FORMATTED
 ~~~roc
 # This should cause an error - var not allowed at top level
-# This should cause an error - var not allowed at top level
 topLevelVar_ = 0
 ~~~
 # CANONICALIZE
