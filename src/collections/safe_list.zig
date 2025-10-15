@@ -95,13 +95,13 @@ pub fn SafeRange(comptime Idx: type) type {
 /// less likely since indices are only created for valid list entries.
 pub fn SafeList(comptime T: type) type {
     return struct {
-        items: std.array_list.Managed(T) = .{},
+        items: std.ArrayList(T) = .{},
 
         /// An index for an item in the list.
         pub const Idx = enum(u32) { _ };
 
         /// A non-type-safe slice of the list.
-        pub const Slice = std.array_list.Managed(T).Slice;
+        pub const Slice = std.ArrayList(T).Slice;
 
         /// A type-safe range of the list.
         pub const Range = SafeRange(Idx);
@@ -178,7 +178,7 @@ pub fn SafeList(comptime T: type) type {
         /// Initialize the `SafeList` with the specified capacity.
         pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!SafeList(T) {
             return .{
-                .items = try std.array_list.Managed(T).initCapacity(gpa, capacity),
+                .items = try std.ArrayList(T).initCapacity(gpa, capacity),
             };
         }
 

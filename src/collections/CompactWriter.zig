@@ -16,10 +16,10 @@ pub const SERIALIZATION_ALIGNMENT = std.mem.Alignment.@"16";
 
 const ZEROS: [16]u8 = [_]u8{0} ** 16;
 
-iovecs: std.array_list.Managed(Iovec),
+iovecs: std.ArrayList(Iovec),
 total_bytes: usize,
 // Track all allocated memory so we can free it in deinit
-allocated_memory: std.array_list.Managed(AllocatedMemory),
+allocated_memory: std.ArrayList(AllocatedMemory),
 
 pub fn init() CompactWriter {
     return CompactWriter{

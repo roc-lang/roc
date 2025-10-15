@@ -138,10 +138,12 @@ pub fn build(b: *std.Build) void {
         // Build and run the compiler
         const builtin_compiler_exe = b.addExecutable(.{
             .name = "builtin_compiler",
-            .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
-            .target = b.graph.host, // this runs at build time on the *host* machine!
-            .optimize = .Debug, // No need to optimize - only compiles builtin modules
-            // Note: libc linking is handled by add_tracy below (required when tracy is enabled)
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
+                .target = b.graph.host, // this runs at build time on the *host* machine!
+                .optimize = .Debug, // No need to optimize - only compiles builtin modules
+                // Note: libc linking is handled by add_tracy below (required when tracy is enabled)
+            }),
         });
 
         // Add only the minimal modules needed for parsing/checking
@@ -223,9 +225,11 @@ pub fn build(b: *std.Build) void {
     // Always build and run the compiler for this command
     const builtin_compiler_exe_force = b.addExecutable(.{
         .name = "builtin_compiler",
-        .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
-        .target = b.graph.host,
-        .optimize = .Debug,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
     });
 
     builtin_compiler_exe_force.root_module.addImport("base", roc_modules.base);
@@ -332,21 +336,25 @@ pub fn build(b: *std.Build) void {
         // Build for native - will fail at compile time if sizes don't match expected
         const size_check_native = b.addExecutable(.{
             .name = "serialization_size_check_native",
-            .root_source_file = b.path("test/serialization_size_check.zig"),
-            .target = target,
-            .optimize = .Debug,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/serialization_size_check.zig"),
+                .target = target,
+                .optimize = .Debug,
+            }),
         });
         roc_modules.addAll(size_check_native);
 
         // Build for wasm32 (32-bit) - will fail at compile time if sizes don't match expected
         const size_check_wasm32 = b.addExecutable(.{
             .name = "serialization_size_check_wasm32",
-            .root_source_file = b.path("test/serialization_size_check.zig"),
-            .target = b.resolveTargetQuery(.{
-                .cpu_arch = .wasm32,
-                .os_tag = .freestanding,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/serialization_size_check.zig"),
+                .target = b.resolveTargetQuery(.{
+                    .cpu_arch = .wasm32,
+                    .os_tag = .freestanding,
+                }),
+                .optimize = .Debug,
             }),
-            .optimize = .Debug,
         });
         size_check_wasm32.entry = .disabled;
         size_check_wasm32.rdynamic = true;
