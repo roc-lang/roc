@@ -2996,7 +2996,7 @@ pub fn canonicalizeExpr(
             defer self.scopeExit(self.env.gpa) catch {};
 
             // args
-                    const args_start = self.env.store.scratch.?.patterns.top();
+            const args_start = self.env.store.scratch.?.patterns.top();
             for (self.parse_ir.store.patternSlice(e.args)) |arg_pattern_idx| {
                 if (try self.canonicalizePattern(arg_pattern_idx)) |pattern_idx| {
                     try self.env.store.scratch.?.patterns.append(pattern_idx);
@@ -4175,7 +4175,7 @@ fn canonicalizePattern(
             return try self.canonicalizeSingleQuote(e.region, e.token, Pattern.Idx);
         },
         .tag => |e| {
-                    const tag_name = self.parse_ir.tokens.resolveIdentifier(e.tag_tok) orelse return null;
+            const tag_name = self.parse_ir.tokens.resolveIdentifier(e.tag_tok) orelse return null;
             const tag_name_text = self.parse_ir.env.getIdent(tag_name);
 
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
@@ -4486,7 +4486,7 @@ fn canonicalizePattern(
         },
         .list => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-        
+
             // Mark the start of scratch patterns for non-rest patterns only
             const scratch_top = self.env.store.scratchPatternTop();
 
