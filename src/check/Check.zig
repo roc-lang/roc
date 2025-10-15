@@ -2235,6 +2235,30 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                         const bool_var = try self.freshBool(rank, expr_region);
                         _ = try self.unify(bool_var, stmt_expr, rank);
                     },
+                    .s_var => |var_stmt| {
+
+                        // Check the pattern
+                        try self.checkPattern(var_stmt.pattern_idx, rank, .no_expectation);
+                        const var_pattern_var: Var = ModuleEnv.varFrom(var_stmt.pattern_idx);
+
+                        {
+                            // Enter a new rank
+                            try self.var_pool.pushRank();
+                            defer self.var_pool.popRank();
+
+                            const next_rank = rank.next();
+                            std.debug.assert(next_rank == self.var_pool.current_rank);
+
+                            does_fx = try self.checkExpr(var_stmt.expr, next_rank, Expected.no_expectation) or does_fx;
+
+                            // Now that we are existing the scope, we must generalize then pop this rank
+                            try self.generalizer.generalize(&self.var_pool, next_rank);
+                        }
+
+                        // Unify the pattern with the expression
+                        const var_expr_var: Var = ModuleEnv.varFrom(var_stmt.expr);
+                        _ = try self.unify(var_pattern_var, var_expr_var, rank);
+                    },
                     else => {
                         // TODO
                     },
