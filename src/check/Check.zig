@@ -2927,9 +2927,8 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: Rank, match: CIR.Ex
     does_fx = try self.checkExpr(first_branch.value, rank, .no_expectation) or does_fx;
     const branch_var = ModuleEnv.varFrom(first_branch.value);
 
-    // Unify the match expr to the first branch.
-    const match_result = try self.unify(ModuleEnv.varFrom(expr_idx), branch_var, rank);
-    std.debug.assert(match_result.isOk());
+    // Redirect the match expr to the first branch.
+    try self.types.setVarRedirect(ModuleEnv.varFrom(expr_idx), branch_var);
 
     // Then iterate over the rest of the branches
     for (branch_idxs[1..], 1..) |branch_idx, branch_cur_index| {
@@ -3023,9 +3022,11 @@ fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region,
     } } };
     const num_var = try self.freshFromContent(num_content, rank, expr_region);
 
-    // Unify operand and result with the number type
+    // Redirect the result to the number type
+    try self.types.setVarRedirect(result_var, num_var);
+
+    // Unify result with the number type
     _ = try self.unify(num_var, operand_var, rank);
-    _ = try self.unify(num_var, result_var, rank);
 
     return does_fx;
 }
@@ -3046,9 +3047,11 @@ fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, r
     // Create a fresh boolean variable for the operation
     const bool_var = try self.freshBool(rank, expr_region);
 
-    // Unify operand and result with the boolean type
+    // Redirect the result to the boolean type
+    try self.types.setVarRedirect(result_var, bool_var);
+
+    // Unify result with the boolean type
     _ = try self.unify(bool_var, operand_var, rank);
-    _ = try self.unify(bool_var, result_var, rank);
 
     return does_fx;
 }
