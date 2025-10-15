@@ -5,7 +5,7 @@ type=snippet
 ~~~
 # SOURCE
 ~~~roc
-stringify : a -> Str where module(a).to_str : a -> Str
+stringify : a -> Str where [a.to_str : a -> Str]
 stringify = |value| value.to_str()
 ~~~
 # EXPECTED
@@ -14,7 +14,7 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:10),OpColon(1:11-1:12),LowerIdent(1:13-1:14),OpArrow(1:15-1:17),UpperIdent(1:18-1:21),KwWhere(1:22-1:27),KwModule(1:28-1:34),NoSpaceOpenRound(1:34-1:35),LowerIdent(1:35-1:36),CloseRound(1:36-1:37),NoSpaceDotLowerIdent(1:37-1:44),OpColon(1:45-1:46),LowerIdent(1:47-1:48),OpArrow(1:49-1:51),UpperIdent(1:52-1:55),
+LowerIdent(1:1-1:10),OpColon(1:11-1:12),LowerIdent(1:13-1:14),OpArrow(1:15-1:17),UpperIdent(1:18-1:21),KwWhere(1:22-1:27),OpenSquare(1:28-1:29),LowerIdent(1:29-1:30),NoSpaceDotLowerIdent(1:30-1:37),OpColon(1:38-1:39),LowerIdent(1:40-1:41),OpArrow(1:42-1:44),UpperIdent(1:45-1:48),CloseSquare(1:48-1:49),
 LowerIdent(2:1-2:10),OpAssign(2:11-2:12),OpBar(2:13-2:14),LowerIdent(2:14-2:19),OpBar(2:19-2:20),LowerIdent(2:21-2:26),NoSpaceDotLowerIdent(2:26-2:33),NoSpaceOpenRound(2:33-2:34),CloseRound(2:34-2:35),
 EndOfFile(3:1-3:1),
 ~~~
@@ -23,15 +23,15 @@ EndOfFile(3:1-3:1),
 (file @1.1-2.35
 	(type-module @1.1-1.10)
 	(statements
-		(s-type-anno @1.1-1.55 (name "stringify")
+		(s-type-anno @1.1-1.49 (name "stringify")
 			(ty-fn @1.13-1.21
 				(ty-var @1.13-1.14 (raw "a"))
 				(ty @1.18-1.21 (name "Str")))
 			(where
-				(method @1.28-1.55 (module-of "a") (name "to_str")
+				(method @1.29-1.48 (module-of "a") (name "to_str")
 					(args
-						(ty-var @1.47-1.48 (raw "a")))
-					(ty @1.52-1.55 (name "Str")))))
+						(ty-var @1.40-1.41 (raw "a")))
+					(ty @1.45-1.48 (name "Str")))))
 		(s-decl @2.1-2.35
 			(p-ident @2.1-2.10 (raw "stringify"))
 			(e-lambda @2.13-2.35
@@ -64,16 +64,16 @@ NO CHANGE
 				(ty-fn @1.13-1.21 (effectful false)
 					(ty-rigid-var @1.13-1.14 (name "a"))
 					(ty-lookup @1.18-1.21 (name "Str") (builtin))))))
-	(s-type-anno @1.1-1.55 (name "stringify")
+	(s-type-anno @1.1-1.49 (name "stringify")
 		(ty-fn @1.13-1.21 (effectful false)
 			(ty-rigid-var @1.13-1.14 (name "a"))
 			(ty-lookup @1.18-1.21 (name "Str") (builtin)))
 		(where
-			(method @1.28-1.55 (module-of "a") (ident "to_str")
+			(method @1.29-1.48 (module-of "a") (ident "to_str")
 				(args
 					(ty-rigid-var-lookup (ty-rigid-var @1.13-1.14 (name "a"))))
-				(ty-lookup @1.52-1.55 (name "Str") (builtin)))))
-	(ext-decl @1.28-1.55 (ident "module(a).to_str") (kind "value")))
+				(ty-lookup @1.45-1.48 (name "Str") (builtin)))))
+	(ext-decl @1.29-1.48 (ident "a.to_str") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
