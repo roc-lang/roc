@@ -100,13 +100,13 @@ result = myBar
 (inferred-types
 	(defs
 		(patt @7.1-7.6 (type "Num(_size)"))
-		(patt @10.1-10.7 (type "Num(Int(Unsigned64))"))
+		(patt @10.1-10.7 (type "Error"))
 		(patt @2.5-2.13 (type "Num(_size)")))
 	(type_decls
 		(nominal @1.1-3.2 (type "Foo")
 			(ty-header @1.1-1.4 (name "Foo"))))
 	(expressions
 		(expr @7.9-7.16 (type "Num(_size)"))
-		(expr @10.10-10.15 (type "Num(Int(Unsigned64))"))
+		(expr @10.10-10.15 (type "Error"))
 		(expr @2.11-2.13 (type "Num(_size)"))))
 ~~~

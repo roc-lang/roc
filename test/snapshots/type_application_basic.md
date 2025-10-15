@@ -121,9 +121,9 @@ main! = |_| processList(["one", "two", "three"])
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.12 (type "List(Str) -> Num(Int(Unsigned64))"))
-		(patt @6.1-6.6 (type "_arg -> Num(Int(Unsigned64))")))
+		(patt @4.1-4.12 (type "List(Str) -> Error"))
+		(patt @6.1-6.6 (type "_arg -> Error")))
 	(expressions
-		(expr @4.15-4.32 (type "List(Str) -> Num(Int(Unsigned64))"))
-		(expr @6.9-6.47 (type "_arg -> Num(Int(Unsigned64))"))))
+		(expr @4.15-4.32 (type "List(Str) -> Error"))
+		(expr @6.9-6.47 (type "_arg -> Error"))))
 ~~~

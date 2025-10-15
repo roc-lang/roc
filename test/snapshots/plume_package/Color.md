@@ -1111,7 +1111,7 @@ is_named_color = |str| {
 		(patt @27.1-27.4 (type "Str -> Result(Color, [InvalidHex(Str)])"))
 		(patt @49.1-49.7 (type "Error -> Error"))
 		(patt @61.1-61.6 (type "Str -> Result(Color, [UnknownColor(Str)])"))
-		(patt @67.1-67.15 (type "_arg -> _ret")))
+		(patt @67.1-67.15 (type "_arg -> Error")))
 	(type_decls
 		(nominal @10.1-15.2 (type "Color")
 			(ty-header @10.1-10.6 (name "Color"))))
@@ -1121,5 +1121,5 @@ is_named_color = |str| {
 		(expr @27.7-46.2 (type "Str -> Result(Color, [InvalidHex(Str)])"))
 		(expr @49.10-54.2 (type "Error -> Error"))
 		(expr @61.9-65.50 (type "Str -> Result(Color, [UnknownColor(Str)])"))
-		(expr @67.18-71.2 (type "_arg -> _ret"))))
+		(expr @67.18-71.2 (type "_arg -> Error"))))
 ~~~

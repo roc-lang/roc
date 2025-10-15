@@ -50,5 +50,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.23 (type "_a"))
+(expr @1.1-1.23 (type "Error"))
 ~~~

@@ -85,5 +85,5 @@ EndOfFile(6:1-6:1),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-5.2 (type "_a"))
+(expr @1.1-5.2 (type "Error"))
 ~~~

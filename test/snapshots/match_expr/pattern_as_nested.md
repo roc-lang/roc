@@ -156,5 +156,5 @@ match person {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-4.2 (type "(Error, _field, Str)"))
+(expr @1.1-4.2 (type "(Error, Error, Str)"))
 ~~~

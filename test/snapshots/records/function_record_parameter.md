@@ -63,5 +63,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.67 (type "{ age: _field, name: _field2 } -> Str"))
+(expr @1.1-1.67 (type "{ age: _field, name: _field2 } -> Error"))
 ~~~

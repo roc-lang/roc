@@ -132,5 +132,5 @@ match ... {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-5.2 (type "Str"))
+(expr @1.1-5.2 (type "Error"))
 ~~~

@@ -79,7 +79,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @2.1-2.10 (type "a -> Str")))
+		(patt @2.1-2.10 (type "a -> Error")))
 	(expressions
-		(expr @2.13-2.35 (type "a -> Str"))))
+		(expr @2.13-2.35 (type "a -> Error"))))
 ~~~
