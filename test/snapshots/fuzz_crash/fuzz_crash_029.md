@@ -439,7 +439,6 @@ EndOfFile(18:1-18:1),
 ~~~
 # FORMATTED
 ~~~roc
-# Co		{	} #ose
 # ure
 # Ce
 # rd

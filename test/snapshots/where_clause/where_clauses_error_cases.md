@@ -127,7 +127,6 @@ EndOfFile(14:1-14:1),
 # FORMATTED
 ~~~roc
 # Missing colon in constraint
-# Missing colon in constraint
 broken_fn1 : a -> b
 	where
 		

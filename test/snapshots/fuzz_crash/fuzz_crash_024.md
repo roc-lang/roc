@@ -103,7 +103,6 @@ EndOfFile(6:1-6:1),
 # FORMATTED
 ~~~roc
 # el
-# el
 t = 
 
 # el

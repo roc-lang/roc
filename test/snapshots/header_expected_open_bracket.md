@@ -34,7 +34,6 @@ EndOfFile(2:1-2:1),
 ~~~
 # FORMATTED
 ~~~roc
-
 ~~~
 # CANONICALIZE
 ~~~clojure

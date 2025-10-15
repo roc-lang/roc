@@ -58,15 +58,7 @@ EndOfFile(9:1-9:1),
 ~~~
 # FORMATTED
 ~~~roc
-# Function showing var vs regular identifier independence
-# Function showing var vs regular identifier independence
-testFunc = |input| {
-	sum = input # Regular identifier
-	var sum_ = input * 2 # Var with underscore - should not conflict
-
-	sum_ = sum_ + sum # Reassign var - should work
-	sum + sum_ # Both should be accessible
-}
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
