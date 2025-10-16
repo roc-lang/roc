@@ -13,12 +13,12 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-EndOfFile(2:1-2:1),
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @2.1-2.1
-	(type-module @2.1-2.1)
+(file
+	(type-module)
 	(statements))
 ~~~
 # FORMATTED

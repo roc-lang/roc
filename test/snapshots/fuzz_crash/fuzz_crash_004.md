@@ -50,15 +50,15 @@ F
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:2),
-EndOfFile(2:1-2:1),
+UpperIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.2
-	(type-module @1.1-1.2)
+(file
+	(type-module)
 	(statements
-		(s-malformed @1.1-1.1 (tag "expected_colon_after_type_annotation"))))
+		(s-malformed (tag "expected_colon_after_type_annotation"))))
 ~~~
 # FORMATTED
 ~~~roc

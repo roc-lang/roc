@@ -21,12 +21,12 @@ This Unicode escape sequence is not valid.
 
 # TOKENS
 ~~~zig
-StringStart(1:1-1:2),MalformedStringPart(1:2-1:16),StringEnd(1:16-1:17),
-EndOfFile(2:1-2:1),
+StringStart,MalformedStringPart,StringEnd,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-string @1.1-1.17)
+(e-string)
 ~~~
 # FORMATTED
 ~~~roc
@@ -34,9 +34,9 @@ EndOfFile(2:1-2:1),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-string @1.1-1.17)
+(e-string)
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.17 (type "Str"))
+(expr (type "Str"))
 ~~~

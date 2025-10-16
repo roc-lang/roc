@@ -13,17 +13,17 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-OpBar(1:1-1:2),LowerIdent(1:2-1:3),OpBar(1:3-1:4),LowerIdent(1:5-1:6),OpPlus(1:7-1:8),Int(1:9-1:10),
-EndOfFile(2:1-2:1),
+OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,Int,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-lambda @1.1-1.10
+(e-lambda
 	(args
-		(p-ident @1.2-1.3 (raw "x")))
-	(e-binop @1.5-1.10 (op "+")
-		(e-ident @1.5-1.6 (raw "x"))
-		(e-int @1.9-1.10 (raw "1"))))
+		(p-ident (raw "x")))
+	(e-binop (op "+")
+		(e-ident (raw "x"))
+		(e-int (raw "1"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -31,15 +31,15 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-lambda @1.1-1.10
+(e-lambda
 	(args
-		(p-assign @1.2-1.3 (ident "x")))
-	(e-binop @1.5-1.10 (op "add")
-		(e-lookup-local @1.5-1.6
-			(p-assign @1.2-1.3 (ident "x")))
-		(e-num @1.9-1.10 (value "1"))))
+		(p-assign (ident "x")))
+	(e-binop (op "add")
+		(e-lookup-local
+			(p-assign (ident "x")))
+		(e-num (value "1"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.10 (type "Num(_size) -> Num(_size2)"))
+(expr (type "Num(_size) -> Num(_size2)"))
 ~~~

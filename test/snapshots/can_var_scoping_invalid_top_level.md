@@ -24,18 +24,18 @@ var topLevelVar_ = 0
 
 # TOKENS
 ~~~zig
-KwVar(2:1-2:4),LowerIdent(2:5-2:17),OpAssign(2:18-2:19),Int(2:20-2:21),
-EndOfFile(3:1-3:1),
+KwVar,LowerIdent,OpAssign,Int,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @2.1-2.21
-	(type-module @2.1-2.4)
+(file
+	(type-module)
 	(statements
-		(s-malformed @2.1-2.4 (tag "var_only_allowed_in_a_body"))
-		(s-decl @2.5-2.21
-			(p-ident @2.5-2.17 (raw "topLevelVar_"))
-			(e-int @2.20-2.21 (raw "0")))))
+		(s-malformed (tag "var_only_allowed_in_a_body"))
+		(s-decl
+			(p-ident (raw "topLevelVar_"))
+			(e-int (raw "0")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -46,14 +46,14 @@ topLevelVar_ = 0
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @2.5-2.17 (ident "topLevelVar_"))
-		(e-num @2.20-2.21 (value "0"))))
+		(p-assign (ident "topLevelVar_"))
+		(e-num (value "0"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @2.5-2.17 (type "Num(_size)")))
+		(patt (type "Num(_size)")))
 	(expressions
-		(expr @2.20-2.21 (type "Num(_size)"))))
+		(expr (type "Num(_size)"))))
 ~~~

@@ -52,33 +52,33 @@ Bar : SomeUndeclaredType
 
 # TOKENS
 ~~~zig
-UpperIdent(2:1-2:4),OpColon(2:5-2:6),UpperIdent(2:7-2:10),
-UpperIdent(5:1-5:4),OpColon(5:5-5:6),UpperIdent(5:7-5:10),
-UpperIdent(8:1-8:4),OpColon(8:5-8:6),UpperIdent(8:7-8:25),
-UpperIdent(11:1-11:4),OpColon(11:5-11:6),UpperIdent(11:7-11:10),
-EndOfFile(12:1-12:1),
+UpperIdent,OpColon,UpperIdent,
+UpperIdent,OpColon,UpperIdent,
+UpperIdent,OpColon,UpperIdent,
+UpperIdent,OpColon,UpperIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @2.1-11.10
-	(type-module @2.1-2.4)
+(file
+	(type-module)
 	(statements
-		(s-type-decl @2.1-2.10
-			(header @2.1-2.4 (name "Foo")
+		(s-type-decl
+			(header (name "Foo")
 				(args))
-			(ty @2.7-2.10 (name "U64")))
-		(s-type-decl @5.1-5.10
-			(header @5.1-5.4 (name "Foo")
+			(ty (name "U64")))
+		(s-type-decl
+			(header (name "Foo")
 				(args))
-			(ty @5.7-5.10 (name "Str")))
-		(s-type-decl @8.1-8.25
-			(header @8.1-8.4 (name "Bar")
+			(ty (name "Str")))
+		(s-type-decl
+			(header (name "Bar")
 				(args))
-			(ty @8.7-8.25 (name "SomeUndeclaredType")))
-		(s-type-decl @11.1-11.10
-			(header @11.1-11.4 (name "Baz")
+			(ty (name "SomeUndeclaredType")))
+		(s-type-decl
+			(header (name "Baz")
 				(args))
-			(ty @11.7-11.10 (name "Foo")))))
+			(ty (name "Foo")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -87,31 +87,31 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-alias-decl @2.1-2.10
-		(ty-header @2.1-2.4 (name "Foo"))
-		(ty-lookup @2.7-2.10 (name "U64") (builtin)))
-	(s-alias-decl @5.1-5.10
-		(ty-header @5.1-5.4 (name "Foo"))
-		(ty-lookup @5.7-5.10 (name "Str") (builtin)))
-	(s-alias-decl @8.1-8.25
-		(ty-header @8.1-8.4 (name "Bar"))
-		(ty-malformed @8.7-8.25))
-	(s-alias-decl @11.1-11.10
-		(ty-header @11.1-11.4 (name "Baz"))
-		(ty-lookup @11.7-11.10 (name "Foo") (local))))
+	(s-alias-decl
+		(ty-header (name "Foo"))
+		(ty-lookup (name "U64") (builtin)))
+	(s-alias-decl
+		(ty-header (name "Foo"))
+		(ty-lookup (name "Str") (builtin)))
+	(s-alias-decl
+		(ty-header (name "Bar"))
+		(ty-malformed))
+	(s-alias-decl
+		(ty-header (name "Baz"))
+		(ty-lookup (name "Foo") (local))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @2.1-2.10 (type "Foo")
-			(ty-header @2.1-2.4 (name "Foo")))
-		(alias @5.1-5.10 (type "Foo")
-			(ty-header @5.1-5.4 (name "Foo")))
-		(alias @8.1-8.25 (type "Bar")
-			(ty-header @8.1-8.4 (name "Bar")))
-		(alias @11.1-11.10 (type "Baz")
-			(ty-header @11.1-11.4 (name "Baz"))))
+		(alias (type "Foo")
+			(ty-header (name "Foo")))
+		(alias (type "Foo")
+			(ty-header (name "Foo")))
+		(alias (type "Bar")
+			(ty-header (name "Bar")))
+		(alias (type "Baz")
+			(ty-header (name "Baz"))))
 	(expressions))
 ~~~

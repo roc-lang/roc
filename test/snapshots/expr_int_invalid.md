@@ -23,12 +23,12 @@ Check that the number is correctly formatted. Valid examples include: `42`, `3.1
 
 # TOKENS
 ~~~zig
-Int(1:1-1:42),
-EndOfFile(2:1-2:1),
+Int,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-int @1.1-1.42 (raw "99999999999999999999999999999999999999999"))
+(e-int (raw "99999999999999999999999999999999999999999"))
 ~~~
 # FORMATTED
 ~~~roc
@@ -40,5 +40,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.42 (type "Error"))
+(expr (type "Error"))
 ~~~

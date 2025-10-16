@@ -34,48 +34,48 @@ But `f` needs the first argument to be:
 
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),
-LowerIdent(2:5-2:13),OpColon(2:14-2:15),LowerIdent(2:16-2:17),OpArrow(2:18-2:20),LowerIdent(2:21-2:22),
-LowerIdent(3:5-3:13),OpAssign(3:14-3:15),OpBar(3:16-3:17),LowerIdent(3:17-3:18),OpBar(3:18-3:19),LowerIdent(3:20-3:21),
-LowerIdent(5:5-5:17),OpColon(5:18-5:19),OpenRound(5:20-5:21),NoSpaceOpenRound(5:21-5:22),UpperIdent(5:22-5:25),OpArrow(5:26-5:28),UpperIdent(5:29-5:32),CloseRound(5:32-5:33),OpArrow(5:34-5:36),UpperIdent(5:37-5:40),CloseRound(5:40-5:41),
-LowerIdent(6:5-6:17),OpAssign(6:18-6:19),OpBar(6:20-6:21),LowerIdent(6:21-6:22),OpBar(6:22-6:23),LowerIdent(6:24-6:25),NoSpaceOpenRound(6:25-6:26),OpenSquare(6:26-6:27),StringStart(6:27-6:28),StringPart(6:28-6:33),StringEnd(6:33-6:34),CloseSquare(6:34-6:35),CloseRound(6:35-6:36),
-LowerIdent(8:5-8:17),NoSpaceOpenRound(8:17-8:18),LowerIdent(8:18-8:26),CloseRound(8:26-8:27),
-CloseCurly(9:1-9:2),
-EndOfFile(10:1-10:1),
+OpenCurly,
+LowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,
+LowerIdent,OpColon,OpenRound,NoSpaceOpenRound,UpperIdent,OpArrow,UpperIdent,CloseRound,OpArrow,UpperIdent,CloseRound,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,NoSpaceOpenRound,OpenSquare,StringStart,StringPart,StringEnd,CloseSquare,CloseRound,
+LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-block @1.1-9.2
+(e-block
 	(statements
-		(s-type-anno @2.5-2.22 (name "identity")
-			(ty-fn @2.16-2.22
-				(ty-var @2.16-2.17 (raw "a"))
-				(ty-var @2.21-2.22 (raw "a"))))
-		(s-decl @3.5-3.21
-			(p-ident @3.5-3.13 (raw "identity"))
-			(e-lambda @3.16-3.21
+		(s-type-anno (name "identity")
+			(ty-fn
+				(ty-var (raw "a"))
+				(ty-var (raw "a"))))
+		(s-decl
+			(p-ident (raw "identity"))
+			(e-lambda
 				(args
-					(p-ident @3.17-3.18 (raw "x")))
-				(e-ident @3.20-3.21 (raw "x"))))
-		(s-type-anno @5.5-5.41 (name "needs_string")
-			(ty-fn @5.21-5.40
-				(ty-fn @5.22-5.32
-					(ty @5.22-5.25 (name "Str"))
-					(ty @5.29-5.32 (name "Str")))
-				(ty @5.37-5.40 (name "Str"))))
-		(s-decl @6.5-6.36
-			(p-ident @6.5-6.17 (raw "needs_string"))
-			(e-lambda @6.20-6.36
+					(p-ident (raw "x")))
+				(e-ident (raw "x"))))
+		(s-type-anno (name "needs_string")
+			(ty-fn
+				(ty-fn
+					(ty (name "Str"))
+					(ty (name "Str")))
+				(ty (name "Str"))))
+		(s-decl
+			(p-ident (raw "needs_string"))
+			(e-lambda
 				(args
-					(p-ident @6.21-6.22 (raw "f")))
-				(e-apply @6.24-6.36
-					(e-ident @6.24-6.25 (raw "f"))
-					(e-list @6.26-6.35
-						(e-string @6.27-6.34
-							(e-string-part @6.28-6.33 (raw "hello")))))))
-		(e-apply @8.5-8.27
-			(e-ident @8.5-8.17 (raw "needs_string"))
-			(e-ident @8.18-8.26 (raw "identity")))))
+					(p-ident (raw "f")))
+				(e-apply
+					(e-ident (raw "f"))
+					(e-list
+						(e-string
+							(e-string-part (raw "hello")))))))
+		(e-apply
+			(e-ident (raw "needs_string"))
+			(e-ident (raw "identity")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -91,33 +91,33 @@ EndOfFile(10:1-10:1),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-9.2
-	(s-let @3.5-3.21
-		(p-assign @3.5-3.13 (ident "identity"))
-		(e-lambda @3.16-3.21
+(e-block
+	(s-let
+		(p-assign (ident "identity"))
+		(e-lambda
 			(args
-				(p-assign @3.17-3.18 (ident "x")))
-			(e-lookup-local @3.20-3.21
-				(p-assign @3.17-3.18 (ident "x")))))
-	(s-let @6.5-6.36
-		(p-assign @6.5-6.17 (ident "needs_string"))
-		(e-lambda @6.20-6.36
+				(p-assign (ident "x")))
+			(e-lookup-local
+				(p-assign (ident "x")))))
+	(s-let
+		(p-assign (ident "needs_string"))
+		(e-lambda
 			(args
-				(p-assign @6.21-6.22 (ident "f")))
-			(e-call @6.24-6.36
-				(e-lookup-local @6.24-6.25
-					(p-assign @6.21-6.22 (ident "f")))
-				(e-list @6.26-6.35
+				(p-assign (ident "f")))
+			(e-call
+				(e-lookup-local
+					(p-assign (ident "f")))
+				(e-list
 					(elems
-						(e-string @6.27-6.34
-							(e-literal @6.28-6.33 (string "hello"))))))))
-	(e-call @8.5-8.27
-		(e-lookup-local @8.5-8.17
-			(p-assign @6.5-6.17 (ident "needs_string")))
-		(e-lookup-local @8.18-8.26
-			(p-assign @3.5-3.13 (ident "identity")))))
+						(e-string
+							(e-literal (string "hello"))))))))
+	(e-call
+		(e-lookup-local
+			(p-assign (ident "needs_string")))
+		(e-lookup-local
+			(p-assign (ident "identity")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-9.2 (type "Error"))
+(expr (type "Error"))
 ~~~

@@ -43,52 +43,52 @@ x = 5
 
 # TOKENS
 ~~~zig
-LowerIdent(2:1-2:2),OpAssign(2:3-2:4),Int(2:5-2:6),
-LowerIdent(3:1-3:2),OpAssign(3:3-3:4),Int(3:5-3:7),
-LowerIdent(6:1-6:10),OpAssign(6:11-6:12),OpBar(6:13-6:14),Underscore(6:14-6:15),OpBar(6:15-6:16),OpenCurly(6:17-6:18),
-LowerIdent(7:5-7:6),OpAssign(7:7-7:8),Int(7:9-7:11),
-LowerIdent(8:5-8:16),OpAssign(8:17-8:18),OpenCurly(8:19-8:20),
-LowerIdent(10:9-10:10),OpAssign(10:11-10:12),LowerIdent(10:13-10:14),OpPlus(10:15-10:16),LowerIdent(10:17-10:18),
-LowerIdent(11:9-11:10),OpPlus(11:11-11:12),Int(11:13-11:14),
-CloseCurly(12:5-12:6),
-LowerIdent(13:5-13:16),
-CloseCurly(14:1-14:2),
-EndOfFile(15:1-15:1),
+LowerIdent,OpAssign,Int,
+LowerIdent,OpAssign,Int,
+LowerIdent,OpAssign,OpBar,Underscore,OpBar,OpenCurly,
+LowerIdent,OpAssign,Int,
+LowerIdent,OpAssign,OpenCurly,
+LowerIdent,OpAssign,LowerIdent,OpPlus,LowerIdent,
+LowerIdent,OpPlus,Int,
+CloseCurly,
+LowerIdent,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @2.1-14.2
-	(type-module @2.1-2.2)
+(file
+	(type-module)
 	(statements
-		(s-decl @2.1-2.6
-			(p-ident @2.1-2.2 (raw "x"))
-			(e-int @2.5-2.6 (raw "5")))
-		(s-decl @3.1-3.7
-			(p-ident @3.1-3.2 (raw "y"))
-			(e-int @3.5-3.7 (raw "10")))
-		(s-decl @6.1-14.2
-			(p-ident @6.1-6.10 (raw "outerFunc"))
-			(e-lambda @6.13-14.2
+		(s-decl
+			(p-ident (raw "x"))
+			(e-int (raw "5")))
+		(s-decl
+			(p-ident (raw "y"))
+			(e-int (raw "10")))
+		(s-decl
+			(p-ident (raw "outerFunc"))
+			(e-lambda
 				(args
 					(p-underscore))
-				(e-block @6.17-14.2
+				(e-block
 					(statements
-						(s-decl @7.5-7.11
-							(p-ident @7.5-7.6 (raw "x"))
-							(e-int @7.9-7.11 (raw "20")))
-						(s-decl @8.5-12.6
-							(p-ident @8.5-8.16 (raw "innerResult"))
-							(e-block @8.19-12.6
+						(s-decl
+							(p-ident (raw "x"))
+							(e-int (raw "20")))
+						(s-decl
+							(p-ident (raw "innerResult"))
+							(e-block
 								(statements
-									(s-decl @10.9-10.18
-										(p-ident @10.9-10.10 (raw "z"))
-										(e-binop @10.13-10.18 (op "+")
-											(e-ident @10.13-10.14 (raw "x"))
-											(e-ident @10.17-10.18 (raw "y"))))
-									(e-binop @11.9-11.14 (op "+")
-										(e-ident @11.9-11.10 (raw "z"))
-										(e-int @11.13-11.14 (raw "1"))))))
-						(e-ident @13.5-13.16 (raw "innerResult"))))))))
+									(s-decl
+										(p-ident (raw "z"))
+										(e-binop (op "+")
+											(e-ident (raw "x"))
+											(e-ident (raw "y"))))
+									(e-binop (op "+")
+										(e-ident (raw "z"))
+										(e-int (raw "1"))))))
+						(e-ident (raw "innerResult"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -111,49 +111,49 @@ outerFunc = |_| {
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @2.1-2.2 (ident "x"))
-		(e-num @2.5-2.6 (value "5")))
+		(p-assign (ident "x"))
+		(e-num (value "5")))
 	(d-let
-		(p-assign @3.1-3.2 (ident "y"))
-		(e-num @3.5-3.7 (value "10")))
+		(p-assign (ident "y"))
+		(e-num (value "10")))
 	(d-let
-		(p-assign @6.1-6.10 (ident "outerFunc"))
-		(e-closure @6.13-14.2
+		(p-assign (ident "outerFunc"))
+		(e-closure
 			(captures
-				(capture @3.1-3.2 (ident "y")))
-			(e-lambda @6.13-14.2
+				(capture (ident "y")))
+			(e-lambda
 				(args
-					(p-underscore @6.14-6.15))
-				(e-block @6.17-14.2
-					(s-let @7.5-7.11
-						(p-assign @7.5-7.6 (ident "x"))
-						(e-num @7.9-7.11 (value "20")))
-					(s-let @8.5-12.6
-						(p-assign @8.5-8.16 (ident "innerResult"))
-						(e-block @8.19-12.6
-							(s-let @10.9-10.18
-								(p-assign @10.9-10.10 (ident "z"))
-								(e-binop @10.13-10.18 (op "add")
-									(e-lookup-local @10.13-10.14
-										(p-assign @7.5-7.6 (ident "x")))
-									(e-lookup-local @10.17-10.18
-										(p-assign @3.1-3.2 (ident "y")))))
-							(e-binop @11.9-11.14 (op "add")
-								(e-lookup-local @11.9-11.10
-									(p-assign @10.9-10.10 (ident "z")))
-								(e-num @11.13-11.14 (value "1")))))
-					(e-lookup-local @13.5-13.16
-						(p-assign @8.5-8.16 (ident "innerResult"))))))))
+					(p-underscore))
+				(e-block
+					(s-let
+						(p-assign (ident "x"))
+						(e-num (value "20")))
+					(s-let
+						(p-assign (ident "innerResult"))
+						(e-block
+							(s-let
+								(p-assign (ident "z"))
+								(e-binop (op "add")
+									(e-lookup-local
+										(p-assign (ident "x")))
+									(e-lookup-local
+										(p-assign (ident "y")))))
+							(e-binop (op "add")
+								(e-lookup-local
+									(p-assign (ident "z")))
+								(e-num (value "1")))))
+					(e-lookup-local
+						(p-assign (ident "innerResult"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @2.1-2.2 (type "Num(_size)"))
-		(patt @3.1-3.2 (type "Num(_size)"))
-		(patt @6.1-6.10 (type "_arg -> Num(_size)")))
+		(patt (type "Num(_size)"))
+		(patt (type "Num(_size)"))
+		(patt (type "_arg -> Num(_size)")))
 	(expressions
-		(expr @2.5-2.6 (type "Num(_size)"))
-		(expr @3.5-3.7 (type "Num(_size)"))
-		(expr @6.13-14.2 (type "_arg -> Num(_size)"))))
+		(expr (type "Num(_size)"))
+		(expr (type "Num(_size)"))
+		(expr (type "_arg -> Num(_size)"))))
 ~~~

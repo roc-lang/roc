@@ -110,21 +110,21 @@ Add a main! function like:
 
 # TOKENS
 ~~~zig
-OpBar(1:1-1:2),OpBar(1:2-1:3),NoSpaceOpenRound(1:3-1:4),OpBar(1:4-1:5),NoSpaceOpenRound(1:5-1:6),LowerIdent(1:6-1:16),OpBar(1:16-1:17),
-EndOfFile(2:1-2:1),
+OpBar,OpBar,NoSpaceOpenRound,OpBar,NoSpaceOpenRound,LowerIdent,OpBar,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.17
-	(type-module @1.1-1.2)
+(file
+	(type-module)
 	(statements
-		(s-malformed @1.1-1.2 (tag "statement_unexpected_token"))
-		(s-malformed @1.2-1.3 (tag "statement_unexpected_token"))
-		(s-malformed @1.3-1.4 (tag "statement_unexpected_token"))
-		(s-malformed @1.4-1.5 (tag "statement_unexpected_token"))
-		(s-malformed @1.5-1.6 (tag "statement_unexpected_token"))
-		(s-malformed @1.6-1.16 (tag "statement_unexpected_token"))
-		(s-malformed @1.16-1.17 (tag "statement_unexpected_token"))))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc

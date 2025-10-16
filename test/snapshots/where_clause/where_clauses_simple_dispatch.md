@@ -14,33 +14,33 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:10),OpColon(1:11-1:12),LowerIdent(1:13-1:14),OpArrow(1:15-1:17),UpperIdent(1:18-1:21),KwWhere(1:22-1:27),OpenSquare(1:28-1:29),LowerIdent(1:29-1:30),NoSpaceDotLowerIdent(1:30-1:37),OpColon(1:38-1:39),LowerIdent(1:40-1:41),OpArrow(1:42-1:44),UpperIdent(1:45-1:48),CloseSquare(1:48-1:49),
-LowerIdent(2:1-2:10),OpAssign(2:11-2:12),OpBar(2:13-2:14),LowerIdent(2:14-2:19),OpBar(2:19-2:20),LowerIdent(2:21-2:26),NoSpaceDotLowerIdent(2:26-2:33),NoSpaceOpenRound(2:33-2:34),CloseRound(2:34-2:35),
-EndOfFile(3:1-3:1),
+LowerIdent,OpColon,LowerIdent,OpArrow,UpperIdent,KwWhere,OpenSquare,LowerIdent,NoSpaceDotLowerIdent,OpColon,LowerIdent,OpArrow,UpperIdent,CloseSquare,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-2.35
-	(type-module @1.1-1.10)
+(file
+	(type-module)
 	(statements
-		(s-type-anno @1.1-1.49 (name "stringify")
-			(ty-fn @1.13-1.21
-				(ty-var @1.13-1.14 (raw "a"))
-				(ty @1.18-1.21 (name "Str")))
+		(s-type-anno (name "stringify")
+			(ty-fn
+				(ty-var (raw "a"))
+				(ty (name "Str")))
 			(where
-				(method @1.29-1.48 (module-of "a") (name "to_str")
+				(method (module-of "a") (name "to_str")
 					(args
-						(ty-var @1.40-1.41 (raw "a")))
-					(ty @1.45-1.48 (name "Str")))))
-		(s-decl @2.1-2.35
-			(p-ident @2.1-2.10 (raw "stringify"))
-			(e-lambda @2.13-2.35
+						(ty-var (raw "a")))
+					(ty (name "Str")))))
+		(s-decl
+			(p-ident (raw "stringify"))
+			(e-lambda
 				(args
-					(p-ident @2.14-2.19 (raw "value")))
-				(e-field-access @2.21-2.35
-					(e-ident @2.21-2.26 (raw "value"))
-					(e-apply @2.26-2.35
-						(e-ident @2.26-2.33 (raw "to_str"))))))))
+					(p-ident (raw "value")))
+				(e-field-access
+					(e-ident (raw "value"))
+					(e-apply
+						(e-ident (raw "to_str"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -50,36 +50,36 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @2.1-2.10 (ident "stringify"))
-		(e-lambda @2.13-2.35
+		(p-assign (ident "stringify"))
+		(e-lambda
 			(args
-				(p-assign @2.14-2.19 (ident "value")))
-			(e-dot-access @2.21-2.35 (field "to_str")
+				(p-assign (ident "value")))
+			(e-dot-access (field "to_str")
 				(receiver
-					(e-lookup-local @2.21-2.26
-						(p-assign @2.14-2.19 (ident "value"))))
+					(e-lookup-local
+						(p-assign (ident "value"))))
 				(args)))
-		(annotation @2.1-2.10
+		(annotation
 			(declared-type
-				(ty-fn @1.13-1.21 (effectful false)
-					(ty-rigid-var @1.13-1.14 (name "a"))
-					(ty-lookup @1.18-1.21 (name "Str") (builtin))))))
-	(s-type-anno @1.1-1.49 (name "stringify")
-		(ty-fn @1.13-1.21 (effectful false)
-			(ty-rigid-var @1.13-1.14 (name "a"))
-			(ty-lookup @1.18-1.21 (name "Str") (builtin)))
+				(ty-fn (effectful false)
+					(ty-rigid-var (name "a"))
+					(ty-lookup (name "Str") (builtin))))))
+	(s-type-anno (name "stringify")
+		(ty-fn (effectful false)
+			(ty-rigid-var (name "a"))
+			(ty-lookup (name "Str") (builtin)))
 		(where
-			(method @1.29-1.48 (module-of "a") (ident "to_str")
+			(method (module-of "a") (ident "to_str")
 				(args
-					(ty-rigid-var-lookup (ty-rigid-var @1.13-1.14 (name "a"))))
-				(ty-lookup @1.45-1.48 (name "Str") (builtin)))))
-	(ext-decl @1.29-1.48 (ident "a.to_str") (kind "value")))
+					(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
+				(ty-lookup (name "Str") (builtin)))))
+	(ext-decl (ident "a.to_str") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @2.1-2.10 (type "a -> Str")))
+		(patt (type "a -> Str")))
 	(expressions
-		(expr @2.13-2.35 (type "a -> Str"))))
+		(expr (type "a -> Str"))))
 ~~~

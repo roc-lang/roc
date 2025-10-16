@@ -23,15 +23,15 @@ if bool 1 else 2
 
 # TOKENS
 ~~~zig
-KwIf(1:1-1:3),LowerIdent(1:4-1:8),Int(1:9-1:10),KwElse(1:11-1:15),Int(1:16-1:17),
-EndOfFile(2:1-2:1),
+KwIf,LowerIdent,Int,KwElse,Int,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-if-then-else @1.1-1.17
-	(e-ident @1.4-1.8 (raw "bool"))
-	(e-int @1.9-1.10 (raw "1"))
-	(e-int @1.16-1.17 (raw "2")))
+(e-if-then-else
+	(e-ident (raw "bool"))
+	(e-int (raw "1"))
+	(e-int (raw "2")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -39,15 +39,15 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-if @1.1-1.17
+(e-if
 	(if-branches
 		(if-branch
 			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-num @1.9-1.10 (value "1"))))
+			(e-num (value "1"))))
 	(if-else
-		(e-num @1.16-1.17 (value "2"))))
+		(e-num (value "2"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.17 (type "Num(_size)"))
+(expr (type "Num(_size)"))
 ~~~

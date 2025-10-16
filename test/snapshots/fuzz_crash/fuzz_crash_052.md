@@ -36,16 +36,16 @@ Other valid examples:
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:2),
-Int(2:1-2:2),
-EndOfFile(3:1-3:1),
+UpperIdent,
+Int,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-2.2
-	(type-module @1.1-1.2)
+(file
+	(type-module)
 	(statements
-		(s-malformed @2.1-2.2 (tag "expected_colon_after_type_annotation"))))
+		(s-malformed (tag "expected_colon_after_type_annotation"))))
 ~~~
 # FORMATTED
 ~~~roc

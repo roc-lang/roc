@@ -80,37 +80,37 @@ green : Color
 
 # TOKENS
 ~~~zig
-KwImport(1:1-1:7),UpperIdent(1:8-1:13),DotStar(1:13-1:15),
-LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:12),
-LowerIdent(4:1-4:4),OpAssign(4:5-4:6),UpperIdent(4:7-4:10),
-LowerIdent(6:1-6:5),OpColon(6:6-6:7),UpperIdent(6:8-6:13),
-LowerIdent(7:1-7:5),OpAssign(7:6-7:7),UpperIdent(7:8-7:12),
-LowerIdent(9:1-9:6),OpColon(9:7-9:8),UpperIdent(9:9-9:14),
-LowerIdent(10:1-10:6),OpAssign(10:7-10:8),UpperIdent(10:9-10:14),
-EndOfFile(11:1-11:1),
+KwImport,UpperIdent,DotStar,
+LowerIdent,OpColon,UpperIdent,
+LowerIdent,OpAssign,UpperIdent,
+LowerIdent,OpColon,UpperIdent,
+LowerIdent,OpAssign,UpperIdent,
+LowerIdent,OpColon,UpperIdent,
+LowerIdent,OpAssign,UpperIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-10.14
-	(type-module @1.1-1.7)
+(file
+	(type-module)
 	(statements
-		(s-import @1.1-1.13 (raw "Color"))
-		(s-malformed @1.13-1.15 (tag "statement_unexpected_token"))
-		(s-type-anno @3.1-3.12 (name "red")
-			(ty @3.7-3.12 (name "Color")))
-		(s-decl @4.1-4.10
-			(p-ident @4.1-4.4 (raw "red"))
-			(e-tag @4.7-4.10 (raw "Red")))
-		(s-type-anno @6.1-6.13 (name "blue")
-			(ty @6.8-6.13 (name "Color")))
-		(s-decl @7.1-7.12
-			(p-ident @7.1-7.5 (raw "blue"))
-			(e-tag @7.8-7.12 (raw "Blue")))
-		(s-type-anno @9.1-9.14 (name "green")
-			(ty @9.9-9.14 (name "Color")))
-		(s-decl @10.1-10.14
-			(p-ident @10.1-10.6 (raw "green"))
-			(e-tag @10.9-10.14 (raw "Green")))))
+		(s-import (raw "Color"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-type-anno (name "red")
+			(ty (name "Color")))
+		(s-decl
+			(p-ident (raw "red"))
+			(e-tag (raw "Red")))
+		(s-type-anno (name "blue")
+			(ty (name "Color")))
+		(s-decl
+			(p-ident (raw "blue"))
+			(e-tag (raw "Blue")))
+		(s-type-anno (name "green")
+			(ty (name "Color")))
+		(s-decl
+			(p-ident (raw "green"))
+			(e-tag (raw "Green")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -130,35 +130,35 @@ green = Green
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @4.1-4.4 (ident "red"))
-		(e-tag @4.7-4.10 (name "Red"))
-		(annotation @4.1-4.4
+		(p-assign (ident "red"))
+		(e-tag (name "Red"))
+		(annotation
 			(declared-type
-				(ty-malformed @3.7-3.12))))
+				(ty-malformed))))
 	(d-let
-		(p-assign @7.1-7.5 (ident "blue"))
-		(e-tag @7.8-7.12 (name "Blue"))
-		(annotation @7.1-7.5
+		(p-assign (ident "blue"))
+		(e-tag (name "Blue"))
+		(annotation
 			(declared-type
-				(ty-malformed @6.8-6.13))))
+				(ty-malformed))))
 	(d-let
-		(p-assign @10.1-10.6 (ident "green"))
-		(e-tag @10.9-10.14 (name "Green"))
-		(annotation @10.1-10.6
+		(p-assign (ident "green"))
+		(e-tag (name "Green"))
+		(annotation
 			(declared-type
-				(ty-malformed @9.9-9.14))))
-	(s-import @1.1-1.13 (module "Color")
+				(ty-malformed))))
+	(s-import (module "Color")
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.4 (type "Error"))
-		(patt @7.1-7.5 (type "Error"))
-		(patt @10.1-10.6 (type "Error")))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error")))
 	(expressions
-		(expr @4.7-4.10 (type "Error"))
-		(expr @7.8-7.12 (type "Error"))
-		(expr @10.9-10.14 (type "Error"))))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))))
 ~~~

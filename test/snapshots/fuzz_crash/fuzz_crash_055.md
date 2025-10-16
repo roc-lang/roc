@@ -83,19 +83,19 @@ module(a).h:s
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),NoSpaceOpenRound(1:7-1:8),LowerIdent(1:8-1:9),CloseRound(1:9-1:10),NoSpaceDotLowerIdent(1:10-1:12),OpColon(1:12-1:13),LowerIdent(1:13-1:14),
-EndOfFile(2:1-2:1),
+KwModule,NoSpaceOpenRound,LowerIdent,CloseRound,NoSpaceDotLowerIdent,OpColon,LowerIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.14
-	(malformed-header @1.7-1.8 (tag "header_expected_open_square"))
+(file
+	(malformed-header (tag "header_expected_open_square"))
 	(statements
-		(s-malformed @1.8-1.9 (tag "statement_unexpected_token"))
-		(s-malformed @1.9-1.10 (tag "statement_unexpected_token"))
-		(s-malformed @1.10-1.12 (tag "statement_unexpected_token"))
-		(s-malformed @1.12-1.13 (tag "statement_unexpected_token"))
-		(s-malformed @1.13-1.14 (tag "statement_unexpected_token"))))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc

@@ -65,49 +65,49 @@ But the type annotation says it should have the type:
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:8),OpColonEqual(1:9-1:11),Underscore(1:12-1:13),
-UpperIdent(3:1-3:11),OpColonEqual(3:12-3:14),UpperIdent(3:15-3:22),
-LowerIdent(5:1-5:6),OpColon(5:7-5:8),UpperIdent(5:9-5:19),
-LowerIdent(6:1-6:6),OpAssign(6:7-6:8),StringStart(6:9-6:10),StringPart(6:10-6:14),StringEnd(6:14-6:15),
-UpperIdent(8:1-8:9),OpColonEqual(8:10-8:12),UpperIdent(8:13-8:16),
-UpperIdent(10:1-10:12),OpColonEqual(10:13-10:15),UpperIdent(10:16-10:24),
-LowerIdent(12:1-12:10),OpColon(12:11-12:12),UpperIdent(12:13-12:24),
-LowerIdent(13:1-13:10),OpAssign(13:11-13:12),StringStart(13:13-13:14),StringPart(13:14-13:18),StringEnd(13:18-13:19),
-EndOfFile(14:1-14:1),
+UpperIdent,OpColonEqual,Underscore,
+UpperIdent,OpColonEqual,UpperIdent,
+LowerIdent,OpColon,UpperIdent,
+LowerIdent,OpAssign,StringStart,StringPart,StringEnd,
+UpperIdent,OpColonEqual,UpperIdent,
+UpperIdent,OpColonEqual,UpperIdent,
+LowerIdent,OpColon,UpperIdent,
+LowerIdent,OpAssign,StringStart,StringPart,StringEnd,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-13.19
-	(type-module @1.1-1.8)
+(file
+	(type-module)
 	(statements
-		(s-type-decl @1.1-1.13
-			(header @1.1-1.8 (name "BadBase")
+		(s-type-decl
+			(header (name "BadBase")
 				(args))
 			(_))
-		(s-type-decl @3.1-3.22
-			(header @3.1-3.11 (name "BadDerived")
+		(s-type-decl
+			(header (name "BadDerived")
 				(args))
-			(ty @3.15-3.22 (name "BadBase")))
-		(s-type-anno @5.1-5.19 (name "value")
-			(ty @5.9-5.19 (name "BadDerived")))
-		(s-decl @6.1-6.15
-			(p-ident @6.1-6.6 (raw "value"))
-			(e-string @6.9-6.15
-				(e-string-part @6.10-6.14 (raw "test"))))
-		(s-type-decl @8.1-8.16
-			(header @8.1-8.9 (name "GoodBase")
+			(ty (name "BadBase")))
+		(s-type-anno (name "value")
+			(ty (name "BadDerived")))
+		(s-decl
+			(p-ident (raw "value"))
+			(e-string
+				(e-string-part (raw "test"))))
+		(s-type-decl
+			(header (name "GoodBase")
 				(args))
-			(ty @8.13-8.16 (name "Str")))
-		(s-type-decl @10.1-10.24
-			(header @10.1-10.12 (name "GoodDerived")
+			(ty (name "Str")))
+		(s-type-decl
+			(header (name "GoodDerived")
 				(args))
-			(ty @10.16-10.24 (name "GoodBase")))
-		(s-type-anno @12.1-12.24 (name "goodValue")
-			(ty @12.13-12.24 (name "GoodDerived")))
-		(s-decl @13.1-13.19
-			(p-ident @13.1-13.10 (raw "goodValue"))
-			(e-string @13.13-13.19
-				(e-string-part @13.14-13.18 (raw "test"))))))
+			(ty (name "GoodBase")))
+		(s-type-anno (name "goodValue")
+			(ty (name "GoodDerived")))
+		(s-decl
+			(p-ident (raw "goodValue"))
+			(e-string
+				(e-string-part (raw "test"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -117,48 +117,48 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @6.1-6.6 (ident "value"))
-		(e-string @6.9-6.15
-			(e-literal @6.10-6.14 (string "test")))
-		(annotation @6.1-6.6
+		(p-assign (ident "value"))
+		(e-string
+			(e-literal (string "test")))
+		(annotation
 			(declared-type
-				(ty-lookup @5.9-5.19 (name "BadDerived") (local)))))
+				(ty-lookup (name "BadDerived") (local)))))
 	(d-let
-		(p-assign @13.1-13.10 (ident "goodValue"))
-		(e-string @13.13-13.19
-			(e-literal @13.14-13.18 (string "test")))
-		(annotation @13.1-13.10
+		(p-assign (ident "goodValue"))
+		(e-string
+			(e-literal (string "test")))
+		(annotation
 			(declared-type
-				(ty-lookup @12.13-12.24 (name "GoodDerived") (local)))))
-	(s-nominal-decl @1.1-1.13
-		(ty-header @1.1-1.8 (name "BadBase"))
-		(ty-underscore @1.1-1.1))
-	(s-nominal-decl @3.1-3.22
-		(ty-header @3.1-3.11 (name "BadDerived"))
-		(ty-lookup @3.15-3.22 (name "BadBase") (local)))
-	(s-nominal-decl @8.1-8.16
-		(ty-header @8.1-8.9 (name "GoodBase"))
-		(ty-lookup @8.13-8.16 (name "Str") (builtin)))
-	(s-nominal-decl @10.1-10.24
-		(ty-header @10.1-10.12 (name "GoodDerived"))
-		(ty-lookup @10.16-10.24 (name "GoodBase") (local))))
+				(ty-lookup (name "GoodDerived") (local)))))
+	(s-nominal-decl
+		(ty-header (name "BadBase"))
+		(ty-underscore))
+	(s-nominal-decl
+		(ty-header (name "BadDerived"))
+		(ty-lookup (name "BadBase") (local)))
+	(s-nominal-decl
+		(ty-header (name "GoodBase"))
+		(ty-lookup (name "Str") (builtin)))
+	(s-nominal-decl
+		(ty-header (name "GoodDerived"))
+		(ty-lookup (name "GoodBase") (local))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.6 (type "Error"))
-		(patt @13.1-13.10 (type "Error")))
+		(patt (type "Error"))
+		(patt (type "Error")))
 	(type_decls
-		(nominal @1.1-1.13 (type "BadBase")
-			(ty-header @1.1-1.8 (name "BadBase")))
-		(nominal @3.1-3.22 (type "BadDerived")
-			(ty-header @3.1-3.11 (name "BadDerived")))
-		(nominal @8.1-8.16 (type "GoodBase")
-			(ty-header @8.1-8.9 (name "GoodBase")))
-		(nominal @10.1-10.24 (type "GoodDerived")
-			(ty-header @10.1-10.12 (name "GoodDerived"))))
+		(nominal (type "BadBase")
+			(ty-header (name "BadBase")))
+		(nominal (type "BadDerived")
+			(ty-header (name "BadDerived")))
+		(nominal (type "GoodBase")
+			(ty-header (name "GoodBase")))
+		(nominal (type "GoodDerived")
+			(ty-header (name "GoodDerived"))))
 	(expressions
-		(expr @6.9-6.15 (type "Error"))
-		(expr @13.13-13.19 (type "Error"))))
+		(expr (type "Error"))
+		(expr (type "Error"))))
 ~~~

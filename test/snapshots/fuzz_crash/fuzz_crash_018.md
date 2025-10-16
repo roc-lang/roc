@@ -63,19 +63,19 @@ Add a main! function like:
 
 # TOKENS
 ~~~zig
-Int(1:1-1:2),LowerIdent(1:3-1:4),OpColon(1:4-1:5),UpperIdent(1:5-1:6),
-DotUpperIdent(2:1-2:3),
-EndOfFile(3:1-3:1),
+Int,LowerIdent,OpColon,UpperIdent,
+DotUpperIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-2.3
-	(type-module @1.1-1.2)
+(file
+	(type-module)
 	(statements
-		(s-malformed @1.1-1.2 (tag "statement_unexpected_token"))
-		(s-type-anno @1.3-1.6 (name "b")
-			(ty @1.5-1.6 (name "S")))
-		(s-malformed @2.1-2.3 (tag "statement_unexpected_token"))))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-type-anno (name "b")
+			(ty (name "S")))
+		(s-malformed (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc

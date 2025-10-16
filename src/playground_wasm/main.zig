@@ -844,7 +844,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
         try file.pushToSExprTree(module_env.gpa, &module_env.common, &parse_ast, &tree);
 
-        try tree.toHtml(ast_writer);
+        try tree.toHtml(ast_writer, .include_linecol);
     }
 
     result.ast_html = allocator.dupe(u8, ast_html_buffer.items) catch |err| {
@@ -1344,7 +1344,7 @@ fn writeReplCanCirResponse(response_buffer: []u8, module_env: *ModuleEnv) Respon
 
     const mutable_cir = @constCast(module_env);
     ModuleEnv.pushToSExprTree(mutable_cir, null, &tree) catch {};
-    tree.toHtml(sexpr_writer) catch {};
+    tree.toHtml(sexpr_writer, .include_linecol) catch {};
 
     try writeJsonString(w, sexpr_buffer.items);
     try w.writeAll("\"}");
@@ -1382,7 +1382,7 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 
     const mutable_cir = @constCast(cir);
     ModuleEnv.pushToSExprTree(mutable_cir, null, &tree) catch {};
-    tree.toHtml(sexpr_writer) catch {};
+    tree.toHtml(sexpr_writer, .include_linecol) catch {};
 
     try writeJsonString(w, sexpr_buffer.items);
     try w.writeAll("\"}");
@@ -1625,7 +1625,7 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) ResponseWr
         try writeErrorResponse(response_buffer, .ERROR, error_msg);
         return;
     };
-    tree.toHtml(sexpr_writer) catch {};
+    tree.toHtml(sexpr_writer, .include_linecol) catch {};
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
     try writeJsonString(w, sexpr_buffer.items);

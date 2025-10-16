@@ -27,16 +27,16 @@ b:r
 
 # TOKENS
 ~~~zig
-LowerIdent(2:1-2:2),OpColon(2:2-2:3),LowerIdent(2:3-2:4),
-EndOfFile(3:1-3:1),
+LowerIdent,OpColon,LowerIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @2.1-2.4
-	(type-module @2.1-2.2)
+(file
+	(type-module)
 	(statements
-		(s-type-anno @2.1-2.4 (name "b")
-			(ty-var @2.3-2.4 (raw "r")))))
+		(s-type-anno (name "b")
+			(ty-var (raw "r")))))
 ~~~
 # FORMATTED
 ~~~roc

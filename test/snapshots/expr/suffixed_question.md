@@ -35,14 +35,14 @@ Stdout.line???
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:7),NoSpaceDotLowerIdent(1:7-1:12),OpDoubleQuestion(1:12-1:14),NoSpaceOpQuestion(1:14-1:15),
-EndOfFile(2:1-2:1),
+UpperIdent,NoSpaceDotLowerIdent,OpDoubleQuestion,NoSpaceOpQuestion,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-binop @1.1-1.15 (op "??")
-	(e-ident @1.1-1.12 (raw "Stdout.line"))
-	(e-malformed @1.14-1.15 (reason "expr_unexpected_token")))
+(e-binop (op "??")
+	(e-ident (raw "Stdout.line"))
+	(e-malformed (reason "expr_unexpected_token")))
 ~~~
 # FORMATTED
 ~~~roc
