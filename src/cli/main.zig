@@ -2391,7 +2391,8 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
         try stderr.print("Failed to create compile-time evaluator: {}\n", .{err});
         std.process.exit(1);
     };
-    defer comptime_evaluator.deinit();
+    // Note: comptime_evaluator must be deinitialized AFTER building reports from checker.problems
+    // because the crash messages are owned by the evaluator but referenced by the problems
 
     _ = comptime_evaluator.evalAll() catch |err| {
         try stderr.print("Failed to evaluate declarations: {}\n", .{err});
@@ -2445,6 +2446,9 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
             try reporting.renderReportToTerminal(&report, stderr.any(), palette, config);
         }
     }
+
+    // Clean up comptime evaluator AFTER building reports (crash messages must stay alive until reports are built)
+    comptime_evaluator.deinit();
 
     // Report results
     if (failed == 0 and !has_comptime_crashes) {

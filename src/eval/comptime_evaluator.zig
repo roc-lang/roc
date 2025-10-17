@@ -116,6 +116,8 @@ pub const ComptimeEvaluator = struct {
     crash: CrashContext,
     roc_ops: ?RocOps,
     problems: *ProblemStore,
+    /// Track crash messages we've allocated so we can free them
+    crash_messages: std.ArrayList([]const u8),
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -129,10 +131,17 @@ pub const ComptimeEvaluator = struct {
             .crash = CrashContext.init(allocator),
             .roc_ops = null,
             .problems = problems,
+            .crash_messages = std.ArrayList([]const u8).init(allocator),
         };
     }
 
     pub fn deinit(self: *ComptimeEvaluator) void {
+        // Free all crash messages we allocated
+        for (self.crash_messages.items) |msg| {
+            self.allocator.free(msg);
+        }
+        self.crash_messages.deinit();
+
         self.interpreter.deinit();
         self.crash.deinit();
     }
@@ -213,6 +222,8 @@ pub const ComptimeEvaluator = struct {
                 },
                 .crash => |crash_info| {
                     crashed += 1;
+                    // Track the crash message so we can free it later
+                    try self.crash_messages.append(crash_info.message);
                     // Create a crash problem and add it to the problem store
                     const problem = Problem{
                         .comptime_crash = .{

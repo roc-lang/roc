@@ -729,7 +729,6 @@ pub const PackageEnv = struct {
 
         // After type checking, evaluate top-level declarations at compile time
         var comptime_evaluator = try eval.ComptimeEvaluator.init(self.gpa, &env, &checker.problems);
-        defer comptime_evaluator.deinit();
         _ = try comptime_evaluator.evalAll();
 
         // Build reports from problems
@@ -744,6 +743,9 @@ pub const PackageEnv = struct {
         if (@import("builtin").target.cpu.arch != .wasm32) {
             self.total_check_diagnostics_ns += @intCast(check_diag_end - check_diag_start);
         }
+
+        // Clean up comptime evaluator AFTER building reports (crash messages must stay alive until reports are built)
+        comptime_evaluator.deinit();
 
         // Free temporary ModuleEnv copies created for others
         for (others.items) |ptr| self.gpa.destroy(ptr);

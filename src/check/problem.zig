@@ -1861,12 +1861,6 @@ pub const Store = struct {
     }
 
     pub fn deinit(self: *Self, gpa: Allocator) void {
-        // Free owned strings in comptime_crash problems
-        for (self.problems.items) |problem| {
-            if (problem == .comptime_crash) {
-                gpa.free(problem.comptime_crash.message);
-            }
-        }
         self.problems.deinit(gpa);
     }
 
