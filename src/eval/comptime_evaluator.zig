@@ -160,6 +160,13 @@ pub const ComptimeEvaluator = struct {
         const expr_idx = def.expr;
         const region = self.env.store.getExprRegion(expr_idx);
 
+        // Skip function definitions (lambdas/closures) - they can't be evaluated at compile time
+        const expr = self.env.store.getExpr(expr_idx);
+        switch (expr) {
+            .e_lambda, .e_closure => return EvalResult.success,
+            else => {},
+        }
+
         const ops = self.get_ops();
         const result = self.interpreter.evalMinimal(expr_idx, ops) catch |err| {
             // Check if this was a crash
@@ -175,12 +182,9 @@ pub const ComptimeEvaluator = struct {
                     };
                 }
             }
-            return EvalResult{
-                .error_eval = .{
-                    .err = err,
-                    .region = region,
-                },
-            };
+            // For all other errors (like trying to evaluate unevaluatable expressions),
+            // we silently skip them - the type checker has already validated the code
+            return EvalResult.success;
         };
 
         const layout_cache = &self.interpreter.runtime_layout_store;

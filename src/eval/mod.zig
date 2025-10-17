@@ -30,6 +30,7 @@ test "eval tests" {
 
     std.testing.refAllDecls(@import("test/TestEnv.zig"));
     std.testing.refAllDecls(@import("test/eval_test.zig"));
+    std.testing.refAllDecls(@import("test/comptime_eval_test.zig"));
     std.testing.refAllDecls(@import("test/helpers.zig"));
     std.testing.refAllDecls(@import("test/interpreter_style_test.zig"));
     std.testing.refAllDecls(@import("test/interpreter_polymorphism_test.zig"));

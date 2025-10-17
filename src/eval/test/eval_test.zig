@@ -268,6 +268,32 @@ test "error test - divide by zero" {
     try runExpectError("10 % 0", error.DivisionByZero, .no_trace);
 }
 
+test "MY TEST - simple lambda with if-else" {
+    // Copy of working test - verify it runs
+    try runExpectInt("(|x| if x > 0 x else 0)(5)", 5, .no_trace);
+    try runExpectInt("(|x| if x > 0 x else 0)(-3)", 0, .no_trace);
+}
+
+test "MY TEST - crash in else branch inside lambda" {
+    // Test crash in else branch evaluated at runtime
+    try runExpectError(
+        \\(|x| if x > 0 x else {
+        \\    crash "crash in else!"
+        \\    0
+        \\})(-5)
+    , error.Crash, .no_trace);
+}
+
+test "MY TEST - crash NOT taken when condition true" {
+    // Test that crash in else branch is NOT executed when if branch is taken
+    try runExpectInt(
+        \\(|x| if x > 0 x else {
+        \\    crash "this should not execute"
+        \\    0
+        \\})(10)
+    , 10, .no_trace);
+}
+
 test "error test - crash statement" {
     // Test crash statement in a block (crash is a statement, not an expression)
     try runExpectError(
