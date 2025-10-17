@@ -1047,7 +1047,7 @@ fn runWithWindowsHandleInheritance(allocs: *Allocators, exe_path: []const u8, sh
 
     // Create command line with handle and size as arguments
     const handle_uint = @intFromPtr(shm_handle.fd);
-    const cmd_line = try std.fmt.allocPrintZ(allocs.arena, "\"{s}\" {} {}\x00", .{ exe_path, handle_uint, shm_handle.size });
+    const cmd_line = try std.fmt.allocPrintSentinel(allocs.arena, "\"{s}\" {} {}", .{ exe_path, handle_uint, shm_handle.size }, 0);
     const cmd_line_w = try std.unicode.utf8ToUtf16LeAllocZ(allocs.arena, cmd_line);
 
     // Set up process creation structures

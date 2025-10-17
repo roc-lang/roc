@@ -189,20 +189,12 @@ pub fn createMapping(size: usize) SharedMemoryError!Handle {
         },
         .macos, .freebsd, .openbsd, .netbsd => {
             // Use shm_open with a random name
-            const random_name = std.fmt.allocPrint(
-                std.heap.page_allocator,
-                "/roc_shm_{}",
-                .{std.crypto.random.int(u64)},
-            ) catch {
+            const random_name = std.fmt.allocPrintSentinel(std.heap.page_allocator, "/roc_shm_{}", .{std.crypto.random.int(u64)}, 0) catch {
                 return error.OutOfMemory;
             };
             defer std.heap.page_allocator.free(random_name);
 
-            const shm_name = std.fmt.allocPrint(
-                std.heap.page_allocator,
-                "{s}\x00",
-                .{random_name},
-            ) catch {
+            const shm_name = std.fmt.allocPrintSentinel(std.heap.page_allocator, "{s}", .{random_name}, 0) catch {
                 return error.OutOfMemory;
             };
             defer std.heap.page_allocator.free(shm_name);
