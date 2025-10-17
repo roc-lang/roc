@@ -20,6 +20,12 @@ pub const Color = enum {
     punctuation,
 };
 
+/// Controls whether line/column information is included in output
+pub const LineColMode = enum {
+    skip_linecol,
+    include_linecol,
+};
+
 /// Helper function to escape HTML characters
 fn escapeHtmlChar(writer: anytype, char: u8) !void {
     switch (char) {
@@ -257,7 +263,7 @@ pub fn endNode(self: *SExprTree, begin: NodeBegin, attrsMarker: NodeBegin) std.m
 }
 
 /// Internal method that writes the node using a writer implementation
-fn toStringImpl(self: *const SExprTree, node: Node, writer_impl: anytype, indent: usize) !void {
+fn toStringImpl(self: *const SExprTree, node: Node, writer_impl: anytype, indent: usize, linecol_mode: LineColMode) !void {
     switch (node) {
         .StaticAtom => |s| {
             try writer_impl.setColor(.node_name);
@@ -292,7 +298,6 @@ fn toStringImpl(self: *const SExprTree, node: Node, writer_impl: anytype, indent
         },
         .BytesRange => |range| {
             try writer_impl.beginSourceRange(range.begin, range.end);
-            // try writer_impl.print("@{d}-{d}", .{ range.begin, range.end });
             try writer_impl.print("@{d}.{d}-{d}.{d}", .{
                 // add one to display numbers instead of index
                 range.region.start_line_idx + 1,
@@ -309,20 +314,36 @@ fn toStringImpl(self: *const SExprTree, node: Node, writer_impl: anytype, indent
 
             var first = true;
             for (range.begin..range.attrs_marker) |i| {
+                const child = self.children.items[i];
+
+                // Skip BytesRange nodes when linecol_mode is .skip_linecol
+                // Note we do this check here to prevent trailing whitespace in the output
+                if (child == .BytesRange and linecol_mode == .skip_linecol) {
+                    continue;
+                }
+
                 if (!first) {
                     try writer_impl.print(" ", .{});
                 }
                 first = false;
-                try self.toStringImpl(self.children.items[i], writer_impl, indent + 1);
+                try self.toStringImpl(child, writer_impl, indent + 1, linecol_mode);
             }
 
             for (range.attrs_marker..range.end) |i| {
+                const child = self.children.items[i];
+
+                // Skip BytesRange nodes when linecol_mode is .skip_linecol
+                // Note we do this check here to prevent extra newlines in the output
+                if (child == .BytesRange and linecol_mode == .skip_linecol) {
+                    continue;
+                }
+
                 if (!first) {
                     try writer_impl.print("\n", .{});
                     try writer_impl.writeIndent(indent + 1);
                 }
                 first = false;
-                try self.toStringImpl(self.children.items[i], writer_impl, indent + 1);
+                try self.toStringImpl(child, writer_impl, indent + 1, linecol_mode);
             }
 
             try writer_impl.setColor(.punctuation);
@@ -333,24 +354,24 @@ fn toStringImpl(self: *const SExprTree, node: Node, writer_impl: anytype, indent
 }
 
 /// Pretty-print the root node (top of stack) to the writer
-pub fn printTree(self: *const SExprTree, writer: anytype) !void {
+pub fn printTree(self: *const SExprTree, writer: anytype, linecol_mode: LineColMode) !void {
     if (self.stack.items.len == 0) return;
     var plain_writer = PlainTextSExprWriter(@TypeOf(writer.any())){ .writer = writer.any() };
-    try self.toStringImpl(self.stack.items[self.stack.items.len - 1], &plain_writer, 0);
+    try self.toStringImpl(self.stack.items[self.stack.items.len - 1], &plain_writer, 0, linecol_mode);
 }
 
 /// Render this SExprTree to a writer with pleasing indentation.
-pub fn toStringPretty(self: *const SExprTree, writer: anytype) !void {
+pub fn toStringPretty(self: *const SExprTree, writer: std.io.AnyWriter, linecol_mode: LineColMode) !void {
     if (self.stack.items.len == 0) return;
     var plain_writer = PlainTextSExprWriter(@TypeOf(writer)){ .writer = writer };
-    try self.toStringImpl(self.stack.items[self.stack.items.len - 1], &plain_writer, 0);
+    try self.toStringImpl(self.stack.items[self.stack.items.len - 1], &plain_writer, 0, linecol_mode);
 }
 
 /// Render this SExprTree to HTML with syntax highlighting.
-pub fn toHtml(self: *const SExprTree, writer: *std.Io.Writer) !void {
+pub fn toHtml(self: *const SExprTree, writer: *std.Io.Writer, linecol_mode: LineColMode) !void {
     if (self.stack.items.len == 0) return;
     var html_writer = HtmlSExprWriter.init(writer);
-    try self.toStringImpl(self.stack.items[self.stack.items.len - 1], &html_writer, 0);
+    try self.toStringImpl(self.stack.items[self.stack.items.len - 1], &html_writer, 0, linecol_mode);
     html_writer.deinit() catch {
         return error.ErrFinalizingHTMLWriter;
     };

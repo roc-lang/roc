@@ -31,15 +31,15 @@ To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
-OpenSquare(1:1-1:2),Int(1:2-1:3),Comma(1:3-1:4),StringStart(1:5-1:6),StringPart(1:6-1:11),StringEnd(1:11-1:12),CloseSquare(1:12-1:13),
-EndOfFile(2:1-2:1),
+OpenSquare,Int,Comma,StringStart,StringPart,StringEnd,CloseSquare,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-list @1.1-1.13
-	(e-int @1.2-1.3 (raw "1"))
-	(e-string @1.5-1.12
-		(e-string-part @1.6-1.11 (raw "hello"))))
+(e-list
+	(e-int (raw "1"))
+	(e-string
+		(e-string-part (raw "hello"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -47,13 +47,13 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1.1-1.13
+(e-list
 	(elems
-		(e-num @1.2-1.3 (value "1"))
-		(e-string @1.5-1.12
-			(e-literal @1.6-1.11 (string "hello")))))
+		(e-num (value "1"))
+		(e-string
+			(e-literal (string "hello")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.13 (type "List(Error)"))
+(expr (type "List(Error)"))
 ~~~

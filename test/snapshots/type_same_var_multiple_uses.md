@@ -18,47 +18,47 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
-LowerIdent(3:1-3:5),OpColon(3:6-3:7),LowerIdent(3:8-3:9),OpArrow(3:10-3:12),OpenRound(3:13-3:14),LowerIdent(3:14-3:15),Comma(3:15-3:16),LowerIdent(3:17-3:18),CloseRound(3:18-3:19),
-LowerIdent(4:1-4:5),OpAssign(4:6-4:7),OpBar(4:8-4:9),LowerIdent(4:9-4:10),OpBar(4:10-4:11),OpenRound(4:12-4:13),LowerIdent(4:13-4:14),Comma(4:14-4:15),LowerIdent(4:16-4:17),CloseRound(4:17-4:18),
-LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBar(6:11-6:12),OpenCurly(6:13-6:14),CloseCurly(6:14-6:15),
-EndOfFile(7:1-7:1),
+KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
+LowerIdent,OpColon,LowerIdent,OpArrow,OpenRound,LowerIdent,Comma,LowerIdent,CloseRound,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenRound,LowerIdent,Comma,LowerIdent,CloseRound,
+LowerIdent,OpAssign,OpBar,Underscore,OpBar,OpenCurly,CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-6.15
-	(app @1.1-1.53
-		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11
+(file
+	(app
+		(provides
+			(exposed-lower-ident
 				(text "main!")))
-		(record-field @1.15-1.51 (name "pf")
-			(e-string @1.28-1.51
-				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
-		(packages @1.13-1.53
-			(record-field @1.15-1.51 (name "pf")
-				(e-string @1.28-1.51
-					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
+		(record-field (name "pf")
+			(e-string
+				(e-string-part (raw "../basic-cli/main.roc"))))
+		(packages
+			(record-field (name "pf")
+				(e-string
+					(e-string-part (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-3.19 (name "pair")
-			(ty-fn @3.8-3.19
-				(ty-var @3.8-3.9 (raw "a"))
-				(ty-tuple @3.13-3.19
-					(ty-var @3.14-3.15 (raw "a"))
-					(ty-var @3.17-3.18 (raw "a")))))
-		(s-decl @4.1-4.18
-			(p-ident @4.1-4.5 (raw "pair"))
-			(e-lambda @4.8-4.18
+		(s-type-anno (name "pair")
+			(ty-fn
+				(ty-var (raw "a"))
+				(ty-tuple
+					(ty-var (raw "a"))
+					(ty-var (raw "a")))))
+		(s-decl
+			(p-ident (raw "pair"))
+			(e-lambda
 				(args
-					(p-ident @4.9-4.10 (raw "x")))
-				(e-tuple @4.12-4.18
-					(e-ident @4.13-4.14 (raw "x"))
-					(e-ident @4.16-4.17 (raw "x")))))
-		(s-decl @6.1-6.15
-			(p-ident @6.1-6.6 (raw "main!"))
-			(e-lambda @6.9-6.15
+					(p-ident (raw "x")))
+				(e-tuple
+					(e-ident (raw "x"))
+					(e-ident (raw "x")))))
+		(s-decl
+			(p-ident (raw "main!"))
+			(e-lambda
 				(args
 					(p-underscore))
-				(e-record @6.13-6.15)))))
+				(e-record)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -68,37 +68,37 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @4.1-4.5 (ident "pair"))
-		(e-lambda @4.8-4.18
+		(p-assign (ident "pair"))
+		(e-lambda
 			(args
-				(p-assign @4.9-4.10 (ident "x")))
-			(e-tuple @4.12-4.18
+				(p-assign (ident "x")))
+			(e-tuple
 				(elems
-					(e-lookup-local @4.13-4.14
-						(p-assign @4.9-4.10 (ident "x")))
-					(e-lookup-local @4.16-4.17
-						(p-assign @4.9-4.10 (ident "x"))))))
-		(annotation @4.1-4.5
+					(e-lookup-local
+						(p-assign (ident "x")))
+					(e-lookup-local
+						(p-assign (ident "x"))))))
+		(annotation
 			(declared-type
-				(ty-fn @3.8-3.19 (effectful false)
-					(ty-rigid-var @3.8-3.9 (name "a"))
-					(ty-tuple @3.13-3.19
-						(ty-rigid-var-lookup (ty-rigid-var @3.8-3.9 (name "a")))
-						(ty-rigid-var-lookup (ty-rigid-var @3.8-3.9 (name "a"))))))))
+				(ty-fn (effectful false)
+					(ty-rigid-var (name "a"))
+					(ty-tuple
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(d-let
-		(p-assign @6.1-6.6 (ident "main!"))
-		(e-lambda @6.9-6.15
+		(p-assign (ident "main!"))
+		(e-lambda
 			(args
-				(p-underscore @6.10-6.11))
-			(e-empty_record @6.13-6.15))))
+				(p-underscore))
+			(e-empty_record))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.5 (type "a -> (a, a)"))
-		(patt @6.1-6.6 (type "_arg -> {}")))
+		(patt (type "a -> (a, a)"))
+		(patt (type "_arg -> {}")))
 	(expressions
-		(expr @4.8-4.18 (type "a -> (a, a)"))
-		(expr @6.9-6.15 (type "_arg -> {}"))))
+		(expr (type "a -> (a, a)"))
+		(expr (type "_arg -> {}"))))
 ~~~

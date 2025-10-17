@@ -33,38 +33,38 @@ But the second argument has the type:
 
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),
-LowerIdent(2:5-2:9),OpColon(2:10-2:11),LowerIdent(2:12-2:13),Comma(2:13-2:14),LowerIdent(2:15-2:16),OpArrow(2:17-2:19),OpenRound(2:20-2:21),LowerIdent(2:21-2:22),Comma(2:22-2:23),LowerIdent(2:24-2:25),CloseRound(2:25-2:26),
-LowerIdent(3:5-3:9),OpAssign(3:10-3:11),OpBar(3:12-3:13),LowerIdent(3:13-3:14),Comma(3:14-3:15),LowerIdent(3:16-3:17),OpBar(3:17-3:18),OpenRound(3:19-3:20),LowerIdent(3:20-3:21),Comma(3:21-3:22),LowerIdent(3:23-3:24),CloseRound(3:24-3:25),
-LowerIdent(5:5-5:9),NoSpaceOpenRound(5:9-5:10),Int(5:10-5:12),Comma(5:12-5:13),StringStart(5:14-5:15),StringPart(5:15-5:20),StringEnd(5:20-5:21),CloseRound(5:21-5:22),
-CloseCurly(6:1-6:2),
-EndOfFile(7:1-7:1),
+OpenCurly,
+LowerIdent,OpColon,LowerIdent,Comma,LowerIdent,OpArrow,OpenRound,LowerIdent,Comma,LowerIdent,CloseRound,
+LowerIdent,OpAssign,OpBar,LowerIdent,Comma,LowerIdent,OpBar,OpenRound,LowerIdent,Comma,LowerIdent,CloseRound,
+LowerIdent,NoSpaceOpenRound,Int,Comma,StringStart,StringPart,StringEnd,CloseRound,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-block @1.1-6.2
+(e-block
 	(statements
-		(s-type-anno @2.5-2.26 (name "pair")
-			(ty-fn @2.12-2.26
-				(ty-var @2.12-2.13 (raw "a"))
-				(ty-var @2.15-2.16 (raw "a"))
-				(ty-tuple @2.20-2.26
-					(ty-var @2.21-2.22 (raw "a"))
-					(ty-var @2.24-2.25 (raw "a")))))
-		(s-decl @3.5-3.25
-			(p-ident @3.5-3.9 (raw "pair"))
-			(e-lambda @3.12-3.25
+		(s-type-anno (name "pair")
+			(ty-fn
+				(ty-var (raw "a"))
+				(ty-var (raw "a"))
+				(ty-tuple
+					(ty-var (raw "a"))
+					(ty-var (raw "a")))))
+		(s-decl
+			(p-ident (raw "pair"))
+			(e-lambda
 				(args
-					(p-ident @3.13-3.14 (raw "x"))
-					(p-ident @3.16-3.17 (raw "y")))
-				(e-tuple @3.19-3.25
-					(e-ident @3.20-3.21 (raw "x"))
-					(e-ident @3.23-3.24 (raw "y")))))
-		(e-apply @5.5-5.22
-			(e-ident @5.5-5.9 (raw "pair"))
-			(e-int @5.10-5.12 (raw "42"))
-			(e-string @5.14-5.21
-				(e-string-part @5.15-5.20 (raw "hello"))))))
+					(p-ident (raw "x"))
+					(p-ident (raw "y")))
+				(e-tuple
+					(e-ident (raw "x"))
+					(e-ident (raw "y")))))
+		(e-apply
+			(e-ident (raw "pair"))
+			(e-int (raw "42"))
+			(e-string
+				(e-string-part (raw "hello"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -77,27 +77,27 @@ EndOfFile(7:1-7:1),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-6.2
-	(s-let @3.5-3.25
-		(p-assign @3.5-3.9 (ident "pair"))
-		(e-lambda @3.12-3.25
+(e-block
+	(s-let
+		(p-assign (ident "pair"))
+		(e-lambda
 			(args
-				(p-assign @3.13-3.14 (ident "x"))
-				(p-assign @3.16-3.17 (ident "y")))
-			(e-tuple @3.19-3.25
+				(p-assign (ident "x"))
+				(p-assign (ident "y")))
+			(e-tuple
 				(elems
-					(e-lookup-local @3.20-3.21
-						(p-assign @3.13-3.14 (ident "x")))
-					(e-lookup-local @3.23-3.24
-						(p-assign @3.16-3.17 (ident "y")))))))
-	(e-call @5.5-5.22
-		(e-lookup-local @5.5-5.9
-			(p-assign @3.5-3.9 (ident "pair")))
-		(e-num @5.10-5.12 (value "42"))
-		(e-string @5.14-5.21
-			(e-literal @5.15-5.20 (string "hello")))))
+					(e-lookup-local
+						(p-assign (ident "x")))
+					(e-lookup-local
+						(p-assign (ident "y")))))))
+	(e-call
+		(e-lookup-local
+			(p-assign (ident "pair")))
+		(e-num (value "42"))
+		(e-string
+			(e-literal (string "hello")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-6.2 (type "Error"))
+(expr (type "Error"))
 ~~~

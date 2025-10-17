@@ -13,17 +13,17 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:4),OpAssign(1:5-1:6),Float(1:7-1:12),
-EndOfFile(2:1-2:1),
+LowerIdent,OpAssign,Float,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.12
-	(type-module @1.1-1.4)
+(file
+	(type-module)
 	(statements
-		(s-decl @1.1-1.12
-			(p-ident @1.1-1.4 (raw "foo"))
-			(e-frac @1.7-1.12 (raw "12.34")))))
+		(s-decl
+			(p-ident (raw "foo"))
+			(e-frac (raw "12.34")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -33,14 +33,14 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @1.1-1.4 (ident "foo"))
-		(e-dec-small @1.7-1.12 (numerator "1234") (denominator-power-of-ten "2") (value "12.34"))))
+		(p-assign (ident "foo"))
+		(e-dec-small (numerator "1234") (denominator-power-of-ten "2") (value "12.34"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @1.1-1.4 (type "Num(Frac(_size))")))
+		(patt (type "Num(Frac(_size))")))
 	(expressions
-		(expr @1.7-1.12 (type "Num(Frac(_size))"))))
+		(expr (type "Num(Frac(_size))"))))
 ~~~

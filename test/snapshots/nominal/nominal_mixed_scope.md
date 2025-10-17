@@ -90,55 +90,55 @@ This type is referenced here:
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:12),OpColonEqual(1:13-1:15),OpenSquare(1:16-1:17),UpperIdent(1:17-1:24),Comma(1:24-1:25),UpperIdent(1:26-1:34),CloseSquare(1:34-1:35),
-LowerIdent(3:1-3:13),OpColon(3:14-3:15),Underscore(3:16-3:17),OpArrow(3:18-3:20),UpperIdent(3:21-3:32),
-LowerIdent(4:1-4:13),OpAssign(4:14-4:15),OpBar(4:16-4:17),LowerIdent(4:17-4:22),OpBar(4:22-4:23),OpenCurly(4:24-4:25),
-KwImport(7:5-7:11),UpperIdent(7:12-7:17),NoSpaceDotUpperIdent(7:17-7:21),
-KwMatch(9:5-9:10),LowerIdent(9:11-9:16),OpenCurly(9:17-9:18),
-UpperIdent(10:9-10:12),NoSpaceDotUpperIdent(10:12-10:16),OpFatArrow(10:17-10:19),UpperIdent(10:20-10:31),NoSpaceDotUpperIdent(10:31-10:39),
-UpperIdent(11:9-11:12),NoSpaceDotUpperIdent(11:12-11:18),OpFatArrow(11:19-11:21),UpperIdent(11:22-11:33),NoSpaceDotUpperIdent(11:33-11:42),
-UpperIdent(12:9-12:12),NoSpaceDotUpperIdent(12:12-12:17),OpFatArrow(12:18-12:20),UpperIdent(12:21-12:32),NoSpaceDotUpperIdent(12:32-12:40),
-CloseCurly(13:5-13:6),
-CloseCurly(14:1-14:2),
-EndOfFile(15:1-15:1),
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,CloseSquare,
+LowerIdent,OpColon,Underscore,OpArrow,UpperIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,
+KwImport,UpperIdent,NoSpaceDotUpperIdent,
+KwMatch,LowerIdent,OpenCurly,
+UpperIdent,NoSpaceDotUpperIdent,OpFatArrow,UpperIdent,NoSpaceDotUpperIdent,
+UpperIdent,NoSpaceDotUpperIdent,OpFatArrow,UpperIdent,NoSpaceDotUpperIdent,
+UpperIdent,NoSpaceDotUpperIdent,OpFatArrow,UpperIdent,NoSpaceDotUpperIdent,
+CloseCurly,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-14.2
-	(type-module @1.1-1.12)
+(file
+	(type-module)
 	(statements
-		(s-type-decl @1.1-1.35
-			(header @1.1-1.12 (name "LocalStatus")
+		(s-type-decl
+			(header (name "LocalStatus")
 				(args))
-			(ty-tag-union @1.16-1.35
+			(ty-tag-union
 				(tags
-					(ty @1.17-1.24 (name "Pending"))
-					(ty @1.26-1.34 (name "Complete")))))
-		(s-type-anno @3.1-3.32 (name "processColor")
-			(ty-fn @3.16-3.32
+					(ty (name "Pending"))
+					(ty (name "Complete")))))
+		(s-type-anno (name "processColor")
+			(ty-fn
 				(_)
-				(ty @3.21-3.32 (name "LocalStatus"))))
-		(s-decl @4.1-14.2
-			(p-ident @4.1-4.13 (raw "processColor"))
-			(e-lambda @4.16-14.2
+				(ty (name "LocalStatus"))))
+		(s-decl
+			(p-ident (raw "processColor"))
+			(e-lambda
 				(args
-					(p-ident @4.17-4.22 (raw "color")))
-				(e-block @4.24-14.2
+					(p-ident (raw "color")))
+				(e-block
 					(statements
-						(s-malformed @7.5-7.11 (tag "import_must_be_top_level"))
-						(e-tag @7.12-7.21 (raw "Color.RGB"))
+						(s-malformed (tag "import_must_be_top_level"))
+						(e-tag (raw "Color.RGB"))
 						(e-match
-							(e-ident @9.11-9.16 (raw "color"))
+							(e-ident (raw "color"))
 							(branches
-								(branch @10.9-10.39
-									(p-tag @10.9-10.16 (raw ".Red"))
-									(e-tag @10.20-10.39 (raw "LocalStatus.Pending")))
-								(branch @11.9-11.42
-									(p-tag @11.9-11.18 (raw ".Green"))
-									(e-tag @11.22-11.42 (raw "LocalStatus.Complete")))
-								(branch @12.9-12.40
-									(p-tag @12.9-12.17 (raw ".Blue"))
-									(e-tag @12.21-12.40 (raw "LocalStatus.Pending")))))))))))
+								(branch
+									(p-tag (raw ".Red"))
+									(e-tag (raw "LocalStatus.Pending")))
+								(branch
+									(p-tag (raw ".Green"))
+									(e-tag (raw "LocalStatus.Complete")))
+								(branch
+									(p-tag (raw ".Blue"))
+									(e-tag (raw "LocalStatus.Pending")))))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -161,60 +161,60 @@ processColor = |color| {
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @4.1-4.13 (ident "processColor"))
-		(e-lambda @4.16-14.2
+		(p-assign (ident "processColor"))
+		(e-lambda
 			(args
-				(p-assign @4.17-4.22 (ident "color")))
-			(e-block @4.24-14.2
+				(p-assign (ident "color")))
+			(e-block
 				(s-runtime-error (tag "not_implemented"))
-				(s-expr @7.12-7.21
+				(s-expr
 					(e-runtime-error (tag "undeclared_type")))
-				(e-match @9.5-13.6
-					(match @9.5-13.6
+				(e-match
+					(match
 						(cond
-							(e-lookup-local @9.11-9.16
-								(p-assign @4.17-4.22 (ident "color"))))
+							(e-lookup-local
+								(p-assign (ident "color"))))
 						(branches
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-runtime-error @10.9-10.12 (tag "undeclared_type"))))
+										(p-runtime-error (tag "undeclared_type"))))
 								(value
-									(e-nominal @10.20-10.39 (nominal "LocalStatus")
-										(e-tag @10.20-10.39 (name "Pending")))))
+									(e-nominal (nominal "LocalStatus")
+										(e-tag (name "Pending")))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-runtime-error @11.9-11.12 (tag "undeclared_type"))))
+										(p-runtime-error (tag "undeclared_type"))))
 								(value
-									(e-nominal @11.22-11.42 (nominal "LocalStatus")
-										(e-tag @11.22-11.42 (name "Complete")))))
+									(e-nominal (nominal "LocalStatus")
+										(e-tag (name "Complete")))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-runtime-error @12.9-12.12 (tag "undeclared_type"))))
+										(p-runtime-error (tag "undeclared_type"))))
 								(value
-									(e-nominal @12.21-12.40 (nominal "LocalStatus")
-										(e-tag @12.21-12.40 (name "Pending"))))))))))
-		(annotation @4.1-4.13
+									(e-nominal (nominal "LocalStatus")
+										(e-tag (name "Pending"))))))))))
+		(annotation
 			(declared-type
-				(ty-fn @3.16-3.32 (effectful false)
-					(ty-underscore @1.1-1.1)
-					(ty-lookup @3.21-3.32 (name "LocalStatus") (local))))))
-	(s-nominal-decl @1.1-1.35
-		(ty-header @1.1-1.12 (name "LocalStatus"))
-		(ty-tag-union @1.16-1.35
-			(ty-tag-name @1.17-1.24 (name "Pending"))
-			(ty-tag-name @1.26-1.34 (name "Complete")))))
+				(ty-fn (effectful false)
+					(ty-underscore)
+					(ty-lookup (name "LocalStatus") (local))))))
+	(s-nominal-decl
+		(ty-header (name "LocalStatus"))
+		(ty-tag-union
+			(ty-tag-name (name "Pending"))
+			(ty-tag-name (name "Complete")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.13 (type "_arg -> LocalStatus")))
+		(patt (type "_arg -> LocalStatus")))
 	(type_decls
-		(nominal @1.1-1.35 (type "LocalStatus")
-			(ty-header @1.1-1.12 (name "LocalStatus"))))
+		(nominal (type "LocalStatus")
+			(ty-header (name "LocalStatus"))))
 	(expressions
-		(expr @4.16-14.2 (type "_arg -> LocalStatus"))))
+		(expr (type "_arg -> LocalStatus"))))
 ~~~

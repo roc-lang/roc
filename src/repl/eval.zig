@@ -106,7 +106,7 @@ pub const Repl = struct {
 
             var can_buffer = std.array_list.Managed(u8).init(self.allocator);
             defer can_buffer.deinit();
-            try tree.toStringPretty(can_buffer.writer().any());
+            try tree.toStringPretty(can_buffer.writer().any(), .include_linecol);
 
             const can_html = try self.allocator.dupe(u8, can_buffer.items);
             try self.debug_can_html.append(can_html);
@@ -120,7 +120,7 @@ pub const Repl = struct {
 
             var types_buffer = std.array_list.Managed(u8).init(self.allocator);
             defer types_buffer.deinit();
-            try tree.toStringPretty(types_buffer.writer().any());
+            try tree.toStringPretty(types_buffer.writer().any(), .include_linecol);
 
             const types_html = try self.allocator.dupe(u8, types_buffer.items);
             try self.debug_types_html.append(types_html);

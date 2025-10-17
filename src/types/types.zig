@@ -28,6 +28,7 @@ test {
     try std.testing.expectEqual(20, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(16, @sizeOf(NominalType));
+    try std.testing.expectEqual(16, @sizeOf(StaticDispatchConstraint));
 }
 
 /// A type variable
@@ -212,12 +213,12 @@ pub const Content = union(enum) {
 /// A flex var, with optional static dispatch constraints
 pub const Flex = struct {
     name: ?Ident.Idx,
-    constraints: StaticDispatchConstraint.SafeMultiList.Range,
+    constraints: StaticDispatchConstraint.SafeList.Range,
 
     pub fn init() Flex {
         return .{
             .name = null,
-            .constraints = StaticDispatchConstraint.SafeMultiList.Range.empty(),
+            .constraints = StaticDispatchConstraint.SafeList.Range.empty(),
         };
     }
 
@@ -228,7 +229,7 @@ pub const Flex = struct {
         };
     }
 
-    pub fn withConstraints(self: Flex, constraints: StaticDispatchConstraint.SafeMultiList.Range) Flex {
+    pub fn withConstraints(self: Flex, constraints: StaticDispatchConstraint.SafeList.Range) Flex {
         return .{
             .name = self.name,
             .constraints = constraints,
@@ -241,16 +242,16 @@ pub const Flex = struct {
 /// A rigid var, with optional static dispatch constraints
 pub const Rigid = struct {
     name: Ident.Idx,
-    constraints: StaticDispatchConstraint.SafeMultiList.Range,
+    constraints: StaticDispatchConstraint.SafeList.Range,
 
     pub fn init(name: Ident.Idx) Rigid {
         return .{
             .name = name,
-            .constraints = StaticDispatchConstraint.SafeMultiList.Range.empty(),
+            .constraints = StaticDispatchConstraint.SafeList.Range.empty(),
         };
     }
 
-    pub fn withConstraints(self: Rigid, constraints: StaticDispatchConstraint.SafeMultiList.Range) Rigid {
+    pub fn withConstraints(self: Rigid, constraints: StaticDispatchConstraint.SafeList.Range) Rigid {
         return .{
             .name = self.name,
             .constraints = constraints,
@@ -949,6 +950,33 @@ pub const StaticDispatchConstraint = struct {
     /// the dispatch fn ret
     fn_ret: Var,
 
+    /// A safe list of static dispatch constraints
+    pub const SafeList = MkSafeList(Self);
+
     /// A safe multi list of static dispatch constraints
     pub const SafeMultiList = MkSafeMultiList(Self);
+
+    /// A function to be passed into std.mem.sort to sort fields by name
+    pub fn sortByFnNameAsc(ident_store: *const Ident.Store, a: Self, b: Self) bool {
+        return Self.orderByFnName(ident_store, a, b) == .lt;
+    }
+
+    /// Get the ordering of how a compares to b
+    pub fn orderByFnName(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
+        const a_text = store.getText(a.fn_name);
+        const b_text = store.getText(b.fn_name);
+        return std.mem.order(u8, a_text, b_text);
+    }
+};
+
+/// Two record fields
+pub const TwoStaticDispatchConstraints = struct {
+    a: StaticDispatchConstraint,
+    b: StaticDispatchConstraint,
+
+    /// A safe list of tag union fields
+    pub const SafeList = MkSafeList(@This());
+
+    /// A safe multi list of tag union fields
+    pub const SafeMultiList = MkSafeMultiList(@This());
 };

@@ -23,16 +23,16 @@ person.age + 5
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:7),NoSpaceDotLowerIdent(1:7-1:11),OpPlus(1:12-1:13),Int(1:14-1:15),
-EndOfFile(2:1-2:1),
+LowerIdent,NoSpaceDotLowerIdent,OpPlus,Int,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-binop @1.1-1.15 (op "+")
-	(e-field-access @1.1-1.11
-		(e-ident @1.1-1.7 (raw "person"))
-		(e-ident @1.7-1.11 (raw "age")))
-	(e-int @1.14-1.15 (raw "5")))
+(e-binop (op "+")
+	(e-field-access
+		(e-ident (raw "person"))
+		(e-ident (raw "age")))
+	(e-int (raw "5")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -40,13 +40,13 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-1.15 (op "add")
-	(e-dot-access @1.1-1.11 (field "age")
+(e-binop (op "add")
+	(e-dot-access (field "age")
 		(receiver
 			(e-runtime-error (tag "ident_not_in_scope"))))
-	(e-num @1.14-1.15 (value "5")))
+	(e-num (value "5")))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.15 (type "Num(_size)"))
+(expr (type "Num(_size)"))
 ~~~

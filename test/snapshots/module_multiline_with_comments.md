@@ -86,22 +86,22 @@ This is an unexpected parsing error. Please check your syntax.
 
 # TOKENS
 ~~~zig
-OpenSquare(1:2-1:3),
-LowerIdent(2:3-2:12),Comma(2:12-2:13),
-UpperIdent(3:3-3:11),Comma(3:11-3:12),
-CloseSquare(4:2-4:3),
-EndOfFile(5:1-5:1),
+OpenSquare,
+LowerIdent,Comma,
+UpperIdent,Comma,
+CloseSquare,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.2-4.3
-	(type-module @1.2-1.3)
+(file
+	(type-module)
 	(statements
-		(s-malformed @1.2-1.3 (tag "statement_unexpected_token"))
-		(s-malformed @2.3-2.12 (tag "statement_unexpected_token"))
-		(s-malformed @2.12-2.13 (tag "statement_unexpected_token"))
-		(s-malformed @3.11-3.12 (tag "expected_colon_after_type_annotation"))
-		(s-malformed @4.2-4.3 (tag "statement_unexpected_token"))))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
+		(s-malformed (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc

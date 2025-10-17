@@ -25,19 +25,19 @@ import json.Json
 
 # TOKENS
 ~~~zig
-KwImport(1:1-1:7),LowerIdent(1:8-1:12),NoSpaceDotUpperIdent(1:12-1:17),
-LowerIdent(3:1-3:5),OpAssign(3:6-3:7),UpperIdent(3:8-3:12),NoSpaceDotLowerIdent(3:12-3:17),
-EndOfFile(4:1-4:1),
+KwImport,LowerIdent,NoSpaceDotUpperIdent,
+LowerIdent,OpAssign,UpperIdent,NoSpaceDotLowerIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-3.17
-	(type-module @1.1-1.7)
+(file
+	(type-module)
 	(statements
-		(s-import @1.1-1.17 (raw "json.Json"))
-		(s-decl @3.1-3.17
-			(p-ident @3.1-3.5 (raw "main"))
-			(e-ident @3.8-3.17 (raw "Json.utf8")))))
+		(s-import (raw "json.Json"))
+		(s-decl
+			(p-ident (raw "main"))
+			(e-ident (raw "Json.utf8")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -47,18 +47,18 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @3.1-3.5 (ident "main"))
-		(e-lookup-external @3.8-3.17
+		(p-assign (ident "main"))
+		(e-lookup-external
 			(module-idx "2")
 			(target-node-idx "0")))
-	(s-import @1.1-1.17 (module "json.Json") (qualifier "json")
+	(s-import (module "json.Json") (qualifier "json")
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.5 (type "Error")))
+		(patt (type "Error")))
 	(expressions
-		(expr @3.8-3.17 (type "Error"))))
+		(expr (type "Error"))))
 ~~~

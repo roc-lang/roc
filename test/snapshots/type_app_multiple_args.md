@@ -40,57 +40,57 @@ main! = |_| processDict(Dict.empty().insert("one", 1))
 
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
-LowerIdent(3:1-3:12),OpColon(3:13-3:14),UpperIdent(3:15-3:19),NoSpaceOpenRound(3:19-3:20),UpperIdent(3:20-3:23),Comma(3:23-3:24),UpperIdent(3:25-3:28),CloseRound(3:28-3:29),OpArrow(3:30-3:32),UpperIdent(3:33-3:37),NoSpaceOpenRound(3:37-3:38),UpperIdent(3:38-3:41),CloseRound(3:41-3:42),
-LowerIdent(4:1-4:12),OpAssign(4:13-4:14),OpBar(4:15-4:16),NamedUnderscore(4:16-4:21),OpBar(4:21-4:22),OpenSquare(4:23-4:24),CloseSquare(4:24-4:25),
-LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBar(6:11-6:12),LowerIdent(6:13-6:24),NoSpaceOpenRound(6:24-6:25),UpperIdent(6:25-6:29),NoSpaceDotLowerIdent(6:29-6:35),NoSpaceOpenRound(6:35-6:36),CloseRound(6:36-6:37),NoSpaceDotLowerIdent(6:37-6:44),NoSpaceOpenRound(6:44-6:45),StringStart(6:45-6:46),StringPart(6:46-6:49),StringEnd(6:49-6:50),Comma(6:50-6:51),Int(6:52-6:53),CloseRound(6:53-6:54),CloseRound(6:54-6:55),
-EndOfFile(7:1-7:1),
+KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
+LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,UpperIdent,CloseRound,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,
+LowerIdent,OpAssign,OpBar,NamedUnderscore,OpBar,OpenSquare,CloseSquare,
+LowerIdent,OpAssign,OpBar,Underscore,OpBar,LowerIdent,NoSpaceOpenRound,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,NoSpaceDotLowerIdent,NoSpaceOpenRound,StringStart,StringPart,StringEnd,Comma,Int,CloseRound,CloseRound,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-6.55
-	(app @1.1-1.53
-		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11
+(file
+	(app
+		(provides
+			(exposed-lower-ident
 				(text "main!")))
-		(record-field @1.15-1.51 (name "pf")
-			(e-string @1.28-1.51
-				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
-		(packages @1.13-1.53
-			(record-field @1.15-1.51 (name "pf")
-				(e-string @1.28-1.51
-					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
+		(record-field (name "pf")
+			(e-string
+				(e-string-part (raw "../basic-cli/main.roc"))))
+		(packages
+			(record-field (name "pf")
+				(e-string
+					(e-string-part (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-3.42 (name "processDict")
-			(ty-fn @3.15-3.42
-				(ty-apply @3.15-3.29
-					(ty @3.15-3.19 (name "Dict"))
-					(ty @3.20-3.23 (name "Str"))
-					(ty @3.25-3.28 (name "U64")))
-				(ty-apply @3.33-3.42
-					(ty @3.33-3.37 (name "List"))
-					(ty @3.38-3.41 (name "Str")))))
-		(s-decl @4.1-4.25
-			(p-ident @4.1-4.12 (raw "processDict"))
-			(e-lambda @4.15-4.25
+		(s-type-anno (name "processDict")
+			(ty-fn
+				(ty-apply
+					(ty (name "Dict"))
+					(ty (name "Str"))
+					(ty (name "U64")))
+				(ty-apply
+					(ty (name "List"))
+					(ty (name "Str")))))
+		(s-decl
+			(p-ident (raw "processDict"))
+			(e-lambda
 				(args
-					(p-ident @4.16-4.21 (raw "_dict")))
-				(e-list @4.23-4.25)))
-		(s-decl @6.1-6.55
-			(p-ident @6.1-6.6 (raw "main!"))
-			(e-lambda @6.9-6.55
+					(p-ident (raw "_dict")))
+				(e-list)))
+		(s-decl
+			(p-ident (raw "main!"))
+			(e-lambda
 				(args
 					(p-underscore))
-				(e-apply @6.13-6.55
-					(e-ident @6.13-6.24 (raw "processDict"))
-					(e-field-access @6.25-6.54
-						(e-apply @6.25-6.37
-							(e-ident @6.25-6.35 (raw "Dict.empty")))
-						(e-apply @6.37-6.54
-							(e-ident @6.37-6.44 (raw "insert"))
-							(e-string @6.45-6.50
-								(e-string-part @6.46-6.49 (raw "one")))
-							(e-int @6.52-6.53 (raw "1")))))))))
+				(e-apply
+					(e-ident (raw "processDict"))
+					(e-field-access
+						(e-apply
+							(e-ident (raw "Dict.empty")))
+						(e-apply
+							(e-ident (raw "insert"))
+							(e-string
+								(e-string-part (raw "one")))
+							(e-int (raw "1")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -100,44 +100,44 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @4.1-4.12 (ident "processDict"))
-		(e-lambda @4.15-4.25
+		(p-assign (ident "processDict"))
+		(e-lambda
 			(args
-				(p-assign @4.16-4.21 (ident "_dict")))
-			(e-empty_list @4.23-4.25))
-		(annotation @4.1-4.12
+				(p-assign (ident "_dict")))
+			(e-empty_list))
+		(annotation
 			(declared-type
-				(ty-fn @3.15-3.42 (effectful false)
-					(ty-malformed @3.15-3.19)
-					(ty-apply @3.33-3.42 (name "List") (builtin)
-						(ty-lookup @3.38-3.41 (name "Str") (builtin)))))))
+				(ty-fn (effectful false)
+					(ty-malformed)
+					(ty-apply (name "List") (builtin)
+						(ty-lookup (name "Str") (builtin)))))))
 	(d-let
-		(p-assign @6.1-6.6 (ident "main!"))
-		(e-closure @6.9-6.55
+		(p-assign (ident "main!"))
+		(e-closure
 			(captures
-				(capture @4.1-4.12 (ident "processDict")))
-			(e-lambda @6.9-6.55
+				(capture (ident "processDict")))
+			(e-lambda
 				(args
-					(p-underscore @6.10-6.11))
-				(e-call @6.13-6.55
-					(e-lookup-local @6.13-6.24
-						(p-assign @4.1-4.12 (ident "processDict")))
-					(e-dot-access @6.25-6.54 (field "insert")
+					(p-underscore))
+				(e-call
+					(e-lookup-local
+						(p-assign (ident "processDict")))
+					(e-dot-access (field "insert")
 						(receiver
-							(e-call @6.25-6.37
+							(e-call
 								(e-runtime-error (tag "ident_not_in_scope"))))
 						(args
-							(e-string @6.45-6.50
-								(e-literal @6.46-6.49 (string "one")))
-							(e-num @6.52-6.53 (value "1")))))))))
+							(e-string
+								(e-literal (string "one")))
+							(e-num (value "1")))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.12 (type "Error -> List(Str)"))
-		(patt @6.1-6.6 (type "_arg -> List(Str)")))
+		(patt (type "Error -> List(Str)"))
+		(patt (type "_arg -> List(Str)")))
 	(expressions
-		(expr @4.15-4.25 (type "Error -> List(Str)"))
-		(expr @6.9-6.55 (type "_arg -> List(Str)"))))
+		(expr (type "Error -> List(Str)"))
+		(expr (type "_arg -> List(Str)"))))
 ~~~

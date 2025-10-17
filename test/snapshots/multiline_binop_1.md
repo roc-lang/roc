@@ -20,20 +20,20 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-Int(1:1-1:2),
-OpPlus(2:2-2:3),
-Int(6:2-6:3),
-OpStar(7:3-7:4),
-Int(8:3-8:4),
-EndOfFile(9:1-9:1),
+Int,
+OpPlus,
+Int,
+OpStar,
+Int,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-binop @1.1-8.4 (op "+")
-	(e-int @1.1-1.2 (raw "1"))
-	(e-binop @6.2-8.4 (op "*")
-		(e-int @6.2-6.3 (raw "2"))
-		(e-int @8.3-8.4 (raw "3"))))
+(e-binop (op "+")
+	(e-int (raw "1"))
+	(e-binop (op "*")
+		(e-int (raw "2"))
+		(e-int (raw "3"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -41,13 +41,13 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-8.4 (op "add")
-	(e-num @1.1-1.2 (value "1"))
-	(e-binop @6.2-8.4 (op "mul")
-		(e-num @6.2-6.3 (value "2"))
-		(e-num @8.3-8.4 (value "3"))))
+(e-binop (op "add")
+	(e-num (value "1"))
+	(e-binop (op "mul")
+		(e-num (value "2"))
+		(e-num (value "3"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-8.4 (type "Num(_size)"))
+(expr (type "Num(_size)"))
 ~~~

@@ -30,53 +30,53 @@ match items {
 
 # TOKENS
 ~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:12),OpenCurly(1:13-1:14),
-OpenSquare(2:5-2:6),Underscore(2:6-2:7),CloseSquare(2:7-2:8),OpFatArrow(2:9-2:11),Int(2:12-2:13),
-OpenSquare(3:5-3:6),DoubleDot(3:6-3:8),Comma(3:8-3:9),LowerIdent(3:10-3:14),CloseSquare(3:14-3:15),OpFatArrow(3:16-3:18),LowerIdent(3:19-3:23),
-OpenSquare(4:5-4:6),LowerIdent(4:6-4:11),Comma(4:11-4:12),DoubleDot(4:13-4:15),CloseSquare(4:15-4:16),OpFatArrow(4:17-4:19),LowerIdent(4:20-4:25),
-OpenSquare(5:5-5:6),Underscore(5:6-5:7),Comma(5:7-5:8),Underscore(5:9-5:10),Comma(5:10-5:11),LowerIdent(5:12-5:17),CloseSquare(5:17-5:18),OpFatArrow(5:19-5:21),LowerIdent(5:22-5:27),
-OpenSquare(6:5-6:6),LowerIdent(6:6-6:7),Comma(6:7-6:8),Underscore(6:9-6:10),Comma(6:10-6:11),Underscore(6:12-6:13),Comma(6:13-6:14),LowerIdent(6:15-6:16),CloseSquare(6:16-6:17),OpFatArrow(6:18-6:20),LowerIdent(6:21-6:22),OpPlus(6:23-6:24),LowerIdent(6:25-6:26),
-OpenSquare(7:5-7:6),CloseSquare(7:6-7:7),OpFatArrow(7:8-7:10),Int(7:11-7:12),
-CloseCurly(8:1-8:2),
-EndOfFile(9:1-9:1),
+KwMatch,LowerIdent,OpenCurly,
+OpenSquare,Underscore,CloseSquare,OpFatArrow,Int,
+OpenSquare,DoubleDot,Comma,LowerIdent,CloseSquare,OpFatArrow,LowerIdent,
+OpenSquare,LowerIdent,Comma,DoubleDot,CloseSquare,OpFatArrow,LowerIdent,
+OpenSquare,Underscore,Comma,Underscore,Comma,LowerIdent,CloseSquare,OpFatArrow,LowerIdent,
+OpenSquare,LowerIdent,Comma,Underscore,Comma,Underscore,Comma,LowerIdent,CloseSquare,OpFatArrow,LowerIdent,OpPlus,LowerIdent,
+OpenSquare,CloseSquare,OpFatArrow,Int,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.12 (raw "items"))
+	(e-ident (raw "items"))
 	(branches
-		(branch @2.5-2.13
-			(p-list @2.5-2.8
+		(branch
+			(p-list
 				(p-underscore))
-			(e-int @2.12-2.13 (raw "1")))
-		(branch @3.5-3.23
-			(p-list @3.5-3.15
-				(p-list-rest @3.6-3.8)
-				(p-ident @3.10-3.14 (raw "last")))
-			(e-ident @3.19-3.23 (raw "last")))
-		(branch @4.5-4.25
-			(p-list @4.5-4.16
-				(p-ident @4.6-4.11 (raw "first"))
-				(p-list-rest @4.13-4.15))
-			(e-ident @4.20-4.25 (raw "first")))
-		(branch @5.5-5.27
-			(p-list @5.5-5.18
+			(e-int (raw "1")))
+		(branch
+			(p-list
+				(p-list-rest)
+				(p-ident (raw "last")))
+			(e-ident (raw "last")))
+		(branch
+			(p-list
+				(p-ident (raw "first"))
+				(p-list-rest))
+			(e-ident (raw "first")))
+		(branch
+			(p-list
 				(p-underscore)
 				(p-underscore)
-				(p-ident @5.12-5.17 (raw "third")))
-			(e-ident @5.22-5.27 (raw "third")))
-		(branch @6.5-6.26
-			(p-list @6.5-6.17
-				(p-ident @6.6-6.7 (raw "x"))
+				(p-ident (raw "third")))
+			(e-ident (raw "third")))
+		(branch
+			(p-list
+				(p-ident (raw "x"))
 				(p-underscore)
 				(p-underscore)
-				(p-ident @6.15-6.16 (raw "y")))
-			(e-binop @6.21-6.26 (op "+")
-				(e-ident @6.21-6.22 (raw "x"))
-				(e-ident @6.25-6.26 (raw "y"))))
-		(branch @7.5-7.12
-			(p-list @7.5-7.7)
-			(e-int @7.11-7.12 (raw "0")))))
+				(p-ident (raw "y")))
+			(e-binop (op "+")
+				(e-ident (raw "x"))
+				(e-ident (raw "y"))))
+		(branch
+			(p-list)
+			(e-int (raw "0")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -91,74 +91,74 @@ match items {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-match @1.1-8.2
-	(match @1.1-8.2
+(e-match
+	(match
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-list @2.5-2.8
+						(p-list
 							(patterns
-								(p-underscore @2.6-2.7)))))
+								(p-underscore)))))
 				(value
-					(e-num @2.12-2.13 (value "1"))))
+					(e-num (value "1"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-list @3.5-3.15
+						(p-list
 							(patterns
-								(p-assign @3.10-3.14 (ident "last")))
+								(p-assign (ident "last")))
 							(rest-at (index 0)))))
 				(value
-					(e-lookup-local @3.19-3.23
-						(p-assign @3.10-3.14 (ident "last")))))
+					(e-lookup-local
+						(p-assign (ident "last")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-list @4.5-4.16
+						(p-list
 							(patterns
-								(p-assign @4.6-4.11 (ident "first")))
+								(p-assign (ident "first")))
 							(rest-at (index 1)))))
 				(value
-					(e-lookup-local @4.20-4.25
-						(p-assign @4.6-4.11 (ident "first")))))
+					(e-lookup-local
+						(p-assign (ident "first")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-list @5.5-5.18
+						(p-list
 							(patterns
-								(p-underscore @5.6-5.7)
-								(p-underscore @5.9-5.10)
-								(p-assign @5.12-5.17 (ident "third"))))))
+								(p-underscore)
+								(p-underscore)
+								(p-assign (ident "third"))))))
 				(value
-					(e-lookup-local @5.22-5.27
-						(p-assign @5.12-5.17 (ident "third")))))
+					(e-lookup-local
+						(p-assign (ident "third")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-list @6.5-6.17
+						(p-list
 							(patterns
-								(p-assign @6.6-6.7 (ident "x"))
-								(p-underscore @6.9-6.10)
-								(p-underscore @6.12-6.13)
-								(p-assign @6.15-6.16 (ident "y"))))))
+								(p-assign (ident "x"))
+								(p-underscore)
+								(p-underscore)
+								(p-assign (ident "y"))))))
 				(value
-					(e-binop @6.21-6.26 (op "add")
-						(e-lookup-local @6.21-6.22
-							(p-assign @6.6-6.7 (ident "x")))
-						(e-lookup-local @6.25-6.26
-							(p-assign @6.15-6.16 (ident "y"))))))
+					(e-binop (op "add")
+						(e-lookup-local
+							(p-assign (ident "x")))
+						(e-lookup-local
+							(p-assign (ident "y"))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-list @7.5-7.7
+						(p-list
 							(patterns))))
 				(value
-					(e-num @7.11-7.12 (value "0")))))))
+					(e-num (value "0")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-8.2 (type "Num(_size)"))
+(expr (type "Num(_size)"))
 ~~~

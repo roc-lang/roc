@@ -160,25 +160,25 @@ Pair(a, b+ : (
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:4),OpSlash(1:4-1:5),LowerIdent(1:5-1:9),NoSpaceDotLowerIdent(1:9-1:13),StringStart(1:13-1:14),StringPart(1:14-1:16),StringEnd(1:16-1:16),
-UpperIdent(3:1-3:5),NoSpaceOpenRound(3:5-3:6),LowerIdent(3:6-3:7),Comma(3:7-3:8),LowerIdent(3:9-3:10),OpPlus(3:10-3:11),OpColon(3:12-3:13),OpenRound(3:14-3:15),
-EndOfFile(4:1-4:1),
+UpperIdent,OpSlash,LowerIdent,NoSpaceDotLowerIdent,StringStart,StringPart,StringEnd,
+UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,OpPlus,OpColon,OpenRound,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-3.15
-	(type-module @1.1-1.4)
+(file
+	(type-module)
 	(statements
-		(s-malformed @1.4-1.5 (tag "expected_colon_after_type_annotation"))
-		(s-malformed @1.5-1.9 (tag "statement_unexpected_token"))
-		(s-malformed @1.9-1.13 (tag "statement_unexpected_token"))
-		(s-malformed @1.13-1.14 (tag "statement_unexpected_token"))
-		(s-malformed @1.14-1.16 (tag "statement_unexpected_token"))
-		(s-malformed @1.16-1.16 (tag "statement_unexpected_token"))
-		(s-type-decl @3.1-3.15
-			(header @3.1-3.11 (name "<malformed>")
+		(s-malformed (tag "expected_colon_after_type_annotation"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-type-decl
+			(header (name "<malformed>")
 				(args))
-			(ty-malformed @3.14-3.15 (tag "expected_ty_anno_close_round")))))
+			(ty-malformed (tag "expected_ty_anno_close_round")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -189,16 +189,16 @@ EndOfFile(4:1-4:1),
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-alias-decl @3.1-3.15
-		(ty-header @3.1-3.11 (name ""))
-		(ty-malformed @3.14-3.15)))
+	(s-alias-decl
+		(ty-header (name ""))
+		(ty-malformed)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @3.1-3.15 (type "")
-			(ty-header @3.1-3.11 (name ""))))
+		(alias (type "")
+			(ty-header (name ""))))
 	(expressions))
 ~~~

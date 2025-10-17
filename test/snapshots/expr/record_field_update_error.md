@@ -70,17 +70,17 @@ This type annotation is malformed or contains invalid syntax.
 
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),LowerIdent(1:3-1:9),OpAmpersand(1:10-1:11),LowerIdent(1:12-1:15),OpColon(1:15-1:16),Int(1:17-1:19),CloseCurly(1:20-1:21),
-EndOfFile(2:1-2:1),
+OpenCurly,LowerIdent,OpAmpersand,LowerIdent,OpColon,Int,CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-block @1.1-1.21
+(e-block
 	(statements
-		(e-ident @1.3-1.9 (raw "person"))
-		(e-malformed @1.10-1.11 (reason "expr_unexpected_token"))
-		(s-type-anno @1.12-1.19 (name "age")
-			(ty-malformed @1.17-1.19 (tag "ty_anno_unexpected_token")))))
+		(e-ident (raw "person"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(s-type-anno (name "age")
+			(ty-malformed (tag "ty_anno_unexpected_token")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -91,14 +91,14 @@ EndOfFile(2:1-2:1),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-1.21
-	(s-expr @1.3-1.9
+(e-block
+	(s-expr
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-expr @1.10-1.11
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(e-empty_record @1.1-1.21))
+	(e-empty_record))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.21 (type "{}"))
+(expr (type "{}"))
 ~~~

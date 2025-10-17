@@ -7,23 +7,27 @@
 const std = @import("std");
 const base = @import("base");
 const collections = @import("collections");
+const types_store = @import("store.zig");
+const types_mod = @import("types.zig");
 
-const TypesStore = @import("store.zig").Store;
-const Var = @import("types.zig").Var;
-const Flex = @import("types.zig").Flex;
-const Content = @import("types.zig").Content;
-const FlatType = @import("types.zig").FlatType;
-const Alias = @import("types.zig").Alias;
-const Func = @import("types.zig").Func;
-const Record = @import("types.zig").Record;
-const TagUnion = @import("types.zig").TagUnion;
-const RecordField = @import("types.zig").RecordField;
-const Tag = @import("types.zig").Tag;
-const Num = @import("types.zig").Num;
-const NominalType = @import("types.zig").NominalType;
-const Tuple = @import("types.zig").Tuple;
-const Rank = @import("types.zig").Rank;
-const Mark = @import("types.zig").Mark;
+const TypesStore = types_store.Store;
+const Var = types_mod.Var;
+const Flex = types_mod.Flex;
+const StaticDispatchConstraint = types_mod.StaticDispatchConstraint;
+const Rigid = types_mod.Rigid;
+const Content = types_mod.Content;
+const FlatType = types_mod.FlatType;
+const Alias = types_mod.Alias;
+const Func = types_mod.Func;
+const Record = types_mod.Record;
+const TagUnion = types_mod.TagUnion;
+const RecordField = types_mod.RecordField;
+const Tag = types_mod.Tag;
+const Num = types_mod.Num;
+const NominalType = types_mod.NominalType;
+const Tuple = types_mod.Tuple;
+const Rank = types_mod.Rank;
+const Mark = types_mod.Mark;
 const Ident = base.Ident;
 
 /// Type to manage instantiation.
@@ -80,36 +84,61 @@ pub const Instantiator = struct {
             .rigid => |rigid| {
                 // If this var is rigid, then create a new var depending on the
                 // provided behavior
-                const fresh_var = blk: {
+                const fresh_type: enum { flex, rigid } = blk: {
                     switch (self.rigid_behavior) {
                         .fresh_rigid => {
-                            break :blk try self.store.freshFromContentWithRank(
-                                Content{ .rigid = rigid },
-                                self.current_rank,
-                            );
+                            break :blk .rigid;
                         },
                         .fresh_flex => {
-                            break :blk try self.store.freshFromContentWithRank(
-                                Content{ .flex = Flex.init().withName(rigid.name) },
-                                self.current_rank,
-                            );
+                            break :blk .flex;
                         },
                         .substitute_rigids => |rigid_subs| {
-                            if (rigid_subs.get(rigid.name)) |existing_flex| {
-                                break :blk existing_flex;
-                            } else {
-                                std.debug.assert(false);
-                                break :blk try self.store.freshFromContentWithRank(
-                                    .err,
-                                    self.current_rank,
-                                );
-                            }
+                            // If this is a var that we're substituting, then we
+                            // we just return it.
+
+                            const existing_var = inner_blk: {
+                                if (rigid_subs.get(rigid.name)) |existing_flex| {
+                                    break :inner_blk existing_flex;
+                                } else {
+                                    std.debug.assert(false);
+                                    break :inner_blk try self.store.freshFromContentWithRank(
+                                        .err,
+                                        self.current_rank,
+                                    );
+                                }
+                            };
+
+                            // Remember this substitution for recursive references
+                            try self.var_map.put(resolved_var, existing_var);
+
+                            return existing_var;
                         },
                     }
                 };
 
                 // Remember this substitution for recursive references
+                // IMPORTANT: This has to be inserted _before_ we recurse into `instantiateContent`
+                const fresh_var = try self.store.fresh();
                 try self.var_map.put(resolved_var, fresh_var);
+
+                // Copy the rigid var's constraints
+                const fresh_constraints = try self.instantiateStaticDispatchConstraints(rigid.constraints);
+
+                // Copy the rigid var's constraints
+                const fresh_content = switch (fresh_type) {
+                    .flex => Content{ .flex = Flex{ .name = rigid.name, .constraints = fresh_constraints } },
+                    .rigid => Content{ .rigid = Rigid{ .name = rigid.name, .constraints = fresh_constraints } },
+                };
+
+                // Update the placeholder fresh var with the real content
+                try self.store.setVarDesc(
+                    fresh_var,
+                    .{
+                        .content = fresh_content,
+                        .rank = self.current_rank,
+                        .mark = Mark.none,
+                    },
+                );
 
                 return fresh_var;
             },
@@ -140,8 +169,11 @@ pub const Instantiator = struct {
     fn instantiateContent(self: *Self, content: Content) std.mem.Allocator.Error!Content {
         return switch (content) {
             .flex => |maybe_ident| Content{ .flex = maybe_ident },
-            // .rigid => |maybe_ident| Content{ .rigid = maybe_ident },
-            .rigid => unreachable,
+            .rigid => {
+                // Rigids should be handled by `instantiateVar`
+                // If we have run into one here, it is  abug
+                unreachable;
+            },
             .alias => |alias| {
                 // Instantiate the structure recursively
                 return try self.instantiateAlias(alias);
@@ -153,6 +185,12 @@ pub const Instantiator = struct {
             },
             .err => Content.err,
         };
+    }
+
+    fn instantiateFlex(self: *Self, flex: Flex) std.mem.Allocator.Error!Content {
+        const fresh_constraints = try self.instantiateStaticDispatchConstraints(flex.constraints);
+
+        return Flex{ .name = flex.name, .constraints = fresh_constraints };
     }
 
     fn instantiateAlias(self: *Self, alias: Alias) std.mem.Allocator.Error!Content {
@@ -326,5 +364,43 @@ pub const Instantiator = struct {
 
     pub fn getIdent(self: *const Self, idx: Ident.Idx) []const u8 {
         return self.idents.getText(idx);
+    }
+
+    fn instantiateStaticDispatchConstraints(self: *Self, constraints: StaticDispatchConstraint.SafeList.Range) std.mem.Allocator.Error!StaticDispatchConstraint.SafeList.Range {
+        const constraints_len = constraints.len();
+        if (constraints_len == 0) {
+            return StaticDispatchConstraint.SafeList.Range.empty();
+        } else {
+            var fresh_constraints = try std.ArrayList(StaticDispatchConstraint).initCapacity(self.store.gpa, constraints.len());
+            defer fresh_constraints.deinit();
+
+            for (self.store.sliceStaticDispatchConstraints(constraints)) |constraint| {
+                const fresh_constraint = try self.instantiateStaticDispatchConstraint(constraint);
+                try fresh_constraints.append(fresh_constraint);
+            }
+
+            const fresh_constraints_range = try self.store.appendStaticDispatchConstraints(fresh_constraints.items);
+            return fresh_constraints_range;
+        }
+    }
+
+    fn instantiateStaticDispatchConstraint(self: *Self, constraint: StaticDispatchConstraint) std.mem.Allocator.Error!StaticDispatchConstraint {
+        var fresh_vars = std.ArrayList(Var).init(self.store.gpa);
+        defer fresh_vars.deinit();
+
+        // Copy the args
+        for (self.store.sliceVars(constraint.fn_args.nonempty)) |source_fn_arg| {
+            const fresh_fn_arg = try self.instantiateVar(source_fn_arg);
+            try fresh_vars.append(fresh_fn_arg);
+        }
+        const fresh_fn_args_range = try self.store.appendVars(fresh_vars.items);
+
+        const fresh_fn_ret = try self.instantiateVar(constraint.fn_ret);
+
+        return StaticDispatchConstraint{
+            .fn_name = constraint.fn_name,
+            .fn_args = .{ .nonempty = fresh_fn_args_range },
+            .fn_ret = fresh_fn_ret,
+        };
     }
 };

@@ -333,8 +333,18 @@ const Formatter = struct {
     pub fn formatFile(fmt: *Formatter) !void {
         fmt.ast.store.emptyScratch();
         const file = fmt.ast.store.getFile();
+        const header = fmt.ast.store.getHeader(file.header);
         const header_region = fmt.ast.store.nodes.items.items(.region)[@intFromEnum(file.header)];
-        _ = try fmt.flushCommentsBefore(header_region.start);
+        // Only flush comments before the header if it has its own tokens.
+        // type_module, default_app, and malformed headers share the first statement's token,
+        // so flushing here would duplicate the whitespace handling.
+        const header_has_own_tokens = switch (header) {
+            .type_module, .default_app, .malformed => false,
+            else => true,
+        };
+        if (header_has_own_tokens) {
+            _ = try fmt.flushCommentsBefore(header_region.start);
+        }
         _ = try fmt.formatHeader(file.header);
         const statement_slice = fmt.ast.store.statementSlice(file.statements);
         for (statement_slice) |s| {
@@ -659,31 +669,34 @@ const Formatter = struct {
 
         try fmt.pushAll("where");
 
+        // Add opening bracket
+        if (clauses_are_multiline) {
+            try fmt.ensureNewline();
+            fmt.curr_indent += 1;
+            try fmt.pushIndent();
+            try fmt.push('[');
+        } else {
+            try fmt.pushAll(" [");
+        }
+
         for (clause_slice, 0..) |clause, i| {
             if (clauses_are_multiline) {
                 const clause_region = fmt.nodeRegion(@intFromEnum(clause));
                 _ = try fmt.flushCommentsBefore(clause_region.start);
             }
-            if (i == 0) {
-                if (clauses_are_multiline) {
-                    fmt.curr_indent += 1;
-                } else {
-                    try fmt.push(' ');
-                }
-            }
-            if (clauses_are_multiline) {
-                try fmt.ensureNewline();
-                try fmt.pushIndent();
-            }
-            try fmt.formatWhereClause(clause);
-            if (i < clause_slice.len - 1) {
+            if (i > 0) {
                 if (clauses_are_multiline) {
                     try fmt.push(',');
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
                 } else {
                     try fmt.pushAll(", ");
                 }
             }
+            try fmt.formatWhereClause(clause);
         }
+
+        try fmt.push(']');
     }
 
     fn formatIdent(fmt: *Formatter, ident: Token.Idx, qualifier: ?Token.Idx) !void {
@@ -1753,7 +1766,7 @@ const Formatter = struct {
         const multiline = fmt.nodeWillBeMultiline(AST.WhereClause.Idx, idx);
         switch (clause) {
             .mod_method => |c| {
-                try fmt.pushAll("module(");
+                // Format as: a.method : Type
                 if (multiline and try fmt.flushCommentsBefore(c.var_tok)) {
                     fmt.curr_indent = start_indent + 1;
                     try fmt.pushIndent();
@@ -1763,7 +1776,6 @@ const Formatter = struct {
                     fmt.curr_indent = start_indent;
                     try fmt.pushIndent();
                 }
-                try fmt.push(')');
                 try fmt.push('.');
                 try fmt.pushTokenText(c.name_tok);
                 try fmt.pushAll(" :");
@@ -1814,7 +1826,7 @@ const Formatter = struct {
                 _ = try fmt.formatTypeAnno(c.ret_anno);
             },
             .mod_alias => |c| {
-                try fmt.pushAll("module(");
+                // Format as: a.TypeAlias
                 if (multiline and try fmt.flushCommentsBefore(c.var_tok)) {
                     fmt.curr_indent = start_indent + 1;
                     try fmt.pushIndent();
@@ -1824,7 +1836,6 @@ const Formatter = struct {
                     fmt.curr_indent = start_indent;
                     try fmt.pushIndent();
                 }
-                try fmt.push(')');
                 try fmt.push('.');
                 try fmt.pushTokenText(c.name_tok);
             },

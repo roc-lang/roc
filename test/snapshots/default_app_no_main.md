@@ -26,22 +26,22 @@ helper = |x| x + 1
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:7),OpAssign(1:8-1:9),OpBar(1:10-1:11),LowerIdent(1:11-1:12),OpBar(1:12-1:13),LowerIdent(1:14-1:15),OpPlus(1:16-1:17),Int(1:18-1:19),
-EndOfFile(2:1-2:1),
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,Int,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.19
-	(type-module @1.1-1.7)
+(file
+	(type-module)
 	(statements
-		(s-decl @1.1-1.19
-			(p-ident @1.1-1.7 (raw "helper"))
-			(e-lambda @1.10-1.19
+		(s-decl
+			(p-ident (raw "helper"))
+			(e-lambda
 				(args
-					(p-ident @1.11-1.12 (raw "x")))
-				(e-binop @1.14-1.19 (op "+")
-					(e-ident @1.14-1.15 (raw "x"))
-					(e-int @1.18-1.19 (raw "1")))))))
+					(p-ident (raw "x")))
+				(e-binop (op "+")
+					(e-ident (raw "x"))
+					(e-int (raw "1")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -51,20 +51,20 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @1.1-1.7 (ident "helper"))
-		(e-lambda @1.10-1.19
+		(p-assign (ident "helper"))
+		(e-lambda
 			(args
-				(p-assign @1.11-1.12 (ident "x")))
-			(e-binop @1.14-1.19 (op "add")
-				(e-lookup-local @1.14-1.15
-					(p-assign @1.11-1.12 (ident "x")))
-				(e-num @1.18-1.19 (value "1"))))))
+				(p-assign (ident "x")))
+			(e-binop (op "add")
+				(e-lookup-local
+					(p-assign (ident "x")))
+				(e-num (value "1"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @1.1-1.7 (type "Num(_size) -> Num(_size2)")))
+		(patt (type "Num(_size) -> Num(_size2)")))
 	(expressions
-		(expr @1.10-1.19 (type "Num(_size) -> Num(_size2)"))))
+		(expr (type "Num(_size) -> Num(_size2)"))))
 ~~~

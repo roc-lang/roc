@@ -154,34 +154,34 @@ The unused variable is declared here:
 
 # TOKENS
 ~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:12),OpenCurly(1:13-1:14),
-OpenSquare(2:5-2:6),LowerIdent(2:6-2:11),Comma(2:11-2:12),DoubleDot(2:13-2:15),LowerIdent(2:15-2:19),CloseSquare(2:19-2:20),OpFatArrow(2:21-2:23),Int(2:24-2:25),
-OpenSquare(3:5-3:6),DoubleDot(3:6-3:8),LowerIdent(3:8-3:12),Comma(3:12-3:13),LowerIdent(3:14-3:18),CloseSquare(3:18-3:19),OpFatArrow(3:20-3:22),Int(3:23-3:24),
-OpenSquare(4:5-4:6),LowerIdent(4:6-4:7),Comma(4:7-4:8),DoubleDot(4:9-4:11),LowerIdent(4:11-4:15),Comma(4:15-4:16),LowerIdent(4:17-4:18),CloseSquare(4:18-4:19),OpFatArrow(4:20-4:22),Int(4:23-4:24),
-CloseCurly(5:1-5:2),
-EndOfFile(6:1-6:1),
+KwMatch,LowerIdent,OpenCurly,
+OpenSquare,LowerIdent,Comma,DoubleDot,LowerIdent,CloseSquare,OpFatArrow,Int,
+OpenSquare,DoubleDot,LowerIdent,Comma,LowerIdent,CloseSquare,OpFatArrow,Int,
+OpenSquare,LowerIdent,Comma,DoubleDot,LowerIdent,Comma,LowerIdent,CloseSquare,OpFatArrow,Int,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.12 (raw "items"))
+	(e-ident (raw "items"))
 	(branches
-		(branch @2.5-2.25
-			(p-list @2.5-2.20
-				(p-ident @2.6-2.11 (raw "first"))
-				(p-list-rest @2.13-2.19 (name "rest")))
-			(e-int @2.24-2.25 (raw "0")))
-		(branch @3.5-3.24
-			(p-list @3.5-3.19
-				(p-list-rest @3.6-3.12 (name "rest"))
-				(p-ident @3.14-3.18 (raw "last")))
-			(e-int @3.23-3.24 (raw "1")))
-		(branch @4.5-4.24
-			(p-list @4.5-4.19
-				(p-ident @4.6-4.7 (raw "x"))
-				(p-list-rest @4.9-4.15 (name "rest"))
-				(p-ident @4.17-4.18 (raw "y")))
-			(e-int @4.23-4.24 (raw "2")))))
+		(branch
+			(p-list
+				(p-ident (raw "first"))
+				(p-list-rest (name "rest")))
+			(e-int (raw "0")))
+		(branch
+			(p-list
+				(p-list-rest (name "rest"))
+				(p-ident (raw "last")))
+			(e-int (raw "1")))
+		(branch
+			(p-list
+				(p-ident (raw "x"))
+				(p-list-rest (name "rest"))
+				(p-ident (raw "y")))
+			(e-int (raw "2")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -193,44 +193,44 @@ match items {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-match @1.1-5.2
-	(match @1.1-5.2
+(e-match
+	(match
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-list @2.5-2.20
+						(p-list
 							(patterns
-								(p-assign @2.6-2.11 (ident "first")))
+								(p-assign (ident "first")))
 							(rest-at (index 1)
-								(p-assign @2.15-2.15 (ident "rest"))))))
+								(p-assign (ident "rest"))))))
 				(value
-					(e-num @2.24-2.25 (value "0"))))
+					(e-num (value "0"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-list @3.5-3.19
+						(p-list
 							(patterns
-								(p-assign @3.14-3.18 (ident "last")))
+								(p-assign (ident "last")))
 							(rest-at (index 0)
-								(p-assign @3.8-3.8 (ident "rest"))))))
+								(p-assign (ident "rest"))))))
 				(value
-					(e-num @3.23-3.24 (value "1"))))
+					(e-num (value "1"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-list @4.5-4.19
+						(p-list
 							(patterns
-								(p-assign @4.6-4.7 (ident "x"))
-								(p-assign @4.17-4.18 (ident "y")))
+								(p-assign (ident "x"))
+								(p-assign (ident "y")))
 							(rest-at (index 1)
-								(p-assign @4.11-4.11 (ident "rest"))))))
+								(p-assign (ident "rest"))))))
 				(value
-					(e-num @4.23-4.24 (value "2")))))))
+					(e-num (value "2")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-5.2 (type "Num(_size)"))
+(expr (type "Num(_size)"))
 ~~~

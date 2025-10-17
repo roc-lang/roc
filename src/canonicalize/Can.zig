@@ -7421,20 +7421,18 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
             // Canonicalize return type
             const ret_anno = try self.canonicalizeTypeAnno(mm.ret_anno, type_anno_ctx);
 
-            // Create external declaration for where clause method constraint
-            // This represents the requirement that type variable must come from a module
-            // that provides the specified method
+            // Create external declaration for where clause type constraint
+            // This represents the requirement that the type variable provides the specified method
             const var_name_text = self.env.getIdent(var_ident);
 
-            // Create qualified name: "module(a).method"
-            const qualified_text = try std.fmt.allocPrint(self.env.gpa, "module({s}).{s}", .{ var_name_text, method_name_clean });
+            // Create qualified name: "a.method"
+            const qualified_text = try std.fmt.allocPrint(self.env.gpa, "{s}.{s}", .{ var_name_text, method_name_clean });
             defer self.env.gpa.free(qualified_text);
             const qualified_name = try self.env.insertIdent(Ident.for_text(qualified_text));
 
-            // Create module name: "module(a)"
-            const module_text = try std.fmt.allocPrint(self.env.gpa, "module({s})", .{var_name_text});
-            defer self.env.gpa.free(module_text);
-            const module_name = try self.env.insertIdent(Ident.for_text(module_text));
+            // Use the type variable name as the module name - TODO this needs to be updated to use
+            // types instead of modules!
+            const module_name = var_ident;
 
             const external_type_var = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex = types.Flex.init() }, region, TypeVar);
             const external_decl = try self.createExternalDeclaration(qualified_name, module_name, method_ident, .value, external_type_var, region);
@@ -7466,20 +7464,17 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
             const var_ident = try self.env.insertIdent(Ident.for_text(var_name));
             const alias_ident = try self.env.insertIdent(Ident.for_text(alias_name_clean));
 
-            // Create external declaration for where clause alias constraint
-            // This represents the requirement that type variable must come from a module
-            // that provides the specified type alias
+            // Create external declaration for where clause type constraint
+            // This represents the requirement that the type variable provides the specified type alias
             const var_name_text = self.env.getIdent(var_ident);
 
-            // Create qualified name: "module(a).Alias"
-            const qualified_text = try std.fmt.allocPrint(self.env.gpa, "module({s}).{s}", .{ var_name_text, alias_name_clean });
+            // Create qualified name: "a.Alias"
+            const qualified_text = try std.fmt.allocPrint(self.env.gpa, "{s}.{s}", .{ var_name_text, alias_name_clean });
             defer self.env.gpa.free(qualified_text);
             const qualified_name = try self.env.insertIdent(Ident.for_text(qualified_text));
 
-            // Create module name: "module(a)"
-            const module_text = try std.fmt.allocPrint(self.env.gpa, "module({s})", .{var_name_text});
-            defer self.env.gpa.free(module_text);
-            const module_name = try self.env.insertIdent(Ident.for_text(module_text));
+            // Use the type variable name as the module name
+            const module_name = var_ident;
 
             const external_type_var = try self.env.addTypeSlotAndTypeVar(@enumFromInt(0), .{ .flex = types.Flex.init() }, region, TypeVar);
             const external_decl = try self.createExternalDeclaration(qualified_name, module_name, alias_ident, .type, external_type_var, region);

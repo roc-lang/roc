@@ -842,7 +842,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     try file.pushToSExprTree(module_env.gpa, &module_env.common, &parse_ast, &tree);
 
-    try tree.toHtml(&ast_writer.writer);
+    try tree.toHtml(&ast_writer.writer, .include_linecol);
 
     result.ast_html = allocator.dupe(u8, ast_writer.written()) catch |err| {
         logDebug("compileSource: failed to dupe ast_html: {}\n", .{err});
@@ -1360,7 +1360,7 @@ fn writeReplCanCirResponse(response_buffer: []u8, module_env: *ModuleEnv) Respon
 
     const mutable_cir = @constCast(module_env);
     ModuleEnv.pushToSExprTree(mutable_cir, null, &tree) catch {};
-    tree.toHtml(&sexpr_writer_allocating.writer) catch {};
+    tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch {};
     sexpr_writer_allocating.writer.flush() catch {};
 
     try writeJsonString(w, sexpr_writer_allocating.written());
@@ -1397,7 +1397,7 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 
     const mutable_cir = @constCast(cir);
     ModuleEnv.pushToSExprTree(mutable_cir, null, &tree) catch {};
-    tree.toHtml(&sexpr_writer_allocating.writer) catch {};
+    tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch {};
     sexpr_writer_allocating.writer.flush() catch {};
 
     try writeJsonString(w, sexpr_writer_allocating.written());
@@ -1637,7 +1637,7 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) ResponseWr
         try writeErrorResponse(response_buffer, .ERROR, error_msg);
         return;
     };
-    tree.toHtml(&sexpr_writer_allocating.writer) catch {};
+    tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch {};
     sexpr_writer_allocating.writer.flush() catch {};
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");

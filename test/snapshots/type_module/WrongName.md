@@ -28,21 +28,21 @@ SomeOtherName := [A, B]
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:14),OpColonEqual(1:15-1:17),OpenSquare(1:18-1:19),UpperIdent(1:19-1:20),Comma(1:20-1:21),UpperIdent(1:22-1:23),CloseSquare(1:23-1:24),
-EndOfFile(2:1-2:1),
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,CloseSquare,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.24
-	(type-module @1.1-1.14)
+(file
+	(type-module)
 	(statements
-		(s-type-decl @1.1-1.24
-			(header @1.1-1.14 (name "SomeOtherName")
+		(s-type-decl
+			(header (name "SomeOtherName")
 				(args))
-			(ty-tag-union @1.18-1.24
+			(ty-tag-union
 				(tags
-					(ty @1.19-1.20 (name "A"))
-					(ty @1.22-1.23 (name "B")))))))
+					(ty (name "A"))
+					(ty (name "B")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -51,18 +51,18 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-nominal-decl @1.1-1.24
-		(ty-header @1.1-1.14 (name "SomeOtherName"))
-		(ty-tag-union @1.18-1.24
-			(ty-tag-name @1.19-1.20 (name "A"))
-			(ty-tag-name @1.22-1.23 (name "B")))))
+	(s-nominal-decl
+		(ty-header (name "SomeOtherName"))
+		(ty-tag-union
+			(ty-tag-name (name "A"))
+			(ty-tag-name (name "B")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(type_decls
-		(nominal @1.1-1.24 (type "SomeOtherName")
-			(ty-header @1.1-1.14 (name "SomeOtherName"))))
+		(nominal (type "SomeOtherName")
+			(ty-header (name "SomeOtherName"))))
 	(expressions))
 ~~~

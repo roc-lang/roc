@@ -5,6 +5,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
+const base = @import("base");
+const Allocators = base.Allocators;
 const libc_finder = @import("libc_finder.zig");
 
 /// External C functions from zig_llvm.cpp - only available when LLVM is enabled
@@ -108,14 +110,15 @@ pub const LinkError = error{
 };
 
 /// Link object files into an executable using LLD
-pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
+pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
     // Check if LLVM is available at compile time
     if (comptime !llvm_available) {
         return LinkError.LLVMNotAvailable;
     }
 
-    var args = std.array_list.Managed([]const u8).init(allocator);
-    defer args.deinit();
+    // Use arena allocator for all temporary allocations
+    // Pre-allocate capacity to avoid reallocations (typical command has 20-40 args)
+    var args = std.array_list.Managed([]const u8).initCapacity(allocs.arena, 64) catch return LinkError.OutOfMemory;
 
     // Add platform-specific linker name and arguments
     // Use target OS if provided, otherwise fall back to host OS
@@ -188,9 +191,9 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
                     // for cross-compilation. Only detect locally for native builds
                     if (config.extra_args.len == 0) {
                         // Native build - try to detect dynamic linker
-                        if (libc_finder.findLibc(allocator)) |libc_info| {
+                        if (libc_finder.findLibc(allocs.arena)) |libc_info| {
                             // We need to copy the path since args holds references
-                            const dynamic_linker = try allocator.dupe(u8, libc_info.dynamic_linker);
+                            const dynamic_linker = try allocs.arena.dupe(u8, libc_info.dynamic_linker);
 
                             // Clean up libc_info after copying what we need
                             var info = libc_info;
@@ -220,7 +223,7 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
             try args.append("lld-link");
 
             // Add output argument using Windows style
-            const out_arg = try std.fmt.allocPrint(allocator, "/out:{s}", .{config.output_path});
+            const out_arg = try std.fmt.allocPrint(allocs.arena, "/out:{s}", .{config.output_path});
             try args.append(out_arg);
 
             // Add subsystem flag (console by default)
@@ -283,16 +286,11 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
     }
 
     // Convert to null-terminated strings for C API
-    var c_args = allocator.alloc([*:0]const u8, args.items.len) catch return LinkError.OutOfMemory;
-    defer allocator.free(c_args);
+    // Arena allocator will clean up all these temporary allocations
+    var c_args = allocs.arena.alloc([*:0]const u8, args.items.len) catch return LinkError.OutOfMemory;
 
     for (args.items, 0..) |arg, i| {
-        c_args[i] = (allocator.dupeZ(u8, arg) catch return LinkError.OutOfMemory).ptr;
-    }
-    defer {
-        for (c_args) |c_arg| {
-            allocator.free(std.mem.span(c_arg));
-        }
+        c_args[i] = (allocs.arena.dupeZ(u8, arg) catch return LinkError.OutOfMemory).ptr;
     }
 
     // Call appropriate LLD function based on target format
@@ -329,7 +327,7 @@ pub fn link(allocator: Allocator, config: LinkConfig) LinkError!void {
 }
 
 /// Convenience function to link two object files into an executable
-pub fn linkTwoObjects(allocator: Allocator, obj1: []const u8, obj2: []const u8, output: []const u8) LinkError!void {
+pub fn linkTwoObjects(allocs: *Allocators, obj1: []const u8, obj2: []const u8, output: []const u8) LinkError!void {
     if (comptime !llvm_available) {
         return LinkError.LLVMNotAvailable;
     }
@@ -339,11 +337,11 @@ pub fn linkTwoObjects(allocator: Allocator, obj1: []const u8, obj2: []const u8, 
         .object_files = &.{ obj1, obj2 },
     };
 
-    return link(allocator, config);
+    return link(allocs, config);
 }
 
 /// Convenience function to link multiple object files into an executable
-pub fn linkObjects(allocator: Allocator, object_files: []const []const u8, output: []const u8) LinkError!void {
+pub fn linkObjects(allocs: *Allocators, object_files: []const []const u8, output: []const u8) LinkError!void {
     if (comptime !llvm_available) {
         return LinkError.LLVMNotAvailable;
     }
@@ -353,7 +351,7 @@ pub fn linkObjects(allocator: Allocator, object_files: []const []const u8, outpu
         .object_files = object_files,
     };
 
-    return link(allocator, config);
+    return link(allocs, config);
 }
 
 test "link config creation" {
@@ -380,12 +378,16 @@ test "target format detection" {
 
 test "link error when LLVM not available" {
     if (comptime !llvm_available) {
+        var allocs: Allocators = undefined;
+        allocs.initInPlace(std.testing.allocator);
+        defer allocs.deinit();
+
         const config = LinkConfig{
             .output_path = "test_output",
             .object_files = &.{ "file1.o", "file2.o" },
         };
 
-        const result = link(std.testing.allocator, config);
+        const result = link(&allocs, config);
         try std.testing.expectError(LinkError.LLVMNotAvailable, result);
     }
 }

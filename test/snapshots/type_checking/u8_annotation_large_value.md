@@ -24,20 +24,20 @@ Its inferred type is:
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:2),OpColon(1:3-1:4),UpperIdent(1:5-1:7),
-LowerIdent(2:1-2:2),OpAssign(2:3-2:4),Int(2:5-2:8),
-EndOfFile(3:1-3:1),
+LowerIdent,OpColon,UpperIdent,
+LowerIdent,OpAssign,Int,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-2.8
-	(type-module @1.1-1.2)
+(file
+	(type-module)
 	(statements
-		(s-type-anno @1.1-1.7 (name "x")
-			(ty @1.5-1.7 (name "U8")))
-		(s-decl @2.1-2.8
-			(p-ident @2.1-2.2 (raw "x"))
-			(e-int @2.5-2.8 (raw "500")))))
+		(s-type-anno (name "x")
+			(ty (name "U8")))
+		(s-decl
+			(p-ident (raw "x"))
+			(e-int (raw "500")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -47,17 +47,17 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @2.1-2.2 (ident "x"))
-		(e-num @2.5-2.8 (value "500"))
-		(annotation @2.1-2.2
+		(p-assign (ident "x"))
+		(e-num (value "500"))
+		(annotation
 			(declared-type
-				(ty-lookup @1.5-1.7 (name "U8") (builtin))))))
+				(ty-lookup (name "U8") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @2.1-2.2 (type "Error")))
+		(patt (type "Error")))
 	(expressions
-		(expr @2.5-2.8 (type "Error"))))
+		(expr (type "Error"))))
 ~~~

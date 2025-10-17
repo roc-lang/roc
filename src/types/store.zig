@@ -84,7 +84,7 @@ pub const Store = struct {
     vars: VarSafeList,
     record_fields: RecordFieldSafeMultiList,
     tags: TagSafeMultiList,
-    static_dispatch_constraints: StaticDispatchConstraint.SafeMultiList,
+    static_dispatch_constraints: StaticDispatchConstraint.SafeList,
 
     /// Init the unification table
     pub fn init(gpa: Allocator) std.mem.Allocator.Error!Self {
@@ -105,7 +105,7 @@ pub const Store = struct {
             .vars = try VarSafeList.initCapacity(gpa, child_capacity),
             .record_fields = try RecordFieldSafeMultiList.initCapacity(gpa, child_capacity),
             .tags = try TagSafeMultiList.initCapacity(gpa, child_capacity),
-            .static_dispatch_constraints = try StaticDispatchConstraint.SafeMultiList.initCapacity(gpa, child_capacity),
+            .static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, child_capacity),
         };
     }
 
@@ -484,6 +484,11 @@ pub const Store = struct {
         return try self.tags.appendSlice(self.gpa, slice);
     }
 
+    /// Append static dispatch constraints to the backing list, returning the range
+    pub fn appendStaticDispatchConstraints(self: *Self, s: []const StaticDispatchConstraint) std.mem.Allocator.Error!StaticDispatchConstraint.SafeList.Range {
+        return try self.static_dispatch_constraints.appendSlice(self.gpa, s);
+    }
+
     // sub list getters //
 
     /// Given a range, get a slice of vars from the backing array
@@ -499,6 +504,11 @@ pub const Store = struct {
     /// Given a range, get a slice of tags from the backing array
     pub fn getTagsSlice(self: *const Self, range: TagSafeMultiList.Range) TagSafeMultiList.Slice {
         return self.tags.sliceRange(range);
+    }
+
+    /// Given a range, get a slice of vars from the backing array
+    pub fn sliceStaticDispatchConstraints(self: *const Self, range: StaticDispatchConstraint.SafeList.Range) []StaticDispatchConstraint {
+        return self.static_dispatch_constraints.sliceRange(range);
     }
 
     // helpers - alias types //
@@ -734,7 +744,7 @@ pub const Store = struct {
         vars: VarSafeList.Serialized,
         record_fields: RecordFieldSafeMultiList.Serialized,
         tags: TagSafeMultiList.Serialized,
-        static_dispatch_constraints: StaticDispatchConstraint.SafeMultiList.Serialized,
+        static_dispatch_constraints: StaticDispatchConstraint.SafeList.Serialized,
 
         /// Serialize a Store into this Serialized struct, appending data to the writer
         pub fn serialize(
@@ -899,7 +909,7 @@ pub const Store = struct {
 
         offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
         const static_dispatch_constraints_buffer = @as([]align(SERIALIZATION_ALIGNMENT) const u8, @alignCast(buffer[offset .. offset + static_dispatch_constraints_size]));
-        const static_dispatch_constraints = try StaticDispatchConstraint.SafeMultiList.deserializeFrom(static_dispatch_constraints_buffer, allocator);
+        const static_dispatch_constraints = try StaticDispatchConstraint.SafeList.deserializeFrom(static_dispatch_constraints_buffer, allocator);
         offset += static_dispatch_constraints_size;
 
         return Self{

@@ -13,14 +13,14 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-OpUnaryMinus(1:1-1:2),NoSpaceOpenRound(1:2-1:3),Int(1:3-1:4),CloseRound(1:4-1:5),
-EndOfFile(2:1-2:1),
+OpUnaryMinus,NoSpaceOpenRound,Int,CloseRound,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
 (unary "-"
-	(e-tuple @1.2-1.5
-		(e-int @1.3-1.4 (raw "8"))))
+	(e-tuple
+		(e-int (raw "8"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -28,10 +28,10 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-unary-minus @1.1-1.5
-	(e-num @1.3-1.4 (value "8")))
+(e-unary-minus
+	(e-num (value "8")))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.5 (type "Num(_size)"))
+(expr (type "Num(_size)"))
 ~~~

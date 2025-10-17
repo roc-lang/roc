@@ -320,142 +320,140 @@ The unused variable is declared here:
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),
-UpperIdent(2:5-2:10),Comma(2:10-2:11),
-UpperIdent(3:5-3:12),NoSpaceDotUpperIdent(3:12-3:20),NoSpaceDotUpperIdent(3:20-3:26),Comma(3:26-3:27),
-UpperIdent(4:5-4:11),Comma(4:11-4:12),
-UpperIdent(5:5-5:19),Comma(5:19-5:20),
-CloseSquare(6:1-6:2),
-KwImport(8:1-8:7),UpperIdent(8:8-8:14),NoSpaceDotUpperIdent(8:14-8:21),
-KwImport(9:1-9:7),UpperIdent(9:8-9:13),
-KwImport(10:1-10:7),UpperIdent(10:8-10:15),NoSpaceDotUpperIdent(10:15-10:23),KwExposing(10:24-10:32),OpenSquare(10:33-10:34),UpperIdent(10:34-10:39),CloseSquare(10:39-10:40),
-KwImport(11:1-11:7),UpperIdent(11:8-11:22),KwAs(11:23-11:25),UpperIdent(11:26-11:32),
-LowerIdent(14:1-14:16),OpColon(14:17-14:18),UpperIdent(14:19-14:24),NoSpaceDotUpperIdent(14:24-14:28),
-LowerIdent(15:1-15:16),OpAssign(15:17-15:18),UpperIdent(15:19-15:24),NoSpaceDotUpperIdent(15:24-15:28),NoSpaceOpenRound(15:28-15:29),OpenCurly(15:29-15:30),LowerIdent(15:31-15:32),OpColon(15:32-15:33),Int(15:34-15:37),Comma(15:37-15:38),LowerIdent(15:39-15:40),OpColon(15:40-15:41),Int(15:42-15:43),Comma(15:43-15:44),LowerIdent(15:45-15:46),OpColon(15:46-15:47),Int(15:48-15:49),CloseCurly(15:50-15:51),CloseRound(15:51-15:52),
-LowerIdent(18:1-18:17),OpColon(18:18-18:19),UpperIdent(18:20-18:26),NoSpaceDotUpperIdent(18:26-18:35),
-LowerIdent(19:1-19:17),OpAssign(19:18-19:19),UpperIdent(19:20-19:26),NoSpaceDotUpperIdent(19:26-19:35),NoSpaceDotUpperIdent(19:35-19:43),
-LowerIdent(22:1-22:20),OpColon(22:21-22:22),UpperIdent(22:23-22:30),NoSpaceDotUpperIdent(22:30-22:38),NoSpaceDotUpperIdent(22:38-22:44),
-LowerIdent(23:1-23:20),OpAssign(23:21-23:22),UpperIdent(23:23-23:28),NoSpaceDotLowerIdent(23:28-23:32),
-LowerIdent(26:1-26:11),OpColon(26:12-26:13),UpperIdent(26:14-26:20),NoSpaceDotUpperIdent(26:20-26:27),NoSpaceOpenRound(26:27-26:28),UpperIdent(26:28-26:31),Comma(26:31-26:32),UpperIdent(26:33-26:36),CloseRound(26:36-26:37),
-LowerIdent(27:1-27:11),OpAssign(27:12-27:13),UpperIdent(27:14-27:20),NoSpaceDotUpperIdent(27:20-27:23),NoSpaceOpenRound(27:23-27:24),Int(27:24-27:26),CloseRound(27:26-27:27),
-LowerIdent(30:1-30:9),OpColon(30:10-30:11),OpenCurly(30:12-30:13),CloseCurly(30:13-30:14),OpArrow(30:15-30:17),UpperIdent(30:18-30:23),NoSpaceDotUpperIdent(30:23-30:27),
-LowerIdent(31:1-31:9),OpAssign(31:10-31:11),OpBar(31:12-31:13),Underscore(31:13-31:14),OpBar(31:14-31:15),UpperIdent(31:16-31:21),NoSpaceDotUpperIdent(31:21-31:25),NoSpaceOpenRound(31:25-31:26),OpenCurly(31:26-31:27),LowerIdent(31:28-31:29),OpColon(31:29-31:30),Int(31:31-31:32),Comma(31:32-31:33),LowerIdent(31:34-31:35),OpColon(31:35-31:36),Int(31:37-31:40),Comma(31:40-31:41),LowerIdent(31:42-31:43),OpColon(31:43-31:44),Int(31:45-31:46),CloseCurly(31:47-31:48),CloseRound(31:48-31:49),
-LowerIdent(34:1-34:13),OpColon(34:14-34:15),UpperIdent(34:16-34:21),NoSpaceDotUpperIdent(34:21-34:25),OpArrow(34:26-34:28),UpperIdent(34:29-34:32),
-LowerIdent(35:1-35:13),OpAssign(35:14-35:15),OpBar(35:16-35:17),LowerIdent(35:17-35:22),OpBar(35:22-35:23),
-StringStart(36:5-36:6),StringPart(36:6-36:21),StringEnd(36:21-36:22),
-LowerIdent(39:1-39:10),OpColon(39:11-39:12),UpperIdent(39:13-39:19),NoSpaceDotUpperIdent(39:19-39:26),NoSpaceOpenRound(39:26-39:27),UpperIdent(39:27-39:32),NoSpaceDotUpperIdent(39:32-39:36),Comma(39:36-39:37),UpperIdent(39:38-39:44),NoSpaceDotUpperIdent(39:44-39:50),CloseRound(39:50-39:51),OpArrow(39:52-39:54),UpperIdent(39:55-39:62),NoSpaceDotUpperIdent(39:62-39:70),NoSpaceDotUpperIdent(39:70-39:76),
-LowerIdent(40:1-40:10),OpAssign(40:11-40:12),OpBar(40:13-40:14),LowerIdent(40:14-40:20),OpBar(40:20-40:21),
-KwMatch(41:5-41:10),LowerIdent(41:11-41:17),OpenCurly(41:18-41:19),
-UpperIdent(42:9-42:15),NoSpaceDotUpperIdent(42:15-42:18),NoSpaceOpenRound(42:18-42:19),LowerIdent(42:19-42:22),CloseRound(42:22-42:23),OpFatArrow(42:24-42:26),UpperIdent(42:27-42:32),NoSpaceDotLowerIdent(42:32-42:42),NoSpaceOpenRound(42:42-42:43),LowerIdent(42:43-42:46),CloseRound(42:46-42:47),
-UpperIdent(43:9-43:15),NoSpaceDotUpperIdent(43:15-43:19),NoSpaceOpenRound(43:19-43:20),LowerIdent(43:20-43:23),CloseRound(43:23-43:24),OpFatArrow(43:25-43:27),UpperIdent(43:28-43:33),NoSpaceDotLowerIdent(43:33-43:41),
-CloseCurly(44:5-44:6),
-EndOfFile(45:1-45:1),
+KwModule,OpenSquare,
+UpperIdent,Comma,
+UpperIdent,NoSpaceDotUpperIdent,NoSpaceDotUpperIdent,Comma,
+UpperIdent,Comma,
+UpperIdent,Comma,
+CloseSquare,
+KwImport,UpperIdent,NoSpaceDotUpperIdent,
+KwImport,UpperIdent,
+KwImport,UpperIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,
+KwImport,UpperIdent,KwAs,UpperIdent,
+LowerIdent,OpColon,UpperIdent,NoSpaceDotUpperIdent,
+LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseRound,
+LowerIdent,OpColon,UpperIdent,NoSpaceDotUpperIdent,
+LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,NoSpaceDotUpperIdent,
+LowerIdent,OpColon,UpperIdent,NoSpaceDotUpperIdent,NoSpaceDotUpperIdent,
+LowerIdent,OpAssign,UpperIdent,NoSpaceDotLowerIdent,
+LowerIdent,OpColon,UpperIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,UpperIdent,Comma,UpperIdent,CloseRound,
+LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,Int,CloseRound,
+LowerIdent,OpColon,OpenCurly,CloseCurly,OpArrow,UpperIdent,NoSpaceDotUpperIdent,
+LowerIdent,OpAssign,OpBar,Underscore,OpBar,UpperIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseRound,
+LowerIdent,OpColon,UpperIdent,NoSpaceDotUpperIdent,OpArrow,UpperIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,
+StringStart,StringPart,StringEnd,
+LowerIdent,OpColon,UpperIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,UpperIdent,NoSpaceDotUpperIdent,Comma,UpperIdent,NoSpaceDotUpperIdent,CloseRound,OpArrow,UpperIdent,NoSpaceDotUpperIdent,NoSpaceDotUpperIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,
+KwMatch,LowerIdent,OpenCurly,
+UpperIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpFatArrow,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
+UpperIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpFatArrow,UpperIdent,NoSpaceDotLowerIdent,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-44.6
-	(malformed-header @8.1-8.7 (tag "import_exposing_no_close"))
+(file
+	(malformed-header (tag "import_exposing_no_close"))
 	(statements
-		(s-malformed @8.14-8.21 (tag "expected_colon_after_type_annotation"))
-		(s-import @9.1-9.13 (raw "Color"))
-		(s-import @10.1-10.15 (raw "ModuleA"))
-		(s-malformed @10.15-10.23 (tag "statement_unexpected_token"))
-		(s-malformed @10.24-10.32 (tag "statement_unexpected_token"))
-		(s-malformed @10.33-10.34 (tag "statement_unexpected_token"))
-		(s-malformed @10.39-10.40 (tag "expected_colon_after_type_annotation"))
-		(s-import @11.1-11.32 (raw "ExternalModule") (alias "ExtMod"))
-		(s-type-anno @14.1-14.28 (name "simpleQualified")
-			(ty @14.19-14.28 (name "Color.RGB")))
-		(s-decl @15.1-15.52
-			(p-ident @15.1-15.16 (raw "simpleQualified"))
-			(e-apply @15.19-15.52
-				(e-tag @15.19-15.28 (raw "Color.RGB"))
-				(e-record @15.29-15.51
+		(s-malformed (tag "expected_colon_after_type_annotation"))
+		(s-import (raw "Color"))
+		(s-import (raw "ModuleA"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
+		(s-import (raw "ExternalModule") (alias "ExtMod"))
+		(s-type-anno (name "simpleQualified")
+			(ty (name "Color.RGB")))
+		(s-decl
+			(p-ident (raw "simpleQualified"))
+			(e-apply
+				(e-tag (raw "Color.RGB"))
+				(e-record
 					(field (field "r")
-						(e-int @15.34-15.37 (raw "255")))
+						(e-int (raw "255")))
 					(field (field "g")
-						(e-int @15.42-15.43 (raw "0")))
+						(e-int (raw "0")))
 					(field (field "b")
-						(e-int @15.48-15.49 (raw "0"))))))
-		(s-type-anno @18.1-18.35 (name "aliasedQualified")
-			(ty @18.20-18.35 (name "ExtMod.DataType")))
-		(s-decl @19.1-19.43
-			(p-ident @19.1-19.17 (raw "aliasedQualified"))
-			(e-tag @19.20-19.43 (raw "ExtMod.DataType.Default")))
-		(s-type-anno @22.1-22.44 (name "multiLevelQualified")
-			(ty @22.23-22.44 (name "ModuleA.ModuleB.TypeC")))
-		(s-decl @23.1-23.32
-			(p-ident @23.1-23.20 (raw "multiLevelQualified"))
-			(e-ident @23.23-23.32 (raw "TypeC.new")))
-		(s-type-anno @26.1-26.37 (name "resultType")
-			(ty-apply @26.14-26.37
-				(ty @26.14-26.27 (name "Result.Result"))
-				(ty @26.28-26.31 (name "I32"))
-				(ty @26.33-26.36 (name "Str"))))
-		(s-decl @27.1-27.27
-			(p-ident @27.1-27.11 (raw "resultType"))
-			(e-apply @27.14-27.27
-				(e-tag @27.14-27.23 (raw "Result.Ok"))
-				(e-int @27.24-27.26 (raw "42"))))
-		(s-type-anno @30.1-30.27 (name "getColor")
-			(ty-fn @30.12-30.27
-				(ty-record @30.12-30.14)
-				(ty @30.18-30.27 (name "Color.RGB"))))
-		(s-decl @31.1-31.49
-			(p-ident @31.1-31.9 (raw "getColor"))
-			(e-lambda @31.12-31.49
+						(e-int (raw "0"))))))
+		(s-type-anno (name "aliasedQualified")
+			(ty (name "ExtMod.DataType")))
+		(s-decl
+			(p-ident (raw "aliasedQualified"))
+			(e-tag (raw "ExtMod.DataType.Default")))
+		(s-type-anno (name "multiLevelQualified")
+			(ty (name "ModuleA.ModuleB.TypeC")))
+		(s-decl
+			(p-ident (raw "multiLevelQualified"))
+			(e-ident (raw "TypeC.new")))
+		(s-type-anno (name "resultType")
+			(ty-apply
+				(ty (name "Result.Result"))
+				(ty (name "I32"))
+				(ty (name "Str"))))
+		(s-decl
+			(p-ident (raw "resultType"))
+			(e-apply
+				(e-tag (raw "Result.Ok"))
+				(e-int (raw "42"))))
+		(s-type-anno (name "getColor")
+			(ty-fn
+				(ty-record)
+				(ty (name "Color.RGB"))))
+		(s-decl
+			(p-ident (raw "getColor"))
+			(e-lambda
 				(args
 					(p-underscore))
-				(e-apply @31.16-31.49
-					(e-tag @31.16-31.25 (raw "Color.RGB"))
-					(e-record @31.26-31.48
+				(e-apply
+					(e-tag (raw "Color.RGB"))
+					(e-record
 						(field (field "r")
-							(e-int @31.31-31.32 (raw "0")))
+							(e-int (raw "0")))
 						(field (field "g")
-							(e-int @31.37-31.40 (raw "255")))
+							(e-int (raw "255")))
 						(field (field "b")
-							(e-int @31.45-31.46 (raw "0")))))))
-		(s-type-anno @34.1-34.32 (name "processColor")
-			(ty-fn @34.16-34.32
-				(ty @34.16-34.25 (name "Color.RGB"))
-				(ty @34.29-34.32 (name "Str"))))
-		(s-decl @35.1-36.22
-			(p-ident @35.1-35.13 (raw "processColor"))
-			(e-lambda @35.16-36.22
+							(e-int (raw "0")))))))
+		(s-type-anno (name "processColor")
+			(ty-fn
+				(ty (name "Color.RGB"))
+				(ty (name "Str"))))
+		(s-decl
+			(p-ident (raw "processColor"))
+			(e-lambda
 				(args
-					(p-ident @35.17-35.22 (raw "color")))
-				(e-string @36.5-36.22
-					(e-string-part @36.6-36.21 (raw "Color processed")))))
-		(s-type-anno @39.1-39.76 (name "transform")
-			(ty-fn @39.13-39.76
-				(ty-apply @39.13-39.51
-					(ty @39.13-39.26 (name "Result.Result"))
-					(ty @39.27-39.36 (name "Color.RGB"))
-					(ty @39.38-39.50 (name "ExtMod.Error")))
-				(ty @39.55-39.76 (name "ModuleA.ModuleB.TypeC"))))
-		(s-decl @40.1-44.6
-			(p-ident @40.1-40.10 (raw "transform"))
-			(e-lambda @40.13-44.6
+					(p-ident (raw "color")))
+				(e-string
+					(e-string-part (raw "Color processed")))))
+		(s-type-anno (name "transform")
+			(ty-fn
+				(ty-apply
+					(ty (name "Result.Result"))
+					(ty (name "Color.RGB"))
+					(ty (name "ExtMod.Error")))
+				(ty (name "ModuleA.ModuleB.TypeC"))))
+		(s-decl
+			(p-ident (raw "transform"))
+			(e-lambda
 				(args
-					(p-ident @40.14-40.20 (raw "result")))
+					(p-ident (raw "result")))
 				(e-match
-					(e-ident @41.11-41.17 (raw "result"))
+					(e-ident (raw "result"))
 					(branches
-						(branch @42.9-42.47
-							(p-tag @42.9-42.23 (raw ".Ok")
-								(p-ident @42.19-42.22 (raw "rgb")))
-							(e-apply @42.27-42.47
-								(e-ident @42.27-42.42 (raw "TypeC.fromColor"))
-								(e-ident @42.43-42.46 (raw "rgb"))))
-						(branch @43.9-43.41
-							(p-tag @43.9-43.24 (raw ".Err")
-								(p-ident @43.20-43.23 (raw "err")))
-							(e-ident @43.28-43.41 (raw "TypeC.default")))))))))
+						(branch
+							(p-tag (raw ".Ok")
+								(p-ident (raw "rgb")))
+							(e-apply
+								(e-ident (raw "TypeC.fromColor"))
+								(e-ident (raw "rgb"))))
+						(branch
+							(p-tag (raw ".Err")
+								(p-ident (raw "err")))
+							(e-ident (raw "TypeC.default")))))))))
 ~~~
 # FORMATTED
 ~~~roc
-
-
 
 import Color
 import ModuleA
@@ -499,118 +497,118 @@ transform = |result|
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @15.1-15.16 (ident "simpleQualified"))
+		(p-assign (ident "simpleQualified"))
 		(e-runtime-error (tag "undeclared_type"))
-		(annotation @15.1-15.16
+		(annotation
 			(declared-type
-				(ty-lookup @14.19-14.28 (name "RGB") (external (module-idx "2") (target-node-idx "0"))))))
+				(ty-lookup (name "RGB") (external (module-idx "2") (target-node-idx "0"))))))
 	(d-let
-		(p-assign @19.1-19.17 (ident "aliasedQualified"))
-		(e-nominal-external @19.20-19.43
+		(p-assign (ident "aliasedQualified"))
+		(e-nominal-external
 			(module-idx "4")
 			(target-node-idx "0")
-			(e-tag @19.20-19.43 (name "Default")))
-		(annotation @19.1-19.17
+			(e-tag (name "Default")))
+		(annotation
 			(declared-type
-				(ty-lookup @18.20-18.35 (name "DataType") (external (module-idx "4") (target-node-idx "0"))))))
+				(ty-lookup (name "DataType") (external (module-idx "4") (target-node-idx "0"))))))
 	(d-let
-		(p-assign @23.1-23.20 (ident "multiLevelQualified"))
+		(p-assign (ident "multiLevelQualified"))
 		(e-runtime-error (tag "ident_not_in_scope"))
-		(annotation @23.1-23.20
+		(annotation
 			(declared-type
-				(ty-malformed @22.23-22.44))))
+				(ty-malformed))))
 	(d-let
-		(p-assign @27.1-27.11 (ident "resultType"))
-		(e-nominal @27.14-27.27 (nominal "Result")
-			(e-tag @27.14-27.27 (name "Ok")
+		(p-assign (ident "resultType"))
+		(e-nominal (nominal "Result")
+			(e-tag (name "Ok")
 				(args
-					(e-num @27.24-27.26 (value "42")))))
-		(annotation @27.1-27.11
+					(e-num (value "42")))))
+		(annotation
 			(declared-type
-				(ty-malformed @26.14-26.27))))
+				(ty-malformed))))
 	(d-let
-		(p-assign @31.1-31.9 (ident "getColor"))
-		(e-lambda @31.12-31.49
+		(p-assign (ident "getColor"))
+		(e-lambda
 			(args
-				(p-underscore @31.13-31.14))
+				(p-underscore))
 			(e-runtime-error (tag "undeclared_type")))
-		(annotation @31.1-31.9
+		(annotation
 			(declared-type
-				(ty-fn @30.12-30.27 (effectful false)
-					(ty-record @30.12-30.14)
-					(ty-lookup @30.18-30.27 (name "RGB") (external (module-idx "2") (target-node-idx "0")))))))
+				(ty-fn (effectful false)
+					(ty-record)
+					(ty-lookup (name "RGB") (external (module-idx "2") (target-node-idx "0")))))))
 	(d-let
-		(p-assign @35.1-35.13 (ident "processColor"))
-		(e-lambda @35.16-36.22
+		(p-assign (ident "processColor"))
+		(e-lambda
 			(args
-				(p-assign @35.17-35.22 (ident "color")))
-			(e-string @36.5-36.22
-				(e-literal @36.6-36.21 (string "Color processed"))))
-		(annotation @35.1-35.13
+				(p-assign (ident "color")))
+			(e-string
+				(e-literal (string "Color processed"))))
+		(annotation
 			(declared-type
-				(ty-fn @34.16-34.32 (effectful false)
-					(ty-lookup @34.16-34.25 (name "RGB") (external (module-idx "2") (target-node-idx "0")))
-					(ty-lookup @34.29-34.32 (name "Str") (builtin))))))
+				(ty-fn (effectful false)
+					(ty-lookup (name "RGB") (external (module-idx "2") (target-node-idx "0")))
+					(ty-lookup (name "Str") (builtin))))))
 	(d-let
-		(p-assign @40.1-40.10 (ident "transform"))
-		(e-closure @40.13-44.6
+		(p-assign (ident "transform"))
+		(e-closure
 			(captures
-				(capture @42.19-42.22 (ident "rgb")))
-			(e-lambda @40.13-44.6
+				(capture (ident "rgb")))
+			(e-lambda
 				(args
-					(p-assign @40.14-40.20 (ident "result")))
-				(e-match @41.5-44.6
-					(match @41.5-44.6
+					(p-assign (ident "result")))
+				(e-match
+					(match
 						(cond
-							(e-lookup-local @41.11-41.17
-								(p-assign @40.14-40.20 (ident "result"))))
+							(e-lookup-local
+								(p-assign (ident "result"))))
 						(branches
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @42.9-42.23
-											(p-applied-tag @42.9-42.23))))
+										(p-nominal
+											(p-applied-tag))))
 								(value
-									(e-call @42.27-42.47
+									(e-call
 										(e-runtime-error (tag "ident_not_in_scope"))
-										(e-lookup-local @42.43-42.46
-											(p-assign @42.19-42.22 (ident "rgb"))))))
+										(e-lookup-local
+											(p-assign (ident "rgb"))))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal @43.9-43.24
-											(p-applied-tag @43.9-43.24))))
+										(p-nominal
+											(p-applied-tag))))
 								(value
 									(e-runtime-error (tag "ident_not_in_scope")))))))))
-		(annotation @40.1-40.10
+		(annotation
 			(declared-type
-				(ty-fn @39.13-39.76 (effectful false)
-					(ty-malformed @39.13-39.26)
-					(ty-malformed @39.55-39.76)))))
-	(s-import @9.1-9.13 (module "Color")
+				(ty-fn (effectful false)
+					(ty-malformed)
+					(ty-malformed)))))
+	(s-import (module "Color")
 		(exposes))
-	(s-import @10.1-10.15 (module "ModuleA")
+	(s-import (module "ModuleA")
 		(exposes))
-	(s-import @11.1-11.32 (module "ExternalModule") (alias "ExtMod")
+	(s-import (module "ExternalModule") (alias "ExtMod")
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @15.1-15.16 (type "Error"))
-		(patt @19.1-19.17 (type "Error"))
-		(patt @23.1-23.20 (type "Error"))
-		(patt @27.1-27.11 (type "Error"))
-		(patt @31.1-31.9 (type "{  } -> Error"))
-		(patt @35.1-35.13 (type "Error -> Str"))
-		(patt @40.1-40.10 (type "Error -> Error")))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "{  } -> Error"))
+		(patt (type "Error -> Str"))
+		(patt (type "Error -> Error")))
 	(expressions
-		(expr @15.19-15.24 (type "Error"))
-		(expr @19.20-19.43 (type "Error"))
-		(expr @23.23-23.32 (type "Error"))
-		(expr @27.14-27.27 (type "Error"))
-		(expr @31.12-31.49 (type "{  } -> Error"))
-		(expr @35.16-36.22 (type "Error -> Str"))
-		(expr @40.13-44.6 (type "Error -> Error"))))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "{  } -> Error"))
+		(expr (type "Error -> Str"))
+		(expr (type "Error -> Error"))))
 ~~~

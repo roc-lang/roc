@@ -15,14 +15,14 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-Int(1:1-1:2),
-OpBang(2:1-2:2),
-OpAmpersand(3:1-3:2),LowerIdent(3:2-3:3),NoSpaceDotLowerIdent(3:3-3:5),
-EndOfFile(4:1-4:1),
+Int,
+OpBang,
+OpAmpersand,LowerIdent,NoSpaceDotLowerIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-int @1.1-1.2 (raw "4"))
+(e-int (raw "4"))
 ~~~
 # FORMATTED
 ~~~roc
@@ -30,9 +30,9 @@ EndOfFile(4:1-4:1),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-num @1.1-1.2 (value "4"))
+(e-num (value "4"))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.2 (type "Num(_size)"))
+(expr (type "Num(_size)"))
 ~~~

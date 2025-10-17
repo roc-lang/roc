@@ -36,6 +36,8 @@ pub const Rank = types.Rank;
 pub const Mark = types.Mark;
 pub const TypeScope = types.TypeScope;
 pub const VarMap = types.VarMap;
+pub const StaticDispatchConstraint = types.StaticDispatchConstraint;
+pub const TwoStaticDispatchConstraints = types.TwoStaticDispatchConstraints;
 
 pub const Slot = store.Slot;
 pub const ResolvedVarDesc = store.ResolvedVarDesc;

@@ -36,20 +36,20 @@ The unused variable is declared here:
 
 # TOKENS
 ~~~zig
-OpBar(1:1-1:2),LowerIdent(1:2-1:3),OpBar(1:3-1:4),OpBar(1:5-1:6),LowerIdent(1:6-1:7),OpBar(1:7-1:8),LowerIdent(1:9-1:10),OpPlus(1:11-1:12),LowerIdent(1:13-1:14),
-EndOfFile(2:1-2:1),
+OpBar,LowerIdent,OpBar,OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,LowerIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-lambda @1.1-1.14
+(e-lambda
 	(args
-		(p-ident @1.2-1.3 (raw "x")))
-	(e-lambda @1.5-1.14
+		(p-ident (raw "x")))
+	(e-lambda
 		(args
-			(p-ident @1.6-1.7 (raw "y")))
-		(e-binop @1.9-1.14 (op "+")
-			(e-ident @1.9-1.10 (raw "x"))
-			(e-ident @1.13-1.14 (raw "z")))))
+			(p-ident (raw "y")))
+		(e-binop (op "+")
+			(e-ident (raw "x"))
+			(e-ident (raw "z")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -57,21 +57,21 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-lambda @1.1-1.14
+(e-lambda
 	(args
-		(p-assign @1.2-1.3 (ident "x")))
-	(e-closure @1.5-1.14
+		(p-assign (ident "x")))
+	(e-closure
 		(captures
-			(capture @1.2-1.3 (ident "x")))
-		(e-lambda @1.5-1.14
+			(capture (ident "x")))
+		(e-lambda
 			(args
-				(p-assign @1.6-1.7 (ident "y")))
-			(e-binop @1.9-1.14 (op "add")
-				(e-lookup-local @1.9-1.10
-					(p-assign @1.2-1.3 (ident "x")))
+				(p-assign (ident "y")))
+			(e-binop (op "add")
+				(e-lookup-local
+					(p-assign (ident "x")))
 				(e-runtime-error (tag "ident_not_in_scope"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.14 (type "Error -> _arg -> Error"))
+(expr (type "Error -> _arg -> Error"))
 ~~~

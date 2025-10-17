@@ -51,19 +51,19 @@ To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
-OpenSquare(1:1-1:2),Int(1:2-1:3),Comma(1:3-1:4),StringStart(1:5-1:6),StringPart(1:6-1:11),StringEnd(1:11-1:12),Comma(1:12-1:13),OpenSquare(1:14-1:15),Int(1:15-1:16),Comma(1:16-1:17),StringStart(1:18-1:19),StringPart(1:19-1:24),StringEnd(1:24-1:25),CloseSquare(1:25-1:26),CloseSquare(1:26-1:27),
-EndOfFile(2:1-2:1),
+OpenSquare,Int,Comma,StringStart,StringPart,StringEnd,Comma,OpenSquare,Int,Comma,StringStart,StringPart,StringEnd,CloseSquare,CloseSquare,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-list @1.1-1.27
-	(e-int @1.2-1.3 (raw "1"))
-	(e-string @1.5-1.12
-		(e-string-part @1.6-1.11 (raw "hello")))
-	(e-list @1.14-1.26
-		(e-int @1.15-1.16 (raw "3"))
-		(e-string @1.18-1.25
-			(e-string-part @1.19-1.24 (raw "world")))))
+(e-list
+	(e-int (raw "1"))
+	(e-string
+		(e-string-part (raw "hello")))
+	(e-list
+		(e-int (raw "3"))
+		(e-string
+			(e-string-part (raw "world")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -71,18 +71,18 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1.1-1.27
+(e-list
 	(elems
-		(e-num @1.2-1.3 (value "1"))
-		(e-string @1.5-1.12
-			(e-literal @1.6-1.11 (string "hello")))
-		(e-list @1.14-1.26
+		(e-num (value "1"))
+		(e-string
+			(e-literal (string "hello")))
+		(e-list
 			(elems
-				(e-num @1.15-1.16 (value "3"))
-				(e-string @1.18-1.25
-					(e-literal @1.19-1.24 (string "world")))))))
+				(e-num (value "3"))
+				(e-string
+					(e-literal (string "world")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.27 (type "List(Error)"))
+(expr (type "List(Error)"))
 ~~~

@@ -22,12 +22,12 @@ pub const CliArgs = union(enum) {
     licenses,
     problem: CliProblem,
 
-    pub fn deinit(self: CliArgs, gpa: mem.Allocator) void {
+    pub fn deinit(self: CliArgs, alloc: mem.Allocator) void {
         switch (self) {
-            .fmt => |fmt| gpa.free(fmt.paths),
-            .run => |run| gpa.free(run.app_args),
-            .bundle => |bundle| gpa.free(bundle.paths),
-            .unbundle => |unbundle| gpa.free(unbundle.paths),
+            .fmt => |fmt| alloc.free(fmt.paths),
+            .run => |run| alloc.free(run.app_args),
+            .bundle => |bundle| alloc.free(bundle.paths),
+            .unbundle => |unbundle| alloc.free(unbundle.paths),
             else => return,
         }
     }
@@ -127,14 +127,14 @@ pub const DocsArgs = struct {
 };
 
 /// Parse a list of arguments.
-pub fn parse(gpa: mem.Allocator, args: []const []const u8) !CliArgs {
-    if (args.len == 0) return try parseRun(gpa, args);
+pub fn parse(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
+    if (args.len == 0) return try parseRun(alloc, args);
 
     if (mem.eql(u8, args[0], "check")) return parseCheck(args[1..]);
     if (mem.eql(u8, args[0], "build")) return parseBuild(args[1..]);
-    if (mem.eql(u8, args[0], "bundle")) return try parseBundle(gpa, args[1..]);
-    if (mem.eql(u8, args[0], "unbundle")) return try parseUnbundle(gpa, args[1..]);
-    if (mem.eql(u8, args[0], "fmt")) return try parseFormat(gpa, args[1..]);
+    if (mem.eql(u8, args[0], "bundle")) return try parseBundle(alloc, args[1..]);
+    if (mem.eql(u8, args[0], "unbundle")) return try parseUnbundle(alloc, args[1..]);
+    if (mem.eql(u8, args[0], "fmt")) return try parseFormat(alloc, args[1..]);
     if (mem.eql(u8, args[0], "test")) return parseTest(args[1..]);
     if (mem.eql(u8, args[0], "repl")) return parseRepl(args[1..]);
     if (mem.eql(u8, args[0], "version")) return parseVersion(args[1..]);
@@ -142,7 +142,7 @@ pub fn parse(gpa: mem.Allocator, args: []const []const u8) !CliArgs {
     if (mem.eql(u8, args[0], "help")) return CliArgs{ .help = main_help };
     if (mem.eql(u8, args[0], "licenses")) return parseLicenses(args[1..]);
 
-    return try parseRun(gpa, args);
+    return try parseRun(alloc, args);
 }
 
 const main_help =
@@ -293,8 +293,8 @@ fn parseBuild(args: []const []const u8) CliArgs {
     return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse } };
 }
 
-fn parseBundle(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
-    var paths = std.array_list.Managed([]const u8).init(gpa);
+fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
+    var paths = try std.array_list.Managed([]const u8).initCapacity(alloc, 16);
     var output_dir: ?[]const u8 = null;
     var compression_level: i32 = 3;
 
@@ -358,8 +358,8 @@ fn parseBundle(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.E
     } };
 }
 
-fn parseUnbundle(gpa: mem.Allocator, args: []const []const u8) !CliArgs {
-    var paths = std.array_list.Managed([]const u8).init(gpa);
+fn parseUnbundle(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
+    var paths = try std.array_list.Managed([]const u8).initCapacity(alloc, 16);
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
@@ -392,7 +392,7 @@ fn parseUnbundle(gpa: mem.Allocator, args: []const []const u8) !CliArgs {
         var iter = cwd.iterate();
         while (try iter.next()) |entry| {
             if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".tar.zst")) {
-                try paths.append(try gpa.dupe(u8, entry.name));
+                try paths.append(try alloc.dupe(u8, entry.name));
             }
         }
 
@@ -422,8 +422,8 @@ fn parseUnbundle(gpa: mem.Allocator, args: []const []const u8) !CliArgs {
     } };
 }
 
-fn parseFormat(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
-    var paths = std.array_list.Managed([]const u8).init(gpa);
+fn parseFormat(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
+    var paths = try std.array_list.Managed([]const u8).initCapacity(alloc, 16);
     var stdin = false;
     var check = false;
     for (args) |arg| {
@@ -628,12 +628,12 @@ fn parseDocs(args: []const []const u8) CliArgs {
     return CliArgs{ .docs = DocsArgs{ .path = path orelse "main.roc", .main = main, .output = output orelse "generated-docs", .time = time, .no_cache = no_cache, .verbose = verbose, .serve = serve } };
 }
 
-fn parseRun(gpa: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
+fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
     var path: ?[]const u8 = null;
     var opt: OptLevel = .dev;
     var target: ?[]const u8 = null;
     var no_cache: bool = false;
-    var app_args = std.array_list.Managed([]const u8).init(gpa);
+    var app_args = try std.array_list.Managed([]const u8).initCapacity(alloc, 16);
     for (args) |arg| {
         if (isHelpFlag(arg)) {
             // We need to free the paths here because we aren't returning the .run variant
