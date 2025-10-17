@@ -1477,7 +1477,13 @@ test "download from local server" {
 
             // Read HTTP request
             var request_buf: [4096]u8 = undefined;
-            const bytes_read = try connection.stream.read(&request_buf);
+            var recv_buffer: [512]u8 = undefined;
+            var conn_reader = connection.stream.reader(&recv_buffer);
+            var slices = [_][]u8{request_buf[0..]};
+            const bytes_read = std.Io.Reader.readVec(conn_reader.interface(), &slices) catch |err| switch (err) {
+                error.EndOfStream => 0,
+                error.ReadFailed => return conn_reader.getError() orelse error.Unexpected,
+            };
 
             // Parse request line to get the path
             const request = request_buf[0..bytes_read];

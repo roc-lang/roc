@@ -2968,7 +2968,13 @@ fn handleConnection(allocs: *Allocators, connection: std.net.Server.Connection, 
     defer connection.stream.close();
 
     var buffer: [4096]u8 = undefined;
-    const bytes_read = try connection.stream.read(&buffer);
+    var reader_buffer: [512]u8 = undefined;
+    var conn_reader = connection.stream.reader(&reader_buffer);
+    var slices = [_][]u8{buffer[0..]};
+    const bytes_read = std.Io.Reader.readVec(conn_reader.interface(), &slices) catch |err| switch (err) {
+        error.EndOfStream => 0,
+        error.ReadFailed => return conn_reader.getError() orelse error.Unexpected,
+    };
 
     if (bytes_read == 0) return;
 
