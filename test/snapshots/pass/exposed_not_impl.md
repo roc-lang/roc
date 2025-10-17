@@ -20,26 +20,26 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-LowerIdent(6:1-6:4),OpAssign(6:5-6:6),Int(6:7-6:9),
-UpperIdent(8:1-8:7),OpColon(8:8-8:9),OpenSquare(8:10-8:11),UpperIdent(8:11-8:12),Comma(8:12-8:13),UpperIdent(8:14-8:15),Comma(8:15-8:16),UpperIdent(8:17-8:18),CloseSquare(8:18-8:19),
-EndOfFile(9:1-9:1),
+LowerIdent,OpAssign,Int,
+UpperIdent,OpColon,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @6.1-8.19
-	(type-module @6.1-6.4)
+(file
+	(type-module)
 	(statements
-		(s-decl @6.1-6.9
-			(p-ident @6.1-6.4 (raw "foo"))
-			(e-int @6.7-6.9 (raw "42")))
-		(s-type-decl @8.1-8.19
-			(header @8.1-8.7 (name "MyType")
+		(s-decl
+			(p-ident (raw "foo"))
+			(e-int (raw "42")))
+		(s-type-decl
+			(header (name "MyType")
 				(args))
-			(ty-tag-union @8.10-8.19
+			(ty-tag-union
 				(tags
-					(ty @8.11-8.12 (name "A"))
-					(ty @8.14-8.15 (name "B"))
-					(ty @8.17-8.18 (name "C")))))))
+					(ty (name "A"))
+					(ty (name "B"))
+					(ty (name "C")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -49,23 +49,23 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @6.1-6.4 (ident "foo"))
-		(e-num @6.7-6.9 (value "42")))
-	(s-alias-decl @8.1-8.19
-		(ty-header @8.1-8.7 (name "MyType"))
-		(ty-tag-union @8.10-8.19
-			(ty-tag-name @8.11-8.12 (name "A"))
-			(ty-tag-name @8.14-8.15 (name "B"))
-			(ty-tag-name @8.17-8.18 (name "C")))))
+		(p-assign (ident "foo"))
+		(e-num (value "42")))
+	(s-alias-decl
+		(ty-header (name "MyType"))
+		(ty-tag-union
+			(ty-tag-name (name "A"))
+			(ty-tag-name (name "B"))
+			(ty-tag-name (name "C")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.4 (type "Num(_size)")))
+		(patt (type "Num(_size)")))
 	(type_decls
-		(alias @8.1-8.19 (type "MyType")
-			(ty-header @8.1-8.7 (name "MyType"))))
+		(alias (type "MyType")
+			(ty-header (name "MyType"))))
 	(expressions
-		(expr @6.7-6.9 (type "Num(_size)"))))
+		(expr (type "Num(_size)"))))
 ~~~

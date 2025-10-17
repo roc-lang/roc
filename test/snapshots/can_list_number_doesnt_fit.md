@@ -23,15 +23,15 @@ Its inferred type is:
 
 # TOKENS
 ~~~zig
-OpenSquare(1:1-1:2),Int(1:2-1:5),Comma(1:5-1:6),Int(1:7-1:10),Comma(1:10-1:11),Int(1:12-1:15),CloseSquare(1:15-1:16),
-EndOfFile(2:1-2:1),
+OpenSquare,Int,Comma,Int,Comma,Int,CloseSquare,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-list @1.1-1.16
-	(e-int @1.2-1.5 (raw "1u8"))
-	(e-int @1.7-1.10 (raw "2u8"))
-	(e-int @1.12-1.15 (raw "300")))
+(e-list
+	(e-int (raw "1u8"))
+	(e-int (raw "2u8"))
+	(e-int (raw "300")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -39,13 +39,13 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1.1-1.16
+(e-list
 	(elems
-		(e-num @1.2-1.5 (value "1"))
-		(e-num @1.7-1.10 (value "2"))
-		(e-num @1.12-1.15 (value "300"))))
+		(e-num (value "1"))
+		(e-num (value "2"))
+		(e-num (value "300"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.16 (type "List(Error)"))
+(expr (type "List(Error)"))
 ~~~

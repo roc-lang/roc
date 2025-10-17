@@ -31,27 +31,27 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-KwIf(1:1-1:3),
-LowerIdent(2:2-2:6),
-OpenCurly(3:3-3:4),
-Int(4:4-4:5),
-CloseCurly(5:3-5:4),
-KwElse(6:4-6:8),
-OpenCurly(7:5-7:6),
-Int(8:6-8:7),
-CloseCurly(9:5-9:6),
-EndOfFile(10:1-10:1),
+KwIf,
+LowerIdent,
+OpenCurly,
+Int,
+CloseCurly,
+KwElse,
+OpenCurly,
+Int,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-if-then-else @1.1-9.6
-	(e-ident @2.2-2.6 (raw "bool"))
-	(e-block @3.3-5.4
+(e-if-then-else
+	(e-ident (raw "bool"))
+	(e-block
 		(statements
-			(e-int @4.4-4.5 (raw "1"))))
-	(e-block @7.5-9.6
+			(e-int (raw "1"))))
+	(e-block
 		(statements
-			(e-int @8.6-8.7 (raw "2")))))
+			(e-int (raw "2")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -59,17 +59,17 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-if @1.1-9.6
+(e-if
 	(if-branches
 		(if-branch
 			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-block @3.3-5.4
-				(e-num @4.4-4.5 (value "1")))))
+			(e-block
+				(e-num (value "1")))))
 	(if-else
-		(e-block @7.5-9.6
-			(e-num @8.6-8.7 (value "2")))))
+		(e-block
+			(e-num (value "2")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-9.6 (type "Num(_size)"))
+(expr (type "Num(_size)"))
 ~~~

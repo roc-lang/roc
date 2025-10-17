@@ -24,54 +24,54 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:22),OpColon(1:23-1:24),LowerIdent(1:25-1:28),OpArrow(1:29-1:31),LowerIdent(1:32-1:35),
-LowerIdent(2:1-2:22),OpAssign(2:23-2:24),OpBar(2:25-2:26),LowerIdent(2:26-2:27),OpBar(2:27-2:28),OpenCurly(2:29-2:30),
-LowerIdent(3:2-3:3),OpColon(3:4-3:5),LowerIdent(3:6-3:15),OpArrow(3:16-3:18),LowerIdent(3:19-3:28),
-LowerIdent(4:2-4:3),OpAssign(4:4-4:5),OpBar(4:6-4:7),LowerIdent(4:7-4:8),OpBar(4:8-4:9),OpenCurly(4:10-4:11),
-LowerIdent(5:3-5:4),OpColon(5:5-5:6),LowerIdent(5:7-5:16),
-LowerIdent(6:3-6:4),OpAssign(6:5-6:6),LowerIdent(6:7-6:8),
-LowerIdent(8:3-8:4),
-CloseCurly(9:2-9:3),
-LowerIdent(11:2-11:3),NoSpaceOpenRound(11:3-11:4),LowerIdent(11:4-11:5),CloseRound(11:5-11:6),
-CloseCurly(12:1-12:2),
-EndOfFile(13:1-13:1),
+LowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,
+LowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,
+LowerIdent,OpColon,LowerIdent,
+LowerIdent,OpAssign,LowerIdent,
+LowerIdent,
+CloseCurly,
+LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-12.2
-	(type-module @1.1-1.22)
+(file
+	(type-module)
 	(statements
-		(s-type-anno @1.1-1.35 (name "scopedTypeVarInternal")
-			(ty-fn @1.25-1.35
-				(ty-var @1.25-1.28 (raw "val"))
-				(ty-var @1.32-1.35 (raw "val"))))
-		(s-decl @2.1-12.2
-			(p-ident @2.1-2.22 (raw "scopedTypeVarInternal"))
-			(e-lambda @2.25-12.2
+		(s-type-anno (name "scopedTypeVarInternal")
+			(ty-fn
+				(ty-var (raw "val"))
+				(ty-var (raw "val"))))
+		(s-decl
+			(p-ident (raw "scopedTypeVarInternal"))
+			(e-lambda
 				(args
-					(p-ident @2.26-2.27 (raw "a")))
-				(e-block @2.29-12.2
+					(p-ident (raw "a")))
+				(e-block
 					(statements
-						(s-type-anno @3.2-3.28 (name "b")
-							(ty-fn @3.6-3.28
-								(ty-var @3.6-3.15 (raw "other_val"))
-								(ty-var @3.19-3.28 (raw "other_val"))))
-						(s-decl @4.2-9.3
-							(p-ident @4.2-4.3 (raw "b"))
-							(e-lambda @4.6-9.3
+						(s-type-anno (name "b")
+							(ty-fn
+								(ty-var (raw "other_val"))
+								(ty-var (raw "other_val"))))
+						(s-decl
+							(p-ident (raw "b"))
+							(e-lambda
 								(args
-									(p-ident @4.7-4.8 (raw "c")))
-								(e-block @4.10-9.3
+									(p-ident (raw "c")))
+								(e-block
 									(statements
-										(s-type-anno @5.3-5.16 (name "d")
-											(ty-var @5.7-5.16 (raw "other_val")))
-										(s-decl @6.3-6.8
-											(p-ident @6.3-6.4 (raw "d"))
-											(e-ident @6.7-6.8 (raw "c")))
-										(e-ident @8.3-8.4 (raw "d"))))))
-						(e-apply @11.2-11.6
-							(e-ident @11.2-11.3 (raw "b"))
-							(e-ident @11.4-11.5 (raw "a")))))))))
+										(s-type-anno (name "d")
+											(ty-var (raw "other_val")))
+										(s-decl
+											(p-ident (raw "d"))
+											(e-ident (raw "c")))
+										(e-ident (raw "d"))))))
+						(e-apply
+							(e-ident (raw "b"))
+							(e-ident (raw "a")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -81,39 +81,39 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @2.1-2.22 (ident "scopedTypeVarInternal"))
-		(e-lambda @2.25-12.2
+		(p-assign (ident "scopedTypeVarInternal"))
+		(e-lambda
 			(args
-				(p-assign @2.26-2.27 (ident "a")))
-			(e-block @2.29-12.2
-				(s-let @4.2-9.3
-					(p-assign @4.2-4.3 (ident "b"))
-					(e-lambda @4.6-9.3
+				(p-assign (ident "a")))
+			(e-block
+				(s-let
+					(p-assign (ident "b"))
+					(e-lambda
 						(args
-							(p-assign @4.7-4.8 (ident "c")))
-						(e-block @4.10-9.3
-							(s-let @6.3-6.8
-								(p-assign @6.3-6.4 (ident "d"))
-								(e-lookup-local @6.7-6.8
-									(p-assign @4.7-4.8 (ident "c"))))
-							(e-lookup-local @8.3-8.4
-								(p-assign @6.3-6.4 (ident "d"))))))
-				(e-call @11.2-11.6
-					(e-lookup-local @11.2-11.3
-						(p-assign @4.2-4.3 (ident "b")))
-					(e-lookup-local @11.4-11.5
-						(p-assign @2.26-2.27 (ident "a"))))))
-		(annotation @2.1-2.22
+							(p-assign (ident "c")))
+						(e-block
+							(s-let
+								(p-assign (ident "d"))
+								(e-lookup-local
+									(p-assign (ident "c"))))
+							(e-lookup-local
+								(p-assign (ident "d"))))))
+				(e-call
+					(e-lookup-local
+						(p-assign (ident "b")))
+					(e-lookup-local
+						(p-assign (ident "a"))))))
+		(annotation
 			(declared-type
-				(ty-fn @1.25-1.35 (effectful false)
-					(ty-rigid-var @1.25-1.28 (name "val"))
-					(ty-rigid-var-lookup (ty-rigid-var @1.25-1.28 (name "val"))))))))
+				(ty-fn (effectful false)
+					(ty-rigid-var (name "val"))
+					(ty-rigid-var-lookup (ty-rigid-var (name "val"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @2.1-2.22 (type "val -> val")))
+		(patt (type "val -> val")))
 	(expressions
-		(expr @2.25-12.2 (type "val -> val"))))
+		(expr (type "val -> val"))))
 ~~~

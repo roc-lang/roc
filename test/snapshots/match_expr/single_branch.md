@@ -25,21 +25,21 @@ match value {
 
 # TOKENS
 ~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:12),OpenCurly(1:13-1:14),
-LowerIdent(2:5-2:6),OpFatArrow(2:7-2:9),LowerIdent(2:10-2:11),OpPlus(2:12-2:13),Int(2:14-2:15),
-CloseCurly(3:1-3:2),
-EndOfFile(4:1-4:1),
+KwMatch,LowerIdent,OpenCurly,
+LowerIdent,OpFatArrow,LowerIdent,OpPlus,Int,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.12 (raw "value"))
+	(e-ident (raw "value"))
 	(branches
-		(branch @2.5-2.15
-			(p-ident @2.5-2.6 (raw "x"))
-			(e-binop @2.10-2.15 (op "+")
-				(e-ident @2.10-2.11 (raw "x"))
-				(e-int @2.14-2.15 (raw "1"))))))
+		(branch
+			(p-ident (raw "x"))
+			(e-binop (op "+")
+				(e-ident (raw "x"))
+				(e-int (raw "1"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -49,22 +49,22 @@ match value {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-match @1.1-3.2
-	(match @1.1-3.2
+(e-match
+	(match
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-assign @2.5-2.6 (ident "x"))))
+						(p-assign (ident "x"))))
 				(value
-					(e-binop @2.10-2.15 (op "add")
-						(e-lookup-local @2.10-2.11
-							(p-assign @2.5-2.6 (ident "x")))
-						(e-num @2.14-2.15 (value "1"))))))))
+					(e-binop (op "add")
+						(e-lookup-local
+							(p-assign (ident "x")))
+						(e-num (value "1"))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-3.2 (type "Error"))
+(expr (type "Error"))
 ~~~

@@ -50,28 +50,28 @@ To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:12),OpenCurly(1:13-1:14),
-UpperIdent(2:2-2:5),OpFatArrow(2:6-2:8),Int(2:9-2:10),
-UpperIdent(3:2-3:6),OpFatArrow(3:7-3:9),Int(3:10-3:11),
-UpperIdent(4:2-4:7),OpFatArrow(4:8-4:10),StringStart(4:11-4:12),StringPart(4:12-4:13),StringEnd(4:13-4:14),
-CloseCurly(5:1-5:2),
-EndOfFile(6:1-6:1),
+KwMatch,LowerIdent,OpenCurly,
+UpperIdent,OpFatArrow,Int,
+UpperIdent,OpFatArrow,Int,
+UpperIdent,OpFatArrow,StringStart,StringPart,StringEnd,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.12 (raw "color"))
+	(e-ident (raw "color"))
 	(branches
-		(branch @2.2-2.10
-			(p-tag @2.2-2.5 (raw "Red"))
-			(e-int @2.9-2.10 (raw "1")))
-		(branch @3.2-3.11
-			(p-tag @3.2-3.6 (raw "Blue"))
-			(e-int @3.10-3.11 (raw "2")))
-		(branch @4.2-4.14
-			(p-tag @4.2-4.7 (raw "Green"))
-			(e-string @4.11-4.14
-				(e-string-part @4.12-4.13 (raw "3"))))))
+		(branch
+			(p-tag (raw "Red"))
+			(e-int (raw "1")))
+		(branch
+			(p-tag (raw "Blue"))
+			(e-int (raw "2")))
+		(branch
+			(p-tag (raw "Green"))
+			(e-string
+				(e-string-part (raw "3"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -79,32 +79,32 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-match @1.1-5.2
-	(match @1.1-5.2
+(e-match
+	(match
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-applied-tag @2.2-2.5)))
+						(p-applied-tag)))
 				(value
-					(e-num @2.9-2.10 (value "1"))))
+					(e-num (value "1"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-applied-tag @3.2-3.6)))
+						(p-applied-tag)))
 				(value
-					(e-num @3.10-3.11 (value "2"))))
+					(e-num (value "2"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-applied-tag @4.2-4.7)))
+						(p-applied-tag)))
 				(value
-					(e-string @4.11-4.14
-						(e-literal @4.12-4.13 (string "3"))))))))
+					(e-string
+						(e-literal (string "3"))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-5.2 (type "Error"))
+(expr (type "Error"))
 ~~~

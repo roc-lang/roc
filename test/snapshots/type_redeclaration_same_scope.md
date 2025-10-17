@@ -31,35 +31,35 @@ Maybe(a) : [Some(a), None]
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:6),NoSpaceOpenRound(1:6-1:7),LowerIdent(1:7-1:8),CloseRound(1:8-1:9),OpColon(1:10-1:11),OpenSquare(1:12-1:13),UpperIdent(1:13-1:17),NoSpaceOpenRound(1:17-1:18),LowerIdent(1:18-1:19),CloseRound(1:19-1:20),Comma(1:20-1:21),UpperIdent(1:22-1:26),CloseSquare(1:26-1:27),
-UpperIdent(2:1-2:6),NoSpaceOpenRound(2:6-2:7),LowerIdent(2:7-2:8),CloseRound(2:8-2:9),OpColon(2:10-2:11),OpenSquare(2:12-2:13),UpperIdent(2:13-2:15),NoSpaceOpenRound(2:15-2:16),LowerIdent(2:16-2:17),CloseRound(2:17-2:18),Comma(2:18-2:19),UpperIdent(2:20-2:23),CloseSquare(2:23-2:24),
-EndOfFile(3:1-3:1),
+UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColon,OpenSquare,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,UpperIdent,CloseSquare,
+UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColon,OpenSquare,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,UpperIdent,CloseSquare,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-2.24
-	(type-module @1.1-1.6)
+(file
+	(type-module)
 	(statements
-		(s-type-decl @1.1-1.27
-			(header @1.1-1.9 (name "Maybe")
+		(s-type-decl
+			(header (name "Maybe")
 				(args
-					(ty-var @1.7-1.8 (raw "a"))))
-			(ty-tag-union @1.12-1.27
+					(ty-var (raw "a"))))
+			(ty-tag-union
 				(tags
-					(ty-apply @1.13-1.20
-						(ty @1.13-1.17 (name "Some"))
-						(ty-var @1.18-1.19 (raw "a")))
-					(ty @1.22-1.26 (name "None")))))
-		(s-type-decl @2.1-2.24
-			(header @2.1-2.9 (name "Maybe")
+					(ty-apply
+						(ty (name "Some"))
+						(ty-var (raw "a")))
+					(ty (name "None")))))
+		(s-type-decl
+			(header (name "Maybe")
 				(args
-					(ty-var @2.7-2.8 (raw "a"))))
-			(ty-tag-union @2.12-2.24
+					(ty-var (raw "a"))))
+			(ty-tag-union
 				(tags
-					(ty-apply @2.13-2.18
-						(ty @2.13-2.15 (name "Ok"))
-						(ty-var @2.16-2.17 (raw "a")))
-					(ty @2.20-2.23 (name "Err")))))))
+					(ty-apply
+						(ty (name "Ok"))
+						(ty-var (raw "a")))
+					(ty (name "Err")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -68,35 +68,35 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-alias-decl @1.1-1.27
-		(ty-header @1.1-1.9 (name "Maybe")
+	(s-alias-decl
+		(ty-header (name "Maybe")
 			(ty-args
-				(ty-rigid-var @1.7-1.8 (name "a"))))
-		(ty-tag-union @1.12-1.27
-			(ty-tag-name @1.13-1.20 (name "Some")
-				(ty-rigid-var-lookup (ty-rigid-var @1.7-1.8 (name "a"))))
-			(ty-tag-name @1.22-1.26 (name "None"))))
-	(s-alias-decl @2.1-2.24
-		(ty-header @2.1-2.9 (name "Maybe")
+				(ty-rigid-var (name "a"))))
+		(ty-tag-union
+			(ty-tag-name (name "Some")
+				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
+			(ty-tag-name (name "None"))))
+	(s-alias-decl
+		(ty-header (name "Maybe")
 			(ty-args
-				(ty-rigid-var @2.7-2.8 (name "a"))))
-		(ty-tag-union @2.12-2.24
-			(ty-tag-name @2.13-2.18 (name "Ok")
-				(ty-rigid-var-lookup (ty-rigid-var @2.7-2.8 (name "a"))))
-			(ty-tag-name @2.20-2.23 (name "Err")))))
+				(ty-rigid-var (name "a"))))
+		(ty-tag-union
+			(ty-tag-name (name "Ok")
+				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
+			(ty-tag-name (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @1.1-1.27 (type "Maybe(a)")
-			(ty-header @1.1-1.9 (name "Maybe")
+		(alias (type "Maybe(a)")
+			(ty-header (name "Maybe")
 				(ty-args
-					(ty-rigid-var @1.7-1.8 (name "a")))))
-		(alias @2.1-2.24 (type "Maybe(a)")
-			(ty-header @2.1-2.9 (name "Maybe")
+					(ty-rigid-var (name "a")))))
+		(alias (type "Maybe(a)")
+			(ty-header (name "Maybe")
 				(ty-args
-					(ty-rigid-var @2.7-2.8 (name "a"))))))
+					(ty-rigid-var (name "a"))))))
 	(expressions))
 ~~~

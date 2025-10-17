@@ -432,44 +432,44 @@ This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),
-KwIf(2:5-2:7),OpColon(2:7-2:8),StringStart(2:9-2:10),StringPart(2:10-2:21),StringEnd(2:21-2:22),Comma(2:22-2:23),
-LowerIdent(3:5-3:9),OpColon(3:9-3:10),StringStart(3:11-3:12),StringPart(3:12-3:25),StringEnd(3:25-3:26),Comma(3:26-3:27),
-KwExpect(4:5-4:11),OpColon(4:11-4:12),StringStart(4:13-4:14),StringPart(4:14-4:28),StringEnd(4:28-4:29),Comma(4:29-4:30),
-KwImport(5:5-5:11),OpColon(5:11-5:12),StringStart(5:13-5:14),StringPart(5:14-5:25),StringEnd(5:25-5:26),Comma(5:26-5:27),
-OpAnd(6:5-6:8),OpColon(6:8-6:9),UpperIdent(6:10-6:14),NoSpaceDotLowerIdent(6:14-6:19),Comma(6:19-6:20),
-OpOr(7:5-7:7),OpColon(7:7-7:8),UpperIdent(7:9-7:13),NoSpaceDotLowerIdent(7:13-7:19),Comma(7:19-7:20),
-CloseCurly(8:1-8:2),
-EndOfFile(9:1-9:1),
+OpenCurly,
+KwIf,OpColon,StringStart,StringPart,StringEnd,Comma,
+LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
+KwExpect,OpColon,StringStart,StringPart,StringEnd,Comma,
+KwImport,OpColon,StringStart,StringPart,StringEnd,Comma,
+OpAnd,OpColon,UpperIdent,NoSpaceDotLowerIdent,Comma,
+OpOr,OpColon,UpperIdent,NoSpaceDotLowerIdent,Comma,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-block @1.1-8.2
+(e-block
 	(statements
-		(e-malformed @2.5-2.23 (reason "no_else"))
-		(s-type-anno @3.5-3.12 (name "when")
-			(ty-malformed @3.11-3.12 (tag "ty_anno_unexpected_token")))
-		(e-malformed @3.12-3.25 (reason "expr_unexpected_token"))
-		(e-malformed @3.25-3.26 (reason "expr_unexpected_token"))
-		(e-malformed @3.26-3.27 (reason "expr_unexpected_token"))
-		(s-expect @4.5-4.12
-			(e-malformed @4.11-4.12 (reason "expr_unexpected_token")))
-		(e-string @4.13-4.29
-			(e-string-part @4.14-4.28 (raw "test assertion")))
-		(e-malformed @4.29-4.30 (reason "expr_unexpected_token"))
-		(s-malformed @5.5-5.11 (tag "import_must_be_top_level"))
-		(e-malformed @5.11-5.12 (reason "expr_unexpected_token"))
-		(e-string @5.13-5.26
-			(e-string-part @5.14-5.25 (raw "module load")))
-		(e-malformed @5.26-5.27 (reason "expr_unexpected_token"))
-		(e-malformed @6.5-6.8 (reason "expr_unexpected_token"))
-		(e-malformed @6.8-6.9 (reason "expr_unexpected_token"))
-		(e-ident @6.10-6.19 (raw "Bool.true"))
-		(e-malformed @6.19-6.20 (reason "expr_unexpected_token"))
-		(e-malformed @7.5-7.7 (reason "expr_unexpected_token"))
-		(e-malformed @7.7-7.8 (reason "expr_unexpected_token"))
-		(e-ident @7.9-7.19 (raw "Bool.false"))
-		(e-malformed @7.19-7.20 (reason "expr_unexpected_token"))))
+		(e-malformed (reason "no_else"))
+		(s-type-anno (name "when")
+			(ty-malformed (tag "ty_anno_unexpected_token")))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(s-expect
+			(e-malformed (reason "expr_unexpected_token")))
+		(e-string
+			(e-string-part (raw "test assertion")))
+		(e-malformed (reason "expr_unexpected_token"))
+		(s-malformed (tag "import_must_be_top_level"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-string
+			(e-string-part (raw "module load")))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-ident (raw "Bool.true"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-ident (raw "Bool.false"))
+		(e-malformed (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -490,47 +490,47 @@ EndOfFile(9:1-9:1),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-8.2
-	(s-expr @2.5-2.23
+(e-block
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @3.12-3.25
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @3.25-3.26
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @3.26-3.27
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expect @4.5-4.12
+	(s-expect
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @4.13-4.29
-		(e-string @4.13-4.29
-			(e-literal @4.14-4.28 (string "test assertion"))))
-	(s-expr @4.29-4.30
+	(s-expr
+		(e-string
+			(e-literal (string "test assertion"))))
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-runtime-error (tag "not_implemented"))
-	(s-expr @5.11-5.12
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @5.13-5.26
-		(e-string @5.13-5.26
-			(e-literal @5.14-5.25 (string "module load"))))
-	(s-expr @5.26-5.27
+	(s-expr
+		(e-string
+			(e-literal (string "module load"))))
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @6.5-6.8
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @6.8-6.9
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @6.10-6.19
+	(s-expr
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-expr @6.19-6.20
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @7.5-7.7
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @7.7-7.8
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @7.9-7.19
+	(s-expr
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(e-runtime-error (tag "expr_not_canonicalized")))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-8.2 (type "Error"))
+(expr (type "Error"))
 ~~~

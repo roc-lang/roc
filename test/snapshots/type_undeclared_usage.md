@@ -67,40 +67,40 @@ processValue = |value| {
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:7),OpColon(1:8-1:9),UpperIdent(1:10-1:21),
-LowerIdent(3:1-3:13),OpColon(3:14-3:15),UpperIdent(3:16-3:32),OpArrow(3:33-3:35),UpperIdent(3:36-3:39),
-LowerIdent(4:1-4:13),OpAssign(4:14-4:15),OpBar(4:16-4:17),LowerIdent(4:17-4:22),OpBar(4:22-4:23),OpenCurly(4:24-4:25),
-StringStart(5:5-5:6),StringPart(5:6-5:15),StringEnd(5:15-5:16),
-CloseCurly(6:1-6:2),
-UpperIdent(8:1-8:12),OpColon(8:13-8:14),UpperIdent(8:15-8:25),NoSpaceDotUpperIdent(8:25-8:37),
-EndOfFile(9:1-9:1),
+UpperIdent,OpColon,UpperIdent,
+LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,
+StringStart,StringPart,StringEnd,
+CloseCurly,
+UpperIdent,OpColon,UpperIdent,NoSpaceDotUpperIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-8.37
-	(type-module @1.1-1.7)
+(file
+	(type-module)
 	(statements
-		(s-type-decl @1.1-1.21
-			(header @1.1-1.7 (name "MyType")
+		(s-type-decl
+			(header (name "MyType")
 				(args))
-			(ty @1.10-1.21 (name "UnknownType")))
-		(s-type-anno @3.1-3.39 (name "processValue")
-			(ty-fn @3.16-3.39
-				(ty @3.16-3.32 (name "UndeclaredResult"))
-				(ty @3.36-3.39 (name "Str"))))
-		(s-decl @4.1-6.2
-			(p-ident @4.1-4.13 (raw "processValue"))
-			(e-lambda @4.16-6.2
+			(ty (name "UnknownType")))
+		(s-type-anno (name "processValue")
+			(ty-fn
+				(ty (name "UndeclaredResult"))
+				(ty (name "Str"))))
+		(s-decl
+			(p-ident (raw "processValue"))
+			(e-lambda
 				(args
-					(p-ident @4.17-4.22 (raw "value")))
-				(e-block @4.24-6.2
+					(p-ident (raw "value")))
+				(e-block
 					(statements
-						(e-string @5.5-5.16
-							(e-string-part @5.6-5.15 (raw "processed")))))))
-		(s-type-decl @8.1-8.37
-			(header @8.1-8.12 (name "AnotherType")
+						(e-string
+							(e-string-part (raw "processed")))))))
+		(s-type-decl
+			(header (name "AnotherType")
 				(args))
-			(ty @8.15-8.37 (name "SomeModule.MissingType")))))
+			(ty (name "SomeModule.MissingType")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -117,35 +117,35 @@ AnotherType : SomeModule.MissingType
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @4.1-4.13 (ident "processValue"))
-		(e-lambda @4.16-6.2
+		(p-assign (ident "processValue"))
+		(e-lambda
 			(args
-				(p-assign @4.17-4.22 (ident "value")))
-			(e-block @4.24-6.2
-				(e-string @5.5-5.16
-					(e-literal @5.6-5.15 (string "processed")))))
-		(annotation @4.1-4.13
+				(p-assign (ident "value")))
+			(e-block
+				(e-string
+					(e-literal (string "processed")))))
+		(annotation
 			(declared-type
-				(ty-fn @3.16-3.39 (effectful false)
-					(ty-malformed @3.16-3.32)
-					(ty-lookup @3.36-3.39 (name "Str") (builtin))))))
-	(s-alias-decl @1.1-1.21
-		(ty-header @1.1-1.7 (name "MyType"))
-		(ty-malformed @1.10-1.21))
-	(s-alias-decl @8.1-8.37
-		(ty-header @8.1-8.12 (name "AnotherType"))
-		(ty-malformed @8.15-8.37)))
+				(ty-fn (effectful false)
+					(ty-malformed)
+					(ty-lookup (name "Str") (builtin))))))
+	(s-alias-decl
+		(ty-header (name "MyType"))
+		(ty-malformed))
+	(s-alias-decl
+		(ty-header (name "AnotherType"))
+		(ty-malformed)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.13 (type "Error -> Str")))
+		(patt (type "Error -> Str")))
 	(type_decls
-		(alias @1.1-1.21 (type "MyType")
-			(ty-header @1.1-1.7 (name "MyType")))
-		(alias @8.1-8.37 (type "AnotherType")
-			(ty-header @8.1-8.12 (name "AnotherType"))))
+		(alias (type "MyType")
+			(ty-header (name "MyType")))
+		(alias (type "AnotherType")
+			(ty-header (name "AnotherType"))))
 	(expressions
-		(expr @4.16-6.2 (type "Error -> Str"))))
+		(expr (type "Error -> Str"))))
 ~~~

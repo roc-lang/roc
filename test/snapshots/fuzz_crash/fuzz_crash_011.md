@@ -59,16 +59,16 @@ Other valid examples:
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),UpperIdent(1:8-1:9),CloseSquare(1:9-1:10),UpperIdent(1:10-1:11),
-EndOfFile(2:1-2:1),
+KwModule,UpperIdent,CloseSquare,UpperIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.11
-	(malformed-header @1.8-1.9 (tag "header_expected_open_square"))
+(file
+	(malformed-header (tag "header_expected_open_square"))
 	(statements
-		(s-malformed @1.9-1.10 (tag "statement_unexpected_token"))
-		(s-malformed @1.1-1.1 (tag "expected_colon_after_type_annotation"))))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))))
 ~~~
 # FORMATTED
 ~~~roc

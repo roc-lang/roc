@@ -144,52 +144,52 @@ getUser = |id| if (id > 1!) "big" else "l"
 
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),OpBar(1:15-1:16),LowerIdent(1:16-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:30),StringEnd(1:30-1:31),CloseCurly(1:32-1:33),
-UpperIdent(3:1-3:7),OpColon(3:8-3:9),UpperIdent(3:10-3:13),
-LowerIdent(5:1-5:4),OpColon(5:5-5:6),UpperIdent(5:7-5:13),OpArrow(5:14-5:16),UpperIdent(5:17-5:20),
-LowerIdent(6:1-6:8),OpAssign(6:9-6:10),OpBar(6:11-6:12),LowerIdent(6:12-6:14),OpBar(6:14-6:15),KwIf(6:16-6:18),OpenRound(6:19-6:20),LowerIdent(6:20-6:22),OpGreaterThan(6:23-6:24),Int(6:25-6:26),OpBang(6:26-6:27),CloseRound(6:27-6:28),StringStart(6:29-6:30),StringPart(6:30-6:33),StringEnd(6:33-6:34),KwElse(6:35-6:39),StringStart(6:40-6:41),StringPart(6:41-6:42),StringEnd(6:42-6:43),
-OpUnaryMinus(8:1-8:2),LowerIdent(8:2-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBar(8:11-8:12),LowerIdent(8:13-8:20),NoSpaceOpenRound(8:20-8:21),Int(8:21-8:24),CloseRound(8:24-8:25),
-EndOfFile(9:1-9:1),
+KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,OpBar,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
+UpperIdent,OpColon,UpperIdent,
+LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,KwIf,OpenRound,LowerIdent,OpGreaterThan,Int,OpBang,CloseRound,StringStart,StringPart,StringEnd,KwElse,StringStart,StringPart,StringEnd,
+OpUnaryMinus,LowerIdent,OpAssign,OpBar,Underscore,OpBar,LowerIdent,NoSpaceOpenRound,Int,CloseRound,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-8.25
-	(malformed-header @1.1-1.16 (tag "expected_package_or_platform_name"))
+(file
+	(malformed-header (tag "expected_package_or_platform_name"))
 	(statements
-		(s-type-anno @1.16-1.27 (name "f")
-			(ty-malformed @1.19-1.27 (tag "ty_anno_unexpected_token")))
-		(s-malformed @1.28-1.29 (tag "statement_unexpected_token"))
-		(s-malformed @1.29-1.30 (tag "statement_unexpected_token"))
-		(s-malformed @1.30-1.31 (tag "statement_unexpected_token"))
-		(s-malformed @1.32-1.33 (tag "statement_unexpected_token"))
-		(s-type-decl @3.1-3.13
-			(header @3.1-3.7 (name "UserId")
+		(s-type-anno (name "f")
+			(ty-malformed (tag "ty_anno_unexpected_token")))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-type-decl
+			(header (name "UserId")
 				(args))
-			(ty @3.10-3.13 (name "U64")))
-		(s-type-anno @5.1-5.20 (name "ser")
-			(ty-fn @5.7-5.20
-				(ty @5.7-5.13 (name "UserId"))
-				(ty @5.17-5.20 (name "Str"))))
-		(s-decl @6.1-6.43
-			(p-ident @6.1-6.8 (raw "getUser"))
-			(e-lambda @6.11-6.43
+			(ty (name "U64")))
+		(s-type-anno (name "ser")
+			(ty-fn
+				(ty (name "UserId"))
+				(ty (name "Str"))))
+		(s-decl
+			(p-ident (raw "getUser"))
+			(e-lambda
 				(args
-					(p-ident @6.12-6.14 (raw "id")))
-				(e-if-then-else @6.16-6.43
-					(e-malformed @6.27-6.28 (reason "expected_expr_close_round_or_comma"))
-					(e-string @6.29-6.34
-						(e-string-part @6.30-6.33 (raw "big")))
-					(e-string @6.40-6.43
-						(e-string-part @6.41-6.42 (raw "l"))))))
-		(s-malformed @8.1-8.2 (tag "statement_unexpected_token"))
-		(s-decl @8.2-8.25
-			(p-ident @8.2-8.6 (raw "ain!"))
-			(e-lambda @8.9-8.25
+					(p-ident (raw "id")))
+				(e-if-then-else
+					(e-malformed (reason "expected_expr_close_round_or_comma"))
+					(e-string
+						(e-string-part (raw "big")))
+					(e-string
+						(e-string-part (raw "l"))))))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-decl
+			(p-ident (raw "ain!"))
+			(e-lambda
 				(args
 					(p-underscore))
-				(e-apply @8.13-8.25
-					(e-ident @8.13-8.20 (raw "getUser"))
-					(e-int @8.21-8.24 (raw "900")))))))
+				(e-apply
+					(e-ident (raw "getUser"))
+					(e-int (raw "900")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -207,37 +207,37 @@ ain! = |_| getUser(900)
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @6.1-6.8 (ident "getUser"))
-		(e-lambda @6.11-6.43
+		(p-assign (ident "getUser"))
+		(e-lambda
 			(args
-				(p-assign @6.12-6.14 (ident "id")))
+				(p-assign (ident "id")))
 			(e-runtime-error (tag "if_condition_not_canonicalized"))))
 	(d-let
-		(p-assign @8.2-8.6 (ident "ain!"))
-		(e-closure @8.9-8.25
+		(p-assign (ident "ain!"))
+		(e-closure
 			(captures
-				(capture @6.1-6.8 (ident "getUser")))
-			(e-lambda @8.9-8.25
+				(capture (ident "getUser")))
+			(e-lambda
 				(args
-					(p-underscore @8.10-8.11))
-				(e-call @8.13-8.25
-					(e-lookup-local @8.13-8.20
-						(p-assign @6.1-6.8 (ident "getUser")))
-					(e-num @8.21-8.24 (value "900"))))))
-	(s-alias-decl @3.1-3.13
-		(ty-header @3.1-3.7 (name "UserId"))
-		(ty-lookup @3.10-3.13 (name "U64") (builtin))))
+					(p-underscore))
+				(e-call
+					(e-lookup-local
+						(p-assign (ident "getUser")))
+					(e-num (value "900"))))))
+	(s-alias-decl
+		(ty-header (name "UserId"))
+		(ty-lookup (name "U64") (builtin))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.8 (type "_arg -> Error"))
-		(patt @8.2-8.6 (type "_arg -> Error")))
+		(patt (type "_arg -> Error"))
+		(patt (type "_arg -> Error")))
 	(type_decls
-		(alias @3.1-3.13 (type "UserId")
-			(ty-header @3.1-3.7 (name "UserId"))))
+		(alias (type "UserId")
+			(ty-header (name "UserId"))))
 	(expressions
-		(expr @6.11-6.43 (type "_arg -> Error"))
-		(expr @8.9-8.25 (type "_arg -> Error"))))
+		(expr (type "_arg -> Error"))
+		(expr (type "_arg -> Error"))))
 ~~~

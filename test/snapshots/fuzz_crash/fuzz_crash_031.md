@@ -103,22 +103,22 @@ vavar t= '
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:5),OpenSquare(1:6-1:7),CloseSquare(1:7-1:8),
-LowerIdent(4:1-4:6),LowerIdent(4:7-4:8),OpAssign(4:8-4:9),MalformedSingleQuoteUnclosed(4:10-4:11),
-EndOfFile(5:1-5:1),
+LowerIdent,OpenSquare,CloseSquare,
+LowerIdent,LowerIdent,OpAssign,MalformedSingleQuoteUnclosed,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-4.11
-	(type-module @1.1-1.5)
+(file
+	(type-module)
 	(statements
-		(s-malformed @1.1-1.5 (tag "statement_unexpected_token"))
-		(s-malformed @1.6-1.7 (tag "statement_unexpected_token"))
-		(s-malformed @1.7-1.8 (tag "statement_unexpected_token"))
-		(s-malformed @4.1-4.6 (tag "statement_unexpected_token"))
-		(s-decl @4.7-4.11
-			(p-ident @4.7-4.8 (raw "t"))
-			(e-malformed @4.10-4.11 (reason "expr_unexpected_token")))))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-decl
+			(p-ident (raw "t"))
+			(e-malformed (reason "expr_unexpected_token")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -131,14 +131,14 @@ t =
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @4.7-4.8 (ident "t"))
+		(p-assign (ident "t"))
 		(e-runtime-error (tag "expr_not_canonicalized"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.7-4.8 (type "Error")))
+		(patt (type "Error")))
 	(expressions
-		(expr @4.10-4.11 (type "Error"))))
+		(expr (type "Error"))))
 ~~~

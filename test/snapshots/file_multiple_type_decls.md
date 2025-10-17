@@ -15,30 +15,30 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:10),OpColon(1:11-1:12),UpperIdent(1:13-1:16),
-UpperIdent(2:1-2:11),OpColon(2:12-2:13),UpperIdent(2:14-2:17),
-UpperIdent(3:1-3:10),OpColon(3:11-3:12),UpperIdent(3:13-3:17),NoSpaceOpenRound(3:17-3:18),UpperIdent(3:18-3:20),CloseRound(3:20-3:21),
-EndOfFile(4:1-4:1),
+UpperIdent,OpColon,UpperIdent,
+UpperIdent,OpColon,UpperIdent,
+UpperIdent,OpColon,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-3.21
-	(type-module @1.1-1.10)
+(file
+	(type-module)
 	(statements
-		(s-type-decl @1.1-1.16
-			(header @1.1-1.10 (name "FirstType")
+		(s-type-decl
+			(header (name "FirstType")
 				(args))
-			(ty @1.13-1.16 (name "U64")))
-		(s-type-decl @2.1-2.17
-			(header @2.1-2.11 (name "SecondType")
+			(ty (name "U64")))
+		(s-type-decl
+			(header (name "SecondType")
 				(args))
-			(ty @2.14-2.17 (name "Str")))
-		(s-type-decl @3.1-3.21
-			(header @3.1-3.10 (name "ThirdType")
+			(ty (name "Str")))
+		(s-type-decl
+			(header (name "ThirdType")
 				(args))
-			(ty-apply @3.13-3.21
-				(ty @3.13-3.17 (name "List"))
-				(ty @3.18-3.20 (name "U8"))))))
+			(ty-apply
+				(ty (name "List"))
+				(ty (name "U8"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -47,27 +47,27 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-alias-decl @1.1-1.16
-		(ty-header @1.1-1.10 (name "FirstType"))
-		(ty-lookup @1.13-1.16 (name "U64") (builtin)))
-	(s-alias-decl @2.1-2.17
-		(ty-header @2.1-2.11 (name "SecondType"))
-		(ty-lookup @2.14-2.17 (name "Str") (builtin)))
-	(s-alias-decl @3.1-3.21
-		(ty-header @3.1-3.10 (name "ThirdType"))
-		(ty-apply @3.13-3.21 (name "List") (builtin)
-			(ty-lookup @3.18-3.20 (name "U8") (builtin)))))
+	(s-alias-decl
+		(ty-header (name "FirstType"))
+		(ty-lookup (name "U64") (builtin)))
+	(s-alias-decl
+		(ty-header (name "SecondType"))
+		(ty-lookup (name "Str") (builtin)))
+	(s-alias-decl
+		(ty-header (name "ThirdType"))
+		(ty-apply (name "List") (builtin)
+			(ty-lookup (name "U8") (builtin)))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @1.1-1.16 (type "FirstType")
-			(ty-header @1.1-1.10 (name "FirstType")))
-		(alias @2.1-2.17 (type "SecondType")
-			(ty-header @2.1-2.11 (name "SecondType")))
-		(alias @3.1-3.21 (type "ThirdType")
-			(ty-header @3.1-3.10 (name "ThirdType"))))
+		(alias (type "FirstType")
+			(ty-header (name "FirstType")))
+		(alias (type "SecondType")
+			(ty-header (name "SecondType")))
+		(alias (type "ThirdType")
+			(ty-header (name "ThirdType"))))
 	(expressions))
 ~~~

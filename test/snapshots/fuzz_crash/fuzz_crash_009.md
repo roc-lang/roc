@@ -105,26 +105,26 @@ foo =
 
 # TOKENS
 ~~~zig
-LowerIdent(1:2-1:3),OpenCurly(1:3-1:4),LowerIdent(1:4-1:5),Comma(1:5-1:6),
-CloseSquare(2:6-2:7),
-LowerIdent(4:1-4:4),OpAssign(4:5-4:6),
-StringStart(6:5-6:6),StringPart(6:6-6:12),StringEnd(6:12-6:12),
-EndOfFile(7:1-7:1),
+LowerIdent,OpenCurly,LowerIdent,Comma,
+CloseSquare,
+LowerIdent,OpAssign,
+StringStart,StringPart,StringEnd,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.2-6.12
-	(type-module @1.2-1.3)
+(file
+	(type-module)
 	(statements
-		(s-malformed @1.2-1.3 (tag "statement_unexpected_token"))
-		(s-malformed @1.3-1.4 (tag "statement_unexpected_token"))
-		(s-malformed @1.4-1.5 (tag "statement_unexpected_token"))
-		(s-malformed @1.5-1.6 (tag "statement_unexpected_token"))
-		(s-malformed @2.6-2.7 (tag "statement_unexpected_token"))
-		(s-decl @4.1-6.12
-			(p-ident @4.1-4.4 (raw "foo"))
-			(e-string @6.5-6.12
-				(e-string-part @6.6-6.12 (raw "onmo %"))))))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-decl
+			(p-ident (raw "foo"))
+			(e-string
+				(e-string-part (raw "onmo %"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -139,15 +139,15 @@ foo =
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @4.1-4.4 (ident "foo"))
-		(e-string @6.5-6.12
-			(e-literal @6.6-6.12 (string "onmo %")))))
+		(p-assign (ident "foo"))
+		(e-string
+			(e-literal (string "onmo %")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.4 (type "Str")))
+		(patt (type "Str")))
 	(expressions
-		(expr @6.5-6.12 (type "Str"))))
+		(expr (type "Str"))))
 ~~~

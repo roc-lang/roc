@@ -39,32 +39,32 @@ You can fix this by either defining `b!` in this module, or by removing it from 
 
 # TOKENS
 ~~~zig
-KwHosted(1:1-1:7),OpenSquare(1:8-1:9),
-LowerIdent(2:2-2:4),Comma(2:4-2:5),
-LowerIdent(3:2-3:4),
-CloseSquare(4:1-4:2),
-LowerIdent(6:1-6:3),OpColon(6:4-6:5),UpperIdent(6:6-6:9),OpFatArrow(6:10-6:12),UpperIdent(6:13-6:16),
-LowerIdent(7:1-7:3),OpColon(7:4-7:5),UpperIdent(7:6-7:9),OpFatArrow(7:10-7:12),UpperIdent(7:13-7:16),
-EndOfFile(8:1-8:1),
+KwHosted,OpenSquare,
+LowerIdent,Comma,
+LowerIdent,
+CloseSquare,
+LowerIdent,OpColon,UpperIdent,OpFatArrow,UpperIdent,
+LowerIdent,OpColon,UpperIdent,OpFatArrow,UpperIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-7.16
-	(hosted @1.1-4.2
-		(exposes @1.8-4.2
-			(exposed-lower-ident @2.2-2.4
+(file
+	(hosted
+		(exposes
+			(exposed-lower-ident
 				(text "a!"))
-			(exposed-lower-ident @3.2-3.4
+			(exposed-lower-ident
 				(text "b!"))))
 	(statements
-		(s-type-anno @6.1-6.16 (name "a!")
-			(ty-fn @6.6-6.16
-				(ty @6.6-6.9 (name "Str"))
-				(ty @6.13-6.16 (name "Str"))))
-		(s-type-anno @7.1-7.16 (name "b!")
-			(ty-fn @7.6-7.16
-				(ty @7.6-7.9 (name "Str"))
-				(ty @7.13-7.16 (name "Str"))))))
+		(s-type-anno (name "a!")
+			(ty-fn
+				(ty (name "Str"))
+				(ty (name "Str"))))
+		(s-type-anno (name "b!")
+			(ty-fn
+				(ty (name "Str"))
+				(ty (name "Str"))))))
 ~~~
 # FORMATTED
 ~~~roc

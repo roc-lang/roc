@@ -13,12 +13,12 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-Int(1:1-1:11),
-EndOfFile(2:1-2:1),
+Int,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-int @1.1-1.11 (raw "2147483647"))
+(e-int (raw "2147483647"))
 ~~~
 # FORMATTED
 ~~~roc
@@ -26,9 +26,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-num @1.1-1.11 (value "2147483647"))
+(e-num (value "2147483647"))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.11 (type "Num(_size)"))
+(expr (type "Num(_size)"))
 ~~~

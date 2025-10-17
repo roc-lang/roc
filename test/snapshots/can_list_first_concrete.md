@@ -31,16 +31,16 @@ To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
-OpenSquare(1:1-1:2),Int(1:2-1:4),Comma(1:4-1:5),StringStart(1:6-1:7),StringPart(1:7-1:12),StringEnd(1:12-1:13),Comma(1:13-1:14),Float(1:15-1:19),CloseSquare(1:19-1:20),
-EndOfFile(2:1-2:1),
+OpenSquare,Int,Comma,StringStart,StringPart,StringEnd,Comma,Float,CloseSquare,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-list @1.1-1.20
-	(e-int @1.2-1.4 (raw "42"))
-	(e-string @1.6-1.13
-		(e-string-part @1.7-1.12 (raw "world")))
-	(e-frac @1.15-1.19 (raw "3.14")))
+(e-list
+	(e-int (raw "42"))
+	(e-string
+		(e-string-part (raw "world")))
+	(e-frac (raw "3.14")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -48,14 +48,14 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1.1-1.20
+(e-list
 	(elems
-		(e-num @1.2-1.4 (value "42"))
-		(e-string @1.6-1.13
-			(e-literal @1.7-1.12 (string "world")))
-		(e-dec-small @1.15-1.19 (numerator "314") (denominator-power-of-ten "2") (value "3.14"))))
+		(e-num (value "42"))
+		(e-string
+			(e-literal (string "world")))
+		(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.20 (type "List(Error)"))
+(expr (type "List(Error)"))
 ~~~

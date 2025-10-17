@@ -13,14 +13,14 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-Int(1:1-1:2),OpPlus(1:3-1:4),Int(1:5-1:6),
-EndOfFile(2:1-2:1),
+Int,OpPlus,Int,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-binop @1.1-1.6 (op "+")
-	(e-int @1.1-1.2 (raw "1"))
-	(e-int @1.5-1.6 (raw "2")))
+(e-binop (op "+")
+	(e-int (raw "1"))
+	(e-int (raw "2")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -28,11 +28,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-1.6 (op "add")
-	(e-num @1.1-1.2 (value "1"))
-	(e-num @1.5-1.6 (value "2")))
+(e-binop (op "add")
+	(e-num (value "1"))
+	(e-num (value "2")))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.6 (type "Num(_size)"))
+(expr (type "Num(_size)"))
 ~~~

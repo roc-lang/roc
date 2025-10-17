@@ -216,59 +216,59 @@ This type is referenced here:
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:12),OpColon(1:13-1:14),LowerIdent(1:14-1:17),OpFatArrow(1:18-1:20),UpperIdent(1:21-1:24),OpAssign(1:24-1:25),OpenSquare(1:26-1:27),UpperIdent(1:27-1:34),Comma(1:34-1:35),UpperIdent(1:36-1:44),CloseSquare(1:44-1:45),
-LowerIdent(3:1-3:5),OpColon(3:6-3:7),Underscore(3:8-3:9),OpArrow(3:10-3:12),LowerIdent(3:13-3:16),
-LowerIdent(4:1-4:5),OpAssign(4:6-4:7),OpBar(4:8-4:9),LowerIdent(4:9-4:14),OpBar(4:14-4:15),OpenCurly(4:16-4:17),KwImport(4:18-4:24),UpperIdent(4:25-4:30),NoSpaceDotUpperIdent(4:30-4:34),
-KwMatch(6:5-6:10),LowerIdent(6:11-6:16),OpenCurly(6:17-6:18),UpperIdent(6:19-6:22),OpFatArrow(6:23-6:25),UpperIdent(6:26-6:37),NoSpaceDotUpperIdent(6:37-6:45),
-UpperIdent(7:1-7:6),OpFatArrow(7:7-7:9),UpperIdent(7:10-7:21),OpUnaryMinus(7:21-7:22),UpperIdent(7:22-7:30),
-UpperIdent(8:3-8:4),NoSpaceDotUpperIdent(8:4-8:9),OpFatArrow(8:10-8:12),UpperIdent(8:13-8:24),NoSpaceDotUpperIdent(8:24-8:32),
-CloseCurly(9:5-9:6),
-CloseCurly(10:1-10:2),
-EndOfFile(11:1-11:1),
+UpperIdent,OpColon,LowerIdent,OpFatArrow,UpperIdent,OpAssign,OpenSquare,UpperIdent,Comma,UpperIdent,CloseSquare,
+LowerIdent,OpColon,Underscore,OpArrow,LowerIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,KwImport,UpperIdent,NoSpaceDotUpperIdent,
+KwMatch,LowerIdent,OpenCurly,UpperIdent,OpFatArrow,UpperIdent,NoSpaceDotUpperIdent,
+UpperIdent,OpFatArrow,UpperIdent,OpUnaryMinus,UpperIdent,
+UpperIdent,NoSpaceDotUpperIdent,OpFatArrow,UpperIdent,NoSpaceDotUpperIdent,
+CloseCurly,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-10.2
-	(type-module @1.1-1.12)
+(file
+	(type-module)
 	(statements
-		(s-type-decl @1.1-1.24
-			(header @1.1-1.12 (name "LocalStatus")
+		(s-type-decl
+			(header (name "LocalStatus")
 				(args))
-			(ty-fn @1.14-1.24
-				(ty-var @1.14-1.17 (raw "lue"))
-				(ty @1.21-1.24 (name "Loc"))))
-		(s-malformed @1.24-1.25 (tag "statement_unexpected_token"))
-		(s-malformed @1.26-1.27 (tag "statement_unexpected_token"))
-		(s-malformed @1.34-1.35 (tag "expected_colon_after_type_annotation"))
-		(s-malformed @1.44-1.45 (tag "expected_colon_after_type_annotation"))
-		(s-type-anno @3.1-3.16 (name "olor")
-			(ty-fn @3.8-3.16
+			(ty-fn
+				(ty-var (raw "lue"))
+				(ty (name "Loc"))))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
+		(s-type-anno (name "olor")
+			(ty-fn
 				(_)
-				(ty-var @3.13-3.16 (raw "tus"))))
-		(s-decl @4.1-10.2
-			(p-ident @4.1-4.5 (raw "olor"))
-			(e-lambda @4.8-10.2
+				(ty-var (raw "tus"))))
+		(s-decl
+			(p-ident (raw "olor"))
+			(e-lambda
 				(args
-					(p-ident @4.9-4.14 (raw "color")))
-				(e-block @4.16-10.2
+					(p-ident (raw "color")))
+				(e-block
 					(statements
-						(s-malformed @4.18-4.24 (tag "import_must_be_top_level"))
-						(e-tag @4.25-4.34 (raw "Color.RGB"))
+						(s-malformed (tag "import_must_be_top_level"))
+						(e-tag (raw "Color.RGB"))
 						(e-match
-							(e-ident @6.11-6.16 (raw "color"))
+							(e-ident (raw "color"))
 							(branches
-								(branch @6.19-6.45
-									(p-tag @6.19-6.22 (raw "RGB"))
-									(e-tag @6.26-6.45 (raw "LocalStatus.Pending")))
-								(branch @7.1-7.21
-									(p-tag @7.1-7.6 (raw "Green"))
-									(e-tag @7.10-7.21 (raw "LocalStatus")))
-								(branch @7.21-7.30
-									(p-malformed @7.21-7.22 (tag "pattern_unexpected_token"))
-									(e-tag @7.22-7.30 (raw "Complete")))
-								(branch @8.3-8.32
-									(p-tag @8.3-8.9 (raw ".Blue"))
-									(e-tag @8.13-8.32 (raw "LocalStatus.Pending")))))))))))
+								(branch
+									(p-tag (raw "RGB"))
+									(e-tag (raw "LocalStatus.Pending")))
+								(branch
+									(p-tag (raw "Green"))
+									(e-tag (raw "LocalStatus")))
+								(branch
+									(p-malformed (tag "pattern_unexpected_token"))
+									(e-tag (raw "Complete")))
+								(branch
+									(p-tag (raw ".Blue"))
+									(e-tag (raw "LocalStatus.Pending")))))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -291,63 +291,63 @@ olor = |color| {
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @4.1-4.5 (ident "olor"))
-		(e-lambda @4.8-10.2
+		(p-assign (ident "olor"))
+		(e-lambda
 			(args
-				(p-assign @4.9-4.14 (ident "color")))
-			(e-block @4.16-10.2
+				(p-assign (ident "color")))
+			(e-block
 				(s-runtime-error (tag "not_implemented"))
-				(s-expr @4.25-4.34
+				(s-expr
 					(e-runtime-error (tag "undeclared_type")))
-				(e-match @6.5-9.6
-					(match @6.5-9.6
+				(e-match
+					(match
 						(cond
-							(e-lookup-local @6.11-6.16
-								(p-assign @4.9-4.14 (ident "color"))))
+							(e-lookup-local
+								(p-assign (ident "color"))))
 						(branches
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-applied-tag @6.19-6.22)))
+										(p-applied-tag)))
 								(value
 									(e-runtime-error (tag "type_alias_but_needed_nominal"))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-applied-tag @7.1-7.6)))
+										(p-applied-tag)))
 								(value
-									(e-tag @7.10-7.21 (name "LocalStatus"))))
+									(e-tag (name "LocalStatus"))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-runtime-error @7.21-7.22 (tag "pattern_not_canonicalized"))))
+										(p-runtime-error (tag "pattern_not_canonicalized"))))
 								(value
-									(e-tag @7.22-7.30 (name "Complete"))))
+									(e-tag (name "Complete"))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-runtime-error @8.3-8.4 (tag "undeclared_type"))))
+										(p-runtime-error (tag "undeclared_type"))))
 								(value
 									(e-runtime-error (tag "type_alias_but_needed_nominal")))))))))
-		(annotation @4.1-4.5
+		(annotation
 			(declared-type
-				(ty-fn @3.8-3.16 (effectful false)
-					(ty-underscore @1.1-1.1)
-					(ty-rigid-var @3.13-3.16 (name "tus"))))))
-	(s-alias-decl @1.1-1.24
-		(ty-header @1.1-1.12 (name "LocalStatus"))
-		(ty-fn @1.14-1.24 (effectful true)
-			(ty-malformed @1.14-1.17)
-			(ty-malformed @1.21-1.24))))
+				(ty-fn (effectful false)
+					(ty-underscore)
+					(ty-rigid-var (name "tus"))))))
+	(s-alias-decl
+		(ty-header (name "LocalStatus"))
+		(ty-fn (effectful true)
+			(ty-malformed)
+			(ty-malformed))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.5 (type "_arg -> Error")))
+		(patt (type "_arg -> Error")))
 	(type_decls
-		(alias @1.1-1.24 (type "LocalStatus")
-			(ty-header @1.1-1.12 (name "LocalStatus"))))
+		(alias (type "LocalStatus")
+			(ty-header (name "LocalStatus"))))
 	(expressions
-		(expr @4.8-10.2 (type "_arg -> Error"))))
+		(expr (type "_arg -> Error"))))
 ~~~

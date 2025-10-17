@@ -23,12 +23,12 @@ Json.utf8
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:5),NoSpaceDotLowerIdent(1:5-1:10),
-EndOfFile(2:1-2:1),
+UpperIdent,NoSpaceDotLowerIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.10 (raw "Json.utf8"))
+(e-ident (raw "Json.utf8"))
 ~~~
 # FORMATTED
 ~~~roc
@@ -40,5 +40,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.10 (type "Error"))
+(expr (type "Error"))
 ~~~

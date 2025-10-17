@@ -53,26 +53,26 @@ To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:4),OpAssign(1:5-1:6),KwIf(1:7-1:9),Int(1:10-1:11),UpperIdent(1:12-1:13),
-KwElse(3:5-3:9),OpenCurly(3:10-3:11),
-StringStart(4:2-4:3),StringPart(4:3-4:8),StringEnd(4:8-4:9),
-CloseCurly(5:5-5:6),
-EndOfFile(6:1-6:1),
+LowerIdent,OpAssign,KwIf,Int,UpperIdent,
+KwElse,OpenCurly,
+StringStart,StringPart,StringEnd,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-5.6
-	(type-module @1.1-1.4)
+(file
+	(type-module)
 	(statements
-		(s-decl @1.1-5.6
-			(p-ident @1.1-1.4 (raw "foo"))
-			(e-if-then-else @1.7-5.6
-				(e-int @1.10-1.11 (raw "1"))
-				(e-tag @1.12-1.13 (raw "A"))
-				(e-block @3.10-5.6
+		(s-decl
+			(p-ident (raw "foo"))
+			(e-if-then-else
+				(e-int (raw "1"))
+				(e-tag (raw "A"))
+				(e-block
 					(statements
-						(e-string @4.2-4.9
-							(e-string-part @4.3-4.8 (raw "hello")))))))))
+						(e-string
+							(e-string-part (raw "hello")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -86,22 +86,22 @@ foo = if 1 A
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @1.1-1.4 (ident "foo"))
-		(e-if @1.7-5.6
+		(p-assign (ident "foo"))
+		(e-if
 			(if-branches
 				(if-branch
-					(e-num @1.10-1.11 (value "1"))
-					(e-tag @1.12-1.13 (name "A"))))
+					(e-num (value "1"))
+					(e-tag (name "A"))))
 			(if-else
-				(e-block @3.10-5.6
-					(e-string @4.2-4.9
-						(e-literal @4.3-4.8 (string "hello"))))))))
+				(e-block
+					(e-string
+						(e-literal (string "hello"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @1.1-1.4 (type "Error")))
+		(patt (type "Error")))
 	(expressions
-		(expr @1.7-5.6 (type "Error"))))
+		(expr (type "Error"))))
 ~~~

@@ -21,29 +21,29 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-OpenSquare(1:1-1:2),
-OpenSquare(2:2-2:3),Int(2:3-2:4),CloseSquare(2:4-2:5),Comma(2:5-2:6),
-OpenSquare(3:2-3:3),Int(3:3-3:4),CloseSquare(3:4-3:5),Comma(3:5-3:6),
-OpenSquare(4:2-4:3),
-Int(5:3-5:4),Comma(5:4-5:5),
-Int(6:3-6:4),Comma(6:4-6:5),
-CloseSquare(7:2-7:3),Comma(7:3-7:4),
-OpenSquare(8:2-8:3),Int(8:3-8:4),CloseSquare(8:4-8:5),Comma(8:5-8:6),
-CloseSquare(9:1-9:2),
-EndOfFile(10:1-10:1),
+OpenSquare,
+OpenSquare,Int,CloseSquare,Comma,
+OpenSquare,Int,CloseSquare,Comma,
+OpenSquare,
+Int,Comma,
+Int,Comma,
+CloseSquare,Comma,
+OpenSquare,Int,CloseSquare,Comma,
+CloseSquare,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-list @1.1-9.2
-	(e-list @2.2-2.5
-		(e-int @2.3-2.4 (raw "1")))
-	(e-list @3.2-3.5
-		(e-int @3.3-3.4 (raw "2")))
-	(e-list @4.2-7.3
-		(e-int @5.3-5.4 (raw "3"))
-		(e-int @6.3-6.4 (raw "4")))
-	(e-list @8.2-8.5
-		(e-int @8.3-8.4 (raw "5"))))
+(e-list
+	(e-list
+		(e-int (raw "1")))
+	(e-list
+		(e-int (raw "2")))
+	(e-list
+		(e-int (raw "3"))
+		(e-int (raw "4")))
+	(e-list
+		(e-int (raw "5"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -51,23 +51,23 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1.1-9.2
+(e-list
 	(elems
-		(e-list @2.2-2.5
+		(e-list
 			(elems
-				(e-num @2.3-2.4 (value "1"))))
-		(e-list @3.2-3.5
+				(e-num (value "1"))))
+		(e-list
 			(elems
-				(e-num @3.3-3.4 (value "2"))))
-		(e-list @4.2-7.3
+				(e-num (value "2"))))
+		(e-list
 			(elems
-				(e-num @5.3-5.4 (value "3"))
-				(e-num @6.3-6.4 (value "4"))))
-		(e-list @8.2-8.5
+				(e-num (value "3"))
+				(e-num (value "4"))))
+		(e-list
 			(elems
-				(e-num @8.3-8.4 (value "5"))))))
+				(e-num (value "5"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-9.2 (type "List(List(Num(_size)))"))
+(expr (type "List(List(Num(_size)))"))
 ~~~

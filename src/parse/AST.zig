@@ -771,7 +771,7 @@ pub fn toSExprStr(ast: *@This(), gpa: std.mem.Allocator, env: *const CommonEnv, 
 
     try file.pushToSExprTree(gpa, env, ast, &tree);
 
-    try tree.toStringPretty(writer);
+    try tree.toStringPretty(writer, .include_linecol);
 }
 
 /// The kind of the type declaration represented, either:

@@ -13,12 +13,12 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-Float(1:1-1:9),
-EndOfFile(2:1-2:1),
+Float,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-frac @1.1-1.9 (raw "1.0e-100"))
+(e-frac (raw "1.0e-100"))
 ~~~
 # FORMATTED
 ~~~roc
@@ -26,9 +26,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-frac-f64 @1.1-1.9 (value "1e-100"))
+(e-frac-f64 (value "1e-100"))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.9 (type "Num(Frac(_size))"))
+(expr (type "Num(Frac(_size))"))
 ~~~

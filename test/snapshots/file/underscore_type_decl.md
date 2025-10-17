@@ -339,36 +339,36 @@ import Module exposing [Pair]
 
 # TOKENS
 ~~~zig
-KwImport(1:1-1:7),UpperIdent(1:8-1:14),KwExposing(1:15-1:23),OpenSquare(1:24-1:25),UpperIdent(1:25-1:29),CloseSquare(1:29-1:30),
-UpperIdent(3:1-3:6),NoSpaceOpenRound(3:6-3:7),LowerIdent(3:7-3:8),Comma(3:8-3:9),Underscore(3:10-3:11),CloseRound(3:11-3:12),OpAssign(3:13-3:14),UpperIdent(3:15-3:19),NoSpaceOpenRound(3:19-3:20),Int(3:20-3:21),Comma(3:21-3:22),Int(3:23-3:24),CloseRound(3:24-3:25),
-UpperIdent(4:1-4:6),NoSpaceOpenRound(4:6-4:7),Underscore(4:7-4:8),Comma(4:8-4:9),LowerIdent(4:10-4:11),CloseRound(4:11-4:12),OpAssign(4:13-4:14),UpperIdent(4:15-4:19),NoSpaceOpenRound(4:19-4:20),Int(4:20-4:21),Comma(4:21-4:22),Int(4:23-4:24),CloseRound(4:24-4:25),
-UpperIdent(5:1-5:6),NoSpaceOpenRound(5:6-5:7),Underscore(5:7-5:8),Comma(5:8-5:9),Underscore(5:10-5:11),CloseRound(5:11-5:12),OpAssign(5:13-5:14),UpperIdent(5:15-5:19),NoSpaceOpenRound(5:19-5:20),Int(5:20-5:21),Comma(5:21-5:22),Int(5:23-5:24),CloseRound(5:24-5:25),
-EndOfFile(6:1-6:1),
+KwImport,UpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,
+UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,Underscore,CloseRound,OpAssign,UpperIdent,NoSpaceOpenRound,Int,Comma,Int,CloseRound,
+UpperIdent,NoSpaceOpenRound,Underscore,Comma,LowerIdent,CloseRound,OpAssign,UpperIdent,NoSpaceOpenRound,Int,Comma,Int,CloseRound,
+UpperIdent,NoSpaceOpenRound,Underscore,Comma,Underscore,CloseRound,OpAssign,UpperIdent,NoSpaceOpenRound,Int,Comma,Int,CloseRound,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-5.25
-	(type-module @1.1-1.7)
+(file
+	(type-module)
 	(statements
-		(s-import @1.1-1.30 (raw "Module")
+		(s-import (raw "Module")
 			(exposing
-				(exposed-upper-ident @1.25-1.29 (text "Pair"))))
-		(s-malformed @3.13-3.14 (tag "expected_colon_after_type_annotation"))
-		(s-malformed @4.1-4.6 (tag "expected_colon_after_type_annotation"))
-		(s-malformed @4.6-4.7 (tag "statement_unexpected_token"))
-		(s-malformed @4.7-4.8 (tag "statement_unexpected_token"))
-		(s-malformed @4.8-4.9 (tag "statement_unexpected_token"))
-		(s-malformed @4.10-4.11 (tag "statement_unexpected_token"))
-		(s-malformed @4.11-4.12 (tag "statement_unexpected_token"))
-		(s-malformed @4.13-4.14 (tag "statement_unexpected_token"))
-		(s-malformed @5.1-5.6 (tag "expected_colon_after_type_annotation"))
-		(s-malformed @5.6-5.7 (tag "statement_unexpected_token"))
-		(s-malformed @5.7-5.8 (tag "statement_unexpected_token"))
-		(s-malformed @5.8-5.9 (tag "statement_unexpected_token"))
-		(s-malformed @5.10-5.11 (tag "statement_unexpected_token"))
-		(s-malformed @5.11-5.12 (tag "statement_unexpected_token"))
-		(s-malformed @5.13-5.14 (tag "statement_unexpected_token"))
-		(s-malformed @1.1-1.1 (tag "expected_colon_after_type_annotation"))))
+				(exposed-upper-ident (text "Pair"))))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -380,7 +380,7 @@ import Module exposing [Pair]
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import @1.1-1.30 (module "Module")
+	(s-import (module "Module")
 		(exposes
 			(exposed (name "Pair") (wildcard false)))))
 ~~~

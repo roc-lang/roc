@@ -25,19 +25,19 @@ if bool { # Comment after then open
 
 # TOKENS
 ~~~zig
-KwIf(1:1-1:3),LowerIdent(1:4-1:8),OpenCurly(1:9-1:10),
-UpperIdent(2:2-2:3),
-CloseCurly(3:1-3:2),KwElse(3:3-3:7),UpperIdent(3:8-3:9),
-EndOfFile(4:1-4:1),
+KwIf,LowerIdent,OpenCurly,
+UpperIdent,
+CloseCurly,KwElse,UpperIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-if-then-else @1.1-3.9
-	(e-ident @1.4-1.8 (raw "bool"))
-	(e-block @1.9-3.2
+(e-if-then-else
+	(e-ident (raw "bool"))
+	(e-block
 		(statements
-			(e-tag @2.2-2.3 (raw "A"))))
-	(e-tag @3.8-3.9 (raw "B")))
+			(e-tag (raw "A"))))
+	(e-tag (raw "B")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -45,16 +45,16 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-if @1.1-3.9
+(e-if
 	(if-branches
 		(if-branch
 			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-block @1.9-3.2
-				(e-tag @2.2-2.3 (name "A")))))
+			(e-block
+				(e-tag (name "A")))))
 	(if-else
-		(e-tag @3.8-3.9 (name "B"))))
+		(e-tag (name "B"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-3.9 (type "[A, B]_others"))
+(expr (type "[A, B]_others"))
 ~~~

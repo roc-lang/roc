@@ -15,34 +15,34 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwMatch(1:1-1:6),OpenSquare(1:7-1:8),CloseSquare(1:8-1:9),OpenCurly(1:10-1:11),
-LowerIdent(2:5-2:10),OpFatArrow(2:11-2:13),OpenCurly(2:14-2:15),LowerIdent(2:16-2:20),OpColon(2:20-2:21),OpenSquare(2:22-2:23),Int(2:23-2:24),Comma(2:24-2:25),Int(2:26-2:27),Comma(2:27-2:28),Int(2:29-2:30),CloseSquare(2:30-2:31),Comma(2:31-2:32),LowerIdent(2:33-2:37),OpColon(2:37-2:38),OpenSquare(2:39-2:40),StringStart(2:40-2:41),StringPart(2:41-2:42),StringEnd(2:42-2:43),Comma(2:43-2:44),StringStart(2:45-2:46),StringPart(2:46-2:47),StringEnd(2:47-2:48),Comma(2:48-2:49),StringStart(2:50-2:51),StringPart(2:51-2:52),StringEnd(2:52-2:53),CloseSquare(2:53-2:54),Comma(2:54-2:55),LowerIdent(2:56-2:61),OpColon(2:61-2:62),LowerIdent(2:63-2:68),CloseCurly(2:69-2:70),
-CloseCurly(3:1-3:2),
-EndOfFile(4:1-4:1),
+KwMatch,OpenSquare,CloseSquare,OpenCurly,
+LowerIdent,OpFatArrow,OpenCurly,LowerIdent,OpColon,OpenSquare,Int,Comma,Int,Comma,Int,CloseSquare,Comma,LowerIdent,OpColon,OpenSquare,StringStart,StringPart,StringEnd,Comma,StringStart,StringPart,StringEnd,Comma,StringStart,StringPart,StringEnd,CloseSquare,Comma,LowerIdent,OpColon,LowerIdent,CloseCurly,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
 (e-match
-	(e-list @1.7-1.9)
+	(e-list)
 	(branches
-		(branch @2.5-2.70
-			(p-ident @2.5-2.10 (raw "empty"))
-			(e-record @2.14-2.70
+		(branch
+			(p-ident (raw "empty"))
+			(e-record
 				(field (field "ints")
-					(e-list @2.22-2.31
-						(e-int @2.23-2.24 (raw "1"))
-						(e-int @2.26-2.27 (raw "2"))
-						(e-int @2.29-2.30 (raw "3"))))
+					(e-list
+						(e-int (raw "1"))
+						(e-int (raw "2"))
+						(e-int (raw "3"))))
 				(field (field "strs")
-					(e-list @2.39-2.54
-						(e-string @2.40-2.43
-							(e-string-part @2.41-2.42 (raw "a")))
-						(e-string @2.45-2.48
-							(e-string-part @2.46-2.47 (raw "b")))
-						(e-string @2.50-2.53
-							(e-string-part @2.51-2.52 (raw "c")))))
+					(e-list
+						(e-string
+							(e-string-part (raw "a")))
+						(e-string
+							(e-string-part (raw "b")))
+						(e-string
+							(e-string-part (raw "c")))))
 				(field (field "empty")
-					(e-ident @2.63-2.68 (raw "empty")))))))
+					(e-ident (raw "empty")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -52,38 +52,38 @@ match [] {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-match @1.1-3.2
-	(match @1.1-3.2
+(e-match
+	(match
 		(cond
-			(e-empty_list @1.7-1.9))
+			(e-empty_list))
 		(branches
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-assign @2.5-2.10 (ident "empty"))))
+						(p-assign (ident "empty"))))
 				(value
-					(e-record @2.14-2.70
+					(e-record
 						(fields
 							(field (name "ints")
-								(e-list @2.22-2.31
+								(e-list
 									(elems
-										(e-num @2.23-2.24 (value "1"))
-										(e-num @2.26-2.27 (value "2"))
-										(e-num @2.29-2.30 (value "3")))))
+										(e-num (value "1"))
+										(e-num (value "2"))
+										(e-num (value "3")))))
 							(field (name "strs")
-								(e-list @2.39-2.54
+								(e-list
 									(elems
-										(e-string @2.40-2.43
-											(e-literal @2.41-2.42 (string "a")))
-										(e-string @2.45-2.48
-											(e-literal @2.46-2.47 (string "b")))
-										(e-string @2.50-2.53
-											(e-literal @2.51-2.52 (string "c"))))))
+										(e-string
+											(e-literal (string "a")))
+										(e-string
+											(e-literal (string "b")))
+										(e-string
+											(e-literal (string "c"))))))
 							(field (name "empty")
-								(e-lookup-local @2.63-2.68
-									(p-assign @2.5-2.10 (ident "empty")))))))))))
+								(e-lookup-local
+									(p-assign (ident "empty")))))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-3.2 (type "{ empty: List(_elem), ints: List(Num(_size)), strs: List(Str) }"))
+(expr (type "{ empty: List(_elem), ints: List(Num(_size)), strs: List(Str) }"))
 ~~~
