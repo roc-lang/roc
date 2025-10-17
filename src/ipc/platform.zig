@@ -198,7 +198,7 @@ pub fn createMapping(size: usize) SharedMemoryError!Handle {
                 return error.OutOfMemory;
             };
             defer std.heap.page_allocator.free(shm_name);
-            const shm_name_null_terminated = shm_name[0 .. shm_name.len - 1 :0];
+            const shm_name_null_terminated = shm_name[0.. :0];
             const fd = posix.shm_open(
                 shm_name_null_terminated,
                 @as(u32, @bitCast(std.posix.O{ .ACCMODE = .RDWR, .CREAT = true, .EXCL = true })),
