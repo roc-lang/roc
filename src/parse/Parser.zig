@@ -140,7 +140,7 @@ fn unnest(self: *Parser) void {
 /// add a diagnostic error
 pub fn pushDiagnostic(self: *Parser, tag: AST.Diagnostic.Tag, region: AST.TokenizedRegion) Error!void {
     if (self.diagnostics.items.len < MAX_PARSE_DIAGNOSTICS) {
-        try self.diagnostics.append(self.gpa,.{ .tag = tag, .region = region });
+        try self.diagnostics.append(self.gpa, .{ .tag = tag, .region = region });
     }
 }
 /// add a malformed token
@@ -165,7 +165,7 @@ pub fn pushMalformed(self: *Parser, comptime T: type, tag: AST.Diagnostic.Tag, s
         // AST node should span the entire malformed expression
         const ast_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
 
-        try self.diagnostics.append(self.gpa,.{
+        try self.diagnostics.append(self.gpa, .{
             .tag = tag,
             .region = diagnostic_region,
         });

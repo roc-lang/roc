@@ -1335,12 +1335,12 @@ fn processSnapshotContent(
         try restored_tree.toStringPretty(restored_sexpr.writer().any(), .skip_linecol);
 
         // Compare S-expressions - crash if they don't match
-        if (!std.mem.eql(u8, original_sexpr_unmanaged.items, restored_sexpr_unmanaged.items)) {
+        if (!std.mem.eql(u8, original_sexpr.items, restored_sexpr.items)) {
             std.log.err("Cache round-trip validation failed for snapshot: {s}", .{output_path});
             std.log.err("Original and restored CIR S-expressions don't match!", .{});
             std.log.err("This indicates a bug in MmapCache serialization/deserialization.", .{});
-            std.log.err("Original S-expression:\n{s}", .{original_sexpr_unmanaged.items});
-            std.log.err("Restored S-expression:\n{s}", .{restored_sexpr_unmanaged.items});
+            std.log.err("Original S-expression:\n{s}", .{original_sexpr.items});
+            std.log.err("Restored S-expression:\n{s}", .{restored_sexpr.items});
             return error.CacheRoundTripValidationFailed;
         }
     }
