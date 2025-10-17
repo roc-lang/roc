@@ -1309,93 +1309,93 @@ test "download URL validation" {
     }
 }
 
-// // In-memory file system for testing
-// const MemoryFileSystem = struct {
-//     allocator: std.mem.Allocator,
-//     files: std.StringHashMap(std.array_list.Managed(u8)),
-//     directories: std.StringHashMap(void),
+// In-memory file system for testing
+const MemoryFileSystem = struct {
+    allocator: std.mem.Allocator,
+    files: std.StringHashMap(std.array_list.Managed(u8)),
+    directories: std.StringHashMap(void),
 
-//     pub fn init(allocator: std.mem.Allocator) MemoryFileSystem {
-//         return .{
-//             .allocator = allocator,
-//             .files = std.StringHashMap(std.array_list.Managed(u8)).init(allocator),
-//             .directories = std.StringHashMap(void).init(allocator),
-//         };
-//     }
+    pub fn init(allocator: std.mem.Allocator) MemoryFileSystem {
+        return .{
+            .allocator = allocator,
+            .files = std.StringHashMap(std.array_list.Managed(u8)).init(allocator),
+            .directories = std.StringHashMap(void).init(allocator),
+        };
+    }
 
-//     pub fn deinit(self: *MemoryFileSystem) void {
-//         var file_iter = self.files.iterator();
-//         while (file_iter.next()) |entry| {
-//             self.allocator.free(entry.key_ptr.*);
-//             entry.value_ptr.deinit();
-//         }
-//         self.files.deinit();
+    pub fn deinit(self: *MemoryFileSystem) void {
+        var file_iter = self.files.iterator();
+        while (file_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit();
+        }
+        self.files.deinit();
 
-//         var dir_iter = self.directories.iterator();
-//         while (dir_iter.next()) |entry| {
-//             self.allocator.free(entry.key_ptr.*);
-//         }
-//         self.directories.deinit();
-//     }
+        var dir_iter = self.directories.iterator();
+        while (dir_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.directories.deinit();
+    }
 
-//     pub fn extractWriter(self: *MemoryFileSystem) bundle.ExtractWriter {
-//         return .{
-//             .ptr = self,
-//             .makeDirFn = makeDir,
-//             .streamFileFn = streamFile,
-//         };
-//     }
+    pub fn extractWriter(self: *MemoryFileSystem) bundle.ExtractWriter {
+        return .{
+            .ptr = self,
+            .makeDirFn = makeDir,
+            .streamFileFn = streamFile,
+        };
+    }
 
-//     fn makeDir(ptr: *anyopaque, path: []const u8) anyerror!void {
-//         const self = @as(*MemoryFileSystem, @ptrCast(@alignCast(ptr)));
-//         if (!self.directories.contains(path)) {
-//             try self.directories.put(try self.allocator.dupe(u8, path), {});
-//         }
-//     }
+    fn makeDir(ptr: *anyopaque, path: []const u8) anyerror!void {
+        const self = @as(*MemoryFileSystem, @ptrCast(@alignCast(ptr)));
+        if (!self.directories.contains(path)) {
+            try self.directories.put(try self.allocator.dupe(u8, path), {});
+        }
+    }
 
-//     fn streamFile(ptr: *anyopaque, path: []const u8, reader: *std.Io.Reader, size: usize) anyerror!void {
-//         const self = @as(*MemoryFileSystem, @ptrCast(@alignCast(ptr)));
+    fn streamFile(ptr: *anyopaque, path: []const u8, reader: *std.Io.Reader, size: usize) anyerror!void {
+        const self = @as(*MemoryFileSystem, @ptrCast(@alignCast(ptr)));
 
-//         // Create parent directories if needed
-//         if (std.fs.path.dirname(path)) |dir_name| {
-//             if (!self.directories.contains(dir_name)) {
-//                 try self.directories.put(try self.allocator.dupe(u8, dir_name), {});
-//             }
-//         }
+        // Create parent directories if needed
+        if (std.fs.path.dirname(path)) |dir_name| {
+            if (!self.directories.contains(dir_name)) {
+                try self.directories.put(try self.allocator.dupe(u8, dir_name), {});
+            }
+        }
 
-//         // Create new file data
-//         var file_data = std.array_list.Managed(u8).init(self.allocator);
+        // Create new file data
+        var file_data = std.array_list.Managed(u8).init(self.allocator);
 
-//         // Stream from reader
-//         var buffer: [bundle.STREAM_BUFFER_SIZE]u8 = undefined;
-//         var total_read: usize = 0;
+        // Stream from reader
+        var buffer: [bundle.STREAM_BUFFER_SIZE]u8 = undefined;
+        var total_read: usize = 0;
 
-//         while (total_read < size) {
-//             const to_read = @min(buffer.len, size - total_read);
-//             const bytes_read = try reader.read(buffer[0..to_read]);
+        while (total_read < size) {
+            const to_read = @min(buffer.len, size - total_read);
+            const bytes_read = try reader.read(buffer[0..to_read]);
 
-//             if (bytes_read == 0) {
-//                 break;
-//             }
+            if (bytes_read == 0) {
+                break;
+            }
 
-//             try file_data.appendSlice(buffer[0..bytes_read]);
-//             total_read += bytes_read;
-//         }
+            try file_data.appendSlice(buffer[0..bytes_read]);
+            total_read += bytes_read;
+        }
 
-//         if (total_read != size) {
-//             file_data.deinit();
-//             return error.UnexpectedEndOfStream;
-//         }
+        if (total_read != size) {
+            file_data.deinit();
+            return error.UnexpectedEndOfStream;
+        }
 
-//         // Store the file
-//         try self.files.put(try self.allocator.dupe(u8, path), file_data);
-//     }
+        // Store the file
+        try self.files.put(try self.allocator.dupe(u8, path), file_data);
+    }
 
-//     pub fn getFileContent(self: *MemoryFileSystem, path: []const u8) ?[]const u8 {
-//         const file = self.files.get(path) orelse return null;
-//         return file.items;
-//     }
-// };
+    pub fn getFileContent(self: *MemoryFileSystem, path: []const u8) ?[]const u8 {
+        const file = self.files.get(path) orelse return null;
+        return file.items;
+    }
+};
 
 test "download from local server" {
     const testing = std.testing;

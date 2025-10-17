@@ -25,12 +25,12 @@
         },
         .roc_deps_arm_linux_musleabihf = .{
             .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.15.1/arm-linux-musleabihf.tar.xz?response-content-disposition=attachment",
-            .hash = "122037ecc8654feb3d34da5424ca6a73f140dbd30475ed4f23a6f29844e799d51a3",
+            .hash = "N-V-__8AAE9SyhMGHGnkgRenWYw-birLp2Nl-IYGqIbdlga3",
             .lazy = true,
         },
         .roc_deps_x86_linux_musl = .{
             .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.15.1/x86-linux-musl.tar.xz?response-content-disposition=attachment",
-            .hash = "12208fbefa56ba6571399c60d96810d00a561af1926cf56e07fc32c748fbbb70ccf",
+            .hash = "N-V-__8AAGXNmxEQQYT5QBEheV2NJzSQjwaBuUx8wj_tGdoy",
             .lazy = true,
         },
         .roc_deps_x86_64_linux_musl = .{
