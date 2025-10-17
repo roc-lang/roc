@@ -19,6 +19,7 @@ const parse = @import("parse");
 const can = @import("can");
 const check = @import("check");
 const reporting = @import("reporting");
+const eval = @import("eval");
 
 const Check = check.Check;
 const Can = can.Can;
@@ -725,6 +726,11 @@ pub const PackageEnv = struct {
         if (@import("builtin").target.cpu.arch != .wasm32) {
             self.total_type_checking_ns += @intCast(check_end - check_start);
         }
+
+        // After type checking, evaluate top-level declarations at compile time
+        var comptime_evaluator = try eval.ComptimeEvaluator.init(self.gpa, &env, &checker.problems);
+        defer comptime_evaluator.deinit();
+        _ = try comptime_evaluator.evalAll();
 
         // Build reports from problems
         const check_diag_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
