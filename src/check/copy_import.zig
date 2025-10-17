@@ -436,10 +436,10 @@ fn copyStaticDispatchConstraints(
         return StaticDispatchConstraint.SafeList.Range.empty();
     } else {
         // Setup tmp state
-        var dest_constraints = try std.ArrayList(StaticDispatchConstraint).initCapacity(dest_store.gpa, source_constraints_len);
+        var dest_constraints = try std.array_list.Managed(StaticDispatchConstraint).initCapacity(dest_store.gpa, source_constraints_len);
         defer dest_constraints.deinit();
 
-        var dest_fn_args = try std.ArrayList(Var).initCapacity(dest_store.gpa, 8);
+        var dest_fn_args = try std.array_list.Managed(Var).initCapacity(dest_store.gpa, 8);
         defer dest_fn_args.deinit();
 
         // Iterate over the constraints

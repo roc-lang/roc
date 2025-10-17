@@ -35,8 +35,8 @@ env: *CommonEnv,
 tokens: TokenizedBuffer,
 store: NodeStore,
 root_node_idx: u32 = 0,
-tokenize_diagnostics: std.array_list.Managed(tokenize.Diagnostic),
-parse_diagnostics: std.array_list.Managed(AST.Diagnostic),
+tokenize_diagnostics: std.ArrayListUnmanaged(tokenize.Diagnostic),
+parse_diagnostics: std.ArrayListUnmanaged(AST.Diagnostic),
 
 /// Calculate whether this region is - or will be - multiline
 pub fn regionIsMultiline(self: *AST, region: TokenizedRegion) bool {
@@ -111,8 +111,8 @@ pub fn appendRegionInfoToSexprTree(self: *const AST, env: *const CommonEnv, tree
 pub fn deinit(self: *AST, gpa: std.mem.Allocator) void {
     defer self.tokens.deinit(gpa);
     defer self.store.deinit();
-    defer self.tokenize_diagnostics.deinit();
-    defer self.parse_diagnostics.deinit();
+    defer self.tokenize_diagnostics.deinit(gpa);
+    defer self.parse_diagnostics.deinit(gpa);
 }
 
 /// Convert a tokenize diagnostic to a Report for rendering

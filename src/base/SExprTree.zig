@@ -361,7 +361,7 @@ pub fn printTree(self: *const SExprTree, writer: anytype, linecol_mode: LineColM
 }
 
 /// Render this SExprTree to a writer with pleasing indentation.
-pub fn toStringPretty(self: *const SExprTree, writer: std.io.AnyWriter, linecol_mode: LineColMode) !void {
+pub fn toStringPretty(self: *const SExprTree, writer: anytype, linecol_mode: LineColMode) !void {
     if (self.stack.items.len == 0) return;
     var plain_writer = PlainTextSExprWriter(@TypeOf(writer)){ .writer = writer };
     try self.toStringImpl(self.stack.items[self.stack.items.len - 1], &plain_writer, 0, linecol_mode);

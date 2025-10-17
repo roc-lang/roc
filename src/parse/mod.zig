@@ -47,12 +47,12 @@ fn runParse(env: *CommonEnv, gpa: std.mem.Allocator, parserCall: *const fn (*Par
 
     errdefer result.tokens.deinit(gpa);
     errdefer parser.store.deinit();
-    errdefer parser.diagnostics.deinit();
+    errdefer parser.diagnostics.deinit(gpa);
 
     const idx = try parserCall(&parser);
 
     const tokenize_diagnostics_slice = try gpa.dupe(tokenize.Diagnostic, result.messages);
-    const tokenize_diagnostics = std.array_list.Managed(tokenize.Diagnostic).fromOwnedSlice(gpa, tokenize_diagnostics_slice);
+    const tokenize_diagnostics = std.ArrayListUnmanaged(tokenize.Diagnostic).fromOwnedSlice(tokenize_diagnostics_slice);
 
     return .{
         .env = env,

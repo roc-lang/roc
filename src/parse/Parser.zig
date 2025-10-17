@@ -29,8 +29,8 @@ gpa: std.mem.Allocator,
 pos: TokenIdx,
 tok_buf: TokenizedBuffer,
 store: NodeStore,
-scratch_nodes: std.array_list.Managed(Node.Idx),
-diagnostics: std.array_list.Managed(AST.Diagnostic),
+scratch_nodes: std.ArrayListUnmanaged(Node.Idx),
+diagnostics: std.ArrayListUnmanaged(AST.Diagnostic),
 cached_malformed_node: ?Node.Idx,
 nesting_counter: u8,
 
@@ -44,8 +44,8 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
         .pos = 0,
         .tok_buf = tokens,
         .store = store,
-        .scratch_nodes = std.array_list.Managed(Node.Idx).init(gpa),
-        .diagnostics = std.array_list.Managed(AST.Diagnostic).init(gpa),
+        .scratch_nodes = .{},
+        .diagnostics = .{},
         .cached_malformed_node = null,
         .nesting_counter = MAX_NESTING_LEVELS,
     };
@@ -53,7 +53,7 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
 
 /// Deinit the parser.  The buffer of tokens and the store are still owned by the caller.
 pub fn deinit(parser: *Parser) void {
-    parser.scratch_nodes.deinit();
+    parser.scratch_nodes.deinit(parser.gpa);
 
     // diagnostics will be kept and passed to the following compiler stage
     // to be deinitialized by the caller when no longer required
@@ -140,7 +140,7 @@ fn unnest(self: *Parser) void {
 /// add a diagnostic error
 pub fn pushDiagnostic(self: *Parser, tag: AST.Diagnostic.Tag, region: AST.TokenizedRegion) Error!void {
     if (self.diagnostics.items.len < MAX_PARSE_DIAGNOSTICS) {
-        try self.diagnostics.append(.{ .tag = tag, .region = region });
+        try self.diagnostics.append(self.gpa,.{ .tag = tag, .region = region });
     }
 }
 /// add a malformed token
@@ -165,7 +165,7 @@ pub fn pushMalformed(self: *Parser, comptime T: type, tag: AST.Diagnostic.Tag, s
         // AST node should span the entire malformed expression
         const ast_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
 
-        try self.diagnostics.append(.{
+        try self.diagnostics.append(self.gpa,.{
             .tag = tag,
             .region = diagnostic_region,
         });

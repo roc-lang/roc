@@ -371,7 +371,7 @@ pub const Instantiator = struct {
         if (constraints_len == 0) {
             return StaticDispatchConstraint.SafeList.Range.empty();
         } else {
-            var fresh_constraints = try std.ArrayList(StaticDispatchConstraint).initCapacity(self.store.gpa, constraints.len());
+            var fresh_constraints = try std.array_list.Managed(StaticDispatchConstraint).initCapacity(self.store.gpa, constraints.len());
             defer fresh_constraints.deinit();
 
             for (self.store.sliceStaticDispatchConstraints(constraints)) |constraint| {
@@ -385,7 +385,7 @@ pub const Instantiator = struct {
     }
 
     fn instantiateStaticDispatchConstraint(self: *Self, constraint: StaticDispatchConstraint) std.mem.Allocator.Error!StaticDispatchConstraint {
-        var fresh_vars = std.ArrayList(Var).init(self.store.gpa);
+        var fresh_vars = std.array_list.Managed(Var).init(self.store.gpa);
         defer fresh_vars.deinit();
 
         // Copy the args
