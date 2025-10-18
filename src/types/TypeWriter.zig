@@ -793,11 +793,13 @@ fn countVarOccurrences(self: *const TypeWriter, search_var: Var, root_var: Var) 
     }
 
     var count: usize = 0;
-    self.countVar(search_var, root_var, &count);
+    var visited = std.AutoHashMap(Var, void).init(self.types.gpa);
+    defer visited.deinit();
+    self.countVar(search_var, root_var, &count, &visited);
     return count;
 }
 
-fn countVar(self: *const TypeWriter, search_var: Var, current_var: Var, count: *usize) void {
+fn countVar(self: *const TypeWriter, search_var: Var, current_var: Var, count: *usize, visited: *std.AutoHashMap(Var, void)) void {
     if (@intFromEnum(current_var) >= self.types.slots.backing.len()) {
         return;
     }
@@ -809,8 +811,16 @@ fn countVar(self: *const TypeWriter, search_var: Var, current_var: Var, count: *
         return;
     }
 
+    // Count if this is the search var
     if (resolved.var_ == search_var) {
         count.* += 1;
+    }
+
+    // Check if we've already visited this resolved var to prevent infinite recursion
+    // Do this AFTER counting so we count multiple occurrences
+    const gop = visited.getOrPut(resolved.var_) catch return;
+    if (gop.found_existing) {
+        return; // Already visited this var's structure, stop to prevent infinite recursion
     }
 
     switch (resolved.desc.content) {
@@ -820,55 +830,55 @@ fn countVar(self: *const TypeWriter, search_var: Var, current_var: Var, count: *
             // For aliases, we only count occurrences in the type arguments
             var args_iter = self.types.iterAliasArgs(alias);
             while (args_iter.next()) |arg_var| {
-                self.countVar(search_var, arg_var, count);
+                self.countVar(search_var, arg_var, count, visited);
             }
         },
         .structure => |flat_type| {
-            self.countVarInFlatType(search_var, flat_type, count);
+            self.countVarInFlatType(search_var, flat_type, count, visited);
         },
     }
 }
 
-fn countVarInFlatType(self: *const TypeWriter, search_var: Var, flat_type: FlatType, count: *usize) void {
+fn countVarInFlatType(self: *const TypeWriter, search_var: Var, flat_type: FlatType, count: *usize, visited: *std.AutoHashMap(Var, void)) void {
     switch (flat_type) {
         .str, .empty_record, .empty_tag_union => {},
         .box => |sub_var| {
-            self.countVar(search_var, sub_var, count);
+            self.countVar(search_var, sub_var, count, visited);
         },
         .list => |sub_var| {
-            self.countVar(search_var, sub_var, count);
+            self.countVar(search_var, sub_var, count, visited);
         },
         .list_unbound, .num => {},
         .tuple => |tuple| {
-            // Skip tuple traversal during counting to avoid issues with potentially corrupt data
-            // The occurrence count is just used for naming, so not counting into tuples is safe
-            _ = tuple;
-            return;
+            const elems = self.types.sliceVars(tuple.elems);
+            for (elems) |elem| {
+                self.countVar(search_var, elem, count, visited);
+            }
         },
         .nominal_type => |nominal_type| {
             var args_iter = self.types.iterNominalArgs(nominal_type);
             while (args_iter.next()) |arg_var| {
-                self.countVar(search_var, arg_var, count);
+                self.countVar(search_var, arg_var, count, visited);
             }
         },
         .fn_pure, .fn_effectful, .fn_unbound => |func| {
             const args = self.types.sliceVars(func.args);
             for (args) |arg| {
-                self.countVar(search_var, arg, count);
+                self.countVar(search_var, arg, count, visited);
             }
-            self.countVar(search_var, func.ret, count);
+            self.countVar(search_var, func.ret, count, visited);
         },
         .record => |record| {
             const fields = self.types.getRecordFieldsSlice(record.fields);
             for (fields.items(.var_)) |field_var| {
-                self.countVar(search_var, field_var, count);
+                self.countVar(search_var, field_var, count, visited);
             }
-            self.countVar(search_var, record.ext, count);
+            self.countVar(search_var, record.ext, count, visited);
         },
         .record_unbound => |fields| {
             const fields_slice = self.types.getRecordFieldsSlice(fields);
             for (fields_slice.items(.var_)) |field_var| {
-                self.countVar(search_var, field_var, count);
+                self.countVar(search_var, field_var, count, visited);
             }
         },
         .tag_union => |tag_union| {
@@ -885,10 +895,10 @@ fn countVarInFlatType(self: *const TypeWriter, search_var: Var, flat_type: FlatT
                 const tag = self.types.tags.get(tag_idx);
                 const args = self.types.sliceVars(tag.args);
                 for (args) |arg_var| {
-                    self.countVar(search_var, arg_var, count);
+                    self.countVar(search_var, arg_var, count, visited);
                 }
             }
-            self.countVar(search_var, tag_union.ext, count);
+            self.countVar(search_var, tag_union.ext, count, visited);
         },
     }
 }
