@@ -300,21 +300,19 @@ main! = |_| processComplex(Ok([Some(42), None]))
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-nominal
-										(p-applied-tag))))
+									(p-applied-tag)))
 							(value
 								(e-empty_list)))
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-nominal
-										(p-applied-tag))))
+									(p-applied-tag)))
 							(value
 								(e-empty_list)))))))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-apply (name "Result") (local)
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-apply (name "List") (builtin)
 							(ty-malformed))
 						(ty-malformed))
@@ -343,21 +341,20 @@ main! = |_| processComplex(Ok([Some(42), None]))
 				(e-call
 					(e-lookup-local
 						(p-assign (ident "processComplex")))
-					(e-nominal (nominal "Result")
-						(e-tag (name "Ok")
-							(args
-								(e-list
-									(elems
-										(e-tag (name "Some")
-											(args
-												(e-num (value "42"))))
-										(e-tag (name "None")))))))))))
+					(e-tag (name "Ok")
+						(args
+							(e-list
+								(elems
+									(e-tag (name "Some")
+										(args
+											(e-num (value "42"))))
+									(e-tag (name "None"))))))))))
 	(s-alias-decl
 		(ty-header (name "ComplexType")
 			(ty-args
 				(ty-rigid-var (name "a"))
 				(ty-rigid-var (name "b"))))
-		(ty-apply (name "Result") (local)
+		(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 			(ty-apply (name "List") (builtin)
 				(ty-malformed))
 			(ty-malformed))))

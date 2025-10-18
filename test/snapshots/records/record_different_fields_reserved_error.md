@@ -365,7 +365,7 @@ I don't recognize this syntax.
 This might be a syntax error, an unsupported language feature, or a typo.
 
 **UNDEFINED VARIABLE**
-Nothing is named `true` in this scope.
+Nothing is named `Bool.true` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **record_different_fields_reserved_error.md:6:10:6:19:**
@@ -409,7 +409,7 @@ I don't recognize this syntax.
 This might be a syntax error, an unsupported language feature, or a typo.
 
 **UNDEFINED VARIABLE**
-Nothing is named `false` in this scope.
+Nothing is named `Bool.false` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **record_different_fields_reserved_error.md:7:9:7:19:**

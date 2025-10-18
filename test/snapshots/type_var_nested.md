@@ -236,39 +236,35 @@ main = |_| "done"
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-nominal
-												(p-applied-tag))))
+											(p-applied-tag)))
 									(value
-										(e-nominal (nominal "Result")
-											(e-tag (name "Ok")
-												(args
-													(e-call
-														(e-lookup-local
-															(p-assign (ident "transform")))
-														(e-lookup-local
-															(p-assign (ident "value")))))))))
+										(e-tag (name "Ok")
+											(args
+												(e-call
+													(e-lookup-local
+														(p-assign (ident "transform")))
+													(e-lookup-local
+														(p-assign (ident "value"))))))))
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-nominal
-												(p-applied-tag))))
+											(p-applied-tag)))
 									(value
-										(e-nominal (nominal "Result")
-											(e-tag (name "Err")
-												(args
-													(e-lookup-local
-														(p-assign (ident "error"))))))))))))))
+										(e-tag (name "Err")
+											(args
+												(e-lookup-local
+													(p-assign (ident "error")))))))))))))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-apply (name "Result") (local)
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-rigid-var (name "a"))
 						(ty-rigid-var (name "e")))
 					(ty-parens
 						(ty-fn (effectful false)
 							(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 							(ty-rigid-var (name "b"))))
-					(ty-apply (name "Result") (local)
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-rigid-var-lookup (ty-rigid-var (name "b")))
 						(ty-rigid-var-lookup (ty-rigid-var (name "e"))))))))
 	(d-let
@@ -324,20 +320,18 @@ main = |_| "done"
 		(e-lambda
 			(args
 				(p-assign (ident "value")))
-			(e-nominal (nominal "Result")
-				(e-tag (name "Ok")
-					(args
-						(e-nominal (nominal "Result")
-							(e-tag (name "Ok")
-								(args
-									(e-lookup-local
-										(p-assign (ident "value"))))))))))
+			(e-tag (name "Ok")
+				(args
+					(e-tag (name "Ok")
+						(args
+							(e-lookup-local
+								(p-assign (ident "value"))))))))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
 					(ty-rigid-var (name "a"))
-					(ty-apply (name "Result") (local)
-						(ty-apply (name "Result") (local)
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
+						(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 							(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 							(ty-lookup (name "Str") (builtin)))
 						(ty-lookup (name "Str") (builtin)))))))

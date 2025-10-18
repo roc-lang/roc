@@ -1634,8 +1634,7 @@ expect {
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-nominal
-										(p-applied-tag))))
+									(p-applied-tag)))
 							(value
 								(e-num (value "12")))))))))
 	(d-let
@@ -1700,10 +1699,9 @@ expect {
 								(field (name "baz")
 									(e-runtime-error (tag "ident_not_in_scope")))
 								(field (name "qux")
-									(e-nominal (nominal "Result")
-										(e-tag (name "Ok")
-											(args
-												(e-runtime-error (tag "ident_not_in_scope"))))))
+									(e-tag (name "Ok")
+										(args
+											(e-runtime-error (tag "ident_not_in_scope")))))
 								(field (name "ned")
 									(e-runtime-error (tag "ident_not_in_scope"))))))
 					(s-let
@@ -1830,13 +1828,13 @@ expect {
 			(ty-args
 				(ty-rigid-var (name "a"))))
 		(ty-tag-union))
-	(s-import (module "pf.Stdout") (qualifier "pf")
+	(s-import (module "pf.Stdout")
 		(exposes
 			(exposed (name "line!") (wildcard false))))
 	(s-import (module "Stdot")
 		(exposes
 			(exposed (name "Cust") (wildcard false))))
-	(s-import (module "Bae") (alias "Gooe")
+	(s-import (module "Bae")
 		(exposes))
 	(s-import (module "Ba")
 		(exposes))

@@ -20,6 +20,7 @@ const ipc = @import("ipc");
 const fmt = @import("fmt");
 const eval = @import("eval");
 const builtins = @import("builtins");
+const compiled_builtins = @import("compiled_builtins");
 
 const cli_args = @import("cli_args.zig");
 const bench = @import("bench.zig");
@@ -1324,10 +1325,12 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         .module_name = try env.insertIdent(base.Ident.for_text("test")),
         .list = try env.insertIdent(base.Ident.for_text("List")),
         .box = try env.insertIdent(base.Ident.for_text("Box")),
+        .bool_stmt = @enumFromInt(0), // TODO: load from builtin modules
+        .result_stmt = @enumFromInt(0), // TODO: load from builtin modules
     };
 
     // Create canonicalizer
-    var canonicalizer = try Can.init(&env, &parse_ast, null, .{});
+    var canonicalizer = try Can.init(&env, &parse_ast, null);
 
     // Canonicalize the entire module
     try canonicalizer.canonicalizeFile();
@@ -2340,6 +2343,8 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
         .module_name = try env.insertIdent(base.Ident.for_text(module_name)),
         .list = try env.insertIdent(base.Ident.for_text("List")),
         .box = try env.insertIdent(base.Ident.for_text("Box")),
+        .bool_stmt = @enumFromInt(0), // TODO: load from builtin modules
+        .result_stmt = @enumFromInt(0), // TODO: load from builtin modules
     };
 
     // Parse the source code as a full module
@@ -2356,7 +2361,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     try env.initCIRFields(allocs.gpa, module_name);
 
     // Create canonicalizer
-    var canonicalizer = Can.init(&env, &parse_ast, null, .{}) catch |err| {
+    var canonicalizer = Can.init(&env, &parse_ast, null) catch |err| {
         try stderr.print("Failed to initialize canonicalizer: {}", .{err});
         std.process.exit(1);
     };
@@ -2387,7 +2392,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     };
 
     // Create test runner infrastructure for test evaluation
-    var test_runner = TestRunner.init(allocs.gpa, &env) catch |err| {
+    var test_runner = TestRunner.init(allocs.gpa, &env, module_common_idents.bool_stmt) catch |err| {
         try stderr.print("Failed to create test runner: {}\n", .{err});
         std.process.exit(1);
     };

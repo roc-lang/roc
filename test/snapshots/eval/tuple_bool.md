@@ -44,34 +44,30 @@ NO CHANGE
 ~~~clojure
 (e-tuple
 	(elems
-		(e-nominal (nominal "Bool")
+		(e-tag (name "True"))
+		(e-tag (name "False"))
+		(e-nominal-external
+			(module-idx "2")
+			(target-node-idx "1")
 			(e-tag (name "True")))
-		(e-nominal (nominal "Bool")
-			(e-tag (name "False")))
-		(e-nominal (nominal "Bool")
-			(e-tag (name "True")))
-		(e-nominal (nominal "Bool")
+		(e-nominal-external
+			(module-idx "2")
+			(target-node-idx "1")
 			(e-tag (name "False")))
 		(e-unary-not
-			(e-nominal (nominal "Bool")
-				(e-tag (name "True"))))
+			(e-tag (name "True")))
 		(e-unary-not
-			(e-nominal (nominal "Bool")
-				(e-tag (name "False"))))
+			(e-tag (name "False")))
 		(e-binop (op "and")
-			(e-nominal (nominal "Bool")
-				(e-tag (name "True")))
-			(e-nominal (nominal "Bool")
-				(e-tag (name "False"))))
+			(e-tag (name "True"))
+			(e-tag (name "False")))
 		(e-binop (op "or")
 			(e-unary-not
-				(e-nominal (nominal "Bool")
-					(e-tag (name "True"))))
+				(e-tag (name "True")))
 			(e-unary-not
-				(e-nominal (nominal "Bool")
-					(e-tag (name "True")))))))
+				(e-tag (name "True"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool)"))
+(expr (type "([True]_others, [False]_others2, Bool, Bool, Bool, Bool, Bool, Bool)"))
 ~~~

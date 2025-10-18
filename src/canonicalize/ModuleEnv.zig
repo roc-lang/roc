@@ -1369,6 +1369,7 @@ pub const Serialized = struct {
     gpa: [2]u64, // Reserve space for allocator (vtable ptr + context ptr), provided during deserialization
     common: CommonEnv.Serialized,
     types: TypeStore.Serialized,
+    module_kind: ModuleKind, // Must match field order in Self
     all_defs: CIR.Def.Span,
     all_statements: CIR.Statement.Span,
     exports: CIR.Def.Span,
@@ -1378,7 +1379,6 @@ pub const Serialized = struct {
     module_name: [2]u64, // Reserve space for slice (ptr + len), provided during deserialization
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
-    module_kind: ModuleKind,
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -1391,6 +1391,7 @@ pub const Serialized = struct {
         try self.types.serialize(&env.types, allocator, writer);
 
         // Copy simple values directly
+        self.module_kind = env.module_kind;
         self.all_defs = env.all_defs;
         self.all_statements = env.all_statements;
         self.exports = env.exports;
@@ -1424,6 +1425,10 @@ pub const Serialized = struct {
         // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
         const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
 
+        // Deserialize store separately (returns a pointer that must be freed after copying)
+        const deserialized_store_ptr = self.store.deserialize(offset, gpa);
+        const deserialized_store = deserialized_store_ptr.*;
+
         env.* = Self{
             .gpa = gpa,
             .common = self.common.deserialize(offset, source).*,
@@ -1437,7 +1442,7 @@ pub const Serialized = struct {
             .imports = self.imports.deserialize(offset, gpa).*,
             .module_name = module_name,
             .diagnostics = self.diagnostics,
-            .store = self.store.deserialize(offset, gpa).*,
+            .store = deserialized_store,
         };
 
         return env;
@@ -1937,7 +1942,8 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
 
         // Iterate through all definitions to extract pattern types
         const defs_slice = self.store.sliceDefs(self.all_defs);
-        for (defs_slice) |def_idx| {
+        for (defs_slice, 0..) |def_idx, i| {
+            _ = i;
             const def = self.store.getDef(def_idx);
 
             // Only process assign patterns - skip destructuring patterns

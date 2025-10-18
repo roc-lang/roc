@@ -60,16 +60,14 @@ NO CHANGE
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-nominal
-							(p-applied-tag))))
+						(p-applied-tag)))
 				(value
 					(e-string
 						(e-literal (string "ready to go!")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-nominal
-							(p-applied-tag))))
+						(p-applied-tag)))
 				(value
 					(e-string
 						(e-literal (string "not ready yet"))))))))

@@ -60,11 +60,37 @@ Result(ok, err) : [Ok(ok), Err(err)]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 But _Result_ was already declared here:
-**type_comprehensive_scope.md:1:1:1:1:**
+**type_comprehensive_scope.md:1:1:28:1:**
 ```roc
 # Built-in types should work
+MyU64 : U64
+MyString : Str
+MyBool : Bool
+
+# Simple user-defined type
+Person : { name: Str, age: U64 }
+
+# Type with parameters
+Result(ok, err) : [Ok(ok), Err(err)]
+
+# Forward reference - Tree references Node before Node is defined
+Tree(a) : [Branch(Node(a)), Leaf(a)]
+
+# Node definition comes after Tree
+Node(a) : { value: a, children: List(Tree(a)) }
+
+# Using a previously defined type
+MyResult : Result(Str, U64)
+
+# Type redeclaration (should error)
+Person : U64
+
+# Using an undeclared type (should error)
+BadType : SomeUndeclaredType
+
+# Using built-in types with parameters
+MyList : List(Str)
 ```
-^
 
 
 **UNDECLARED TYPE**
@@ -298,7 +324,7 @@ Complex : {
 		(ty-lookup (name "Str") (builtin)))
 	(s-alias-decl
 		(ty-header (name "MyBool"))
-		(ty-lookup (name "Bool") (local)))
+		(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "1"))))
 	(s-alias-decl
 		(ty-header (name "Person"))
 		(ty-record
@@ -338,7 +364,7 @@ Complex : {
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(s-alias-decl
 		(ty-header (name "MyResult"))
-		(ty-apply (name "Result") (local)
+		(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 			(ty-lookup (name "Str") (builtin))
 			(ty-lookup (name "U64") (builtin))))
 	(s-alias-decl
@@ -360,8 +386,8 @@ Complex : {
 			(field (field "person")
 				(ty-lookup (name "Person") (local)))
 			(field (field "result")
-				(ty-apply (name "Result") (local)
-					(ty-lookup (name "Bool") (local))
+				(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
+					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "1")))
 					(ty-lookup (name "Str") (builtin))))
 			(field (field "tree")
 				(ty-apply (name "Tree") (local)

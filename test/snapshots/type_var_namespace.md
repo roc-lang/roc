@@ -62,7 +62,7 @@ I don't recognize this syntax.
 This might be a syntax error, an unsupported language feature, or a typo.
 
 **UNDEFINED VARIABLE**
-Nothing is named `withDefault` in this scope.
+Nothing is named `Result.withDefault` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **type_var_namespace.md:11:34:11:52:**

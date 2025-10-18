@@ -44,11 +44,30 @@ Result : [Success(Str), Error(Str), Warning(Str, I32)]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 But _Result_ was already declared here:
-**type_tag_union_complex.md:1:1:1:1:**
+**type_tag_union_complex.md:1:1:21:21:**
 ```roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
+
+# Simple tag union with no-argument tags
+Status : [Loading, Complete, Failed]
+
+# Tag union with mixed argument types
+Result : [Success(Str), Error(Str), Warning(Str, I32)]
+
+# Nested tag unions
+Response : [Ok(Result), NetworkError, ParseError]
+
+# Multiple tag unions using similar tag names
+UserState : [Active(Str), Inactive, Suspended(Str)]
+ConnectionState : [Active, Disconnected, Connecting(Str)]
+
+# Function using tag unions
+processResult : Result -> Str
+processResult = |_result| "processed"
+
+# Function with nested tag union
+handleResponse : Response -> Str
 ```
-^
 
 
 # TOKENS
@@ -182,7 +201,7 @@ NO CHANGE
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-lookup (name "Result") (local))
+					(ty-lookup (name "Result") (external (module-idx "3") (target-node-idx "3")))
 					(ty-lookup (name "Str") (builtin))))))
 	(d-let
 		(p-assign (ident "handleResponse"))
@@ -222,7 +241,7 @@ NO CHANGE
 		(ty-header (name "Response"))
 		(ty-tag-union
 			(ty-tag-name (name "Ok")
-				(ty-lookup (name "Result") (local)))
+				(ty-lookup (name "Result") (external (module-idx "3") (target-node-idx "3"))))
 			(ty-tag-name (name "NetworkError"))
 			(ty-tag-name (name "ParseError"))))
 	(s-alias-decl

@@ -12,6 +12,7 @@ const Check = @import("../Check.zig");
 const TestEnv = @import("./TestEnv.zig");
 
 const ModuleEnv = can.ModuleEnv;
+const CIR = can.CIR;
 const testing = std.testing;
 const compiled_builtins = @import("compiled_builtins");
 
@@ -33,6 +34,17 @@ const LoadedModule = struct {
     }
 };
 
+/// Deserialize BuiltinIndices from the binary data generated at build time
+fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !CIR.BuiltinIndices {
+    // Copy to properly aligned memory
+    const aligned_buffer = try gpa.alignedAlloc(u8, @alignOf(CIR.BuiltinIndices), bin_data.len);
+    defer gpa.free(aligned_buffer);
+    @memcpy(aligned_buffer, bin_data);
+
+    const indices_ptr = @as(*const CIR.BuiltinIndices, @ptrCast(aligned_buffer.ptr));
+    return indices_ptr.*;
+}
+
 /// Load a compiled ModuleEnv from embedded binary data
 fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) !LoadedModule {
     // Copy the embedded data to properly aligned memory
@@ -52,6 +64,11 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
 
     // Deserialize
     const base_ptr = @intFromPtr(buffer.ptr);
+
+    // Deserialize store separately (returns a pointer that must be freed after copying)
+    const deserialized_store_ptr = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa);
+    const deserialized_store = deserialized_store_ptr.*;
+
     env.* = ModuleEnv{
         .gpa = gpa,
         .common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), source).*,
@@ -65,7 +82,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .imports = serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
         .module_name = module_name,
         .diagnostics = serialized_ptr.diagnostics,
-        .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+        .store = deserialized_store,
     };
 
     return LoadedModule{
@@ -100,6 +117,15 @@ test "compiled builtins - load Set" {
 test "compiled builtins - use Set and Dict together" {
     const gpa = testing.allocator;
 
+    // Load builtin modules (following TestEnv.zig pattern)
+    const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var bool_module = try loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    var result_module = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
     // Load Dict first
     const dict_source = "Dict := [EmptyDict].{}\n";
     var dict_loaded = try loadCompiledModule(gpa, compiled_builtins.dict_bin, "Dict", dict_source);
@@ -112,8 +138,6 @@ test "compiled builtins - use Set and Dict together" {
 
     // Now create a test that uses both Set and Dict
     const test_source =
-        \\module []
-        \\
         \\import Set
         \\import Dict
         \\
@@ -135,12 +159,6 @@ test "compiled builtins - use Set and Dict together" {
     module_env.common.source = test_source;
     module_env.module_name = "Test";
     try module_env.common.calcLineStarts(gpa);
-
-    const module_common_idents: Check.CommonIdents = .{
-        .module_name = try module_env.insertIdent(base.Ident.for_text("Test")),
-        .list = try module_env.insertIdent(base.Ident.for_text("List")),
-        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
-    };
 
     // Parse
     const parse = @import("parse");
@@ -172,13 +190,39 @@ test "compiled builtins - use Set and Dict together" {
 
     // Canonicalize
     try module_env.initCIRFields(gpa, "test");
+
+    // Inject builtin type declarations (Bool and Result) following TestEnv.zig pattern
+    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
+    const actual_bool_idx = try module_env.store.addStatement(bool_stmt, base.Region.zero());
+    _ = try module_env.types.freshFromContent(.err); // Add type variable for Bool
+
+    const result_stmt = result_module.env.store.getStatement(builtin_indices.result_type);
+    const actual_result_idx = try module_env.store.addStatement(result_stmt, base.Region.zero());
+    _ = try module_env.types.freshFromContent(.err); // Add type variable for Result
+
+    // Update builtin_statements span
+    const start_idx = @intFromEnum(actual_bool_idx);
+    const end_idx = @intFromEnum(actual_result_idx);
+    module_env.builtin_statements = .{ .span = .{
+        .start = start_idx,
+        .len = end_idx - start_idx + 1,
+    } };
+
+    const module_common_idents: Check.CommonIdents = .{
+        .module_name = try module_env.insertIdent(base.Ident.for_text("Test")),
+        .list = try module_env.insertIdent(base.Ident.for_text("List")),
+        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+        .bool_stmt = actual_bool_idx,
+        .result_stmt = actual_result_idx,
+    };
+
     var can_result = try gpa.create(can.Can);
     defer {
         can_result.deinit();
         gpa.destroy(can_result);
     }
 
-    can_result.* = try can.Can.init(module_env, parse_ast, &module_envs, .{});
+    can_result.* = try can.Can.init(module_env, parse_ast, &module_envs);
     try can_result.canonicalizeFile();
     try can_result.validateForChecking();
 

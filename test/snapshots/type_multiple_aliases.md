@@ -179,8 +179,8 @@ NO CHANGE
 		(p-assign (ident "main!"))
 		(e-closure
 			(captures
-				(capture (ident "get_user_name"))
-				(capture (ident "create_user")))
+				(capture (ident "create_user"))
+				(capture (ident "get_user_name")))
 			(e-lambda
 				(args
 					(p-underscore))

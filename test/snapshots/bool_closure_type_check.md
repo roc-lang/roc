@@ -40,8 +40,7 @@ NO CHANGE
 		(e-unary-not
 			(e-lookup-local
 				(p-assign (ident "x")))))
-	(e-nominal (nominal "Bool")
-		(e-tag (name "True"))))
+	(e-tag (name "True")))
 ~~~
 # TYPES
 ~~~clojure

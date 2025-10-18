@@ -175,26 +175,25 @@ EndOfFile,
 								(e-string
 									(e-literal (string "alice@example.com")))))))))
 		(field (name "metadata")
-			(e-nominal (nominal "Result")
-				(e-tag (name "Ok")
-					(args
-						(e-record
-							(fields
-								(field (name "tags")
-									(e-list
-										(elems
-											(e-string
-												(e-literal (string "developer")))
-											(e-string
-												(e-literal (string "senior")))
-											(e-string
-												(e-literal (string "fullstack"))))))
-								(field (name "permissions")
-									(e-list
-										(elems
-											(e-tag (name "Read"))
-											(e-tag (name "Write"))
-											(e-tag (name "Admin")))))))))))
+			(e-tag (name "Ok")
+				(args
+					(e-record
+						(fields
+							(field (name "tags")
+								(e-list
+									(elems
+										(e-string
+											(e-literal (string "developer")))
+										(e-string
+											(e-literal (string "senior")))
+										(e-string
+											(e-literal (string "fullstack"))))))
+							(field (name "permissions")
+								(e-list
+									(elems
+										(e-tag (name "Read"))
+										(e-tag (name "Write"))
+										(e-tag (name "Admin"))))))))))
 		(field (name "callback")
 			(e-lambda
 				(args
@@ -235,5 +234,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ callback: Num(_size) -> Num(_size2), metadata: Result({ permissions: List([Read, Write, Admin]_others), tags: List(Str) }, err), name: Str, nested: { items: List([Some(Str)][None]_others2), result: [Success({ data: List(Num(_size3)), timestamp: Str })]_others3 }, preferences: { notifications: [Email(Str)]_others4, theme: [Dark]_others5 }, scores: List(Num(_size4)), status: [Active({ since: Str })]_others6 }"))
+(expr (type "{ callback: Num(_size) -> Num(_size2), metadata: [Ok({ permissions: List([Read, Write, Admin]_others), tags: List(Str) })]_others2, name: Str, nested: { items: List([Some(Str)][None]_others3), result: [Success({ data: List(Num(_size3)), timestamp: Str })]_others4 }, preferences: { notifications: [Email(Str)]_others5, theme: [Dark]_others6 }, scores: List(Num(_size4)), status: [Active({ since: Str })]_others7 }"))
 ~~~

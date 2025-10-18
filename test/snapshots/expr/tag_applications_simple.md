@@ -19,23 +19,23 @@ type=expr
 ]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - tag_applications_simple.md:3:5:3:5
+INCOMPATIBLE LIST ELEMENTS - tag_applications_simple.md:9:5:9:5
 # PROBLEMS
 **INCOMPATIBLE LIST ELEMENTS**
-The second and third elements in this list have incompatible types:
-**tag_applications_simple.md:3:5:**
+The eighth and ninth elements in this list have incompatible types:
+**tag_applications_simple.md:9:5:**
 ```roc
-    None,
-    Ok("hello"),
+    Right(2),
+    Some(Ok(Just(42))),
 ```
-    ^^^^
-    ^^^^^^^^^^^
+    ^^^^^^^^
+    ^^^^^^^^^^^^^^^^^^
 
-The second element has this type:
-    _[Some(Num(_size)), None]_others_
+The eighth element has this type:
+    _[Err(Str), Just(Num(_size)), Left(Num(_size2)), None, Nothing, Ok(Str), Some(Num(_size3)), Right(Num(_size4))]_others_
 
-However, the third element has this type:
-    _Result(Str, err)_
+However, the ninth element has this type:
+    _[Some([Ok([Just(Num(_size))]_others)]_others2)][Err(Str), Just(Num(_size2)), Left(Num(_size3)), None, Nothing, Ok(Str), Right(Num(_size4))]_others3_
 
 All elements in a list must have compatible types.
 
@@ -121,16 +121,14 @@ EndOfFile,
 			(args
 				(e-num (value "42"))))
 		(e-tag (name "None"))
-		(e-nominal (nominal "Result")
-			(e-tag (name "Ok")
-				(args
-					(e-string
-						(e-literal (string "hello"))))))
-		(e-nominal (nominal "Result")
-			(e-tag (name "Err")
-				(args
-					(e-string
-						(e-literal (string "oops"))))))
+		(e-tag (name "Ok")
+			(args
+				(e-string
+					(e-literal (string "hello")))))
+		(e-tag (name "Err")
+			(args
+				(e-string
+					(e-literal (string "oops")))))
 		(e-tag (name "Just")
 			(args
 				(e-num (value "100"))))
@@ -143,21 +141,18 @@ EndOfFile,
 				(e-num (value "2"))))
 		(e-tag (name "Some")
 			(args
-				(e-nominal (nominal "Result")
-					(e-tag (name "Ok")
-						(args
-							(e-tag (name "Just")
-								(args
-									(e-num (value "42")))))))))
+				(e-tag (name "Ok")
+					(args
+						(e-tag (name "Just")
+							(args
+								(e-num (value "42"))))))))
 		(e-tag (name "Result")
 			(args
-				(e-nominal (nominal "Result")
-					(e-tag (name "Ok")
-						(args
-							(e-tag (name "Some")
-								(args
-									(e-nominal (nominal "Bool")
-										(e-tag (name "True"))))))))))))
+				(e-tag (name "Ok")
+					(args
+						(e-tag (name "Some")
+							(args
+								(e-tag (name "True"))))))))))
 ~~~
 # TYPES
 ~~~clojure

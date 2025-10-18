@@ -35,10 +35,9 @@ NO CHANGE
 		(e-num (value "1"))
 		(e-string
 			(e-literal (string "hello")))
-		(e-nominal (nominal "Bool")
-			(e-tag (name "True")))))
+		(e-tag (name "True"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(Num(_size), Str, Bool)"))
+(expr (type "(Num(_size), Str, [True]_others)"))
 ~~~

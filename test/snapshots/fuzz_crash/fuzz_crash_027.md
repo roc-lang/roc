@@ -943,7 +943,7 @@ This expression is used in an unexpected way:
 ```
 
 It has the type:
-    _[Stdoline!(Str)]_others_
+    _[Stdoline!(Str)][Err(_d), Ok({  })]_
 
 But the type annotation says it should have the type:
     _Result({  }, _d)_
@@ -1914,8 +1914,7 @@ expect {
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-nominal
-										(p-applied-tag))))
+									(p-applied-tag)))
 							(value
 								(e-num (value "121000")))))))))
 	(d-let
@@ -1959,11 +1958,10 @@ expect {
 					(s-crash (msg "Unreachtement"))
 					(s-let
 						(p-assign (ident "tag_with"))
-						(e-nominal (nominal "Result")
-							(e-tag (name "Ok")
-								(args
-									(e-lookup-local
-										(p-assign (ident "number")))))))
+						(e-tag (name "Ok")
+							(args
+								(e-lookup-local
+									(p-assign (ident "number"))))))
 					(s-let
 						(p-assign (ident "ited"))
 						(e-string
@@ -1990,11 +1988,10 @@ expect {
 									(e-lookup-local
 										(p-assign (ident "tag"))))
 								(field (name "qux")
-									(e-nominal (nominal "Result")
-										(e-tag (name "Ok")
-											(args
-												(e-lookup-local
-													(p-assign (ident "world")))))))
+									(e-tag (name "Ok")
+										(args
+											(e-lookup-local
+												(p-assign (ident "world"))))))
 								(field (name "punned")
 									(e-runtime-error (tag "ident_not_in_scope"))))))
 					(s-let
@@ -2006,11 +2003,10 @@ expect {
 									(e-literal (string "World")))
 								(e-lookup-local
 									(p-assign (ident "tag")))
-								(e-nominal (nominal "Result")
-									(e-tag (name "Ok")
-										(args
-											(e-lookup-local
-												(p-assign (ident "world"))))))
+								(e-tag (name "Ok")
+									(args
+										(e-lookup-local
+											(p-assign (ident "world")))))
 								(e-tuple
 									(elems
 										(e-runtime-error (tag "ident_not_in_scope"))
@@ -2029,11 +2025,10 @@ expect {
 								(e-string
 									(e-literal (string "World")))
 								(e-runtime-error (tag "ident_not_in_scope"))
-								(e-nominal (nominal "Result")
-									(e-tag (name "Ok")
-										(args
-											(e-lookup-local
-												(p-assign (ident "world"))))))
+								(e-tag (name "Ok")
+									(args
+										(e-lookup-local
+											(p-assign (ident "world")))))
 								(e-tuple
 									(elems
 										(e-runtime-error (tag "ident_not_in_scope"))
@@ -2049,10 +2044,9 @@ expect {
 						(e-binop (op "or")
 							(e-binop (op "gt")
 								(e-binop (op "null_coalesce")
-									(e-nominal (nominal "Result")
-										(e-tag (name "Err")
-											(args
-												(e-runtime-error (tag "ident_not_in_scope")))))
+									(e-tag (name "Err")
+										(args
+											(e-runtime-error (tag "ident_not_in_scope"))))
 									(e-num (value "12")))
 								(e-binop (op "mul")
 									(e-num (value "5"))
@@ -2097,7 +2091,7 @@ expect {
 				(ty-fn (effectful false)
 					(ty-apply (name "List") (builtin)
 						(ty-malformed))
-					(ty-apply (name "Result") (local)
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-record)
 						(ty-underscore))))))
 	(d-let
@@ -2169,17 +2163,17 @@ expect {
 			(ty-malformed)
 			(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 			(ty-malformed)))
-	(s-import (module "pf.Stdout") (qualifier "pf")
+	(s-import (module "pf.Stdout")
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "e!") (wildcard false))))
 	(s-import (module "Stdot")
 		(exposes))
-	(s-import (module "pkg.S") (qualifier "pkg")
+	(s-import (module "pkg.S")
 		(exposes
 			(exposed (name "func") (alias "fry") (wildcard false))
 			(exposed (name "Custom") (wildcard true))))
-	(s-import (module "Bae") (alias "Gooe")
+	(s-import (module "Bae")
 		(exposes))
 	(s-import (module "Ba")
 		(exposes))

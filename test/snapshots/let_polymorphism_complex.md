@@ -653,8 +653,7 @@ main = |_| {
 			(e-literal (string "hello"))))
 	(d-let
 		(p-assign (ident "bool"))
-		(e-nominal (nominal "Bool")
-			(e-tag (name "True"))))
+		(e-tag (name "True")))
 	(d-let
 		(p-assign (ident "empty_list"))
 		(e-empty_list))
@@ -682,10 +681,8 @@ main = |_| {
 		(p-assign (ident "bool_list"))
 		(e-list
 			(elems
-				(e-nominal (nominal "Bool")
-					(e-tag (name "True")))
-				(e-nominal (nominal "Bool")
-					(e-tag (name "False"))))))
+				(e-tag (name "True"))
+				(e-tag (name "False")))))
 	(d-let
 		(p-assign (ident "nested_empty"))
 		(e-list
@@ -1061,12 +1058,12 @@ main = |_| {
 		(patt (type "Num(_size)"))
 		(patt (type "Num(Frac(_size))"))
 		(patt (type "Str"))
-		(patt (type "Bool"))
+		(patt (type "[True]_others"))
 		(patt (type "List(Num(_size))"))
 		(patt (type "{}"))
 		(patt (type "List(Num(_size))"))
 		(patt (type "List(Str)"))
-		(patt (type "List(Bool)"))
+		(patt (type "List([True, False]_others)"))
 		(patt (type "List(List(Num(_size)))"))
 		(patt (type "List(List(Num(_size)))"))
 		(patt (type "{ count: Num(_size), items: List(Num(_size2)) }"))
@@ -1090,12 +1087,12 @@ main = |_| {
 		(expr (type "Num(_size)"))
 		(expr (type "Num(Frac(_size))"))
 		(expr (type "Str"))
-		(expr (type "Bool"))
+		(expr (type "[True]_others"))
 		(expr (type "List(Num(_size))"))
 		(expr (type "{}"))
 		(expr (type "List(Num(_size))"))
 		(expr (type "List(Str)"))
-		(expr (type "List(Bool)"))
+		(expr (type "List([True, False]_others)"))
 		(expr (type "List(List(Num(_size)))"))
 		(expr (type "List(List(Num(_size)))"))
 		(expr (type "{ count: Num(_size), items: List(Num(_size2)) }"))

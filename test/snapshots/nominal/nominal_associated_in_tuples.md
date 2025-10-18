@@ -21,7 +21,6 @@ boxed = Box(X)
 # EXPECTED
 UNDECLARED TYPE VARIABLE - nominal_associated_in_tuples.md:9:7:9:8
 UNDECLARED TYPE VARIABLE - nominal_associated_in_tuples.md:9:17:9:18
-TYPE MISMATCH - nominal_associated_in_tuples.md:7:8:7:14
 TOO MANY ARGS - nominal_associated_in_tuples.md:11:9:11:21
 # PROBLEMS
 **UNDECLARED TYPE VARIABLE**
@@ -49,20 +48,6 @@ Box : a -> [Box(a)]
 ```
                 ^
 
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_associated_in_tuples.md:7:8:7:14:**
-```roc
-pair = (X, Z)
-```
-       ^^^^^^
-
-It has the type:
-    _([X]_others, [Z]_others2)_
-
-But the type annotation says it should have the type:
-    _(Foo.Bar, Foo.Baz)_
 
 **TOO MANY ARGS**
 The type _Box_ expects  argument, but got  instead.
@@ -204,7 +189,7 @@ boxed = Box(X)
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
+		(patt (type "(Foo.Bar, Foo.Baz)"))
 		(patt (type "Error")))
 	(type_decls
 		(nominal (type "Foo")
@@ -216,6 +201,6 @@ boxed = Box(X)
 		(alias (type "Box")
 			(ty-header (name "Box"))))
 	(expressions
-		(expr (type "Error"))
+		(expr (type "(Foo.Bar, Foo.Baz)"))
 		(expr (type "Error"))))
 ~~~

@@ -355,7 +355,7 @@ data = json
 		(annotation
 			(declared-type
 				(ty-malformed))))
-	(s-import (module "json.Core") (qualifier "json")
+	(s-import (module "json.Core")
 		(exposes)))
 ~~~
 # TYPES

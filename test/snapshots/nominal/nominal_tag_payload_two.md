@@ -139,7 +139,9 @@ is_ok = |result| match result {
 									(p-nominal
 										(p-applied-tag))))
 							(value
-								(e-nominal (nominal "Bool")
+								(e-nominal-external
+									(module-idx "2")
+									(target-node-idx "1")
 									(e-tag (name "True")))))
 						(branch
 							(patterns
@@ -147,7 +149,9 @@ is_ok = |result| match result {
 									(p-nominal
 										(p-applied-tag))))
 							(value
-								(e-nominal (nominal "Bool")
+								(e-nominal-external
+									(module-idx "2")
+									(target-node-idx "1")
 									(e-tag (name "False")))))))))
 		(annotation
 			(declared-type
@@ -155,7 +159,7 @@ is_ok = |result| match result {
 					(ty-apply (name "MyResult") (local)
 						(ty-rigid-var (name "_ok"))
 						(ty-rigid-var (name "_err")))
-					(ty-lookup (name "Bool") (local))))))
+					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "1")))))))
 	(s-nominal-decl
 		(ty-header (name "MyResult")
 			(ty-args

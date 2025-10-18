@@ -11,7 +11,7 @@ type=expr
 UNDEFINED VARIABLE - record_mixed_types.md:1:35:1:44
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `true` in this scope.
+Nothing is named `Bool.true` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **record_mixed_types.md:1:35:1:44:**

@@ -3274,14 +3274,23 @@ pub const Serialized = struct {
         // NodeStore.Serialized should be at least as big as NodeStore
         std.debug.assert(@sizeOf(Serialized) >= @sizeOf(NodeStore));
 
-        // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+        // CRITICAL: On 32-bit platforms, deserializing nodes in-place corrupts the adjacent
+        // regions and extra_data fields. We must deserialize in REVERSE order (last to first)
+        // so that each deserialization doesn't corrupt fields that haven't been deserialized yet.
+
+        // Deserialize in reverse order: extra_data, regions, then nodes
+        const deserialized_extra_data = self.extra_data.deserialize(offset).*;
+        const deserialized_regions = self.regions.deserialize(offset).*;
+        const deserialized_nodes = self.nodes.deserialize(offset).*;
+
+        // Overwrite ourself with the deserialized version, and return our pointer after casting it to NodeStore
         const store = @as(*NodeStore, @ptrFromInt(@intFromPtr(self)));
 
         store.* = NodeStore{
             .gpa = gpa,
-            .nodes = self.nodes.deserialize(offset).*,
-            .regions = self.regions.deserialize(offset).*,
-            .extra_data = self.extra_data.deserialize(offset).*,
+            .nodes = deserialized_nodes,
+            .regions = deserialized_regions,
+            .extra_data = deserialized_extra_data,
             .scratch = null, // A deserialized NodeStore is read-only, so it has no need for scratch memory!
         };
 

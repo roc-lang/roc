@@ -284,8 +284,7 @@ EndOfFile,
 				(e-num (value "1"))
 				(e-string
 					(e-literal (string "hello")))
-				(e-nominal (nominal "Bool")
-					(e-tag (name "True"))))))
+				(e-tag (name "True")))))
 	(s-let
 		(p-assign (ident "nested"))
 		(e-tuple

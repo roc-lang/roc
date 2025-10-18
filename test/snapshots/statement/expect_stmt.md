@@ -29,7 +29,9 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(s-expect
-		(e-nominal (nominal "Bool")
+		(e-nominal-external
+			(module-idx "2")
+			(target-node-idx "1")
 			(e-tag (name "True")))))
 ~~~
 # TYPES

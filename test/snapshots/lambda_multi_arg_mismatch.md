@@ -238,8 +238,7 @@ result = multi_arg_fn(
 				(elems
 					(e-num (value "1"))
 					(e-num (value "2"))))
-			(e-nominal (nominal "Bool")
-				(e-tag (name "True")))
+			(e-tag (name "True"))
 			(e-string
 				(e-literal (string "done"))))))
 ~~~

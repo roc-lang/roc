@@ -104,7 +104,7 @@ import json.Json
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import (module "json.Json") (qualifier "json")
+	(s-import (module "json.Json")
 		(exposes)))
 ~~~
 # TYPES

@@ -106,7 +106,7 @@ main! = |_| processNested([])
 			(declared-type
 				(ty-fn (effectful false)
 					(ty-apply (name "List") (builtin)
-						(ty-apply (name "Result") (local)
+						(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 							(ty-lookup (name "Str") (builtin))
 							(ty-malformed)))
 					(ty-apply (name "List") (builtin)

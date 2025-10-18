@@ -88,8 +88,7 @@ match data {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-nominal
-							(p-applied-tag))))
+						(p-applied-tag)))
 				(value
 					(e-binop (op "add")
 						(e-lookup-local
@@ -99,8 +98,7 @@ match data {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-nominal
-							(p-applied-tag))))
+						(p-applied-tag)))
 				(value
 					(e-binop (op "sub")
 						(e-lookup-local
@@ -109,8 +107,7 @@ match data {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-nominal
-							(p-applied-tag))))
+						(p-applied-tag)))
 				(value
 					(e-binop (op "mul")
 						(e-lookup-local
@@ -119,8 +116,7 @@ match data {
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-nominal
-							(p-applied-tag))))
+						(p-applied-tag)))
 				(value
 					(e-binop (op "div")
 						(e-lookup-local

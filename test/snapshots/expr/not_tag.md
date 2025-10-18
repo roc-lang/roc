@@ -19,7 +19,7 @@ This expression is used in an unexpected way:
   ^^^^
 
 It has the type:
-    _[C(Num(_size))]_others_
+    _[C(Num(_size))][False, True]_
 
 But I expected it to be:
     _Bool_
