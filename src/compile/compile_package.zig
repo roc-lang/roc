@@ -480,6 +480,7 @@ pub const PackageEnv = struct {
         // Load source and init ModuleEnv
         var st = &self.modules.items[module_id];
         const src = try std.fs.cwd().readFileAlloc(self.gpa, st.path, std.math.maxInt(usize));
+        defer self.gpa.free(src);
 
         // line starts for diagnostics and consistent positions
 
@@ -691,7 +692,7 @@ pub const PackageEnv = struct {
         // Build other_modules array according to env.imports order
         const import_count = env.imports.imports.items.items.len;
         var others = try std.ArrayList(*ModuleEnv).initCapacity(self.gpa, import_count);
-        defer others.deinit();
+        // NOTE: Don't deinit 'others' yet - comptime_evaluator holds a reference to others.items
         for (env.imports.imports.items.items[0..import_count]) |str_idx| {
             const import_name = env.getString(str_idx);
             // Determine external vs local from CIR s_import qualifier metadata directly
@@ -745,6 +746,9 @@ pub const PackageEnv = struct {
 
         // Clean up comptime evaluator AFTER building reports (crash messages must stay alive until reports are built)
         comptime_evaluator.deinit();
+
+        // Now we can safely deinit the 'others' ArrayList
+        others.deinit();
 
         // Note: We no longer need to free the 'others' items because they now point directly
         // to ModuleEnv instances stored in the modules ArrayList, not to heap-allocated copies.
