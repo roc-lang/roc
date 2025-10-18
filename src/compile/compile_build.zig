@@ -728,11 +728,10 @@ pub const BuildEnv = struct {
     }
 
     fn parseHeaderDeps(self: *BuildEnv, file_path: []const u8) !HeaderInfo {
-        // Read source; ModuleEnv takes ownership of source
+        // Read source; ModuleEnv takes ownership and will free it on deinit
         const file_abs = try std.fs.path.resolve(self.gpa, &.{file_path});
         defer self.gpa.free(file_abs);
         const src = try std.fs.cwd().readFileAlloc(self.gpa, file_abs, std.math.maxInt(usize));
-        defer self.gpa.free(src);
 
         var env = try ModuleEnv.init(self.gpa, src);
         defer env.deinit();

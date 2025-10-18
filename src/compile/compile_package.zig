@@ -480,7 +480,7 @@ pub const PackageEnv = struct {
         // Load source and init ModuleEnv
         var st = &self.modules.items[module_id];
         const src = try std.fs.cwd().readFileAlloc(self.gpa, st.path, std.math.maxInt(usize));
-        defer self.gpa.free(src);
+        // NOTE: ModuleEnv takes ownership of src - it will be freed when env.deinit() is called
 
         // line starts for diagnostics and consistent positions
 
