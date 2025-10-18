@@ -25,55 +25,9 @@ is_ok_ret_bool = |result| match result {
 main! = |_| {}
 ~~~
 # EXPECTED
-UNDECLARED TYPE - type_tag_union_basic.md:6:56:6:60
-UNDECLARED TYPE - type_tag_union_basic.md:12:46:12:50
-UNDECLARED TYPE - type_tag_union_basic.md:14:15:14:19
-UNDECLARED TYPE - type_tag_union_basic.md:15:16:15:20
+NIL
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**type_tag_union_basic.md:6:56:6:60:**
-```roc
-is_ok_ret_unqualified_bool : [Ok2(_ok), Err2(_err)] -> Bool
-```
-                                                       ^^^^
-
-
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**type_tag_union_basic.md:12:46:12:50:**
-```roc
-is_ok_ret_bool : [Ok2(_ok2), Err2(_err2)] -> Bool
-```
-                                             ^^^^
-
-
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**type_tag_union_basic.md:14:15:14:19:**
-```roc
-    Ok2(_) => Bool.True
-```
-              ^^^^
-
-
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**type_tag_union_basic.md:15:16:15:20:**
-```roc
-    Err2(_) => Bool.False
-```
-               ^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -254,7 +208,7 @@ main! = |_| {}
 							(ty-rigid-var (name "_ok")))
 						(ty-tag-name (name "Err2")
 							(ty-rigid-var (name "_err"))))
-					(ty-malformed)))))
+					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "0")))))))
 	(d-let
 		(p-assign (ident "is_ok_ret_bool"))
 		(e-lambda
@@ -271,13 +225,19 @@ main! = |_| {}
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-runtime-error (tag "undeclared_type"))))
+								(e-nominal-external
+									(module-idx "2")
+									(target-node-idx "0")
+									(e-tag (name "True")))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-runtime-error (tag "undeclared_type"))))))))
+								(e-nominal-external
+									(module-idx "2")
+									(target-node-idx "0")
+									(e-tag (name "False")))))))))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
@@ -286,7 +246,7 @@ main! = |_| {}
 							(ty-rigid-var (name "_ok2")))
 						(ty-tag-name (name "Err2")
 							(ty-rigid-var (name "_err2"))))
-					(ty-malformed)))))
+					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "0")))))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda

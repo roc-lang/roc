@@ -56,9 +56,9 @@ NO CHANGE
 				(p-assign (ident "c")))
 			(e-closure
 				(captures
-					(capture (ident "b"))
+					(capture (ident "c"))
 					(capture (ident "a"))
-					(capture (ident "c")))
+					(capture (ident "b")))
 				(e-lambda
 					(args
 						(p-assign (ident "x")))

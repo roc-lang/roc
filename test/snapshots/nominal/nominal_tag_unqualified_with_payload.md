@@ -17,43 +17,9 @@ isOk = |result| match result {
 }
 ~~~
 # EXPECTED
-UNDECLARED TYPE - nominal_tag_unqualified_with_payload.md:6:29:6:33
-UNDECLARED TYPE - nominal_tag_unqualified_with_payload.md:8:14:8:18
-UNDECLARED TYPE - nominal_tag_unqualified_with_payload.md:9:15:9:19
+NIL
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_tag_unqualified_with_payload.md:6:29:6:33:**
-```roc
-isOk : MyResult(ok, err) -> Bool
-```
-                            ^^^^
-
-
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_tag_unqualified_with_payload.md:8:14:8:18:**
-```roc
-    Ok(_) => Bool.True
-```
-             ^^^^
-
-
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_tag_unqualified_with_payload.md:9:15:9:19:**
-```roc
-    Err(_) => Bool.False
-```
-              ^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,CloseSquare,
@@ -162,20 +128,26 @@ isOk = |result| match result {
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-runtime-error (tag "undeclared_type"))))
+								(e-nominal-external
+									(module-idx "2")
+									(target-node-idx "0")
+									(e-tag (name "True")))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-runtime-error (tag "undeclared_type"))))))))
+								(e-nominal-external
+									(module-idx "2")
+									(target-node-idx "0")
+									(e-tag (name "False")))))))))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
 					(ty-apply (name "MyResult") (local)
 						(ty-rigid-var (name "ok"))
 						(ty-rigid-var (name "err")))
-					(ty-malformed)))))
+					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "0")))))))
 	(s-nominal-decl
 		(ty-header (name "MyResult")
 			(ty-args

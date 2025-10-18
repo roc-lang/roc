@@ -87,7 +87,7 @@ NO CHANGE
 				(p-assign (ident "msg")))
 			(e-call
 				(e-lookup-external
-					(module-idx "2")
+					(module-idx "4")
 					(target-node-idx "0"))
 				(e-lookup-local
 					(p-assign (ident "msg")))))

@@ -15,7 +15,6 @@ tag_tuple : Value((_a, _b, _c))
 # EXPECTED
 UNDECLARED TYPE - type_annotations.md:2:7:2:12
 UNDECLARED TYPE - type_annotations.md:5:14:5:20
-UNDECLARED TYPE - type_annotations.md:5:25:5:31
 UNDECLARED TYPE - type_annotations.md:6:13:6:18
 # PROBLEMS
 **UNDECLARED TYPE**
@@ -38,17 +37,6 @@ This type is referenced here:
 main! : List(String) -> Result({}, _)
 ```
              ^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**type_annotations.md:5:25:5:31:**
-```roc
-main! : List(String) -> Result({}, _)
-```
-                        ^^^^^^
 
 
 **UNDECLARED TYPE**

@@ -15,55 +15,9 @@ isRed = |color| match color {
 }
 ~~~
 # EXPECTED
-UNDECLARED TYPE - nominal_tag_mixed_qualified_unqualified.md:3:18:3:22
-UNDECLARED TYPE - nominal_tag_mixed_qualified_unqualified.md:5:12:5:16
-UNDECLARED TYPE - nominal_tag_mixed_qualified_unqualified.md:6:20:6:24
-UNDECLARED TYPE - nominal_tag_mixed_qualified_unqualified.md:7:13:7:17
+NIL
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_tag_mixed_qualified_unqualified.md:3:18:3:22:**
-```roc
-isRed : Color -> Bool
-```
-                 ^^^^
-
-
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_tag_mixed_qualified_unqualified.md:5:12:5:16:**
-```roc
-    Red => Bool.True
-```
-           ^^^^
-
-
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_tag_mixed_qualified_unqualified.md:6:20:6:24:**
-```roc
-    Color.Green => Bool.False
-```
-                   ^^^^
-
-
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_tag_mixed_qualified_unqualified.md:7:13:7:17:**
-```roc
-    Blue => Bool.False
-```
-            ^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,
@@ -140,25 +94,34 @@ isRed = |color| match color {
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-runtime-error (tag "undeclared_type"))))
+								(e-nominal-external
+									(module-idx "2")
+									(target-node-idx "0")
+									(e-tag (name "True")))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-nominal
 										(p-applied-tag))))
 							(value
-								(e-runtime-error (tag "undeclared_type"))))
+								(e-nominal-external
+									(module-idx "2")
+									(target-node-idx "0")
+									(e-tag (name "False")))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-runtime-error (tag "undeclared_type"))))))))
+								(e-nominal-external
+									(module-idx "2")
+									(target-node-idx "0")
+									(e-tag (name "False")))))))))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
 					(ty-lookup (name "Color") (local))
-					(ty-malformed)))))
+					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "0")))))))
 	(s-nominal-decl
 		(ty-header (name "Color"))
 		(ty-tag-union

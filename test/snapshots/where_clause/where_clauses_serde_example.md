@@ -10,31 +10,9 @@ deserialize : List(U8) -> Result(a, [DecodeErr])
 deserialize = |_| ...
 ~~~
 # EXPECTED
-UNDECLARED TYPE - where_clauses_serde_example.md:1:27:1:33
-UNDECLARED TYPE - where_clauses_serde_example.md:2:32:2:38
+NIL
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**where_clauses_serde_example.md:1:27:1:33:**
-```roc
-deserialize : List(U8) -> Result(a, [DecodeErr])
-```
-                          ^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**where_clauses_serde_example.md:2:32:2:38:**
-```roc
-	where [a.decode : List(U8) -> Result(a, [DecodeErr])]
-```
-	                              ^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,OpArrow,UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,OpenSquare,UpperIdent,CloseSquare,CloseRound,
@@ -95,18 +73,27 @@ NO CHANGE
 				(ty-fn (effectful false)
 					(ty-apply (name "List") (builtin)
 						(ty-lookup (name "U8") (builtin)))
-					(ty-malformed)))))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+						(ty-rigid-var (name "a"))
+						(ty-tag-union
+							(ty-tag-name (name "DecodeErr"))))))))
 	(s-type-anno (name "deserialize")
 		(ty-fn (effectful false)
 			(ty-apply (name "List") (builtin)
 				(ty-lookup (name "U8") (builtin)))
-			(ty-malformed))
+			(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+				(ty-rigid-var (name "a"))
+				(ty-tag-union
+					(ty-tag-name (name "DecodeErr")))))
 		(where
 			(method (module-of "a") (ident "decode")
 				(args
 					(ty-apply (name "List") (builtin)
 						(ty-lookup (name "U8") (builtin))))
-				(ty-malformed))))
+				(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+					(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+					(ty-tag-union
+						(ty-tag-name (name "DecodeErr")))))))
 	(ext-decl (ident "a.decode") (kind "value")))
 ~~~
 # TYPES

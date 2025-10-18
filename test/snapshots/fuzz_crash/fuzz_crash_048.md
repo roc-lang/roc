@@ -17,7 +17,6 @@ tag_tuple : Value((a, b, c))
 ASCII CONTROL CHARACTER - :0:0:0:0
 UNDECLARED TYPE - fuzz_crash_048.md:2:7:2:12
 UNDECLARED TYPE - fuzz_crash_048.md:6:14:6:20
-UNDECLARED TYPE - fuzz_crash_048.md:6:25:6:31
 UNDECLARED TYPE - fuzz_crash_048.md:7:13:7:18
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
@@ -45,17 +44,6 @@ This type is referenced here:
 main! : List(String) -> Result({}, _)
 ```
              ^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_048.md:6:25:6:31:**
-```roc
-main! : List(String) -> Result({}, _)
-```
-                        ^^^^^^
 
 
 **UNDECLARED TYPE**

@@ -224,27 +224,27 @@ main = {
 			(s-let
 				(p-assign (ident "client"))
 				(e-lookup-external
-					(module-idx "3")
+					(module-idx "5")
 					(target-node-idx "0")))
 			(s-let
 				(p-assign (ident "parser"))
 				(e-lookup-external
-					(module-idx "2")
+					(module-idx "4")
 					(target-node-idx "0")))
 			(s-let
 				(p-assign (ident "helper"))
 				(e-lookup-external
-					(module-idx "4")
+					(module-idx "6")
 					(target-node-idx "0")))
 			(s-let
 				(p-assign (ident "result1"))
 				(e-lookup-external
-					(module-idx "2")
+					(module-idx "4")
 					(target-node-idx "0")))
 			(s-let
 				(p-assign (ident "result2"))
 				(e-lookup-external
-					(module-idx "3")
+					(module-idx "5")
 					(target-node-idx "0")))
 			(s-let
 				(p-assign (ident "result3"))
@@ -255,7 +255,7 @@ main = {
 			(s-let
 				(p-assign (ident "combined"))
 				(e-lookup-external
-					(module-idx "4")
+					(module-idx "6")
 					(target-node-idx "0")))
 			(e-tuple
 				(elems

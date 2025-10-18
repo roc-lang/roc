@@ -8,31 +8,9 @@ type=expr
 (True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
 ~~~
 # EXPECTED
-UNDECLARED TYPE - tuple_bool.md:1:15:1:19
-UNDECLARED TYPE - tuple_bool.md:1:26:1:30
+NIL
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**tuple_bool.md:1:15:1:19:**
-```roc
-(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
-```
-              ^^^^
-
-
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**tuple_bool.md:1:26:1:30:**
-```roc
-(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
-```
-                         ^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 OpenRound,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,NoSpaceDotUpperIdent,Comma,UpperIdent,NoSpaceDotUpperIdent,Comma,OpBang,UpperIdent,Comma,OpBang,UpperIdent,Comma,UpperIdent,OpAnd,UpperIdent,Comma,OpBang,UpperIdent,OpOr,OpBang,UpperIdent,CloseRound,
@@ -68,8 +46,14 @@ NO CHANGE
 	(elems
 		(e-tag (name "True"))
 		(e-tag (name "False"))
-		(e-runtime-error (tag "undeclared_type"))
-		(e-runtime-error (tag "undeclared_type"))
+		(e-nominal-external
+			(module-idx "2")
+			(target-node-idx "0")
+			(e-tag (name "True")))
+		(e-nominal-external
+			(module-idx "2")
+			(target-node-idx "0")
+			(e-tag (name "False")))
 		(e-unary-not
 			(e-tag (name "True")))
 		(e-unary-not

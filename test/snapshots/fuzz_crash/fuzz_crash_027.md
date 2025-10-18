@@ -206,7 +206,6 @@ NOT IMPLEMENTED - :0:0:0:0
 UNUSED VARIABLE - fuzz_crash_027.md:62:2:62:3
 UNDEFINED VARIABLE - fuzz_crash_027.md:97:2:97:6
 UNDECLARED TYPE - fuzz_crash_027.md:99:14:99:20
-UNDECLARED TYPE - fuzz_crash_027.md:99:25:99:31
 UNDEFINED VARIABLE - fuzz_crash_027.md:103:9:103:13
 UNDEFINED VARIABLE - fuzz_crash_027.md:114:2:114:11
 NOT IMPLEMENTED - :0:0:0:0
@@ -649,17 +648,6 @@ This type is referenced here:
 main! : List(String) -> Result({}, _)
 ```
              ^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_027.md:99:25:99:31:**
-```roc
-main! : List(String) -> Result({}, _)
-```
-                        ^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -2071,7 +2059,9 @@ expect {
 				(ty-fn (effectful false)
 					(ty-apply (name "List") (builtin)
 						(ty-malformed))
-					(ty-malformed)))))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+						(ty-record)
+						(ty-underscore))))))
 	(d-let
 		(p-assign (ident "empty"))
 		(e-empty_record)
@@ -2177,7 +2167,7 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> Num(_size)"))
+		(patt (type "_arg -> Num(_size)"))
 		(patt (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(patt (type "[Red, Blue]_others, _arg -> Error"))
 		(patt (type "List(Error) -> Error"))
@@ -2212,7 +2202,7 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "a -> Num(_size)"))
+		(expr (type "_arg -> Num(_size)"))
 		(expr (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(expr (type "[Red, Blue]_others, _arg -> Error"))
 		(expr (type "List(Error) -> Error"))

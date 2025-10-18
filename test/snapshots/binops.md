@@ -24,55 +24,9 @@ type=expr
 )
 ~~~
 # EXPECTED
-UNDECLARED TYPE - binops.md:14:5:14:9
-UNDECLARED TYPE - binops.md:14:19:14:23
-UNDECLARED TYPE - binops.md:15:5:15:9
-UNDECLARED TYPE - binops.md:15:19:15:23
+NIL
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**binops.md:14:5:14:9:**
-```roc
-    Bool.True and Bool.False,
-```
-    ^^^^
-
-
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**binops.md:14:19:14:23:**
-```roc
-    Bool.True and Bool.False,
-```
-                  ^^^^
-
-
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**binops.md:15:5:15:9:**
-```roc
-    Bool.False or Bool.True,
-```
-    ^^^^
-
-
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**binops.md:15:19:15:23:**
-```roc
-    Bool.False or Bool.True,
-```
-                  ^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 OpenRound,
@@ -204,16 +158,28 @@ EndOfFile,
 			(e-num (value "4"))
 			(e-num (value "2")))
 		(e-binop (op "and")
-			(e-runtime-error (tag "undeclared_type"))
-			(e-runtime-error (tag "undeclared_type")))
+			(e-nominal-external
+				(module-idx "2")
+				(target-node-idx "0")
+				(e-tag (name "True")))
+			(e-nominal-external
+				(module-idx "2")
+				(target-node-idx "0")
+				(e-tag (name "False"))))
 		(e-binop (op "or")
-			(e-runtime-error (tag "undeclared_type"))
-			(e-runtime-error (tag "undeclared_type")))
+			(e-nominal-external
+				(module-idx "2")
+				(target-node-idx "0")
+				(e-tag (name "False")))
+			(e-nominal-external
+				(module-idx "2")
+				(target-node-idx "0")
+				(e-tag (name "True"))))
 		(e-binop (op "null_coalesce")
 			(e-tag (name "None"))
 			(e-num (value "0")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(Num(_size), Num(_size2), Num(_size3), Num(_size4), Num(_size5), Num(_size6), Num(_size7), Num(_size8), Num(_size9), Num(_size10), Num(_size11), Num(_size12), Error, Error, _field)"))
+(expr (type "(Num(_size), Num(_size2), Num(_size3), Num(_size4), Num(_size5), _field, _field2, _field3, _field4, _field5, _field6, Num(_size6), Error, Error, _field7)"))
 ~~~

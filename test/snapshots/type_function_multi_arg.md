@@ -141,8 +141,8 @@ main! = |_| {}
 						(p-assign (ident "x")))
 					(e-closure
 						(captures
-							(capture (ident "fn"))
-							(capture (ident "x")))
+							(capture (ident "x"))
+							(capture (ident "fn")))
 						(e-lambda
 							(args
 								(p-assign (ident "y")))

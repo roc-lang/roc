@@ -8,19 +8,9 @@ type=statement
 create_user! : Str, U32 => { name : Str, age : U32, id : U64, active : Bool }
 ~~~
 # EXPECTED
-UNDECLARED TYPE - type_function_return_record.md:1:72:1:76
+NIL
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**type_function_return_record.md:1:72:1:76:**
-```roc
-create_user! : Str, U32 => { name : Str, age : U32, id : U64, active : Bool }
-```
-                                                                       ^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,Comma,UpperIdent,OpFatArrow,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,

@@ -8,22 +8,9 @@ type=expr
 !(C(2))
 ~~~
 # EXPECTED
-TYPE MISMATCH - not_tag.md:1:3:1:7
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**not_tag.md:1:3:1:7:**
-```roc
-!(C(2))
-```
-  ^^^^
-
-It has the type:
-    _[C(Num(_size))]_others_
-
-But I expected it to be:
-    _Num(_size)_
-
+NIL
 # TOKENS
 ~~~zig
 OpBang,NoSpaceOpenRound,UpperIdent,NoSpaceOpenRound,Int,CloseRound,CloseRound,
@@ -50,5 +37,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "[C(Num(_size))]_others"))
 ~~~

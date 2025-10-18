@@ -246,7 +246,6 @@ NOT IMPLEMENTED - :0:0:0:0
 UNUSED VARIABLE - syntax_grab_bag.md:82:2:82:3
 UNDEFINED VARIABLE - syntax_grab_bag.md:141:2:141:6
 UNDECLARED TYPE - syntax_grab_bag.md:143:14:143:20
-UNDECLARED TYPE - syntax_grab_bag.md:143:25:143:31
 UNDEFINED VARIABLE - syntax_grab_bag.md:147:9:147:13
 UNDEFINED VARIABLE - syntax_grab_bag.md:158:2:158:11
 NOT IMPLEMENTED - :0:0:0:0
@@ -591,17 +590,6 @@ This type is referenced here:
 main! : List(String) -> Result({}, _)
 ```
              ^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**syntax_grab_bag.md:143:25:143:31:**
-```roc
-main! : List(String) -> Result({}, _)
-```
-                        ^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -2251,7 +2239,7 @@ expect {
 						(e-runtime-error (tag "not_implemented")))
 					(e-call
 						(e-lookup-external
-							(module-idx "2")
+							(module-idx "4")
 							(target-node-idx "0"))
 						(e-string
 							(e-literal (string "How about "))
@@ -2265,7 +2253,9 @@ expect {
 				(ty-fn (effectful false)
 					(ty-apply (name "List") (builtin)
 						(ty-malformed))
-					(ty-malformed)))))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+						(ty-record)
+						(ty-underscore))))))
 	(d-let
 		(p-assign (ident "empty"))
 		(e-empty_record)
@@ -2402,7 +2392,7 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> Num(_size)"))
+		(patt (type "_arg -> Num(_size)"))
 		(patt (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(patt (type "[Red][Blue, Green]_others, _arg -> Error"))
 		(patt (type "List(Error) -> Error"))
@@ -2447,7 +2437,7 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "a -> Num(_size)"))
+		(expr (type "_arg -> Num(_size)"))
 		(expr (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(expr (type "[Red][Blue, Green]_others, _arg -> Error"))
 		(expr (type "List(Error) -> Error"))

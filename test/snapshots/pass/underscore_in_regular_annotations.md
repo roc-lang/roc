@@ -39,7 +39,6 @@ transform = |_, b| b
 PARSE ERROR - underscore_in_regular_annotations.md:28:22:28:24
 PARSE ERROR - underscore_in_regular_annotations.md:28:25:28:27
 UNUSED VARIABLE - underscore_in_regular_annotations.md:9:12:9:16
-UNDECLARED TYPE - underscore_in_regular_annotations.md:16:17:16:23
 # PROBLEMS
 **PARSE ERROR**
 Function types with multiple arrows need parentheses.
@@ -76,17 +75,6 @@ The unused variable is declared here:
 process = |list| "processed"
 ```
            ^^^^
-
-
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**underscore_in_regular_annotations.md:16:17:16:23:**
-```roc
-handle_result : Result(_, Str) -> Str
-```
-                ^^^^^^
 
 
 # TOKENS
@@ -343,7 +331,9 @@ transform = |_, b| b
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-malformed)
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+						(ty-underscore)
+						(ty-lookup (name "Str") (builtin)))
 					(ty-lookup (name "Str") (builtin))))))
 	(d-let
 		(p-assign (ident "map"))

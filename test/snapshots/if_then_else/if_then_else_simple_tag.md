@@ -8,19 +8,9 @@ type=expr
 if Bool.True Ok(0) else Err(1)
 ~~~
 # EXPECTED
-UNDECLARED TYPE - if_then_else_simple_tag.md:1:4:1:8
+NIL
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**if_then_else_simple_tag.md:1:4:1:8:**
-```roc
-if Bool.True Ok(0) else Err(1)
-```
-   ^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwIf,UpperIdent,NoSpaceDotUpperIdent,UpperIdent,NoSpaceOpenRound,Int,CloseRound,KwElse,UpperIdent,NoSpaceOpenRound,Int,CloseRound,
@@ -46,7 +36,10 @@ NO CHANGE
 (e-if
 	(if-branches
 		(if-branch
-			(e-runtime-error (tag "undeclared_type"))
+			(e-nominal-external
+				(module-idx "2")
+				(target-node-idx "0")
+				(e-tag (name "True")))
 			(e-tag (name "Ok")
 				(args
 					(e-num (value "0"))))))

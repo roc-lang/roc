@@ -13,19 +13,9 @@ type=expr
 }
 ~~~
 # EXPECTED
-UNDECLARED TYPE - ann_effectful_fn.md:2:28:2:34
+NIL
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**ann_effectful_fn.md:2:28:2:34:**
-```roc
-    launchTheNukes : {} => Result Bool LaunchNukeErr
-```
-                           ^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly,

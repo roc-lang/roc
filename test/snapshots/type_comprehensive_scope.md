@@ -43,24 +43,11 @@ Complex : {
 }
 ~~~
 # EXPECTED
-UNDECLARED TYPE - type_comprehensive_scope.md:4:10:4:14
 UNDECLARED TYPE - type_comprehensive_scope.md:13:19:13:23
 TYPE REDECLARED - type_comprehensive_scope.md:22:1:22:13
 UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 UNDECLARED TYPE - type_comprehensive_scope.md:29:10:29:14
-UNDECLARED TYPE - type_comprehensive_scope.md:34:20:34:24
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**type_comprehensive_scope.md:4:10:4:14:**
-```roc
-MyBool : Bool
-```
-         ^^^^
-
-
 **UNDECLARED TYPE**
 The type _Node_ is not declared in this scope.
 
@@ -110,17 +97,6 @@ This type is referenced here:
 MyDict : Dict(Str, U64)
 ```
          ^^^^
-
-
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**type_comprehensive_scope.md:34:20:34:24:**
-```roc
-    result: Result(Bool, Str),
-```
-                   ^^^^
 
 
 # TOKENS
@@ -303,7 +279,7 @@ Complex : {
 		(ty-lookup (name "Str") (builtin)))
 	(s-alias-decl
 		(ty-header (name "MyBool"))
-		(ty-malformed))
+		(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "0"))))
 	(s-alias-decl
 		(ty-header (name "Person"))
 		(ty-record
@@ -366,7 +342,7 @@ Complex : {
 				(ty-lookup (name "Person") (local)))
 			(field (field "result")
 				(ty-apply (name "Result") (local)
-					(ty-malformed)
+					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "0")))
 					(ty-lookup (name "Str") (builtin))))
 			(field (field "tree")
 				(ty-apply (name "Tree") (local)

@@ -113,13 +113,13 @@ main! = |_| {
 					(p-assign (ident "result"))
 					(e-call
 						(e-lookup-external
-							(module-idx "3")
+							(module-idx "5")
 							(target-node-idx "0"))
 						(e-string
 							(e-literal (string "Hello from external module!")))))
 				(e-call
 					(e-lookup-external
-						(module-idx "2")
+						(module-idx "4")
 						(target-node-idx "0"))
 					(e-lookup-local
 						(p-assign (ident "result")))))))

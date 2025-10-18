@@ -13,20 +13,8 @@ processNested = |_list| ["one","two"]
 main! = |_| processNested([])
 ~~~
 # EXPECTED
-UNDECLARED TYPE - type_app_nested.md:3:22:3:28
 UNDECLARED TYPE - type_app_nested.md:3:34:3:37
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**type_app_nested.md:3:22:3:28:**
-```roc
-processNested : List(Result(Str, Err)) -> List(Str)
-```
-                     ^^^^^^
-
-
 **UNDECLARED TYPE**
 The type _Err_ is not declared in this scope.
 
@@ -118,7 +106,9 @@ main! = |_| processNested([])
 			(declared-type
 				(ty-fn (effectful false)
 					(ty-apply (name "List") (builtin)
-						(ty-malformed))
+						(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+							(ty-lookup (name "Str") (builtin))
+							(ty-malformed)))
 					(ty-apply (name "List") (builtin)
 						(ty-lookup (name "Str") (builtin)))))))
 	(d-let

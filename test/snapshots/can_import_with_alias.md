@@ -49,7 +49,7 @@ NO CHANGE
 	(d-let
 		(p-assign (ident "main"))
 		(e-lookup-external
-			(module-idx "2")
+			(module-idx "4")
 			(target-node-idx "0")))
 	(s-import (module "json.Json")
 		(exposes)))

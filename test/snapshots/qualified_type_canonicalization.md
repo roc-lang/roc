@@ -63,11 +63,8 @@ MODULE NOT FOUND - qualified_type_canonicalization.md:11:1:11:32
 UNDECLARED TYPE - qualified_type_canonicalization.md:15:19:15:24
 MODULE NOT IMPORTED - qualified_type_canonicalization.md:22:23:22:44
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:23:23:23:32
-MODULE NOT IMPORTED - qualified_type_canonicalization.md:26:14:26:27
-UNDECLARED TYPE - qualified_type_canonicalization.md:27:14:27:20
 UNDECLARED TYPE - qualified_type_canonicalization.md:31:16:31:21
 UNUSED VARIABLE - qualified_type_canonicalization.md:35:17:35:22
-MODULE NOT IMPORTED - qualified_type_canonicalization.md:39:13:39:26
 MODULE NOT IMPORTED - qualified_type_canonicalization.md:39:55:39:76
 UNDECLARED TYPE - qualified_type_canonicalization.md:42:9:42:15
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:42:27:42:42
@@ -231,28 +228,6 @@ multiLevelQualified = TypeC.new
                       ^^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `Result` imported into this Roc file.
-
-You're attempting to use this module here:
-**qualified_type_canonicalization.md:26:14:26:27:**
-```roc
-resultType : Result.Result(I32, Str)
-```
-             ^^^^^^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**qualified_type_canonicalization.md:27:14:27:20:**
-```roc
-resultType = Result.Ok(42)
-```
-             ^^^^^^
-
-
 **UNDECLARED TYPE**
 The type _Color_ is not declared in this scope.
 
@@ -274,17 +249,6 @@ The unused variable is declared here:
 processColor = |color|
 ```
                 ^^^^^
-
-
-**MODULE NOT IMPORTED**
-There is no module with the name `Result` imported into this Roc file.
-
-You're attempting to use this module here:
-**qualified_type_canonicalization.md:39:13:39:26:**
-```roc
-transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
-```
-            ^^^^^^^^^^^^^
 
 
 **MODULE NOT IMPORTED**
@@ -537,16 +501,16 @@ transform = |result|
 		(e-runtime-error (tag "undeclared_type"))
 		(annotation
 			(declared-type
-				(ty-lookup (name "RGB") (external (module-idx "2") (target-node-idx "0"))))))
+				(ty-lookup (name "RGB") (external (module-idx "4") (target-node-idx "0"))))))
 	(d-let
 		(p-assign (ident "aliasedQualified"))
 		(e-nominal-external
-			(module-idx "4")
+			(module-idx "6")
 			(target-node-idx "0")
 			(e-tag (name "Default")))
 		(annotation
 			(declared-type
-				(ty-lookup (name "DataType") (external (module-idx "4") (target-node-idx "0"))))))
+				(ty-lookup (name "DataType") (external (module-idx "6") (target-node-idx "0"))))))
 	(d-let
 		(p-assign (ident "multiLevelQualified"))
 		(e-runtime-error (tag "ident_not_in_scope"))
@@ -555,10 +519,17 @@ transform = |result|
 				(ty-malformed))))
 	(d-let
 		(p-assign (ident "resultType"))
-		(e-runtime-error (tag "undeclared_type"))
+		(e-nominal-external
+			(module-idx "3")
+			(target-node-idx "0")
+			(e-tag (name "Ok")
+				(args
+					(e-num (value "42")))))
 		(annotation
 			(declared-type
-				(ty-malformed))))
+				(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+					(ty-lookup (name "I32") (builtin))
+					(ty-lookup (name "Str") (builtin))))))
 	(d-let
 		(p-assign (ident "getColor"))
 		(e-lambda
@@ -569,7 +540,7 @@ transform = |result|
 			(declared-type
 				(ty-fn (effectful false)
 					(ty-record)
-					(ty-lookup (name "RGB") (external (module-idx "2") (target-node-idx "0")))))))
+					(ty-lookup (name "RGB") (external (module-idx "4") (target-node-idx "0")))))))
 	(d-let
 		(p-assign (ident "processColor"))
 		(e-lambda
@@ -580,7 +551,7 @@ transform = |result|
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-lookup (name "RGB") (external (module-idx "2") (target-node-idx "0")))
+					(ty-lookup (name "RGB") (external (module-idx "4") (target-node-idx "0")))
 					(ty-lookup (name "Str") (builtin))))))
 	(d-let
 		(p-assign (ident "transform"))
@@ -614,7 +585,9 @@ transform = |result|
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-malformed)
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+						(ty-lookup (name "RGB") (external (module-idx "4") (target-node-idx "0")))
+						(ty-lookup (name "Error") (external (module-idx "6") (target-node-idx "0"))))
 					(ty-malformed)))))
 	(s-import (module "Color")
 		(exposes))

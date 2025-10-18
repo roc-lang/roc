@@ -58,7 +58,7 @@ NO CHANGE
 		(p-assign (ident "hello!"))
 		(e-call
 			(e-lookup-external
-				(module-idx "2")
+				(module-idx "4")
 				(target-node-idx "0"))
 			(e-string
 				(e-literal (string "Hello")))))

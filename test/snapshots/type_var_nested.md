@@ -35,55 +35,9 @@ wrap_in_result = |value| Ok(Ok(value))
 main = |_| "done"
 ~~~
 # EXPECTED
-UNDECLARED TYPE - type_var_nested.md:4:14:4:20
-UNDECLARED TYPE - type_var_nested.md:4:40:4:46
-UNDECLARED TYPE - type_var_nested.md:25:23:25:29
-UNDECLARED TYPE - type_var_nested.md:25:30:25:36
+NIL
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**type_var_nested.md:4:14:4:20:**
-```roc
-map_result : Result(a, e), (a -> b) -> Result(b, e)
-```
-             ^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**type_var_nested.md:4:40:4:46:**
-```roc
-map_result : Result(a, e), (a -> b) -> Result(b, e)
-```
-                                       ^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**type_var_nested.md:25:23:25:29:**
-```roc
-wrap_in_result : a -> Result(Result(a, Str), Str)
-```
-                      ^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**type_var_nested.md:25:30:25:36:**
-```roc
-wrap_in_result : a -> Result(Result(a, Str), Str)
-```
-                             ^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -303,12 +257,16 @@ main = |_| "done"
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-malformed)
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+						(ty-rigid-var (name "a"))
+						(ty-rigid-var (name "e")))
 					(ty-parens
 						(ty-fn (effectful false)
 							(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 							(ty-rigid-var (name "b"))))
-					(ty-malformed)))))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+						(ty-rigid-var-lookup (ty-rigid-var (name "b")))
+						(ty-rigid-var-lookup (ty-rigid-var (name "e"))))))))
 	(d-let
 		(p-assign (ident "identity"))
 		(e-lambda
@@ -372,7 +330,11 @@ main = |_| "done"
 			(declared-type
 				(ty-fn (effectful false)
 					(ty-rigid-var (name "a"))
-					(ty-malformed)))))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+						(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+							(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+							(ty-lookup (name "Str") (builtin)))
+						(ty-lookup (name "Str") (builtin)))))))
 	(d-let
 		(p-assign (ident "main"))
 		(e-lambda

@@ -397,8 +397,8 @@ main = |_| {
 		(p-assign (ident "main"))
 		(e-closure
 			(captures
-				(capture (ident "all_str_list"))
 				(capture (ident "all_int_list"))
+				(capture (ident "all_str_list"))
 				(capture (ident "all_float_list")))
 			(e-lambda
 				(args

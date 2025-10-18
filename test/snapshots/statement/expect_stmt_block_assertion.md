@@ -12,43 +12,9 @@ foo = |a| {
 }
 ~~~
 # EXPECTED
-UNDECLARED TYPE - expect_stmt_block_assertion.md:1:7:1:11
-UNDECLARED TYPE - expect_stmt_block_assertion.md:1:15:1:19
-UNDECLARED TYPE - expect_stmt_block_assertion.md:3:17:3:21
+NIL
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**expect_stmt_block_assertion.md:1:7:1:11:**
-```roc
-foo : Bool -> Bool
-```
-      ^^^^
-
-
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**expect_stmt_block_assertion.md:1:15:1:19:**
-```roc
-foo : Bool -> Bool
-```
-              ^^^^
-
-
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**expect_stmt_block_assertion.md:3:17:3:21:**
-```roc
-    expect a == Bool.True
-```
-                ^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,
@@ -101,14 +67,17 @@ foo = |a| {
 					(e-binop (op "eq")
 						(e-lookup-local
 							(p-assign (ident "a")))
-						(e-runtime-error (tag "undeclared_type"))))
+						(e-nominal-external
+							(module-idx "2")
+							(target-node-idx "0")
+							(e-tag (name "True")))))
 				(e-lookup-local
 					(p-assign (ident "a")))))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-malformed)
-					(ty-malformed))))))
+					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "0")))
+					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "0"))))))))
 ~~~
 # TYPES
 ~~~clojure

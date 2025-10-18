@@ -49,13 +49,11 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:7:26:7:41
 MODULE NOT IMPORTED - can_import_nested_modules.md:10:28:10:42
 UNDEFINED VARIABLE - can_import_nested_modules.md:11:29:11:43
 MODULE NOT IMPORTED - can_import_nested_modules.md:14:15:14:37
-UNDECLARED TYPE - can_import_nested_modules.md:14:46:14:52
 MODULE NOT IMPORTED - can_import_nested_modules.md:14:58:14:77
 UNDEFINED VARIABLE - can_import_nested_modules.md:16:5:16:37
 UNDEFINED VARIABLE - can_import_nested_modules.md:20:23:20:30
 UNDEFINED VARIABLE - can_import_nested_modules.md:20:37:20:58
 MODULE NOT IMPORTED - can_import_nested_modules.md:23:16:23:36
-UNDECLARED TYPE - can_import_nested_modules.md:23:40:23:46
 MODULE NOT IMPORTED - can_import_nested_modules.md:23:47:23:61
 MODULE NOT IMPORTED - can_import_nested_modules.md:23:63:23:77
 UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
@@ -270,17 +268,6 @@ processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
               ^^^^^^^^^^^^^^^^^^^^^^
 
 
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_nested_modules.md:14:46:14:52:**
-```roc
-processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
-```
-                                             ^^^^^^
-
-
 **MODULE NOT IMPORTED**
 There is no module with the name `Config.Parser` imported into this Roc file.
 
@@ -334,17 +321,6 @@ You're attempting to use this module here:
 validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 ```
                ^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_nested_modules.md:23:40:23:46:**
-```roc
-validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
-```
-                                       ^^^^^^
 
 
 **MODULE NOT IMPORTED**
@@ -571,7 +547,9 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(ty-fn (effectful false)
 					(ty-malformed)
 					(ty-lookup (name "Str") (builtin))
-					(ty-malformed)))))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+						(ty-lookup (name "Str") (builtin))
+						(ty-malformed))))))
 	(d-let
 		(p-assign (ident "formatOutput"))
 		(e-lambda
@@ -600,7 +578,9 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(declared-type
 				(ty-fn (effectful false)
 					(ty-malformed)
-					(ty-malformed)))))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+						(ty-malformed)
+						(ty-malformed))))))
 	(s-import (module "json.Parser")
 		(exposes))
 	(s-import (module "http.Client")

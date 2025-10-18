@@ -10,31 +10,9 @@ foo = Bool.True
 expect foo != Bool.False
 ~~~
 # EXPECTED
-UNDECLARED TYPE - expect_stmt_top_level.md:1:7:1:11
-UNDECLARED TYPE - expect_stmt_top_level.md:3:15:3:19
+NIL
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**expect_stmt_top_level.md:1:7:1:11:**
-```roc
-foo = Bool.True
-```
-      ^^^^
-
-
-**UNDECLARED TYPE**
-The type _Bool_ is not declared in this scope.
-
-This type is referenced here:
-**expect_stmt_top_level.md:3:15:3:19:**
-```roc
-expect foo != Bool.False
-```
-              ^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,
@@ -63,12 +41,18 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "foo"))
-		(e-runtime-error (tag "undeclared_type")))
+		(e-nominal-external
+			(module-idx "2")
+			(target-node-idx "0")
+			(e-tag (name "True"))))
 	(s-expect
 		(e-binop (op "ne")
 			(e-lookup-local
 				(p-assign (ident "foo")))
-			(e-runtime-error (tag "undeclared_type")))))
+			(e-nominal-external
+				(module-idx "2")
+				(target-node-idx "0")
+				(e-tag (name "False"))))))
 ~~~
 # TYPES
 ~~~clojure

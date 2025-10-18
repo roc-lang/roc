@@ -46,17 +46,13 @@ combineResults = |result1, result2|
 # EXPECTED
 MODULE NOT FOUND - can_import_type_annotations.md:1:1:1:56
 MODULE NOT FOUND - can_import_type_annotations.md:2:1:2:17
+DUPLICATE DEFINITION - can_import_type_annotations.md:1:1:1:1
 MODULE NOT FOUND - can_import_type_annotations.md:3:1:3:38
 UNDECLARED TYPE - can_import_type_annotations.md:5:18:5:25
 UNDECLARED TYPE - can_import_type_annotations.md:5:29:5:37
 UNUSED VARIABLE - can_import_type_annotations.md:6:19:6:22
-UNDECLARED TYPE - can_import_type_annotations.md:11:29:11:35
 MODULE NOT IMPORTED - can_import_type_annotations.md:24:18:24:36
-UNDECLARED TYPE - can_import_type_annotations.md:24:45:24:51
 MODULE NOT IMPORTED - can_import_type_annotations.md:24:64:24:81
-UNDECLARED TYPE - can_import_type_annotations.md:28:18:28:24
-UNDECLARED TYPE - can_import_type_annotations.md:28:34:28:40
-UNDECLARED TYPE - can_import_type_annotations.md:28:52:28:58
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `http.Client` was not found in this Roc project.
@@ -78,6 +74,24 @@ You're attempting to use this module here:
 import json.Json
 ```
 ^^^^^^^^^^^^^^^^
+
+
+**DUPLICATE DEFINITION**
+The name `Result` is being redeclared in this scope.
+
+The redeclaration is here:
+**can_import_type_annotations.md:1:1:1:1:**
+```roc
+import http.Client as Http exposing [Request, Response]
+```
+^
+
+But `Result` was already defined here:
+**can_import_type_annotations.md:1:1:1:1:**
+```roc
+import http.Client as Http exposing [Request, Response]
+```
+^
 
 
 **MODULE NOT FOUND**
@@ -125,17 +139,6 @@ processRequest = |req| Http.defaultResponse
                   ^^^
 
 
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_type_annotations.md:11:29:11:35:**
-```roc
-handleApi : Http.Request -> Result(Http.Response, Json.Error)
-```
-                            ^^^^^^
-
-
 **MODULE NOT IMPORTED**
 There is no module with the name `Json.Parser` imported into this Roc file.
 
@@ -147,17 +150,6 @@ advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error
                  ^^^^^^^^^^^^^^^^^^
 
 
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_type_annotations.md:24:45:24:51:**
-```roc
-advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
-```
-                                            ^^^^^^
-
-
 **MODULE NOT IMPORTED**
 There is no module with the name `Json.Parser` imported into this Roc file.
 
@@ -167,39 +159,6 @@ You're attempting to use this module here:
 advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
 ```
                                                                ^^^^^^^^^^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_type_annotations.md:28:18:28:24:**
-```roc
-combineResults : Result(a, err), Result(b, err) -> Result((a, b), err)
-```
-                 ^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_type_annotations.md:28:34:28:40:**
-```roc
-combineResults : Result(a, err), Result(b, err) -> Result((a, b), err)
-```
-                                 ^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**can_import_type_annotations.md:28:52:28:58:**
-```roc
-combineResults : Result(a, err), Result(b, err) -> Result((a, b), err)
-```
-                                                   ^^^^^^
 
 
 # TOKENS
@@ -433,7 +392,7 @@ combineResults = |result1, result2|
 			(args
 				(p-assign (ident "req")))
 			(e-lookup-external
-				(module-idx "2")
+				(module-idx "4")
 				(target-node-idx "0")))
 		(annotation
 			(declared-type
@@ -447,7 +406,7 @@ combineResults = |result1, result2|
 				(p-assign (ident "input")))
 			(e-call
 				(e-lookup-external
-					(module-idx "3")
+					(module-idx "5")
 					(target-node-idx "0"))
 				(e-lookup-local
 					(p-assign (ident "input")))))
@@ -455,7 +414,7 @@ combineResults = |result1, result2|
 			(declared-type
 				(ty-fn (effectful false)
 					(ty-lookup (name "Str") (builtin))
-					(ty-lookup (name "Value") (external (module-idx "3") (target-node-idx "0")))))))
+					(ty-lookup (name "Value") (external (module-idx "5") (target-node-idx "0")))))))
 	(d-let
 		(p-assign (ident "handleApi"))
 		(e-closure
@@ -470,7 +429,7 @@ combineResults = |result1, result2|
 						(p-assign (ident "result"))
 						(e-call
 							(e-lookup-external
-								(module-idx "3")
+								(module-idx "5")
 								(target-node-idx "0"))
 							(e-dot-access (field "body")
 								(receiver
@@ -491,7 +450,7 @@ combineResults = |result1, result2|
 											(args
 												(e-call
 													(e-lookup-external
-														(module-idx "2")
+														(module-idx "4")
 														(target-node-idx "0"))
 													(e-lookup-local
 														(p-assign (ident "data"))))))))
@@ -507,16 +466,18 @@ combineResults = |result1, result2|
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-lookup (name "Request") (external (module-idx "2") (target-node-idx "0")))
-					(ty-malformed)))))
+					(ty-lookup (name "Request") (external (module-idx "4") (target-node-idx "0")))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+						(ty-lookup (name "Response") (external (module-idx "4") (target-node-idx "0")))
+						(ty-lookup (name "Error") (external (module-idx "5") (target-node-idx "0"))))))))
 	(d-let
 		(p-assign (ident "config"))
 		(e-lookup-external
-			(module-idx "3")
+			(module-idx "5")
 			(target-node-idx "0"))
 		(annotation
 			(declared-type
-				(ty-lookup (name "Config") (external (module-idx "3") (target-node-idx "0"))))))
+				(ty-lookup (name "Config") (external (module-idx "5") (target-node-idx "0"))))))
 	(d-let
 		(p-assign (ident "advancedParser"))
 		(e-lambda
@@ -525,7 +486,7 @@ combineResults = |result1, result2|
 				(p-assign (ident "input")))
 			(e-call
 				(e-lookup-external
-					(module-idx "3")
+					(module-idx "5")
 					(target-node-idx "0"))
 				(e-lookup-local
 					(p-assign (ident "parserConfig")))
@@ -536,15 +497,17 @@ combineResults = |result1, result2|
 				(ty-fn (effectful false)
 					(ty-malformed)
 					(ty-lookup (name "Str") (builtin))
-					(ty-malformed)))))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+						(ty-lookup (name "Value") (external (module-idx "5") (target-node-idx "0")))
+						(ty-malformed))))))
 	(d-let
 		(p-assign (ident "combineResults"))
 		(e-closure
 			(captures
-				(capture (ident "err"))
-				(capture (ident "err"))
 				(capture (ident "value1"))
-				(capture (ident "value2")))
+				(capture (ident "err"))
+				(capture (ident "value2"))
+				(capture (ident "err")))
 			(e-lambda
 				(args
 					(p-assign (ident "result1"))
@@ -600,9 +563,17 @@ combineResults = |result1, result2|
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-malformed)
-					(ty-malformed)
-					(ty-malformed)))))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+						(ty-rigid-var (name "a"))
+						(ty-rigid-var (name "err")))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+						(ty-rigid-var (name "b"))
+						(ty-rigid-var-lookup (ty-rigid-var (name "err"))))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+						(ty-tuple
+							(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+							(ty-rigid-var-lookup (ty-rigid-var (name "b"))))
+						(ty-rigid-var-lookup (ty-rigid-var (name "err"))))))))
 	(s-import (module "http.Client")
 		(exposes
 			(exposed (name "Request") (wildcard false))

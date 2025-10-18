@@ -220,8 +220,8 @@ main! = |_| {
 		(e-closure
 			(captures
 				(capture (ident "addOne"))
-				(capture (ident "combine"))
-				(capture (ident "identity")))
+				(capture (ident "identity"))
+				(capture (ident "combine")))
 			(e-lambda
 				(args
 					(p-underscore))

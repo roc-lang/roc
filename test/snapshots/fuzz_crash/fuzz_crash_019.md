@@ -1854,8 +1854,8 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> Num(_size)"))
-		(patt (type "a -> Error"))
+		(patt (type "_arg -> Num(_size)"))
+		(patt (type "_arg -> Error"))
 		(patt (type "[Blue]_others, [Tb]_others2 -> Error"))
 		(patt (type "_arg -> [Stdo!(Str)]_others"))
 		(patt (type "{}")))
@@ -1886,8 +1886,8 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "a -> Num(_size)"))
-		(expr (type "a -> Error"))
+		(expr (type "_arg -> Num(_size)"))
+		(expr (type "_arg -> Error"))
 		(expr (type "[Blue]_others, [Tb]_others2 -> Error"))
 		(expr (type "_arg -> [Stdo!(Str)]_others"))
 		(expr (type "{}"))))

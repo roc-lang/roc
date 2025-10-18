@@ -20,19 +20,9 @@ nested : { bar : Foo.Bar, count : U64 }
 nested = { bar: A, count: 1 }
 ~~~
 # EXPECTED
-UNDECLARED TYPE - nominal_associated_lookup_in_containers.md:9:10:9:16
+NIL
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_associated_lookup_in_containers.md:9:10:9:16:**
-```roc
-result : Result(Foo.Bar, Foo.Error)
-```
-         ^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -145,7 +135,9 @@ nested = { bar: A, count: 1 }
 				(e-tag (name "A"))))
 		(annotation
 			(declared-type
-				(ty-malformed))))
+				(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+					(ty-lookup (name "Foo.Bar") (local))
+					(ty-lookup (name "Foo.Error") (local))))))
 	(d-let
 		(p-assign (ident "nested"))
 		(e-record
