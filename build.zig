@@ -10,6 +10,16 @@ const OptimizeMode = std.builtin.OptimizeMode;
 const ResolvedTarget = std.Build.ResolvedTarget;
 const Step = std.Build.Step;
 
+fn mustUseLlvm(target: ResolvedTarget) bool {
+    return target.result.os.tag == .macos and target.result.cpu.arch == .x86_64;
+}
+
+fn configureBackend(step: *Step.Compile, target: ResolvedTarget) void {
+    if (mustUseLlvm(target)) {
+        step.use_llvm = true;
+    }
+}
+
 pub fn build(b: *std.Build) void {
     // build steps
     const run_step = b.step("run", "Build and run the roc cli");
@@ -145,6 +155,7 @@ pub fn build(b: *std.Build) void {
                 // Note: libc linking is handled by add_tracy below (required when tracy is enabled)
             }),
         });
+        configureBackend(builtin_compiler_exe, b.graph.host);
 
         // Add only the minimal modules needed for parsing/checking
         builtin_compiler_exe.root_module.addImport("base", roc_modules.base);
@@ -231,6 +242,7 @@ pub fn build(b: *std.Build) void {
             .optimize = .Debug,
         }),
     });
+    configureBackend(builtin_compiler_exe_force, b.graph.host);
 
     builtin_compiler_exe_force.root_module.addImport("base", roc_modules.base);
     builtin_compiler_exe_force.root_module.addImport("collections", roc_modules.collections);
@@ -266,6 +278,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
+    configureBackend(snapshot_exe, target);
     roc_modules.addAll(snapshot_exe);
     snapshot_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
     snapshot_exe.step.dependOn(&write_compiled_builtins.step);
@@ -283,6 +296,10 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    configureBackend(playground_exe, b.resolveTargetQuery(.{
+        .cpu_arch = .wasm32,
+        .os_tag = .freestanding,
+    }));
     playground_exe.entry = .disabled;
     playground_exe.rdynamic = true;
     roc_modules.addAll(playground_exe);
@@ -310,6 +327,7 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
             }),
         });
+        configureBackend(playground_integration_test_exe, target);
         playground_integration_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
         playground_integration_test_exe.root_module.addImport("build_options", build_options.createModule());
         roc_modules.addAll(playground_integration_test_exe);
@@ -342,6 +360,7 @@ pub fn build(b: *std.Build) void {
                 .optimize = .Debug,
             }),
         });
+        configureBackend(size_check_native, target);
         roc_modules.addAll(size_check_native);
 
         // Build for wasm32 (32-bit) - will fail at compile time if sizes don't match expected
@@ -356,6 +375,10 @@ pub fn build(b: *std.Build) void {
                 .optimize = .Debug,
             }),
         });
+        configureBackend(size_check_wasm32, b.resolveTargetQuery(.{
+            .cpu_arch = .wasm32,
+            .os_tag = .freestanding,
+        }));
         size_check_wasm32.entry = .disabled;
         size_check_wasm32.rdynamic = true;
         roc_modules.addAll(size_check_wasm32);
@@ -603,6 +626,7 @@ fn add_fuzz_target(
             .optimize = if (target.result.os.tag == .macos) .Debug else .ReleaseSafe,
         }),
     });
+    configureBackend(fuzz_obj, target);
     // Required for fuzzing.
     fuzz_obj.root_module.link_libc = true;
     fuzz_obj.root_module.stack_check = false;
@@ -622,6 +646,7 @@ fn add_fuzz_target(
             .link_libc = true,
         }),
     });
+    configureBackend(repro_exe, target);
     repro_exe.root_module.addImport("fuzz_test", fuzz_obj.root_module);
 
     install_and_run(b, no_bin, repro_exe, repro_step, repro_step, run_args);
@@ -660,6 +685,7 @@ fn addMainExe(
             .link_libc = true,
         }),
     });
+    configureBackend(exe, target);
 
     // Create test platform host static library (str)
     const test_platform_host_lib = b.addLibrary(.{
@@ -673,6 +699,7 @@ fn addMainExe(
             .pic = true, // Enable Position Independent Code for PIE compatibility
         }),
     });
+    configureBackend(test_platform_host_lib, target);
     test_platform_host_lib.root_module.addImport("builtins", roc_modules.builtins);
 
     // Force bundle compiler-rt to resolve runtime symbols like __main
@@ -696,6 +723,7 @@ fn addMainExe(
             .pic = true, // Enable Position Independent Code for PIE compatibility
         }),
     });
+    configureBackend(test_platform_int_host_lib, target);
     test_platform_int_host_lib.root_module.addImport("builtins", roc_modules.builtins);
     // Force bundle compiler-rt to resolve runtime symbols like __main
     test_platform_int_host_lib.bundle_compiler_rt = true;
@@ -729,6 +757,7 @@ fn addMainExe(
             }),
             .linkage = .static,
         });
+        configureBackend(cross_int_host_lib, cross_resolved_target);
         cross_int_host_lib.root_module.addImport("builtins", roc_modules.builtins);
         cross_int_host_lib.bundle_compiler_rt = true;
 
@@ -757,6 +786,7 @@ fn addMainExe(
             .pic = true, // Enable Position Independent Code for PIE compatibility
         }),
     });
+    configureBackend(builtins_obj, target);
 
     // Create shim static library at build time - fully static without libc
     //
@@ -772,6 +802,7 @@ fn addMainExe(
         }),
         .linkage = .static,
     });
+    configureBackend(shim_lib, target);
     // Add all modules from roc_modules that the shim needs
     roc_modules.addAll(shim_lib);
     // Link against the pre-built builtins library
@@ -1435,3 +1466,4 @@ fn createMinimalElfX64() []const u8 {
         0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_align
     };
 }
+

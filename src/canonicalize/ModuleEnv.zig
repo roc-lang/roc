@@ -1400,6 +1400,7 @@ pub const Serialized = struct {
         try self.imports.serialize(&env.imports, allocator, writer);
 
         self.diagnostics = env.diagnostics;
+        self.module_kind = env.module_kind;
 
         // Serialize NodeStore
         try self.store.serialize(&env.store, allocator, writer);
