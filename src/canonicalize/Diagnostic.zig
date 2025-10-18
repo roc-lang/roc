@@ -44,6 +44,10 @@ pub const Diagnostic = union(enum) {
         ident: Ident.Idx,
         region: Region,
     },
+    qualified_ident_does_not_exist: struct {
+        ident: Ident.Idx, // The full qualified identifier (e.g., "Stdout.line!")
+        region: Region,
+    },
     invalid_top_level_statement: struct {
         stmt: StringLiteral.Idx,
         region: Region,
@@ -244,6 +248,7 @@ pub const Diagnostic = union(enum) {
             .invalid_num_literal => |d| d.region,
             .ident_already_in_scope => |d| d.region,
             .ident_not_in_scope => |d| d.region,
+            .qualified_ident_does_not_exist => |d| d.region,
             .invalid_top_level_statement => |d| d.region,
             .expr_not_canonicalized => |d| d.region,
             .invalid_string_interpolation => |d| d.region,
@@ -496,6 +501,32 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText(" or ");
         try report.document.addKeyword("exposing");
         try report.document.addReflowingText(" missing up-top?");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            owned_filename,
+            source,
+            line_starts,
+        );
+        return report;
+    }
+
+    /// Build a report for "qualified ident does not exist" diagnostic
+    pub fn buildQualifiedIdentDoesNotExistReport(
+        allocator: Allocator,
+        ident_name: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) !Report {
+        var report = Report.init(allocator, "DOES NOT EXIST", .runtime_error);
+        const owned_ident = try report.addOwnedString(ident_name);
+        try report.document.addUnqualifiedSymbol(owned_ident);
+        try report.document.addReflowingText(" does not exist.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         const owned_filename = try report.addOwnedString(filename);

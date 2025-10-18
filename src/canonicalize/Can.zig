@@ -2290,7 +2290,7 @@ pub fn canonicalizeExpr(
                             const target_node_idx = target_node_idx_opt orelse {
                                 // The identifier doesn't exist in the module or isn't exposed
                                 return CanonicalizedExpr{
-                                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .ident_not_in_scope = .{
+                                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .qualified_ident_does_not_exist = .{
                                         .ident = qualified_ident,
                                         .region = region,
                                     } }),
@@ -2371,7 +2371,7 @@ pub fn canonicalizeExpr(
                                 // This can happen with qualified identifiers like "Result.withDefault" where Result is a type module
                                 // but withDefault doesn't exist
                                 return CanonicalizedExpr{
-                                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .ident_not_in_scope = .{
+                                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .qualified_ident_does_not_exist = .{
                                         .ident = ident,
                                         .region = region,
                                     } }),

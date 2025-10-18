@@ -31,14 +31,13 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - rigid_var_no_instantiation_error.md:17:21:17:30
+DOES NOT EXIST - rigid_var_no_instantiation_error.md:17:21:17:30
 UNUSED VARIABLE - rigid_var_no_instantiation_error.md:13:5:13:12
 UNUSED VARIABLE - rigid_var_no_instantiation_error.md:17:5:17:12
 UNUSED VARIABLE - rigid_var_no_instantiation_error.md:21:5:21:12
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `Bool.true` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Bool.true` does not exist.
 
 **rigid_var_no_instantiation_error.md:17:21:17:30:**
 ```roc
@@ -257,7 +256,7 @@ main! = |_| {
 								(p-assign (ident "swap")))
 							(e-tuple
 								(elems
-									(e-runtime-error (tag "ident_not_in_scope"))
+									(e-runtime-error (tag "qualified_ident_does_not_exist"))
 									(e-list
 										(elems
 											(e-num (value "1"))

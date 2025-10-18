@@ -11,7 +11,7 @@ main = Json.utf8
 ~~~
 # EXPECTED
 MODULE NOT FOUND - can_import_json.md:1:1:1:17
-UNDEFINED VARIABLE - can_import_json.md:3:8:3:17
+DOES NOT EXIST - can_import_json.md:3:8:3:17
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `json.Json` was not found in this Roc project.
@@ -24,9 +24,8 @@ import json.Json
 ^^^^^^^^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `Json.utf8` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Json.utf8` does not exist.
 
 **can_import_json.md:3:8:3:17:**
 ```roc
@@ -60,7 +59,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "main"))
-		(e-runtime-error (tag "ident_not_in_scope")))
+		(e-runtime-error (tag "qualified_ident_does_not_exist")))
 	(s-import (module "json.Json")
 		(exposes)))
 ~~~

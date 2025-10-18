@@ -68,29 +68,29 @@ DUPLICATE DEFINITION - can_import_exposing_types.md:1:1:1:1
 MODULE NOT FOUND - can_import_exposing_types.md:3:1:3:38
 UNDECLARED TYPE - can_import_exposing_types.md:6:27:6:32
 UNDECLARED TYPE - can_import_exposing_types.md:6:34:6:39
-UNDEFINED VARIABLE - can_import_exposing_types.md:7:21:7:31
+DOES NOT EXIST - can_import_exposing_types.md:7:21:7:31
 UNDECLARED TYPE - can_import_exposing_types.md:10:17:10:24
 UNDECLARED TYPE - can_import_exposing_types.md:10:28:10:36
-UNDEFINED VARIABLE - can_import_exposing_types.md:12:14:12:25
-UNDEFINED VARIABLE - can_import_exposing_types.md:14:22:14:29
-UNDEFINED VARIABLE - can_import_exposing_types.md:15:23:15:38
+DOES NOT EXIST - can_import_exposing_types.md:12:14:12:25
+DOES NOT EXIST - can_import_exposing_types.md:14:22:14:29
+DOES NOT EXIST - can_import_exposing_types.md:15:23:15:38
 UNDECLARED TYPE - can_import_exposing_types.md:20:15:20:21
 UNDECLARED TYPE - can_import_exposing_types.md:20:28:20:33
 UNDECLARED TYPE - can_import_exposing_types.md:20:50:20:55
 UNDECLARED TYPE - can_import_exposing_types.md:20:58:20:63
 UNDEFINED VARIABLE - can_import_exposing_types.md:22:5:22:16
-UNDEFINED VARIABLE - can_import_exposing_types.md:24:13:24:30
+DOES NOT EXIST - can_import_exposing_types.md:24:13:24:30
 UNDECLARED TYPE - can_import_exposing_types.md:35:16:35:22
-UNDEFINED VARIABLE - can_import_exposing_types.md:36:25:36:40
+DOES NOT EXIST - can_import_exposing_types.md:36:25:36:40
 UNDECLARED TYPE - can_import_exposing_types.md:39:18:39:26
-UNDEFINED VARIABLE - can_import_exposing_types.md:42:23:42:42
+DOES NOT EXIST - can_import_exposing_types.md:42:23:42:42
 UNDEFINED VARIABLE - can_import_exposing_types.md:43:23:43:37
 UNDECLARED TYPE - can_import_exposing_types.md:47:25:47:30
 UNDECLARED TYPE - can_import_exposing_types.md:47:32:47:37
 UNDECLARED TYPE - can_import_exposing_types.md:47:40:47:46
 UNDECLARED TYPE - can_import_exposing_types.md:47:57:47:65
 UNDECLARED TYPE - can_import_exposing_types.md:47:67:47:72
-UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
+DOES NOT EXIST - can_import_exposing_types.md:50:33:50:44
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Config_ is not declared in this scope.
@@ -198,9 +198,8 @@ parseJson : Str -> Result(Value, Error)
                                  ^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `Json.parse` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Json.parse` does not exist.
 
 **can_import_exposing_types.md:7:21:7:31:**
 ```roc
@@ -231,9 +230,8 @@ handleRequest : Request -> Response
                            ^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `Json.decode` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Json.decode` does not exist.
 
 **can_import_exposing_types.md:12:14:12:25:**
 ```roc
@@ -242,9 +240,8 @@ Is there an `import` or `exposing` missing up-top?
              ^^^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `Http.ok` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Http.ok` does not exist.
 
 **can_import_exposing_types.md:14:22:14:29:**
 ```roc
@@ -253,9 +250,8 @@ Is there an `import` or `exposing` missing up-top?
                      ^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `Http.badRequest` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Http.badRequest` does not exist.
 
 **can_import_exposing_types.md:15:23:15:38:**
 ```roc
@@ -319,9 +315,8 @@ Is there an `import` or `exposing` missing up-top?
     ^^^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `Json.validateWith` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Json.validateWith` does not exist.
 
 **can_import_exposing_types.md:24:13:24:30:**
 ```roc
@@ -341,9 +336,8 @@ createClient : Config -> Http.Client
                ^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `Http.clientWith` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Http.clientWith` does not exist.
 
 **can_import_exposing_types.md:36:25:36:40:**
 ```roc
@@ -363,9 +357,8 @@ handleResponse : Response -> Str
                  ^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `Http.statusToString` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Http.statusToString` does not exist.
 
 **can_import_exposing_types.md:42:23:42:42:**
 ```roc
@@ -440,9 +433,8 @@ combineResults : Result(Value, Error), Status -> Result(Response, Error)
                                                                   ^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `Json.encode` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Json.encode` does not exist.
 
 **can_import_exposing_types.md:50:33:50:44:**
 ```roc
@@ -738,7 +730,7 @@ combineResults = |jsonResult, httpStatus|
 			(args
 				(p-assign (ident "input")))
 			(e-call
-				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-runtime-error (tag "qualified_ident_does_not_exist"))
 				(e-lookup-local
 					(p-assign (ident "input")))))
 		(annotation
@@ -761,7 +753,7 @@ combineResults = |jsonResult, httpStatus|
 					(s-let
 						(p-assign (ident "result"))
 						(e-call
-							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-runtime-error (tag "qualified_ident_does_not_exist"))
 							(e-dot-access (field "body")
 								(receiver
 									(e-lookup-local
@@ -778,7 +770,7 @@ combineResults = |jsonResult, httpStatus|
 											(p-applied-tag)))
 									(value
 										(e-call
-											(e-runtime-error (tag "ident_not_in_scope"))
+											(e-runtime-error (tag "qualified_ident_does_not_exist"))
 											(e-lookup-local
 												(p-assign (ident "value"))))))
 								(branch
@@ -787,7 +779,7 @@ combineResults = |jsonResult, httpStatus|
 											(p-applied-tag)))
 									(value
 										(e-call
-											(e-runtime-error (tag "ident_not_in_scope"))
+											(e-runtime-error (tag "qualified_ident_does_not_exist"))
 											(e-lookup-local
 												(p-assign (ident "error"))))))))))))
 		(annotation
@@ -812,7 +804,7 @@ combineResults = |jsonResult, httpStatus|
 						(args
 							(p-assign (ident "v")))
 						(e-call
-							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-runtime-error (tag "qualified_ident_does_not_exist"))
 							(e-lookup-local
 								(p-assign (ident "config")))
 							(e-lookup-local
@@ -833,7 +825,7 @@ combineResults = |jsonResult, httpStatus|
 			(args
 				(p-assign (ident "config")))
 			(e-call
-				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-runtime-error (tag "qualified_ident_does_not_exist"))
 				(e-lookup-local
 					(p-assign (ident "config")))))
 		(annotation
@@ -864,7 +856,7 @@ combineResults = |jsonResult, httpStatus|
 										(p-applied-tag)))
 								(value
 									(e-call
-										(e-runtime-error (tag "ident_not_in_scope"))
+										(e-runtime-error (tag "qualified_ident_does_not_exist"))
 										(e-lookup-local
 											(p-assign (ident "status"))))))
 							(branch
@@ -908,7 +900,7 @@ combineResults = |jsonResult, httpStatus|
 												(fields
 													(field (name "body")
 														(e-call
-															(e-runtime-error (tag "ident_not_in_scope"))
+															(e-runtime-error (tag "qualified_ident_does_not_exist"))
 															(e-lookup-local
 																(p-assign (ident "value")))))
 													(field (name "status")

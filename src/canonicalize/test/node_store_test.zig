@@ -435,6 +435,13 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(CIR.Diagnostic{
+        .qualified_ident_does_not_exist = .{
+            .ident = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
         .invalid_top_level_statement = .{
             .stmt = rand_idx(StringLiteral.Idx),
             .region = rand_region(),

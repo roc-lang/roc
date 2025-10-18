@@ -266,6 +266,27 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .qualified_ident_does_not_exist => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const ident_name = self.getIdent(data.ident);
+
+            var report = Report.init(allocator, "DOES NOT EXIST", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" does not exist.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .exposed_but_not_implemented => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
