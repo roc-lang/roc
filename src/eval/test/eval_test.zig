@@ -432,7 +432,7 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interpreter = try Interpreter.init(testing.allocator, resources.module_env);
+    var interpreter = try Interpreter.init(testing.allocator, resources.module_env, &.{});
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -748,7 +748,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
     // Test 1: Evaluate with the original ModuleEnv
     {
-        var interpreter = try Interpreter.init(gpa, &original_env);
+        var interpreter = try Interpreter.init(gpa, &original_env, &.{});
         defer interpreter.deinit();
 
         const ops = test_env_instance.get_ops();
@@ -812,7 +812,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         // Test 4: Evaluate the same expression using the deserialized ModuleEnv
         // The original expression index should still be valid since the NodeStore structure is preserved
         {
-            var interpreter = try Interpreter.init(gpa, deserialized_env);
+            var interpreter = try Interpreter.init(gpa, deserialized_env, &.{});
             defer interpreter.deinit();
 
             const ops = test_env_instance.get_ops();

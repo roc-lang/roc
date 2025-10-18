@@ -197,7 +197,7 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*Modu
 /// Create and initialize interpreter with heap-allocated stable objects
 fn createInterpreter(env_ptr: *ModuleEnv, roc_ops: *RocOps) ShimError!Interpreter {
     const allocator = std.heap.page_allocator;
-    const interpreter = eval.Interpreter.init(allocator, env_ptr) catch {
+    const interpreter = eval.Interpreter.init(allocator, env_ptr, &.{}) catch {
         roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
         return error.InterpreterSetupFailed;
     };

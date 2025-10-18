@@ -727,7 +727,7 @@ pub const PackageEnv = struct {
         }
 
         // After type checking, evaluate top-level declarations at compile time
-        var comptime_evaluator = try eval.ComptimeEvaluator.init(self.gpa, env, &checker.problems);
+        var comptime_evaluator = try eval.ComptimeEvaluator.init(self.gpa, env, others.items, &checker.problems);
         _ = try comptime_evaluator.evalAll();
 
         // Build reports from problems

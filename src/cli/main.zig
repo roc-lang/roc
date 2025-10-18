@@ -2387,7 +2387,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     };
 
     // Evaluate all top-level declarations at compile time
-    var comptime_evaluator = eval.ComptimeEvaluator.init(allocs.gpa, &env, &checker.problems) catch |err| {
+    var comptime_evaluator = eval.ComptimeEvaluator.init(allocs.gpa, &env, &.{}, &checker.problems) catch |err| {
         try stderr.print("Failed to create compile-time evaluator: {}\n", .{err});
         std.process.exit(1);
     };

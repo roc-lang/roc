@@ -23,7 +23,9 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
 } {
     const gpa = test_allocator;
 
-    var module_env = try ModuleEnv.init(gpa, src);
+    const module_env = try gpa.create(ModuleEnv);
+    errdefer gpa.destroy(module_env);
+    module_env.* = try ModuleEnv.init(gpa, src);
     errdefer module_env.deinit();
 
     module_env.common.source = src;
@@ -46,14 +48,14 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     };
 
     // Create canonicalizer
-    var czer = try Can.init(&module_env, &parse_ast, null, .{});
+    var czer = try Can.init(module_env, &parse_ast, null, .{});
     defer czer.deinit();
 
     // Canonicalize the module
     try czer.canonicalizeFile();
 
     // Type check the module
-    var checker = try Check.init(gpa, &module_env.types, &module_env, &.{}, &module_env.store.regions, common_idents);
+    var checker = try Check.init(gpa, &module_env.types, module_env, &.{}, &module_env.store.regions, common_idents);
     defer checker.deinit();
 
     try checker.checkFile();
@@ -63,10 +65,10 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     problems.* = .{};
 
     // Create and run comptime evaluator
-    const evaluator = try ComptimeEvaluator.init(gpa, &module_env, problems);
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &.{}, problems);
 
     return .{
-        .module_env = &module_env,
+        .module_env = module_env,
         .evaluator = evaluator,
         .problems = problems,
     };
@@ -81,7 +83,9 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
 } {
     const gpa = test_allocator;
 
-    var module_env = try ModuleEnv.init(gpa, src);
+    const module_env = try gpa.create(ModuleEnv);
+    errdefer gpa.destroy(module_env);
+    module_env.* = try ModuleEnv.init(gpa, src);
     errdefer module_env.deinit();
 
     module_env.common.source = src;
@@ -109,7 +113,7 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     };
 
     // Create canonicalizer with imports
-    var czer = try Can.init(&module_env, &parse_ast, &module_envs, .{});
+    var czer = try Can.init(module_env, &parse_ast, &module_envs, .{});
     defer czer.deinit();
 
     // Canonicalize the module
@@ -121,7 +125,7 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     try other_envs_list.append(imported_module);
 
     // Type check the module
-    var checker = try Check.init(gpa, &module_env.types, &module_env, other_envs_list.items, &module_env.store.regions, common_idents);
+    var checker = try Check.init(gpa, &module_env.types, module_env, other_envs_list.items, &module_env.store.regions, common_idents);
     defer checker.deinit();
 
     try checker.checkFile();
@@ -130,14 +134,14 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     const problems = try gpa.create(check.problem.Store);
     problems.* = .{};
 
-    // Create and run comptime evaluator
-    const evaluator = try ComptimeEvaluator.init(gpa, &module_env, problems);
-
     // Keep other_envs alive
     const other_envs_slice = try gpa.dupe(*const ModuleEnv, other_envs_list.items);
 
+    // Create and run comptime evaluator
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, other_envs_slice, problems);
+
     return .{
-        .module_env = &module_env,
+        .module_env = module_env,
         .evaluator = evaluator,
         .problems = problems,
         .other_envs = other_envs_slice,
@@ -153,6 +157,7 @@ fn cleanupEvalModule(result: anytype) void {
     problems_mut.deinit(test_allocator);
     test_allocator.destroy(result.problems);
     result.module_env.deinit();
+    test_allocator.destroy(result.module_env);
 }
 
 fn cleanupEvalModuleWithImport(result: anytype) void {
@@ -165,6 +170,7 @@ fn cleanupEvalModuleWithImport(result: anytype) void {
     test_allocator.destroy(result.problems);
     test_allocator.free(result.other_envs);
     result.module_env.deinit();
+    test_allocator.destroy(result.module_env);
 }
 
 test "comptime eval - simple constant" {
@@ -314,8 +320,8 @@ test "comptime eval - cross-module constant works" {
 
     const summary_b = try result_b.evaluator.evalAll();
 
-    // Should skip the constant in module B because it references module A
-    // Cross-module comptime evaluation is not currently supported
+    // Cross-module comptime evaluation is now supported
+    // The constant in module B should evaluate successfully using module A's value
     try testing.expectEqual(@as(u32, 1), summary_b.evaluated);
     try testing.expectEqual(@as(u32, 0), summary_b.crashed);
 }
@@ -352,11 +358,10 @@ test "comptime eval - cross-module crash is detected" {
 
     const summary_b = try result_b.evaluator.evalAll();
 
-    // The expression in module B uses A.crashy but doesn't crash
-    // because cross-module references are skipped during comptime evaluation
-    // Cross-module comptime evaluation is not currently supported
+    // The expression in module B should crash because it evaluates A.crashy + 1
+    // Cross-module comptime evaluation is now supported
     try testing.expectEqual(@as(u32, 1), summary_b.evaluated);
-    try testing.expectEqual(@as(u32, 0), summary_b.crashed);
+    try testing.expectEqual(@as(u32, 1), summary_b.crashed);
 }
 
 test "comptime eval - unexposed constant cannot be accessed" {

@@ -122,12 +122,13 @@ pub const ComptimeEvaluator = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         cir: *ModuleEnv,
+        other_envs: []const *const ModuleEnv,
         problems: *ProblemStore,
     ) !ComptimeEvaluator {
         return ComptimeEvaluator{
             .allocator = allocator,
             .env = cir,
-            .interpreter = try Interpreter.init(allocator, cir),
+            .interpreter = try Interpreter.init(allocator, cir, other_envs),
             .crash = CrashContext.init(allocator),
             .roc_ops = null,
             .problems = problems,
@@ -163,132 +164,6 @@ pub const ComptimeEvaluator = struct {
         return &(self.roc_ops.?);
     }
 
-    /// Check if an expression contains references to external modules
-    fn containsExternalReferences(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx) bool {
-        const expr = self.env.store.getExpr(expr_idx);
-        switch (expr) {
-            // These expressions directly reference external modules
-            .e_lookup_external, .e_nominal_external => return true,
-
-            // Recursively check composite expressions
-            .e_binop => |e| {
-                if (self.containsExternalReferences(e.lhs)) return true;
-                if (self.containsExternalReferences(e.rhs)) return true;
-            },
-            .e_unary_minus => |e| {
-                if (self.containsExternalReferences(e.expr)) return true;
-            },
-            .e_unary_not => |e| {
-                if (self.containsExternalReferences(e.expr)) return true;
-            },
-            .e_if => |e| {
-                const branches = self.env.store.sliceIfBranches(e.branches);
-                for (branches) |branch_idx| {
-                    const branch = self.env.store.getIfBranch(branch_idx);
-                    if (self.containsExternalReferences(branch.cond)) return true;
-                    if (self.containsExternalReferences(branch.body)) return true;
-                }
-                if (self.containsExternalReferences(e.final_else)) return true;
-            },
-            .e_block => |e| {
-                if (self.containsExternalReferences(e.final_expr)) return true;
-            },
-            .e_call => |e| {
-                if (self.containsExternalReferences(e.func)) return true;
-                const args = self.env.store.sliceExpr(e.args);
-                for (args) |arg_idx| {
-                    if (self.containsExternalReferences(arg_idx)) return true;
-                }
-            },
-            .e_list => |e| {
-                const elems = self.env.store.sliceExpr(e.elems);
-                for (elems) |elem_idx| {
-                    if (self.containsExternalReferences(elem_idx)) return true;
-                }
-            },
-            .e_tuple => |e| {
-                const elems = self.env.store.sliceExpr(e.elems);
-                for (elems) |elem_idx| {
-                    if (self.containsExternalReferences(elem_idx)) return true;
-                }
-            },
-            .e_tag => |e| {
-                const args = self.env.store.sliceExpr(e.args);
-                for (args) |arg_idx| {
-                    if (self.containsExternalReferences(arg_idx)) return true;
-                }
-            },
-            .e_nominal => |e| {
-                if (self.containsExternalReferences(e.backing_expr)) return true;
-            },
-            .e_record => |e| {
-                if (e.ext) |ext_idx| {
-                    if (self.containsExternalReferences(ext_idx)) return true;
-                }
-                const fields = self.env.store.sliceRecordFields(e.fields);
-                for (fields) |field_idx| {
-                    const field = self.env.store.getRecordField(field_idx);
-                    if (self.containsExternalReferences(field.value)) return true;
-                }
-            },
-            .e_str => |e| {
-                const segments = self.env.store.sliceExpr(e.span);
-                for (segments) |segment_idx| {
-                    if (self.containsExternalReferences(segment_idx)) return true;
-                }
-            },
-            .e_dbg => |e| {
-                if (self.containsExternalReferences(e.expr)) return true;
-            },
-            .e_expect => |e| {
-                if (self.containsExternalReferences(e.body)) return true;
-            },
-            .e_dot_access => |e| {
-                if (self.containsExternalReferences(e.receiver)) return true;
-                if (e.args) |args| {
-                    const arg_exprs = self.env.store.sliceExpr(args);
-                    for (arg_exprs) |arg_idx| {
-                        if (self.containsExternalReferences(arg_idx)) return true;
-                    }
-                }
-            },
-            .e_match => |e| {
-                if (self.containsExternalReferences(e.cond)) return true;
-                const branches = self.env.store.matchBranchSlice(e.branches);
-                for (branches) |branch_idx| {
-                    const branch = self.env.store.getMatchBranch(branch_idx);
-                    if (self.containsExternalReferences(branch.value)) return true;
-                    if (branch.guard) |guard_idx| {
-                        if (self.containsExternalReferences(guard_idx)) return true;
-                    }
-                }
-            },
-            .e_closure => |e| {
-                if (self.containsExternalReferences(e.lambda_idx)) return true;
-            },
-            .e_lambda => |e| {
-                if (self.containsExternalReferences(e.body)) return true;
-            },
-
-            // Leaf expressions that don't contain subexpressions
-            .e_num,
-            .e_frac_f32,
-            .e_frac_f64,
-            .e_dec,
-            .e_dec_small,
-            .e_str_segment,
-            .e_lookup_local,
-            .e_empty_list,
-            .e_empty_record,
-            .e_zero_argument_tag,
-            .e_runtime_error,
-            .e_crash,
-            .e_ellipsis,
-            => {},
-        }
-        return false;
-    }
-
     /// Evaluates a single declaration
     fn evalDecl(self: *ComptimeEvaluator, def_idx: CIR.Def.Idx) !EvalResult {
         const def = self.env.store.getDef(def_idx);
@@ -300,12 +175,6 @@ pub const ComptimeEvaluator = struct {
         switch (expr) {
             .e_lambda, .e_closure => return EvalResult.success,
             else => {},
-        }
-
-        // Skip expressions that reference external modules
-        // Cross-module evaluation requires access to multiple ModuleEnvs which the interpreter doesn't support
-        if (self.containsExternalReferences(expr_idx)) {
-            return EvalResult.success;
         }
 
         const ops = self.get_ops();
