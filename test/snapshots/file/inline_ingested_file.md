@@ -16,7 +16,7 @@ PARSE ERROR - inline_ingested_file.md:1:9:1:19
 PARSE ERROR - inline_ingested_file.md:1:19:1:20
 PARSE ERROR - inline_ingested_file.md:1:21:1:23
 MODULE NOT FOUND - inline_ingested_file.md:2:1:2:12
-DOES NOT EXIST - inline_ingested_file.md:4:7:4:17
+UNDEFINED VARIABLE - inline_ingested_file.md:4:7:4:17
 UNDEFINED VARIABLE - inline_ingested_file.md:4:18:4:22
 # PROBLEMS
 **PARSE ERROR**
@@ -74,8 +74,9 @@ import Json
 ^^^^^^^^^^^
 
 
-**DOES NOT EXIST**
-`Json.parse` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `parse` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **inline_ingested_file.md:4:7:4:17:**
 ```roc
@@ -133,7 +134,7 @@ foo = Json.parse(data)
 	(d-let
 		(p-assign (ident "foo"))
 		(e-call
-			(e-runtime-error (tag "qualified_ident_does_not_exist"))
+			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-runtime-error (tag "ident_not_in_scope"))))
 	(s-import (module "Json")
 		(exposes)))

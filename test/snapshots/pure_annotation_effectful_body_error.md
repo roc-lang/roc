@@ -17,7 +17,7 @@ main! = bad_function("This should fail")
 ~~~
 # EXPECTED
 MODULE NOT FOUND - pure_annotation_effectful_body_error.md:3:1:3:17
-DOES NOT EXIST - pure_annotation_effectful_body_error.md:7:22:7:34
+UNDEFINED VARIABLE - pure_annotation_effectful_body_error.md:7:22:7:34
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `pf.Stdout` was not found in this Roc project.
@@ -30,8 +30,9 @@ import pf.Stdout
 ^^^^^^^^^^^^^^^^
 
 
-**DOES NOT EXIST**
-`Stdout.line!` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `line!` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **pure_annotation_effectful_body_error.md:7:22:7:34:**
 ```roc
@@ -97,7 +98,7 @@ NO CHANGE
 			(args
 				(p-assign (ident "msg")))
 			(e-call
-				(e-runtime-error (tag "qualified_ident_does_not_exist"))
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local
 					(p-assign (ident "msg")))))
 		(annotation

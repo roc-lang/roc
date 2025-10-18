@@ -50,15 +50,15 @@ DUPLICATE DEFINITION - can_import_type_annotations.md:1:1:1:1
 MODULE NOT FOUND - can_import_type_annotations.md:3:1:3:38
 UNDECLARED TYPE - can_import_type_annotations.md:5:18:5:25
 UNDECLARED TYPE - can_import_type_annotations.md:5:29:5:37
-DOES NOT EXIST - can_import_type_annotations.md:6:24:6:44
+UNDEFINED VARIABLE - can_import_type_annotations.md:6:24:6:44
 UNUSED VARIABLE - can_import_type_annotations.md:6:19:6:22
-DOES NOT EXIST - can_import_type_annotations.md:9:21:9:31
-DOES NOT EXIST - can_import_type_annotations.md:13:14:13:25
-DOES NOT EXIST - can_import_type_annotations.md:15:24:15:36
-DOES NOT EXIST - can_import_type_annotations.md:21:10:21:28
+UNDEFINED VARIABLE - can_import_type_annotations.md:9:21:9:31
+UNDEFINED VARIABLE - can_import_type_annotations.md:13:14:13:25
+UNDEFINED VARIABLE - can_import_type_annotations.md:15:24:15:36
+UNDEFINED VARIABLE - can_import_type_annotations.md:21:10:21:28
 MODULE NOT IMPORTED - can_import_type_annotations.md:24:18:24:36
 MODULE NOT IMPORTED - can_import_type_annotations.md:24:64:24:81
-DOES NOT EXIST - can_import_type_annotations.md:25:40:25:61
+UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `http.Client` was not found in this Roc project.
@@ -133,8 +133,9 @@ processRequest : Request -> Response
                             ^^^^^^^^
 
 
-**DOES NOT EXIST**
-`Http.defaultResponse` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `defaultResponse` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **can_import_type_annotations.md:6:24:6:44:**
 ```roc
@@ -155,8 +156,9 @@ processRequest = |req| Http.defaultResponse
                   ^^^
 
 
-**DOES NOT EXIST**
-`Json.parse` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `parse` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **can_import_type_annotations.md:9:21:9:31:**
 ```roc
@@ -165,8 +167,9 @@ parseJson = |input| Json.parse(input)
                     ^^^^^^^^^^
 
 
-**DOES NOT EXIST**
-`Json.decode` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `decode` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **can_import_type_annotations.md:13:14:13:25:**
 ```roc
@@ -175,8 +178,9 @@ parseJson = |input| Json.parse(input)
              ^^^^^^^^^^^
 
 
-**DOES NOT EXIST**
-`Http.success` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `success` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **can_import_type_annotations.md:15:24:15:36:**
 ```roc
@@ -185,8 +189,9 @@ parseJson = |input| Json.parse(input)
                        ^^^^^^^^^^^^
 
 
-**DOES NOT EXIST**
-`Json.defaultConfig` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `defaultConfig` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **can_import_type_annotations.md:21:10:21:28:**
 ```roc
@@ -217,8 +222,9 @@ advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error
                                                                ^^^^^^^^^^^^^^^^^
 
 
-**DOES NOT EXIST**
-`Json.Parser.parseWith` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `parseWith` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **can_import_type_annotations.md:25:40:25:61:**
 ```roc
@@ -457,7 +463,7 @@ combineResults = |result1, result2|
 		(e-lambda
 			(args
 				(p-assign (ident "req")))
-			(e-runtime-error (tag "qualified_ident_does_not_exist")))
+			(e-runtime-error (tag "ident_not_in_scope")))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
@@ -469,7 +475,7 @@ combineResults = |result1, result2|
 			(args
 				(p-assign (ident "input")))
 			(e-call
-				(e-runtime-error (tag "qualified_ident_does_not_exist"))
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local
 					(p-assign (ident "input")))))
 		(annotation
@@ -490,7 +496,7 @@ combineResults = |result1, result2|
 					(s-let
 						(p-assign (ident "result"))
 						(e-call
-							(e-runtime-error (tag "qualified_ident_does_not_exist"))
+							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-dot-access (field "body")
 								(receiver
 									(e-lookup-local
@@ -509,7 +515,7 @@ combineResults = |result1, result2|
 										(e-tag (name "Ok")
 											(args
 												(e-call
-													(e-runtime-error (tag "qualified_ident_does_not_exist"))
+													(e-runtime-error (tag "ident_not_in_scope"))
 													(e-lookup-local
 														(p-assign (ident "data"))))))))
 								(branch
@@ -530,7 +536,7 @@ combineResults = |result1, result2|
 						(ty-lookup (name "Error") (external (module-idx "5") (target-node-idx "0"))))))))
 	(d-let
 		(p-assign (ident "config"))
-		(e-runtime-error (tag "qualified_ident_does_not_exist"))
+		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation
 			(declared-type
 				(ty-lookup (name "Config") (external (module-idx "5") (target-node-idx "0"))))))
@@ -541,7 +547,7 @@ combineResults = |result1, result2|
 				(p-assign (ident "parserConfig"))
 				(p-assign (ident "input")))
 			(e-call
-				(e-runtime-error (tag "qualified_ident_does_not_exist"))
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local
 					(p-assign (ident "parserConfig")))
 				(e-lookup-local

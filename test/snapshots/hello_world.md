@@ -13,7 +13,7 @@ main! = |_| Stdout.line!("Hello, world!")
 ~~~
 # EXPECTED
 MODULE NOT FOUND - hello_world.md:3:1:3:17
-DOES NOT EXIST - hello_world.md:5:13:5:25
+UNDEFINED VARIABLE - hello_world.md:5:13:5:25
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `pf.Stdout` was not found in this Roc project.
@@ -26,8 +26,9 @@ import pf.Stdout
 ^^^^^^^^^^^^^^^^
 
 
-**DOES NOT EXIST**
-`Stdout.line!` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `line!` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **hello_world.md:5:13:5:25:**
 ```roc
@@ -82,7 +83,7 @@ NO CHANGE
 			(args
 				(p-underscore))
 			(e-call
-				(e-runtime-error (tag "qualified_ident_does_not_exist"))
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-string
 					(e-literal (string "Hello, world!"))))))
 	(s-import (module "pf.Stdout")

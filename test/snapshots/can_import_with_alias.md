@@ -11,7 +11,7 @@ main = MyJson.decode
 ~~~
 # EXPECTED
 MODULE NOT FOUND - can_import_with_alias.md:1:1:1:27
-DOES NOT EXIST - can_import_with_alias.md:3:8:3:21
+UNDEFINED VARIABLE - can_import_with_alias.md:3:8:3:21
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `json.Json` was not found in this Roc project.
@@ -24,8 +24,9 @@ import json.Json as MyJson
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**DOES NOT EXIST**
-`MyJson.decode` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `decode` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **can_import_with_alias.md:3:8:3:21:**
 ```roc
@@ -59,7 +60,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "main"))
-		(e-runtime-error (tag "qualified_ident_does_not_exist")))
+		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-import (module "json.Json")
 		(exposes)))
 ~~~

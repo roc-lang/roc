@@ -43,14 +43,14 @@ main = {
 MODULE NOT FOUND - can_import_comprehensive.md:1:1:1:17
 MODULE NOT FOUND - can_import_comprehensive.md:2:1:2:48
 MODULE NOT FOUND - can_import_comprehensive.md:3:1:3:27
-DOES NOT EXIST - can_import_comprehensive.md:6:14:6:22
-DOES NOT EXIST - can_import_comprehensive.md:7:14:7:23
-DOES NOT EXIST - can_import_comprehensive.md:8:14:8:22
-DOES NOT EXIST - can_import_comprehensive.md:11:15:11:25
-DOES NOT EXIST - can_import_comprehensive.md:14:15:14:24
+UNDEFINED VARIABLE - can_import_comprehensive.md:6:14:6:22
+UNDEFINED VARIABLE - can_import_comprehensive.md:7:14:7:23
+UNDEFINED VARIABLE - can_import_comprehensive.md:8:14:8:22
+UNDEFINED VARIABLE - can_import_comprehensive.md:11:15:11:25
+UNDEFINED VARIABLE - can_import_comprehensive.md:14:15:14:24
 UNDEFINED VARIABLE - can_import_comprehensive.md:17:15:17:18
 UNDEFINED VARIABLE - can_import_comprehensive.md:18:15:18:19
-DOES NOT EXIST - can_import_comprehensive.md:21:16:21:26
+UNDEFINED VARIABLE - can_import_comprehensive.md:21:16:21:26
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `json.Json` was not found in this Roc project.
@@ -85,8 +85,9 @@ import utils.String as Str
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**DOES NOT EXIST**
-`Http.get` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `get` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **can_import_comprehensive.md:6:14:6:22:**
 ```roc
@@ -95,8 +96,9 @@ import utils.String as Str
              ^^^^^^^^
 
 
-**DOES NOT EXIST**
-`Json.utf8` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `utf8` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **can_import_comprehensive.md:7:14:7:23:**
 ```roc
@@ -105,8 +107,9 @@ import utils.String as Str
              ^^^^^^^^^
 
 
-**DOES NOT EXIST**
-`Str.trim` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `trim` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **can_import_comprehensive.md:8:14:8:22:**
 ```roc
@@ -115,8 +118,9 @@ import utils.String as Str
              ^^^^^^^^
 
 
-**DOES NOT EXIST**
-`Json.parse` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `parse` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **can_import_comprehensive.md:11:15:11:25:**
 ```roc
@@ -125,8 +129,9 @@ import utils.String as Str
               ^^^^^^^^^^
 
 
-**DOES NOT EXIST**
-`Http.post` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `post` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **can_import_comprehensive.md:14:15:14:24:**
 ```roc
@@ -157,8 +162,9 @@ Is there an `import` or `exposing` missing up-top?
               ^^^^
 
 
-**DOES NOT EXIST**
-`Str.concat` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `concat` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **can_import_comprehensive.md:21:16:21:26:**
 ```roc
@@ -289,19 +295,19 @@ main = {
 		(e-block
 			(s-let
 				(p-assign (ident "client"))
-				(e-runtime-error (tag "qualified_ident_does_not_exist")))
+				(e-runtime-error (tag "ident_not_in_scope")))
 			(s-let
 				(p-assign (ident "parser"))
-				(e-runtime-error (tag "qualified_ident_does_not_exist")))
+				(e-runtime-error (tag "ident_not_in_scope")))
 			(s-let
 				(p-assign (ident "helper"))
-				(e-runtime-error (tag "qualified_ident_does_not_exist")))
+				(e-runtime-error (tag "ident_not_in_scope")))
 			(s-let
 				(p-assign (ident "result1"))
-				(e-runtime-error (tag "qualified_ident_does_not_exist")))
+				(e-runtime-error (tag "ident_not_in_scope")))
 			(s-let
 				(p-assign (ident "result2"))
-				(e-runtime-error (tag "qualified_ident_does_not_exist")))
+				(e-runtime-error (tag "ident_not_in_scope")))
 			(s-let
 				(p-assign (ident "result3"))
 				(e-runtime-error (tag "ident_not_in_scope")))
@@ -310,7 +316,7 @@ main = {
 				(e-runtime-error (tag "ident_not_in_scope")))
 			(s-let
 				(p-assign (ident "combined"))
-				(e-runtime-error (tag "qualified_ident_does_not_exist")))
+				(e-runtime-error (tag "ident_not_in_scope")))
 			(e-tuple
 				(elems
 					(e-lookup-local

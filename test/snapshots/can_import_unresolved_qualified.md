@@ -34,15 +34,15 @@ parser = Json.Parser.Advanced.NonExistent.create
 # EXPECTED
 MODULE NOT FOUND - can_import_unresolved_qualified.md:1:1:1:17
 MODULE NOT FOUND - can_import_unresolved_qualified.md:2:1:2:27
-DOES NOT EXIST - can_import_unresolved_qualified.md:5:8:5:31
-DOES NOT EXIST - can_import_unresolved_qualified.md:9:20:9:34
+UNDEFINED VARIABLE - can_import_unresolved_qualified.md:5:8:5:31
+UNDEFINED VARIABLE - can_import_unresolved_qualified.md:9:20:9:34
 MODULE NOT IMPORTED - can_import_unresolved_qualified.md:12:18:12:37
 MODULE NOT IMPORTED - can_import_unresolved_qualified.md:12:41:12:61
-DOES NOT EXIST - can_import_unresolved_qualified.md:13:24:13:51
+UNDEFINED VARIABLE - can_import_unresolved_qualified.md:13:24:13:51
 UNUSED VARIABLE - can_import_unresolved_qualified.md:13:19:13:22
-DOES NOT EXIST - can_import_unresolved_qualified.md:16:10:16:20
-DOES NOT EXIST - can_import_unresolved_qualified.md:22:10:22:28
-DOES NOT EXIST - can_import_unresolved_qualified.md:25:10:25:49
+UNDEFINED VARIABLE - can_import_unresolved_qualified.md:16:10:16:20
+UNDEFINED VARIABLE - can_import_unresolved_qualified.md:22:10:22:28
+UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `json.Json` was not found in this Roc project.
@@ -66,8 +66,9 @@ import http.Client as Http
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**DOES NOT EXIST**
-`Json.NonExistent.method` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `method` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **can_import_unresolved_qualified.md:5:8:5:31:**
 ```roc
@@ -76,8 +77,9 @@ main = Json.NonExistent.method
        ^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**DOES NOT EXIST**
-`Json.stringify` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `stringify` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **can_import_unresolved_qualified.md:9:20:9:34:**
 ```roc
@@ -108,8 +110,9 @@ processRequest : Http.Server.Request -> Http.Server.Response
                                         ^^^^^^^^^^^^^^^^^^^^
 
 
-**DOES NOT EXIST**
-`Http.Server.defaultResponse` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `defaultResponse` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **can_import_unresolved_qualified.md:13:24:13:51:**
 ```roc
@@ -130,8 +133,9 @@ processRequest = |req| Http.Server.defaultResponse
                   ^^^
 
 
-**DOES NOT EXIST**
-`Json.prase` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `prase` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **can_import_unresolved_qualified.md:16:10:16:20:**
 ```roc
@@ -140,8 +144,9 @@ result = Json.prase("test")
          ^^^^^^^^^^
 
 
-**DOES NOT EXIST**
-`Http.invalidMethod` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `invalidMethod` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **can_import_unresolved_qualified.md:22:10:22:28:**
 ```roc
@@ -150,8 +155,9 @@ client = Http.invalidMethod
          ^^^^^^^^^^^^^^^^^^
 
 
-**DOES NOT EXIST**
-`Json.Parser.Advanced.NonExistent.create` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `create` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **can_import_unresolved_qualified.md:25:10:25:49:**
 ```roc
@@ -232,14 +238,14 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "main"))
-		(e-runtime-error (tag "qualified_ident_does_not_exist")))
+		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "parseData"))
 		(e-lambda
 			(args
 				(p-assign (ident "data")))
 			(e-call
-				(e-runtime-error (tag "qualified_ident_does_not_exist"))
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local
 					(p-assign (ident "data")))))
 		(annotation
@@ -252,7 +258,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "req")))
-			(e-runtime-error (tag "qualified_ident_does_not_exist")))
+			(e-runtime-error (tag "ident_not_in_scope")))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
@@ -261,7 +267,7 @@ NO CHANGE
 	(d-let
 		(p-assign (ident "result"))
 		(e-call
-			(e-runtime-error (tag "qualified_ident_does_not_exist"))
+			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-string
 				(e-literal (string "test")))))
 	(d-let
@@ -270,10 +276,10 @@ NO CHANGE
 			(p-assign (ident "config"))))
 	(d-let
 		(p-assign (ident "client"))
-		(e-runtime-error (tag "qualified_ident_does_not_exist")))
+		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "parser"))
-		(e-runtime-error (tag "qualified_ident_does_not_exist")))
+		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-import (module "json.Json")
 		(exposes))
 	(s-import (module "http.Client")

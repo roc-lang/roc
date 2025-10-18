@@ -19,8 +19,8 @@ main! = |_| {
 # EXPECTED
 MODULE NOT FOUND - external_decl_lookup.md:3:1:3:17
 MODULE NOT FOUND - external_decl_lookup.md:4:1:4:17
-DOES NOT EXIST - external_decl_lookup.md:8:14:8:23
-DOES NOT EXIST - external_decl_lookup.md:9:5:9:17
+UNDEFINED VARIABLE - external_decl_lookup.md:8:14:8:23
+UNDEFINED VARIABLE - external_decl_lookup.md:9:5:9:17
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `pf.Stdout` was not found in this Roc project.
@@ -44,8 +44,9 @@ import json.Json
 ^^^^^^^^^^^^^^^^
 
 
-**DOES NOT EXIST**
-`Json.utf8` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `utf8` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **external_decl_lookup.md:8:14:8:23:**
 ```roc
@@ -54,8 +55,9 @@ import json.Json
              ^^^^^^^^^
 
 
-**DOES NOT EXIST**
-`Stdout.line!` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `line!` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **external_decl_lookup.md:9:5:9:17:**
 ```roc
@@ -134,11 +136,11 @@ main! = |_| {
 				(s-let
 					(p-assign (ident "result"))
 					(e-call
-						(e-runtime-error (tag "qualified_ident_does_not_exist"))
+						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-string
 							(e-literal (string "Hello from external module!")))))
 				(e-call
-					(e-runtime-error (tag "qualified_ident_does_not_exist"))
+					(e-runtime-error (tag "ident_not_in_scope"))
 					(e-lookup-local
 						(p-assign (ident "result")))))))
 	(s-import (module "pf.Stdout")

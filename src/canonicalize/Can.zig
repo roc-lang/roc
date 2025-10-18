@@ -2207,7 +2207,8 @@ pub fn canonicalizeExpr(
             if (self.parse_ir.tokens.resolveIdentifier(e.token)) |ident| {
                 // Check if this is a module-qualified identifier
                 const qualifier_tokens = self.parse_ir.store.tokenSlice(e.qualifiers);
-                if (qualifier_tokens.len > 0) {
+                blk_qualified: {
+                    if (qualifier_tokens.len == 0) break :blk_qualified;
                     // First, try looking up the full qualified name as a local identifier (for associated items)
                     const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotLowerIdent};
                     const qualified_name_text = self.parse_ir.resolveQualifiedName(
@@ -2289,6 +2290,19 @@ pub fn canonicalizeExpr(
 
                             const target_node_idx = target_node_idx_opt orelse {
                                 // The identifier doesn't exist in the module or isn't exposed
+                                // Check if the module is in module_envs - if not, the import failed (MODULE NOT FOUND)
+                                // and we shouldn't report a redundant error here
+                                const module_exists = if (self.module_envs) |envs_map|
+                                    envs_map.contains(module_name)
+                                else
+                                    false;
+
+                                if (!module_exists) {
+                                    // Module import failed, don't generate redundant error
+                                    // Fall through to normal identifier lookup
+                                    break :blk_qualified;
+                                }
+
                                 return CanonicalizedExpr{
                                     .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .qualified_ident_does_not_exist = .{
                                         .ident = qualified_ident,
@@ -2310,7 +2324,7 @@ pub fn canonicalizeExpr(
                             };
                         }
                     }
-                }
+                } // end blk_qualified
 
                 // Not a module-qualified lookup, or qualifier not found, proceed with normal lookup
                 switch (self.scopeLookup(.ident, ident)) {
@@ -2365,27 +2379,37 @@ pub fn canonicalizeExpr(
                                 }
                             } else null;
 
-                            // If we didn't find a valid node index, this is an error - the identifier doesn't exist or isn't exposed
-                            const target_node_idx = target_node_idx_opt orelse {
-                                // The exposed item doesn't actually exist in the module - fall through to normal error handling
-                                // This can happen with qualified identifiers like "Result.withDefault" where Result is a type module
-                                // but withDefault doesn't exist
-                                return CanonicalizedExpr{
-                                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .qualified_ident_does_not_exist = .{
-                                        .ident = ident,
-                                        .region = region,
-                                    } }),
-                                    .free_vars = null,
-                                };
-                            };
+                            // If we didn't find a valid node index, check if we should report an error
+                            if (target_node_idx_opt) |target_node_idx| {
+                                // Create the e_lookup_external expression with Import.Idx
+                                const expr_idx = try self.env.addExprAndTypeVar(CIR.Expr{ .e_lookup_external = .{
+                                    .module_idx = import_idx,
+                                    .target_node_idx = target_node_idx,
+                                    .region = region,
+                                } }, .err, region);
+                                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                            } else {
+                                // Check if the module is in module_envs - if not, the import failed
+                                // and we shouldn't report a redundant "does not exist" error
+                                const module_exists = if (self.module_envs) |envs_map|
+                                    envs_map.contains(exposed_info.module_name)
+                                else
+                                    false;
 
-                            // Create the e_lookup_external expression with Import.Idx
-                            const expr_idx = try self.env.addExprAndTypeVar(CIR.Expr{ .e_lookup_external = .{
-                                .module_idx = import_idx,
-                                .target_node_idx = target_node_idx,
-                                .region = region,
-                            } }, .err, region);
-                            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                                if (module_exists) {
+                                    // The exposed item doesn't actually exist in the module
+                                    // This can happen with qualified identifiers like "Result.withDefault" where Result is a type module
+                                    // but withDefault doesn't exist
+                                    return CanonicalizedExpr{
+                                        .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .qualified_ident_does_not_exist = .{
+                                            .ident = ident,
+                                            .region = region,
+                                        } }),
+                                        .free_vars = null,
+                                    };
+                                }
+                                // Module doesn't exist, fall through to ident_not_in_scope error below
+                            }
                         }
 
                         // We did not find the ident in scope or as an exposed item

@@ -18,7 +18,7 @@ main! = |_| {}
 ~~~
 # EXPECTED
 MODULE NOT FOUND - type_record_effectful.md:3:1:3:17
-DOES NOT EXIST - type_record_effectful.md:7:5:7:17
+UNDEFINED VARIABLE - type_record_effectful.md:7:5:7:17
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `pf.Stdout` was not found in this Roc project.
@@ -31,8 +31,9 @@ import pf.Stdout
 ^^^^^^^^^^^^^^^^
 
 
-**DOES NOT EXIST**
-`Stdout.line!` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `line!` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **type_record_effectful.md:7:5:7:17:**
 ```roc
@@ -123,7 +124,7 @@ main! = |_| {}
 			(e-block
 				(s-expr
 					(e-call
-						(e-runtime-error (tag "qualified_ident_does_not_exist"))
+						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-dot-access (field "name")
 							(receiver
 								(e-lookup-local

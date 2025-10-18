@@ -20,7 +20,7 @@ main! = |_| {
 ~~~
 # EXPECTED
 MODULE NOT FOUND - hello_world_with_block.md:6:1:6:17
-DOES NOT EXIST - hello_world_with_block.md:11:2:11:14
+UNDEFINED VARIABLE - hello_world_with_block.md:11:2:11:14
 UNUSED VARIABLE - hello_world_with_block.md:9:2:9:7
 # PROBLEMS
 **MODULE NOT FOUND**
@@ -34,8 +34,9 @@ import pf.Stdout
 ^^^^^^^^^^^^^^^^
 
 
-**DOES NOT EXIST**
-`Stdout.line!` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `line!` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **hello_world_with_block.md:11:2:11:14:**
 ```roc
@@ -116,7 +117,7 @@ NO CHANGE
 					(e-string
 						(e-literal (string "World"))))
 				(e-call
-					(e-runtime-error (tag "qualified_ident_does_not_exist"))
+					(e-runtime-error (tag "ident_not_in_scope"))
 					(e-string
 						(e-literal (string "Hello, world!")))))))
 	(s-import (module "pf.Stdout")
