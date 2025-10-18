@@ -1263,6 +1263,9 @@ fn processSnapshotContent(
         try solver.checkFile();
     }
 
+    // Assert that we have regions for every type variable
+    solver.debugAssertArraysInSync();
+
     // Cache round-trip validation - ensure ModuleCache serialization/deserialization works
     {
         // Generate original S-expression for comparison

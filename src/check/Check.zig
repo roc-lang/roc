@@ -244,8 +244,11 @@ fn unify(self: *Self, a: Var, b: Var, rank: Rank) std.mem.Allocator.Error!unifie
 
     for (self.unify_scratch.fresh_vars.items.items) |fresh_var| {
         try self.var_pool.addVarToRank(fresh_var, rank);
+        const region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(a));
+        try self.fillInRegionsThrough(fresh_var);
+        self.setRegionAt(fresh_var, region);
     }
-
+    self.debugAssertArraysInSync();
     return result;
 }
 
@@ -311,6 +314,13 @@ fn unifyFromAnno(self: *Self, a: Var, b: Var, rank: Rank) std.mem.Allocator.Erro
             try self.var_pool.addVarToRank(fresh_var, rank);
         }
     }
+    for (self.unify_scratch.fresh_vars.items.items) |fresh_var| {
+        const region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(a));
+        try self.fillInRegionsThrough(fresh_var);
+        self.setRegionAt(fresh_var, region);
+    }
+
+    self.debugAssertArraysInSync();
 
     return result;
 }
