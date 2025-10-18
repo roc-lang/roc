@@ -107,7 +107,10 @@ const ModuleState = struct {
     working: if (@import("builtin").target.cpu.arch != .wasm32) std.atomic.Value(u8) else u8 = if (@import("builtin").target.cpu.arch != .wasm32) std.atomic.Value(u8).init(0) else 0,
 
     fn deinit(self: *ModuleState, gpa: Allocator) void {
+        // Save source before deinitiating env so we can free it
+        const source = if (self.env) |*e| e.common.source else null;
         if (self.env) |*e| e.deinit();
+        if (source) |s| gpa.free(s);
         self.imports.deinit(gpa);
         self.external_imports.deinit(gpa);
         self.dependents.deinit(gpa);
@@ -480,7 +483,6 @@ pub const PackageEnv = struct {
         // Load source and init ModuleEnv
         var st = &self.modules.items[module_id];
         const src = try std.fs.cwd().readFileAlloc(self.gpa, st.path, std.math.maxInt(usize));
-        // NOTE: ModuleEnv takes ownership of src - it will be freed when env.deinit() is called
 
         // line starts for diagnostics and consistent positions
 
@@ -490,8 +492,10 @@ pub const PackageEnv = struct {
 
         try env.common.calcLineStarts(self.gpa);
 
-        // replace env
+        // replace env - save old source to free it after deinit
+        const old_source = if (st.env) |*old| old.common.source else null;
         if (st.env) |*old| old.deinit();
+        if (old_source) |s| self.gpa.free(s);
         st.env = env;
 
         st.phase = .Canonicalize;

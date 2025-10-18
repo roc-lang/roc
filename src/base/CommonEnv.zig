@@ -47,8 +47,10 @@ pub fn deinit(self: *CommonEnv, gpa: std.mem.Allocator) void {
     self.strings.deinit(gpa);
     self.exposed_items.deinit(gpa);
     self.line_starts.deinit(gpa);
-    // Free the source string - ModuleEnv owns it and frees it on deinit
-    gpa.free(self.source);
+    // NOTE: source is NOT freed here because ownership varies:
+    // - compile_package.zig allocates with readFileAlloc and frees before deinit
+    // - snapshot_tool.zig uses a slice into file_content (freed separately)
+    // - builtin_compiler.zig allocates with readFileAlloc and frees before deinit
 }
 
 /// Add the given offset to the memory addresses of all pointers in `self`.
