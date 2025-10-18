@@ -13,13 +13,13 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwExpect(1:1-1:7),UpperIdent(1:8-1:12),NoSpaceDotUpperIdent(1:12-1:17),
-EndOfFile(2:1-2:1),
+KwExpect,UpperIdent,NoSpaceDotUpperIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(s-expect @1.1-1.17
-	(e-tag @1.8-1.17 (raw "Bool.True")))
+(s-expect
+	(e-tag (raw "Bool.True")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -28,9 +28,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-expect @1.1-1.17
-		(e-nominal @1.8-1.17 (nominal "Bool")
-			(e-tag @1.8-1.17 (name "True")))))
+	(s-expect
+		(e-nominal (nominal "Bool")
+			(e-tag (name "True")))))
 ~~~
 # TYPES
 ~~~clojure

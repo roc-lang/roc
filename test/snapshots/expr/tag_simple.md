@@ -13,12 +13,12 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:6),
-EndOfFile(2:1-2:1),
+UpperIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-tag @1.1-1.6 (raw "MyTag"))
+(e-tag (raw "MyTag"))
 ~~~
 # FORMATTED
 ~~~roc
@@ -26,9 +26,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.6 (name "MyTag"))
+(e-tag (name "MyTag"))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.6 (type "[MyTag]_others"))
+(expr (type "[MyTag]_others"))
 ~~~

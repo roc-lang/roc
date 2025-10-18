@@ -59,27 +59,27 @@ o:0)
 
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),OpenSquare(1:4-1:5),CloseSquare(1:5-1:6),OpenCurly(1:6-1:7),LowerIdent(1:7-1:8),OpColon(1:8-1:9),KwPlatform(1:9-1:17),StringStart(1:17-1:18),StringPart(1:18-1:18),StringEnd(1:18-1:19),CloseCurly(1:19-1:20),OpenCurly(1:20-1:21),
-LowerIdent(2:1-2:2),OpColon(2:2-2:3),Int(2:3-2:4),CloseRound(2:4-2:5),
-EndOfFile(3:1-3:1),
+KwApp,OpenSquare,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,OpenCurly,
+LowerIdent,OpColon,Int,CloseRound,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-2.5
-	(app @1.1-1.20
-		(provides @1.4-1.6)
-		(record-field @1.7-1.19 (name "f")
-			(e-string @1.17-1.19
-				(e-string-part @1.18-1.18 (raw ""))))
-		(packages @1.6-1.20
-			(record-field @1.7-1.19 (name "f")
-				(e-string @1.17-1.19
-					(e-string-part @1.18-1.18 (raw ""))))))
+(file
+	(app
+		(provides)
+		(record-field (name "f")
+			(e-string
+				(e-string-part (raw ""))))
+		(packages
+			(record-field (name "f")
+				(e-string
+					(e-string-part (raw ""))))))
 	(statements
-		(s-malformed @1.20-1.21 (tag "statement_unexpected_token"))
-		(s-type-anno @2.1-2.4 (name "o")
-			(ty-malformed @2.3-2.4 (tag "ty_anno_unexpected_token")))
-		(s-malformed @2.4-2.5 (tag "statement_unexpected_token"))))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-type-anno (name "o")
+			(ty-malformed (tag "ty_anno_unexpected_token")))
+		(s-malformed (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc

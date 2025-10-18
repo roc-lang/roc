@@ -31,35 +31,35 @@ But I expected it to be:
 
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),
-LowerIdent(2:5-2:13),OpColon(2:14-2:15),OpenRound(2:16-2:17),LowerIdent(2:17-2:18),Comma(2:18-2:19),LowerIdent(2:20-2:21),CloseRound(2:21-2:22),OpArrow(2:23-2:25),OpenRound(2:26-2:27),LowerIdent(2:27-2:28),Comma(2:28-2:29),LowerIdent(2:30-2:31),CloseRound(2:31-2:32),
-LowerIdent(3:5-3:13),OpAssign(3:14-3:15),OpBar(3:16-3:17),LowerIdent(3:17-3:21),OpBar(3:21-3:22),LowerIdent(3:23-3:27),
-LowerIdent(5:5-5:13),NoSpaceOpenRound(5:13-5:14),Int(5:14-5:15),Comma(5:15-5:16),Int(5:17-5:18),CloseRound(5:18-5:19),
-CloseCurly(6:1-6:2),
-EndOfFile(7:1-7:1),
+OpenCurly,
+LowerIdent,OpColon,OpenRound,LowerIdent,Comma,LowerIdent,CloseRound,OpArrow,OpenRound,LowerIdent,Comma,LowerIdent,CloseRound,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,
+LowerIdent,NoSpaceOpenRound,Int,Comma,Int,CloseRound,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-block @1.1-6.2
+(e-block
 	(statements
-		(s-type-anno @2.5-2.32 (name "identity")
-			(ty-fn @2.16-2.32
-				(ty-tuple @2.16-2.22
-					(ty-var @2.17-2.18 (raw "a"))
-					(ty-var @2.20-2.21 (raw "b")))
-				(ty-tuple @2.26-2.32
-					(ty-var @2.27-2.28 (raw "a"))
-					(ty-var @2.30-2.31 (raw "b")))))
-		(s-decl @3.5-3.27
-			(p-ident @3.5-3.13 (raw "identity"))
-			(e-lambda @3.16-3.27
+		(s-type-anno (name "identity")
+			(ty-fn
+				(ty-tuple
+					(ty-var (raw "a"))
+					(ty-var (raw "b")))
+				(ty-tuple
+					(ty-var (raw "a"))
+					(ty-var (raw "b")))))
+		(s-decl
+			(p-ident (raw "identity"))
+			(e-lambda
 				(args
-					(p-ident @3.17-3.21 (raw "pair")))
-				(e-ident @3.23-3.27 (raw "pair"))))
-		(e-apply @5.5-5.19
-			(e-ident @5.5-5.13 (raw "identity"))
-			(e-int @5.14-5.15 (raw "1"))
-			(e-int @5.17-5.18 (raw "2")))))
+					(p-ident (raw "pair")))
+				(e-ident (raw "pair"))))
+		(e-apply
+			(e-ident (raw "identity"))
+			(e-int (raw "1"))
+			(e-int (raw "2")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -72,21 +72,21 @@ EndOfFile(7:1-7:1),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-6.2
-	(s-let @3.5-3.27
-		(p-assign @3.5-3.13 (ident "identity"))
-		(e-lambda @3.16-3.27
+(e-block
+	(s-let
+		(p-assign (ident "identity"))
+		(e-lambda
 			(args
-				(p-assign @3.17-3.21 (ident "pair")))
-			(e-lookup-local @3.23-3.27
-				(p-assign @3.17-3.21 (ident "pair")))))
-	(e-call @5.5-5.19
-		(e-lookup-local @5.5-5.13
-			(p-assign @3.5-3.13 (ident "identity")))
-		(e-num @5.14-5.15 (value "1"))
-		(e-num @5.17-5.18 (value "2"))))
+				(p-assign (ident "pair")))
+			(e-lookup-local
+				(p-assign (ident "pair")))))
+	(e-call
+		(e-lookup-local
+			(p-assign (ident "identity")))
+		(e-num (value "1"))
+		(e-num (value "2"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-6.2 (type "_c"))
+(expr (type "_c"))
 ~~~

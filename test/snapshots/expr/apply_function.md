@@ -23,16 +23,16 @@ foo(42, "hello")
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:4),NoSpaceOpenRound(1:4-1:5),Int(1:5-1:7),Comma(1:7-1:8),StringStart(1:9-1:10),StringPart(1:10-1:15),StringEnd(1:15-1:16),CloseRound(1:16-1:17),
-EndOfFile(2:1-2:1),
+LowerIdent,NoSpaceOpenRound,Int,Comma,StringStart,StringPart,StringEnd,CloseRound,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-apply @1.1-1.17
-	(e-ident @1.1-1.4 (raw "foo"))
-	(e-int @1.5-1.7 (raw "42"))
-	(e-string @1.9-1.16
-		(e-string-part @1.10-1.15 (raw "hello"))))
+(e-apply
+	(e-ident (raw "foo"))
+	(e-int (raw "42"))
+	(e-string
+		(e-string-part (raw "hello"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -40,13 +40,13 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call @1.1-1.17
+(e-call
 	(e-runtime-error (tag "ident_not_in_scope"))
-	(e-num @1.5-1.7 (value "42"))
-	(e-string @1.9-1.16
-		(e-literal @1.10-1.15 (string "hello"))))
+	(e-num (value "42"))
+	(e-string
+		(e-literal (string "hello"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.17 (type "_a"))
+(expr (type "_a"))
 ~~~

@@ -52,23 +52,23 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-StringStart(1:1-1:2),StringPart(1:2-1:24),OpenStringInterpolation(1:24-1:26),
-LowerIdent(2:2-2:11),NoSpaceOpenRound(2:11-2:12),
-LowerIdent(3:3-3:4),Comma(3:4-3:5),
-LowerIdent(4:3-4:4),Comma(4:4-4:5),
-CloseRound(5:2-5:3),
-CloseStringInterpolation(6:1-6:2),StringPart(6:2-6:42),StringEnd(6:42-6:43),
-EndOfFile(7:1-7:1),
+StringStart,StringPart,OpenStringInterpolation,
+LowerIdent,NoSpaceOpenRound,
+LowerIdent,Comma,
+LowerIdent,Comma,
+CloseRound,
+CloseStringInterpolation,StringPart,StringEnd,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-string @1.1-6.43
-	(e-string-part @1.2-1.24 (raw "This is a string with "))
-	(e-apply @2.2-5.3
-		(e-ident @2.2-2.11 (raw "some_func"))
-		(e-ident @3.3-3.4 (raw "a"))
-		(e-ident @4.3-4.4 (raw "b")))
-	(e-string-part @6.2-6.42 (raw " lines of text due to the template parts")))
+(e-string
+	(e-string-part (raw "This is a string with "))
+	(e-apply
+		(e-ident (raw "some_func"))
+		(e-ident (raw "a"))
+		(e-ident (raw "b")))
+	(e-string-part (raw " lines of text due to the template parts")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -76,15 +76,15 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-string @1.1-6.43
-	(e-literal @1.2-1.24 (string "This is a string with "))
-	(e-call @2.2-5.3
+(e-string
+	(e-literal (string "This is a string with "))
+	(e-call
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(e-literal @6.2-6.42 (string " lines of text due to the template parts")))
+	(e-literal (string " lines of text due to the template parts")))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-6.43 (type "Str"))
+(expr (type "Str"))
 ~~~

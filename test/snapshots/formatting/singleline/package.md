@@ -36,36 +36,36 @@ You can fix this by either defining `b!` in this module, or by removing it from 
 
 # TOKENS
 ~~~zig
-KwPackage(1:1-1:8),OpenSquare(1:9-1:10),LowerIdent(1:10-1:12),Comma(1:12-1:13),LowerIdent(1:14-1:16),CloseSquare(1:16-1:17),OpenCurly(1:18-1:19),LowerIdent(1:20-1:21),OpColon(1:21-1:22),StringStart(1:23-1:24),StringPart(1:24-1:25),StringEnd(1:25-1:26),Comma(1:26-1:27),LowerIdent(1:28-1:29),OpColon(1:29-1:30),StringStart(1:31-1:32),StringPart(1:32-1:33),StringEnd(1:33-1:34),CloseCurly(1:35-1:36),
-LowerIdent(3:1-3:3),OpColon(3:4-3:5),UpperIdent(3:6-3:9),OpFatArrow(3:10-3:12),UpperIdent(3:13-3:16),
-LowerIdent(4:1-4:3),OpColon(4:4-4:5),UpperIdent(4:6-4:9),OpFatArrow(4:10-4:12),UpperIdent(4:13-4:16),
-EndOfFile(5:1-5:1),
+KwPackage,OpenSquare,LowerIdent,Comma,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,StringStart,StringPart,StringEnd,CloseCurly,
+LowerIdent,OpColon,UpperIdent,OpFatArrow,UpperIdent,
+LowerIdent,OpColon,UpperIdent,OpFatArrow,UpperIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-4.16
-	(package @1.1-1.36
-		(exposes @1.9-1.17
-			(exposed-lower-ident @1.10-1.12
+(file
+	(package
+		(exposes
+			(exposed-lower-ident
 				(text "a!"))
-			(exposed-lower-ident @1.14-1.16
+			(exposed-lower-ident
 				(text "b!")))
-		(packages @1.18-1.36
-			(record-field @1.20-1.26 (name "a")
-				(e-string @1.23-1.26
-					(e-string-part @1.24-1.25 (raw "a"))))
-			(record-field @1.28-1.34 (name "b")
-				(e-string @1.31-1.34
-					(e-string-part @1.32-1.33 (raw "b"))))))
+		(packages
+			(record-field (name "a")
+				(e-string
+					(e-string-part (raw "a"))))
+			(record-field (name "b")
+				(e-string
+					(e-string-part (raw "b"))))))
 	(statements
-		(s-type-anno @3.1-3.16 (name "a!")
-			(ty-fn @3.6-3.16
-				(ty @3.6-3.9 (name "Str"))
-				(ty @3.13-3.16 (name "Str"))))
-		(s-type-anno @4.1-4.16 (name "b!")
-			(ty-fn @4.6-4.16
-				(ty @4.6-4.9 (name "Str"))
-				(ty @4.13-4.16 (name "Str"))))))
+		(s-type-anno (name "a!")
+			(ty-fn
+				(ty (name "Str"))
+				(ty (name "Str"))))
+		(s-type-anno (name "b!")
+			(ty-fn
+				(ty (name "Str"))
+				(ty (name "Str"))))))
 ~~~
 # FORMATTED
 ~~~roc

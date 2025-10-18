@@ -39,38 +39,38 @@ The unused variable is declared here:
 
 # TOKENS
 ~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:13),OpenCurly(1:14-1:15),
-OpenCurly(2:5-2:6),LowerIdent(2:7-2:11),Comma(2:11-2:12),LowerIdent(2:13-2:20),OpColon(2:20-2:21),OpenCurly(2:22-2:23),LowerIdent(2:24-2:28),CloseCurly(2:29-2:30),KwAs(2:31-2:33),LowerIdent(2:34-2:38),CloseCurly(2:39-2:40),KwAs(2:41-2:43),LowerIdent(2:44-2:54),OpFatArrow(2:55-2:57),OpenRound(2:58-2:59),LowerIdent(2:59-2:69),Comma(2:69-2:70),LowerIdent(2:71-2:75),Comma(2:75-2:76),LowerIdent(2:77-2:81),CloseRound(2:81-2:82),
-OpenCurly(3:5-3:6),LowerIdent(3:7-3:11),CloseCurly(3:12-3:13),KwAs(3:14-3:16),LowerIdent(3:17-3:29),OpFatArrow(3:30-3:32),OpenRound(3:33-3:34),LowerIdent(3:34-3:46),Comma(3:46-3:47),LowerIdent(3:48-3:52),Comma(3:52-3:53),StringStart(3:54-3:55),StringPart(3:55-3:62),StringEnd(3:62-3:63),CloseRound(3:63-3:64),
-CloseCurly(4:1-4:2),
-EndOfFile(5:1-5:1),
+KwMatch,LowerIdent,OpenCurly,
+OpenCurly,LowerIdent,Comma,LowerIdent,OpColon,OpenCurly,LowerIdent,CloseCurly,KwAs,LowerIdent,CloseCurly,KwAs,LowerIdent,OpFatArrow,OpenRound,LowerIdent,Comma,LowerIdent,Comma,LowerIdent,CloseRound,
+OpenCurly,LowerIdent,CloseCurly,KwAs,LowerIdent,OpFatArrow,OpenRound,LowerIdent,Comma,LowerIdent,Comma,StringStart,StringPart,StringEnd,CloseRound,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.13 (raw "person"))
+	(e-ident (raw "person"))
 	(branches
-		(branch @2.5-2.82
-			(p-as @2.5-2.43 (name "fullPerson")
-				(p-record @2.5-2.40
-					(field @2.7-2.11 (name "name") (rest false))
-					(field @2.13-2.38 (name "address") (rest false)
-						(p-as @2.22-2.33 (name "addr")
-							(p-record @2.22-2.30
-								(field @2.24-2.28 (name "city") (rest false)))))))
-			(e-tuple @2.58-2.82
-				(e-ident @2.59-2.69 (raw "fullPerson"))
-				(e-ident @2.71-2.75 (raw "addr"))
-				(e-ident @2.77-2.81 (raw "city"))))
-		(branch @3.5-3.64
-			(p-as @3.5-3.16 (name "simplePerson")
-				(p-record @3.5-3.13
-					(field @3.7-3.11 (name "name") (rest false))))
-			(e-tuple @3.33-3.64
-				(e-ident @3.34-3.46 (raw "simplePerson"))
-				(e-ident @3.48-3.52 (raw "name"))
-				(e-string @3.54-3.63
-					(e-string-part @3.55-3.62 (raw "unknown")))))))
+		(branch
+			(p-as (name "fullPerson")
+				(p-record
+					(field (name "name") (rest false))
+					(field (name "address") (rest false)
+						(p-as (name "addr")
+							(p-record
+								(field (name "city") (rest false)))))))
+			(e-tuple
+				(e-ident (raw "fullPerson"))
+				(e-ident (raw "addr"))
+				(e-ident (raw "city"))))
+		(branch
+			(p-as (name "simplePerson")
+				(p-record
+					(field (name "name") (rest false))))
+			(e-tuple
+				(e-ident (raw "simplePerson"))
+				(e-ident (raw "name"))
+				(e-string
+					(e-string-part (raw "unknown")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -81,80 +81,80 @@ match person {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-match @1.1-4.2
-	(match @1.1-4.2
+(e-match
+	(match
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-as @2.5-2.43 (as "fullPerson")
-							(p-record-destructure @2.5-2.40
+						(p-as (as "fullPerson")
+							(p-record-destructure
 								(destructs
-									(record-destruct @2.7-2.11 (label "name") (ident "name")
+									(record-destruct (label "name") (ident "name")
 										(required
-											(p-assign @2.7-2.11 (ident "name"))))
-									(record-destruct @2.13-2.38 (label "address") (ident "address")
+											(p-assign (ident "name"))))
+									(record-destruct (label "address") (ident "address")
 										(sub-pattern
-											(p-as @2.22-2.33 (as "addr")
-												(p-record-destructure @2.22-2.30
+											(p-as (as "addr")
+												(p-record-destructure
 													(destructs
-														(record-destruct @2.24-2.28 (label "city") (ident "city")
+														(record-destruct (label "city") (ident "city")
 															(required
-																(p-assign @2.24-2.28 (ident "city"))))))))))))))
+																(p-assign (ident "city"))))))))))))))
 				(value
-					(e-tuple @2.58-2.82
+					(e-tuple
 						(elems
-							(e-lookup-local @2.59-2.69
-								(p-as @2.5-2.43 (as "fullPerson")
-									(p-record-destructure @2.5-2.40
+							(e-lookup-local
+								(p-as (as "fullPerson")
+									(p-record-destructure
 										(destructs
-											(record-destruct @2.7-2.11 (label "name") (ident "name")
+											(record-destruct (label "name") (ident "name")
 												(required
-													(p-assign @2.7-2.11 (ident "name"))))
-											(record-destruct @2.13-2.38 (label "address") (ident "address")
+													(p-assign (ident "name"))))
+											(record-destruct (label "address") (ident "address")
 												(sub-pattern
-													(p-as @2.22-2.33 (as "addr")
-														(p-record-destructure @2.22-2.30
+													(p-as (as "addr")
+														(p-record-destructure
 															(destructs
-																(record-destruct @2.24-2.28 (label "city") (ident "city")
+																(record-destruct (label "city") (ident "city")
 																	(required
-																		(p-assign @2.24-2.28 (ident "city")))))))))))))
-							(e-lookup-local @2.71-2.75
-								(p-as @2.22-2.33 (as "addr")
-									(p-record-destructure @2.22-2.30
+																		(p-assign (ident "city")))))))))))))
+							(e-lookup-local
+								(p-as (as "addr")
+									(p-record-destructure
 										(destructs
-											(record-destruct @2.24-2.28 (label "city") (ident "city")
+											(record-destruct (label "city") (ident "city")
 												(required
-													(p-assign @2.24-2.28 (ident "city"))))))))
-							(e-lookup-local @2.77-2.81
-								(p-assign @2.24-2.28 (ident "city")))))))
+													(p-assign (ident "city"))))))))
+							(e-lookup-local
+								(p-assign (ident "city")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-as @3.5-3.16 (as "simplePerson")
-							(p-record-destructure @3.5-3.13
+						(p-as (as "simplePerson")
+							(p-record-destructure
 								(destructs
-									(record-destruct @3.7-3.11 (label "name") (ident "name")
+									(record-destruct (label "name") (ident "name")
 										(required
-											(p-assign @3.7-3.11 (ident "name")))))))))
+											(p-assign (ident "name")))))))))
 				(value
-					(e-tuple @3.33-3.64
+					(e-tuple
 						(elems
-							(e-lookup-local @3.34-3.46
-								(p-as @3.5-3.16 (as "simplePerson")
-									(p-record-destructure @3.5-3.13
+							(e-lookup-local
+								(p-as (as "simplePerson")
+									(p-record-destructure
 										(destructs
-											(record-destruct @3.7-3.11 (label "name") (ident "name")
+											(record-destruct (label "name") (ident "name")
 												(required
-													(p-assign @3.7-3.11 (ident "name"))))))))
-							(e-lookup-local @3.48-3.52
-								(p-assign @3.7-3.11 (ident "name")))
-							(e-string @3.54-3.63
-								(e-literal @3.55-3.62 (string "unknown"))))))))))
+													(p-assign (ident "name"))))))))
+							(e-lookup-local
+								(p-assign (ident "name")))
+							(e-string
+								(e-literal (string "unknown"))))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-4.2 (type "(Error, Error, Str)"))
+(expr (type "(Error, Error, Str)"))
 ~~~

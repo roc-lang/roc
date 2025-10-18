@@ -38,6 +38,7 @@ const RocDbg = builtins.host_abi.RocDbg;
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 const SExprTree = base.SExprTree;
+const LineColMode = base.SExprTree.LineColMode;
 const CacheModule = compile.CacheModule;
 const AST = parse.AST;
 const Report = reporting.Report;
@@ -689,12 +690,18 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
     };
 }
 
+var debug_allocator: std.heap.DebugAllocator(.{}) = .{
+    .backing_allocator = std.heap.c_allocator,
+};
+
 /// cli entrypoint for snapshot tool
 pub fn main() !void {
-    // Use GeneralPurposeAllocator for command-line parsing and general work
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa_impl.deinit();
-    const gpa = gpa_impl.allocator();
+    // Always use the debug allocator with the snapshot tool to help find allocation bugs.
+    const gpa = debug_allocator.allocator();
+    defer {
+        const mem_state = debug_allocator.deinit();
+        std.debug.assert(mem_state == .ok);
+    }
 
     const args = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, args);
@@ -711,6 +718,7 @@ pub fn main() !void {
     var expected_section_command = UpdateCommand.none;
     var output_section_command = UpdateCommand.none;
     var trace_eval: bool = false;
+    var linecol_mode: LineColMode = .skip_linecol;
 
     for (args[1..]) |arg| {
         if (std.mem.eql(u8, arg, "--verbose")) {
@@ -721,6 +729,8 @@ pub fn main() !void {
             debug_mode = true;
         } else if (std.mem.eql(u8, arg, "--trace-eval")) {
             trace_eval = true;
+        } else if (std.mem.eql(u8, arg, "--linecol")) {
+            linecol_mode = .include_linecol;
         } else if (std.mem.eql(u8, arg, "--threads")) {
             if (max_threads != 0) {
                 std.log.err("`--threads` should only be specified once.", .{});
@@ -775,6 +785,7 @@ pub fn main() !void {
                 \\  --html          Generate HTML output files
                 \\  --debug         Use GeneralPurposeAllocator for debugging (default: c_allocator)
                 \\  --trace-eval    Enable interpreter trace output (only works with single REPL snapshot)
+                \\  --linecol       Include line/column information in output
                 \\  --threads <n>   Number of threads to use (0 = auto-detect, 1 = single-threaded). Default: 0.
                 \\  --check-expected     Validate that EXPECTED sections match PROBLEMS sections
                 \\  --update-expected    Update EXPECTED sections based on PROBLEMS sections
@@ -833,6 +844,7 @@ pub fn main() !void {
         .expected_section_command = expected_section_command,
         .output_section_command = output_section_command,
         .trace_eval = trace_eval,
+        .linecol_mode = linecol_mode,
         .dict_module = dict_loaded.env,
         .set_module = set_loaded.env,
     };
@@ -1275,7 +1287,7 @@ fn processSnapshotContent(
 
         var original_sexpr = std.ArrayList(u8).init(allocator);
         defer original_sexpr.deinit();
-        try original_tree.toStringPretty(original_sexpr.writer().any());
+        try original_tree.toStringPretty(original_sexpr.writer().any(), .skip_linecol);
 
         // Create arena for serialization
         var cache_arena = std.heap.ArenaAllocator.init(allocator);
@@ -1303,7 +1315,7 @@ fn processSnapshotContent(
 
         var restored_sexpr = std.ArrayList(u8).init(allocator);
         defer restored_sexpr.deinit();
-        try restored_tree.toStringPretty(restored_sexpr.writer().any());
+        try restored_tree.toStringPretty(restored_sexpr.writer().any(), .skip_linecol);
 
         // Compare S-expressions - crash if they don't match
         if (!std.mem.eql(u8, original_sexpr.items, restored_sexpr.items)) {
@@ -1342,11 +1354,11 @@ fn processSnapshotContent(
     try generateSourceSection(&output, &content);
     success = try generateExpectedSection(&output, output_path, &content, &generated_reports, config) and success;
     try generateProblemsSection(&output, &generated_reports);
-    try generateTokensSection(&output, &parse_ast, &content, &module_env);
-    try generateParseSection(&output, &content, &parse_ast, &module_env.common);
+    try generateTokensSection(&output, &parse_ast, &content, &module_env, config.linecol_mode);
+    try generateParseSection(&output, &content, &parse_ast, &module_env.common, config.linecol_mode);
     try generateFormattedSection(&output, &content, &parse_ast);
-    try generateCanonicalizeSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx));
-    try generateTypesSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx));
+    try generateCanonicalizeSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), config.linecol_mode);
+    try generateTypesSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), config.linecol_mode);
 
     try generateHtmlClosing(&output);
 
@@ -1397,6 +1409,7 @@ const Config = struct {
     output_section_command: UpdateCommand,
     disable_updates: bool = false, // Disable updates for check mode
     trace_eval: bool = false,
+    linecol_mode: LineColMode = .skip_linecol, // Include line/column info in output
     // Compiled builtin modules (Set and Dict) loaded at startup
     dict_module: ?*const ModuleEnv = null,
     set_module: ?*const ModuleEnv = null,
@@ -2041,7 +2054,7 @@ fn generateProblemsSection(output: *DualOutput, reports: *const std.ArrayList(re
 }
 
 /// Generate TOKENS section for both markdown and HTML
-pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, _: *const Content, module_env: *ModuleEnv) !void {
+pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, _: *const Content, module_env: *ModuleEnv, linecol_mode: LineColMode) !void {
     try output.begin_section("TOKENS");
     try output.begin_code_block("zig");
 
@@ -2062,14 +2075,18 @@ pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, _: *const Con
         const info = module_env.calcRegionInfo(region);
 
         // Markdown token output
-        try output.md_writer.print("{s}({d}:{d}-{d}:{d}),", .{
-            @tagName(tok),
-            // add one to display numbers instead of index
-            info.start_line_idx + 1,
-            info.start_col_idx + 1,
-            info.end_line_idx + 1,
-            info.end_col_idx + 1,
-        });
+        if (linecol_mode == .include_linecol) {
+            try output.md_writer.print("{s}({d}:{d}-{d}:{d}),", .{
+                @tagName(tok),
+                // add one to display numbers instead of index
+                info.start_line_idx + 1,
+                info.start_col_idx + 1,
+                info.end_line_idx + 1,
+                info.end_col_idx + 1,
+            });
+        } else {
+            try output.md_writer.print("{s},", .{@tagName(tok)});
+        }
 
         if (i + 1 < tokenizedBuffer.tokens.len) {
             const next_region = tokenizedBuffer.resolve(@intCast(i + 1));
@@ -2118,7 +2135,7 @@ fn source_contains_newline_in_range(source: []const u8, start: usize, end: usize
 }
 
 /// Generate PARSE2 section using SExprTree for both markdown and HTML
-fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast: *AST, env: *CommonEnv) !void {
+fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast: *AST, env: *CommonEnv, linecol_mode: LineColMode) !void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
 
@@ -2167,7 +2184,7 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
         try output.begin_section("PARSE");
         try output.begin_code_block("clojure");
 
-        try tree.toStringPretty(output.md_writer.any());
+        try tree.toStringPretty(output.md_writer.any(), linecol_mode);
         try output.md_writer.writeAll("\n");
 
         // Generate HTML output with syntax highlighting
@@ -2176,7 +2193,7 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
                 \\                <pre class="ast-parse">
             );
 
-            try tree.toHtml(writer.any());
+            try tree.toHtml(writer.any(), linecol_mode);
 
             try writer.writeAll(
                 \\</pre>
@@ -2257,7 +2274,7 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
 }
 
 /// Generate CANONICALIZE section for both markdown and HTML
-fn generateCanonicalizeSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx: ?CIR.Expr.Idx) !void {
+fn generateCanonicalizeSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx: ?CIR.Expr.Idx, linecol_mode: LineColMode) !void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
     try can_ir.pushToSExprTree(maybe_expr_idx, &tree);
@@ -2265,14 +2282,14 @@ fn generateCanonicalizeSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_ex
     try output.begin_section("CANONICALIZE");
     try output.begin_code_block("clojure");
 
-    try tree.toStringPretty(output.md_writer.any());
+    try tree.toStringPretty(output.md_writer.any(), linecol_mode);
     try output.md_writer.writeAll("\n");
 
     if (output.html_writer) |writer| {
         try writer.writeAll(
             \\                <pre>
         );
-        try tree.toHtml(writer.any());
+        try tree.toHtml(writer.any(), linecol_mode);
         try writer.writeAll(
             \\</pre>
             \\
@@ -2284,14 +2301,14 @@ fn generateCanonicalizeSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_ex
 }
 
 /// Generate TYPES section for both markdown and HTML
-fn generateTypesSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx: ?CIR.Expr.Idx) !void {
+fn generateTypesSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx: ?CIR.Expr.Idx, linecol_mode: LineColMode) !void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
     try can_ir.pushTypesToSExprTree(maybe_expr_idx, &tree);
 
     try output.begin_section("TYPES");
     try output.begin_code_block("clojure");
-    try tree.toStringPretty(output.md_writer.any());
+    try tree.toStringPretty(output.md_writer.any(), linecol_mode);
     try output.md_writer.writeAll("\n");
 
     // HTML TYPES section
@@ -2299,7 +2316,7 @@ fn generateTypesSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx:
         try writer.writeAll(
             \\                <pre>
         );
-        try tree.toHtml(writer.any());
+        try tree.toHtml(writer.any(), linecol_mode);
         try writer.writeAll(
             \\</pre>
             \\

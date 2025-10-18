@@ -13,15 +13,15 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),OpColon(1:7-1:8),StringStart(1:9-1:10),StringPart(1:10-1:14),StringEnd(1:14-1:15),CloseCurly(1:16-1:17),
-EndOfFile(2:1-2:1),
+OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-record @1.1-1.17
+(e-record
 	(field (field "name")
-		(e-string @1.9-1.15
-			(e-string-part @1.10-1.14 (raw "test")))))
+		(e-string
+			(e-string-part (raw "test")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -29,13 +29,13 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1.1-1.17
+(e-record
 	(fields
 		(field (name "name")
-			(e-string @1.9-1.15
-				(e-literal @1.10-1.14 (string "test"))))))
+			(e-string
+				(e-literal (string "test"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.17 (type "{ name: Str }"))
+(expr (type "{ name: Str }"))
 ~~~

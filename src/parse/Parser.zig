@@ -1293,67 +1293,66 @@ fn parseWhereConstraint(self: *Parser) Error!?AST.Collection.Idx {
         return null;
     };
 
-    const where_end = self.pos; // Position right after the where keyword
+    // Expect opening bracket [
+    self.expect(.OpenSquare) catch {
+        const diagnostic_region = AST.TokenizedRegion{ .start = where_start, .end = self.pos };
+        try self.diagnostics.append(self.gpa, .{
+            .tag = .where_expected_open_bracket,
+            .region = diagnostic_region,
+        });
+        const malformed_clause = try self.store.addMalformed(AST.WhereClause.Idx, .where_expected_open_bracket, diagnostic_region);
+        const where_clauses_top = self.store.scratchWhereClauseTop();
+        try self.store.addScratchWhereClause(malformed_clause);
+        const where_clauses = try self.store.whereClauseSpanFrom(where_clauses_top);
+        const coll_id = try self.store.addCollection(.collection_where_clause, .{
+            .region = .{ .start = where_start, .end = self.pos },
+            .span = where_clauses.span,
+        });
+        return coll_id;
+    };
+
     const where_clauses_top = self.store.scratchWhereClauseTop();
-    while (self.peek() != .Comma and self.peek() != .EndOfFile) {
-        const curr = self.peek();
-        const next = self.peekNext();
 
-        // Check if we've reached the start of a new statement (e.g., "broken_fn2 : a -> b" or "process = ...")
-        // This indicates we should stop parsing where clauses
-        if (curr == .LowerIdent and (next == .OpColon or next == .OpAssign)) {
-            break;
-        }
-
-        const valid_lookahead = curr == .KwModule or (curr == .LowerIdent and (next == .NoSpaceDotLowerIdent or next == .DotLowerIdent or next == .NoSpaceDotUpperIdent or next == .DotUpperIdent));
-        if (!valid_lookahead) {
-            // Check if we have a malformed constraint that starts with a type variable
-            if (curr == .LowerIdent) {
-                // Try to parse as a malformed where clause to provide better error messages
-                const clause = try self.parseWhereClause();
-                try self.store.addScratchWhereClause(clause);
-                if (self.peek() != .Comma) {
-                    break;
-                }
-                self.advance();
-                continue;
-            }
-            break;
-        }
+    // Parse comma-separated where clauses until we hit ]
+    while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
         const clause = try self.parseWhereClause();
         try self.store.addScratchWhereClause(clause);
-        if (self.peek() != .Comma) {
+
+        if (self.peek() == .Comma) {
+            self.advance();
+        } else if (self.peek() != .CloseSquare) {
+            // Expected comma or closing bracket
             break;
         }
-        self.advance();
     }
+
     const where_clauses = try self.store.whereClauseSpanFrom(where_clauses_top);
 
     // Check if the where clause is empty
     if (where_clauses.span.len == 0) {
-        // Create diagnostic region pointing to the where keyword
-        const diagnostic_region = AST.TokenizedRegion{ .start = where_start, .end = where_end };
-
-        // Create AST region for the malformed node
-        const ast_region = AST.TokenizedRegion{ .start = where_start, .end = where_end };
-
-        // Add the diagnostic
+        const diagnostic_region = AST.TokenizedRegion{ .start = where_start, .end = self.pos };
         try self.diagnostics.append(self.gpa, .{
             .tag = .where_expected_constraints,
             .region = diagnostic_region,
         });
-
-        // Create the malformed where clause node
-        const malformed_clause = try self.store.addMalformed(AST.WhereClause.Idx, .where_expected_constraints, ast_region);
-
+        const malformed_clause = try self.store.addMalformed(AST.WhereClause.Idx, .where_expected_constraints, diagnostic_region);
         try self.store.addScratchWhereClause(malformed_clause);
         const updated_where_clauses = try self.store.whereClauseSpanFrom(where_clauses_top);
         const coll_id = try self.store.addCollection(.collection_where_clause, .{
-            .region = .{ .start = where_start, .end = where_end },
+            .region = .{ .start = where_start, .end = self.pos },
             .span = updated_where_clauses.span,
         });
         return coll_id;
     }
+
+    // Expect closing bracket ]
+    self.expect(.CloseSquare) catch {
+        const diagnostic_region = AST.TokenizedRegion{ .start = where_start, .end = self.pos };
+        try self.diagnostics.append(self.gpa, .{
+            .tag = .where_expected_close_bracket,
+            .region = diagnostic_region,
+        });
+    };
 
     const coll_id = try self.store.addCollection(.collection_where_clause, .{
         .region = .{ .start = where_start, .end = self.pos },
@@ -2764,164 +2763,94 @@ pub fn parseAnnoRecordField(self: *Parser) Error!AST.AnnoRecordField.Idx {
 
 /// Parse a where clause
 ///
-/// e.g. `a.hash(hasher) -> hasher`
-/// e.g. `hasher.Hasher`
-/// e.g. `module(a).decode(List(U8)) -> a`
+/// e.g. `a.hash : a -> U64`
+/// e.g. `a.Hasher : Type`
 pub fn parseWhereClause(self: *Parser) Error!AST.WhereClause.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     const start = self.pos;
-    if (self.peek() == .KwModule) {
-        // Parsing a mod_method clause
-        self.advance();
-        self.expect(.NoSpaceOpenRound) catch {
-            return try self.pushMalformed(
-                AST.WhereClause.Idx,
-                .where_expected_mod_open,
-                start,
-            );
-        };
-        const var_tok = self.pos;
-        self.expect(.LowerIdent) catch {
-            return try self.pushMalformed(
-                AST.WhereClause.Idx,
-                .where_expected_var,
-                start,
-            );
-        };
-        self.expect(.CloseRound) catch {
-            return try self.pushMalformed(
-                AST.WhereClause.Idx,
-                .where_expected_mod_close,
-                start,
-            );
-        };
-        const name_tok = self.pos;
-        if (self.peek() != .NoSpaceDotLowerIdent and self.peek() != .DotLowerIdent and self.peek() != .NoSpaceDotUpperIdent and self.peek() != .DotUpperIdent) {
-            return try self.pushMalformed(
-                AST.WhereClause.Idx,
-                .where_expected_method_or_alias_name,
-                start,
-            );
-        }
-        self.advance();
 
-        // Check if this is a type alias (uppercase identifier)
-        const current_token_tag = self.tok_buf.tokens.items(.tag)[name_tok];
-        if (current_token_tag == .NoSpaceDotUpperIdent or current_token_tag == .DotUpperIdent) {
-            // Type alias case: module(a).TypeAlias
-            return try self.store.addWhereClause(.{ .mod_alias = .{
-                .region = .{ .start = start, .end = self.pos },
-                .name_tok = name_tok,
-                .var_tok = var_tok,
-            } });
-        }
-
-        if (self.peek() == .OpColon) {
-            // Handle type annotation syntax: module(a).method : type
-            self.advance(); // advance past colon
-            const args_start = self.pos;
-            const method_type_anno = try self.parseTypeAnno(.not_looking_for_args);
-            const method_type = self.store.getTypeAnno(method_type_anno);
-
-            // Check if the type annotation is a function type
-            if (method_type == .@"fn") {
-                // Function type: extract args and return type
-                const fn_type = method_type.@"fn";
-                const args = try self.store.addCollection(
-                    .collection_ty_anno,
-                    .{
-                        .region = .{ .start = args_start, .end = self.pos },
-                        .span = fn_type.args.span,
-                    },
-                );
-                return try self.store.addWhereClause(.{ .mod_method = .{
-                    .region = .{ .start = start, .end = self.pos },
-                    .name_tok = name_tok,
-                    .var_tok = var_tok,
-                    .args = args,
-                    .ret_anno = fn_type.ret,
-                } });
-            } else {
-                // Non-function type: treat as zero-argument method
-                const empty_args = try self.store.addCollection(
-                    .collection_ty_anno,
-                    .{
-                        .region = .{ .start = args_start, .end = self.pos },
-                        .span = base.DataSpan.empty(),
-                    },
-                );
-                return try self.store.addWhereClause(.{ .mod_method = .{
-                    .region = .{ .start = start, .end = self.pos },
-                    .name_tok = name_tok,
-                    .var_tok = var_tok,
-                    .args = empty_args,
-                    .ret_anno = method_type_anno,
-                } });
-            }
-        } else if (self.peek() == .OpArrow) {
-            // Handle case where user forgot the colon: module(a).method -> Type
-            return try self.pushMalformed(
-                AST.WhereClause.Idx,
-                .where_expected_colon,
-                start,
-            );
-        } else {
-            // Handle method call syntax: module(a).method(args) -> ret
-            const arg_start = self.pos;
-            self.expect(.NoSpaceOpenRound) catch {
-                return try self.pushMalformed(
-                    AST.WhereClause.Idx,
-                    .where_expected_arg_open,
-                    start,
-                );
-            };
-            const ty_anno_top = self.store.scratchTypeAnnoTop();
-            self.parseCollectionSpan(
-                AST.TypeAnno.Idx,
-                .CloseRound,
-                NodeStore.addScratchTypeAnno,
-                Parser.parseTypeAnnoInCollection,
-            ) catch {
-                self.store.clearScratchTypeAnnosFrom(ty_anno_top);
-                return try self.pushMalformed(
-                    AST.WhereClause.Idx,
-                    .where_expected_arg_close,
-                    start,
-                );
-            };
-            const arg_span = try self.store.typeAnnoSpanFrom(ty_anno_top);
-            const args = try self.store.addCollection(
-                .collection_ty_anno,
-                .{
-                    .region = .{ .start = arg_start, .end = self.pos },
-                    .span = arg_span.span,
-                },
-            );
-            self.expect(.OpArrow) catch {
-                return try self.pushMalformed(
-                    AST.WhereClause.Idx,
-                    .where_expected_method_arrow,
-                    start,
-                );
-            };
-            const ret_ty_anno = try self.parseTypeAnnoInCollection();
-            return try self.store.addWhereClause(.{ .mod_method = .{
-                .region = .{ .start = start, .end = self.pos },
-                .name_tok = name_tok,
-                .var_tok = var_tok,
-                .args = args,
-                .ret_anno = ret_ty_anno,
-            } });
-        }
-    } else {
-        // Only module(a).method syntax is supported
+    // Expect lower identifier (type variable)
+    const var_tok = self.pos;
+    self.expect(.LowerIdent) catch {
         return try self.pushMalformed(
             AST.WhereClause.Idx,
-            .where_expected_module,
+            .where_expected_var,
             start,
         );
+    };
+
+    // Expect dot followed by method/alias name
+    const name_tok = self.pos;
+    if (self.peek() != .NoSpaceDotLowerIdent and self.peek() != .DotLowerIdent and self.peek() != .NoSpaceDotUpperIdent and self.peek() != .DotUpperIdent) {
+        return try self.pushMalformed(
+            AST.WhereClause.Idx,
+            .where_expected_method_or_alias_name,
+            start,
+        );
+    }
+    self.advance();
+
+    // Check if this is a type alias (uppercase identifier)
+    const current_token_tag = self.tok_buf.tokens.items(.tag)[name_tok];
+    if (current_token_tag == .NoSpaceDotUpperIdent or current_token_tag == .DotUpperIdent) {
+        // Type alias case: a.TypeAlias
+        return try self.store.addWhereClause(.{ .mod_alias = .{
+            .region = .{ .start = start, .end = self.pos },
+            .name_tok = name_tok,
+            .var_tok = var_tok,
+        } });
+    }
+
+    // Expect colon
+    self.expect(.OpColon) catch {
+        return try self.pushMalformed(
+            AST.WhereClause.Idx,
+            .where_expected_colon,
+            start,
+        );
+    };
+
+    // Parse type annotation
+    const args_start = self.pos;
+    const method_type_anno = try self.parseTypeAnno(.not_looking_for_args);
+    const method_type = self.store.getTypeAnno(method_type_anno);
+
+    // Check if the type annotation is a function type
+    if (method_type == .@"fn") {
+        // Function type: extract args and return type
+        const fn_type = method_type.@"fn";
+        const args = try self.store.addCollection(
+            .collection_ty_anno,
+            .{
+                .region = .{ .start = args_start, .end = self.pos },
+                .span = fn_type.args.span,
+            },
+        );
+        return try self.store.addWhereClause(.{ .mod_method = .{
+            .region = .{ .start = start, .end = self.pos },
+            .name_tok = name_tok,
+            .var_tok = var_tok,
+            .args = args,
+            .ret_anno = fn_type.ret,
+        } });
+    } else {
+        // Non-function type: treat as zero-argument method
+        const empty_args = try self.store.addCollection(
+            .collection_ty_anno,
+            .{
+                .region = .{ .start = args_start, .end = self.pos },
+                .span = base.DataSpan.empty(),
+            },
+        );
+        return try self.store.addWhereClause(.{ .mod_method = .{
+            .region = .{ .start = start, .end = self.pos },
+            .name_tok = name_tok,
+            .var_tok = var_tok,
+            .args = empty_args,
+            .ret_anno = method_type_anno,
+        } });
     }
 }
 

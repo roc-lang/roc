@@ -13,17 +13,17 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwIf(1:1-1:3),Int(1:4-1:5),OpGreaterThan(1:6-1:7),Int(1:8-1:9),Int(1:10-1:11),KwElse(1:12-1:16),Int(1:17-1:18),
-EndOfFile(2:1-2:1),
+KwIf,Int,OpGreaterThan,Int,Int,KwElse,Int,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-if-then-else @1.1-1.18
-	(e-binop @1.4-1.9 (op ">")
-		(e-int @1.4-1.5 (raw "5"))
-		(e-int @1.8-1.9 (raw "3")))
-	(e-int @1.10-1.11 (raw "1"))
-	(e-int @1.17-1.18 (raw "2")))
+(e-if-then-else
+	(e-binop (op ">")
+		(e-int (raw "5"))
+		(e-int (raw "3")))
+	(e-int (raw "1"))
+	(e-int (raw "2")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -31,17 +31,17 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-if @1.1-1.18
+(e-if
 	(if-branches
 		(if-branch
-			(e-binop @1.4-1.9 (op "gt")
-				(e-num @1.4-1.5 (value "5"))
-				(e-num @1.8-1.9 (value "3")))
-			(e-num @1.10-1.11 (value "1"))))
+			(e-binop (op "gt")
+				(e-num (value "5"))
+				(e-num (value "3")))
+			(e-num (value "1"))))
 	(if-else
-		(e-num @1.17-1.18 (value "2"))))
+		(e-num (value "2"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.18 (type "Num(_size)"))
+(expr (type "Num(_size)"))
 ~~~

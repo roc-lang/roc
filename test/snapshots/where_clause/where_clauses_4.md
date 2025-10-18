@@ -8,7 +8,7 @@ type=snippet
 import Decode exposing [Decode]
 
 decodeThings : List(List(U8)) -> List(a)
-	where module(a).Decode
+	where [a.Decode]
 decodeThings = ...
 ~~~
 # EXPECTED
@@ -27,34 +27,34 @@ import Decode exposing [Decode]
 
 # TOKENS
 ~~~zig
-KwImport(1:1-1:7),UpperIdent(1:8-1:14),KwExposing(1:15-1:23),OpenSquare(1:24-1:25),UpperIdent(1:25-1:31),CloseSquare(1:31-1:32),
-LowerIdent(3:1-3:13),OpColon(3:14-3:15),UpperIdent(3:16-3:20),NoSpaceOpenRound(3:20-3:21),UpperIdent(3:21-3:25),NoSpaceOpenRound(3:25-3:26),UpperIdent(3:26-3:28),CloseRound(3:28-3:29),CloseRound(3:29-3:30),OpArrow(3:31-3:33),UpperIdent(3:34-3:38),NoSpaceOpenRound(3:38-3:39),LowerIdent(3:39-3:40),CloseRound(3:40-3:41),
-KwWhere(4:2-4:7),KwModule(4:8-4:14),NoSpaceOpenRound(4:14-4:15),LowerIdent(4:15-4:16),CloseRound(4:16-4:17),NoSpaceDotUpperIdent(4:17-4:24),
-LowerIdent(5:1-5:13),OpAssign(5:14-5:15),TripleDot(5:16-5:19),
-EndOfFile(6:1-6:1),
+KwImport,UpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,
+LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseRound,OpArrow,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
+KwWhere,OpenSquare,LowerIdent,NoSpaceDotUpperIdent,CloseSquare,
+LowerIdent,OpAssign,TripleDot,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-5.19
-	(type-module @1.1-1.7)
+(file
+	(type-module)
 	(statements
-		(s-import @1.1-1.32 (raw "Decode")
+		(s-import (raw "Decode")
 			(exposing
-				(exposed-upper-ident @1.25-1.31 (text "Decode"))))
-		(s-type-anno @3.1-4.24 (name "decodeThings")
-			(ty-fn @3.16-3.41
-				(ty-apply @3.16-3.30
-					(ty @3.16-3.20 (name "List"))
-					(ty-apply @3.21-3.29
-						(ty @3.21-3.25 (name "List"))
-						(ty @3.26-3.28 (name "U8"))))
-				(ty-apply @3.34-3.41
-					(ty @3.34-3.38 (name "List"))
-					(ty-var @3.39-3.40 (raw "a"))))
+				(exposed-upper-ident (text "Decode"))))
+		(s-type-anno (name "decodeThings")
+			(ty-fn
+				(ty-apply
+					(ty (name "List"))
+					(ty-apply
+						(ty (name "List"))
+						(ty (name "U8"))))
+				(ty-apply
+					(ty (name "List"))
+					(ty-var (raw "a"))))
 			(where
-				(alias @4.8-4.24 (module-of "a") (name "Decode"))))
-		(s-decl @5.1-5.19
-			(p-ident @5.1-5.13 (raw "decodeThings"))
+				(alias (module-of "a") (name "Decode"))))
+		(s-decl
+			(p-ident (raw "decodeThings"))
 			(e-ellipsis))))
 ~~~
 # FORMATTED
@@ -65,35 +65,35 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @5.1-5.13 (ident "decodeThings"))
-		(e-not-implemented @1.1-1.1)
-		(annotation @5.1-5.13
+		(p-assign (ident "decodeThings"))
+		(e-not-implemented)
+		(annotation
 			(declared-type
-				(ty-fn @3.16-3.41 (effectful false)
-					(ty-apply @3.16-3.30 (name "List") (builtin)
-						(ty-apply @3.21-3.29 (name "List") (builtin)
-							(ty-lookup @3.26-3.28 (name "U8") (builtin))))
-					(ty-apply @3.34-3.41 (name "List") (builtin)
-						(ty-rigid-var @3.39-3.40 (name "a")))))))
-	(s-import @1.1-1.32 (module "Decode")
+				(ty-fn (effectful false)
+					(ty-apply (name "List") (builtin)
+						(ty-apply (name "List") (builtin)
+							(ty-lookup (name "U8") (builtin))))
+					(ty-apply (name "List") (builtin)
+						(ty-rigid-var (name "a")))))))
+	(s-import (module "Decode")
 		(exposes
 			(exposed (name "Decode") (wildcard false))))
-	(s-type-anno @3.1-4.24 (name "decodeThings")
-		(ty-fn @3.16-3.41 (effectful false)
-			(ty-apply @3.16-3.30 (name "List") (builtin)
-				(ty-apply @3.21-3.29 (name "List") (builtin)
-					(ty-lookup @3.26-3.28 (name "U8") (builtin))))
-			(ty-apply @3.34-3.41 (name "List") (builtin)
-				(ty-rigid-var @3.39-3.40 (name "a"))))
+	(s-type-anno (name "decodeThings")
+		(ty-fn (effectful false)
+			(ty-apply (name "List") (builtin)
+				(ty-apply (name "List") (builtin)
+					(ty-lookup (name "U8") (builtin))))
+			(ty-apply (name "List") (builtin)
+				(ty-rigid-var (name "a"))))
 		(where
-			(alias @4.8-4.24 (module-of "a") (ident "Decode"))))
-	(ext-decl @4.8-4.24 (ident "module(a).Decode") (kind "type")))
+			(alias (module-of "a") (ident "Decode"))))
+	(ext-decl (ident "a.Decode") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.13 (type "List(List(Num(Int(Unsigned8)))) -> List(a)")))
+		(patt (type "List(List(Num(Int(Unsigned8)))) -> List(a)")))
 	(expressions
-		(expr @1.1-1.1 (type "List(List(Num(Int(Unsigned8)))) -> List(a)"))))
+		(expr (type "List(List(Num(Int(Unsigned8)))) -> List(a)"))))
 ~~~

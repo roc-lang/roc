@@ -16,21 +16,21 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),
-LowerIdent(2:5-2:11),OpColon(2:11-2:12),Int(2:13-2:15),Comma(2:15-2:16),
-LowerIdent(3:5-3:20),OpColon(3:20-3:21),OpBar(3:22-3:23),OpenCurly(3:23-3:24),CloseCurly(3:24-3:25),OpBar(3:25-3:26),TripleDot(3:27-3:30),Comma(3:30-3:31),
-CloseCurly(4:1-4:2),
-EndOfFile(5:1-5:1),
+OpenCurly,
+LowerIdent,OpColon,Int,Comma,
+LowerIdent,OpColon,OpBar,OpenCurly,CloseCurly,OpBar,TripleDot,Comma,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-record @1.1-4.2
+(e-record
 	(field (field "answer")
-		(e-int @2.13-2.15 (raw "42")))
+		(e-int (raw "42")))
 	(field (field "launchTheNukes!")
-		(e-lambda @3.22-3.30
+		(e-lambda
 			(args
-				(p-record @3.23-3.25))
+				(p-record))
 			(e-ellipsis))))
 ~~~
 # FORMATTED
@@ -42,18 +42,18 @@ EndOfFile(5:1-5:1),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1.1-4.2
+(e-record
 	(fields
 		(field (name "answer")
-			(e-num @2.13-2.15 (value "42")))
+			(e-num (value "42")))
 		(field (name "launchTheNukes!")
-			(e-lambda @3.22-3.30
+			(e-lambda
 				(args
-					(p-record-destructure @3.23-3.25
+					(p-record-destructure
 						(destructs)))
-				(e-not-implemented @1.1-1.1)))))
+				(e-not-implemented)))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-4.2 (type "{ answer: Num(_size), launchTheNukes!: {} -> _ret }"))
+(expr (type "{ answer: Num(_size), launchTheNukes!: {} -> _ret }"))
 ~~~

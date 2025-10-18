@@ -59,12 +59,12 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),Comma(1:7-1:8),LowerIdent(1:9-1:12),Comma(1:12-1:13),LowerIdent(1:14-1:19),Comma(1:19-1:20),LowerIdent(1:21-1:27),CloseCurly(1:28-1:29),
-EndOfFile(2:1-2:1),
+OpenCurly,LowerIdent,Comma,LowerIdent,Comma,LowerIdent,Comma,LowerIdent,CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-record @1.1-1.29
+(e-record
 	(field (field "name"))
 	(field (field "age"))
 	(field (field "email"))
@@ -76,7 +76,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1.1-1.29
+(e-record
 	(fields
 		(field (name "name")
 			(e-runtime-error (tag "ident_not_in_scope")))
@@ -89,5 +89,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.29 (type "{ active: Error, age: Error, email: Error, name: Error }"))
+(expr (type "{ active: Error, age: Error, email: Error, name: Error }"))
 ~~~

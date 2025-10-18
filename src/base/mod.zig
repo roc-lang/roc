@@ -97,6 +97,55 @@ pub const NumLiteral = union(enum) {
     Frac: FracLiteral,
 };
 
+/// The core allocators for the lifetime of a roc program.
+///
+/// This structure should be used to pass allocators to most functions in Roc.
+/// Data structures should anchor to a generic allocator instead (alloc: Allocator).
+/// It is up to the instanciator of the data structure to pick what it will use.
+/// Generally speaking though, data structures can realloc and will use the gpa.
+///
+/// IMPORTANT: After initialization, Allocators must always be passed by pointer (*Allocators),
+/// never by value. Passing by value will invalidate the arena allocator pointer!
+pub const Allocators = struct {
+    /// The gpa is the general purpose allocator. Anything allocated with the gpa must be freed.
+    /// the gpa should generally be used for large allocations and things that might get reallocated.
+    /// It is best to avoid allocating small or short lived things with the gpa.
+    gpa: std.mem.Allocator,
+
+    /// The arena is an arena allocator that is around for the entire roc compilation.
+    /// The arena should be used for small and miscellaneous allocations.
+    /// Things allocated in arena are expected to never be freed individually.
+    ///
+    /// IMPORTANT: This field contains a pointer to arena_impl. The struct must not be
+    /// moved after initialization, or this pointer will be invalidated.
+    arena: std.mem.Allocator,
+
+    /// The underlying arena allocator implementation (stored to enable deinit)
+    arena_impl: std.heap.ArenaAllocator,
+
+    // TODO: consider if we want to add scratch. It would be an arena reset between each compilation phase.
+    // scratch: ?std.mem.Allocator,
+
+    /// Initialize the Allocators in-place with a general purpose allocator.
+    ///
+    /// IMPORTANT: This struct must be initialized in its final memory location.
+    /// After calling initInPlace(), the struct must only be passed by pointer (*Allocators),
+    /// never by value, or the arena allocator pointer will be invalidated.
+    pub fn initInPlace(self: *Allocators, gpa: std.mem.Allocator) void {
+        self.* = .{
+            .gpa = gpa,
+            .arena = undefined,
+            .arena_impl = std.heap.ArenaAllocator.init(gpa),
+        };
+        self.arena = self.arena_impl.allocator();
+    }
+
+    /// Deinitialize the arena allocator.
+    pub fn deinit(self: *Allocators) void {
+        self.arena_impl.deinit();
+    }
+};
+
 test "base tests" {
     std.testing.refAllDecls(@import("CommonEnv.zig"));
     std.testing.refAllDecls(@import("DataSpan.zig"));
