@@ -61,38 +61,11 @@ Result(ok, err) : [Ok(ok), Err(err)]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 But _Result_ was already declared here:
-**type_alias_decl.md:1:1:29:14:**
+**type_alias_decl.md:1:1:1:1:**
 ```roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
-
-# Simple type alias
-UserId : U64
-
-# Generic type alias
-Result(ok, err) : [Ok(ok), Err(err)]
-
-# Record type alias
-Person : { name : Str, age : U64 }
-
-# Function type alias
-MapFn(a, b) : a -> b
-
-# Complex nested type alias
-ApiResponse(data) : Result(data, Str)
-
-# Type declaration with tag union
-Color : [Red, Green, Blue, Custom(U8, U8, U8)]
-
-# Type declaration with records and generics
-Container(item) : {
-    contents : List(item),
-    metadata : { size : U64, created : Str }
-}
-
-main! = |_| {
-    # Use the types to validate they work
-    userId : UserId
 ```
+^
 
 
 **UNUSED VARIABLE**

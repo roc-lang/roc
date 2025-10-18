@@ -1066,10 +1066,12 @@ fn compileSource(source: []const u8) !CompilerStageData {
     };
 
     // Create module_envs map for canonicalization (enables qualified calls)
-    var module_envs_map = std.StringHashMap(*const ModuleEnv).init(allocator);
+    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
     defer module_envs_map.deinit();
-    try module_envs_map.put("Bool", bool_module.env);
-    try module_envs_map.put("Result", result_module.env);
+    const bool_ident = try module_env.insertIdent(base.Ident.for_text("Bool"));
+    const result_ident = try module_env.insertIdent(base.Ident.for_text("Result"));
+    try module_envs_map.put(bool_ident, .{ .env = bool_module.env });
+    try module_envs_map.put(result_ident, .{ .env = result_module.env });
 
     logDebug("compileSource: Starting canonicalization\n", .{});
     var czer = try Can.init(env, &result.parse_ast.?, &module_envs_map);

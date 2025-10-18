@@ -60,7 +60,6 @@ const TypeVarProblem = struct {
 /// Information about an auto-imported module type
 pub const AutoImportedType = struct {
     env: *const ModuleEnv,
-    type_stmt: Statement.Idx,
 };
 
 env: *ModuleEnv,
@@ -7073,10 +7072,10 @@ fn scopeIntroduceTypeDecl(
     // Check if trying to redeclare an auto-imported builtin type
     if (self.module_envs) |envs_map| {
         // Check if this name matches an auto-imported module
-        if (envs_map.get(name_ident)) |imported_type| {
+        if (envs_map.get(name_ident)) |_| {
             // This is an auto-imported builtin type - report error
-            // Get the actual region from the original type declaration in the builtin module
-            const original_region = imported_type.env.store.getStatementRegion(imported_type.type_stmt);
+            // Use Region.zero() since auto-imported types don't have a meaningful source location
+            const original_region = Region.zero();
 
             try self.env.pushDiagnostic(Diagnostic{
                 .type_redeclared = .{

@@ -21,7 +21,7 @@ const expectEqual = testing.expectEqual;
 fn parseAndCanonicalizeSource(
     allocator: std.mem.Allocator,
     source: []const u8,
-    module_envs: ?*std.StringHashMap(*const ModuleEnv),
+    module_envs: ?*std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
 ) !struct {
     parse_env: *ModuleEnv,
     ast: *parse.AST,
@@ -54,8 +54,6 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     const allocator = gpa_state.allocator();
 
     // First, create some module environments with exposed items
-    var module_envs = std.StringHashMap(*const ModuleEnv).init(allocator);
-    defer module_envs.deinit();
     // Create module environment for "Json" module
     const json_env = try allocator.create(ModuleEnv);
     json_env.* = try ModuleEnv.init(allocator, "");
@@ -73,7 +71,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     try json_env.addExposedById(json_error_idx);
     const decode_problem_idx = try json_env.common.idents.insert(allocator, Ident.for_text("DecodeProblem"));
     try json_env.addExposedById(decode_problem_idx);
-    try module_envs.put("Json", json_env);
+
     // Create module environment for "Utils" module
     const utils_env = try allocator.create(ModuleEnv);
     utils_env.* = try ModuleEnv.init(allocator, "");
@@ -88,7 +86,6 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     try utils_env.addExposedById(filter_idx);
     const result_idx = try utils_env.common.idents.insert(allocator, Ident.for_text("Result"));
     try utils_env.addExposedById(result_idx);
-    try module_envs.put("Utils", utils_env);
     // Parse source code with various import statements
     const source =
         \\module [main]
@@ -118,6 +115,15 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     defer ast.deinit(allocator);
     // Initialize CIR fields
     try parse_env.initCIRFields(allocator, "Test");
+
+    // Now create module_envs using parse_env's ident store
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+    defer module_envs.deinit();
+    const json_module_ident = try parse_env.common.idents.insert(allocator, Ident.for_text("Json"));
+    try module_envs.put(json_module_ident, .{ .env = json_env });
+    const utils_module_ident = try parse_env.common.idents.insert(allocator, Ident.for_text("Utils"));
+    try module_envs.put(utils_module_ident, .{ .env = utils_env });
+
     // Canonicalize with module validation
     var can = try Can.init(parse_env, &ast, &module_envs);
     defer can.deinit();
@@ -470,8 +476,13 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     const allocator = gpa_state.allocator();
 
     // Create module environments with exposed items
-    var module_envs = std.StringHashMap(*const ModuleEnv).init(allocator);
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
     defer module_envs.deinit();
+
+    // Create temporary ident store for module name lookup
+    var temp_idents = try base.Ident.Store.initCapacity(allocator, 16);
+    defer temp_idents.deinit(allocator);
+
     // Create a "MathUtils" module with some exposed definitions
     const math_env = try allocator.create(ModuleEnv);
     math_env.* = try ModuleEnv.init(allocator, "");
@@ -492,7 +503,8 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     try math_env.common.exposed_items.setNodeIndexById(allocator, @bitCast(add_idx), 100);
     try math_env.common.exposed_items.setNodeIndexById(allocator, @bitCast(multiply_idx), 200);
     try math_env.common.exposed_items.setNodeIndexById(allocator, @bitCast(pi_idx), 300);
-    try module_envs.put("MathUtils", math_env);
+    const math_utils_ident = try temp_idents.insert(allocator, Ident.for_text("MathUtils"));
+    try module_envs.put(math_utils_ident, .{ .env = math_env });
     // Parse source that uses these exposed items
     const source =
         \\module [calculate]
@@ -551,7 +563,8 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     const undefined_idx = try empty_env.common.idents.insert(allocator, Ident.for_text("undefined"));
     try empty_env.addExposedById(undefined_idx);
     // Don't set node index - should default to 0
-    try module_envs.put("EmptyModule", empty_env);
+    const empty_module_ident = try temp_idents.insert(allocator, Ident.for_text("EmptyModule"));
+    try module_envs.put(empty_module_ident, .{ .env = empty_env });
     const source2 =
         \\module [test]
         \\

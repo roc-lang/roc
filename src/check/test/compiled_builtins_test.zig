@@ -183,10 +183,12 @@ test "compiled builtins - use Set and Dict together" {
     }
 
     // Set up module imports
-    var module_envs = std.StringHashMap(*const ModuleEnv).init(gpa);
+    var module_envs = std.AutoHashMap(base.Ident.Idx, can.Can.AutoImportedType).init(gpa);
     defer module_envs.deinit();
-    try module_envs.put("Set", set_loaded.env);
-    try module_envs.put("Dict", dict_loaded.env);
+    const set_ident = try module_env.insertIdent(base.Ident.for_text("Set"));
+    const dict_ident = try module_env.insertIdent(base.Ident.for_text("Dict"));
+    try module_envs.put(set_ident, .{ .env = set_loaded.env });
+    try module_envs.put(dict_ident, .{ .env = dict_loaded.env });
 
     // Canonicalize
     try module_env.initCIRFields(gpa, "test");

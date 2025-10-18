@@ -117,7 +117,7 @@ can: *Can,
 checker: Check,
 type_writer: types.TypeWriter,
 
-module_envs: std.StringHashMap(*const ModuleEnv),
+module_envs: std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
 other_envs: std.ArrayList(*const ModuleEnv),
 
 // Loaded builtin modules (loaded per test, cleaned up in deinit)
@@ -146,11 +146,8 @@ pub fn initWithImport(source: []const u8, other_module_name: []const u8, other_m
     const can = try gpa.create(Can);
     errdefer gpa.destroy(can);
 
-    var module_envs = std.StringHashMap(*const ModuleEnv).init(gpa);
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
     var other_envs = std.ArrayList(*const ModuleEnv).init(gpa);
-
-    // Put the other module in the env map
-    try module_envs.put(other_module_name, other_module_env);
 
     const module_name = "Test";
     std.debug.assert(!std.mem.eql(u8, module_name, other_module_name));
@@ -164,26 +161,32 @@ pub fn initWithImport(source: []const u8, other_module_name: []const u8, other_m
     var result_module = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     errdefer result_module.deinit();
 
-    // Set node indices for the exposed types so they can be properly referenced
-    // The Bool type is at statement index 1, so we set node_idx to 1
-    const bool_ident = bool_module.env.common.findIdent("Bool") orelse unreachable;
-    try bool_module.env.setExposedNodeIndexById(bool_ident, @intCast(@intFromEnum(builtin_indices.bool_type)));
-
-    // The Result type is at statement index 3, so we set node_idx to 3
-    const result_ident = result_module.env.common.findIdent("Result") orelse unreachable;
-    try result_module.env.setExposedNodeIndexById(result_ident, @intCast(@intFromEnum(builtin_indices.result_type)));
-
-    // Add Bool and Result to module_envs for auto-importing
-    try module_envs.put("Bool", bool_module.env);
-    try module_envs.put("Result", result_module.env);
-
-    // Initialize the ModuleEnv with the CommonEnv
+    // Initialize the module_env so we can use its ident store
     module_env.* = try ModuleEnv.init(gpa, source);
     errdefer module_env.deinit();
 
     module_env.common.source = source;
     module_env.module_name = module_name;
     try module_env.common.calcLineStarts(gpa);
+
+    // Put the other module in the env map using module_env's ident store
+    const other_module_ident = try module_env.insertIdent(base.Ident.for_text(other_module_name));
+    try module_envs.put(other_module_ident, .{ .env = other_module_env });
+
+    // Set node indices for the exposed types so they can be properly referenced
+    // The Bool type is at statement index 1, so we set node_idx to 1
+    const bool_module_ident = bool_module.env.common.findIdent("Bool") orelse unreachable;
+    try bool_module.env.setExposedNodeIndexById(bool_module_ident, @intCast(@intFromEnum(builtin_indices.bool_type)));
+
+    // The Result type is at statement index 3, so we set node_idx to 3
+    const result_module_ident = result_module.env.common.findIdent("Result") orelse unreachable;
+    try result_module.env.setExposedNodeIndexById(result_module_ident, @intCast(@intFromEnum(builtin_indices.result_type)));
+
+    // Add Bool and Result to module_envs for auto-importing
+    const bool_ident = try module_env.insertIdent(base.Ident.for_text("Bool"));
+    const result_ident = try module_env.insertIdent(base.Ident.for_text("Result"));
+    try module_envs.put(bool_ident, .{ .env = bool_module.env });
+    try module_envs.put(result_ident, .{ .env = result_module.env });
 
     // Parse the AST
     parse_ast.* = try parse.parse(&module_env.common, gpa);
@@ -296,7 +299,7 @@ pub fn init(source: []const u8) !TestEnv {
     const can = try gpa.create(Can);
     errdefer gpa.destroy(can);
 
-    var module_envs = std.StringHashMap(*const ModuleEnv).init(gpa);
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
 
     const module_name = "Test";
 
@@ -311,16 +314,12 @@ pub fn init(source: []const u8) !TestEnv {
 
     // Set node indices for the exposed types so they can be properly referenced
     // The Bool type is at statement index 1, so we set node_idx to 1
-    const bool_ident = bool_module.env.common.findIdent("Bool") orelse unreachable;
-    try bool_module.env.setExposedNodeIndexById(bool_ident, @intCast(@intFromEnum(builtin_indices.bool_type)));
+    const bool_module_ident = bool_module.env.common.findIdent("Bool") orelse unreachable;
+    try bool_module.env.setExposedNodeIndexById(bool_module_ident, @intCast(@intFromEnum(builtin_indices.bool_type)));
 
     // The Result type is at statement index 3, so we set node_idx to 3
-    const result_ident = result_module.env.common.findIdent("Result") orelse unreachable;
-    try result_module.env.setExposedNodeIndexById(result_ident, @intCast(@intFromEnum(builtin_indices.result_type)));
-
-    // Add Bool and Result to module_envs for auto-importing
-    try module_envs.put("Bool", bool_module.env);
-    try module_envs.put("Result", result_module.env);
+    const result_module_ident = result_module.env.common.findIdent("Result") orelse unreachable;
+    try result_module.env.setExposedNodeIndexById(result_module_ident, @intCast(@intFromEnum(builtin_indices.result_type)));
 
     // Initialize the ModuleEnv with the CommonEnv
     module_env.* = try ModuleEnv.init(gpa, source);

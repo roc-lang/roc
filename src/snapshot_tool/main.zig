@@ -1235,7 +1235,6 @@ fn processSnapshotContent(
         dict_import_idx = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Dict");
         try module_envs.put(dict_ident, .{
             .env = dict_env,
-            .type_stmt = config.builtin_indices.dict_type,
         });
     }
     if (config.set_module) |set_env| {
@@ -1243,7 +1242,6 @@ fn processSnapshotContent(
         set_import_idx = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Set");
         try module_envs.put(set_ident, .{
             .env = set_env,
-            .type_stmt = config.builtin_indices.set_type,
         });
     }
     // Bool and Result are registered as imports to make them available as external types
@@ -1252,7 +1250,6 @@ fn processSnapshotContent(
         bool_import_idx = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Bool");
         try module_envs.put(bool_ident, .{
             .env = bool_env,
-            .type_stmt = config.builtin_indices.bool_type,
         });
     }
     if (config.result_module) |result_env| {
@@ -1260,7 +1257,6 @@ fn processSnapshotContent(
         result_import_idx = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Result");
         try module_envs.put(result_ident, .{
             .env = result_env,
-            .type_stmt = config.builtin_indices.result_type,
         });
     }
 

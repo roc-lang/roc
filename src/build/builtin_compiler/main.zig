@@ -213,12 +213,17 @@ fn compileModule(
     }
 
     // 4. Create module imports map (for cross-module references)
-    var module_envs = std.StringHashMap(*const ModuleEnv).init(gpa);
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
     defer module_envs.deinit();
+
+    // Create temporary ident store for module name lookup
+    var temp_idents = try base.Ident.Store.initCapacity(gpa, 16);
+    defer temp_idents.deinit(gpa);
 
     // Add dependencies (e.g., Dict for Set)
     for (deps) |dep| {
-        try module_envs.put(dep.name, dep.env);
+        const dep_ident = try temp_idents.insert(gpa, base.Ident.for_text(dep.name));
+        try module_envs.put(dep_ident, .{ .env = dep.env });
     }
 
     // 5. Canonicalize
