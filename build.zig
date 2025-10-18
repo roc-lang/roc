@@ -178,12 +178,6 @@ pub fn build(b: *std.Build) void {
                 bin_filename,
             );
         }
-
-        // Also copy builtin_indices.bin
-        _ = write_compiled_builtins.addCopyFile(
-            .{ .cwd_relative = "zig-out/builtins/builtin_indices.bin" },
-            "builtin_indices.bin",
-        );
     } else {
         // Use existing .bin files from zig-out/builtins/
         for (roc_files) |roc_path| {
@@ -196,13 +190,13 @@ pub fn build(b: *std.Build) void {
                 bin_filename,
             );
         }
-
-        // Also copy builtin_indices.bin
-        _ = write_compiled_builtins.addCopyFile(
-            .{ .cwd_relative = "zig-out/builtins/builtin_indices.bin" },
-            "builtin_indices.bin",
-        );
     }
+
+    // Also copy builtin_indices.bin
+    _ = write_compiled_builtins.addCopyFile(
+        .{ .cwd_relative = "zig-out/builtins/builtin_indices.bin" },
+        "builtin_indices.bin",
+    );
 
     // Generate compiled_builtins.zig dynamically based on discovered .roc files
     const builtins_source_str = generateCompiledBuiltinsSource(b, roc_files) catch |err| {
@@ -219,9 +213,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = compiled_builtins_source,
     });
 
-    // Add compiled_builtins to the repl module so it can load Bool and Result
     roc_modules.repl.addImport("compiled_builtins", compiled_builtins_module);
-    // Add compiled_builtins to the compile module for type checking with builtin indices
     roc_modules.compile.addImport("compiled_builtins", compiled_builtins_module);
 
     // Manual rebuild command: zig build rebuild-builtins

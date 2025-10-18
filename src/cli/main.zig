@@ -2361,7 +2361,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     try env.initCIRFields(allocs.gpa, module_name);
 
     // Create canonicalizer
-    var canonicalizer = Can.init(&env, &parse_ast, null, .{}) catch |err| {
+    var canonicalizer = Can.init(&env, &parse_ast, null) catch |err| {
         try stderr.print("Failed to initialize canonicalizer: {}", .{err});
         std.process.exit(1);
     };
@@ -2392,7 +2392,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     };
 
     // Create test runner infrastructure for test evaluation
-    var test_runner = TestRunner.init(allocs.gpa, &env) catch |err| {
+    var test_runner = TestRunner.init(allocs.gpa, &env, module_common_idents.bool_stmt) catch |err| {
         try stderr.print("Failed to create test runner: {}\n", .{err});
         std.process.exit(1);
     };
