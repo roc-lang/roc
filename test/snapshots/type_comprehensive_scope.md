@@ -279,7 +279,7 @@ Complex : {
 		(ty-lookup (name "Str") (builtin)))
 	(s-alias-decl
 		(ty-header (name "MyBool"))
-		(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "0"))))
+		(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "1"))))
 	(s-alias-decl
 		(ty-header (name "Person"))
 		(ty-record
@@ -342,7 +342,7 @@ Complex : {
 				(ty-lookup (name "Person") (local)))
 			(field (field "result")
 				(ty-apply (name "Result") (local)
-					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "0")))
+					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "1")))
 					(ty-lookup (name "Str") (builtin))))
 			(field (field "tree")
 				(ty-apply (name "Tree") (local)

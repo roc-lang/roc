@@ -379,6 +379,17 @@ fn processTypeDeclFirstPass(
     try self.env.store.setStatementNode(type_decl_stmt_idx, type_decl_stmt);
     try self.env.store.addScratchStatement(type_decl_stmt_idx);
 
+    // For type modules, associate the node index with the exposed type
+    if (self.env.module_kind == .type_module) {
+        const module_name_text = self.env.module_name;
+        const type_text = self.env.getIdent(qualified_name_idx);
+        if (std.mem.eql(u8, type_text, module_name_text)) {
+            // This is the main type of the type module - set its node index
+            const node_idx_u16 = @as(u16, @intCast(@intFromEnum(type_decl_stmt_idx)));
+            try self.env.setExposedNodeIndexById(qualified_name_idx, node_idx_u16);
+        }
+    }
+
     // Remove from exposed_type_texts since the type is now fully defined
     const type_text = self.env.getIdent(type_header.name);
     _ = self.exposed_type_texts.remove(type_text);

@@ -1238,6 +1238,7 @@ fn processSnapshotContent(
         set_import_idx = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Set");
         try module_envs.put("Set", set_env);
     }
+    // Bool and Result are registered as imports to make them available as external types
     if (config.bool_module) |bool_env| {
         bool_import_idx = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Bool");
         try module_envs.put("Bool", bool_env);
@@ -1301,7 +1302,7 @@ fn processSnapshotContent(
     // Assert that everything is in-sync
     can_ir.debugAssertArraysInSync();
 
-    // Types - include Set and Dict modules if loaded
+    // Types - include Set, Dict, Bool, and Result modules if loaded
     var builtin_modules = std.ArrayList(*const ModuleEnv).init(allocator);
     defer builtin_modules.deinit();
 
@@ -1310,6 +1311,12 @@ fn processSnapshotContent(
     }
     if (config.set_module) |set_env| {
         try builtin_modules.append(set_env);
+    }
+    if (config.bool_module) |bool_env| {
+        try builtin_modules.append(bool_env);
+    }
+    if (config.result_module) |result_env| {
+        try builtin_modules.append(result_env);
     }
 
     var solver = try Check.init(

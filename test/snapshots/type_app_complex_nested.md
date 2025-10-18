@@ -312,7 +312,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-apply (name "List") (builtin)
 							(ty-malformed))
 						(ty-malformed))
@@ -354,7 +354,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 			(ty-args
 				(ty-rigid-var (name "a"))
 				(ty-rigid-var (name "b"))))
-		(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+		(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 			(ty-apply (name "List") (builtin)
 				(ty-malformed))
 			(ty-malformed))))
@@ -363,7 +363,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> List(a)"))
+		(patt (type "Result(List(Error), Error) -> List(a)"))
 		(patt (type "Error -> a"))
 		(patt (type "_arg -> List(a)")))
 	(type_decls
@@ -373,7 +373,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "b"))))))
 	(expressions
-		(expr (type "Error -> List(a)"))
+		(expr (type "Result(List(Error), Error) -> List(a)"))
 		(expr (type "Error -> a"))
 		(expr (type "_arg -> List(a)"))))
 ~~~

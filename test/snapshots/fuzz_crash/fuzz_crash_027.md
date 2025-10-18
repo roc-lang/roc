@@ -225,8 +225,10 @@ UNUSED VARIABLE - fuzz_crash_027.md:141:2:141:7
 UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
 UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
 TOO FEW ARGS - fuzz_crash_027.md:21:3:22:4
+INVALID IF CONDITION - fuzz_crash_027.md:50:5:50:5
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
 TYPE MISMATCH - fuzz_crash_027.md:111:2:113:3
+TYPE MISMATCH - fuzz_crash_027.md:143:2:147:3
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.
@@ -853,6 +855,19 @@ The type _List_ expects  argument, but got  instead.
 
 
 
+**INVALID IF CONDITION**
+This `if` condition needs to be a _Bool_:
+**fuzz_crash_027.md:50:5:**
+```roc
+	if num {
+```
+    ^^^
+
+Right now, it has the type:
+    _Num(Int(Unsigned64))_
+
+Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
+
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the third branch of this `match` differs from previous ones:
 **fuzz_crash_027.md:64:2:**
@@ -915,6 +930,23 @@ It has the type:
 
 But I expected it to be:
     _[Red, Blue]_others, _arg -> Error_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_027.md:143:2:147:3:**
+```roc
+	Stdoline!(
+		"How about ${ #
+			Num.toStr(number) # on expr
+		} as a",
+	)
+```
+
+It has the type:
+    _[Stdoline!(Str)][Err(_d), Ok({  })]_
+
+But the type annotation says it should have the type:
+    _Result({  }, _d)_
 
 # TOKENS
 ~~~zig
@@ -2059,7 +2091,7 @@ expect {
 				(ty-fn (effectful false)
 					(ty-apply (name "List") (builtin)
 						(ty-malformed))
-					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-record)
 						(ty-underscore))))))
 	(d-let
@@ -2167,7 +2199,7 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> Num(_size)"))
+		(patt (type "Bool -> Num(_size)"))
 		(patt (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(patt (type "[Red, Blue]_others, _arg -> Error"))
 		(patt (type "List(Error) -> Error"))
@@ -2202,7 +2234,7 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "_arg -> Num(_size)"))
+		(expr (type "Bool -> Num(_size)"))
 		(expr (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(expr (type "[Red, Blue]_others, _arg -> Error"))
 		(expr (type "List(Error) -> Error"))

@@ -521,13 +521,13 @@ transform = |result|
 		(p-assign (ident "resultType"))
 		(e-nominal-external
 			(module-idx "3")
-			(target-node-idx "0")
+			(target-node-idx "3")
 			(e-tag (name "Ok")
 				(args
 					(e-num (value "42")))))
 		(annotation
 			(declared-type
-				(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+				(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 					(ty-lookup (name "I32") (builtin))
 					(ty-lookup (name "Str") (builtin))))))
 	(d-let
@@ -585,7 +585,7 @@ transform = |result|
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-lookup (name "RGB") (external (module-idx "4") (target-node-idx "0")))
 						(ty-lookup (name "Error") (external (module-idx "6") (target-node-idx "0"))))
 					(ty-malformed)))))
@@ -603,16 +603,16 @@ transform = |result|
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "Error"))
-		(patt (type "Error"))
+		(patt (type "Result(Num(Int(Signed32)), Str)"))
 		(patt (type "{  } -> Error"))
 		(patt (type "Error -> Str"))
-		(patt (type "Error -> Error")))
+		(patt (type "Result(Error, Error) -> Error")))
 	(expressions
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))
-		(expr (type "Error"))
+		(expr (type "Result(Num(Int(Signed32)), Str)"))
 		(expr (type "{  } -> Error"))
 		(expr (type "Error -> Str"))
-		(expr (type "Error -> Error"))))
+		(expr (type "Result(Error, Error) -> Error"))))
 ~~~

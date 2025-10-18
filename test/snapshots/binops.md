@@ -160,20 +160,20 @@ EndOfFile,
 		(e-binop (op "and")
 			(e-nominal-external
 				(module-idx "2")
-				(target-node-idx "0")
+				(target-node-idx "1")
 				(e-tag (name "True")))
 			(e-nominal-external
 				(module-idx "2")
-				(target-node-idx "0")
+				(target-node-idx "1")
 				(e-tag (name "False"))))
 		(e-binop (op "or")
 			(e-nominal-external
 				(module-idx "2")
-				(target-node-idx "0")
+				(target-node-idx "1")
 				(e-tag (name "False")))
 			(e-nominal-external
 				(module-idx "2")
-				(target-node-idx "0")
+				(target-node-idx "1")
 				(e-tag (name "True"))))
 		(e-binop (op "null_coalesce")
 			(e-tag (name "None"))
@@ -181,5 +181,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(Num(_size), Num(_size2), Num(_size3), Num(_size4), Num(_size5), _field, _field2, _field3, _field4, _field5, _field6, Num(_size6), Error, Error, _field7)"))
+(expr (type "(Num(_size), Num(_size2), Num(_size3), Num(_size4), Num(_size5), Bool, Bool, Bool, Bool, Bool, Bool, Num(_size6), Bool, Bool, _field)"))
 ~~~

@@ -82,8 +82,6 @@ import_cache: ImportCache,
 constraint_origins: std.AutoHashMap(Var, Var),
 /// Copied Bool type from Bool module (for use in if conditions, etc.)
 bool_var: Var,
-/// Copied Result type from Result module (for use in Result operations)
-result_var: Var,
 /// Deferred static dispatch constraints - accumulated during type checking,
 /// then solved for at the end
 deferred_static_dispatch_constraints: DeferredConstraintCheck.SafeList,
@@ -136,7 +134,6 @@ pub fn init(
         .import_cache = ImportCache{},
         .constraint_origins = std.AutoHashMap(Var, Var).init(gpa),
         .bool_var = undefined, // Will be initialized in copyBuiltinTypes()
-        .result_var = undefined, // Will be initialized in copyBuiltinTypes()
         .deferred_static_dispatch_constraints = try DeferredConstraintCheck.SafeList.initCapacity(gpa, 128),
     };
 }
@@ -560,16 +557,7 @@ fn copyBuiltinTypes(self: *Self) !void {
         self.bool_var = ModuleEnv.varFrom(bool_stmt_idx);
     }
 
-    // Copy Result type from Result module
-    if (result_module) |result_env| {
-        const result_stmt_idx = self.common_idents.result_stmt;
-        const result_type_var = ModuleEnv.varFrom(result_stmt_idx);
-        self.result_var = try self.copyVar(result_type_var, result_env);
-    } else {
-        // If Result module not found, use the statement from the current module
-        const result_stmt_idx = self.common_idents.result_stmt;
-        self.result_var = ModuleEnv.varFrom(result_stmt_idx);
-    }
+    // Result type is accessed via external references, no need to copy it here
 }
 
 /// Check the types for all defs in a file
@@ -1065,19 +1053,34 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenType
 
                         // Get the arguments & name the referenced type
                         const ext_arg_vars, const ext_name = blk: {
-                            if (ext_resolved == .alias) {
-                                const decl_alias = ext_resolved.alias;
-                                break :blk .{ self.types.sliceAliasArgs(decl_alias), decl_alias.ident.ident_idx };
-                            } else if (ext_resolved == .structure and ext_resolved.structure == .nominal_type) {
-                                const decl_nominal = ext_resolved.structure.nominal_type;
-                                break :blk .{ self.types.sliceNominalArgs(decl_nominal), decl_nominal.ident.ident_idx };
-                            } else if (ext_resolved == .err) {
-                                try self.updateVar(anno_var, .err, Rank.generalized);
-                                return;
-                            } else {
-                                std.debug.assert(false);
-                                try self.updateVar(anno_var, .err, Rank.generalized);
-                                return;
+                            switch (ext_resolved) {
+                                .alias => |decl_alias| {
+                                    break :blk .{ self.types.sliceAliasArgs(decl_alias), decl_alias.ident.ident_idx };
+                                },
+                                .structure => |flat_type| {
+                                    if (flat_type == .nominal_type) {
+                                        const decl_nominal = flat_type.nominal_type;
+                                        break :blk .{ self.types.sliceNominalArgs(decl_nominal), decl_nominal.ident.ident_idx };
+                                    } else {
+                                        // External type resolved to a non-nominal structure (e.g., record, func, etc.)
+                                        // This shouldn't happen for type applications, treat as error
+                                        try self.updateVar(anno_var, .err, Rank.generalized);
+                                        return;
+                                    }
+                                },
+                                .err => {
+                                    try self.updateVar(anno_var, .err, Rank.generalized);
+                                    return;
+                                },
+                                .flex, .rigid => {
+                                    // External type resolved to a flex or rigid var.
+                                    // This can happen when the external type is polymorphic but hasn't been
+                                    // instantiated yet. We need to use the variable as-is, but this means
+                                    // we can't get the arity/name information. This is likely a bug in how
+                                    // the external type was set up. For now, treat it as an error.
+                                    try self.updateVar(anno_var, .err, Rank.generalized);
+                                    return;
+                                },
                             }
                         };
 

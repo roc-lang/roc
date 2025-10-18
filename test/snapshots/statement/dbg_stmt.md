@@ -31,7 +31,7 @@ NO CHANGE
 	(s-dbg
 		(e-nominal-external
 			(module-idx "2")
-			(target-node-idx "0")
+			(target-node-idx "1")
 			(e-tag (name "True")))))
 ~~~
 # TYPES

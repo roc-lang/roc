@@ -273,6 +273,7 @@ UNUSED VARIABLE - fuzz_crash_023.md:180:2:180:17
 UNUSED VARIABLE - fuzz_crash_023.md:188:2:188:15
 UNUSED VARIABLE - fuzz_crash_023.md:189:2:189:23
 UNDECLARED TYPE - fuzz_crash_023.md:201:9:201:14
+INVALID IF CONDITION - fuzz_crash_023.md:70:5:70:5
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_023.md:84:2:84:2
 TYPE MISMATCH - fuzz_crash_023.md:155:2:157:3
 # PROBLEMS
@@ -884,6 +885,19 @@ tuple : Value((a, b, c))
 ```
         ^^^^^
 
+
+**INVALID IF CONDITION**
+This `if` condition needs to be a _Bool_:
+**fuzz_crash_023.md:70:5:**
+```roc
+	if num {
+```
+    ^^^
+
+Right now, it has the type:
+    _Num(Int(Unsigned64))_
+
+Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:
@@ -2334,7 +2348,7 @@ expect {
 				(ty-fn (effectful false)
 					(ty-apply (name "List") (builtin)
 						(ty-malformed))
-					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-record)
 						(ty-underscore))))))
 	(d-let
@@ -2473,10 +2487,10 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> Num(_size)"))
+		(patt (type "Bool -> Num(_size)"))
 		(patt (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(patt (type "[Red][Blue, Green]_others, _arg -> Error"))
-		(patt (type "List(Error) -> Error"))
+		(patt (type "List(Error) -> Result({  }, _d)"))
 		(patt (type "{}")))
 	(type_decls
 		(alias (type "Map(a, b)")
@@ -2518,9 +2532,9 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "_arg -> Num(_size)"))
+		(expr (type "Bool -> Num(_size)"))
 		(expr (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(expr (type "[Red][Blue, Green]_others, _arg -> Error"))
-		(expr (type "List(Error) -> Error"))
+		(expr (type "List(Error) -> Result({  }, _d)"))
 		(expr (type "{}"))))
 ~~~

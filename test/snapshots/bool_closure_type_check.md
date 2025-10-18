@@ -44,5 +44,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[True]_others"))
+(expr (type "Bool"))
 ~~~
