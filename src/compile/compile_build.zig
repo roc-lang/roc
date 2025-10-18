@@ -1278,12 +1278,10 @@ pub const OrderedSink = struct {
 
     pub fn deinit(self: *OrderedSink) void {
         // Free entries
-        for (self.entries.items) |e| {
+        for (self.entries.items) |*e| {
             // pkg_name and module_name are borrowed, don't free
             // Deinit all reports for this module
-            var i: usize = 0;
-            while (i < e.reports.items.len) : (i += 1) {
-                var rep = e.reports.items[i];
+            for (e.reports.items) |*rep| {
                 rep.deinit();
             }
             e.reports.deinit();
@@ -1470,6 +1468,8 @@ pub const OrderedSink = struct {
                 .reports = reps,
             };
 
+            // Reinitialize the reports ArrayList since toOwnedSlice() moved ownership
+            e.reports = std.ArrayList(Report).init(self.gpa);
             e.ready = false;
             e.emitted = false;
         }
