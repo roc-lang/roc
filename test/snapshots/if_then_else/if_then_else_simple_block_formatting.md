@@ -47,19 +47,19 @@ To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
-KwIf(1:1-1:3),LowerIdent(1:4-1:8),OpenCurly(1:9-1:10),
-UpperIdent(2:2-2:3),
-CloseCurly(3:1-3:2),KwElse(3:3-3:7),Int(3:8-3:9),
-EndOfFile(4:1-4:1),
+KwIf,LowerIdent,OpenCurly,
+UpperIdent,
+CloseCurly,KwElse,Int,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-if-then-else @1.1-3.9
-	(e-ident @1.4-1.8 (raw "bool"))
-	(e-block @1.9-3.2
+(e-if-then-else
+	(e-ident (raw "bool"))
+	(e-block
 		(statements
-			(e-tag @2.2-2.3 (raw "A"))))
-	(e-int @3.8-3.9 (raw "2")))
+			(e-tag (raw "A"))))
+	(e-int (raw "2")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -67,16 +67,16 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-if @1.1-3.9
+(e-if
 	(if-branches
 		(if-branch
 			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-block @1.9-3.2
-				(e-tag @2.2-2.3 (name "A")))))
+			(e-block
+				(e-tag (name "A")))))
 	(if-else
-		(e-num @3.8-3.9 (value "2"))))
+		(e-num (value "2"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-3.9 (type "Error"))
+(expr (type "Error"))
 ~~~

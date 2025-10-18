@@ -18,104 +18,107 @@ isRed = |color| match color {
 }
 ~~~
 # EXPECTED
-INVALID NOMINAL TAG - nominal_tag_qualified_still_works.md:8:18:8:27
-INVALID NOMINAL TAG - nominal_tag_qualified_still_works.md:9:20:9:30
-INVALID NOMINAL TAG - nominal_tag_qualified_still_works.md:10:19:10:29
+UNDECLARED TYPE - nominal_tag_qualified_still_works.md:6:18:6:22
+UNDECLARED TYPE - nominal_tag_qualified_still_works.md:8:18:8:22
+UNDECLARED TYPE - nominal_tag_qualified_still_works.md:9:20:9:24
+UNDECLARED TYPE - nominal_tag_qualified_still_works.md:10:19:10:23
 # PROBLEMS
-**INVALID NOMINAL TAG**
-I'm having trouble with this nominal tag:
-**nominal_tag_qualified_still_works.md:8:18:8:27:**
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
+
+This type is referenced here:
+**nominal_tag_qualified_still_works.md:6:18:6:22:**
+```roc
+isRed : Color -> Bool
+```
+                 ^^^^
+
+
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
+
+This type is referenced here:
+**nominal_tag_qualified_still_works.md:8:18:8:22:**
 ```roc
     Color.Red => Bool.True
 ```
-                 ^^^^^^^^^
+                 ^^^^
 
-The tag is:
-    _True_
 
-But the nominal type needs it to be:
-    _EmptyDict_
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
 
-**INVALID NOMINAL TAG**
-I'm having trouble with this nominal tag:
-**nominal_tag_qualified_still_works.md:9:20:9:30:**
+This type is referenced here:
+**nominal_tag_qualified_still_works.md:9:20:9:24:**
 ```roc
     Color.Green => Bool.False
 ```
-                   ^^^^^^^^^^
+                   ^^^^
 
-The tag is:
-    _False_
 
-But the nominal type needs it to be:
-    _EmptyDict_
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
 
-**INVALID NOMINAL TAG**
-I'm having trouble with this nominal tag:
-**nominal_tag_qualified_still_works.md:10:19:10:29:**
+This type is referenced here:
+**nominal_tag_qualified_still_works.md:10:19:10:23:**
 ```roc
     Color.Blue => Bool.False
 ```
-                  ^^^^^^^^^^
+                  ^^^^
 
-The tag is:
-    _False_
-
-But the nominal type needs it to be:
-    _EmptyDict_
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:6),OpColonEqual(1:7-1:9),OpenSquare(1:10-1:11),UpperIdent(1:11-1:14),Comma(1:14-1:15),UpperIdent(1:16-1:21),Comma(1:21-1:22),UpperIdent(1:23-1:27),CloseSquare(1:27-1:28),
-LowerIdent(3:1-3:8),OpColon(3:9-3:10),UpperIdent(3:11-3:16),
-LowerIdent(4:1-4:8),OpAssign(4:9-4:10),UpperIdent(4:11-4:16),NoSpaceDotUpperIdent(4:16-4:20),
-LowerIdent(6:1-6:6),OpColon(6:7-6:8),UpperIdent(6:9-6:14),OpArrow(6:15-6:17),UpperIdent(6:18-6:22),
-LowerIdent(7:1-7:6),OpAssign(7:7-7:8),OpBar(7:9-7:10),LowerIdent(7:10-7:15),OpBar(7:15-7:16),KwMatch(7:17-7:22),LowerIdent(7:23-7:28),OpenCurly(7:29-7:30),
-UpperIdent(8:5-8:10),NoSpaceDotUpperIdent(8:10-8:14),OpFatArrow(8:15-8:17),UpperIdent(8:18-8:22),NoSpaceDotUpperIdent(8:22-8:27),
-UpperIdent(9:5-9:10),NoSpaceDotUpperIdent(9:10-9:16),OpFatArrow(9:17-9:19),UpperIdent(9:20-9:24),NoSpaceDotUpperIdent(9:24-9:30),
-UpperIdent(10:5-10:10),NoSpaceDotUpperIdent(10:10-10:15),OpFatArrow(10:16-10:18),UpperIdent(10:19-10:23),NoSpaceDotUpperIdent(10:23-10:29),
-CloseCurly(11:1-11:2),
-EndOfFile(12:1-12:1),
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,
+LowerIdent,OpColon,UpperIdent,
+LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,
+LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,KwMatch,LowerIdent,OpenCurly,
+UpperIdent,NoSpaceDotUpperIdent,OpFatArrow,UpperIdent,NoSpaceDotUpperIdent,
+UpperIdent,NoSpaceDotUpperIdent,OpFatArrow,UpperIdent,NoSpaceDotUpperIdent,
+UpperIdent,NoSpaceDotUpperIdent,OpFatArrow,UpperIdent,NoSpaceDotUpperIdent,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-11.2
-	(type-module @1.1-1.6)
+(file
+	(type-module)
 	(statements
-		(s-type-decl @1.1-1.28
-			(header @1.1-1.6 (name "Color")
+		(s-type-decl
+			(header (name "Color")
 				(args))
-			(ty-tag-union @1.10-1.28
+			(ty-tag-union
 				(tags
-					(ty @1.11-1.14 (name "Red"))
-					(ty @1.16-1.21 (name "Green"))
-					(ty @1.23-1.27 (name "Blue")))))
-		(s-type-anno @3.1-3.16 (name "myColor")
-			(ty @3.11-3.16 (name "Color")))
-		(s-decl @4.1-4.20
-			(p-ident @4.1-4.8 (raw "myColor"))
-			(e-tag @4.11-4.20 (raw "Color.Red")))
-		(s-type-anno @6.1-6.22 (name "isRed")
-			(ty-fn @6.9-6.22
-				(ty @6.9-6.14 (name "Color"))
-				(ty @6.18-6.22 (name "Bool"))))
-		(s-decl @7.1-11.2
-			(p-ident @7.1-7.6 (raw "isRed"))
-			(e-lambda @7.9-11.2
+					(ty (name "Red"))
+					(ty (name "Green"))
+					(ty (name "Blue")))))
+		(s-type-anno (name "myColor")
+			(ty (name "Color")))
+		(s-decl
+			(p-ident (raw "myColor"))
+			(e-tag (raw "Color.Red")))
+		(s-type-anno (name "isRed")
+			(ty-fn
+				(ty (name "Color"))
+				(ty (name "Bool"))))
+		(s-decl
+			(p-ident (raw "isRed"))
+			(e-lambda
 				(args
-					(p-ident @7.10-7.15 (raw "color")))
+					(p-ident (raw "color")))
 				(e-match
-					(e-ident @7.23-7.28 (raw "color"))
+					(e-ident (raw "color"))
 					(branches
-						(branch @8.5-8.27
-							(p-tag @8.5-8.14 (raw ".Red"))
-							(e-tag @8.18-8.27 (raw "Bool.True")))
-						(branch @9.5-9.30
-							(p-tag @9.5-9.16 (raw ".Green"))
-							(e-tag @9.20-9.30 (raw "Bool.False")))
-						(branch @10.5-10.29
-							(p-tag @10.5-10.15 (raw ".Blue"))
-							(e-tag @10.19-10.29 (raw "Bool.False")))))))))
+						(branch
+							(p-tag (raw ".Red"))
+							(e-tag (raw "Bool.True")))
+						(branch
+							(p-tag (raw ".Green"))
+							(e-tag (raw "Bool.False")))
+						(branch
+							(p-tag (raw ".Blue"))
+							(e-tag (raw "Bool.False")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -135,75 +138,66 @@ isRed = |color| match color {
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @4.1-4.8 (ident "myColor"))
-		(e-nominal @4.11-4.20 (nominal "Color")
-			(e-tag @4.11-4.20 (name "Red")))
-		(annotation @4.1-4.8
+		(p-assign (ident "myColor"))
+		(e-nominal (nominal "Color")
+			(e-tag (name "Red")))
+		(annotation
 			(declared-type
-				(ty-lookup @3.11-3.16 (name "Color") (local)))))
+				(ty-lookup (name "Color") (local)))))
 	(d-let
-		(p-assign @7.1-7.6 (ident "isRed"))
-		(e-lambda @7.9-11.2
+		(p-assign (ident "isRed"))
+		(e-lambda
 			(args
-				(p-assign @7.10-7.15 (ident "color")))
-			(e-match @7.17-11.2
-				(match @7.17-11.2
+				(p-assign (ident "color")))
+			(e-match
+				(match
 					(cond
-						(e-lookup-local @7.23-7.28
-							(p-assign @7.10-7.15 (ident "color"))))
+						(e-lookup-local
+							(p-assign (ident "color"))))
 					(branches
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-nominal @8.5-8.14
-										(p-applied-tag @8.5-8.14))))
+									(p-nominal
+										(p-applied-tag))))
 							(value
-								(e-nominal-external @8.18-8.27
-									(module-idx "2")
-									(target-node-idx "1")
-									(e-tag @8.18-8.27 (name "True")))))
+								(e-runtime-error (tag "undeclared_type"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-nominal @9.5-9.16
-										(p-applied-tag @9.5-9.16))))
+									(p-nominal
+										(p-applied-tag))))
 							(value
-								(e-nominal-external @9.20-9.30
-									(module-idx "2")
-									(target-node-idx "1")
-									(e-tag @9.20-9.30 (name "False")))))
+								(e-runtime-error (tag "undeclared_type"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-nominal @10.5-10.15
-										(p-applied-tag @10.5-10.15))))
+									(p-nominal
+										(p-applied-tag))))
 							(value
-								(e-nominal-external @10.19-10.29
-									(module-idx "2")
-									(target-node-idx "1")
-									(e-tag @10.19-10.29 (name "False")))))))))
-		(annotation @7.1-7.6
+								(e-runtime-error (tag "undeclared_type"))))))))
+		(annotation
 			(declared-type
-				(ty-fn @6.9-6.22 (effectful false)
-					(ty-lookup @6.9-6.14 (name "Color") (local))
-					(ty-lookup @6.18-6.22 (name "Bool") (external (module-idx "2") (target-node-idx "1")))))))
-	(s-nominal-decl @1.1-1.28
-		(ty-header @1.1-1.6 (name "Color"))
-		(ty-tag-union @1.10-1.28
-			(ty-tag-name @1.11-1.14 (name "Red"))
-			(ty-tag-name @1.16-1.21 (name "Green"))
-			(ty-tag-name @1.23-1.27 (name "Blue")))))
+				(ty-fn (effectful false)
+					(ty-lookup (name "Color") (local))
+					(ty-malformed)))))
+	(s-nominal-decl
+		(ty-header (name "Color"))
+		(ty-tag-union
+			(ty-tag-name (name "Red"))
+			(ty-tag-name (name "Green"))
+			(ty-tag-name (name "Blue")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.8 (type "Color"))
-		(patt @7.1-7.6 (type "Color -> Error")))
+		(patt (type "Color"))
+		(patt (type "Color -> Error")))
 	(type_decls
-		(nominal @1.1-1.28 (type "Color")
-			(ty-header @1.1-1.6 (name "Color"))))
+		(nominal (type "Color")
+			(ty-header (name "Color"))))
 	(expressions
-		(expr @4.11-4.20 (type "Color"))
-		(expr @7.9-11.2 (type "Color -> Error"))))
+		(expr (type "Color"))
+		(expr (type "Color -> Error"))))
 ~~~

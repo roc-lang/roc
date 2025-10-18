@@ -83,19 +83,19 @@ import json.Json [foo, BAR]
 
 # TOKENS
 ~~~zig
-KwImport(1:1-1:7),LowerIdent(1:8-1:12),NoSpaceDotUpperIdent(1:12-1:17),OpenSquare(1:18-1:19),LowerIdent(1:19-1:22),Comma(1:22-1:23),UpperIdent(1:24-1:27),CloseSquare(1:27-1:28),
-EndOfFile(2:1-2:1),
+KwImport,LowerIdent,NoSpaceDotUpperIdent,OpenSquare,LowerIdent,Comma,UpperIdent,CloseSquare,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.28
-	(type-module @1.1-1.7)
+(file
+	(type-module)
 	(statements
-		(s-import @1.1-1.17 (raw "json.Json"))
-		(s-malformed @1.18-1.19 (tag "statement_unexpected_token"))
-		(s-malformed @1.19-1.22 (tag "statement_unexpected_token"))
-		(s-malformed @1.22-1.23 (tag "statement_unexpected_token"))
-		(s-malformed @1.27-1.28 (tag "expected_colon_after_type_annotation"))))
+		(s-import (raw "json.Json"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -104,7 +104,7 @@ import json.Json
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import @1.1-1.17 (module "json.Json")
+	(s-import (module "json.Json")
 		(exposes)))
 ~~~
 # TYPES

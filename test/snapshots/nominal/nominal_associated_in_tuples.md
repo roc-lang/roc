@@ -61,70 +61,70 @@ boxed : Box(Foo.Bar)
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:4),OpColonEqual(1:5-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),CloseSquare(1:17-1:18),Dot(1:18-1:19),OpenCurly(1:19-1:20),
-UpperIdent(2:5-2:8),OpColonEqual(2:9-2:11),OpenSquare(2:12-2:13),UpperIdent(2:13-2:14),Comma(2:14-2:15),UpperIdent(2:16-2:17),CloseSquare(2:17-2:18),
-UpperIdent(3:5-3:8),OpColonEqual(3:9-3:11),OpenSquare(3:12-3:13),UpperIdent(3:13-3:14),CloseSquare(3:14-3:15),
-CloseCurly(4:1-4:2),
-LowerIdent(6:1-6:5),OpColon(6:6-6:7),OpenRound(6:8-6:9),UpperIdent(6:9-6:12),NoSpaceDotUpperIdent(6:12-6:16),Comma(6:16-6:17),UpperIdent(6:18-6:21),NoSpaceDotUpperIdent(6:21-6:25),CloseRound(6:25-6:26),
-LowerIdent(7:1-7:5),OpAssign(7:6-7:7),OpenRound(7:8-7:9),UpperIdent(7:9-7:10),Comma(7:10-7:11),UpperIdent(7:12-7:13),CloseRound(7:13-7:14),
-UpperIdent(9:1-9:4),OpColon(9:5-9:6),LowerIdent(9:7-9:8),OpArrow(9:9-9:11),OpenSquare(9:12-9:13),UpperIdent(9:13-9:16),NoSpaceOpenRound(9:16-9:17),LowerIdent(9:17-9:18),CloseRound(9:18-9:19),CloseSquare(9:19-9:20),
-LowerIdent(11:1-11:6),OpColon(11:7-11:8),UpperIdent(11:9-11:12),NoSpaceOpenRound(11:12-11:13),UpperIdent(11:13-11:16),NoSpaceDotUpperIdent(11:16-11:20),CloseRound(11:20-11:21),
-LowerIdent(12:1-12:6),OpAssign(12:7-12:8),UpperIdent(12:9-12:12),NoSpaceOpenRound(12:12-12:13),UpperIdent(12:13-12:14),CloseRound(12:14-12:15),
-EndOfFile(13:1-13:1),
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,CloseSquare,
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,
+CloseCurly,
+LowerIdent,OpColon,OpenRound,UpperIdent,NoSpaceDotUpperIdent,Comma,UpperIdent,NoSpaceDotUpperIdent,CloseRound,
+LowerIdent,OpAssign,OpenRound,UpperIdent,Comma,UpperIdent,CloseRound,
+UpperIdent,OpColon,LowerIdent,OpArrow,OpenSquare,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,CloseSquare,
+LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,UpperIdent,NoSpaceDotUpperIdent,CloseRound,
+LowerIdent,OpAssign,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-12.15
-	(type-module @1.1-1.4)
+(file
+	(type-module)
 	(statements
-		(s-type-decl @1.1-4.2
-			(header @1.1-1.4 (name "Foo")
+		(s-type-decl
+			(header (name "Foo")
 				(args))
-			(ty-tag-union @1.8-1.18
+			(ty-tag-union
 				(tags
-					(ty @1.9-1.17 (name "Whatever"))))
-			(associated @1.19-4.2
-				(s-type-decl @2.5-2.18
-					(header @2.5-2.8 (name "Bar")
+					(ty (name "Whatever"))))
+			(associated
+				(s-type-decl
+					(header (name "Bar")
 						(args))
-					(ty-tag-union @2.12-2.18
+					(ty-tag-union
 						(tags
-							(ty @2.13-2.14 (name "X"))
-							(ty @2.16-2.17 (name "Y")))))
-				(s-type-decl @3.5-3.15
-					(header @3.5-3.8 (name "Baz")
+							(ty (name "X"))
+							(ty (name "Y")))))
+				(s-type-decl
+					(header (name "Baz")
 						(args))
-					(ty-tag-union @3.12-3.15
+					(ty-tag-union
 						(tags
-							(ty @3.13-3.14 (name "Z")))))))
-		(s-type-anno @6.1-6.26 (name "pair")
-			(ty-tuple @6.8-6.26
-				(ty @6.9-6.16 (name "Foo.Bar"))
-				(ty @6.18-6.25 (name "Foo.Baz"))))
-		(s-decl @7.1-7.14
-			(p-ident @7.1-7.5 (raw "pair"))
-			(e-tuple @7.8-7.14
-				(e-tag @7.9-7.10 (raw "X"))
-				(e-tag @7.12-7.13 (raw "Z"))))
-		(s-type-decl @9.1-9.20
-			(header @9.1-9.4 (name "Box")
+							(ty (name "Z")))))))
+		(s-type-anno (name "pair")
+			(ty-tuple
+				(ty (name "Foo.Bar"))
+				(ty (name "Foo.Baz"))))
+		(s-decl
+			(p-ident (raw "pair"))
+			(e-tuple
+				(e-tag (raw "X"))
+				(e-tag (raw "Z"))))
+		(s-type-decl
+			(header (name "Box")
 				(args))
-			(ty-fn @9.7-9.20
-				(ty-var @9.7-9.8 (raw "a"))
-				(ty-tag-union @9.12-9.20
+			(ty-fn
+				(ty-var (raw "a"))
+				(ty-tag-union
 					(tags
-						(ty-apply @9.13-9.19
-							(ty @9.13-9.16 (name "Box"))
-							(ty-var @9.17-9.18 (raw "a")))))))
-		(s-type-anno @11.1-11.21 (name "boxed")
-			(ty-apply @11.9-11.21
-				(ty @11.9-11.12 (name "Box"))
-				(ty @11.13-11.20 (name "Foo.Bar"))))
-		(s-decl @12.1-12.15
-			(p-ident @12.1-12.6 (raw "boxed"))
-			(e-apply @12.9-12.15
-				(e-tag @12.9-12.12 (raw "Box"))
-				(e-tag @12.13-12.14 (raw "X"))))))
+						(ty-apply
+							(ty (name "Box"))
+							(ty-var (raw "a")))))))
+		(s-type-anno (name "boxed")
+			(ty-apply
+				(ty (name "Box"))
+				(ty (name "Foo.Bar"))))
+		(s-decl
+			(p-ident (raw "boxed"))
+			(e-apply
+				(e-tag (raw "Box"))
+				(e-tag (raw "X"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -145,62 +145,62 @@ boxed = Box(X)
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @7.1-7.5 (ident "pair"))
-		(e-tuple @7.8-7.14
+		(p-assign (ident "pair"))
+		(e-tuple
 			(elems
-				(e-tag @7.9-7.10 (name "X"))
-				(e-tag @7.12-7.13 (name "Z"))))
-		(annotation @7.1-7.5
+				(e-tag (name "X"))
+				(e-tag (name "Z"))))
+		(annotation
 			(declared-type
-				(ty-tuple @6.8-6.26
-					(ty-lookup @6.9-6.16 (name "Foo.Bar") (local))
-					(ty-lookup @6.18-6.25 (name "Foo.Baz") (local))))))
+				(ty-tuple
+					(ty-lookup (name "Foo.Bar") (local))
+					(ty-lookup (name "Foo.Baz") (local))))))
 	(d-let
-		(p-assign @12.1-12.6 (ident "boxed"))
-		(e-tag @12.9-12.15 (name "Box")
+		(p-assign (ident "boxed"))
+		(e-tag (name "Box")
 			(args
-				(e-tag @12.13-12.14 (name "X"))))
-		(annotation @12.1-12.6
+				(e-tag (name "X"))))
+		(annotation
 			(declared-type
-				(ty-apply @11.9-11.21 (name "Box") (local)
-					(ty-lookup @11.13-11.20 (name "Foo.Bar") (local))))))
-	(s-nominal-decl @1.1-4.2
-		(ty-header @1.1-1.4 (name "Foo"))
-		(ty-tag-union @1.8-1.18
-			(ty-tag-name @1.9-1.17 (name "Whatever"))))
-	(s-nominal-decl @2.5-2.18
-		(ty-header @2.5-2.18 (name "Foo.Bar"))
-		(ty-tag-union @2.12-2.18
-			(ty-tag-name @2.13-2.14 (name "X"))
-			(ty-tag-name @2.16-2.17 (name "Y"))))
-	(s-nominal-decl @3.5-3.15
-		(ty-header @3.5-3.15 (name "Foo.Baz"))
-		(ty-tag-union @3.12-3.15
-			(ty-tag-name @3.13-3.14 (name "Z"))))
-	(s-alias-decl @9.1-9.20
-		(ty-header @9.1-9.4 (name "Box"))
-		(ty-fn @9.7-9.20 (effectful false)
-			(ty-malformed @9.7-9.8)
-			(ty-tag-union @9.12-9.20
-				(ty-tag-name @9.13-9.19 (name "Box")
-					(ty-malformed @9.17-9.18))))))
+				(ty-apply (name "Box") (local)
+					(ty-lookup (name "Foo.Bar") (local))))))
+	(s-nominal-decl
+		(ty-header (name "Foo"))
+		(ty-tag-union
+			(ty-tag-name (name "Whatever"))))
+	(s-nominal-decl
+		(ty-header (name "Foo.Bar"))
+		(ty-tag-union
+			(ty-tag-name (name "X"))
+			(ty-tag-name (name "Y"))))
+	(s-nominal-decl
+		(ty-header (name "Foo.Baz"))
+		(ty-tag-union
+			(ty-tag-name (name "Z"))))
+	(s-alias-decl
+		(ty-header (name "Box"))
+		(ty-fn (effectful false)
+			(ty-malformed)
+			(ty-tag-union
+				(ty-tag-name (name "Box")
+					(ty-malformed))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @7.1-7.5 (type "(Foo.Bar, Foo.Baz)"))
-		(patt @12.1-12.6 (type "Error")))
+		(patt (type "(Foo.Bar, Foo.Baz)"))
+		(patt (type "Error")))
 	(type_decls
-		(nominal @1.1-4.2 (type "Foo")
-			(ty-header @1.1-1.4 (name "Foo")))
-		(nominal @2.5-2.18 (type "Foo.Bar")
-			(ty-header @2.5-2.18 (name "Foo.Bar")))
-		(nominal @3.5-3.15 (type "Foo.Baz")
-			(ty-header @3.5-3.15 (name "Foo.Baz")))
-		(alias @9.1-9.20 (type "Box")
-			(ty-header @9.1-9.4 (name "Box"))))
+		(nominal (type "Foo")
+			(ty-header (name "Foo")))
+		(nominal (type "Foo.Bar")
+			(ty-header (name "Foo.Bar")))
+		(nominal (type "Foo.Baz")
+			(ty-header (name "Foo.Baz")))
+		(alias (type "Box")
+			(ty-header (name "Box"))))
 	(expressions
-		(expr @7.8-7.14 (type "(Foo.Bar, Foo.Baz)"))
-		(expr @12.9-12.15 (type "Error"))))
+		(expr (type "(Foo.Bar, Foo.Baz)"))
+		(expr (type "Error"))))
 ~~~

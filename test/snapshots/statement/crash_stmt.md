@@ -13,14 +13,14 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwCrash(1:1-1:6),StringStart(1:7-1:8),StringPart(1:8-1:20),StringEnd(1:20-1:21),
-EndOfFile(2:1-2:1),
+KwCrash,StringStart,StringPart,StringEnd,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(s-crash @1.1-1.21
-	(e-string @1.7-1.21
-		(e-string-part @1.8-1.20 (raw "some message"))))
+(s-crash
+	(e-string
+		(e-string-part (raw "some message"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -29,7 +29,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-crash @1.1-1.21 (msg "some message")))
+	(s-crash (msg "some message")))
 ~~~
 # TYPES
 ~~~clojure

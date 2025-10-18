@@ -6,6 +6,7 @@ const std = @import("std");
 const base = @import("base");
 const builtins = @import("builtins");
 const can = @import("can");
+const reporting = @import("reporting");
 const Interpreter = @import("interpreter.zig").Interpreter;
 const eval_mod = @import("mod.zig");
 
@@ -92,10 +93,32 @@ const Evaluation = enum {
     not_a_bool,
 };
 
+/// Categorizes the type of test failure
+const FailureType = enum {
+    /// expect evaluated to false
+    simple_failure,
+    /// interpreter error during evaluation
+    eval_error,
+    /// expression didn't return a bool
+    not_bool,
+};
+
+/// Detailed information about a test failure
+const FailureInfo = union(FailureType) {
+    /// No additional info needed
+    simple_failure,
+    /// The specific interpreter error
+    eval_error: EvalError,
+    /// No additional info needed
+    not_bool,
+};
+
 // Track test results
 const TestResult = struct {
     passed: bool,
     region: base.Region,
+    failure_info: ?FailureInfo = null,
+    // Legacy error message for HTML report compatibility
     error_msg: ?[]const u8 = null,
 };
 
@@ -186,18 +209,32 @@ pub const TestRunner = struct {
                 const result = self.eval(stmt.s_expect.body) catch |err| {
                     failed += 1;
                     const error_msg = try std.fmt.allocPrint(self.allocator, "Test evaluation failed: {}", .{err});
-                    try self.test_results.append(.{ .region = region, .passed = false, .error_msg = error_msg });
+                    try self.test_results.append(.{
+                        .region = region,
+                        .passed = false,
+                        .failure_info = .{ .eval_error = err },
+                        .error_msg = error_msg,
+                    });
                     continue;
                 };
                 switch (result) {
                     .not_a_bool => {
                         failed += 1;
                         const error_msg = try std.fmt.allocPrint(self.allocator, "Test did not evaluate to a boolean", .{});
-                        try self.test_results.append(.{ .region = region, .passed = false, .error_msg = error_msg });
+                        try self.test_results.append(.{
+                            .region = region,
+                            .passed = false,
+                            .failure_info = .not_bool,
+                            .error_msg = error_msg,
+                        });
                     },
                     .failed => {
                         failed += 1;
-                        try self.test_results.append(.{ .region = region, .passed = false });
+                        try self.test_results.append(.{
+                            .region = region,
+                            .passed = false,
+                            .failure_info = .simple_failure,
+                        });
                     },
                     .passed => {
                         passed += 1;
@@ -211,6 +248,125 @@ pub const TestRunner = struct {
             .passed = passed,
             .failed = failed,
         };
+    }
+
+    /// Create a Report for a failed test.
+    /// Caller is responsible for calling report.deinit().
+    pub fn createReport(self: *const TestRunner, test_result: TestResult, filename: []const u8) !reporting.Report {
+        std.debug.assert(!test_result.passed); // Only call for failed tests
+
+        const failure_info = test_result.failure_info orelse {
+            // Fallback for legacy tests without failure_info
+            var report = reporting.Report.init(self.allocator, "TEST FAILURE", .runtime_error);
+            errdefer report.deinit();
+            try report.document.addText("This expect failed but no failure information is available.");
+            return report;
+        };
+
+        switch (failure_info) {
+            .simple_failure => {
+                var report = reporting.Report.init(self.allocator, "TEST FAILURE", .runtime_error);
+                errdefer report.deinit();
+
+                try report.document.addText("This ");
+                try report.document.addAnnotated("expect", .keyword);
+                try report.document.addText(" failed:");
+                try report.document.addLineBreak();
+
+                // Show the source code with highlighting
+                const region_info = self.env.calcRegionInfo(test_result.region);
+                try report.document.addSourceRegion(
+                    region_info,
+                    .error_highlight,
+                    filename,
+                    self.env.common.source,
+                    self.env.getLineStarts(),
+                );
+                try report.document.addLineBreak();
+
+                try report.document.addText("The expression evaluated to ");
+                try report.document.addAnnotated("False", .emphasized);
+                try report.document.addText(".");
+
+                return report;
+            },
+            .eval_error => |err| {
+                var report = reporting.Report.init(self.allocator, "TEST EVALUATION ERROR", .runtime_error);
+                errdefer report.deinit();
+
+                try report.document.addText("This ");
+                try report.document.addAnnotated("expect", .keyword);
+                try report.document.addText(" could not be evaluated:");
+                try report.document.addLineBreak();
+
+                // Show the source code with highlighting
+                const region_info = self.env.calcRegionInfo(test_result.region);
+                try report.document.addSourceRegion(
+                    region_info,
+                    .error_highlight,
+                    filename,
+                    self.env.common.source,
+                    self.env.getLineStarts(),
+                );
+                try report.document.addLineBreak();
+
+                // Show the error type
+                const error_name = @errorName(err);
+                try report.document.addText("Error: ");
+                try report.document.addAnnotated(error_name, .error_highlight);
+                try report.document.addLineBreak();
+                try report.document.addLineBreak();
+
+                // Add helpful explanation based on error type
+                const explanation = switch (err) {
+                    error.TypeMismatch => "The test expression has incompatible types and cannot be evaluated.",
+                    error.DivisionByZero => "The test expression attempts to divide by zero.",
+                    error.NotImplemented => "The test uses a feature that is not yet implemented in the interpreter.",
+                    error.ZeroSizedType => "The test expression results in a zero-sized type.",
+                    else => "This usually indicates a bug in the test itself.",
+                };
+                try report.document.addText(explanation);
+
+                return report;
+            },
+            .not_bool => {
+                var report = reporting.Report.init(self.allocator, "EXPECT TYPE ERROR", .runtime_error);
+                errdefer report.deinit();
+
+                try report.document.addText("This ");
+                try report.document.addAnnotated("expect", .keyword);
+                try report.document.addText(" expression must evaluate to a ");
+                try report.document.addAnnotated("Bool", .type_variable);
+                try report.document.addText(":");
+                try report.document.addLineBreak();
+
+                // Show the source code with highlighting
+                const region_info = self.env.calcRegionInfo(test_result.region);
+                try report.document.addSourceRegion(
+                    region_info,
+                    .error_highlight,
+                    filename,
+                    self.env.common.source,
+                    self.env.getLineStarts(),
+                );
+                try report.document.addLineBreak();
+
+                try report.document.addText("The expression did not evaluate to a ");
+                try report.document.addAnnotated("Bool", .type_variable);
+                try report.document.addText(" value.");
+                try report.document.addLineBreak();
+                try report.document.addLineBreak();
+                try report.document.addText("Every ");
+                try report.document.addAnnotated("expect", .keyword);
+                try report.document.addText(" must have a boolean expression\u{2014}either ");
+                try report.document.addAnnotated("True", .tag_name);
+                try report.document.addText(" or ");
+                try report.document.addAnnotated("False", .tag_name);
+                try report.document.addText(".");
+
+                return report;
+            },
+        }
     }
 
     /// Write a html report of the test results to the given writer.

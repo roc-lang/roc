@@ -14,7 +14,7 @@ match Answer {
 ~~~
 # EXPECTED
 INCOMPATIBLE MATCH BRANCHES - literal_patterns.md:1:1:1:1
-TYPE MISMATCH - literal_patterns.md:5:5:5:7
+INCOMPATIBLE MATCH PATTERNS - literal_patterns.md:1:1:1:1
 # PROBLEMS
 **INCOMPATIBLE MATCH BRANCHES**
 The second branch's type in this `match` is different from the previous ones:
@@ -37,48 +37,57 @@ All branches in an `match` must have compatible types.
 Note: You can wrap branches values in a tag to make them compatible.
 To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**literal_patterns.md:5:5:5:7:**
+**INCOMPATIBLE MATCH PATTERNS**
+The pattern in the fourth branch of this `match` differs from previous ones:
+**literal_patterns.md:1:1:**
 ```roc
+match Answer {
+    Answer => 1
+    Zero => "hello"
+    Greeting => 3
     10 => 4
+}
 ```
     ^^
 
-It has the type:
+The fourth pattern has this type:
     _Num(_size)_
 
-But I expected it to be:
+But all the previous patterns have this type: 
     _[Answer, Zero, Greeting]_others_
+
+All patterns in an `match` must have compatible types.
+
+
 
 # TOKENS
 ~~~zig
-KwMatch(1:1-1:6),UpperIdent(1:7-1:13),OpenCurly(1:14-1:15),
-UpperIdent(2:5-2:11),OpFatArrow(2:12-2:14),Int(2:15-2:16),
-UpperIdent(3:5-3:9),OpFatArrow(3:10-3:12),StringStart(3:13-3:14),StringPart(3:14-3:19),StringEnd(3:19-3:20),
-UpperIdent(4:5-4:13),OpFatArrow(4:14-4:16),Int(4:17-4:18),
-Int(5:5-5:7),OpFatArrow(5:8-5:10),Int(5:11-5:12),
-CloseCurly(6:1-6:2),
-EndOfFile(7:1-7:1),
+KwMatch,UpperIdent,OpenCurly,
+UpperIdent,OpFatArrow,Int,
+UpperIdent,OpFatArrow,StringStart,StringPart,StringEnd,
+UpperIdent,OpFatArrow,Int,
+Int,OpFatArrow,Int,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
 (e-match
-	(e-tag @1.7-1.13 (raw "Answer"))
+	(e-tag (raw "Answer"))
 	(branches
-		(branch @2.5-2.16
-			(p-tag @2.5-2.11 (raw "Answer"))
-			(e-int @2.15-2.16 (raw "1")))
-		(branch @3.5-3.20
-			(p-tag @3.5-3.9 (raw "Zero"))
-			(e-string @3.13-3.20
-				(e-string-part @3.14-3.19 (raw "hello"))))
-		(branch @4.5-4.18
-			(p-tag @4.5-4.13 (raw "Greeting"))
-			(e-int @4.17-4.18 (raw "3")))
-		(branch @5.5-5.12
-			(p-int @5.5-5.7 (raw "10"))
-			(e-int @5.11-5.12 (raw "4")))))
+		(branch
+			(p-tag (raw "Answer"))
+			(e-int (raw "1")))
+		(branch
+			(p-tag (raw "Zero"))
+			(e-string
+				(e-string-part (raw "hello"))))
+		(branch
+			(p-tag (raw "Greeting"))
+			(e-int (raw "3")))
+		(branch
+			(p-int (raw "10"))
+			(e-int (raw "4")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -91,38 +100,38 @@ match Answer {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-match @1.1-6.2
-	(match @1.1-6.2
+(e-match
+	(match
 		(cond
-			(e-tag @1.7-1.13 (name "Answer")))
+			(e-tag (name "Answer")))
 		(branches
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-applied-tag @2.5-2.11)))
+						(p-applied-tag)))
 				(value
-					(e-num @2.15-2.16 (value "1"))))
+					(e-num (value "1"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-applied-tag @3.5-3.9)))
+						(p-applied-tag)))
 				(value
-					(e-string @3.13-3.20
-						(e-literal @3.14-3.19 (string "hello")))))
+					(e-string
+						(e-literal (string "hello")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-applied-tag @4.5-4.13)))
+						(p-applied-tag)))
 				(value
-					(e-num @4.17-4.18 (value "3"))))
+					(e-num (value "3"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-num @5.5-5.7 (value "10"))))
+						(p-num (value "10"))))
 				(value
-					(e-num @5.11-5.12 (value "4")))))))
+					(e-num (value "4")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-6.2 (type "Error"))
+(expr (type "Error"))
 ~~~

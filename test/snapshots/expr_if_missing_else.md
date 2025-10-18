@@ -36,17 +36,17 @@ This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:4),OpAssign(1:5-1:6),KwIf(1:7-1:9),LowerIdent(1:10-1:13),Int(1:14-1:15),
-EndOfFile(2:1-2:1),
+LowerIdent,OpAssign,KwIf,LowerIdent,Int,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.15
-	(type-module @1.1-1.4)
+(file
+	(type-module)
 	(statements
-		(s-decl @1.1-1.15
-			(p-ident @1.1-1.4 (raw "foo"))
-			(e-malformed @1.7-1.15 (reason "no_else")))))
+		(s-decl
+			(p-ident (raw "foo"))
+			(e-malformed (reason "no_else")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -56,14 +56,14 @@ foo =
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @1.1-1.4 (ident "foo"))
+		(p-assign (ident "foo"))
 		(e-runtime-error (tag "expr_not_canonicalized"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @1.1-1.4 (type "Error")))
+		(patt (type "Error")))
 	(expressions
-		(expr @1.7-1.15 (type "Error"))))
+		(expr (type "Error"))))
 ~~~

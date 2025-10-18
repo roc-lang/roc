@@ -18,33 +18,33 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:4),OpColonEqual(1:5-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),CloseSquare(1:17-1:18),Dot(1:18-1:19),OpenCurly(1:19-1:20),
-LowerIdent(2:5-2:8),OpAssign(2:9-2:10),Int(2:11-2:13),
-CloseCurly(3:1-3:2),
-LowerIdent(5:1-5:7),OpColon(5:8-5:9),UpperIdent(5:10-5:13),
-LowerIdent(6:1-6:7),OpAssign(6:8-6:9),UpperIdent(6:10-6:13),NoSpaceDotLowerIdent(6:13-6:17),
-EndOfFile(7:1-7:1),
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
+LowerIdent,OpAssign,Int,
+CloseCurly,
+LowerIdent,OpColon,UpperIdent,
+LowerIdent,OpAssign,UpperIdent,NoSpaceDotLowerIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-6.17
-	(type-module @1.1-1.4)
+(file
+	(type-module)
 	(statements
-		(s-type-decl @1.1-3.2
-			(header @1.1-1.4 (name "Foo")
+		(s-type-decl
+			(header (name "Foo")
 				(args))
-			(ty-tag-union @1.8-1.18
+			(ty-tag-union
 				(tags
-					(ty @1.9-1.17 (name "Whatever"))))
-			(associated @1.19-3.2
-				(s-decl @2.5-2.13
-					(p-ident @2.5-2.8 (raw "bar"))
-					(e-int @2.11-2.13 (raw "42")))))
-		(s-type-anno @5.1-5.13 (name "useBar")
-			(ty @5.10-5.13 (name "U64")))
-		(s-decl @6.1-6.17
-			(p-ident @6.1-6.7 (raw "useBar"))
-			(e-ident @6.10-6.17 (raw "Foo.bar")))))
+					(ty (name "Whatever"))))
+			(associated
+				(s-decl
+					(p-ident (raw "bar"))
+					(e-int (raw "42")))))
+		(s-type-anno (name "useBar")
+			(ty (name "U64")))
+		(s-decl
+			(p-ident (raw "useBar"))
+			(e-ident (raw "Foo.bar")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -59,30 +59,30 @@ useBar = Foo.bar
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @6.1-6.7 (ident "useBar"))
-		(e-lookup-local @6.10-6.17
-			(p-assign @2.5-2.13 (ident "Foo.bar")))
-		(annotation @6.1-6.7
+		(p-assign (ident "useBar"))
+		(e-lookup-local
+			(p-assign (ident "Foo.bar")))
+		(annotation
 			(declared-type
-				(ty-lookup @5.10-5.13 (name "U64") (builtin)))))
+				(ty-lookup (name "U64") (builtin)))))
 	(d-let
-		(p-assign @2.5-2.13 (ident "Foo.bar"))
-		(e-num @2.11-2.13 (value "42")))
-	(s-nominal-decl @1.1-3.2
-		(ty-header @1.1-1.4 (name "Foo"))
-		(ty-tag-union @1.8-1.18
-			(ty-tag-name @1.9-1.17 (name "Whatever")))))
+		(p-assign (ident "Foo.bar"))
+		(e-num (value "42")))
+	(s-nominal-decl
+		(ty-header (name "Foo"))
+		(ty-tag-union
+			(ty-tag-name (name "Whatever")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.7 (type "Num(_size)"))
-		(patt @2.5-2.13 (type "Num(_size)")))
+		(patt (type "Num(_size)"))
+		(patt (type "Num(_size)")))
 	(type_decls
-		(nominal @1.1-3.2 (type "Foo")
-			(ty-header @1.1-1.4 (name "Foo"))))
+		(nominal (type "Foo")
+			(ty-header (name "Foo"))))
 	(expressions
-		(expr @6.10-6.17 (type "Num(_size)"))
-		(expr @2.11-2.13 (type "Num(_size)"))))
+		(expr (type "Num(_size)"))
+		(expr (type "Num(_size)"))))
 ~~~

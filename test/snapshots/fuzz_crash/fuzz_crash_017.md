@@ -51,22 +51,22 @@ foo = "hello ${namF
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:3),OpAssign(1:4-1:5),StringStart(1:6-1:7),StringPart(1:7-1:10),StringEnd(1:10-1:11),
-LowerIdent(2:1-2:4),OpAssign(2:5-2:6),StringStart(2:7-2:8),StringPart(2:8-2:14),OpenStringInterpolation(2:14-2:16),LowerIdent(2:16-2:20),
-EndOfFile(3:1-3:1),
+LowerIdent,OpAssign,StringStart,StringPart,StringEnd,
+LowerIdent,OpAssign,StringStart,StringPart,OpenStringInterpolation,LowerIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-2.20
-	(type-module @1.1-1.3)
+(file
+	(type-module)
 	(statements
-		(s-decl @1.1-1.11
-			(p-ident @1.1-1.3 (raw "me"))
-			(e-string @1.6-1.11
-				(e-string-part @1.7-1.10 (raw "luc"))))
-		(s-decl @2.1-2.20
-			(p-ident @2.1-2.4 (raw "foo"))
-			(e-malformed @2.7-2.20 (reason "string_expected_close_interpolation")))))
+		(s-decl
+			(p-ident (raw "me"))
+			(e-string
+				(e-string-part (raw "luc"))))
+		(s-decl
+			(p-ident (raw "foo"))
+			(e-malformed (reason "string_expected_close_interpolation")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -77,20 +77,20 @@ foo =
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @1.1-1.3 (ident "me"))
-		(e-string @1.6-1.11
-			(e-literal @1.7-1.10 (string "luc"))))
+		(p-assign (ident "me"))
+		(e-string
+			(e-literal (string "luc"))))
 	(d-let
-		(p-assign @2.1-2.4 (ident "foo"))
+		(p-assign (ident "foo"))
 		(e-runtime-error (tag "expr_not_canonicalized"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @1.1-1.3 (type "Str"))
-		(patt @2.1-2.4 (type "Error")))
+		(patt (type "Str"))
+		(patt (type "Error")))
 	(expressions
-		(expr @1.6-1.11 (type "Str"))
-		(expr @2.7-2.20 (type "Error"))))
+		(expr (type "Str"))
+		(expr (type "Error"))))
 ~~~

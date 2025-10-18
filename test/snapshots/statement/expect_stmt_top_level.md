@@ -10,40 +10,49 @@ foo = Bool.True
 expect foo != Bool.False
 ~~~
 # EXPECTED
-INVALID NOMINAL TAG - expect_stmt_top_level.md:1:7:1:16
+UNDECLARED TYPE - expect_stmt_top_level.md:1:7:1:11
+UNDECLARED TYPE - expect_stmt_top_level.md:3:15:3:19
 # PROBLEMS
-**INVALID NOMINAL TAG**
-I'm having trouble with this nominal tag:
-**expect_stmt_top_level.md:1:7:1:16:**
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
+
+This type is referenced here:
+**expect_stmt_top_level.md:1:7:1:11:**
 ```roc
 foo = Bool.True
 ```
-      ^^^^^^^^^
+      ^^^^
 
-The tag is:
-    _True_
 
-But the nominal type needs it to be:
-    _EmptyDict_
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
+
+This type is referenced here:
+**expect_stmt_top_level.md:3:15:3:19:**
+```roc
+expect foo != Bool.False
+```
+              ^^^^
+
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:4),OpAssign(1:5-1:6),UpperIdent(1:7-1:11),NoSpaceDotUpperIdent(1:11-1:16),
-KwExpect(3:1-3:7),LowerIdent(3:8-3:11),OpNotEquals(3:12-3:14),UpperIdent(3:15-3:19),NoSpaceDotUpperIdent(3:19-3:25),
-EndOfFile(4:1-4:1),
+LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,
+KwExpect,LowerIdent,OpNotEquals,UpperIdent,NoSpaceDotUpperIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-3.25
-	(type-module @1.1-1.4)
+(file
+	(type-module)
 	(statements
-		(s-decl @1.1-1.16
-			(p-ident @1.1-1.4 (raw "foo"))
-			(e-tag @1.7-1.16 (raw "Bool.True")))
-		(s-expect @3.1-3.25
-			(e-binop @3.8-3.25 (op "!=")
-				(e-ident @3.8-3.11 (raw "foo"))
-				(e-tag @3.15-3.25 (raw "Bool.False"))))))
+		(s-decl
+			(p-ident (raw "foo"))
+			(e-tag (raw "Bool.True")))
+		(s-expect
+			(e-binop (op "!=")
+				(e-ident (raw "foo"))
+				(e-tag (raw "Bool.False"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -53,25 +62,19 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @1.1-1.4 (ident "foo"))
-		(e-nominal-external @1.7-1.16
-			(module-idx "2")
-			(target-node-idx "1")
-			(e-tag @1.7-1.16 (name "True"))))
-	(s-expect @3.1-3.25
-		(e-binop @3.8-3.25 (op "ne")
-			(e-lookup-local @3.8-3.11
-				(p-assign @1.1-1.4 (ident "foo")))
-			(e-nominal-external @3.15-3.25
-				(module-idx "2")
-				(target-node-idx "1")
-				(e-tag @3.15-3.25 (name "False"))))))
+		(p-assign (ident "foo"))
+		(e-runtime-error (tag "undeclared_type")))
+	(s-expect
+		(e-binop (op "ne")
+			(e-lookup-local
+				(p-assign (ident "foo")))
+			(e-runtime-error (tag "undeclared_type")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @1.1-1.4 (type "Error")))
+		(patt (type "Error")))
 	(expressions
-		(expr @1.7-1.16 (type "Error"))))
+		(expr (type "Error"))))
 ~~~

@@ -82,27 +82,26 @@ var t= ]
 
 # TOKENS
 ~~~zig
-KwVar(2:1-2:4),LowerIdent(2:5-2:6),OpAssign(2:6-2:7),CloseSquare(2:8-2:9),
-KwVar(5:1-5:4),LowerIdent(5:5-5:6),OpAssign(5:6-5:7),Int(5:8-5:9),
-EndOfFile(6:1-6:1),
+KwVar,LowerIdent,OpAssign,CloseSquare,
+KwVar,LowerIdent,OpAssign,Int,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @2.1-5.9
-	(type-module @2.1-2.4)
+(file
+	(type-module)
 	(statements
-		(s-malformed @2.1-2.4 (tag "var_only_allowed_in_a_body"))
-		(s-decl @2.5-2.9
-			(p-ident @2.5-2.6 (raw "t"))
-			(e-malformed @2.8-2.9 (reason "expr_unexpected_token")))
-		(s-malformed @5.1-5.4 (tag "var_only_allowed_in_a_body"))
-		(s-decl @5.5-5.9
-			(p-ident @5.5-5.6 (raw "t"))
-			(e-int @5.8-5.9 (raw "0")))))
+		(s-malformed (tag "var_only_allowed_in_a_body"))
+		(s-decl
+			(p-ident (raw "t"))
+			(e-malformed (reason "expr_unexpected_token")))
+		(s-malformed (tag "var_only_allowed_in_a_body"))
+		(s-decl
+			(p-ident (raw "t"))
+			(e-int (raw "0")))))
 ~~~
 # FORMATTED
 ~~~roc
-# el
 # el
 t = 
 
@@ -113,19 +112,19 @@ t = 0
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @2.5-2.6 (ident "t"))
+		(p-assign (ident "t"))
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(d-let
-		(p-assign @5.5-5.6 (ident "t"))
-		(e-num @5.8-5.9 (value "0"))))
+		(p-assign (ident "t"))
+		(e-num (value "0"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @2.5-2.6 (type "Error"))
-		(patt @5.5-5.6 (type "Num(_size)")))
+		(patt (type "Error"))
+		(patt (type "Num(_size)")))
 	(expressions
-		(expr @2.8-2.9 (type "Error"))
-		(expr @5.8-5.9 (type "Num(_size)"))))
+		(expr (type "Error"))
+		(expr (type "Num(_size)"))))
 ~~~

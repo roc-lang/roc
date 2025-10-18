@@ -13,17 +13,17 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:4),OpAssign(1:5-1:6),UpperIdent(1:7-1:15),
-EndOfFile(2:1-2:1),
+LowerIdent,OpAssign,UpperIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.15
-	(type-module @1.1-1.4)
+(file
+	(type-module)
 	(statements
-		(s-decl @1.1-1.15
-			(p-ident @1.1-1.4 (raw "foo"))
-			(e-tag @1.7-1.15 (raw "FortyTwo")))))
+		(s-decl
+			(p-ident (raw "foo"))
+			(e-tag (raw "FortyTwo")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -33,14 +33,14 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @1.1-1.4 (ident "foo"))
-		(e-tag @1.7-1.15 (name "FortyTwo"))))
+		(p-assign (ident "foo"))
+		(e-tag (name "FortyTwo"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @1.1-1.4 (type "[FortyTwo]_others")))
+		(patt (type "[FortyTwo]_others")))
 	(expressions
-		(expr @1.7-1.15 (type "[FortyTwo]_others"))))
+		(expr (type "[FortyTwo]_others"))))
 ~~~

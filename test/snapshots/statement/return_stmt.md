@@ -8,18 +8,28 @@ type=statement
 return Bool.True
 ~~~
 # EXPECTED
-NIL
+UNDECLARED TYPE - return_stmt.md:1:8:1:12
 # PROBLEMS
-NIL
+**UNDECLARED TYPE**
+The type _Bool_ is not declared in this scope.
+
+This type is referenced here:
+**return_stmt.md:1:8:1:12:**
+```roc
+return Bool.True
+```
+       ^^^^
+
+
 # TOKENS
 ~~~zig
-KwReturn(1:1-1:7),UpperIdent(1:8-1:12),NoSpaceDotUpperIdent(1:12-1:17),
-EndOfFile(2:1-2:1),
+KwReturn,UpperIdent,NoSpaceDotUpperIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(s-return @1.1-1.17
-	(e-tag @1.8-1.17 (raw "Bool.True")))
+(s-return
+	(e-tag (raw "Bool.True")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -28,11 +38,8 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-return @1.1-1.17
-		(e-nominal-external @1.8-1.17
-			(module-idx "2")
-			(target-node-idx "1")
-			(e-tag @1.8-1.17 (name "True")))))
+	(s-return
+		(e-runtime-error (tag "undeclared_type"))))
 ~~~
 # TYPES
 ~~~clojure

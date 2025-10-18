@@ -47,20 +47,20 @@ import u.R}g:r->R.a.E
 
 # TOKENS
 ~~~zig
-KwImport(1:1-1:7),LowerIdent(1:8-1:9),NoSpaceDotUpperIdent(1:9-1:11),CloseCurly(1:11-1:12),LowerIdent(1:12-1:13),OpColon(1:13-1:14),LowerIdent(1:14-1:15),OpArrow(1:15-1:17),UpperIdent(1:17-1:18),NoSpaceDotLowerIdent(1:18-1:20),NoSpaceDotUpperIdent(1:20-1:22),
-EndOfFile(2:1-2:1),
+KwImport,LowerIdent,NoSpaceDotUpperIdent,CloseCurly,LowerIdent,OpColon,LowerIdent,OpArrow,UpperIdent,NoSpaceDotLowerIdent,NoSpaceDotUpperIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.22
-	(type-module @1.1-1.7)
+(file
+	(type-module)
 	(statements
-		(s-import @1.1-1.11 (raw "u.R"))
-		(s-malformed @1.11-1.12 (tag "statement_unexpected_token"))
-		(s-type-anno @1.12-1.22 (name "g")
-			(ty-fn @1.14-1.22
-				(ty-var @1.14-1.15 (raw "r"))
-				(ty @1.17-1.22 (name "R.a.E"))))))
+		(s-import (raw "u.R"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-type-anno (name "g")
+			(ty-fn
+				(ty-var (raw "r"))
+				(ty (name "R.a.E"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -70,7 +70,7 @@ g : r -> R.a.E
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import @1.1-1.11 (module "u.R")
+	(s-import (module "u.R")
 		(exposes)))
 ~~~
 # TYPES

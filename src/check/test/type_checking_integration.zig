@@ -619,7 +619,7 @@ test "check type - match - diff cond types 1" {
         \\    False => "false"
         \\  }
     ;
-    try assertFileTypeCheckFail(source, "TYPE MISMATCH");
+    try assertFileTypeCheckFail(source, "INCOMPATIBLE MATCH PATTERNS");
 }
 
 test "check type - match - diff branch types" {
@@ -761,7 +761,7 @@ test "check type - patterns - wrong type" {
         \\  }
         \\}
     ;
-    try assertExprTypeCheckFail(source, "TYPE MISMATCH");
+    try assertExprTypeCheckFail(source, "INCOMPATIBLE MATCH PATTERNS");
 }
 
 test "check type - patterns tag without payload" {
@@ -803,7 +803,7 @@ test "check type - patterns tag with payload mismatch" {
         \\  }
         \\}
     ;
-    try assertExprTypeCheckFail(source, "TYPE MISMATCH");
+    try assertExprTypeCheckFail(source, "INCOMPATIBLE MATCH PATTERNS");
 }
 
 test "check type - patterns str" {
@@ -845,7 +845,7 @@ test "check type - patterns int mismatch" {
         \\  }
         \\}
     ;
-    try assertExprTypeCheckFail(source, "TYPE MISMATCH");
+    try assertExprTypeCheckFail(source, "INCOMPATIBLE MATCH PATTERNS");
 }
 
 test "check type - patterns frac 1" {
@@ -945,7 +945,7 @@ test "check type - patterns record field mismatch" {
         \\  }
         \\}
     ;
-    try assertExprTypeCheckFail(source, "TYPE MISMATCH");
+    try assertExprTypeCheckFail(source, "INCOMPATIBLE MATCH PATTERNS");
 }
 
 // vars

@@ -38,6 +38,7 @@ const RocDbg = builtins.host_abi.RocDbg;
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 const SExprTree = base.SExprTree;
+const LineColMode = base.SExprTree.LineColMode;
 const CacheModule = compile.CacheModule;
 const AST = parse.AST;
 const Report = reporting.Report;
@@ -647,17 +648,6 @@ const LoadedModule = struct {
     }
 };
 
-/// Deserialize BuiltinIndices from the binary data generated at build time
-fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !CIR.BuiltinIndices {
-    // Copy to properly aligned memory
-    const aligned_buffer = try gpa.alignedAlloc(u8, @alignOf(CIR.BuiltinIndices), bin_data.len);
-    defer gpa.free(aligned_buffer);
-    @memcpy(aligned_buffer, bin_data);
-
-    const indices_ptr = @as(*const CIR.BuiltinIndices, @ptrCast(aligned_buffer.ptr));
-    return indices_ptr.*;
-}
-
 /// Load a compiled ModuleEnv from embedded binary data
 fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) !LoadedModule {
     // Copy the embedded data to properly aligned memory
@@ -677,10 +667,6 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
 
     // Deserialize
     const base_ptr = @intFromPtr(buffer.ptr);
-    // Deserialize store in-place (returns the same pointer, just cast to NodeStore)
-    const deserialized_store_ptr = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa);
-    const deserialized_store = deserialized_store_ptr.*;
-
     env.* = ModuleEnv{
         .gpa = gpa,
         .common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), source).*,
@@ -694,7 +680,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .imports = serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
         .module_name = module_name,
         .diagnostics = serialized_ptr.diagnostics,
-        .store = deserialized_store,
+        .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
     };
 
     return LoadedModule{
@@ -704,12 +690,18 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
     };
 }
 
+var debug_allocator: std.heap.DebugAllocator(.{}) = .{
+    .backing_allocator = std.heap.c_allocator,
+};
+
 /// cli entrypoint for snapshot tool
 pub fn main() !void {
-    // Use GeneralPurposeAllocator for command-line parsing and general work
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa_impl.deinit();
-    const gpa = gpa_impl.allocator();
+    // Always use the debug allocator with the snapshot tool to help find allocation bugs.
+    const gpa = debug_allocator.allocator();
+    defer {
+        const mem_state = debug_allocator.deinit();
+        std.debug.assert(mem_state == .ok);
+    }
 
     const args = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, args);
@@ -726,6 +718,7 @@ pub fn main() !void {
     var expected_section_command = UpdateCommand.none;
     var output_section_command = UpdateCommand.none;
     var trace_eval: bool = false;
+    var linecol_mode: LineColMode = .skip_linecol;
 
     for (args[1..]) |arg| {
         if (std.mem.eql(u8, arg, "--verbose")) {
@@ -736,6 +729,8 @@ pub fn main() !void {
             debug_mode = true;
         } else if (std.mem.eql(u8, arg, "--trace-eval")) {
             trace_eval = true;
+        } else if (std.mem.eql(u8, arg, "--linecol")) {
+            linecol_mode = .include_linecol;
         } else if (std.mem.eql(u8, arg, "--threads")) {
             if (max_threads != 0) {
                 std.log.err("`--threads` should only be specified once.", .{});
@@ -790,6 +785,7 @@ pub fn main() !void {
                 \\  --html          Generate HTML output files
                 \\  --debug         Use GeneralPurposeAllocator for debugging (default: c_allocator)
                 \\  --trace-eval    Enable interpreter trace output (only works with single REPL snapshot)
+                \\  --linecol       Include line/column information in output
                 \\  --threads <n>   Number of threads to use (0 = auto-detect, 1 = single-threaded). Default: 0.
                 \\  --check-expected     Validate that EXPECTED sections match PROBLEMS sections
                 \\  --update-expected    Update EXPECTED sections based on PROBLEMS sections
@@ -848,6 +844,7 @@ pub fn main() !void {
         .expected_section_command = expected_section_command,
         .output_section_command = output_section_command,
         .trace_eval = trace_eval,
+        .linecol_mode = linecol_mode,
         .dict_module = dict_loaded.env,
         .set_module = set_loaded.env,
     };
@@ -927,7 +924,6 @@ fn checkSnapshotExpectations(gpa: Allocator) !bool {
                 break :blk res;
             },
         };
-
         if (!success) {
             fail_count += 1;
         }
@@ -1133,10 +1129,6 @@ fn processSnapshotContent(
     var success = true;
     log("Generating snapshot for: {s}", .{output_path});
 
-    // DEBUG: Track fuzz_crash_049
-    if (std.mem.indexOf(u8, output_path, "fuzz_crash_049") != null) {
-    }
-
     // Handle REPL snapshots separately
     if (content.meta.node_type == .repl) {
         return processReplSnapshot(allocator, content, output_path, config);
@@ -1146,16 +1138,8 @@ fn processSnapshotContent(
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    // DEBUG
-    if (std.mem.indexOf(u8, output_path, "fuzz_crash_049") != null) {
-    }
-
     var module_env = try ModuleEnv.init(allocator, content.source);
     defer module_env.deinit();
-
-    // DEBUG
-    if (std.mem.indexOf(u8, output_path, "fuzz_crash_049") != null) {
-    }
 
     // Calculate line starts for source location tracking
     try module_env.common.calcLineStarts(allocator);
@@ -1193,61 +1177,18 @@ fn processSnapshotContent(
     var can_ir = &module_env; // ModuleEnv contains the canonical IR
     try can_ir.initCIRFields(allocator, module_name);
 
-    // DEBUG
-    if (std.mem.indexOf(u8, output_path, "fuzz_crash_049") != null) {
-    }
-
-    // Load builtin modules and inject Bool and Result type declarations
-    // (following the pattern from eval.zig and TestEnv.zig)
-    const builtin_indices = try deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
-
-    // DEBUG
-    if (std.mem.indexOf(u8, output_path, "fuzz_crash_049") != null) {
-    }
-
-    const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try loadCompiledModule(allocator, compiled_builtins.bool_bin, "Bool", bool_source);
-    // NOTE: bool_module.deinit() deferred until end of function - its data is used during TYPES generation
-
-    // DEBUG
-    if (std.mem.indexOf(u8, output_path, "fuzz_crash_049") != null) {
-    }
-
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    var result_module = try loadCompiledModule(allocator, compiled_builtins.result_bin, "Result", result_source);
-    // NOTE: result_module.deinit() deferred until end of function - its data is used during TYPES generation
-
-    // DEBUG
-    if (std.mem.indexOf(u8, output_path, "fuzz_crash_049") != null) {
-    }
-
-    // Set node indices for the exposed types so they can be properly referenced
-    const bool_ident = bool_module.env.common.findIdent("Bool") orelse unreachable;
-    try bool_module.env.setExposedNodeIndexById(bool_ident, @intCast(@intFromEnum(builtin_indices.bool_type)));
-
-    const result_ident = result_module.env.common.findIdent("Result") orelse unreachable;
-    try result_module.env.setExposedNodeIndexById(result_ident, @intCast(@intFromEnum(builtin_indices.result_type)));
-
-    // Get Bool and Result statement indices from IMPORTED modules (not copied!)
-    const bool_stmt_in_bool_module = builtin_indices.bool_type;
-    const result_stmt_in_result_module = builtin_indices.result_type;
-
     const common_idents: Check.CommonIdents = .{
         .module_name = try can_ir.insertIdent(base.Ident.for_text(module_name)),
         .list = try can_ir.insertIdent(base.Ident.for_text("List")),
         .box = try can_ir.insertIdent(base.Ident.for_text("Box")),
-        .bool_stmt = bool_stmt_in_bool_module,
-        .result_stmt = result_stmt_in_result_module,
+        .bool_stmt = @enumFromInt(0), // TODO: load from builtin modules
+        .result_stmt = @enumFromInt(0), // TODO: load from builtin modules
     };
 
-    // Create module_envs map for canonicalization (enables qualified calls)
-    // Auto-inject Bool, Result, Set and Dict as available imports
+    // Auto-inject Set and Dict as available imports (if they're loaded)
+    // This makes them available without needing explicit `import` statements in tests
     var module_envs = std.StringHashMap(*const ModuleEnv).init(allocator);
     defer module_envs.deinit();
-
-    // Add Bool and Result to module_envs for qualified name resolution
-    try module_envs.put("Bool", bool_module.env);
-    try module_envs.put("Result", result_module.env);
 
     var dict_import_idx: ?CIR.Import.Idx = null;
     var set_import_idx: ?CIR.Import.Idx = null;
@@ -1261,16 +1202,8 @@ fn processSnapshotContent(
         try module_envs.put("Set", set_env);
     }
 
-    // DEBUG
-    if (std.mem.indexOf(u8, output_path, "fuzz_crash_049") != null) {
-    }
-
     var czer = try Can.init(can_ir, &parse_ast, &module_envs);
     defer czer.deinit();
-
-    // DEBUG
-    if (std.mem.indexOf(u8, output_path, "fuzz_crash_049") != null) {
-    }
 
     // Register auto-injected imports with the canonicalizer so it knows they're already imported
     if (dict_import_idx) |idx| {
@@ -1281,10 +1214,6 @@ fn processSnapshotContent(
     }
 
     var maybe_expr_idx: ?Can.CanonicalizedExpr = null;
-
-    // DEBUG
-    if (std.mem.indexOf(u8, output_path, "fuzz_crash_049") != null) {
-    }
 
     switch (content.meta.node_type) {
         .file => {
@@ -1318,30 +1247,18 @@ fn processSnapshotContent(
         },
     }
 
-    // DEBUG
-    if (std.mem.indexOf(u8, output_path, "fuzz_crash_049") != null) {
-    }
-
     // Assert that everything is in-sync
     can_ir.debugAssertArraysInSync();
 
-    // Types - pass Bool, Result, Set and Dict modules as imported modules
+    // Types - include Set and Dict modules if loaded
     var builtin_modules = std.ArrayList(*const ModuleEnv).init(allocator);
     defer builtin_modules.deinit();
-
-    // Add Bool and Result as imported modules
-    try builtin_modules.append(bool_module.env);
-    try builtin_modules.append(result_module.env);
 
     if (config.dict_module) |dict_env| {
         try builtin_modules.append(dict_env);
     }
     if (config.set_module) |set_env| {
         try builtin_modules.append(set_env);
-    }
-
-    // DEBUG
-    if (std.mem.indexOf(u8, output_path, "fuzz_crash_049") != null) {
     }
 
     var solver = try Check.init(
@@ -1354,29 +1271,13 @@ fn processSnapshotContent(
     );
     defer solver.deinit();
 
-    // DEBUG
-    if (std.mem.indexOf(u8, output_path, "fuzz_crash_049") != null) {
-    }
-
     // Assert that we have regions for every type variable
     solver.debugAssertArraysInSync();
-
-    // DEBUG
-    if (std.mem.indexOf(u8, output_path, "fuzz_crash_049") != null) {
-    }
 
     if (maybe_expr_idx) |expr_idx| {
         _ = try solver.checkExprRepl(expr_idx.idx);
     } else {
         try solver.checkFile();
-    }
-
-    // DEBUG
-    if (std.mem.indexOf(u8, output_path, "fuzz_crash_049") != null) {
-    }
-
-    // DEBUG
-    if (std.mem.indexOf(u8, output_path, "fuzz_crash_049") != null) {
     }
 
     // Cache round-trip validation - ensure ModuleCache serialization/deserialization works
@@ -1388,7 +1289,7 @@ fn processSnapshotContent(
 
         var original_sexpr = std.ArrayList(u8).init(allocator);
         defer original_sexpr.deinit();
-        try original_tree.toStringPretty(original_sexpr.writer().any());
+        try original_tree.toStringPretty(original_sexpr.writer().any(), .skip_linecol);
 
         // Create arena for serialization
         var cache_arena = std.heap.ArenaAllocator.init(allocator);
@@ -1416,7 +1317,7 @@ fn processSnapshotContent(
 
         var restored_sexpr = std.ArrayList(u8).init(allocator);
         defer restored_sexpr.deinit();
-        try restored_tree.toStringPretty(restored_sexpr.writer().any());
+        try restored_tree.toStringPretty(restored_sexpr.writer().any(), .skip_linecol);
 
         // Compare S-expressions - crash if they don't match
         if (!std.mem.eql(u8, original_sexpr.items, restored_sexpr.items)) {
@@ -1427,10 +1328,6 @@ fn processSnapshotContent(
             std.log.err("Restored S-expression:\n{s}", .{restored_sexpr.items});
             return error.CacheRoundTripValidationFailed;
         }
-    }
-
-    // DEBUG
-    if (std.mem.indexOf(u8, output_path, "fuzz_crash_049") != null) {
     }
 
     // Buffer all output in memory before writing files
@@ -1454,53 +1351,18 @@ fn processSnapshotContent(
         generated_reports.deinit();
     }
 
-    // DEBUG
-    if (std.mem.indexOf(u8, output_path, "fuzz_crash_049") != null) {
-    }
-
     // Generate all sections
     try generateMetaSection(&output, &content);
     try generateSourceSection(&output, &content);
     success = try generateExpectedSection(&output, output_path, &content, &generated_reports, config) and success;
     try generateProblemsSection(&output, &generated_reports);
-    try generateTokensSection(&output, &parse_ast, &content, &module_env);
-
-    // DEBUG
-    if (std.mem.indexOf(u8, output_path, "fuzz_crash_049") != null) {
-    }
-    // DEBUG
-    if (std.mem.indexOf(u8, output_path, "fuzz_crash_049") != null) {
-    }
-
-    try generateParseSection(&output, &content, &parse_ast, &module_env.common);
-
-    // DEBUG
-    if (std.mem.indexOf(u8, output_path, "fuzz_crash_049") != null) {
-    }
-
+    try generateTokensSection(&output, &parse_ast, &content, &module_env, config.linecol_mode);
+    try generateParseSection(&output, &content, &parse_ast, &module_env.common, config.linecol_mode);
     try generateFormattedSection(&output, &content, &parse_ast);
-
-    // DEBUG
-    if (std.mem.indexOf(u8, output_path, "fuzz_crash_049") != null) {
-    }
-
-    try generateCanonicalizeSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx));
-
-    // DEBUG
-    if (std.mem.indexOf(u8, output_path, "fuzz_crash_049") != null) {
-    }
-
-    try generateTypesSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx));
-
-    // DEBUG
-    if (std.mem.indexOf(u8, output_path, "fuzz_crash_049") != null) {
-    }
+    try generateCanonicalizeSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), config.linecol_mode);
+    try generateTypesSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), config.linecol_mode);
 
     try generateHtmlClosing(&output);
-
-    // DEBUG
-    if (std.mem.indexOf(u8, output_path, "fuzz_crash_049") != null) {
-    }
 
     if (!config.disable_updates) {
         // Write the markdown file
@@ -1518,16 +1380,6 @@ fn processSnapshotContent(
             };
         }
     }
-
-    // DEBUG
-    if (std.mem.indexOf(u8, output_path, "fuzz_crash_049") != null) {
-    }
-
-    // Clean up loaded modules AFTER all output generation is complete
-    // (their data is referenced during TYPES section generation)
-    bool_module.deinit();
-    result_module.deinit();
-
     return success;
 }
 
@@ -1559,6 +1411,7 @@ const Config = struct {
     output_section_command: UpdateCommand,
     disable_updates: bool = false, // Disable updates for check mode
     trace_eval: bool = false,
+    linecol_mode: LineColMode = .skip_linecol, // Include line/column info in output
     // Compiled builtin modules (Set and Dict) loaded at startup
     dict_module: ?*const ModuleEnv = null,
     set_module: ?*const ModuleEnv = null,
@@ -1666,7 +1519,7 @@ fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) !voi
                 // Skip hidden files and special directories
                 if (entry.name[0] == '.') continue;
 
-                // Skip todo_cross_module_calls directory (contains disabled tests)
+                // Skip TODO directories (tests for unimplemented features)
                 if (std.mem.eql(u8, entry.name, "todo_cross_module_calls")) continue;
 
                 const full_path = try std.fs.path.join(gpa, &[_][]const u8{ canonical_path, entry.name });
@@ -2206,7 +2059,7 @@ fn generateProblemsSection(output: *DualOutput, reports: *const std.ArrayList(re
 }
 
 /// Generate TOKENS section for both markdown and HTML
-pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, _: *const Content, module_env: *ModuleEnv) !void {
+pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, _: *const Content, module_env: *ModuleEnv, linecol_mode: LineColMode) !void {
     try output.begin_section("TOKENS");
     try output.begin_code_block("zig");
 
@@ -2227,14 +2080,18 @@ pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, _: *const Con
         const info = module_env.calcRegionInfo(region);
 
         // Markdown token output
-        try output.md_writer.print("{s}({d}:{d}-{d}:{d}),", .{
-            @tagName(tok),
-            // add one to display numbers instead of index
-            info.start_line_idx + 1,
-            info.start_col_idx + 1,
-            info.end_line_idx + 1,
-            info.end_col_idx + 1,
-        });
+        if (linecol_mode == .include_linecol) {
+            try output.md_writer.print("{s}({d}:{d}-{d}:{d}),", .{
+                @tagName(tok),
+                // add one to display numbers instead of index
+                info.start_line_idx + 1,
+                info.start_col_idx + 1,
+                info.end_line_idx + 1,
+                info.end_col_idx + 1,
+            });
+        } else {
+            try output.md_writer.print("{s},", .{@tagName(tok)});
+        }
 
         if (i + 1 < tokenizedBuffer.tokens.len) {
             const next_region = tokenizedBuffer.resolve(@intCast(i + 1));
@@ -2283,7 +2140,7 @@ fn source_contains_newline_in_range(source: []const u8, start: usize, end: usize
 }
 
 /// Generate PARSE2 section using SExprTree for both markdown and HTML
-fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast: *AST, env: *CommonEnv) !void {
+fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast: *AST, env: *CommonEnv, linecol_mode: LineColMode) !void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
 
@@ -2332,7 +2189,7 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
         try output.begin_section("PARSE");
         try output.begin_code_block("clojure");
 
-        try tree.toStringPretty(output.md_writer.any());
+        try tree.toStringPretty(output.md_writer.any(), linecol_mode);
         try output.md_writer.writeAll("\n");
 
         // Generate HTML output with syntax highlighting
@@ -2341,7 +2198,7 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
                 \\                <pre class="ast-parse">
             );
 
-            try tree.toHtml(writer.any());
+            try tree.toHtml(writer.any(), linecol_mode);
 
             try writer.writeAll(
                 \\</pre>
@@ -2422,7 +2279,7 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
 }
 
 /// Generate CANONICALIZE section for both markdown and HTML
-fn generateCanonicalizeSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx: ?CIR.Expr.Idx) !void {
+fn generateCanonicalizeSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx: ?CIR.Expr.Idx, linecol_mode: LineColMode) !void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
     try can_ir.pushToSExprTree(maybe_expr_idx, &tree);
@@ -2430,14 +2287,14 @@ fn generateCanonicalizeSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_ex
     try output.begin_section("CANONICALIZE");
     try output.begin_code_block("clojure");
 
-    try tree.toStringPretty(output.md_writer.any());
+    try tree.toStringPretty(output.md_writer.any(), linecol_mode);
     try output.md_writer.writeAll("\n");
 
     if (output.html_writer) |writer| {
         try writer.writeAll(
             \\                <pre>
         );
-        try tree.toHtml(writer.any());
+        try tree.toHtml(writer.any(), linecol_mode);
         try writer.writeAll(
             \\</pre>
             \\
@@ -2449,17 +2306,14 @@ fn generateCanonicalizeSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_ex
 }
 
 /// Generate TYPES section for both markdown and HTML
-fn generateTypesSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx: ?CIR.Expr.Idx) !void {
-
+fn generateTypesSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx: ?CIR.Expr.Idx, linecol_mode: LineColMode) !void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
-
     try can_ir.pushTypesToSExprTree(maybe_expr_idx, &tree);
 
     try output.begin_section("TYPES");
     try output.begin_code_block("clojure");
-    try tree.toStringPretty(output.md_writer.any());
-
+    try tree.toStringPretty(output.md_writer.any(), linecol_mode);
     try output.md_writer.writeAll("\n");
 
     // HTML TYPES section
@@ -2467,7 +2321,7 @@ fn generateTypesSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx:
         try writer.writeAll(
             \\                <pre>
         );
-        try tree.toHtml(writer.any());
+        try tree.toHtml(writer.any(), linecol_mode);
         try writer.writeAll(
             \\</pre>
             \\
@@ -2475,7 +2329,6 @@ fn generateTypesSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx:
     }
     try output.end_code_block();
     try output.end_section();
-
 }
 
 /// Generate TYPES section displaying types store for both markdown and HTML
@@ -3010,6 +2863,38 @@ test "snapshot validation" {
     if (!try checkSnapshotExpectations(allocator)) {
         return error.SnapshotValidationFailed;
     }
+}
+
+test "TODO: cross-module function calls - fibonacci" {
+    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
+}
+
+test "TODO: cross-module function calls - nested_ifs" {
+    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
+}
+
+test "TODO: cross-module function calls - repl_boolean_expressions" {
+    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
+}
+
+test "TODO: cross-module function calls - string_edge_cases" {
+    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
+}
+
+test "TODO: cross-module function calls - string_equality_basic" {
+    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
+}
+
+test "TODO: cross-module function calls - string_interpolation_comparison" {
+    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
+}
+
+test "TODO: cross-module function calls - string_multiline_comparison" {
+    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
+}
+
+test "TODO: cross-module function calls - string_ordering_unsupported" {
+    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
 }
 
 /// An implementation of RocOps for snapshot testing.

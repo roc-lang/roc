@@ -32,61 +32,61 @@ import pf.Stdout
 
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
-KwImport(3:1-3:7),LowerIdent(3:8-3:10),NoSpaceDotUpperIdent(3:10-3:17),
-LowerIdent(5:1-5:10),OpColon(5:11-5:12),OpenCurly(5:13-5:14),LowerIdent(5:15-5:19),OpColon(5:19-5:20),UpperIdent(5:21-5:24),Comma(5:24-5:25),LowerIdent(5:26-5:29),OpColon(5:29-5:30),UpperIdent(5:31-5:34),CloseCurly(5:35-5:36),OpFatArrow(5:37-5:39),UpperIdent(5:40-5:43),
-LowerIdent(6:1-6:10),OpAssign(6:11-6:12),OpBar(6:13-6:14),LowerIdent(6:14-6:20),OpBar(6:20-6:21),OpenCurly(6:22-6:23),
-UpperIdent(7:5-7:11),NoSpaceDotLowerIdent(7:11-7:17),NoSpaceOpenRound(7:17-7:18),LowerIdent(7:18-7:24),NoSpaceDotLowerIdent(7:24-7:29),CloseRound(7:29-7:30),
-LowerIdent(8:5-8:11),NoSpaceDotLowerIdent(8:11-8:16),
-CloseCurly(9:1-9:2),
-LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:11),OpBar(10:11-10:12),OpenCurly(10:13-10:14),CloseCurly(10:14-10:15),
-EndOfFile(11:1-11:1),
+KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
+KwImport,LowerIdent,NoSpaceDotUpperIdent,
+LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,OpFatArrow,UpperIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,
+UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,NoSpaceDotLowerIdent,CloseRound,
+LowerIdent,NoSpaceDotLowerIdent,
+CloseCurly,
+LowerIdent,OpAssign,OpBar,Underscore,OpBar,OpenCurly,CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-10.15
-	(app @1.1-1.53
-		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11
+(file
+	(app
+		(provides
+			(exposed-lower-ident
 				(text "main!")))
-		(record-field @1.15-1.51 (name "pf")
-			(e-string @1.28-1.51
-				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
-		(packages @1.13-1.53
-			(record-field @1.15-1.51 (name "pf")
-				(e-string @1.28-1.51
-					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
+		(record-field (name "pf")
+			(e-string
+				(e-string-part (raw "../basic-cli/main.roc"))))
+		(packages
+			(record-field (name "pf")
+				(e-string
+					(e-string-part (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-import @3.1-3.17 (raw "pf.Stdout"))
-		(s-type-anno @5.1-5.43 (name "printName")
-			(ty-fn @5.13-5.43
-				(ty-record @5.13-5.36
-					(anno-record-field @5.15-5.24 (name "name")
-						(ty @5.21-5.24 (name "Str")))
-					(anno-record-field @5.26-5.34 (name "age")
-						(ty @5.31-5.34 (name "U64"))))
-				(ty @5.40-5.43 (name "Str"))))
-		(s-decl @6.1-9.2
-			(p-ident @6.1-6.10 (raw "printName"))
-			(e-lambda @6.13-9.2
+		(s-import (raw "pf.Stdout"))
+		(s-type-anno (name "printName")
+			(ty-fn
+				(ty-record
+					(anno-record-field (name "name")
+						(ty (name "Str")))
+					(anno-record-field (name "age")
+						(ty (name "U64"))))
+				(ty (name "Str"))))
+		(s-decl
+			(p-ident (raw "printName"))
+			(e-lambda
 				(args
-					(p-ident @6.14-6.20 (raw "person")))
-				(e-block @6.22-9.2
+					(p-ident (raw "person")))
+				(e-block
 					(statements
-						(e-apply @7.5-7.30
-							(e-ident @7.5-7.17 (raw "Stdout.line!"))
-							(e-field-access @7.18-7.29
-								(e-ident @7.18-7.24 (raw "person"))
-								(e-ident @7.24-7.29 (raw "name"))))
-						(e-field-access @8.5-8.16
-							(e-ident @8.5-8.11 (raw "person"))
-							(e-ident @8.11-8.16 (raw "name")))))))
-		(s-decl @10.1-10.15
-			(p-ident @10.1-10.6 (raw "main!"))
-			(e-lambda @10.9-10.15
+						(e-apply
+							(e-ident (raw "Stdout.line!"))
+							(e-field-access
+								(e-ident (raw "person"))
+								(e-ident (raw "name"))))
+						(e-field-access
+							(e-ident (raw "person"))
+							(e-ident (raw "name")))))))
+		(s-decl
+			(p-ident (raw "main!"))
+			(e-lambda
 				(args
 					(p-underscore))
-				(e-record @10.13-10.15)))))
+				(e-record)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -105,49 +105,49 @@ main! = |_| {}
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @6.1-6.10 (ident "printName"))
-		(e-lambda @6.13-9.2
+		(p-assign (ident "printName"))
+		(e-lambda
 			(args
-				(p-assign @6.14-6.20 (ident "person")))
-			(e-block @6.22-9.2
-				(s-expr @7.5-7.30
-					(e-call @7.5-7.30
-						(e-lookup-external @7.5-7.17
-							(module-idx "4")
+				(p-assign (ident "person")))
+			(e-block
+				(s-expr
+					(e-call
+						(e-lookup-external
+							(module-idx "2")
 							(target-node-idx "0"))
-						(e-dot-access @7.18-7.29 (field "name")
+						(e-dot-access (field "name")
 							(receiver
-								(e-lookup-local @7.18-7.24
-									(p-assign @6.14-6.20 (ident "person")))))))
-				(e-dot-access @8.5-8.16 (field "name")
+								(e-lookup-local
+									(p-assign (ident "person")))))))
+				(e-dot-access (field "name")
 					(receiver
-						(e-lookup-local @8.5-8.11
-							(p-assign @6.14-6.20 (ident "person")))))))
-		(annotation @6.1-6.10
+						(e-lookup-local
+							(p-assign (ident "person")))))))
+		(annotation
 			(declared-type
-				(ty-fn @5.13-5.43 (effectful true)
-					(ty-record @5.13-5.36
+				(ty-fn (effectful true)
+					(ty-record
 						(field (field "name")
-							(ty-lookup @5.21-5.24 (name "Str") (builtin)))
+							(ty-lookup (name "Str") (builtin)))
 						(field (field "age")
-							(ty-lookup @5.31-5.34 (name "U64") (builtin))))
-					(ty-lookup @5.40-5.43 (name "Str") (builtin))))))
+							(ty-lookup (name "U64") (builtin))))
+					(ty-lookup (name "Str") (builtin))))))
 	(d-let
-		(p-assign @10.1-10.6 (ident "main!"))
-		(e-lambda @10.9-10.15
+		(p-assign (ident "main!"))
+		(e-lambda
 			(args
-				(p-underscore @10.10-10.11))
-			(e-empty_record @10.13-10.15)))
-	(s-import @3.1-3.17 (module "pf.Stdout")
+				(p-underscore))
+			(e-empty_record)))
+	(s-import (module "pf.Stdout")
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.10 (type "{ age: Num(Int(Unsigned64)), name: Str } => Str"))
-		(patt @10.1-10.6 (type "_arg -> {}")))
+		(patt (type "{ age: Num(Int(Unsigned64)), name: Str } => Str"))
+		(patt (type "_arg -> {}")))
 	(expressions
-		(expr @6.13-9.2 (type "{ age: Num(Int(Unsigned64)), name: Str } => Str"))
-		(expr @10.9-10.15 (type "_arg -> {}"))))
+		(expr (type "{ age: Num(Int(Unsigned64)), name: Str } => Str"))
+		(expr (type "_arg -> {}"))))
 ~~~

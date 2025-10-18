@@ -23,16 +23,16 @@ Underscores in type annotations mean "I don't care about this type", which doesn
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:8),OpColonEqual(1:9-1:11),Underscore(1:12-1:13),
-EndOfFile(2:1-2:1),
+UpperIdent,OpColonEqual,Underscore,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.13
-	(type-module @1.1-1.8)
+(file
+	(type-module)
 	(statements
-		(s-type-decl @1.1-1.13
-			(header @1.1-1.8 (name "BadType")
+		(s-type-decl
+			(header (name "BadType")
 				(args))
 			(_))))
 ~~~
@@ -43,16 +43,16 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-nominal-decl @1.1-1.13
-		(ty-header @1.1-1.8 (name "BadType"))
-		(ty-underscore @1.1-1.1)))
+	(s-nominal-decl
+		(ty-header (name "BadType"))
+		(ty-underscore)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(type_decls
-		(nominal @1.1-1.13 (type "BadType")
-			(ty-header @1.1-1.8 (name "BadType"))))
+		(nominal (type "BadType")
+			(ty-header (name "BadType"))))
 	(expressions))
 ~~~

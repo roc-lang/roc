@@ -35,17 +35,17 @@ This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:4),OpAssign(1:5-1:6),LowerIdent(1:7-1:10),NoSpaceDotInt(1:10-1:12),
-EndOfFile(2:1-2:1),
+LowerIdent,OpAssign,LowerIdent,NoSpaceDotInt,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.12
-	(type-module @1.1-1.4)
+(file
+	(type-module)
 	(statements
-		(s-decl @1.1-1.12
-			(p-ident @1.1-1.4 (raw "foo"))
-			(e-malformed @1.10-1.12 (reason "expr_no_space_dot_int")))))
+		(s-decl
+			(p-ident (raw "foo"))
+			(e-malformed (reason "expr_no_space_dot_int")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -55,14 +55,14 @@ foo =
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @1.1-1.4 (ident "foo"))
+		(p-assign (ident "foo"))
 		(e-runtime-error (tag "expr_not_canonicalized"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @1.1-1.4 (type "Error")))
+		(patt (type "Error")))
 	(expressions
-		(expr @1.10-1.12 (type "Error"))))
+		(expr (type "Error"))))
 ~~~

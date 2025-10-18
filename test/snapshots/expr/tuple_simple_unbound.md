@@ -13,16 +13,16 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-OpenRound(1:1-1:2),Int(1:2-1:3),Comma(1:3-1:4),StringStart(1:5-1:6),StringPart(1:6-1:11),StringEnd(1:11-1:12),Comma(1:12-1:13),UpperIdent(1:14-1:18),CloseRound(1:18-1:19),
-EndOfFile(2:1-2:1),
+OpenRound,Int,Comma,StringStart,StringPart,StringEnd,Comma,UpperIdent,CloseRound,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-tuple @1.1-1.19
-	(e-int @1.2-1.3 (raw "1"))
-	(e-string @1.5-1.12
-		(e-string-part @1.6-1.11 (raw "hello")))
-	(e-tag @1.14-1.18 (raw "True")))
+(e-tuple
+	(e-int (raw "1"))
+	(e-string
+		(e-string-part (raw "hello")))
+	(e-tag (raw "True")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -30,14 +30,14 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tuple @1.1-1.19
+(e-tuple
 	(elems
-		(e-num @1.2-1.3 (value "1"))
-		(e-string @1.5-1.12
-			(e-literal @1.6-1.11 (string "hello")))
-		(e-tag @1.14-1.18 (name "True"))))
+		(e-num (value "1"))
+		(e-string
+			(e-literal (string "hello")))
+		(e-tag (name "True"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.19 (type "(Num(_size), Str, [True]_others)"))
+(expr (type "(Num(_size), Str, [True]_others)"))
 ~~~

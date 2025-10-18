@@ -92,50 +92,50 @@ processData = |data|
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:7),NoSpaceOpenRound(1:7-1:8),LowerIdent(1:8-1:9),Comma(1:9-1:10),LowerIdent(1:11-1:12),CloseRound(1:12-1:13),OpColon(1:14-1:15),OpenSquare(1:16-1:17),UpperIdent(1:17-1:19),NoSpaceOpenRound(1:19-1:20),LowerIdent(1:20-1:21),CloseRound(1:21-1:22),Comma(1:22-1:23),UpperIdent(1:24-1:27),NoSpaceOpenRound(1:27-1:28),LowerIdent(1:28-1:29),CloseRound(1:29-1:30),CloseSquare(1:30-1:31),
-LowerIdent(3:1-3:12),OpColon(3:13-3:14),UpperIdent(3:15-3:18),OpArrow(3:19-3:21),UpperIdent(3:22-3:25),
-LowerIdent(4:1-4:12),OpAssign(4:13-4:14),OpBar(4:15-4:16),LowerIdent(4:16-4:20),OpBar(4:20-4:21),
-StringStart(5:5-5:6),StringPart(5:6-5:15),StringEnd(5:15-5:16),
-UpperIdent(8:1-8:12),OpColon(8:13-8:14),OpenCurly(8:15-8:16),
-UpperIdent(9:5-9:11),OpColon(9:12-9:13),OpenSquare(9:14-9:15),UpperIdent(9:15-9:22),Comma(9:22-9:23),UpperIdent(9:24-9:31),CloseSquare(9:31-9:32),
-CloseCurly(10:1-10:2),
-EndOfFile(11:1-11:1),
+UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,OpColon,OpenSquare,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,CloseSquare,
+LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,
+StringStart,StringPart,StringEnd,
+UpperIdent,OpColon,OpenCurly,
+UpperIdent,OpColon,OpenSquare,UpperIdent,Comma,UpperIdent,CloseSquare,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-10.2
-	(type-module @1.1-1.7)
+(file
+	(type-module)
 	(statements
-		(s-type-decl @1.1-1.31
-			(header @1.1-1.13 (name "Result")
+		(s-type-decl
+			(header (name "Result")
 				(args
-					(ty-var @1.8-1.9 (raw "a"))
-					(ty-var @1.11-1.12 (raw "b"))))
-			(ty-tag-union @1.16-1.31
+					(ty-var (raw "a"))
+					(ty-var (raw "b"))))
+			(ty-tag-union
 				(tags
-					(ty-apply @1.17-1.22
-						(ty @1.17-1.19 (name "Ok"))
-						(ty-var @1.20-1.21 (raw "a")))
-					(ty-apply @1.24-1.30
-						(ty @1.24-1.27 (name "Err"))
-						(ty-var @1.28-1.29 (raw "b"))))))
-		(s-type-anno @3.1-3.25 (name "processData")
-			(ty-fn @3.15-3.25
-				(ty @3.15-3.18 (name "Str"))
-				(ty @3.22-3.25 (name "Str"))))
-		(s-decl @4.1-5.16
-			(p-ident @4.1-4.12 (raw "processData"))
-			(e-lambda @4.15-5.16
+					(ty-apply
+						(ty (name "Ok"))
+						(ty-var (raw "a")))
+					(ty-apply
+						(ty (name "Err"))
+						(ty-var (raw "b"))))))
+		(s-type-anno (name "processData")
+			(ty-fn
+				(ty (name "Str"))
+				(ty (name "Str"))))
+		(s-decl
+			(p-ident (raw "processData"))
+			(e-lambda
 				(args
-					(p-ident @4.16-4.20 (raw "data")))
-				(e-string @5.5-5.16
-					(e-string-part @5.6-5.15 (raw "processed")))))
-		(s-type-decl @8.1-9.31
-			(header @8.1-8.12 (name "InnerModule")
+					(p-ident (raw "data")))
+				(e-string
+					(e-string-part (raw "processed")))))
+		(s-type-decl
+			(header (name "InnerModule")
 				(args))
-			(ty-malformed @9.24-9.31 (tag "expected_ty_close_curly_or_comma")))
-		(s-malformed @9.31-9.32 (tag "statement_unexpected_token"))
-		(s-malformed @10.1-10.2 (tag "statement_unexpected_token"))))
+			(ty-malformed (tag "expected_ty_close_curly_or_comma")))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -153,44 +153,44 @@ InnerModule :
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @4.1-4.12 (ident "processData"))
-		(e-lambda @4.15-5.16
+		(p-assign (ident "processData"))
+		(e-lambda
 			(args
-				(p-assign @4.16-4.20 (ident "data")))
-			(e-string @5.5-5.16
-				(e-literal @5.6-5.15 (string "processed"))))
-		(annotation @4.1-4.12
+				(p-assign (ident "data")))
+			(e-string
+				(e-literal (string "processed"))))
+		(annotation
 			(declared-type
-				(ty-fn @3.15-3.25 (effectful false)
-					(ty-lookup @3.15-3.18 (name "Str") (builtin))
-					(ty-lookup @3.22-3.25 (name "Str") (builtin))))))
-	(s-alias-decl @1.1-1.31
-		(ty-header @1.1-1.13 (name "Result")
+				(ty-fn (effectful false)
+					(ty-lookup (name "Str") (builtin))
+					(ty-lookup (name "Str") (builtin))))))
+	(s-alias-decl
+		(ty-header (name "Result")
 			(ty-args
-				(ty-rigid-var @1.8-1.9 (name "a"))
-				(ty-rigid-var @1.11-1.12 (name "b"))))
-		(ty-tag-union @1.16-1.31
-			(ty-tag-name @1.17-1.22 (name "Ok")
-				(ty-rigid-var-lookup (ty-rigid-var @1.8-1.9 (name "a"))))
-			(ty-tag-name @1.24-1.30 (name "Err")
-				(ty-rigid-var-lookup (ty-rigid-var @1.11-1.12 (name "b"))))))
-	(s-alias-decl @8.1-9.31
-		(ty-header @8.1-8.12 (name "InnerModule"))
-		(ty-malformed @9.24-9.31)))
+				(ty-rigid-var (name "a"))
+				(ty-rigid-var (name "b"))))
+		(ty-tag-union
+			(ty-tag-name (name "Ok")
+				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
+			(ty-tag-name (name "Err")
+				(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))
+	(s-alias-decl
+		(ty-header (name "InnerModule"))
+		(ty-malformed)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.12 (type "Str -> Str")))
+		(patt (type "Str -> Str")))
 	(type_decls
-		(alias @1.1-1.31 (type "Result(a, b)")
-			(ty-header @1.1-1.13 (name "Result")
+		(alias (type "Result(a, b)")
+			(ty-header (name "Result")
 				(ty-args
-					(ty-rigid-var @1.8-1.9 (name "a"))
-					(ty-rigid-var @1.11-1.12 (name "b")))))
-		(alias @8.1-9.31 (type "InnerModule")
-			(ty-header @8.1-8.12 (name "InnerModule"))))
+					(ty-rigid-var (name "a"))
+					(ty-rigid-var (name "b")))))
+		(alias (type "InnerModule")
+			(ty-header (name "InnerModule"))))
 	(expressions
-		(expr @4.15-5.16 (type "Str -> Str"))))
+		(expr (type "Str -> Str"))))
 ~~~

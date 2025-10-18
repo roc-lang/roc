@@ -128,41 +128,41 @@ The unused variable is declared here:
 
 # TOKENS
 ~~~zig
-KwMatch(1:1-1:6),LowerIdent(1:7-1:11),OpenCurly(1:12-1:13),
-OpenSquare(2:5-2:6),DoubleDot(2:6-2:8),LowerIdent(2:8-2:13),CloseSquare(2:13-2:14),OpFatArrow(2:15-2:17),Int(2:18-2:19),
-OpenSquare(3:5-3:6),LowerIdent(3:6-3:11),Comma(3:11-3:12),DoubleDot(3:13-3:15),LowerIdent(3:15-3:20),CloseSquare(3:20-3:21),OpFatArrow(3:22-3:24),LowerIdent(3:25-3:30),
-OpenSquare(4:5-4:6),DoubleDot(4:6-4:8),LowerIdent(4:8-4:13),Comma(4:13-4:14),LowerIdent(4:15-4:19),CloseSquare(4:19-4:20),OpFatArrow(4:21-4:23),LowerIdent(4:24-4:28),
-OpenSquare(5:5-5:6),LowerIdent(5:6-5:11),Comma(5:11-5:12),DoubleDot(5:13-5:15),LowerIdent(5:15-5:20),Comma(5:20-5:21),LowerIdent(5:22-5:26),CloseSquare(5:26-5:27),OpFatArrow(5:28-5:30),LowerIdent(5:31-5:36),OpPlus(5:37-5:38),LowerIdent(5:39-5:43),
-CloseCurly(6:1-6:2),
-EndOfFile(7:1-7:1),
+KwMatch,LowerIdent,OpenCurly,
+OpenSquare,DoubleDot,LowerIdent,CloseSquare,OpFatArrow,Int,
+OpenSquare,LowerIdent,Comma,DoubleDot,LowerIdent,CloseSquare,OpFatArrow,LowerIdent,
+OpenSquare,DoubleDot,LowerIdent,Comma,LowerIdent,CloseSquare,OpFatArrow,LowerIdent,
+OpenSquare,LowerIdent,Comma,DoubleDot,LowerIdent,Comma,LowerIdent,CloseSquare,OpFatArrow,LowerIdent,OpPlus,LowerIdent,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.11 (raw "data"))
+	(e-ident (raw "data"))
 	(branches
-		(branch @2.5-2.19
-			(p-list @2.5-2.14
-				(p-list-rest @2.6-2.13 (name "items")))
-			(e-int @2.18-2.19 (raw "1")))
-		(branch @3.5-3.30
-			(p-list @3.5-3.21
-				(p-ident @3.6-3.11 (raw "first"))
-				(p-list-rest @3.13-3.20 (name "items")))
-			(e-ident @3.25-3.30 (raw "first")))
-		(branch @4.5-4.28
-			(p-list @4.5-4.20
-				(p-list-rest @4.6-4.13 (name "items"))
-				(p-ident @4.15-4.19 (raw "last")))
-			(e-ident @4.24-4.28 (raw "last")))
-		(branch @5.5-5.43
-			(p-list @5.5-5.27
-				(p-ident @5.6-5.11 (raw "first"))
-				(p-list-rest @5.13-5.20 (name "items"))
-				(p-ident @5.22-5.26 (raw "last")))
-			(e-binop @5.31-5.43 (op "+")
-				(e-ident @5.31-5.36 (raw "first"))
-				(e-ident @5.39-5.43 (raw "last"))))))
+		(branch
+			(p-list
+				(p-list-rest (name "items")))
+			(e-int (raw "1")))
+		(branch
+			(p-list
+				(p-ident (raw "first"))
+				(p-list-rest (name "items")))
+			(e-ident (raw "first")))
+		(branch
+			(p-list
+				(p-list-rest (name "items"))
+				(p-ident (raw "last")))
+			(e-ident (raw "last")))
+		(branch
+			(p-list
+				(p-ident (raw "first"))
+				(p-list-rest (name "items"))
+				(p-ident (raw "last")))
+			(e-binop (op "+")
+				(e-ident (raw "first"))
+				(e-ident (raw "last"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -175,59 +175,59 @@ match data {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-match @1.1-6.2
-	(match @1.1-6.2
+(e-match
+	(match
 		(cond
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-list @2.5-2.14
+						(p-list
 							(patterns)
 							(rest-at (index 0)
-								(p-assign @2.8-2.8 (ident "items"))))))
+								(p-assign (ident "items"))))))
 				(value
-					(e-num @2.18-2.19 (value "1"))))
+					(e-num (value "1"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-list @3.5-3.21
+						(p-list
 							(patterns
-								(p-assign @3.6-3.11 (ident "first")))
+								(p-assign (ident "first")))
 							(rest-at (index 1)
-								(p-assign @3.15-3.15 (ident "items"))))))
+								(p-assign (ident "items"))))))
 				(value
-					(e-lookup-local @3.25-3.30
-						(p-assign @3.6-3.11 (ident "first")))))
+					(e-lookup-local
+						(p-assign (ident "first")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-list @4.5-4.20
+						(p-list
 							(patterns
-								(p-assign @4.15-4.19 (ident "last")))
+								(p-assign (ident "last")))
 							(rest-at (index 0)
-								(p-assign @4.8-4.8 (ident "items"))))))
+								(p-assign (ident "items"))))))
 				(value
-					(e-lookup-local @4.24-4.28
-						(p-assign @4.15-4.19 (ident "last")))))
+					(e-lookup-local
+						(p-assign (ident "last")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-list @5.5-5.27
+						(p-list
 							(patterns
-								(p-assign @5.6-5.11 (ident "first"))
-								(p-assign @5.22-5.26 (ident "last")))
+								(p-assign (ident "first"))
+								(p-assign (ident "last")))
 							(rest-at (index 1)
-								(p-assign @5.15-5.15 (ident "items"))))))
+								(p-assign (ident "items"))))))
 				(value
-					(e-binop @5.31-5.43 (op "add")
-						(e-lookup-local @5.31-5.36
-							(p-assign @5.6-5.11 (ident "first")))
-						(e-lookup-local @5.39-5.43
-							(p-assign @5.22-5.26 (ident "last")))))))))
+					(e-binop (op "add")
+						(e-lookup-local
+							(p-assign (ident "first")))
+						(e-lookup-local
+							(p-assign (ident "last")))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-6.2 (type "Num(_size)"))
+(expr (type "Num(_size)"))
 ~~~

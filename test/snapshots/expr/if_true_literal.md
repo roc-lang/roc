@@ -13,15 +13,15 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwIf(1:1-1:3),UpperIdent(1:4-1:8),Int(1:9-1:10),KwElse(1:11-1:15),Int(1:16-1:17),
-EndOfFile(2:1-2:1),
+KwIf,UpperIdent,Int,KwElse,Int,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-if-then-else @1.1-1.17
-	(e-tag @1.4-1.8 (raw "True"))
-	(e-int @1.9-1.10 (raw "1"))
-	(e-int @1.16-1.17 (raw "2")))
+(e-if-then-else
+	(e-tag (raw "True"))
+	(e-int (raw "1"))
+	(e-int (raw "2")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -29,15 +29,15 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-if @1.1-1.17
+(e-if
 	(if-branches
 		(if-branch
-			(e-tag @1.4-1.8 (name "True"))
-			(e-num @1.9-1.10 (value "1"))))
+			(e-tag (name "True"))
+			(e-num (value "1"))))
 	(if-else
-		(e-num @1.16-1.17 (value "2"))))
+		(e-num (value "2"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.17 (type "Num(_size)"))
+(expr (type "Num(_size)"))
 ~~~

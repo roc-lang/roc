@@ -17,19 +17,19 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-OpenSquare(1:1-1:2),
-Int(2:2-2:3),Comma(2:3-2:4),
-Int(3:2-3:3),Comma(3:3-3:4),
-Int(4:2-4:3),Comma(4:3-4:4),
-CloseSquare(5:1-5:2),
-EndOfFile(6:1-6:1),
+OpenSquare,
+Int,Comma,
+Int,Comma,
+Int,Comma,
+CloseSquare,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-list @1.1-5.2
-	(e-int @2.2-2.3 (raw "1"))
-	(e-int @3.2-3.3 (raw "2"))
-	(e-int @4.2-4.3 (raw "3")))
+(e-list
+	(e-int (raw "1"))
+	(e-int (raw "2"))
+	(e-int (raw "3")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -37,13 +37,13 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1.1-5.2
+(e-list
 	(elems
-		(e-num @2.2-2.3 (value "1"))
-		(e-num @3.2-3.3 (value "2"))
-		(e-num @4.2-4.3 (value "3"))))
+		(e-num (value "1"))
+		(e-num (value "2"))
+		(e-num (value "3"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-5.2 (type "List(Num(_size))"))
+(expr (type "List(Num(_size))"))
 ~~~

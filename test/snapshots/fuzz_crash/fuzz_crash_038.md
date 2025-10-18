@@ -50,16 +50,16 @@ Add a main! function like:
 
 # TOKENS
 ~~~zig
-OpStar(1:1-1:2),KwImport(1:2-1:8),UpperIdent(1:9-1:10),KwAs(1:11-1:13),
-EndOfFile(2:1-2:1),
+OpStar,KwImport,UpperIdent,KwAs,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.13
-	(type-module @1.1-1.2)
+(file
+	(type-module)
 	(statements
-		(s-malformed @1.1-1.2 (tag "statement_unexpected_token"))
-		(s-malformed @1.2-1.13 (tag "expected_upper_name_after_import_as"))))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_upper_name_after_import_as"))))
 ~~~
 # FORMATTED
 ~~~roc

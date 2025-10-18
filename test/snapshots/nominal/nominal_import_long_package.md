@@ -122,26 +122,26 @@ red : CE
 
 # TOKENS
 ~~~zig
-KwImport(1:1-1:7),LowerIdent(1:8-1:14),NoSpaceDotUpperIdent(1:14-1:21),NoSpaceDotUpperIdent(1:21-1:27),KwExposing(1:28-1:36),OpenSquare(1:37-1:38),UpperIdent(1:38-1:45),KwAs(1:46-1:48),UpperIdent(1:49-1:51),CloseSquare(1:51-1:52),
-LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:9),
-LowerIdent(4:1-4:4),OpAssign(4:5-4:6),TripleDot(4:7-4:10),
-EndOfFile(5:1-5:1),
+KwImport,LowerIdent,NoSpaceDotUpperIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,UpperIdent,KwAs,UpperIdent,CloseSquare,
+LowerIdent,OpColon,UpperIdent,
+LowerIdent,OpAssign,TripleDot,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-4.10
-	(type-module @1.1-1.7)
+(file
+	(type-module)
 	(statements
-		(s-import @1.1-1.21 (raw "design.Styles"))
-		(s-malformed @1.21-1.27 (tag "statement_unexpected_token"))
-		(s-malformed @1.28-1.36 (tag "statement_unexpected_token"))
-		(s-malformed @1.37-1.38 (tag "statement_unexpected_token"))
-		(s-malformed @1.46-1.48 (tag "expected_colon_after_type_annotation"))
-		(s-malformed @1.51-1.52 (tag "expected_colon_after_type_annotation"))
-		(s-type-anno @3.1-3.9 (name "red")
-			(ty @3.7-3.9 (name "CE")))
-		(s-decl @4.1-4.10
-			(p-ident @4.1-4.4 (raw "red"))
+		(s-import (raw "design.Styles"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
+		(s-type-anno (name "red")
+			(ty (name "CE")))
+		(s-decl
+			(p-ident (raw "red"))
 			(e-ellipsis))))
 ~~~
 # FORMATTED
@@ -156,19 +156,19 @@ red = ... # not implemented
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @4.1-4.4 (ident "red"))
-		(e-not-implemented @1.1-1.1)
-		(annotation @4.1-4.4
+		(p-assign (ident "red"))
+		(e-not-implemented)
+		(annotation
 			(declared-type
-				(ty-malformed @3.7-3.9))))
-	(s-import @1.1-1.21 (module "design.Styles")
+				(ty-malformed))))
+	(s-import (module "design.Styles")
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.4 (type "Error")))
+		(patt (type "Error")))
 	(expressions
-		(expr @1.1-1.1 (type "Error"))))
+		(expr (type "Error"))))
 ~~~

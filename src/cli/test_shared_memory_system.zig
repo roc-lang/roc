@@ -4,11 +4,15 @@ const std = @import("std");
 const builtin = @import("builtin");
 const testing = std.testing;
 const main = @import("main.zig");
+const base = @import("base");
+const Allocators = base.Allocators;
 
 test "platform resolution - basic cli platform" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa_impl.deinit();
+    var allocs: Allocators = undefined;
+    allocs.initInPlace(gpa_impl.allocator());
+    defer allocs.deinit();
 
     // Create a temporary Roc file with cli platform
     var temp_dir = testing.tmpDir(.{});
@@ -27,18 +31,20 @@ test "platform resolution - basic cli platform" {
     defer roc_file.close();
     roc_file.writeAll(roc_content) catch unreachable;
 
-    const roc_path = try temp_dir.dir.realpathAlloc(allocator, "test.roc");
-    defer allocator.free(roc_path);
+    const roc_path = try temp_dir.dir.realpathAlloc(allocs.gpa, "test.roc");
+    defer allocs.gpa.free(roc_path);
 
     // This should return NoPlatformFound since we don't have the actual CLI platform installed
-    const result = main.resolvePlatformPaths(allocator, roc_path);
+    const result = main.resolvePlatformPaths(&allocs, roc_path);
     try testing.expectError(error.NoPlatformFound, result);
 }
 
 test "platform resolution - no platform in file" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa_impl.deinit();
+    var allocs: Allocators = undefined;
+    allocs.initInPlace(gpa_impl.allocator());
+    defer allocs.deinit();
 
     // Create a temporary Roc file without platform specification
     var temp_dir = testing.tmpDir(.{});
@@ -53,26 +59,30 @@ test "platform resolution - no platform in file" {
     defer roc_file.close();
     roc_file.writeAll(roc_content) catch unreachable;
 
-    const roc_path = try temp_dir.dir.realpathAlloc(allocator, "test.roc");
-    defer allocator.free(roc_path);
+    const roc_path = try temp_dir.dir.realpathAlloc(allocs.gpa, "test.roc");
+    defer allocs.gpa.free(roc_path);
 
-    const result = main.resolvePlatformPaths(allocator, roc_path);
+    const result = main.resolvePlatformPaths(&allocs, roc_path);
     try testing.expectError(error.NoPlatformFound, result);
 }
 
 test "platform resolution - file not found" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa_impl.deinit();
+    var allocs: Allocators = undefined;
+    allocs.initInPlace(gpa_impl.allocator());
+    defer allocs.deinit();
 
-    const result = main.resolvePlatformPaths(allocator, "nonexistent.roc");
+    const result = main.resolvePlatformPaths(&allocs, "nonexistent.roc");
     try testing.expectError(error.NoPlatformFound, result);
 }
 
 test "platform resolution - URL platform not supported" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa_impl.deinit();
+    var allocs: Allocators = undefined;
+    allocs.initInPlace(gpa_impl.allocator());
+    defer allocs.deinit();
 
     // Create a temporary Roc file with URL platform
     var temp_dir = testing.tmpDir(.{});
@@ -88,10 +98,10 @@ test "platform resolution - URL platform not supported" {
     defer roc_file.close();
     roc_file.writeAll(roc_content) catch unreachable;
 
-    const roc_path = try temp_dir.dir.realpathAlloc(allocator, "test.roc");
-    defer allocator.free(roc_path);
+    const roc_path = try temp_dir.dir.realpathAlloc(allocs.gpa, "test.roc");
+    defer allocs.gpa.free(roc_path);
 
-    const result = main.resolvePlatformPaths(allocator, roc_path);
+    const result = main.resolvePlatformPaths(&allocs, roc_path);
     try testing.expectError(error.PlatformNotSupported, result);
 }
 
@@ -103,9 +113,11 @@ test "integration - shared memory setup and parsing" {
         return;
     }
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa_impl.deinit();
+    var allocs: Allocators = undefined;
+    allocs.initInPlace(gpa_impl.allocator());
+    defer allocs.deinit();
 
     // Create a temporary Roc file with simple arithmetic
     var temp_dir = testing.tmpDir(.{});
@@ -117,11 +129,11 @@ test "integration - shared memory setup and parsing" {
     defer roc_file.close();
     roc_file.writeAll(roc_content) catch unreachable;
 
-    const roc_path = try temp_dir.dir.realpathAlloc(allocator, "test.roc");
-    defer allocator.free(roc_path);
+    const roc_path = try temp_dir.dir.realpathAlloc(allocs.gpa, "test.roc");
+    defer allocs.gpa.free(roc_path);
 
     // Test that we can set up shared memory with ModuleEnv
-    const shm_handle = try main.setupSharedMemoryWithModuleEnv(allocator, roc_path);
+    const shm_handle = try main.setupSharedMemoryWithModuleEnv(&allocs, roc_path);
 
     // Clean up shared memory resources
     defer {
@@ -150,9 +162,11 @@ test "integration - compilation pipeline for different expressions" {
         return;
     }
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa_impl.deinit();
+    var allocs: Allocators = undefined;
+    allocs.initInPlace(gpa_impl.allocator());
+    defer allocs.deinit();
 
     const test_cases = [_][]const u8{
         "100 - 58",
@@ -163,8 +177,8 @@ test "integration - compilation pipeline for different expressions" {
 
     for (test_cases) |expression| {
         // Prepend boilerplate to make a complete Roc app
-        const roc_content = try std.fmt.allocPrint(allocator, "app [main] {{ pf: platform \"test\" }}\n\nmain = {s}", .{expression});
-        defer allocator.free(roc_content);
+        const roc_content = try std.fmt.allocPrint(allocs.gpa, "app [main] {{ pf: platform \"test\" }}\n\nmain = {s}", .{expression});
+        defer allocs.gpa.free(roc_content);
         var temp_dir = testing.tmpDir(.{});
         defer temp_dir.cleanup();
 
@@ -172,11 +186,11 @@ test "integration - compilation pipeline for different expressions" {
         defer roc_file.close();
         roc_file.writeAll(roc_content) catch unreachable;
 
-        const roc_path = try temp_dir.dir.realpathAlloc(allocator, "test.roc");
-        defer allocator.free(roc_path);
+        const roc_path = try temp_dir.dir.realpathAlloc(allocs.gpa, "test.roc");
+        defer allocs.gpa.free(roc_path);
 
         // Test the full compilation pipeline (parse -> canonicalize -> typecheck)
-        const shm_handle = main.setupSharedMemoryWithModuleEnv(allocator, roc_path) catch |err| {
+        const shm_handle = main.setupSharedMemoryWithModuleEnv(&allocs, roc_path) catch |err| {
             std.log.warn("Failed to set up shared memory for expression: {s}, error: {}\n", .{ roc_content, err });
             continue;
         };
@@ -207,9 +221,11 @@ test "integration - error handling in compilation" {
         return;
     }
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa_impl.deinit();
+    var allocs: Allocators = undefined;
+    allocs.initInPlace(gpa_impl.allocator());
+    defer allocs.deinit();
 
     var temp_dir = testing.tmpDir(.{});
     defer temp_dir.cleanup();
@@ -221,11 +237,11 @@ test "integration - error handling in compilation" {
     defer roc_file.close();
     roc_file.writeAll(invalid_roc_content) catch unreachable;
 
-    const roc_path = try temp_dir.dir.realpathAlloc(allocator, "test.roc");
-    defer allocator.free(roc_path);
+    const roc_path = try temp_dir.dir.realpathAlloc(allocs.gpa, "test.roc");
+    defer allocs.gpa.free(roc_path);
 
     // This should fail during parsing/compilation
-    const result = main.setupSharedMemoryWithModuleEnv(allocator, roc_path);
+    const result = main.setupSharedMemoryWithModuleEnv(&allocs, roc_path);
 
     // We expect this to either fail or succeed (depending on parser error handling)
     // The important thing is that it doesn't crash

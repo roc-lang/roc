@@ -96,54 +96,53 @@ Underscores in type annotations mean "I don't care about this type", which doesn
 
 # TOKENS
 ~~~zig
-UpperIdent(2:1-2:7),NoSpaceOpenRound(2:7-2:8),Underscore(2:8-2:9),CloseRound(2:9-2:10),OpColon(2:11-2:12),UpperIdent(2:13-2:16),
-UpperIdent(5:1-5:8),NoSpaceOpenRound(5:8-5:9),Underscore(5:9-5:10),Comma(5:10-5:11),LowerIdent(5:12-5:13),CloseRound(5:13-5:14),OpColon(5:15-5:16),LowerIdent(5:17-5:18),
-UpperIdent(8:1-8:8),NoSpaceOpenRound(8:8-8:9),LowerIdent(8:9-8:10),Comma(8:10-8:11),Underscore(8:12-8:13),CloseRound(8:13-8:14),OpColon(8:15-8:16),LowerIdent(8:17-8:18),
-UpperIdent(11:1-11:12),NoSpaceOpenRound(11:12-11:13),Underscore(11:13-11:14),Comma(11:14-11:15),LowerIdent(11:16-11:17),CloseRound(11:17-11:18),OpColon(11:19-11:20),OpenCurly(11:21-11:22),LowerIdent(11:23-11:28),OpColon(11:28-11:29),LowerIdent(11:30-11:31),CloseCurly(11:32-11:33),
-UpperIdent(14:1-14:10),NoSpaceOpenRound(14:10-14:11),Underscore(14:11-14:12),Comma(14:12-14:13),Underscore(14:14-14:15),Comma(14:15-14:16),LowerIdent(14:17-14:18),CloseRound(14:18-14:19),OpColon(14:20-14:21),LowerIdent(14:22-14:23),
-EndOfFile(15:1-15:1),
+UpperIdent,NoSpaceOpenRound,Underscore,CloseRound,OpColon,UpperIdent,
+UpperIdent,NoSpaceOpenRound,Underscore,Comma,LowerIdent,CloseRound,OpColon,LowerIdent,
+UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,Underscore,CloseRound,OpColon,LowerIdent,
+UpperIdent,NoSpaceOpenRound,Underscore,Comma,LowerIdent,CloseRound,OpColon,OpenCurly,LowerIdent,OpColon,LowerIdent,CloseCurly,
+UpperIdent,NoSpaceOpenRound,Underscore,Comma,Underscore,Comma,LowerIdent,CloseRound,OpColon,LowerIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @2.1-14.23
-	(type-module @2.1-2.7)
+(file
+	(type-module)
 	(statements
-		(s-type-decl @2.1-2.16
-			(header @2.1-2.10 (name "MyType")
+		(s-type-decl
+			(header (name "MyType")
 				(args
 					(_)))
-			(ty @2.13-2.16 (name "Str")))
-		(s-type-decl @5.1-5.18
-			(header @5.1-5.14 (name "MyType2")
+			(ty (name "Str")))
+		(s-type-decl
+			(header (name "MyType2")
 				(args
 					(_)
-					(ty-var @5.12-5.13 (raw "b"))))
-			(ty-var @5.17-5.18 (raw "b")))
-		(s-type-decl @8.1-8.18
-			(header @8.1-8.14 (name "MyType3")
+					(ty-var (raw "b"))))
+			(ty-var (raw "b")))
+		(s-type-decl
+			(header (name "MyType3")
 				(args
-					(ty-var @8.9-8.10 (raw "a"))
+					(ty-var (raw "a"))
 					(_)))
-			(ty-var @8.17-8.18 (raw "a")))
-		(s-type-decl @11.1-11.33
-			(header @11.1-11.18 (name "ComplexType")
+			(ty-var (raw "a")))
+		(s-type-decl
+			(header (name "ComplexType")
 				(args
 					(_)
-					(ty-var @11.16-11.17 (raw "b"))))
-			(ty-record @11.21-11.33
-				(anno-record-field @11.23-11.31 (name "field")
-					(ty-var @11.30-11.31 (raw "b")))))
-		(s-type-decl @14.1-14.23
-			(header @14.1-14.19 (name "MultiType")
+					(ty-var (raw "b"))))
+			(ty-record
+				(anno-record-field (name "field")
+					(ty-var (raw "b")))))
+		(s-type-decl
+			(header (name "MultiType")
 				(args
 					(_)
 					(_)
-					(ty-var @14.17-14.18 (raw "c"))))
-			(ty-var @14.22-14.23 (raw "c")))))
+					(ty-var (raw "c"))))
+			(ty-var (raw "c")))))
 ~~~
 # FORMATTED
 ~~~roc
-# Type with underscore in parameter position
 # Type with underscore in parameter position
 MyType(_) : Str
 
@@ -162,68 +161,68 @@ MultiType(_, _, c) : c
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-alias-decl @2.1-2.16
-		(ty-header @2.1-2.10 (name "MyType")
+	(s-alias-decl
+		(ty-header (name "MyType")
 			(ty-args
-				(ty-underscore @2.8-2.9)))
-		(ty-lookup @2.13-2.16 (name "Str") (builtin)))
-	(s-alias-decl @5.1-5.18
-		(ty-header @5.1-5.14 (name "MyType2")
+				(ty-underscore)))
+		(ty-lookup (name "Str") (builtin)))
+	(s-alias-decl
+		(ty-header (name "MyType2")
 			(ty-args
-				(ty-underscore @5.9-5.10)
-				(ty-rigid-var @5.12-5.13 (name "b"))))
-		(ty-rigid-var-lookup (ty-rigid-var @5.12-5.13 (name "b"))))
-	(s-alias-decl @8.1-8.18
-		(ty-header @8.1-8.14 (name "MyType3")
+				(ty-underscore)
+				(ty-rigid-var (name "b"))))
+		(ty-rigid-var-lookup (ty-rigid-var (name "b"))))
+	(s-alias-decl
+		(ty-header (name "MyType3")
 			(ty-args
-				(ty-rigid-var @8.9-8.10 (name "a"))
-				(ty-underscore @8.12-8.13)))
-		(ty-rigid-var-lookup (ty-rigid-var @8.9-8.10 (name "a"))))
-	(s-alias-decl @11.1-11.33
-		(ty-header @11.1-11.18 (name "ComplexType")
+				(ty-rigid-var (name "a"))
+				(ty-underscore)))
+		(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
+	(s-alias-decl
+		(ty-header (name "ComplexType")
 			(ty-args
-				(ty-underscore @11.13-11.14)
-				(ty-rigid-var @11.16-11.17 (name "b"))))
-		(ty-record @11.21-11.33
+				(ty-underscore)
+				(ty-rigid-var (name "b"))))
+		(ty-record
 			(field (field "field")
-				(ty-rigid-var-lookup (ty-rigid-var @11.16-11.17 (name "b"))))))
-	(s-alias-decl @14.1-14.23
-		(ty-header @14.1-14.19 (name "MultiType")
+				(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))
+	(s-alias-decl
+		(ty-header (name "MultiType")
 			(ty-args
-				(ty-underscore @14.11-14.12)
-				(ty-underscore @14.14-14.15)
-				(ty-rigid-var @14.17-14.18 (name "c"))))
-		(ty-rigid-var-lookup (ty-rigid-var @14.17-14.18 (name "c")))))
+				(ty-underscore)
+				(ty-underscore)
+				(ty-rigid-var (name "c"))))
+		(ty-rigid-var-lookup (ty-rigid-var (name "c")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @2.1-2.16 (type "MyType(Error)")
-			(ty-header @2.1-2.10 (name "MyType")
+		(alias (type "MyType(Error)")
+			(ty-header (name "MyType")
 				(ty-args
-					(ty-underscore @2.8-2.9))))
-		(alias @5.1-5.18 (type "MyType2(Error, b)")
-			(ty-header @5.1-5.14 (name "MyType2")
+					(ty-underscore))))
+		(alias (type "MyType2(Error, b)")
+			(ty-header (name "MyType2")
 				(ty-args
-					(ty-underscore @5.9-5.10)
-					(ty-rigid-var @5.12-5.13 (name "b")))))
-		(alias @8.1-8.18 (type "MyType3(a, Error)")
-			(ty-header @8.1-8.14 (name "MyType3")
+					(ty-underscore)
+					(ty-rigid-var (name "b")))))
+		(alias (type "MyType3(a, Error)")
+			(ty-header (name "MyType3")
 				(ty-args
-					(ty-rigid-var @8.9-8.10 (name "a"))
-					(ty-underscore @8.12-8.13))))
-		(alias @11.1-11.33 (type "ComplexType(Error, b)")
-			(ty-header @11.1-11.18 (name "ComplexType")
+					(ty-rigid-var (name "a"))
+					(ty-underscore))))
+		(alias (type "ComplexType(Error, b)")
+			(ty-header (name "ComplexType")
 				(ty-args
-					(ty-underscore @11.13-11.14)
-					(ty-rigid-var @11.16-11.17 (name "b")))))
-		(alias @14.1-14.23 (type "MultiType(Error, Error, c)")
-			(ty-header @14.1-14.19 (name "MultiType")
+					(ty-underscore)
+					(ty-rigid-var (name "b")))))
+		(alias (type "MultiType(Error, Error, c)")
+			(ty-header (name "MultiType")
 				(ty-args
-					(ty-underscore @14.11-14.12)
-					(ty-underscore @14.14-14.15)
-					(ty-rigid-var @14.17-14.18 (name "c"))))))
+					(ty-underscore)
+					(ty-underscore)
+					(ty-rigid-var (name "c"))))))
 	(expressions))
 ~~~

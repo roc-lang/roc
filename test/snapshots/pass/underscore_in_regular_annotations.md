@@ -39,6 +39,7 @@ transform = |_, b| b
 PARSE ERROR - underscore_in_regular_annotations.md:28:22:28:24
 PARSE ERROR - underscore_in_regular_annotations.md:28:25:28:27
 UNUSED VARIABLE - underscore_in_regular_annotations.md:9:12:9:16
+UNDECLARED TYPE - underscore_in_regular_annotations.md:16:17:16:23
 # PROBLEMS
 **PARSE ERROR**
 Function types with multiple arrows need parentheses.
@@ -77,137 +78,148 @@ process = |list| "processed"
            ^^^^
 
 
+**UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**underscore_in_regular_annotations.md:16:17:16:23:**
+```roc
+handle_result : Result(_, Str) -> Str
+```
+                ^^^^^^
+
+
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:5),OpColon(1:6-1:7),Underscore(1:8-1:9),OpArrow(1:10-1:12),Underscore(1:13-1:14),
-LowerIdent(2:1-2:5),OpAssign(2:6-2:7),OpBar(2:8-2:9),LowerIdent(2:9-2:10),OpBar(2:10-2:11),LowerIdent(2:12-2:13),
-LowerIdent(4:1-4:9),OpColon(4:10-4:11),LowerIdent(4:12-4:13),OpArrow(4:14-4:16),LowerIdent(4:17-4:18),
-LowerIdent(5:1-5:9),OpAssign(5:10-5:11),OpBar(5:12-5:13),LowerIdent(5:13-5:14),OpBar(5:14-5:15),LowerIdent(5:16-5:17),
-LowerIdent(8:1-8:8),OpColon(8:9-8:10),UpperIdent(8:11-8:15),NoSpaceOpenRound(8:15-8:16),Underscore(8:16-8:17),CloseRound(8:17-8:18),OpArrow(8:19-8:21),UpperIdent(8:22-8:25),
-LowerIdent(9:1-9:8),OpAssign(9:9-9:10),OpBar(9:11-9:12),LowerIdent(9:12-9:16),OpBar(9:16-9:17),StringStart(9:18-9:19),StringPart(9:19-9:28),StringEnd(9:28-9:29),
-LowerIdent(12:1-12:9),OpColon(12:10-12:11),OpenCurly(12:12-12:13),LowerIdent(12:14-12:19),OpColon(12:19-12:20),Underscore(12:21-12:22),Comma(12:22-12:23),LowerIdent(12:24-12:29),OpColon(12:29-12:30),UpperIdent(12:31-12:34),CloseCurly(12:35-12:36),OpArrow(12:37-12:39),UpperIdent(12:40-12:43),
-LowerIdent(13:1-13:9),OpAssign(13:10-13:11),OpBar(13:12-13:13),LowerIdent(13:13-13:19),OpBar(13:19-13:20),LowerIdent(13:21-13:27),NoSpaceDotLowerIdent(13:27-13:33),
-LowerIdent(16:1-16:14),OpColon(16:15-16:16),UpperIdent(16:17-16:23),NoSpaceOpenRound(16:23-16:24),Underscore(16:24-16:25),Comma(16:25-16:26),UpperIdent(16:27-16:30),CloseRound(16:30-16:31),OpArrow(16:32-16:34),UpperIdent(16:35-16:38),
-LowerIdent(17:1-17:14),OpAssign(17:15-17:16),OpBar(17:17-17:18),LowerIdent(17:18-17:24),OpBar(17:24-17:25),
-KwMatch(18:5-18:10),LowerIdent(18:11-18:17),OpenCurly(18:18-18:19),
-UpperIdent(19:9-19:11),NoSpaceOpenRound(19:11-19:12),Underscore(19:12-19:13),CloseRound(19:13-19:14),OpFatArrow(19:15-19:17),StringStart(19:18-19:19),StringPart(19:19-19:26),StringEnd(19:26-19:27),Comma(19:27-19:28),
-UpperIdent(20:9-20:12),NoSpaceOpenRound(20:12-20:13),LowerIdent(20:13-20:16),CloseRound(20:16-20:17),OpFatArrow(20:18-20:20),LowerIdent(20:21-20:24),Comma(20:24-20:25),
-CloseCurly(21:5-21:6),
-LowerIdent(24:1-24:4),OpColon(24:5-24:6),OpenRound(24:7-24:8),LowerIdent(24:8-24:9),OpArrow(24:10-24:12),LowerIdent(24:13-24:14),CloseRound(24:14-24:15),Comma(24:15-24:16),UpperIdent(24:17-24:21),NoSpaceOpenRound(24:21-24:22),LowerIdent(24:22-24:23),CloseRound(24:23-24:24),OpArrow(24:25-24:27),UpperIdent(24:28-24:32),NoSpaceOpenRound(24:32-24:33),LowerIdent(24:33-24:34),CloseRound(24:34-24:35),
-LowerIdent(25:1-25:4),OpAssign(25:5-25:6),OpBar(25:7-25:8),Underscore(25:8-25:9),Comma(25:9-25:10),Underscore(25:11-25:12),OpBar(25:12-25:13),OpenSquare(25:14-25:15),CloseSquare(25:15-25:16),
-LowerIdent(28:1-28:10),OpColon(28:11-28:12),NamedUnderscore(28:13-28:15),OpArrow(28:16-28:18),NamedUnderscore(28:19-28:21),OpArrow(28:22-28:24),NamedUnderscore(28:25-28:27),
-LowerIdent(29:1-29:10),OpAssign(29:11-29:12),OpBar(29:13-29:14),Underscore(29:14-29:15),Comma(29:15-29:16),LowerIdent(29:17-29:18),OpBar(29:18-29:19),LowerIdent(29:20-29:21),
-EndOfFile(30:1-30:1),
+LowerIdent,OpColon,Underscore,OpArrow,Underscore,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,
+LowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,
+LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,Underscore,CloseRound,OpArrow,UpperIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,StringStart,StringPart,StringEnd,
+LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,Underscore,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,OpArrow,UpperIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,NoSpaceDotLowerIdent,
+LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,Underscore,Comma,UpperIdent,CloseRound,OpArrow,UpperIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,
+KwMatch,LowerIdent,OpenCurly,
+UpperIdent,NoSpaceOpenRound,Underscore,CloseRound,OpFatArrow,StringStart,StringPart,StringEnd,Comma,
+UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpFatArrow,LowerIdent,Comma,
+CloseCurly,
+LowerIdent,OpColon,OpenRound,LowerIdent,OpArrow,LowerIdent,CloseRound,Comma,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpArrow,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
+LowerIdent,OpAssign,OpBar,Underscore,Comma,Underscore,OpBar,OpenSquare,CloseSquare,
+LowerIdent,OpColon,NamedUnderscore,OpArrow,NamedUnderscore,OpArrow,NamedUnderscore,
+LowerIdent,OpAssign,OpBar,Underscore,Comma,LowerIdent,OpBar,LowerIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-29.21
-	(type-module @1.1-1.5)
+(file
+	(type-module)
 	(statements
-		(s-type-anno @1.1-1.14 (name "main")
-			(ty-fn @1.8-1.14
+		(s-type-anno (name "main")
+			(ty-fn
 				(_)
 				(_)))
-		(s-decl @2.1-2.13
-			(p-ident @2.1-2.5 (raw "main"))
-			(e-lambda @2.8-2.13
+		(s-decl
+			(p-ident (raw "main"))
+			(e-lambda
 				(args
-					(p-ident @2.9-2.10 (raw "x")))
-				(e-ident @2.12-2.13 (raw "x"))))
-		(s-type-anno @4.1-4.18 (name "identity")
-			(ty-fn @4.12-4.18
-				(ty-var @4.12-4.13 (raw "a"))
-				(ty-var @4.17-4.18 (raw "a"))))
-		(s-decl @5.1-5.17
-			(p-ident @5.1-5.9 (raw "identity"))
-			(e-lambda @5.12-5.17
+					(p-ident (raw "x")))
+				(e-ident (raw "x"))))
+		(s-type-anno (name "identity")
+			(ty-fn
+				(ty-var (raw "a"))
+				(ty-var (raw "a"))))
+		(s-decl
+			(p-ident (raw "identity"))
+			(e-lambda
 				(args
-					(p-ident @5.13-5.14 (raw "x")))
-				(e-ident @5.16-5.17 (raw "x"))))
-		(s-type-anno @8.1-8.25 (name "process")
-			(ty-fn @8.11-8.25
-				(ty-apply @8.11-8.18
-					(ty @8.11-8.15 (name "List"))
+					(p-ident (raw "x")))
+				(e-ident (raw "x"))))
+		(s-type-anno (name "process")
+			(ty-fn
+				(ty-apply
+					(ty (name "List"))
 					(_))
-				(ty @8.22-8.25 (name "Str"))))
-		(s-decl @9.1-9.29
-			(p-ident @9.1-9.8 (raw "process"))
-			(e-lambda @9.11-9.29
+				(ty (name "Str"))))
+		(s-decl
+			(p-ident (raw "process"))
+			(e-lambda
 				(args
-					(p-ident @9.12-9.16 (raw "list")))
-				(e-string @9.18-9.29
-					(e-string-part @9.19-9.28 (raw "processed")))))
-		(s-type-anno @12.1-12.43 (name "get_data")
-			(ty-fn @12.12-12.43
-				(ty-record @12.12-12.36
-					(anno-record-field @12.14-12.22 (name "field")
+					(p-ident (raw "list")))
+				(e-string
+					(e-string-part (raw "processed")))))
+		(s-type-anno (name "get_data")
+			(ty-fn
+				(ty-record
+					(anno-record-field (name "field")
 						(_))
-					(anno-record-field @12.24-12.34 (name "other")
-						(ty @12.31-12.34 (name "U32"))))
-				(ty @12.40-12.43 (name "U32"))))
-		(s-decl @13.1-13.33
-			(p-ident @13.1-13.9 (raw "get_data"))
-			(e-lambda @13.12-13.33
+					(anno-record-field (name "other")
+						(ty (name "U32"))))
+				(ty (name "U32"))))
+		(s-decl
+			(p-ident (raw "get_data"))
+			(e-lambda
 				(args
-					(p-ident @13.13-13.19 (raw "record")))
-				(e-field-access @13.21-13.33
-					(e-ident @13.21-13.27 (raw "record"))
-					(e-ident @13.27-13.33 (raw "other")))))
-		(s-type-anno @16.1-16.38 (name "handle_result")
-			(ty-fn @16.17-16.38
-				(ty-apply @16.17-16.31
-					(ty @16.17-16.23 (name "Result"))
+					(p-ident (raw "record")))
+				(e-field-access
+					(e-ident (raw "record"))
+					(e-ident (raw "other")))))
+		(s-type-anno (name "handle_result")
+			(ty-fn
+				(ty-apply
+					(ty (name "Result"))
 					(_)
-					(ty @16.27-16.30 (name "Str")))
-				(ty @16.35-16.38 (name "Str"))))
-		(s-decl @17.1-21.6
-			(p-ident @17.1-17.14 (raw "handle_result"))
-			(e-lambda @17.17-21.6
+					(ty (name "Str")))
+				(ty (name "Str"))))
+		(s-decl
+			(p-ident (raw "handle_result"))
+			(e-lambda
 				(args
-					(p-ident @17.18-17.24 (raw "result")))
+					(p-ident (raw "result")))
 				(e-match
-					(e-ident @18.11-18.17 (raw "result"))
+					(e-ident (raw "result"))
 					(branches
-						(branch @19.9-19.27
-							(p-tag @19.9-19.14 (raw "Ok")
+						(branch
+							(p-tag (raw "Ok")
 								(p-underscore))
-							(e-string @19.18-19.27
-								(e-string-part @19.19-19.26 (raw "success"))))
-						(branch @20.9-20.24
-							(p-tag @20.9-20.17 (raw "Err")
-								(p-ident @20.13-20.16 (raw "msg")))
-							(e-ident @20.21-20.24 (raw "msg")))))))
-		(s-type-anno @24.1-24.35 (name "map")
-			(ty-fn @24.7-24.35
-				(ty-fn @24.8-24.14
-					(ty-var @24.8-24.9 (raw "a"))
-					(ty-var @24.13-24.14 (raw "b")))
-				(ty-apply @24.17-24.24
-					(ty @24.17-24.21 (name "List"))
-					(ty-var @24.22-24.23 (raw "a")))
-				(ty-apply @24.28-24.35
-					(ty @24.28-24.32 (name "List"))
-					(ty-var @24.33-24.34 (raw "b")))))
-		(s-decl @25.1-25.16
-			(p-ident @25.1-25.4 (raw "map"))
-			(e-lambda @25.7-25.16
+							(e-string
+								(e-string-part (raw "success"))))
+						(branch
+							(p-tag (raw "Err")
+								(p-ident (raw "msg")))
+							(e-ident (raw "msg")))))))
+		(s-type-anno (name "map")
+			(ty-fn
+				(ty-fn
+					(ty-var (raw "a"))
+					(ty-var (raw "b")))
+				(ty-apply
+					(ty (name "List"))
+					(ty-var (raw "a")))
+				(ty-apply
+					(ty (name "List"))
+					(ty-var (raw "b")))))
+		(s-decl
+			(p-ident (raw "map"))
+			(e-lambda
 				(args
 					(p-underscore)
 					(p-underscore))
-				(e-list @25.14-25.16)))
-		(s-type-anno @28.1-28.21 (name "transform")
-			(ty-fn @28.13-28.21
-				(underscore-ty-var @28.13-28.15 (raw "_a"))
-				(underscore-ty-var @28.19-28.21 (raw "_b"))))
-		(s-malformed @28.22-28.24 (tag "multi_arrow_needs_parens"))
-		(s-malformed @28.25-28.27 (tag "statement_unexpected_token"))
-		(s-decl @29.1-29.21
-			(p-ident @29.1-29.10 (raw "transform"))
-			(e-lambda @29.13-29.21
+				(e-list)))
+		(s-type-anno (name "transform")
+			(ty-fn
+				(underscore-ty-var (raw "_a"))
+				(underscore-ty-var (raw "_b"))))
+		(s-malformed (tag "multi_arrow_needs_parens"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-decl
+			(p-ident (raw "transform"))
+			(e-lambda
 				(args
 					(p-underscore)
-					(p-ident @29.17-29.18 (raw "b")))
-				(e-ident @29.20-29.21 (raw "b"))))))
+					(p-ident (raw "b")))
+				(e-ident (raw "b"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -246,139 +258,137 @@ transform = |_, b| b
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @2.1-2.5 (ident "main"))
-		(e-lambda @2.8-2.13
+		(p-assign (ident "main"))
+		(e-lambda
 			(args
-				(p-assign @2.9-2.10 (ident "x")))
-			(e-lookup-local @2.12-2.13
-				(p-assign @2.9-2.10 (ident "x"))))
-		(annotation @2.1-2.5
+				(p-assign (ident "x")))
+			(e-lookup-local
+				(p-assign (ident "x"))))
+		(annotation
 			(declared-type
-				(ty-fn @1.8-1.14 (effectful false)
-					(ty-underscore @1.1-1.1)
-					(ty-underscore @1.1-1.1)))))
+				(ty-fn (effectful false)
+					(ty-underscore)
+					(ty-underscore)))))
 	(d-let
-		(p-assign @5.1-5.9 (ident "identity"))
-		(e-lambda @5.12-5.17
+		(p-assign (ident "identity"))
+		(e-lambda
 			(args
-				(p-assign @5.13-5.14 (ident "x")))
-			(e-lookup-local @5.16-5.17
-				(p-assign @5.13-5.14 (ident "x"))))
-		(annotation @5.1-5.9
+				(p-assign (ident "x")))
+			(e-lookup-local
+				(p-assign (ident "x"))))
+		(annotation
 			(declared-type
-				(ty-fn @4.12-4.18 (effectful false)
-					(ty-rigid-var @4.12-4.13 (name "a"))
-					(ty-rigid-var-lookup (ty-rigid-var @4.12-4.13 (name "a")))))))
+				(ty-fn (effectful false)
+					(ty-rigid-var (name "a"))
+					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
-		(p-assign @9.1-9.8 (ident "process"))
-		(e-lambda @9.11-9.29
+		(p-assign (ident "process"))
+		(e-lambda
 			(args
-				(p-assign @9.12-9.16 (ident "list")))
-			(e-string @9.18-9.29
-				(e-literal @9.19-9.28 (string "processed"))))
-		(annotation @9.1-9.8
+				(p-assign (ident "list")))
+			(e-string
+				(e-literal (string "processed"))))
+		(annotation
 			(declared-type
-				(ty-fn @8.11-8.25 (effectful false)
-					(ty-apply @8.11-8.18 (name "List") (builtin)
-						(ty-underscore @8.16-8.16))
-					(ty-lookup @8.22-8.25 (name "Str") (builtin))))))
+				(ty-fn (effectful false)
+					(ty-apply (name "List") (builtin)
+						(ty-underscore))
+					(ty-lookup (name "Str") (builtin))))))
 	(d-let
-		(p-assign @13.1-13.9 (ident "get_data"))
-		(e-lambda @13.12-13.33
+		(p-assign (ident "get_data"))
+		(e-lambda
 			(args
-				(p-assign @13.13-13.19 (ident "record")))
-			(e-dot-access @13.21-13.33 (field "other")
+				(p-assign (ident "record")))
+			(e-dot-access (field "other")
 				(receiver
-					(e-lookup-local @13.21-13.27
-						(p-assign @13.13-13.19 (ident "record"))))))
-		(annotation @13.1-13.9
+					(e-lookup-local
+						(p-assign (ident "record"))))))
+		(annotation
 			(declared-type
-				(ty-fn @12.12-12.43 (effectful false)
-					(ty-record @12.12-12.36
+				(ty-fn (effectful false)
+					(ty-record
 						(field (field "field")
-							(ty-underscore @1.1-1.1))
+							(ty-underscore))
 						(field (field "other")
-							(ty-lookup @12.31-12.34 (name "U32") (builtin))))
-					(ty-lookup @12.40-12.43 (name "U32") (builtin))))))
+							(ty-lookup (name "U32") (builtin))))
+					(ty-lookup (name "U32") (builtin))))))
 	(d-let
-		(p-assign @17.1-17.14 (ident "handle_result"))
-		(e-closure @17.17-21.6
+		(p-assign (ident "handle_result"))
+		(e-closure
 			(captures
-				(capture @20.13-20.16 (ident "msg")))
-			(e-lambda @17.17-21.6
+				(capture (ident "msg")))
+			(e-lambda
 				(args
-					(p-assign @17.18-17.24 (ident "result")))
-				(e-match @18.5-21.6
-					(match @18.5-21.6
+					(p-assign (ident "result")))
+				(e-match
+					(match
 						(cond
-							(e-lookup-local @18.11-18.17
-								(p-assign @17.18-17.24 (ident "result"))))
+							(e-lookup-local
+								(p-assign (ident "result"))))
 						(branches
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-applied-tag @19.9-19.14)))
+										(p-applied-tag)))
 								(value
-									(e-string @19.18-19.27
-										(e-literal @19.19-19.26 (string "success")))))
+									(e-string
+										(e-literal (string "success")))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-applied-tag @20.9-20.17)))
+										(p-applied-tag)))
 								(value
-									(e-lookup-local @20.21-20.24
-										(p-assign @20.13-20.16 (ident "msg"))))))))))
-		(annotation @17.1-17.14
+									(e-lookup-local
+										(p-assign (ident "msg"))))))))))
+		(annotation
 			(declared-type
-				(ty-fn @16.17-16.38 (effectful false)
-					(ty-apply @16.17-16.31 (name "Result") (external (module-idx "3") (target-node-idx "3"))
-						(ty-underscore @16.24-16.24)
-						(ty-lookup @16.27-16.30 (name "Str") (builtin)))
-					(ty-lookup @16.35-16.38 (name "Str") (builtin))))))
+				(ty-fn (effectful false)
+					(ty-malformed)
+					(ty-lookup (name "Str") (builtin))))))
 	(d-let
-		(p-assign @25.1-25.4 (ident "map"))
-		(e-lambda @25.7-25.16
+		(p-assign (ident "map"))
+		(e-lambda
 			(args
-				(p-underscore @25.8-25.9)
-				(p-underscore @25.11-25.12))
-			(e-empty_list @25.14-25.16))
-		(annotation @25.1-25.4
+				(p-underscore)
+				(p-underscore))
+			(e-empty_list))
+		(annotation
 			(declared-type
-				(ty-fn @24.7-24.35 (effectful false)
-					(ty-parens @24.7-24.15
-						(ty-fn @24.8-24.14 (effectful false)
-							(ty-rigid-var @24.8-24.9 (name "a"))
-							(ty-rigid-var @24.13-24.14 (name "b"))))
-					(ty-apply @24.17-24.24 (name "List") (builtin)
-						(ty-rigid-var-lookup (ty-rigid-var @24.8-24.9 (name "a"))))
-					(ty-apply @24.28-24.35 (name "List") (builtin)
-						(ty-rigid-var-lookup (ty-rigid-var @24.13-24.14 (name "b"))))))))
+				(ty-fn (effectful false)
+					(ty-parens
+						(ty-fn (effectful false)
+							(ty-rigid-var (name "a"))
+							(ty-rigid-var (name "b"))))
+					(ty-apply (name "List") (builtin)
+						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
+					(ty-apply (name "List") (builtin)
+						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))))
 	(d-let
-		(p-assign @29.1-29.10 (ident "transform"))
-		(e-lambda @29.13-29.21
+		(p-assign (ident "transform"))
+		(e-lambda
 			(args
-				(p-underscore @29.14-29.15)
-				(p-assign @29.17-29.18 (ident "b")))
-			(e-lookup-local @29.20-29.21
-				(p-assign @29.17-29.18 (ident "b"))))))
+				(p-underscore)
+				(p-assign (ident "b")))
+			(e-lookup-local
+				(p-assign (ident "b"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @2.1-2.5 (type "_arg -> _ret"))
-		(patt @5.1-5.9 (type "a -> a"))
-		(patt @9.1-9.8 (type "List(_elem) -> Str"))
-		(patt @13.1-13.9 (type "{ field: _field2, other: Num(Int(Unsigned32)) } -> Num(Int(Unsigned32))"))
-		(patt @17.1-17.14 (type "Error -> Str"))
-		(patt @25.1-25.4 (type "a -> b, List(a) -> List(b)"))
-		(patt @29.1-29.10 (type "_arg, c -> c")))
+		(patt (type "_arg -> _ret"))
+		(patt (type "a -> a"))
+		(patt (type "List(_elem) -> Str"))
+		(patt (type "{ field: _field2, other: Num(Int(Unsigned32)) } -> Num(Int(Unsigned32))"))
+		(patt (type "Error -> Str"))
+		(patt (type "a -> b, List(a) -> List(b)"))
+		(patt (type "_arg, c -> c")))
 	(expressions
-		(expr @2.8-2.13 (type "_arg -> _ret"))
-		(expr @5.12-5.17 (type "a -> a"))
-		(expr @9.11-9.29 (type "List(_elem) -> Str"))
-		(expr @13.12-13.33 (type "{ field: _field2, other: Num(Int(Unsigned32)) } -> Num(Int(Unsigned32))"))
-		(expr @17.17-21.6 (type "Error -> Str"))
-		(expr @25.7-25.16 (type "a -> b, List(a) -> List(b)"))
-		(expr @29.13-29.21 (type "_arg, c -> c"))))
+		(expr (type "_arg -> _ret"))
+		(expr (type "a -> a"))
+		(expr (type "List(_elem) -> Str"))
+		(expr (type "{ field: _field2, other: Num(Int(Unsigned32)) } -> Num(Int(Unsigned32))"))
+		(expr (type "Error -> Str"))
+		(expr (type "a -> b, List(a) -> List(b)"))
+		(expr (type "_arg, c -> c"))))
 ~~~

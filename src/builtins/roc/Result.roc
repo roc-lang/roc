@@ -164,7 +164,7 @@ expect Err("yipes!").try(|num| if num < 0 then Err("negative!") else Ok(-num)) =
 ## ```roc
 ## Ok("Hello").is_eq(Ok("Hello"))
 ## ```
-is_eq : Result(ok, err), Result(ok, err) -> Bool where ok.Eq, err.Eq
+is_eq : Result(ok, err), Result(ok, err) -> Bool where [ok.Eq, err.Eq]
 is_eq = |r1, r2| match (r1, r2) {
     (Result.Ok(ok1), Result.Ok(ok2)) => ok1 == ok2
     (Result.Err(err1), Result.Err(err2)) => err1 == err2

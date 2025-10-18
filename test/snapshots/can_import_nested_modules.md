@@ -49,11 +49,13 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:7:26:7:41
 MODULE NOT IMPORTED - can_import_nested_modules.md:10:28:10:42
 UNDEFINED VARIABLE - can_import_nested_modules.md:11:29:11:43
 MODULE NOT IMPORTED - can_import_nested_modules.md:14:15:14:37
+UNDECLARED TYPE - can_import_nested_modules.md:14:46:14:52
 MODULE NOT IMPORTED - can_import_nested_modules.md:14:58:14:77
 UNDEFINED VARIABLE - can_import_nested_modules.md:16:5:16:37
 UNDEFINED VARIABLE - can_import_nested_modules.md:20:23:20:30
 UNDEFINED VARIABLE - can_import_nested_modules.md:20:37:20:58
 MODULE NOT IMPORTED - can_import_nested_modules.md:23:16:23:36
+UNDECLARED TYPE - can_import_nested_modules.md:23:40:23:46
 MODULE NOT IMPORTED - can_import_nested_modules.md:23:47:23:61
 MODULE NOT IMPORTED - can_import_nested_modules.md:23:63:23:77
 UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
@@ -268,6 +270,17 @@ processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
               ^^^^^^^^^^^^^^^^^^^^^^
 
 
+**UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**can_import_nested_modules.md:14:46:14:52:**
+```roc
+processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
+```
+                                             ^^^^^^
+
+
 **MODULE NOT IMPORTED**
 There is no module with the name `Config.Parser` imported into this Roc file.
 
@@ -323,6 +336,17 @@ validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
                ^^^^^^^^^^^^^^^^^^^^
 
 
+**UNDECLARED TYPE**
+The type _Result_ is not declared in this scope.
+
+This type is referenced here:
+**can_import_nested_modules.md:23:40:23:46:**
+```roc
+validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
+```
+                                       ^^^^^^
+
+
 **MODULE NOT IMPORTED**
 There is no module with the name `HttpAuth` imported into this Roc file.
 
@@ -358,113 +382,113 @@ validateAuth = |creds| HttpAuth.validate(creds)
 
 # TOKENS
 ~~~zig
-KwImport(1:1-1:7),LowerIdent(1:8-1:12),NoSpaceDotUpperIdent(1:12-1:19),NoSpaceDotUpperIdent(1:19-1:26),
-KwImport(2:1-2:7),LowerIdent(2:8-2:12),NoSpaceDotUpperIdent(2:12-2:19),NoSpaceDotUpperIdent(2:19-2:24),KwAs(2:25-2:27),UpperIdent(2:28-2:36),
-KwImport(3:1-3:7),LowerIdent(3:8-3:13),NoSpaceDotUpperIdent(3:13-3:20),NoSpaceDotUpperIdent(3:20-3:27),KwExposing(3:28-3:36),OpenSquare(3:37-3:38),LowerIdent(3:38-3:45),CloseSquare(3:45-3:46),
-LowerIdent(6:1-6:12),OpColon(6:13-6:14),UpperIdent(6:15-6:21),NoSpaceDotUpperIdent(6:21-6:30),OpArrow(6:31-6:33),UpperIdent(6:34-6:37),
-LowerIdent(7:1-7:12),OpAssign(7:13-7:14),OpBar(7:15-7:16),LowerIdent(7:16-7:24),OpBar(7:24-7:25),UpperIdent(7:26-7:32),NoSpaceDotLowerIdent(7:32-7:41),NoSpaceOpenRound(7:41-7:42),LowerIdent(7:42-7:50),CloseRound(7:50-7:51),
-LowerIdent(10:1-10:13),OpColon(10:14-10:15),UpperIdent(10:16-10:19),Comma(10:19-10:20),UpperIdent(10:21-10:24),OpArrow(10:25-10:27),UpperIdent(10:28-10:36),NoSpaceDotUpperIdent(10:36-10:42),
-LowerIdent(11:1-11:13),OpAssign(11:14-11:15),OpBar(11:16-11:17),LowerIdent(11:17-11:21),Comma(11:21-11:22),LowerIdent(11:23-11:27),OpBar(11:27-11:28),UpperIdent(11:29-11:37),NoSpaceDotLowerIdent(11:37-11:43),NoSpaceOpenRound(11:43-11:44),LowerIdent(11:44-11:48),Comma(11:48-11:49),LowerIdent(11:50-11:54),CloseRound(11:54-11:55),
-LowerIdent(14:1-14:12),OpColon(14:13-14:14),UpperIdent(14:15-14:21),NoSpaceDotUpperIdent(14:21-14:28),NoSpaceDotUpperIdent(14:28-14:37),Comma(14:37-14:38),UpperIdent(14:39-14:42),OpArrow(14:43-14:45),UpperIdent(14:46-14:52),NoSpaceOpenRound(14:52-14:53),UpperIdent(14:53-14:56),Comma(14:56-14:57),UpperIdent(14:58-14:64),NoSpaceDotUpperIdent(14:64-14:71),NoSpaceDotUpperIdent(14:71-14:77),CloseRound(14:77-14:78),
-LowerIdent(15:1-15:12),OpAssign(15:13-15:14),OpBar(15:15-15:16),LowerIdent(15:16-15:30),Comma(15:30-15:31),LowerIdent(15:32-15:37),OpBar(15:37-15:38),
-UpperIdent(16:5-16:11),NoSpaceDotUpperIdent(16:11-16:18),NoSpaceDotUpperIdent(16:18-16:27),NoSpaceDotLowerIdent(16:27-16:37),NoSpaceOpenRound(16:37-16:38),LowerIdent(16:38-16:52),Comma(16:52-16:53),LowerIdent(16:54-16:59),CloseRound(16:59-16:60),
-LowerIdent(19:1-19:13),OpColon(19:14-19:15),UpperIdent(19:16-19:19),OpArrow(19:20-19:22),UpperIdent(19:23-19:26),
-LowerIdent(20:1-20:13),OpAssign(20:14-20:15),OpBar(20:16-20:17),LowerIdent(20:17-20:21),OpBar(20:21-20:22),LowerIdent(20:23-20:30),NoSpaceOpenRound(20:30-20:31),LowerIdent(20:31-20:35),Comma(20:35-20:36),UpperIdent(20:37-20:43),NoSpaceDotLowerIdent(20:43-20:58),CloseRound(20:58-20:59),
-LowerIdent(23:1-23:13),OpColon(23:14-23:15),UpperIdent(23:16-23:24),NoSpaceDotUpperIdent(23:24-23:36),OpArrow(23:37-23:39),UpperIdent(23:40-23:46),NoSpaceOpenRound(23:46-23:47),UpperIdent(23:47-23:55),NoSpaceDotUpperIdent(23:55-23:61),Comma(23:61-23:62),UpperIdent(23:63-23:71),NoSpaceDotUpperIdent(23:71-23:77),CloseRound(23:77-23:78),
-LowerIdent(24:1-24:13),OpAssign(24:14-24:15),OpBar(24:16-24:17),LowerIdent(24:17-24:22),OpBar(24:22-24:23),UpperIdent(24:24-24:32),NoSpaceDotLowerIdent(24:32-24:41),NoSpaceOpenRound(24:41-24:42),LowerIdent(24:42-24:47),CloseRound(24:47-24:48),
-EndOfFile(25:1-25:1),
+KwImport,LowerIdent,NoSpaceDotUpperIdent,NoSpaceDotUpperIdent,
+KwImport,LowerIdent,NoSpaceDotUpperIdent,NoSpaceDotUpperIdent,KwAs,UpperIdent,
+KwImport,LowerIdent,NoSpaceDotUpperIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,LowerIdent,CloseSquare,
+LowerIdent,OpColon,UpperIdent,NoSpaceDotUpperIdent,OpArrow,UpperIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
+LowerIdent,OpColon,UpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,NoSpaceDotUpperIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,Comma,LowerIdent,OpBar,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,
+LowerIdent,OpColon,UpperIdent,NoSpaceDotUpperIdent,NoSpaceDotUpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,UpperIdent,NoSpaceDotUpperIdent,NoSpaceDotUpperIdent,CloseRound,
+LowerIdent,OpAssign,OpBar,LowerIdent,Comma,LowerIdent,OpBar,
+UpperIdent,NoSpaceDotUpperIdent,NoSpaceDotUpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,
+LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,NoSpaceOpenRound,LowerIdent,Comma,UpperIdent,NoSpaceDotLowerIdent,CloseRound,
+LowerIdent,OpColon,UpperIdent,NoSpaceDotUpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,NoSpaceDotUpperIdent,Comma,UpperIdent,NoSpaceDotUpperIdent,CloseRound,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-24.48
-	(type-module @1.1-1.7)
+(file
+	(type-module)
 	(statements
-		(s-import @1.1-1.19 (raw "json.Parser"))
-		(s-malformed @1.19-1.26 (tag "statement_unexpected_token"))
-		(s-import @2.1-2.19 (raw "http.Client"))
-		(s-malformed @2.19-2.24 (tag "statement_unexpected_token"))
-		(s-malformed @2.25-2.27 (tag "statement_unexpected_token"))
-		(s-malformed @3.1-3.7 (tag "expected_colon_after_type_annotation"))
-		(s-malformed @3.8-3.13 (tag "statement_unexpected_token"))
-		(s-malformed @3.13-3.20 (tag "statement_unexpected_token"))
-		(s-malformed @3.20-3.27 (tag "statement_unexpected_token"))
-		(s-malformed @3.28-3.36 (tag "statement_unexpected_token"))
-		(s-malformed @3.37-3.38 (tag "statement_unexpected_token"))
-		(s-malformed @3.38-3.45 (tag "statement_unexpected_token"))
-		(s-malformed @3.45-3.46 (tag "statement_unexpected_token"))
-		(s-type-anno @6.1-6.37 (name "parseConfig")
-			(ty-fn @6.15-6.37
-				(ty @6.15-6.30 (name "Config.Settings"))
-				(ty @6.34-6.37 (name "Str"))))
-		(s-decl @7.1-7.51
-			(p-ident @7.1-7.12 (raw "parseConfig"))
-			(e-lambda @7.15-7.51
+		(s-import (raw "json.Parser"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-import (raw "http.Client"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-type-anno (name "parseConfig")
+			(ty-fn
+				(ty (name "Config.Settings"))
+				(ty (name "Str"))))
+		(s-decl
+			(p-ident (raw "parseConfig"))
+			(e-lambda
 				(args
-					(p-ident @7.16-7.24 (raw "settings")))
-				(e-apply @7.26-7.51
-					(e-ident @7.26-7.41 (raw "Config.toString"))
-					(e-ident @7.42-7.50 (raw "settings")))))
-		(s-type-anno @10.1-10.42 (name "authenticate")
-			(ty-fn @10.16-10.42
-				(ty @10.16-10.19 (name "Str"))
-				(ty @10.21-10.24 (name "Str"))
-				(ty @10.28-10.42 (name "HttpAuth.Token"))))
-		(s-decl @11.1-11.55
-			(p-ident @11.1-11.13 (raw "authenticate"))
-			(e-lambda @11.16-11.55
+					(p-ident (raw "settings")))
+				(e-apply
+					(e-ident (raw "Config.toString"))
+					(e-ident (raw "settings")))))
+		(s-type-anno (name "authenticate")
+			(ty-fn
+				(ty (name "Str"))
+				(ty (name "Str"))
+				(ty (name "HttpAuth.Token"))))
+		(s-decl
+			(p-ident (raw "authenticate"))
+			(e-lambda
 				(args
-					(p-ident @11.17-11.21 (raw "user"))
-					(p-ident @11.23-11.27 (raw "pass")))
-				(e-apply @11.29-11.55
-					(e-ident @11.29-11.43 (raw "HttpAuth.login"))
-					(e-ident @11.44-11.48 (raw "user"))
-					(e-ident @11.50-11.54 (raw "pass")))))
-		(s-type-anno @14.1-14.78 (name "processData")
-			(ty-fn @14.15-14.78
-				(ty @14.15-14.37 (name "Config.Parser.Advanced"))
-				(ty @14.39-14.42 (name "Str"))
-				(ty-apply @14.46-14.78
-					(ty @14.46-14.52 (name "Result"))
-					(ty @14.53-14.56 (name "Str"))
-					(ty @14.58-14.77 (name "Config.Parser.Error")))))
-		(s-decl @15.1-16.60
-			(p-ident @15.1-15.12 (raw "processData"))
-			(e-lambda @15.15-16.60
+					(p-ident (raw "user"))
+					(p-ident (raw "pass")))
+				(e-apply
+					(e-ident (raw "HttpAuth.login"))
+					(e-ident (raw "user"))
+					(e-ident (raw "pass")))))
+		(s-type-anno (name "processData")
+			(ty-fn
+				(ty (name "Config.Parser.Advanced"))
+				(ty (name "Str"))
+				(ty-apply
+					(ty (name "Result"))
+					(ty (name "Str"))
+					(ty (name "Config.Parser.Error")))))
+		(s-decl
+			(p-ident (raw "processData"))
+			(e-lambda
 				(args
-					(p-ident @15.16-15.30 (raw "advancedConfig"))
-					(p-ident @15.32-15.37 (raw "input")))
-				(e-apply @16.5-16.60
-					(e-ident @16.5-16.37 (raw "Config.Parser.Advanced.parseWith"))
-					(e-ident @16.38-16.52 (raw "advancedConfig"))
-					(e-ident @16.54-16.59 (raw "input")))))
-		(s-type-anno @19.1-19.26 (name "formatOutput")
-			(ty-fn @19.16-19.26
-				(ty @19.16-19.19 (name "Str"))
-				(ty @19.23-19.26 (name "Str"))))
-		(s-decl @20.1-20.59
-			(p-ident @20.1-20.13 (raw "formatOutput"))
-			(e-lambda @20.16-20.59
+					(p-ident (raw "advancedConfig"))
+					(p-ident (raw "input")))
+				(e-apply
+					(e-ident (raw "Config.Parser.Advanced.parseWith"))
+					(e-ident (raw "advancedConfig"))
+					(e-ident (raw "input")))))
+		(s-type-anno (name "formatOutput")
+			(ty-fn
+				(ty (name "Str"))
+				(ty (name "Str"))))
+		(s-decl
+			(p-ident (raw "formatOutput"))
+			(e-lambda
 				(args
-					(p-ident @20.17-20.21 (raw "text")))
-				(e-apply @20.23-20.59
-					(e-ident @20.23-20.30 (raw "padLeft"))
-					(e-ident @20.31-20.35 (raw "text"))
-					(e-ident @20.37-20.58 (raw "Config.defaultPadding")))))
-		(s-type-anno @23.1-23.78 (name "validateAuth")
-			(ty-fn @23.16-23.78
-				(ty @23.16-23.36 (name "HttpAuth.Credentials"))
-				(ty-apply @23.40-23.78
-					(ty @23.40-23.46 (name "Result"))
-					(ty @23.47-23.61 (name "HttpAuth.Token"))
-					(ty @23.63-23.77 (name "HttpAuth.Error")))))
-		(s-decl @24.1-24.48
-			(p-ident @24.1-24.13 (raw "validateAuth"))
-			(e-lambda @24.16-24.48
+					(p-ident (raw "text")))
+				(e-apply
+					(e-ident (raw "padLeft"))
+					(e-ident (raw "text"))
+					(e-ident (raw "Config.defaultPadding")))))
+		(s-type-anno (name "validateAuth")
+			(ty-fn
+				(ty (name "HttpAuth.Credentials"))
+				(ty-apply
+					(ty (name "Result"))
+					(ty (name "HttpAuth.Token"))
+					(ty (name "HttpAuth.Error")))))
+		(s-decl
+			(p-ident (raw "validateAuth"))
+			(e-lambda
 				(args
-					(p-ident @24.17-24.22 (raw "creds")))
-				(e-apply @24.24-24.48
-					(e-ident @24.24-24.41 (raw "HttpAuth.validate"))
-					(e-ident @24.42-24.47 (raw "creds")))))))
+					(p-ident (raw "creds")))
+				(e-apply
+					(e-ident (raw "HttpAuth.validate"))
+					(e-ident (raw "creds")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -499,106 +523,102 @@ validateAuth = |creds| HttpAuth.validate(creds)
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @7.1-7.12 (ident "parseConfig"))
-		(e-lambda @7.15-7.51
+		(p-assign (ident "parseConfig"))
+		(e-lambda
 			(args
-				(p-assign @7.16-7.24 (ident "settings")))
-			(e-call @7.26-7.51
+				(p-assign (ident "settings")))
+			(e-call
 				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local @7.42-7.50
-					(p-assign @7.16-7.24 (ident "settings")))))
-		(annotation @7.1-7.12
+				(e-lookup-local
+					(p-assign (ident "settings")))))
+		(annotation
 			(declared-type
-				(ty-fn @6.15-6.37 (effectful false)
-					(ty-malformed @6.15-6.30)
-					(ty-lookup @6.34-6.37 (name "Str") (builtin))))))
+				(ty-fn (effectful false)
+					(ty-malformed)
+					(ty-lookup (name "Str") (builtin))))))
 	(d-let
-		(p-assign @11.1-11.13 (ident "authenticate"))
-		(e-lambda @11.16-11.55
+		(p-assign (ident "authenticate"))
+		(e-lambda
 			(args
-				(p-assign @11.17-11.21 (ident "user"))
-				(p-assign @11.23-11.27 (ident "pass")))
-			(e-call @11.29-11.55
+				(p-assign (ident "user"))
+				(p-assign (ident "pass")))
+			(e-call
 				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local @11.44-11.48
-					(p-assign @11.17-11.21 (ident "user")))
-				(e-lookup-local @11.50-11.54
-					(p-assign @11.23-11.27 (ident "pass")))))
-		(annotation @11.1-11.13
+				(e-lookup-local
+					(p-assign (ident "user")))
+				(e-lookup-local
+					(p-assign (ident "pass")))))
+		(annotation
 			(declared-type
-				(ty-fn @10.16-10.42 (effectful false)
-					(ty-lookup @10.16-10.19 (name "Str") (builtin))
-					(ty-lookup @10.21-10.24 (name "Str") (builtin))
-					(ty-malformed @10.28-10.42)))))
+				(ty-fn (effectful false)
+					(ty-lookup (name "Str") (builtin))
+					(ty-lookup (name "Str") (builtin))
+					(ty-malformed)))))
 	(d-let
-		(p-assign @15.1-15.12 (ident "processData"))
-		(e-lambda @15.15-16.60
+		(p-assign (ident "processData"))
+		(e-lambda
 			(args
-				(p-assign @15.16-15.30 (ident "advancedConfig"))
-				(p-assign @15.32-15.37 (ident "input")))
-			(e-call @16.5-16.60
+				(p-assign (ident "advancedConfig"))
+				(p-assign (ident "input")))
+			(e-call
 				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local @16.38-16.52
-					(p-assign @15.16-15.30 (ident "advancedConfig")))
-				(e-lookup-local @16.54-16.59
-					(p-assign @15.32-15.37 (ident "input")))))
-		(annotation @15.1-15.12
+				(e-lookup-local
+					(p-assign (ident "advancedConfig")))
+				(e-lookup-local
+					(p-assign (ident "input")))))
+		(annotation
 			(declared-type
-				(ty-fn @14.15-14.78 (effectful false)
-					(ty-malformed @14.15-14.37)
-					(ty-lookup @14.39-14.42 (name "Str") (builtin))
-					(ty-apply @14.46-14.78 (name "Result") (external (module-idx "3") (target-node-idx "3"))
-						(ty-lookup @14.53-14.56 (name "Str") (builtin))
-						(ty-malformed @14.58-14.77))))))
+				(ty-fn (effectful false)
+					(ty-malformed)
+					(ty-lookup (name "Str") (builtin))
+					(ty-malformed)))))
 	(d-let
-		(p-assign @20.1-20.13 (ident "formatOutput"))
-		(e-lambda @20.16-20.59
+		(p-assign (ident "formatOutput"))
+		(e-lambda
 			(args
-				(p-assign @20.17-20.21 (ident "text")))
-			(e-call @20.23-20.59
+				(p-assign (ident "text")))
+			(e-call
 				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local @20.31-20.35
-					(p-assign @20.17-20.21 (ident "text")))
+				(e-lookup-local
+					(p-assign (ident "text")))
 				(e-runtime-error (tag "ident_not_in_scope"))))
-		(annotation @20.1-20.13
+		(annotation
 			(declared-type
-				(ty-fn @19.16-19.26 (effectful false)
-					(ty-lookup @19.16-19.19 (name "Str") (builtin))
-					(ty-lookup @19.23-19.26 (name "Str") (builtin))))))
+				(ty-fn (effectful false)
+					(ty-lookup (name "Str") (builtin))
+					(ty-lookup (name "Str") (builtin))))))
 	(d-let
-		(p-assign @24.1-24.13 (ident "validateAuth"))
-		(e-lambda @24.16-24.48
+		(p-assign (ident "validateAuth"))
+		(e-lambda
 			(args
-				(p-assign @24.17-24.22 (ident "creds")))
-			(e-call @24.24-24.48
+				(p-assign (ident "creds")))
+			(e-call
 				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local @24.42-24.47
-					(p-assign @24.17-24.22 (ident "creds")))))
-		(annotation @24.1-24.13
+				(e-lookup-local
+					(p-assign (ident "creds")))))
+		(annotation
 			(declared-type
-				(ty-fn @23.16-23.78 (effectful false)
-					(ty-malformed @23.16-23.36)
-					(ty-apply @23.40-23.78 (name "Result") (external (module-idx "3") (target-node-idx "3"))
-						(ty-malformed @23.47-23.61)
-						(ty-malformed @23.63-23.77))))))
-	(s-import @1.1-1.19 (module "json.Parser")
+				(ty-fn (effectful false)
+					(ty-malformed)
+					(ty-malformed)))))
+	(s-import (module "json.Parser")
 		(exposes))
-	(s-import @2.1-2.19 (module "http.Client")
+	(s-import (module "http.Client")
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @7.1-7.12 (type "Error -> Str"))
-		(patt @11.1-11.13 (type "Str, Str -> Error"))
-		(patt @15.1-15.12 (type "Error, Str -> Error"))
-		(patt @20.1-20.13 (type "Str -> Str"))
-		(patt @24.1-24.13 (type "Error -> Error")))
+		(patt (type "Error -> Str"))
+		(patt (type "Str, Str -> Error"))
+		(patt (type "Error, Str -> Error"))
+		(patt (type "Str -> Str"))
+		(patt (type "Error -> Error")))
 	(expressions
-		(expr @7.15-7.51 (type "Error -> Str"))
-		(expr @11.16-11.55 (type "Str, Str -> Error"))
-		(expr @15.15-16.60 (type "Error, Str -> Error"))
-		(expr @20.16-20.59 (type "Str -> Str"))
-		(expr @24.16-24.48 (type "Error -> Error"))))
+		(expr (type "Error -> Str"))
+		(expr (type "Str, Str -> Error"))
+		(expr (type "Error, Str -> Error"))
+		(expr (type "Str -> Str"))
+		(expr (type "Error -> Error"))))
 ~~~

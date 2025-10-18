@@ -253,33 +253,33 @@ modu:;::::::::::::::le[%
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:5),OpColon(1:5-1:6),MalformedUnknownToken(1:6-1:7),OpColon(1:7-1:8),OpColon(1:8-1:9),OpColon(1:9-1:10),OpColon(1:10-1:11),OpColon(1:11-1:12),OpColon(1:12-1:13),OpColon(1:13-1:14),OpColon(1:14-1:15),OpColon(1:15-1:16),OpColon(1:16-1:17),OpColon(1:17-1:18),OpColon(1:18-1:19),OpColon(1:19-1:20),OpColon(1:20-1:21),LowerIdent(1:21-1:23),OpenSquare(1:23-1:24),OpPercent(1:24-1:25),
-EndOfFile(2:1-2:1),
+LowerIdent,OpColon,MalformedUnknownToken,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,LowerIdent,OpenSquare,OpPercent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.25
-	(type-module @1.1-1.5)
+(file
+	(type-module)
 	(statements
-		(s-type-anno @1.1-1.7 (name "modu")
-			(ty-malformed @1.6-1.7 (tag "ty_anno_unexpected_token")))
-		(s-malformed @1.7-1.8 (tag "statement_unexpected_token"))
-		(s-malformed @1.8-1.9 (tag "statement_unexpected_token"))
-		(s-malformed @1.9-1.10 (tag "statement_unexpected_token"))
-		(s-malformed @1.10-1.11 (tag "statement_unexpected_token"))
-		(s-malformed @1.11-1.12 (tag "statement_unexpected_token"))
-		(s-malformed @1.12-1.13 (tag "statement_unexpected_token"))
-		(s-malformed @1.13-1.14 (tag "statement_unexpected_token"))
-		(s-malformed @1.14-1.15 (tag "statement_unexpected_token"))
-		(s-malformed @1.15-1.16 (tag "statement_unexpected_token"))
-		(s-malformed @1.16-1.17 (tag "statement_unexpected_token"))
-		(s-malformed @1.17-1.18 (tag "statement_unexpected_token"))
-		(s-malformed @1.18-1.19 (tag "statement_unexpected_token"))
-		(s-malformed @1.19-1.20 (tag "statement_unexpected_token"))
-		(s-malformed @1.20-1.21 (tag "statement_unexpected_token"))
-		(s-malformed @1.21-1.23 (tag "statement_unexpected_token"))
-		(s-malformed @1.23-1.24 (tag "statement_unexpected_token"))
-		(s-malformed @1.24-1.25 (tag "statement_unexpected_token"))))
+		(s-type-anno (name "modu")
+			(ty-malformed (tag "ty_anno_unexpected_token")))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc

@@ -543,55 +543,55 @@ This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),
-NamedUnderscore(2:5-2:18),OpColon(2:18-2:19),StringStart(2:20-2:21),StringPart(2:21-2:39),StringEnd(2:39-2:40),Comma(2:40-2:41),
-LowerIdent(3:5-3:11),OpColon(3:11-3:12),StringStart(3:13-3:14),StringPart(3:14-3:33),StringEnd(3:33-3:34),Comma(3:34-3:35),
-UpperIdent(4:5-4:15),OpColon(4:15-4:16),StringStart(4:17-4:18),StringPart(4:18-4:24),StringEnd(4:24-4:25),Comma(4:25-4:26),
-LowerIdent(5:5-5:10),OpUnaryMinus(5:10-5:11),LowerIdent(5:11-5:15),OpColon(5:15-5:16),StringStart(5:17-5:18),StringPart(5:18-5:23),StringEnd(5:23-5:24),Comma(5:24-5:25),
-LowerIdent(6:5-6:10),MalformedUnknownToken(6:10-6:11),LowerIdent(6:11-6:18),OpColon(6:18-6:19),StringStart(6:20-6:21),StringPart(6:21-6:27),StringEnd(6:27-6:28),Comma(6:28-6:29),
-LowerIdent(7:5-7:10),OpaqueName(7:10-7:17),OpColon(7:17-7:18),StringStart(7:19-7:20),StringPart(7:20-7:29),StringEnd(7:29-7:30),Comma(7:30-7:31),
-CloseCurly(8:1-8:2),
-EndOfFile(9:1-9:1),
+OpenCurly,
+NamedUnderscore,OpColon,StringStart,StringPart,StringEnd,Comma,
+LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
+UpperIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
+LowerIdent,OpUnaryMinus,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
+LowerIdent,MalformedUnknownToken,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
+LowerIdent,OpaqueName,OpColon,StringStart,StringPart,StringEnd,Comma,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-block @1.1-8.2
+(e-block
 	(statements
-		(s-type-anno @2.5-2.21 (name "_privateField")
-			(ty-malformed @2.20-2.21 (tag "ty_anno_unexpected_token")))
-		(e-malformed @2.21-2.39 (reason "expr_unexpected_token"))
-		(e-malformed @2.39-2.40 (reason "expr_unexpected_token"))
-		(e-malformed @2.40-2.41 (reason "expr_unexpected_token"))
-		(s-type-anno @3.5-3.14 (name "field_")
-			(ty-malformed @3.13-3.14 (tag "ty_anno_unexpected_token")))
-		(e-malformed @3.14-3.33 (reason "expr_unexpected_token"))
-		(e-malformed @3.33-3.34 (reason "expr_unexpected_token"))
-		(e-malformed @3.34-3.35 (reason "expr_unexpected_token"))
-		(e-tag @4.5-4.15 (raw "PascalCase"))
-		(e-malformed @4.15-4.16 (reason "expr_unexpected_token"))
-		(e-string @4.17-4.25
-			(e-string-part @4.18-4.24 (raw "pascal")))
-		(e-malformed @4.25-4.26 (reason "expr_unexpected_token"))
-		(e-ident @5.5-5.10 (raw "kebab"))
+		(s-type-anno (name "_privateField")
+			(ty-malformed (tag "ty_anno_unexpected_token")))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(s-type-anno (name "field_")
+			(ty-malformed (tag "ty_anno_unexpected_token")))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-tag (raw "PascalCase"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-string
+			(e-string-part (raw "pascal")))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-ident (raw "kebab"))
 		(unary "-"
-			(e-ident @5.11-5.15 (raw "case")))
-		(e-malformed @5.15-5.16 (reason "expr_unexpected_token"))
-		(e-string @5.17-5.24
-			(e-string-part @5.18-5.23 (raw "kebab")))
-		(e-malformed @5.24-5.25 (reason "expr_unexpected_token"))
-		(e-ident @6.5-6.10 (raw "field"))
-		(e-malformed @6.10-6.11 (reason "expr_unexpected_token"))
-		(s-type-anno @6.11-6.21 (name "special")
-			(ty-malformed @6.20-6.21 (tag "ty_anno_unexpected_token")))
-		(e-malformed @6.21-6.27 (reason "expr_unexpected_token"))
-		(e-malformed @6.27-6.28 (reason "expr_unexpected_token"))
-		(e-malformed @6.28-6.29 (reason "expr_unexpected_token"))
-		(e-ident @7.5-7.10 (raw "field"))
-		(e-malformed @7.10-7.17 (reason "expr_unexpected_token"))
-		(e-malformed @7.17-7.18 (reason "expr_unexpected_token"))
-		(e-string @7.19-7.30
-			(e-string-part @7.20-7.29 (raw "at symbol")))
-		(e-malformed @7.30-7.31 (reason "expr_unexpected_token"))))
+			(e-ident (raw "case")))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-string
+			(e-string-part (raw "kebab")))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-ident (raw "field"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(s-type-anno (name "special")
+			(ty-malformed (tag "ty_anno_unexpected_token")))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-ident (raw "field"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-malformed (reason "expr_unexpected_token"))
+		(e-string
+			(e-string-part (raw "at symbol")))
+		(e-malformed (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -617,62 +617,62 @@ EndOfFile(9:1-9:1),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-8.2
-	(s-expr @2.21-2.39
+(e-block
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @2.39-2.40
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @2.40-2.41
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @3.14-3.33
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @3.33-3.34
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @3.34-3.35
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @4.5-4.15
-		(e-tag @4.5-4.15 (name "PascalCase")))
-	(s-expr @4.15-4.16
+	(s-expr
+		(e-tag (name "PascalCase")))
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @4.17-4.25
-		(e-string @4.17-4.25
-			(e-literal @4.18-4.24 (string "pascal"))))
-	(s-expr @4.25-4.26
+	(s-expr
+		(e-string
+			(e-literal (string "pascal"))))
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @5.5-5.10
+	(s-expr
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-expr @5.10-5.15
-		(e-unary-minus @5.10-5.15
+	(s-expr
+		(e-unary-minus
 			(e-runtime-error (tag "ident_not_in_scope"))))
-	(s-expr @5.15-5.16
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @5.17-5.24
-		(e-string @5.17-5.24
-			(e-literal @5.18-5.23 (string "kebab"))))
-	(s-expr @5.24-5.25
+	(s-expr
+		(e-string
+			(e-literal (string "kebab"))))
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @6.5-6.10
+	(s-expr
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-expr @6.10-6.11
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @6.21-6.27
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @6.27-6.28
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @6.28-6.29
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @7.5-7.10
+	(s-expr
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-expr @7.10-7.17
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @7.17-7.18
+	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr @7.19-7.30
-		(e-string @7.19-7.30
-			(e-literal @7.20-7.29 (string "at symbol"))))
+	(s-expr
+		(e-string
+			(e-literal (string "at symbol"))))
 	(e-runtime-error (tag "expr_not_canonicalized")))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-8.2 (type "Error"))
+(expr (type "Error"))
 ~~~

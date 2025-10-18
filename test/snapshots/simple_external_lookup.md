@@ -23,12 +23,12 @@ List.map
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:5),NoSpaceDotLowerIdent(1:5-1:9),
-EndOfFile(2:1-2:1),
+UpperIdent,NoSpaceDotLowerIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.9 (raw "List.map"))
+(e-ident (raw "List.map"))
 ~~~
 # FORMATTED
 ~~~roc
@@ -40,5 +40,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.9 (type "Error"))
+(expr (type "Error"))
 ~~~

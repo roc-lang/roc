@@ -23,12 +23,12 @@ I.5
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:2),NoSpaceDotInt(1:2-1:4),
-EndOfFile(2:1-2:1),
+UpperIdent,NoSpaceDotInt,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1.2-1.4 (reason "expr_no_space_dot_int"))
+(e-malformed (reason "expr_no_space_dot_int"))
 ~~~
 # FORMATTED
 ~~~roc

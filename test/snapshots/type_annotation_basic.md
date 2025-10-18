@@ -50,105 +50,105 @@ The unused variable is declared here:
 
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),
-LowerIdent(4:1-4:9),OpColon(4:10-4:11),LowerIdent(4:12-4:13),OpArrow(4:14-4:16),LowerIdent(4:17-4:18),
-LowerIdent(5:1-5:9),OpAssign(5:10-5:11),OpBar(5:12-5:13),LowerIdent(5:13-5:14),OpBar(5:14-5:15),LowerIdent(5:16-5:17),
-LowerIdent(8:1-8:8),OpColon(8:9-8:10),LowerIdent(8:11-8:12),Comma(8:12-8:13),LowerIdent(8:14-8:15),OpArrow(8:16-8:18),OpenRound(8:19-8:20),LowerIdent(8:20-8:21),Comma(8:21-8:22),LowerIdent(8:23-8:24),CloseRound(8:24-8:25),
-LowerIdent(9:1-9:8),OpAssign(9:9-9:10),OpBar(9:11-9:12),LowerIdent(9:12-9:17),Comma(9:17-9:18),LowerIdent(9:19-9:25),OpBar(9:25-9:26),OpenRound(9:27-9:28),LowerIdent(9:28-9:33),Comma(9:33-9:34),LowerIdent(9:35-9:41),CloseRound(9:41-9:42),
-LowerIdent(12:1-12:7),OpColon(12:8-12:9),UpperIdent(12:10-12:13),OpArrow(12:14-12:16),UpperIdent(12:17-12:20),
-LowerIdent(13:1-13:7),OpAssign(13:8-13:9),OpBar(13:10-13:11),LowerIdent(13:11-13:12),OpBar(13:12-13:13),LowerIdent(13:14-13:15),OpPlus(13:16-13:17),Int(13:18-13:19),
-LowerIdent(15:1-15:6),OpAssign(15:7-15:8),OpBar(15:9-15:10),Underscore(15:10-15:11),OpBar(15:11-15:12),OpenCurly(15:13-15:14),
-LowerIdent(17:5-17:8),OpAssign(17:9-17:10),LowerIdent(17:11-17:19),NoSpaceOpenRound(17:19-17:20),Int(17:20-17:22),CloseRound(17:22-17:23),
-LowerIdent(18:5-18:9),OpAssign(18:10-18:11),LowerIdent(18:12-18:20),NoSpaceOpenRound(18:20-18:21),StringStart(18:21-18:22),StringPart(18:22-18:27),StringEnd(18:27-18:28),CloseRound(18:28-18:29),
-LowerIdent(21:5-21:9),OpAssign(21:10-21:11),LowerIdent(21:12-21:19),NoSpaceOpenRound(21:19-21:20),LowerIdent(21:20-21:23),Comma(21:23-21:24),LowerIdent(21:25-21:29),CloseRound(21:29-21:30),
-LowerIdent(24:5-24:11),OpAssign(24:12-24:13),LowerIdent(24:14-24:20),NoSpaceOpenRound(24:20-24:21),Int(24:21-24:22),CloseRound(24:22-24:23),
-LowerIdent(26:5-26:11),
-CloseCurly(27:1-27:2),
-EndOfFile(28:1-28:1),
+KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
+LowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,
+LowerIdent,OpColon,LowerIdent,Comma,LowerIdent,OpArrow,OpenRound,LowerIdent,Comma,LowerIdent,CloseRound,
+LowerIdent,OpAssign,OpBar,LowerIdent,Comma,LowerIdent,OpBar,OpenRound,LowerIdent,Comma,LowerIdent,CloseRound,
+LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,Int,
+LowerIdent,OpAssign,OpBar,Underscore,OpBar,OpenCurly,
+LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,Int,CloseRound,
+LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,StringStart,StringPart,StringEnd,CloseRound,
+LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,
+LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,Int,CloseRound,
+LowerIdent,
+CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-27.2
-	(app @1.1-1.53
-		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11
+(file
+	(app
+		(provides
+			(exposed-lower-ident
 				(text "main!")))
-		(record-field @1.15-1.51 (name "pf")
-			(e-string @1.28-1.51
-				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
-		(packages @1.13-1.53
-			(record-field @1.15-1.51 (name "pf")
-				(e-string @1.28-1.51
-					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
+		(record-field (name "pf")
+			(e-string
+				(e-string-part (raw "../basic-cli/main.roc"))))
+		(packages
+			(record-field (name "pf")
+				(e-string
+					(e-string-part (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @4.1-4.18 (name "identity")
-			(ty-fn @4.12-4.18
-				(ty-var @4.12-4.13 (raw "a"))
-				(ty-var @4.17-4.18 (raw "a"))))
-		(s-decl @5.1-5.17
-			(p-ident @5.1-5.9 (raw "identity"))
-			(e-lambda @5.12-5.17
+		(s-type-anno (name "identity")
+			(ty-fn
+				(ty-var (raw "a"))
+				(ty-var (raw "a"))))
+		(s-decl
+			(p-ident (raw "identity"))
+			(e-lambda
 				(args
-					(p-ident @5.13-5.14 (raw "x")))
-				(e-ident @5.16-5.17 (raw "x"))))
-		(s-type-anno @8.1-8.25 (name "combine")
-			(ty-fn @8.11-8.25
-				(ty-var @8.11-8.12 (raw "a"))
-				(ty-var @8.14-8.15 (raw "b"))
-				(ty-tuple @8.19-8.25
-					(ty-var @8.20-8.21 (raw "a"))
-					(ty-var @8.23-8.24 (raw "b")))))
-		(s-decl @9.1-9.42
-			(p-ident @9.1-9.8 (raw "combine"))
-			(e-lambda @9.11-9.42
+					(p-ident (raw "x")))
+				(e-ident (raw "x"))))
+		(s-type-anno (name "combine")
+			(ty-fn
+				(ty-var (raw "a"))
+				(ty-var (raw "b"))
+				(ty-tuple
+					(ty-var (raw "a"))
+					(ty-var (raw "b")))))
+		(s-decl
+			(p-ident (raw "combine"))
+			(e-lambda
 				(args
-					(p-ident @9.12-9.17 (raw "first"))
-					(p-ident @9.19-9.25 (raw "second")))
-				(e-tuple @9.27-9.42
-					(e-ident @9.28-9.33 (raw "first"))
-					(e-ident @9.35-9.41 (raw "second")))))
-		(s-type-anno @12.1-12.20 (name "addOne")
-			(ty-fn @12.10-12.20
-				(ty @12.10-12.13 (name "U64"))
-				(ty @12.17-12.20 (name "U64"))))
-		(s-decl @13.1-13.19
-			(p-ident @13.1-13.7 (raw "addOne"))
-			(e-lambda @13.10-13.19
+					(p-ident (raw "first"))
+					(p-ident (raw "second")))
+				(e-tuple
+					(e-ident (raw "first"))
+					(e-ident (raw "second")))))
+		(s-type-anno (name "addOne")
+			(ty-fn
+				(ty (name "U64"))
+				(ty (name "U64"))))
+		(s-decl
+			(p-ident (raw "addOne"))
+			(e-lambda
 				(args
-					(p-ident @13.11-13.12 (raw "n")))
-				(e-binop @13.14-13.19 (op "+")
-					(e-ident @13.14-13.15 (raw "n"))
-					(e-int @13.18-13.19 (raw "1")))))
-		(s-decl @15.1-27.2
-			(p-ident @15.1-15.6 (raw "main!"))
-			(e-lambda @15.9-27.2
+					(p-ident (raw "n")))
+				(e-binop (op "+")
+					(e-ident (raw "n"))
+					(e-int (raw "1")))))
+		(s-decl
+			(p-ident (raw "main!"))
+			(e-lambda
 				(args
 					(p-underscore))
-				(e-block @15.13-27.2
+				(e-block
 					(statements
-						(s-decl @17.5-17.23
-							(p-ident @17.5-17.8 (raw "num"))
-							(e-apply @17.11-17.23
-								(e-ident @17.11-17.19 (raw "identity"))
-								(e-int @17.20-17.22 (raw "42"))))
-						(s-decl @18.5-18.29
-							(p-ident @18.5-18.9 (raw "text"))
-							(e-apply @18.12-18.29
-								(e-ident @18.12-18.20 (raw "identity"))
-								(e-string @18.21-18.28
-									(e-string-part @18.22-18.27 (raw "hello")))))
-						(s-decl @21.5-21.30
-							(p-ident @21.5-21.9 (raw "pair"))
-							(e-apply @21.12-21.30
-								(e-ident @21.12-21.19 (raw "combine"))
-								(e-ident @21.20-21.23 (raw "num"))
-								(e-ident @21.25-21.29 (raw "text"))))
-						(s-decl @24.5-24.23
-							(p-ident @24.5-24.11 (raw "result"))
-							(e-apply @24.14-24.23
-								(e-ident @24.14-24.20 (raw "addOne"))
-								(e-int @24.21-24.22 (raw "5"))))
-						(e-ident @26.5-26.11 (raw "result"))))))))
+						(s-decl
+							(p-ident (raw "num"))
+							(e-apply
+								(e-ident (raw "identity"))
+								(e-int (raw "42"))))
+						(s-decl
+							(p-ident (raw "text"))
+							(e-apply
+								(e-ident (raw "identity"))
+								(e-string
+									(e-string-part (raw "hello")))))
+						(s-decl
+							(p-ident (raw "pair"))
+							(e-apply
+								(e-ident (raw "combine"))
+								(e-ident (raw "num"))
+								(e-ident (raw "text"))))
+						(s-decl
+							(p-ident (raw "result"))
+							(e-apply
+								(e-ident (raw "addOne"))
+								(e-int (raw "5"))))
+						(e-ident (raw "result"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -184,104 +184,104 @@ main! = |_| {
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @5.1-5.9 (ident "identity"))
-		(e-lambda @5.12-5.17
+		(p-assign (ident "identity"))
+		(e-lambda
 			(args
-				(p-assign @5.13-5.14 (ident "x")))
-			(e-lookup-local @5.16-5.17
-				(p-assign @5.13-5.14 (ident "x"))))
-		(annotation @5.1-5.9
+				(p-assign (ident "x")))
+			(e-lookup-local
+				(p-assign (ident "x"))))
+		(annotation
 			(declared-type
-				(ty-fn @4.12-4.18 (effectful false)
-					(ty-rigid-var @4.12-4.13 (name "a"))
-					(ty-rigid-var-lookup (ty-rigid-var @4.12-4.13 (name "a")))))))
+				(ty-fn (effectful false)
+					(ty-rigid-var (name "a"))
+					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
-		(p-assign @9.1-9.8 (ident "combine"))
-		(e-lambda @9.11-9.42
+		(p-assign (ident "combine"))
+		(e-lambda
 			(args
-				(p-assign @9.12-9.17 (ident "first"))
-				(p-assign @9.19-9.25 (ident "second")))
-			(e-tuple @9.27-9.42
+				(p-assign (ident "first"))
+				(p-assign (ident "second")))
+			(e-tuple
 				(elems
-					(e-lookup-local @9.28-9.33
-						(p-assign @9.12-9.17 (ident "first")))
-					(e-lookup-local @9.35-9.41
-						(p-assign @9.19-9.25 (ident "second"))))))
-		(annotation @9.1-9.8
+					(e-lookup-local
+						(p-assign (ident "first")))
+					(e-lookup-local
+						(p-assign (ident "second"))))))
+		(annotation
 			(declared-type
-				(ty-fn @8.11-8.25 (effectful false)
-					(ty-rigid-var @8.11-8.12 (name "a"))
-					(ty-rigid-var @8.14-8.15 (name "b"))
-					(ty-tuple @8.19-8.25
-						(ty-rigid-var-lookup (ty-rigid-var @8.11-8.12 (name "a")))
-						(ty-rigid-var-lookup (ty-rigid-var @8.14-8.15 (name "b"))))))))
+				(ty-fn (effectful false)
+					(ty-rigid-var (name "a"))
+					(ty-rigid-var (name "b"))
+					(ty-tuple
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))))
 	(d-let
-		(p-assign @13.1-13.7 (ident "addOne"))
-		(e-lambda @13.10-13.19
+		(p-assign (ident "addOne"))
+		(e-lambda
 			(args
-				(p-assign @13.11-13.12 (ident "n")))
-			(e-binop @13.14-13.19 (op "add")
-				(e-lookup-local @13.14-13.15
-					(p-assign @13.11-13.12 (ident "n")))
-				(e-num @13.18-13.19 (value "1"))))
-		(annotation @13.1-13.7
+				(p-assign (ident "n")))
+			(e-binop (op "add")
+				(e-lookup-local
+					(p-assign (ident "n")))
+				(e-num (value "1"))))
+		(annotation
 			(declared-type
-				(ty-fn @12.10-12.20 (effectful false)
-					(ty-lookup @12.10-12.13 (name "U64") (builtin))
-					(ty-lookup @12.17-12.20 (name "U64") (builtin))))))
+				(ty-fn (effectful false)
+					(ty-lookup (name "U64") (builtin))
+					(ty-lookup (name "U64") (builtin))))))
 	(d-let
-		(p-assign @15.1-15.6 (ident "main!"))
-		(e-closure @15.9-27.2
+		(p-assign (ident "main!"))
+		(e-closure
 			(captures
-				(capture @13.1-13.7 (ident "addOne"))
-				(capture @5.1-5.9 (ident "identity"))
-				(capture @9.1-9.8 (ident "combine")))
-			(e-lambda @15.9-27.2
+				(capture (ident "identity"))
+				(capture (ident "addOne"))
+				(capture (ident "combine")))
+			(e-lambda
 				(args
-					(p-underscore @15.10-15.11))
-				(e-block @15.13-27.2
-					(s-let @17.5-17.23
-						(p-assign @17.5-17.8 (ident "num"))
-						(e-call @17.11-17.23
-							(e-lookup-local @17.11-17.19
-								(p-assign @5.1-5.9 (ident "identity")))
-							(e-num @17.20-17.22 (value "42"))))
-					(s-let @18.5-18.29
-						(p-assign @18.5-18.9 (ident "text"))
-						(e-call @18.12-18.29
-							(e-lookup-local @18.12-18.20
-								(p-assign @5.1-5.9 (ident "identity")))
-							(e-string @18.21-18.28
-								(e-literal @18.22-18.27 (string "hello")))))
-					(s-let @21.5-21.30
-						(p-assign @21.5-21.9 (ident "pair"))
-						(e-call @21.12-21.30
-							(e-lookup-local @21.12-21.19
-								(p-assign @9.1-9.8 (ident "combine")))
-							(e-lookup-local @21.20-21.23
-								(p-assign @17.5-17.8 (ident "num")))
-							(e-lookup-local @21.25-21.29
-								(p-assign @18.5-18.9 (ident "text")))))
-					(s-let @24.5-24.23
-						(p-assign @24.5-24.11 (ident "result"))
-						(e-call @24.14-24.23
-							(e-lookup-local @24.14-24.20
-								(p-assign @13.1-13.7 (ident "addOne")))
-							(e-num @24.21-24.22 (value "5"))))
-					(e-lookup-local @26.5-26.11
-						(p-assign @24.5-24.11 (ident "result"))))))))
+					(p-underscore))
+				(e-block
+					(s-let
+						(p-assign (ident "num"))
+						(e-call
+							(e-lookup-local
+								(p-assign (ident "identity")))
+							(e-num (value "42"))))
+					(s-let
+						(p-assign (ident "text"))
+						(e-call
+							(e-lookup-local
+								(p-assign (ident "identity")))
+							(e-string
+								(e-literal (string "hello")))))
+					(s-let
+						(p-assign (ident "pair"))
+						(e-call
+							(e-lookup-local
+								(p-assign (ident "combine")))
+							(e-lookup-local
+								(p-assign (ident "num")))
+							(e-lookup-local
+								(p-assign (ident "text")))))
+					(s-let
+						(p-assign (ident "result"))
+						(e-call
+							(e-lookup-local
+								(p-assign (ident "addOne")))
+							(e-num (value "5"))))
+					(e-lookup-local
+						(p-assign (ident "result"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.9 (type "a -> a"))
-		(patt @9.1-9.8 (type "a, b -> (a, b)"))
-		(patt @13.1-13.7 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
-		(patt @15.1-15.6 (type "_arg -> Num(Int(Unsigned64))")))
+		(patt (type "a -> a"))
+		(patt (type "a, b -> (a, b)"))
+		(patt (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(patt (type "_arg -> Num(Int(Unsigned64))")))
 	(expressions
-		(expr @5.12-5.17 (type "a -> a"))
-		(expr @9.11-9.42 (type "a, b -> (a, b)"))
-		(expr @13.10-13.19 (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
-		(expr @15.9-27.2 (type "_arg -> Num(Int(Unsigned64))"))))
+		(expr (type "a -> a"))
+		(expr (type "a, b -> (a, b)"))
+		(expr (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
+		(expr (type "_arg -> Num(Int(Unsigned64))"))))
 ~~~

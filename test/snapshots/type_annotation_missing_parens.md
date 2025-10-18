@@ -35,17 +35,17 @@ Other valid examples:
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:5),OpColon(1:6-1:7),UpperIdent(1:8-1:12),UpperIdent(1:13-1:15),
-EndOfFile(2:1-2:1),
+LowerIdent,OpColon,UpperIdent,UpperIdent,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.15
-	(type-module @1.1-1.5)
+(file
+	(type-module)
 	(statements
-		(s-type-anno @1.1-1.12 (name "nums")
-			(ty @1.8-1.12 (name "List")))
-		(s-malformed @1.1-1.1 (tag "expected_colon_after_type_annotation"))))
+		(s-type-anno (name "nums")
+			(ty (name "List")))
+		(s-malformed (tag "expected_colon_after_type_annotation"))))
 ~~~
 # FORMATTED
 ~~~roc

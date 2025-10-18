@@ -23,14 +23,14 @@ Expressions can be identifiers, literals, function calls, or operators.
 
 # TOKENS
 ~~~zig
-Int(1:1-1:2),OpPlus(1:3-1:4),OpPlus(1:4-1:5),Int(1:6-1:7),
-EndOfFile(2:1-2:1),
+Int,OpPlus,OpPlus,Int,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-binop @1.1-1.5 (op "+")
-	(e-int @1.1-1.2 (raw "1"))
-	(e-malformed @1.4-1.5 (reason "expr_unexpected_token")))
+(e-binop (op "+")
+	(e-int (raw "1"))
+	(e-malformed (reason "expr_unexpected_token")))
 ~~~
 # FORMATTED
 ~~~roc

@@ -41,83 +41,83 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:2),OpColon(1:3-1:4),UpperIdent(1:5-1:7),
-LowerIdent(2:1-2:2),OpAssign(2:3-2:4),Int(2:5-2:8),
-LowerIdent(4:1-4:2),OpColon(4:3-4:4),UpperIdent(4:5-4:8),
-LowerIdent(5:1-5:2),OpAssign(5:3-5:4),Int(5:5-5:10),
-LowerIdent(7:1-7:2),OpColon(7:3-7:4),UpperIdent(7:5-7:8),
-LowerIdent(8:1-8:2),OpAssign(8:3-8:4),Int(8:5-8:15),
-LowerIdent(10:1-10:2),OpColon(10:3-10:4),UpperIdent(10:5-10:8),
-LowerIdent(11:1-11:2),OpAssign(11:3-11:4),Int(11:5-11:25),
-LowerIdent(13:1-13:2),OpColon(13:3-13:4),UpperIdent(13:5-13:9),
-LowerIdent(14:1-14:2),OpAssign(14:3-14:4),Int(14:5-14:44),
-LowerIdent(16:1-16:2),OpColon(16:3-16:4),UpperIdent(16:5-16:7),
-LowerIdent(17:1-17:2),OpAssign(17:3-17:4),Int(17:5-17:9),
-LowerIdent(19:1-19:2),OpColon(19:3-19:4),UpperIdent(19:5-19:8),
-LowerIdent(20:1-20:2),OpAssign(20:3-20:4),Int(20:5-20:11),
-LowerIdent(22:1-22:2),OpColon(22:3-22:4),UpperIdent(22:5-22:8),
-LowerIdent(23:1-23:2),OpAssign(23:3-23:4),Int(23:5-23:16),
-LowerIdent(25:1-25:2),OpColon(25:3-25:4),UpperIdent(25:5-25:8),
-LowerIdent(26:1-26:2),OpAssign(26:3-26:4),Int(26:5-26:25),
-LowerIdent(28:1-28:2),OpColon(28:3-28:4),UpperIdent(28:5-28:9),
-LowerIdent(29:1-29:2),OpAssign(29:3-29:4),Int(29:5-29:45),
-EndOfFile(30:1-30:1),
+LowerIdent,OpColon,UpperIdent,
+LowerIdent,OpAssign,Int,
+LowerIdent,OpColon,UpperIdent,
+LowerIdent,OpAssign,Int,
+LowerIdent,OpColon,UpperIdent,
+LowerIdent,OpAssign,Int,
+LowerIdent,OpColon,UpperIdent,
+LowerIdent,OpAssign,Int,
+LowerIdent,OpColon,UpperIdent,
+LowerIdent,OpAssign,Int,
+LowerIdent,OpColon,UpperIdent,
+LowerIdent,OpAssign,Int,
+LowerIdent,OpColon,UpperIdent,
+LowerIdent,OpAssign,Int,
+LowerIdent,OpColon,UpperIdent,
+LowerIdent,OpAssign,Int,
+LowerIdent,OpColon,UpperIdent,
+LowerIdent,OpAssign,Int,
+LowerIdent,OpColon,UpperIdent,
+LowerIdent,OpAssign,Int,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-29.45
-	(type-module @1.1-1.2)
+(file
+	(type-module)
 	(statements
-		(s-type-anno @1.1-1.7 (name "a")
-			(ty @1.5-1.7 (name "U8")))
-		(s-decl @2.1-2.8
-			(p-ident @2.1-2.2 (raw "a"))
-			(e-int @2.5-2.8 (raw "255")))
-		(s-type-anno @4.1-4.8 (name "b")
-			(ty @4.5-4.8 (name "U16")))
-		(s-decl @5.1-5.10
-			(p-ident @5.1-5.2 (raw "b"))
-			(e-int @5.5-5.10 (raw "65535")))
-		(s-type-anno @7.1-7.8 (name "c")
-			(ty @7.5-7.8 (name "U32")))
-		(s-decl @8.1-8.15
-			(p-ident @8.1-8.2 (raw "c"))
-			(e-int @8.5-8.15 (raw "4294967295")))
-		(s-type-anno @10.1-10.8 (name "d")
-			(ty @10.5-10.8 (name "U64")))
-		(s-decl @11.1-11.25
-			(p-ident @11.1-11.2 (raw "d"))
-			(e-int @11.5-11.25 (raw "18446744073709551615")))
-		(s-type-anno @13.1-13.9 (name "e")
-			(ty @13.5-13.9 (name "U128")))
-		(s-decl @14.1-14.44
-			(p-ident @14.1-14.2 (raw "e"))
-			(e-int @14.5-14.44 (raw "340282366920938463463374607431768211455")))
-		(s-type-anno @16.1-16.7 (name "f")
-			(ty @16.5-16.7 (name "I8")))
-		(s-decl @17.1-17.9
-			(p-ident @17.1-17.2 (raw "f"))
-			(e-int @17.5-17.9 (raw "-128")))
-		(s-type-anno @19.1-19.8 (name "g")
-			(ty @19.5-19.8 (name "I16")))
-		(s-decl @20.1-20.11
-			(p-ident @20.1-20.2 (raw "g"))
-			(e-int @20.5-20.11 (raw "-32768")))
-		(s-type-anno @22.1-22.8 (name "h")
-			(ty @22.5-22.8 (name "I32")))
-		(s-decl @23.1-23.16
-			(p-ident @23.1-23.2 (raw "h"))
-			(e-int @23.5-23.16 (raw "-2147483648")))
-		(s-type-anno @25.1-25.8 (name "i")
-			(ty @25.5-25.8 (name "I64")))
-		(s-decl @26.1-26.25
-			(p-ident @26.1-26.2 (raw "i"))
-			(e-int @26.5-26.25 (raw "-9223372036854775808")))
-		(s-type-anno @28.1-28.9 (name "j")
-			(ty @28.5-28.9 (name "I128")))
-		(s-decl @29.1-29.45
-			(p-ident @29.1-29.2 (raw "j"))
-			(e-int @29.5-29.45 (raw "-170141183460469231731687303715884105728")))))
+		(s-type-anno (name "a")
+			(ty (name "U8")))
+		(s-decl
+			(p-ident (raw "a"))
+			(e-int (raw "255")))
+		(s-type-anno (name "b")
+			(ty (name "U16")))
+		(s-decl
+			(p-ident (raw "b"))
+			(e-int (raw "65535")))
+		(s-type-anno (name "c")
+			(ty (name "U32")))
+		(s-decl
+			(p-ident (raw "c"))
+			(e-int (raw "4294967295")))
+		(s-type-anno (name "d")
+			(ty (name "U64")))
+		(s-decl
+			(p-ident (raw "d"))
+			(e-int (raw "18446744073709551615")))
+		(s-type-anno (name "e")
+			(ty (name "U128")))
+		(s-decl
+			(p-ident (raw "e"))
+			(e-int (raw "340282366920938463463374607431768211455")))
+		(s-type-anno (name "f")
+			(ty (name "I8")))
+		(s-decl
+			(p-ident (raw "f"))
+			(e-int (raw "-128")))
+		(s-type-anno (name "g")
+			(ty (name "I16")))
+		(s-decl
+			(p-ident (raw "g"))
+			(e-int (raw "-32768")))
+		(s-type-anno (name "h")
+			(ty (name "I32")))
+		(s-decl
+			(p-ident (raw "h"))
+			(e-int (raw "-2147483648")))
+		(s-type-anno (name "i")
+			(ty (name "I64")))
+		(s-decl
+			(p-ident (raw "i"))
+			(e-int (raw "-9223372036854775808")))
+		(s-type-anno (name "j")
+			(ty (name "I128")))
+		(s-decl
+			(p-ident (raw "j"))
+			(e-int (raw "-170141183460469231731687303715884105728")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -127,89 +127,89 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @2.1-2.2 (ident "a"))
-		(e-num @2.5-2.8 (value "255"))
-		(annotation @2.1-2.2
+		(p-assign (ident "a"))
+		(e-num (value "255"))
+		(annotation
 			(declared-type
-				(ty-lookup @1.5-1.7 (name "U8") (builtin)))))
+				(ty-lookup (name "U8") (builtin)))))
 	(d-let
-		(p-assign @5.1-5.2 (ident "b"))
-		(e-num @5.5-5.10 (value "65535"))
-		(annotation @5.1-5.2
+		(p-assign (ident "b"))
+		(e-num (value "65535"))
+		(annotation
 			(declared-type
-				(ty-lookup @4.5-4.8 (name "U16") (builtin)))))
+				(ty-lookup (name "U16") (builtin)))))
 	(d-let
-		(p-assign @8.1-8.2 (ident "c"))
-		(e-num @8.5-8.15 (value "4294967295"))
-		(annotation @8.1-8.2
+		(p-assign (ident "c"))
+		(e-num (value "4294967295"))
+		(annotation
 			(declared-type
-				(ty-lookup @7.5-7.8 (name "U32") (builtin)))))
+				(ty-lookup (name "U32") (builtin)))))
 	(d-let
-		(p-assign @11.1-11.2 (ident "d"))
-		(e-num @11.5-11.25 (value "18446744073709551615"))
-		(annotation @11.1-11.2
+		(p-assign (ident "d"))
+		(e-num (value "18446744073709551615"))
+		(annotation
 			(declared-type
-				(ty-lookup @10.5-10.8 (name "U64") (builtin)))))
+				(ty-lookup (name "U64") (builtin)))))
 	(d-let
-		(p-assign @14.1-14.2 (ident "e"))
-		(e-num @14.5-14.44 (value "340282366920938463463374607431768211455"))
-		(annotation @14.1-14.2
+		(p-assign (ident "e"))
+		(e-num (value "340282366920938463463374607431768211455"))
+		(annotation
 			(declared-type
-				(ty-lookup @13.5-13.9 (name "U128") (builtin)))))
+				(ty-lookup (name "U128") (builtin)))))
 	(d-let
-		(p-assign @17.1-17.2 (ident "f"))
-		(e-num @17.5-17.9 (value "-128"))
-		(annotation @17.1-17.2
+		(p-assign (ident "f"))
+		(e-num (value "-128"))
+		(annotation
 			(declared-type
-				(ty-lookup @16.5-16.7 (name "I8") (builtin)))))
+				(ty-lookup (name "I8") (builtin)))))
 	(d-let
-		(p-assign @20.1-20.2 (ident "g"))
-		(e-num @20.5-20.11 (value "-32768"))
-		(annotation @20.1-20.2
+		(p-assign (ident "g"))
+		(e-num (value "-32768"))
+		(annotation
 			(declared-type
-				(ty-lookup @19.5-19.8 (name "I16") (builtin)))))
+				(ty-lookup (name "I16") (builtin)))))
 	(d-let
-		(p-assign @23.1-23.2 (ident "h"))
-		(e-num @23.5-23.16 (value "-2147483648"))
-		(annotation @23.1-23.2
+		(p-assign (ident "h"))
+		(e-num (value "-2147483648"))
+		(annotation
 			(declared-type
-				(ty-lookup @22.5-22.8 (name "I32") (builtin)))))
+				(ty-lookup (name "I32") (builtin)))))
 	(d-let
-		(p-assign @26.1-26.2 (ident "i"))
-		(e-num @26.5-26.25 (value "-9223372036854775808"))
-		(annotation @26.1-26.2
+		(p-assign (ident "i"))
+		(e-num (value "-9223372036854775808"))
+		(annotation
 			(declared-type
-				(ty-lookup @25.5-25.8 (name "I64") (builtin)))))
+				(ty-lookup (name "I64") (builtin)))))
 	(d-let
-		(p-assign @29.1-29.2 (ident "j"))
-		(e-num @29.5-29.45 (value "-170141183460469231731687303715884105728"))
-		(annotation @29.1-29.2
+		(p-assign (ident "j"))
+		(e-num (value "-170141183460469231731687303715884105728"))
+		(annotation
 			(declared-type
-				(ty-lookup @28.5-28.9 (name "I128") (builtin))))))
+				(ty-lookup (name "I128") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @2.1-2.2 (type "Num(Int(Unsigned8))"))
-		(patt @5.1-5.2 (type "Num(Int(Unsigned16))"))
-		(patt @8.1-8.2 (type "Num(Int(Unsigned32))"))
-		(patt @11.1-11.2 (type "Num(Int(Unsigned64))"))
-		(patt @14.1-14.2 (type "Num(Int(Unsigned128))"))
-		(patt @17.1-17.2 (type "Num(Int(Signed8))"))
-		(patt @20.1-20.2 (type "Num(Int(Signed16))"))
-		(patt @23.1-23.2 (type "Num(Int(Signed32))"))
-		(patt @26.1-26.2 (type "Num(Int(Signed64))"))
-		(patt @29.1-29.2 (type "Num(Int(Signed128))")))
+		(patt (type "Num(Int(Unsigned8))"))
+		(patt (type "Num(Int(Unsigned16))"))
+		(patt (type "Num(Int(Unsigned32))"))
+		(patt (type "Num(Int(Unsigned64))"))
+		(patt (type "Num(Int(Unsigned128))"))
+		(patt (type "Num(Int(Signed8))"))
+		(patt (type "Num(Int(Signed16))"))
+		(patt (type "Num(Int(Signed32))"))
+		(patt (type "Num(Int(Signed64))"))
+		(patt (type "Num(Int(Signed128))")))
 	(expressions
-		(expr @2.5-2.8 (type "Num(Int(Unsigned8))"))
-		(expr @5.5-5.10 (type "Num(Int(Unsigned16))"))
-		(expr @8.5-8.15 (type "Num(Int(Unsigned32))"))
-		(expr @11.5-11.25 (type "Num(Int(Unsigned64))"))
-		(expr @14.5-14.44 (type "Num(Int(Unsigned128))"))
-		(expr @17.5-17.9 (type "Num(Int(Signed8))"))
-		(expr @20.5-20.11 (type "Num(Int(Signed16))"))
-		(expr @23.5-23.16 (type "Num(Int(Signed32))"))
-		(expr @26.5-26.25 (type "Num(Int(Signed64))"))
-		(expr @29.5-29.45 (type "Num(Int(Signed128))"))))
+		(expr (type "Num(Int(Unsigned8))"))
+		(expr (type "Num(Int(Unsigned16))"))
+		(expr (type "Num(Int(Unsigned32))"))
+		(expr (type "Num(Int(Unsigned64))"))
+		(expr (type "Num(Int(Unsigned128))"))
+		(expr (type "Num(Int(Signed8))"))
+		(expr (type "Num(Int(Signed16))"))
+		(expr (type "Num(Int(Signed32))"))
+		(expr (type "Num(Int(Signed64))"))
+		(expr (type "Num(Int(Signed128))"))))
 ~~~

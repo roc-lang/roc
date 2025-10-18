@@ -102,8 +102,11 @@ jobs:
           sudo rm /usr/lib/llvm-18/bin/llvm-config
 
       - name: build repro executables
-        run: |
-          zig build -Dfuzz -Dsystem-afl=false
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: 'zig build -Dfuzz -Dsystem-afl=false'
+          error_string_contains: 'EndOfStream'
+          retry_count: 3
 
       - name: Run Test Platforms (Unix)
         if: runner.os != 'Windows'
@@ -141,7 +144,7 @@ jobs:
       - name: zig snapshot tests
         run: zig build snapshot -- --debug
 
-      - name: build repro executables
+      - name: build tests and repro executables
         uses: ./.github/actions/flaky-retry
         with:
           command: 'zig build test -Dfuzz -Dsystem-afl=false'

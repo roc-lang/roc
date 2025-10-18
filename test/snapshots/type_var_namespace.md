@@ -26,6 +26,7 @@ main! = |_| {}
 UNEXPECTED TOKEN IN EXPRESSION - type_var_namespace.md:11:31:11:33
 UNDEFINED VARIABLE - type_var_namespace.md:11:14:11:24
 UNRECOGNIZED SYNTAX - type_var_namespace.md:11:31:11:33
+UNDEFINED VARIABLE - type_var_namespace.md:11:34:11:52
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **|>** is not expected in an expression.
@@ -60,68 +61,79 @@ I don't recognize this syntax.
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
+**UNDEFINED VARIABLE**
+Nothing is named `withDefault` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**type_var_namespace.md:11:34:11:52:**
+```roc
+    result = List.first(list) |> Result.withDefault(elem)
+```
+                                 ^^^^^^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),
-LowerIdent(4:1-4:8),OpColon(4:9-4:10),UpperIdent(4:11-4:15),NoSpaceOpenRound(4:15-4:16),LowerIdent(4:16-4:20),CloseRound(4:20-4:21),OpArrow(4:22-4:24),LowerIdent(4:25-4:29),
-LowerIdent(5:1-5:8),OpAssign(5:9-5:10),OpBar(5:11-5:12),LowerIdent(5:12-5:16),OpBar(5:16-5:17),OpenCurly(5:18-5:19),
-LowerIdent(7:5-7:9),OpAssign(7:10-7:11),Int(7:12-7:14),
-LowerIdent(10:5-10:11),OpColon(10:12-10:13),LowerIdent(10:14-10:18),
-LowerIdent(11:5-11:11),OpAssign(11:12-11:13),UpperIdent(11:14-11:18),NoSpaceDotLowerIdent(11:18-11:24),NoSpaceOpenRound(11:24-11:25),LowerIdent(11:25-11:29),CloseRound(11:29-11:30),OpPizza(11:31-11:33),UpperIdent(11:34-11:40),NoSpaceDotLowerIdent(11:40-11:52),NoSpaceOpenRound(11:52-11:53),LowerIdent(11:53-11:57),CloseRound(11:57-11:58),
-LowerIdent(13:5-13:11),
-CloseCurly(14:1-14:2),
-LowerIdent(16:1-16:6),OpAssign(16:7-16:8),OpBar(16:9-16:10),Underscore(16:10-16:11),OpBar(16:11-16:12),OpenCurly(16:13-16:14),CloseCurly(16:14-16:15),
-EndOfFile(17:1-17:1),
+KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
+LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpArrow,LowerIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,
+LowerIdent,OpAssign,Int,
+LowerIdent,OpColon,LowerIdent,
+LowerIdent,OpAssign,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpPizza,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
+LowerIdent,
+CloseCurly,
+LowerIdent,OpAssign,OpBar,Underscore,OpBar,OpenCurly,CloseCurly,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-16.15
-	(app @1.1-1.57
-		(provides @1.5-1.12
-			(exposed-lower-ident @1.6-1.11
+(file
+	(app
+		(provides
+			(exposed-lower-ident
 				(text "main!")))
-		(record-field @1.15-1.55 (name "pf")
-			(e-string @1.28-1.55
-				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
-		(packages @1.13-1.57
-			(record-field @1.15-1.55 (name "pf")
-				(e-string @1.28-1.55
-					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
+		(record-field (name "pf")
+			(e-string
+				(e-string-part (raw "../basic-cli/platform.roc"))))
+		(packages
+			(record-field (name "pf")
+				(e-string
+					(e-string-part (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(s-type-anno @4.1-4.29 (name "process")
-			(ty-fn @4.11-4.29
-				(ty-apply @4.11-4.21
-					(ty @4.11-4.15 (name "List"))
-					(ty-var @4.16-4.20 (raw "elem")))
-				(ty-var @4.25-4.29 (raw "elem"))))
-		(s-decl @5.1-14.2
-			(p-ident @5.1-5.8 (raw "process"))
-			(e-lambda @5.11-14.2
+		(s-type-anno (name "process")
+			(ty-fn
+				(ty-apply
+					(ty (name "List"))
+					(ty-var (raw "elem")))
+				(ty-var (raw "elem"))))
+		(s-decl
+			(p-ident (raw "process"))
+			(e-lambda
 				(args
-					(p-ident @5.12-5.16 (raw "list")))
-				(e-block @5.18-14.2
+					(p-ident (raw "list")))
+				(e-block
 					(statements
-						(s-decl @7.5-7.14
-							(p-ident @7.5-7.9 (raw "elem"))
-							(e-int @7.12-7.14 (raw "42")))
-						(s-type-anno @10.5-10.18 (name "result")
-							(ty-var @10.14-10.18 (raw "elem")))
-						(s-decl @11.5-11.30
-							(p-ident @11.5-11.11 (raw "result"))
-							(e-apply @11.14-11.30
-								(e-ident @11.14-11.24 (raw "List.first"))
-								(e-ident @11.25-11.29 (raw "list"))))
-						(e-malformed @11.31-11.33 (reason "expr_unexpected_token"))
-						(e-apply @11.34-11.58
-							(e-ident @11.34-11.52 (raw "Result.withDefault"))
-							(e-ident @11.53-11.57 (raw "elem")))
-						(e-ident @13.5-13.11 (raw "result"))))))
-		(s-decl @16.1-16.15
-			(p-ident @16.1-16.6 (raw "main!"))
-			(e-lambda @16.9-16.15
+						(s-decl
+							(p-ident (raw "elem"))
+							(e-int (raw "42")))
+						(s-type-anno (name "result")
+							(ty-var (raw "elem")))
+						(s-decl
+							(p-ident (raw "result"))
+							(e-apply
+								(e-ident (raw "List.first"))
+								(e-ident (raw "list"))))
+						(e-malformed (reason "expr_unexpected_token"))
+						(e-apply
+							(e-ident (raw "Result.withDefault"))
+							(e-ident (raw "elem")))
+						(e-ident (raw "result"))))))
+		(s-decl
+			(p-ident (raw "main!"))
+			(e-lambda
 				(args
 					(p-underscore))
-				(e-record @16.13-16.15)))))
+				(e-record)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -147,51 +159,49 @@ main! = |_| {}
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @5.1-5.8 (ident "process"))
-		(e-lambda @5.11-14.2
+		(p-assign (ident "process"))
+		(e-lambda
 			(args
-				(p-assign @5.12-5.16 (ident "list")))
-			(e-block @5.18-14.2
-				(s-let @7.5-7.14
-					(p-assign @7.5-7.9 (ident "elem"))
-					(e-num @7.12-7.14 (value "42")))
-				(s-let @11.5-11.30
-					(p-assign @11.5-11.11 (ident "result"))
-					(e-call @11.14-11.30
+				(p-assign (ident "list")))
+			(e-block
+				(s-let
+					(p-assign (ident "elem"))
+					(e-num (value "42")))
+				(s-let
+					(p-assign (ident "result"))
+					(e-call
 						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-lookup-local @11.25-11.29
-							(p-assign @5.12-5.16 (ident "list")))))
-				(s-expr @11.31-11.33
+						(e-lookup-local
+							(p-assign (ident "list")))))
+				(s-expr
 					(e-runtime-error (tag "expr_not_canonicalized")))
-				(s-expr @11.34-11.58
-					(e-call @11.34-11.58
-						(e-lookup-external @11.34-11.52
-							(module-idx "3")
-							(target-node-idx "0"))
-						(e-lookup-local @11.53-11.57
-							(p-assign @7.5-7.9 (ident "elem")))))
-				(e-lookup-local @13.5-13.11
-					(p-assign @11.5-11.11 (ident "result")))))
-		(annotation @5.1-5.8
+				(s-expr
+					(e-call
+						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-lookup-local
+							(p-assign (ident "elem")))))
+				(e-lookup-local
+					(p-assign (ident "result")))))
+		(annotation
 			(declared-type
-				(ty-fn @4.11-4.29 (effectful false)
-					(ty-apply @4.11-4.21 (name "List") (builtin)
-						(ty-rigid-var @4.16-4.20 (name "elem")))
-					(ty-rigid-var-lookup (ty-rigid-var @4.16-4.20 (name "elem")))))))
+				(ty-fn (effectful false)
+					(ty-apply (name "List") (builtin)
+						(ty-rigid-var (name "elem")))
+					(ty-rigid-var-lookup (ty-rigid-var (name "elem")))))))
 	(d-let
-		(p-assign @16.1-16.6 (ident "main!"))
-		(e-lambda @16.9-16.15
+		(p-assign (ident "main!"))
+		(e-lambda
 			(args
-				(p-underscore @16.10-16.11))
-			(e-empty_record @16.13-16.15))))
+				(p-underscore))
+			(e-empty_record))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.8 (type "List(elem) -> elem"))
-		(patt @16.1-16.6 (type "_arg -> {}")))
+		(patt (type "List(elem) -> elem"))
+		(patt (type "_arg -> {}")))
 	(expressions
-		(expr @5.11-14.2 (type "List(elem) -> elem"))
-		(expr @16.9-16.15 (type "_arg -> {}"))))
+		(expr (type "List(elem) -> elem"))
+		(expr (type "_arg -> {}"))))
 ~~~

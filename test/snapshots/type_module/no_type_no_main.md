@@ -26,17 +26,17 @@ x = 5
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:2),OpAssign(1:3-1:4),Int(1:5-1:6),
-EndOfFile(2:1-2:1),
+LowerIdent,OpAssign,Int,
+EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.6
-	(type-module @1.1-1.2)
+(file
+	(type-module)
 	(statements
-		(s-decl @1.1-1.6
-			(p-ident @1.1-1.2 (raw "x"))
-			(e-int @1.5-1.6 (raw "5")))))
+		(s-decl
+			(p-ident (raw "x"))
+			(e-int (raw "5")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -46,14 +46,14 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @1.1-1.2 (ident "x"))
-		(e-num @1.5-1.6 (value "5"))))
+		(p-assign (ident "x"))
+		(e-num (value "5"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @1.1-1.2 (type "Num(_size)")))
+		(patt (type "Num(_size)")))
 	(expressions
-		(expr @1.5-1.6 (type "Num(_size)"))))
+		(expr (type "Num(_size)"))))
 ~~~
