@@ -1058,7 +1058,7 @@ const StringKind = enum {
 pub const Tokenizer = struct {
     cursor: Cursor,
     output: TokenizedBuffer,
-    string_interpolation_stack: std.ArrayListUnmanaged(StringKind),
+    string_interpolation_stack: std.array_list.Managed(StringKind),
     env: *CommonEnv,
 
     /// Creates a new Tokenizer.
@@ -1071,18 +1071,18 @@ pub const Tokenizer = struct {
         return Tokenizer{
             .cursor = cursor,
             .output = output,
-            .string_interpolation_stack = .{},
+            .string_interpolation_stack = std.array_list.Managed(StringKind).init(gpa),
             .env = env,
         };
     }
 
     pub fn deinit(self: *Tokenizer, gpa: std.mem.Allocator) void {
         self.output.deinit(gpa);
-        self.string_interpolation_stack.deinit(gpa);
+        self.string_interpolation_stack.deinit();
     }
 
-    pub fn finishAndDeinit(self: *Tokenizer, gpa: std.mem.Allocator) TokenOutput {
-        self.string_interpolation_stack.deinit(gpa);
+    pub fn finishAndDeinit(self: *Tokenizer, _: std.mem.Allocator) TokenOutput {
+        self.string_interpolation_stack.deinit();
         const actual_message_count = @min(self.cursor.message_count, self.cursor.messages.len);
         return .{
             .tokens = self.output,
@@ -1558,7 +1558,7 @@ pub const Tokenizer = struct {
                 const dollar_start = self.cursor.pos;
                 self.cursor.pos += 2;
                 try self.pushTokenNormalHere(gpa, .OpenStringInterpolation, dollar_start);
-                try self.string_interpolation_stack.append(gpa, kind);
+                try self.string_interpolation_stack.append(kind);
                 return;
             } else if (c == '\n') {
                 try self.pushTokenNormalHere(gpa, string_part_tag, start);
@@ -1648,7 +1648,7 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
         error.Unsupported => return,
         error.OutOfMemory => std.debug.panic("OOM", .{}),
     };
-    defer buf2.deinit(gpa);
+    defer buf2.deinit();
 
     if (debug) {
         std.debug.print("Intermediate:\n==========\n{s}\n==========\n\n", .{buf2.items});
@@ -1727,10 +1727,10 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
     }
 }
 
-fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std.mem.Allocator) !std.ArrayListUnmanaged(u8) {
+fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std.mem.Allocator) !std.array_list.Managed(u8) {
     // Create an arraylist to store the new buffer.
-    var buf2 = try std.ArrayListUnmanaged(u8).initCapacity(alloc, buf.len);
-    errdefer buf2.deinit(alloc);
+    var buf2 = try std.array_list.Managed(u8).initCapacity(alloc, buf.len);
+    errdefer buf2.deinit();
 
     // Dump back to buffer.
     // Here we are just printing in the simplest way possible.
@@ -1749,9 +1749,9 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             // Leave tabs and newlines alone, they are special to roc.
             // Replace everything else with spaces.
             if (buf[i] != '\t' and buf[i] != '\r' and buf[i] != '\n' and buf[i] != '#') {
-                try buf2.append(alloc, ' ');
+                try buf2.append(' ');
             } else {
-                try buf2.append(alloc, buf[i]);
+                try buf2.append(buf[i]);
             }
         }
         if (token.tag == .EndOfFile) {
@@ -1767,460 +1767,460 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
 
             .Float => {
                 if (buf[region.start.offset] == '-') {
-                    try buf2.append(alloc, '-');
-                    try buf2.append(alloc, '0');
-                    try buf2.append(alloc, '.');
+                    try buf2.append('-');
+                    try buf2.append('0');
+                    try buf2.append('.');
                     for (3..length) |_| {
-                        try buf2.append(alloc, '1');
+                        try buf2.append('1');
                     }
                 } else {
-                    try buf2.append(alloc, '0');
-                    try buf2.append(alloc, '.');
+                    try buf2.append('0');
+                    try buf2.append('.');
                     for (2..length) |_| {
-                        try buf2.append(alloc, '1');
+                        try buf2.append('1');
                     }
                 }
             },
             .SingleQuote => {
                 if (length == 3) {
-                    try buf2.append(alloc, '\'');
-                    try buf2.append(alloc, 'A');
-                    try buf2.append(alloc, '\'');
+                    try buf2.append('\'');
+                    try buf2.append('A');
+                    try buf2.append('\'');
                 } else if (length == 4) {
                     if (buf[region.start.offset + 1] == '\\') {
-                        try buf2.append(alloc, '\'');
-                        try buf2.append(alloc, '\\');
-                        try buf2.append(alloc, '\\');
-                        try buf2.append(alloc, '\'');
+                        try buf2.append('\'');
+                        try buf2.append('\\');
+                        try buf2.append('\\');
+                        try buf2.append('\'');
                     } else {
-                        try buf2.append(alloc, '\'');
+                        try buf2.append('\'');
                         // Å
-                        try buf2.append(alloc, 0xC3);
-                        try buf2.append(alloc, 0x85);
-                        try buf2.append(alloc, '\'');
+                        try buf2.append(0xC3);
+                        try buf2.append(0x85);
+                        try buf2.append('\'');
                     }
                 } else if (length == 5) {
-                    try buf2.append(alloc, '\'');
+                    try buf2.append('\'');
                     // Ἀ
-                    try buf2.append(alloc, 0xE1);
-                    try buf2.append(alloc, 0xBC);
-                    try buf2.append(alloc, 0x88);
-                    try buf2.append(alloc, '\'');
+                    try buf2.append(0xE1);
+                    try buf2.append(0xBC);
+                    try buf2.append(0x88);
+                    try buf2.append('\'');
                 } else if (length == 6) {
-                    try buf2.append(alloc, '\'');
+                    try buf2.append('\'');
                     // 𐙝
-                    try buf2.append(alloc, 0xF0);
-                    try buf2.append(alloc, 0x90);
-                    try buf2.append(alloc, 0x99);
-                    try buf2.append(alloc, 0x9D);
-                    try buf2.append(alloc, '\'');
+                    try buf2.append(0xF0);
+                    try buf2.append(0x90);
+                    try buf2.append(0x99);
+                    try buf2.append(0x9D);
+                    try buf2.append('\'');
                 } else {
-                    try buf2.append(alloc, '\'');
-                    try buf2.append(alloc, '\\');
-                    try buf2.append(alloc, 'u');
-                    try buf2.append(alloc, '(');
+                    try buf2.append('\'');
+                    try buf2.append('\\');
+                    try buf2.append('u');
+                    try buf2.append('(');
                     for (6..length) |_| {
-                        try buf2.append(alloc, 'A');
+                        try buf2.append('A');
                     }
-                    try buf2.append(alloc, ')');
-                    try buf2.append(alloc, '\'');
+                    try buf2.append(')');
+                    try buf2.append('\'');
                 }
             },
             .StringStart, .StringEnd => {
-                try buf2.append(alloc, '"');
+                try buf2.append('"');
             },
             .MultilineStringStart => {
                 if (length == 3 and buf[region.start.offset] == '"') {
-                    try buf2.append(alloc, '"');
-                    try buf2.append(alloc, '"');
-                    try buf2.append(alloc, '"');
+                    try buf2.append('"');
+                    try buf2.append('"');
+                    try buf2.append('"');
                 } else {
-                    try buf2.append(alloc, '\\');
-                    try buf2.append(alloc, '\\');
+                    try buf2.append('\\');
+                    try buf2.append('\\');
                 }
             },
             .StringPart => {
                 for (0..length) |_| {
-                    try buf2.append(alloc, '~');
+                    try buf2.append('~');
                 }
             },
             .OpenStringInterpolation => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '$');
-                try buf2.append(alloc, '{');
+                try buf2.append('$');
+                try buf2.append('{');
             },
             .CloseStringInterpolation => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '}');
+                try buf2.append('}');
             },
 
             .UpperIdent => {
-                try buf2.append(alloc, 'Z');
+                try buf2.append('Z');
                 for (1..length) |_| {
-                    try buf2.append(alloc, 'z');
+                    try buf2.append('z');
                 }
             },
             .LowerIdent => {
                 for (0..length) |_| {
-                    try buf2.append(alloc, 'z');
+                    try buf2.append('z');
                 }
             },
             .Underscore => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '_');
+                try buf2.append('_');
             },
             .DotInt => {
-                try buf2.append(alloc, '.');
+                try buf2.append('.');
                 for (1..length) |_| {
-                    try buf2.append(alloc, '1');
+                    try buf2.append('1');
                 }
             },
             .DotLowerIdent => {
-                try buf2.append(alloc, '.');
+                try buf2.append('.');
                 for (1..length) |_| {
-                    try buf2.append(alloc, 'z');
+                    try buf2.append('z');
                 }
             },
             .DotUpperIdent => {
-                try buf2.append(alloc, '.');
-                try buf2.append(alloc, 'Z');
+                try buf2.append('.');
+                try buf2.append('Z');
                 for (2..length) |_| {
-                    try buf2.append(alloc, 'z');
+                    try buf2.append('z');
                 }
             },
             .NoSpaceDotInt => {
-                try buf2.append(alloc, '.');
+                try buf2.append('.');
                 for (1..length) |_| {
-                    try buf2.append(alloc, '1');
+                    try buf2.append('1');
                 }
             },
             .NoSpaceDotLowerIdent => {
-                try buf2.append(alloc, '.');
+                try buf2.append('.');
                 for (1..length) |_| {
-                    try buf2.append(alloc, 'z');
+                    try buf2.append('z');
                 }
             },
             .NoSpaceDotUpperIdent => {
-                try buf2.append(alloc, '.');
-                try buf2.append(alloc, 'Z');
+                try buf2.append('.');
+                try buf2.append('Z');
                 for (2..length) |_| {
-                    try buf2.append(alloc, 'z');
+                    try buf2.append('z');
                 }
             },
             .NoSpaceOpenRound => {
-                try buf2.append(alloc, '(');
+                try buf2.append('(');
             },
 
             .NamedUnderscore => {
-                try buf2.append(alloc, '_');
+                try buf2.append('_');
                 for (1..length) |_| {
-                    try buf2.append(alloc, 'z');
+                    try buf2.append('z');
                 }
             },
             .OpaqueName => {
-                try buf2.append(alloc, '@');
+                try buf2.append('@');
                 for (1..length) |_| {
-                    try buf2.append(alloc, 'z');
+                    try buf2.append('z');
                 }
             },
             .Int => {
                 if (buf[region.start.offset] == '-') {
-                    try buf2.append(alloc, '-');
+                    try buf2.append('-');
                     if (length >= 4) {
-                        try buf2.append(alloc, '0');
-                        try buf2.append(alloc, 'x');
+                        try buf2.append('0');
+                        try buf2.append('x');
                         for (3..length) |_| {
-                            try buf2.append(alloc, '1');
+                            try buf2.append('1');
                         }
                     } else {
                         for (1..length) |_| {
-                            try buf2.append(alloc, '1');
+                            try buf2.append('1');
                         }
                     }
                 } else if (length >= 3) {
                     // To ensure this value when reprinted tokenizes as an int, add a base if the number is 3 or more characters.
-                    try buf2.append(alloc, '0');
-                    try buf2.append(alloc, 'x');
+                    try buf2.append('0');
+                    try buf2.append('x');
                     for (2..length) |_| {
-                        try buf2.append(alloc, '1');
+                        try buf2.append('1');
                     }
                 } else {
                     for (0..length) |_| {
-                        try buf2.append(alloc, '1');
+                        try buf2.append('1');
                     }
                 }
             },
 
             .OpenRound => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '(');
+                try buf2.append('(');
             },
             .CloseRound => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, ')');
+                try buf2.append(')');
             },
             .OpenSquare => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '[');
+                try buf2.append('[');
             },
             .CloseSquare => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, ']');
+                try buf2.append(']');
             },
             .OpenCurly => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '{');
+                try buf2.append('{');
             },
             .CloseCurly => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '}');
+                try buf2.append('}');
             },
 
             .OpPlus => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '+');
+                try buf2.append('+');
             },
             .OpStar => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '*');
+                try buf2.append('*');
             },
             .OpPizza => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '|');
-                try buf2.append(alloc, '>');
+                try buf2.append('|');
+                try buf2.append('>');
             },
             .OpAssign => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '=');
+                try buf2.append('=');
             },
             .OpBinaryMinus => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '-');
+                try buf2.append('-');
             },
             .OpUnaryMinus => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '-');
+                try buf2.append('-');
             },
             .OpNotEquals => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '!');
-                try buf2.append(alloc, '=');
+                try buf2.append('!');
+                try buf2.append('=');
             },
             .OpBang => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '!');
+                try buf2.append('!');
             },
             .OpAnd => {
                 std.debug.assert(length == 3);
-                try buf2.append(alloc, 'a');
-                try buf2.append(alloc, 'n');
-                try buf2.append(alloc, 'd');
+                try buf2.append('a');
+                try buf2.append('n');
+                try buf2.append('d');
             },
             .OpAmpersand => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '&');
+                try buf2.append('&');
             },
             .OpQuestion, .NoSpaceOpQuestion => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '?');
+                try buf2.append('?');
             },
             .OpDoubleQuestion => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '?');
-                try buf2.append(alloc, '?');
+                try buf2.append('?');
+                try buf2.append('?');
             },
             .OpOr => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, 'o');
-                try buf2.append(alloc, 'r');
+                try buf2.append('o');
+                try buf2.append('r');
             },
             .OpBar => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '|');
+                try buf2.append('|');
             },
             .OpDoubleSlash => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '/');
-                try buf2.append(alloc, '/');
+                try buf2.append('/');
+                try buf2.append('/');
             },
             .OpSlash => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '/');
+                try buf2.append('/');
             },
             .OpPercent => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '%');
+                try buf2.append('%');
             },
             .OpCaret => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '^');
+                try buf2.append('^');
             },
             .OpGreaterThanOrEq => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '>');
-                try buf2.append(alloc, '=');
+                try buf2.append('>');
+                try buf2.append('=');
             },
             .OpGreaterThan => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '>');
+                try buf2.append('>');
             },
             .OpLessThanOrEq => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '<');
-                try buf2.append(alloc, '=');
+                try buf2.append('<');
+                try buf2.append('=');
             },
             .OpBackArrow => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '<');
-                try buf2.append(alloc, '-');
+                try buf2.append('<');
+                try buf2.append('-');
             },
             .OpLessThan => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '<');
+                try buf2.append('<');
             },
             .OpEquals => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '=');
-                try buf2.append(alloc, '=');
+                try buf2.append('=');
+                try buf2.append('=');
             },
             .OpColonEqual => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, ':');
-                try buf2.append(alloc, '=');
+                try buf2.append(':');
+                try buf2.append('=');
             },
 
             .Comma => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, ',');
+                try buf2.append(',');
             },
             .Dot => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '.');
+                try buf2.append('.');
             },
             .DoubleDot => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '.');
-                try buf2.append(alloc, '.');
+                try buf2.append('.');
+                try buf2.append('.');
             },
             .TripleDot => {
                 std.debug.assert(length == 3);
-                try buf2.append(alloc, '.');
-                try buf2.append(alloc, '.');
-                try buf2.append(alloc, '.');
+                try buf2.append('.');
+                try buf2.append('.');
+                try buf2.append('.');
             },
             .DotStar => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '.');
-                try buf2.append(alloc, '*');
+                try buf2.append('.');
+                try buf2.append('*');
             },
             .OpColon => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, ':');
+                try buf2.append(':');
             },
             .OpArrow => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '-');
-                try buf2.append(alloc, '>');
+                try buf2.append('-');
+                try buf2.append('>');
             },
             .OpFatArrow => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '=');
-                try buf2.append(alloc, '>');
+                try buf2.append('=');
+                try buf2.append('>');
             },
             .OpBackslash => {
                 std.debug.assert(length == 1);
-                try buf2.append(alloc, '\\');
+                try buf2.append('\\');
             },
 
             .KwApp => {
-                try buf2.appendSlice(alloc, "app");
+                try buf2.appendSlice("app");
             },
             .KwAs => {
-                try buf2.appendSlice(alloc, "as");
+                try buf2.appendSlice("as");
             },
             .KwCrash => {
-                try buf2.appendSlice(alloc, "crash");
+                try buf2.appendSlice("crash");
             },
             .KwDbg => {
-                try buf2.appendSlice(alloc, "dbg");
+                try buf2.appendSlice("dbg");
             },
             .KwDebug => {
-                try buf2.appendSlice(alloc, "debug");
+                try buf2.appendSlice("debug");
             },
             .KwElse => {
-                try buf2.appendSlice(alloc, "else");
+                try buf2.appendSlice("else");
             },
             .KwExpect => {
-                try buf2.appendSlice(alloc, "expect");
+                try buf2.appendSlice("expect");
             },
             .KwExposes => {
-                try buf2.appendSlice(alloc, "exposes");
+                try buf2.appendSlice("exposes");
             },
             .KwExposing => {
-                try buf2.appendSlice(alloc, "exposing");
+                try buf2.appendSlice("exposing");
             },
             .KwFor => {
-                try buf2.appendSlice(alloc, "for");
+                try buf2.appendSlice("for");
             },
             .KwGenerates => {
-                try buf2.appendSlice(alloc, "generates");
+                try buf2.appendSlice("generates");
             },
             .KwHas => {
-                try buf2.appendSlice(alloc, "has");
+                try buf2.appendSlice("has");
             },
             .KwHosted => {
-                try buf2.appendSlice(alloc, "hosted");
+                try buf2.appendSlice("hosted");
             },
             .KwIf => {
-                try buf2.appendSlice(alloc, "if");
+                try buf2.appendSlice("if");
             },
             .KwImplements => {
-                try buf2.appendSlice(alloc, "implements");
+                try buf2.appendSlice("implements");
             },
             .KwImport => {
-                try buf2.appendSlice(alloc, "import");
+                try buf2.appendSlice("import");
             },
             .KwImports => {
-                try buf2.appendSlice(alloc, "imports");
+                try buf2.appendSlice("imports");
             },
             .KwIn => {
-                try buf2.appendSlice(alloc, "in");
+                try buf2.appendSlice("in");
             },
             .KwInterface => {
-                try buf2.appendSlice(alloc, "interface");
+                try buf2.appendSlice("interface");
             },
             .KwModule => {
-                try buf2.appendSlice(alloc, "module");
+                try buf2.appendSlice("module");
             },
             .KwPackage => {
-                try buf2.appendSlice(alloc, "package");
+                try buf2.appendSlice("package");
             },
             .KwPackages => {
-                try buf2.appendSlice(alloc, "packages");
+                try buf2.appendSlice("packages");
             },
             .KwPlatform => {
-                try buf2.appendSlice(alloc, "platform");
+                try buf2.appendSlice("platform");
             },
             .KwProvides => {
-                try buf2.appendSlice(alloc, "provides");
+                try buf2.appendSlice("provides");
             },
             .KwRequires => {
-                try buf2.appendSlice(alloc, "requires");
+                try buf2.appendSlice("requires");
             },
             .KwReturn => {
-                try buf2.appendSlice(alloc, "return");
+                try buf2.appendSlice("return");
             },
             .KwVar => {
-                try buf2.appendSlice(alloc, "var");
+                try buf2.appendSlice("var");
             },
             .KwMatch => {
-                try buf2.appendSlice(alloc, "match");
+                try buf2.appendSlice("match");
             },
             .KwWhere => {
-                try buf2.appendSlice(alloc, "where");
+                try buf2.appendSlice("where");
             },
             .KwWith => {
-                try buf2.appendSlice(alloc, "with");
+                try buf2.appendSlice("with");
             },
 
             // If the input has malformed tokens, we don't want to assert anything about it (yet)

@@ -25,7 +25,7 @@ const EvalError = Interpreter.Error;
 const CrashContext = eval_mod.CrashContext;
 const CrashState = eval_mod.CrashState;
 
-fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
+fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const test_env: *TestRunner = @ptrCast(@alignCast(env));
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
     const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
@@ -39,7 +39,7 @@ fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
     alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
 }
 
-fn testRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.C) void {
+fn testRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void {
     const test_env: *TestRunner = @ptrCast(@alignCast(env));
     const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
     const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
@@ -51,7 +51,7 @@ fn testRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.C) void 
     test_env.allocator.rawFree(slice, align_enum, @returnAddress());
 }
 
-fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void {
+fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void {
     const test_env: *TestRunner = @ptrCast(@alignCast(env));
     const size_storage_bytes = @max(realloc_args.alignment, @alignOf(usize));
     const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
@@ -67,19 +67,19 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void 
     realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
 }
 
-fn testRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.C) void {
+fn testRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
     _ = dbg_args;
     _ = env;
     @panic("testRocDbg not implemented yet");
 }
 
-fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.C) void {
+fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
     _ = expect_args;
     _ = env;
     @panic("testRocExpectFailed not implemented yet");
 }
 
-fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {
+fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c) void {
     const test_env: *TestRunner = @ptrCast(@alignCast(env));
     const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
     test_env.crash.recordCrash(msg_slice) catch |err| {
@@ -134,7 +134,7 @@ pub const TestRunner = struct {
     interpreter: Interpreter,
     crash: CrashContext,
     roc_ops: ?RocOps,
-    test_results: std.ArrayList(TestResult),
+    test_results: std.array_list.Managed(TestResult),
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -146,7 +146,7 @@ pub const TestRunner = struct {
             .interpreter = try Interpreter.init(allocator, cir),
             .crash = CrashContext.init(allocator),
             .roc_ops = null,
-            .test_results = std.ArrayList(TestResult).init(allocator),
+            .test_results = std.array_list.Managed(TestResult).init(allocator),
         };
     }
 
@@ -369,7 +369,7 @@ pub const TestRunner = struct {
     }
 
     /// Write a html report of the test results to the given writer.
-    pub fn write_html_report(self: *const TestRunner, writer: std.io.AnyWriter) !void {
+    pub fn write_html_report(self: *const TestRunner, writer: *std.Io.Writer) !void {
         if (self.test_results.items.len > 0) {
             try writer.writeAll("<div class=\"test-results\">\n");
             for (self.test_results.items) |result| {

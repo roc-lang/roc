@@ -160,26 +160,27 @@ pub fn download(
     }
 
     // Start the request with the potentially modified URI
-    var server_header_buffer: [SERVER_HEADER_BUFFER_SIZE]u8 = undefined;
-    var request = client.open(.GET, uri, .{
-        .server_header_buffer = &server_header_buffer,
+    var request = client.request(.GET, uri, .{
         .redirect_behavior = .unhandled,
         .extra_headers = extra_headers,
     }) catch return error.HttpError;
     defer request.deinit();
 
-    // Send the request
-    request.send() catch return error.HttpError;
-    request.finish() catch return error.HttpError;
-    request.wait() catch return error.HttpError;
+    // Send just the request head (no body)
+    request.sendBodiless() catch return error.HttpError;
+
+    // Receive headers into a temporary buffer
+    var head_buffer: [SERVER_HEADER_BUFFER_SIZE]u8 = undefined;
+    var response = request.receiveHead(&head_buffer) catch return error.HttpError;
 
     // Check response status
-    if (request.response.status != .ok) {
+    if (response.head.status != .ok) {
         return error.HttpError;
     }
 
-    // Get the response reader
-    const reader = request.reader();
+    // Prepare buffered reader for response body
+    var reader_buffer: [1024]u8 = undefined;
+    const reader = response.reader(&reader_buffer);
 
     // Stream directly to unbundleStream
     var dir_writer = bundle.DirExtractWriter.init(extract_dir);

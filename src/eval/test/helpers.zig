@@ -19,6 +19,21 @@ const test_allocator = std.testing.allocator;
 
 const TestParseError = parse.Parser.Error || error{ TokenizeError, SyntaxError };
 
+const TraceWriter = struct {
+    buffer: [256]u8 = undefined,
+    writer: std.fs.File.Writer = undefined,
+
+    fn init() TraceWriter {
+        var tw = TraceWriter{};
+        tw.writer = std.fs.File.stderr().writer(&tw.buffer);
+        return tw;
+    }
+
+    fn interface(self: *TraceWriter) *std.Io.Writer {
+        return &self.writer.interface;
+    }
+};
+
 /// Helper function to run an expression and expect a specific error.
 pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
@@ -32,7 +47,7 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: e
 
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
-        interpreter.startTrace(std.io.getStdErr().writer().any());
+        interpreter.startTrace();
     }
     defer if (enable_trace) interpreter.endTrace();
 
@@ -59,7 +74,7 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
 
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
-        interpreter.startTrace(std.io.getStdErr().writer().any());
+        interpreter.startTrace();
     }
     defer if (enable_trace) interpreter.endTrace();
 
@@ -84,7 +99,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
 
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
-        interpreter.startTrace(std.io.getStdErr().writer().any());
+        interpreter.startTrace();
     }
     defer if (enable_trace) interpreter.endTrace();
 
@@ -118,7 +133,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
 
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
-        interpreter.startTrace(std.io.getStdErr().writer().any());
+        interpreter.startTrace();
     }
     defer if (enable_trace) interpreter.endTrace();
 
@@ -166,7 +181,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
 
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
-        interpreter.startTrace(std.io.getStdErr().writer().any());
+        interpreter.startTrace();
     }
     defer if (enable_trace) interpreter.endTrace();
 
@@ -209,7 +224,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
 
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
-        interpreter.startTrace(std.io.getStdErr().writer().any());
+        interpreter.startTrace();
     }
     defer if (enable_trace) interpreter.endTrace();
 

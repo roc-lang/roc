@@ -78,7 +78,7 @@ pub const ReportingConfig = struct {
                 // can't use stdio in WASM
                 break :isTty false;
             } else {
-                break :isTty std.io.getStdOut().isTty();
+                break :isTty std.fs.File.stdout().isTty();
             }
         };
 

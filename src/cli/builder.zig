@@ -50,6 +50,57 @@ const ZigLLVMABIType = enum(c_int) {
     ZigLLVMABITypeHard,
 };
 
+const ZigLLVMCoverageType = enum(c_int) {
+    ZigLLVMCoverageType_None = 0,
+    ZigLLVMCoverageType_Function,
+    ZigLLVMCoverageType_BB,
+    ZigLLVMCoverageType_Edge,
+};
+
+const ZigLLVMCoverageOptions = extern struct {
+    CoverageType: ZigLLVMCoverageType,
+    IndirectCalls: bool,
+    TraceBB: bool,
+    TraceCmp: bool,
+    TraceDiv: bool,
+    TraceGep: bool,
+    Use8bitCounters: bool,
+    TracePC: bool,
+    TracePCGuard: bool,
+    Inline8bitCounters: bool,
+    InlineBoolFlag: bool,
+    PCTable: bool,
+    NoPrune: bool,
+    StackDepth: bool,
+    TraceLoads: bool,
+    TraceStores: bool,
+    CollectControlFlow: bool,
+};
+
+const ZigLLVMThinOrFullLTOPhase = enum(c_int) {
+    ZigLLVMThinOrFullLTOPhase_None,
+    ZigLLVMThinOrFullLTOPhase_ThinPreLink,
+    ZigLLVMThinOrFullLTOPhase_ThinkPostLink,
+    ZigLLVMThinOrFullLTOPhase_FullPreLink,
+    ZigLLVMThinOrFullLTOPhase_FullPostLink,
+};
+
+const ZigLLVMEmitOptions = extern struct {
+    is_debug: bool,
+    is_small: bool,
+    time_report_out: ?*?[*:0]u8,
+    tsan: bool,
+    sancov: bool,
+    lto: ZigLLVMThinOrFullLTOPhase,
+    allow_fast_isel: bool,
+    allow_machine_outliner: bool,
+    asm_filename: ?[*:0]const u8,
+    bin_filename: ?[*:0]const u8,
+    llvm_ir_filename: ?[*:0]const u8,
+    bitcode_filename: ?[*:0]const u8,
+    coverage: ZigLLVMCoverageOptions,
+};
+
 // LLVM Code Generation Optimization Levels
 const LLVMCodeGenLevelNone: c_int = 0;
 const LLVMCodeGenLevelLess: c_int = 1;
@@ -80,15 +131,7 @@ const llvm_externs = if (llvm_available) struct {
         targ_machine_ref: ?*anyopaque,
         module_ref: ?*anyopaque,
         error_message: *[*:0]u8,
-        is_debug: bool,
-        is_small: bool,
-        time_report: bool,
-        tsan: bool,
-        lto: bool,
-        asm_filename: ?[*:0]const u8,
-        bin_filename: ?[*:0]const u8,
-        llvm_ir_filename: ?[*:0]const u8,
-        bitcode_filename: ?[*:0]const u8,
+        options: *const ZigLLVMEmitOptions,
     ) bool;
     extern fn ZigLLVMCreateTargetMachine(
         target_ref: ?*anyopaque,
@@ -102,6 +145,7 @@ const llvm_externs = if (llvm_available) struct {
         data_sections: bool,
         float_abi: ZigLLVMABIType,
         abi_name: ?[*:0]const u8,
+        emulated_tls: bool,
     ) ?*anyopaque;
 
     // LLVM wrapper functions
@@ -219,6 +263,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, config: CompileConfig) !bool {
         false, // data_sections
         .ZigLLVMABITypeDefault, // float_abi
         null, // abi_name
+        false, // emulated_tls
     );
     if (target_machine == null) {
         std.log.err("Failed to create target machine for triple='{s}', cpu='{s}', features='{s}'", .{ target_triple, config.cpu, config.features });
@@ -234,19 +279,31 @@ pub fn compileBitcodeToObject(gpa: Allocator, config: CompileConfig) !bool {
     // 8. Emit object file
     std.log.debug("Emitting object file to: {s}", .{config.output_path});
     var emit_error_message: [*:0]u8 = undefined;
+
+    var coverage_options = std.mem.zeroes(ZigLLVMCoverageOptions);
+    coverage_options.CoverageType = .ZigLLVMCoverageType_None;
+
+    const emit_options = ZigLLVMEmitOptions{
+        .is_debug = false,
+        .is_small = config.optimization == .size,
+        .time_report_out = null,
+        .tsan = false,
+        .sancov = false,
+        .lto = .ZigLLVMThinOrFullLTOPhase_None,
+        .allow_fast_isel = false,
+        .allow_machine_outliner = true,
+        .asm_filename = null,
+        .bin_filename = object_path_z.ptr,
+        .llvm_ir_filename = null,
+        .bitcode_filename = null,
+        .coverage = coverage_options,
+    };
+
     const emit_result = externs.ZigLLVMTargetMachineEmitToFile(
         target_machine,
         module,
         &emit_error_message,
-        false, // is_debug
-        config.optimization == .size, // is_small
-        false, // time_report
-        false, // tsan
-        false, // lto
-        null, // asm_filename
-        object_path_z.ptr, // bin_filename
-        null, // llvm_ir_filename
-        null, // bitcode_filename
+        &emit_options,
     );
 
     if (emit_result) {

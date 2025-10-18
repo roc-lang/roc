@@ -36,7 +36,9 @@ pub const BuildEnv = build.BuildEnv;
 
 // /// Print global stats to stderr
 // pub fn printGlobalStats() !void {
-//     const stderr = std.io.getStdErr().writer();
+//     var stderr_buffer: [1024]u8 = undefined;
+//     var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+//     const stderr = &stderr_writer.interface;
 //     try global_stats.print(stderr.any());
 // }
 

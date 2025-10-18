@@ -211,19 +211,19 @@ pub const Generalizer = struct {
     }
 };
 
-const VarArrayList = std.ArrayList(Var);
+const VarArrayList = std.array_list.Managed(Var);
 
 /// A pool of variables grouped by rank, use to manage & generalize variables
 /// introduced during unification
 pub const VarPool = struct {
     const Self = @This();
 
-    ranks: std.ArrayList(VarArrayList),
+    ranks: std.array_list.Managed(VarArrayList),
     current_rank: Rank,
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) std.mem.Allocator.Error!Self {
-        var ranks = try std.ArrayList(VarArrayList).initCapacity(allocator, 16);
+        var ranks = try std.array_list.Managed(VarArrayList).initCapacity(allocator, 16);
         for (0..16) |_| {
             ranks.appendAssumeCapacity(try VarArrayList.initCapacity(allocator, 16));
         }

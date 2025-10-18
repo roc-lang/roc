@@ -12,14 +12,14 @@ const RocStr = @import("str.zig").RocStr;
 const increfDataPtrC = utils.increfDataPtrC;
 
 const Opaque = ?[*]u8;
-const EqFn = *const fn (Opaque, Opaque) callconv(.C) bool;
-const CompareFn = *const fn (Opaque, Opaque, Opaque) callconv(.C) u8;
-const CopyFn = *const fn (Opaque, Opaque) callconv(.C) void;
+const EqFn = *const fn (Opaque, Opaque) callconv(.c) bool;
+const CompareFn = *const fn (Opaque, Opaque, Opaque) callconv(.c) u8;
+const CopyFn = *const fn (Opaque, Opaque) callconv(.c) void;
 
-const Inc = *const fn (?[*]u8) callconv(.C) void;
-const IncN = *const fn (?[*]u8, usize) callconv(.C) void;
-const Dec = *const fn (?[*]u8) callconv(.C) void;
-const HasTagId = *const fn (u16, ?[*]u8) callconv(.C) extern struct { matched: bool, data: ?[*]u8 };
+const Inc = *const fn (?[*]u8) callconv(.c) void;
+const IncN = *const fn (?[*]u8, usize) callconv(.c) void;
+const Dec = *const fn (?[*]u8) callconv(.c) void;
+const HasTagId = *const fn (u16, ?[*]u8) callconv(.c) extern struct { matched: bool, data: ?[*]u8 };
 
 /// A bit mask were the only set bit is the bit indicating if the List is a seamless slice.
 pub const SEAMLESS_SLICE_BIT: usize =
@@ -150,7 +150,7 @@ pub const RocList = extern struct {
         if (elements_refcounted and !self.isSeamlessSlice()) {
             // - 1 is refcount.
             // - 2 is size on heap.
-            const ptr = @as([*]usize, @alignCast(@ptrCast(self.getAllocationDataPtr()))) - 2;
+            const ptr = @as([*]usize, @ptrCast(@alignCast(self.getAllocationDataPtr()))) - 2;
             ptr[0] = self.length;
         }
     }
@@ -161,7 +161,7 @@ pub const RocList = extern struct {
             if (self.getAllocationDataPtr()) |source| {
                 // - 1 is refcount.
                 // - 2 is size on heap.
-                const ptr = @as([*]usize, @alignCast(@ptrCast(source))) - 2;
+                const ptr = @as([*]usize, @ptrCast(@alignCast(source))) - 2;
                 ptr[0] = self.length;
             }
         }
@@ -371,7 +371,7 @@ pub const RocList = extern struct {
 };
 
 /// Increment the reference count.
-pub fn listIncref(list: RocList, amount: isize, elements_refcounted: bool) callconv(.C) void {
+pub fn listIncref(list: RocList, amount: isize, elements_refcounted: bool) callconv(.c) void {
     list.incref(amount, elements_refcounted);
 }
 
@@ -383,7 +383,7 @@ pub fn listDecref(
     elements_refcounted: bool,
     dec: Dec,
     roc_ops: *RocOps,
-) callconv(.C) void {
+) callconv(.c) void {
     list.decref(
         alignment,
         element_width,
@@ -401,7 +401,7 @@ pub fn listWithCapacity(
     elements_refcounted: bool,
     inc: Inc,
     roc_ops: *RocOps,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     return listReserve(
         RocList.empty(),
         alignment,
@@ -424,7 +424,7 @@ pub fn listReserve(
     inc: Inc,
     update_mode: UpdateMode,
     roc_ops: *RocOps,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     const original_len = list.len();
     const cap = @as(u64, @intCast(list.getCapacity()));
     const desired_cap = @as(u64, @intCast(original_len)) +| spare;
@@ -458,7 +458,7 @@ pub fn listReleaseExcessCapacity(
     dec: Dec,
     update_mode: UpdateMode,
     roc_ops: *RocOps,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     const old_length = list.len();
     // We use the direct list.capacity_or_alloc_ptr to make sure both that there is no extra capacity and that it isn't a seamless slice.
     if ((update_mode == .InPlace or list.isUnique()) and list.capacity_or_alloc_ptr == old_length) {
@@ -495,7 +495,7 @@ pub fn listAppendUnsafe(
     element: Opaque,
     element_width: usize,
     copy: CopyFn,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     const old_length = list.len();
     var output = list;
     output.length += 1;
@@ -520,7 +520,7 @@ fn listAppend(
     update_mode: UpdateMode,
     copy: CopyFn,
     roc_ops: *RocOps,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     const with_capacity = listReserve(
         list,
         alignment,
@@ -555,7 +555,7 @@ pub fn pushInPlace(
     element_size: usize,
     element: *anyopaque,
     roc_ops: *RocOps,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     const old_length = list.len();
     const old_capacity = list.getCapacity();
 
@@ -610,7 +610,7 @@ pub fn shallowClone(
     elem_alignment: u32,
     elements_refcounted: bool,
     roc_ops: *RocOps,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     std.debug.assert(desired_capacity > 0);
     std.debug.assert(elem_size > 0);
     std.debug.assert(elem_alignment > 0);
@@ -652,7 +652,7 @@ pub fn listPrepend(
     inc: Inc,
     copy: CopyFn,
     roc_ops: *RocOps,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     const old_length = list.len();
     // TODO: properly wire in update mode.
     var with_capacity = listReserve(
@@ -696,7 +696,7 @@ pub fn listSwap(
     update_mode: UpdateMode,
     copy: CopyFn,
     roc_ops: *RocOps,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     // Early exit to avoid swapping the same element.
     if (index_1 == index_2)
         return list;
@@ -742,7 +742,7 @@ pub fn listSublist(
     len_u64: u64,
     dec: Dec,
     roc_ops: *RocOps,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     const size = list.len();
     if (size == 0 or len_u64 == 0 or start_u64 >= @as(u64, @intCast(size))) {
         if (list.isUnique()) {
@@ -823,7 +823,7 @@ pub fn listDropAt(
     inc: Inc,
     dec: Dec,
     roc_ops: *RocOps,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     const size = list.len();
     const size_u64 = @as(u64, @intCast(size));
 
@@ -938,7 +938,7 @@ pub fn listSortWith(
     dec: Dec,
     copy: CopyFn,
     roc_ops: *RocOps,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     if (input.len() < 2) {
         return input;
     }
@@ -1040,7 +1040,7 @@ pub fn listConcat(
     inc: Inc,
     dec: Dec,
     roc_ops: *RocOps,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     // NOTE we always use list_a! because it is owned, we must consume it, and it may have unused capacity
     if (list_b.isEmpty()) {
         if (list_a.getCapacity() == 0) {
@@ -1162,7 +1162,7 @@ pub fn listReplaceInPlace(
     element_width: usize,
     out_element: ?[*]u8,
     copy: CopyFn,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     // INVARIANT: bounds checking happens on the roc side
     //
     // at the time of writing, the function is implemented roughly as
@@ -1186,7 +1186,7 @@ pub fn listReplace(
     out_element: ?[*]u8,
     copy: CopyFn,
     roc_ops: *RocOps,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     // INVARIANT: bounds checking happens on the roc side
     //
     // at the time of writing, the function is implemented roughly as
@@ -1228,7 +1228,7 @@ inline fn listReplaceInPlaceHelp(
 /// Check if list has exclusive ownership for safe in-place modification.
 pub fn listIsUnique(
     list: RocList,
-) callconv(.C) bool {
+) callconv(.c) bool {
     return list.isEmpty() or list.isUnique();
 }
 
@@ -1241,32 +1241,32 @@ pub fn listClone(
     inc: Inc,
     dec: Dec,
     roc_ops: *RocOps,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     return list.makeUnique(alignment, element_width, elements_refcounted, inc, dec, roc_ops);
 }
 
 /// Get current allocated capacity for growth planning.
 pub fn listCapacity(
     list: RocList,
-) callconv(.C) usize {
+) callconv(.c) usize {
     return list.getCapacity();
 }
 
 /// Get raw memory pointer for direct access patterns.
 pub fn listAllocationPtr(
     list: RocList,
-) callconv(.C) ?[*]u8 {
+) callconv(.c) ?[*]u8 {
     return list.getAllocationDataPtr();
 }
 
-fn rcNone(_: ?[*]u8) callconv(.C) void {}
+fn rcNone(_: ?[*]u8) callconv(.c) void {}
 
 /// Append UTF-8 string bytes to list for efficient string-to-bytes conversion.
 pub fn listConcatUtf8(
     list: RocList,
     string: RocStr,
     roc_ops: *RocOps,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     if (string.len() == 0) {
         return list;
     } else {
@@ -1597,7 +1597,7 @@ test "listSwap basic functionality" {
     // Swap elements at indices 1 and 3
     // Proper copy function for u16 elements
     const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*u16, @ptrCast(@alignCast(dest)));
                 const src_ptr = @as(*u16, @ptrCast(@alignCast(src)));
@@ -1627,7 +1627,7 @@ test "listAppendUnsafe basic functionality" {
 
     // Copy function for u8 elements
     const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
                 const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));
@@ -1663,7 +1663,7 @@ test "listAppendUnsafe with different types" {
 
     // Copy function for i32 elements
     const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*i32, @ptrCast(@alignCast(dest)));
                 const src_ptr = @as(*i32, @ptrCast(@alignCast(src)));
@@ -1694,7 +1694,7 @@ test "listAppendUnsafe with pre-allocated capacity" {
 
     // Copy function for u16 elements
     const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*u16, @ptrCast(@alignCast(dest)));
                 const src_ptr = @as(*u16, @ptrCast(@alignCast(src)));
@@ -1726,7 +1726,7 @@ test "listPrepend basic functionality" {
 
     // Copy function for u8 elements
     const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
                 const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));
@@ -1761,7 +1761,7 @@ test "listPrepend to empty list" {
 
     // Copy function for i32 elements
     const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*i32, @ptrCast(@alignCast(dest)));
                 const src_ptr = @as(*i32, @ptrCast(@alignCast(src)));
@@ -1793,7 +1793,7 @@ test "listPrepend multiple elements" {
 
     // Copy function for u16 elements
     const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*u16, @ptrCast(@alignCast(dest)));
                 const src_ptr = @as(*u16, @ptrCast(@alignCast(src)));
@@ -1937,7 +1937,7 @@ test "listReplace basic functionality" {
 
     // Copy function for u8 elements
     const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
                 const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));
@@ -1974,7 +1974,7 @@ test "listReplace first element" {
 
     // Copy function for i32 elements
     const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*i32, @ptrCast(@alignCast(dest)));
                 const src_ptr = @as(*i32, @ptrCast(@alignCast(src)));
@@ -2010,7 +2010,7 @@ test "listReplace last element" {
 
     // Copy function for u16 elements
     const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*u16, @ptrCast(@alignCast(dest)));
                 const src_ptr = @as(*u16, @ptrCast(@alignCast(src)));
@@ -2047,7 +2047,7 @@ test "listReplace single element list" {
 
     // Copy function for u8 elements
     const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
                 const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));
@@ -2154,7 +2154,7 @@ test "edge case: listPrepend to large list" {
 
     // Copy function for u8 elements
     const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
                 const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));
@@ -2227,7 +2227,7 @@ test "edge case: listAppendUnsafe multiple times" {
 
     // Copy function for u8 elements
     const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
                 const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));
@@ -2443,7 +2443,7 @@ test "listReplaceInPlace basic functionality" {
 
     // Copy function for u8 elements
     const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
                 const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));
@@ -2480,7 +2480,7 @@ test "listReplaceInPlace first and last elements" {
 
     // Copy function for i32 elements
     const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*i32, @ptrCast(@alignCast(dest)));
                 const src_ptr = @as(*i32, @ptrCast(@alignCast(src)));
@@ -2525,7 +2525,7 @@ test "listReplaceInPlace single element list" {
 
     // Copy function for u16 elements
     const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*u16, @ptrCast(@alignCast(dest)));
                 const src_ptr = @as(*u16, @ptrCast(@alignCast(src)));
@@ -2559,7 +2559,7 @@ test "listReplaceInPlace vs listReplace comparison" {
 
     // Copy function for u8 elements
     const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
                 const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));
@@ -2652,7 +2652,7 @@ test "integration: prepend then drop operations" {
 
     // Copy function for u8 elements
     const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
                 const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));
@@ -2730,7 +2730,7 @@ test "integration: replace then swap operations" {
 
     // Copy function for u32 elements
     const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*u32, @ptrCast(@alignCast(dest)));
                 const src_ptr = @as(*u32, @ptrCast(@alignCast(src)));
@@ -2805,7 +2805,7 @@ test "stress: many small operations" {
 
     // Copy function for u8 elements
     const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
                 const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));
@@ -2978,7 +2978,7 @@ test "boundary conditions: swap with identical indices" {
 
     // Copy function for u8 elements
     const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.C) void {
+        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
                 const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));

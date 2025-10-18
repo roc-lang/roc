@@ -63,7 +63,7 @@ pub fn main() !void {
         }
         // No input data, just read from stdin.
         std.debug.print("Reading bytes for repro from stdin\n", .{});
-        const bytes = try std.io.getStdIn().readToEndAlloc(gpa, @intCast(MAX_SIZE));
+        const bytes = try std.fs.File.stdin().readToEndAlloc(gpa, @intCast(MAX_SIZE));
         defer gpa.free(bytes);
 
         fuzz_test.zig_fuzz_init();

@@ -206,24 +206,20 @@ test "DirExtractWriter - basic functionality" {
 test "unbundle filename validation" {
     // Use a dummy reader and directory that won't actually be used
     const dummy_data = "";
-    var stream = std.io.fixedBufferStream(dummy_data);
+    var stream_reader = std.Io.Reader.fixed(dummy_data);
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
     // Test with invalid filename (no .tar.zst extension)
-    try testing.expectError(error.InvalidFilename, unbundle.unbundle(testing.allocator, stream.reader(), tmp.dir, "invalid.txt", null));
+    try testing.expectError(error.InvalidFilename, unbundle.unbundle(testing.allocator, &stream_reader, tmp.dir, "invalid.txt", null));
 
-    // Reset stream position
-    stream.pos = 0;
+    // Test with invalid base58 hash (create a new reader)
+    var stream_reader2 = std.Io.Reader.fixed(dummy_data);
+    try testing.expectError(error.InvalidFilename, unbundle.unbundle(testing.allocator, &stream_reader2, tmp.dir, "not-valid-base58!@#.tar.zst", null));
 
-    // Test with invalid base58 hash
-    try testing.expectError(error.InvalidFilename, unbundle.unbundle(testing.allocator, stream.reader(), tmp.dir, "not-valid-base58!@#.tar.zst", null));
-
-    // Reset stream position
-    stream.pos = 0;
-
-    // Test with empty hash
-    try testing.expectError(error.InvalidFilename, unbundle.unbundle(testing.allocator, stream.reader(), tmp.dir, ".tar.zst", null));
+    // Test with empty hash (create a new reader)
+    var stream_reader3 = std.Io.Reader.fixed(dummy_data);
+    try testing.expectError(error.InvalidFilename, unbundle.unbundle(testing.allocator, &stream_reader3, tmp.dir, ".tar.zst", null));
 }
 
 test "pathHasUnbundleErr - long paths" {

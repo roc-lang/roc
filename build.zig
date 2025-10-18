@@ -10,6 +10,16 @@ const OptimizeMode = std.builtin.OptimizeMode;
 const ResolvedTarget = std.Build.ResolvedTarget;
 const Step = std.Build.Step;
 
+fn mustUseLlvm(target: ResolvedTarget) bool {
+    return target.result.os.tag == .macos and target.result.cpu.arch == .x86_64;
+}
+
+fn configureBackend(step: *Step.Compile, target: ResolvedTarget) void {
+    if (mustUseLlvm(target)) {
+        step.use_llvm = true;
+    }
+}
+
 pub fn build(b: *std.Build) void {
     // build steps
     const run_step = b.step("run", "Build and run the roc cli");
@@ -138,11 +148,14 @@ pub fn build(b: *std.Build) void {
         // Build and run the compiler
         const builtin_compiler_exe = b.addExecutable(.{
             .name = "builtin_compiler",
-            .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
-            .target = b.graph.host, // this runs at build time on the *host* machine!
-            .optimize = .Debug, // No need to optimize - only compiles builtin modules
-            // Note: libc linking is handled by add_tracy below (required when tracy is enabled)
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
+                .target = b.graph.host, // this runs at build time on the *host* machine!
+                .optimize = .Debug, // No need to optimize - only compiles builtin modules
+                // Note: libc linking is handled by add_tracy below (required when tracy is enabled)
+            }),
         });
+        configureBackend(builtin_compiler_exe, b.graph.host);
 
         // Add only the minimal modules needed for parsing/checking
         builtin_compiler_exe.root_module.addImport("base", roc_modules.base);
@@ -223,10 +236,13 @@ pub fn build(b: *std.Build) void {
     // Always build and run the compiler for this command
     const builtin_compiler_exe_force = b.addExecutable(.{
         .name = "builtin_compiler",
-        .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
-        .target = b.graph.host,
-        .optimize = .Debug,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
     });
+    configureBackend(builtin_compiler_exe_force, b.graph.host);
 
     builtin_compiler_exe_force.root_module.addImport("base", roc_modules.base);
     builtin_compiler_exe_force.root_module.addImport("collections", roc_modules.collections);
@@ -255,11 +271,14 @@ pub fn build(b: *std.Build) void {
     // Add snapshot tool
     const snapshot_exe = b.addExecutable(.{
         .name = "snapshot",
-        .root_source_file = b.path("src/snapshot_tool/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/snapshot_tool/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
     });
+    configureBackend(snapshot_exe, target);
     roc_modules.addAll(snapshot_exe);
     snapshot_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
     snapshot_exe.step.dependOn(&write_compiled_builtins.step);
@@ -268,13 +287,19 @@ pub fn build(b: *std.Build) void {
 
     const playground_exe = b.addExecutable(.{
         .name = "playground",
-        .root_source_file = b.path("src/playground_wasm/main.zig"),
-        .target = b.resolveTargetQuery(.{
-            .cpu_arch = .wasm32,
-            .os_tag = .freestanding,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/playground_wasm/main.zig"),
+            .target = b.resolveTargetQuery(.{
+                .cpu_arch = .wasm32,
+                .os_tag = .freestanding,
+            }),
+            .optimize = optimize,
         }),
-        .optimize = optimize,
     });
+    configureBackend(playground_exe, b.resolveTargetQuery(.{
+        .cpu_arch = .wasm32,
+        .os_tag = .freestanding,
+    }));
     playground_exe.entry = .disabled;
     playground_exe.rdynamic = true;
     roc_modules.addAll(playground_exe);
@@ -296,10 +321,13 @@ pub fn build(b: *std.Build) void {
     const playground_test_install = blk: {
         const playground_integration_test_exe = b.addExecutable(.{
             .name = "playground_integration_test",
-            .root_source_file = b.path("test/playground-integration/main.zig"),
-            .target = target,
-            .optimize = optimize,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/playground-integration/main.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
         });
+        configureBackend(playground_integration_test_exe, target);
         playground_integration_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
         playground_integration_test_exe.root_module.addImport("build_options", build_options.createModule());
         roc_modules.addAll(playground_integration_test_exe);
@@ -326,22 +354,31 @@ pub fn build(b: *std.Build) void {
         // Build for native - will fail at compile time if sizes don't match expected
         const size_check_native = b.addExecutable(.{
             .name = "serialization_size_check_native",
-            .root_source_file = b.path("test/serialization_size_check.zig"),
-            .target = target,
-            .optimize = .Debug,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/serialization_size_check.zig"),
+                .target = target,
+                .optimize = .Debug,
+            }),
         });
+        configureBackend(size_check_native, target);
         roc_modules.addAll(size_check_native);
 
         // Build for wasm32 (32-bit) - will fail at compile time if sizes don't match expected
         const size_check_wasm32 = b.addExecutable(.{
             .name = "serialization_size_check_wasm32",
-            .root_source_file = b.path("test/serialization_size_check.zig"),
-            .target = b.resolveTargetQuery(.{
-                .cpu_arch = .wasm32,
-                .os_tag = .freestanding,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/serialization_size_check.zig"),
+                .target = b.resolveTargetQuery(.{
+                    .cpu_arch = .wasm32,
+                    .os_tag = .freestanding,
+                }),
+                .optimize = .Debug,
             }),
-            .optimize = .Debug,
         });
+        configureBackend(size_check_wasm32, b.resolveTargetQuery(.{
+            .cpu_arch = .wasm32,
+            .os_tag = .freestanding,
+        }));
         size_check_wasm32.entry = .disabled;
         size_check_wasm32.rdynamic = true;
         roc_modules.addAll(size_check_wasm32);
@@ -390,10 +427,12 @@ pub fn build(b: *std.Build) void {
     if (enable_snapshot_tests) {
         const snapshot_test = b.addTest(.{
             .name = "snapshot_tool_test",
-            .root_source_file = b.path("src/snapshot_tool/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/snapshot_tool/main.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+            }),
             .filters = test_filters,
         });
         roc_modules.addAll(snapshot_test);
@@ -413,10 +452,12 @@ pub fn build(b: *std.Build) void {
     if (enable_cli_tests) {
         const cli_test = b.addTest(.{
             .name = "cli_test",
-            .root_source_file = b.path("src/cli/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/cli/main.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+            }),
             .filters = test_filters,
         });
         roc_modules.addAll(cli_test);
@@ -435,10 +476,12 @@ pub fn build(b: *std.Build) void {
     if (enable_watch_tests) {
         const watch_test = b.addTest(.{
             .name = "watch_test",
-            .root_source_file = b.path("src/watch/watch.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/watch/watch.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+            }),
             .filters = test_filters,
         });
         roc_modules.addAll(watch_test);
@@ -524,7 +567,7 @@ fn discoverBuiltinRocFiles(b: *std.Build) ![]const []const u8 {
     var builtin_roc_dir = try std.fs.cwd().openDir("src/build/roc", .{ .iterate = true });
     defer builtin_roc_dir.close();
 
-    var roc_files = std.ArrayList([]const u8).init(b.allocator);
+    var roc_files = std.array_list.Managed([]const u8).init(b.allocator);
     errdefer roc_files.deinit();
 
     var iter = builtin_roc_dir.iterate();
@@ -539,7 +582,7 @@ fn discoverBuiltinRocFiles(b: *std.Build) ![]const []const u8 {
 }
 
 fn generateCompiledBuiltinsSource(b: *std.Build, roc_files: []const []const u8) ![]const u8 {
-    var builtins_source = std.ArrayList(u8).init(b.allocator);
+    var builtins_source = std.array_list.Managed(u8).init(b.allocator);
     errdefer builtins_source.deinit();
     const writer = builtins_source.writer();
 
@@ -576,11 +619,14 @@ fn add_fuzz_target(
     const root_source_file = b.path(b.fmt("test/fuzzing/fuzz-{s}.zig", .{name}));
     const fuzz_obj = b.addObject(.{
         .name = b.fmt("{s}_obj", .{name}),
-        .root_source_file = root_source_file,
-        .target = target,
-        // Work around instrumentation bugs on mac without giving up perf on linux.
-        .optimize = if (target.result.os.tag == .macos) .Debug else .ReleaseSafe,
+        .root_module = b.createModule(.{
+            .root_source_file = root_source_file,
+            .target = target,
+            // Work around instrumentation bugs on mac without giving up perf on linux.
+            .optimize = if (target.result.os.tag == .macos) .Debug else .ReleaseSafe,
+        }),
     });
+    configureBackend(fuzz_obj, target);
     // Required for fuzzing.
     fuzz_obj.root_module.link_libc = true;
     fuzz_obj.root_module.stack_check = false;
@@ -593,11 +639,14 @@ fn add_fuzz_target(
     const repro_step = b.step(name_repro, b.fmt("run fuzz reproduction for {s}", .{name}));
     const repro_exe = b.addExecutable(.{
         .name = name_repro,
-        .root_source_file = b.path("test/fuzzing/fuzz-repro.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/fuzzing/fuzz-repro.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
     });
+    configureBackend(repro_exe, target);
     repro_exe.root_module.addImport("fuzz_test", fuzz_obj.root_module);
 
     install_and_run(b, no_bin, repro_exe, repro_step, repro_step, run_args);
@@ -628,16 +677,20 @@ fn addMainExe(
 ) ?*Step.Compile {
     const exe = b.addExecutable(.{
         .name = "roc",
-        .root_source_file = b.path("src/cli/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .strip = strip,
-        .link_libc = true,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/cli/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .link_libc = true,
+        }),
     });
+    configureBackend(exe, target);
 
     // Create test platform host static library (str)
     const test_platform_host_lib = b.addLibrary(.{
         .name = "test_platform_str_host",
+        .linkage = .static,
         .root_module = b.createModule(.{
             .root_source_file = b.path("test/str/platform/host.zig"),
             .target = target,
@@ -645,8 +698,8 @@ fn addMainExe(
             .strip = true,
             .pic = true, // Enable Position Independent Code for PIE compatibility
         }),
-        .linkage = .static,
     });
+    configureBackend(test_platform_host_lib, target);
     test_platform_host_lib.root_module.addImport("builtins", roc_modules.builtins);
 
     // Force bundle compiler-rt to resolve runtime symbols like __main
@@ -661,6 +714,7 @@ fn addMainExe(
     // Create test platform host static library (int) - native target
     const test_platform_int_host_lib = b.addLibrary(.{
         .name = "test_platform_int_host",
+        .linkage = .static,
         .root_module = b.createModule(.{
             .root_source_file = b.path("test/int/platform/host.zig"),
             .target = target,
@@ -668,8 +722,8 @@ fn addMainExe(
             .strip = true,
             .pic = true, // Enable Position Independent Code for PIE compatibility
         }),
-        .linkage = .static,
     });
+    configureBackend(test_platform_int_host_lib, target);
     test_platform_int_host_lib.root_module.addImport("builtins", roc_modules.builtins);
     // Force bundle compiler-rt to resolve runtime symbols like __main
     test_platform_int_host_lib.bundle_compiler_rt = true;
@@ -703,6 +757,7 @@ fn addMainExe(
             }),
             .linkage = .static,
         });
+        configureBackend(cross_int_host_lib, cross_resolved_target);
         cross_int_host_lib.root_module.addImport("builtins", roc_modules.builtins);
         cross_int_host_lib.bundle_compiler_rt = true;
 
@@ -723,12 +778,15 @@ fn addMainExe(
     // Create builtins static library at build time with minimal dependencies
     const builtins_obj = b.addObject(.{
         .name = "roc_builtins",
-        .root_source_file = b.path("src/builtins/static_lib.zig"),
-        .target = target,
-        .optimize = optimize,
-        .strip = true,
-        .pic = true, // Enable Position Independent Code for PIE compatibility
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/builtins/static_lib.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .pic = true, // Enable Position Independent Code for PIE compatibility
+        }),
     });
+    configureBackend(builtins_obj, target);
 
     // Create shim static library at build time - fully static without libc
     //
@@ -744,6 +802,7 @@ fn addMainExe(
         }),
         .linkage = .static,
     });
+    configureBackend(shim_lib, target);
     // Add all modules from roc_modules that the shim needs
     roc_modules.addAll(shim_lib);
     // Link against the pre-built builtins library
@@ -816,7 +875,7 @@ const ParsedBuildArgs = struct {
 };
 
 fn appendFilter(
-    list: *std.ArrayList([]const u8),
+    list: *std.array_list.Managed([]const u8),
     b: *std.Build,
     value: []const u8,
 ) void {
@@ -831,8 +890,8 @@ fn parseBuildArgs(b: *std.Build) ParsedBuildArgs {
         .test_filters = &.{},
     };
 
-    var run_args_list = std.ArrayList([]const u8).init(b.allocator);
-    var filter_list = std.ArrayList([]const u8).init(b.allocator);
+    var run_args_list = std.array_list.Managed([]const u8).init(b.allocator);
+    var filter_list = std.array_list.Managed([]const u8).init(b.allocator);
 
     var i: usize = 0;
     while (i < raw_args.len) {
@@ -1099,6 +1158,10 @@ const llvm_libs = [_][]const u8{
     "LLVMNVPTXCodeGen",
     "LLVMNVPTXDesc",
     "LLVMNVPTXInfo",
+    "LLVMSPIRVAnalysis",
+    "LLVMSPIRVCodeGen",
+    "LLVMSPIRVDesc",
+    "LLVMSPIRVInfo",
     "LLVMMSP430Disassembler",
     "LLVMMSP430AsmParser",
     "LLVMMSP430CodeGen",
@@ -1173,14 +1236,17 @@ const llvm_libs = [_][]const u8{
     "LLVMMCDisassembler",
     "LLVMLTO",
     "LLVMPasses",
+    "LLVMCGData",
     "LLVMHipStdPar",
     "LLVMCFGuard",
     "LLVMCoroutines",
+    "LLVMSandboxIR",
     "LLVMipo",
     "LLVMVectorize",
     "LLVMLinker",
     "LLVMInstrumentation",
     "LLVMFrontendOpenMP",
+    "LLVMFrontendAtomic",
     "LLVMFrontendOffloading",
     "LLVMFrontendOpenACC",
     "LLVMFrontendHLSL",
@@ -1279,7 +1345,7 @@ fn getCompilerVersion(b: *std.Build, optimize: OptimizeMode) []const u8 {
 fn generateGlibcStub(b: *std.Build, target: ResolvedTarget, target_name: []const u8) ?*Step.UpdateSourceFiles {
 
     // Generate assembly stub with comprehensive symbols using the new build module
-    var assembly_buf = std.ArrayList(u8).init(b.allocator);
+    var assembly_buf = std.array_list.Managed(u8).init(b.allocator);
     defer assembly_buf.deinit();
 
     const writer = assembly_buf.writer();

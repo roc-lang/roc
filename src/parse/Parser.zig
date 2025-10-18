@@ -67,7 +67,7 @@ fn test_parser(source: []const u8, run: fn (parser: Parser) TestError!void) Test
     tokenizer.tokenize();
     const tok_result = tokenizer.finalize_and_deinit();
     defer tok_result.tokens.deinit();
-    const parser = Parser.init(std.testing.allocator, tok_result.tokens);
+    const parser = try Parser.init(tok_result.tokens, std.testing.allocator);
     defer parser.store.deinit();
     defer parser.scratch_nodes.deinit();
     defer parser.diagnostics.deinit();

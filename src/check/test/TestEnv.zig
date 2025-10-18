@@ -22,7 +22,7 @@ checker: Check,
 type_writer: types.TypeWriter,
 
 module_envs: std.StringHashMap(*const ModuleEnv),
-other_envs: std.ArrayList(*const ModuleEnv),
+other_envs: std.array_list.Managed(*const ModuleEnv),
 
 /// Test environment for canonicalization testing, providing a convenient wrapper around ModuleEnv, AST, and Can.
 const TestEnv = @This();
@@ -47,7 +47,7 @@ pub fn initWithImport(source: []const u8, other_module_name: []const u8, other_m
     errdefer gpa.destroy(can);
 
     var module_envs = std.StringHashMap(*const ModuleEnv).init(gpa);
-    var other_envs = std.ArrayList(*const ModuleEnv).init(gpa);
+    var other_envs = std.array_list.Managed(*const ModuleEnv).init(gpa);
 
     // Put the other module in the env map
     try module_envs.put(other_module_name, other_module_env);
@@ -126,7 +126,7 @@ pub fn init(source: []const u8) !TestEnv {
     errdefer gpa.destroy(can);
 
     const module_envs = std.StringHashMap(*const ModuleEnv).init(gpa);
-    const other_envs = std.ArrayList(*const ModuleEnv).init(gpa);
+    const other_envs = std.array_list.Managed(*const ModuleEnv).init(gpa);
 
     const module_name = "Test";
 
@@ -270,18 +270,30 @@ pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) !void {
     try testing.expectEqualStrings(expected, report.title);
 }
 
+fn renderReportToMarkdownBuffer(buf: *std.array_list.Managed(u8), report: anytype) !void {
+    buf.clearRetainingCapacity();
+    var unmanaged = buf.moveToUnmanaged();
+    defer buf.* = unmanaged.toManaged(buf.allocator);
+
+    var writer_alloc = std.Io.Writer.Allocating.fromArrayList(buf.allocator, &unmanaged);
+    defer unmanaged = writer_alloc.toArrayList();
+
+    report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
+        error.WriteFailed => return error.OutOfMemory,
+        else => return err,
+    };
+}
+
 fn assertNoParseProblems(self: *TestEnv) !void {
     if (self.parse_ast.hasErrors()) {
-        var report_buf = try std.ArrayList(u8).initCapacity(self.gpa, 256);
+        var report_buf = try std.array_list.Managed(u8).initCapacity(self.gpa, 256);
         defer report_buf.deinit();
 
         for (self.parse_ast.tokenize_diagnostics.items) |tok_diag| {
             var report = try self.parse_ast.tokenizeDiagnosticToReport(tok_diag, self.gpa);
             defer report.deinit();
 
-            report_buf.clearRetainingCapacity();
-            try report.render(report_buf.writer(), .markdown);
-
+            try renderReportToMarkdownBuffer(&report_buf, &report);
             try testing.expectEqualStrings("EXPECTED NO ERROR", report_buf.items);
         }
 
@@ -289,16 +301,14 @@ fn assertNoParseProblems(self: *TestEnv) !void {
             var report = try self.parse_ast.parseDiagnosticToReport(&self.module_env.common, diag, self.gpa, self.module_env.module_name);
             defer report.deinit();
 
-            report_buf.clearRetainingCapacity();
-            try report.render(report_buf.writer(), .markdown);
-
+            try renderReportToMarkdownBuffer(&report_buf, &report);
             try testing.expectEqualStrings("EXPECTED NO ERROR", report_buf.items);
         }
     }
 }
 
 fn assertNoCanProblems(self: *TestEnv) !void {
-    var report_buf = try std.ArrayList(u8).initCapacity(self.gpa, 256);
+    var report_buf = try std.array_list.Managed(u8).initCapacity(self.gpa, 256);
     defer report_buf.deinit();
 
     const diagnostics = try self.module_env.getDiagnostics();
@@ -306,9 +316,7 @@ fn assertNoCanProblems(self: *TestEnv) !void {
         var report = try self.module_env.diagnosticToReport(d, self.gpa, self.module_env.module_name);
         defer report.deinit();
 
-        report_buf.clearRetainingCapacity();
-        try report.render(report_buf.writer(), .markdown);
-
+        try renderReportToMarkdownBuffer(&report_buf, &report);
         try testing.expectEqualStrings("EXPECTED NO ERROR", report_buf.items);
     }
 }
@@ -317,16 +325,14 @@ fn assertNoTypeProblems(self: *TestEnv) !void {
     var report_builder = problem_mod.ReportBuilder.init(self.gpa, self.module_env, self.module_env, &self.checker.snapshots, "test", &.{});
     defer report_builder.deinit();
 
-    var report_buf = try std.ArrayList(u8).initCapacity(self.gpa, 256);
+    var report_buf = try std.array_list.Managed(u8).initCapacity(self.gpa, 256);
     defer report_buf.deinit();
 
     for (self.checker.problems.problems.items) |problem| {
         var report = try report_builder.build(problem);
         defer report.deinit();
 
-        report_buf.clearRetainingCapacity();
-        try report.render(report_buf.writer(), .markdown);
-
+        try renderReportToMarkdownBuffer(&report_buf, &report);
         try testing.expectEqualStrings("EXPECTED NO ERROR", report_buf.items);
     }
 

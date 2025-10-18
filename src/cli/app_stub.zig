@@ -120,7 +120,7 @@ fn createAppStubs(llvm_builder: *std.zig.llvm.Builder, entrypoints: []const Plat
 }
 
 /// Add an app entrypoint stub that follows the RocCall ABI
-/// RocCall ABI: void roc__<name>(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void;
+/// RocCall ABI: void roc__<name>(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
 fn addRocCallAbiStub(
     llvm_builder: *std.zig.llvm.Builder,
     ptr_type: std.zig.llvm.Builder.Type,
@@ -130,7 +130,7 @@ fn addRocCallAbiStub(
     const Builder = std.zig.llvm.Builder;
     const WipFunction = Builder.WipFunction;
 
-    // RocCall ABI signature: void roc__<name>(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void
+    // RocCall ABI signature: void roc__<name>(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void
     const params = [_]Builder.Type{ ptr_type, ptr_type, ptr_type };
     const fn_type = try llvm_builder.fnType(.void, &params, .normal);
 
@@ -180,8 +180,8 @@ fn addRocCallAbiStub(
 pub fn getTestPlatformEntrypoints(allocator: Allocator, platform_type: []const u8) ![]PlatformEntrypoint {
     if (std.mem.eql(u8, platform_type, "int")) {
         // Based on test/int/platform/host.zig:
-        // extern fn roc__addInts(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void;
-        // extern fn roc__multiplyInts(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void;
+        // extern fn roc__addInts(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+        // extern fn roc__multiplyInts(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
         const entrypoints = try allocator.alloc(PlatformEntrypoint, 2);
         entrypoints[0] = PlatformEntrypoint{ .name = "addInts" };
         entrypoints[1] = PlatformEntrypoint{ .name = "multiplyInts" };

@@ -36,6 +36,9 @@ pub const UnbundleError = error{
     DictionaryIdFlagUnsupported,
     MalformedBlock,
     MalformedFrame,
+    WriteFailed,
+    ReadFailed,
+    EndOfStream,
 } || std.mem.Allocator.Error;
 
 /// Context for error reporting during unbundle operations
@@ -64,8 +67,8 @@ pub const ExtractWriter = struct {
     vtable: *const VTable,
 
     pub const VTable = struct {
-        createFile: *const fn (ptr: *anyopaque, path: []const u8) CreateFileError!std.io.AnyWriter,
-        finishFile: *const fn (ptr: *anyopaque, writer: std.io.AnyWriter) void,
+        createFile: *const fn (ptr: *anyopaque, path: []const u8) CreateFileError!*std.Io.Writer,
+        finishFile: *const fn (ptr: *anyopaque, writer: *std.Io.Writer) void,
         makeDir: *const fn (ptr: *anyopaque, path: []const u8) MakeDirError!void,
     };
 
@@ -78,11 +81,11 @@ pub const ExtractWriter = struct {
         DirectoryCreateFailed,
     };
 
-    pub fn createFile(self: ExtractWriter, path: []const u8) CreateFileError!std.io.AnyWriter {
+    pub fn createFile(self: ExtractWriter, path: []const u8) CreateFileError!*std.Io.Writer {
         return self.vtable.createFile(self.ptr, path);
     }
 
-    pub fn finishFile(self: ExtractWriter, writer: std.io.AnyWriter) void {
+    pub fn finishFile(self: ExtractWriter, writer: *std.Io.Writer) void {
         return self.vtable.finishFile(self.ptr, writer);
     }
 
@@ -95,20 +98,26 @@ pub const ExtractWriter = struct {
 pub const DirExtractWriter = struct {
     dir: std.fs.Dir,
     allocator: std.mem.Allocator,
-    open_files: std.ArrayList(std.fs.File),
+    open_files: std.array_list.Managed(FileWriterEntry),
+
+    const FileWriterEntry = struct {
+        file: std.fs.File,
+        buffer: [4096]u8,
+        writer: std.fs.File.Writer,
+    };
 
     pub fn init(dir: std.fs.Dir, allocator: std.mem.Allocator) DirExtractWriter {
         return .{
             .dir = dir,
             .allocator = allocator,
-            .open_files = std.ArrayList(std.fs.File).init(allocator),
+            .open_files = std.array_list.Managed(FileWriterEntry).init(allocator),
         };
     }
 
     pub fn deinit(self: *DirExtractWriter) void {
         // Close any remaining open files
-        for (self.open_files.items) |*file| {
-            file.close();
+        for (self.open_files.items) |*entry| {
+            entry.file.close();
         }
         self.open_files.deinit();
     }
@@ -126,7 +135,7 @@ pub const DirExtractWriter = struct {
         .makeDir = makeDir,
     };
 
-    fn createFile(ptr: *anyopaque, path: []const u8) ExtractWriter.CreateFileError!std.io.AnyWriter {
+    fn createFile(ptr: *anyopaque, path: []const u8) ExtractWriter.CreateFileError!*std.Io.Writer {
         const self: *DirExtractWriter = @ptrCast(@alignCast(ptr));
 
         // Ensure parent directories exist
@@ -135,28 +144,31 @@ pub const DirExtractWriter = struct {
         }
 
         const file = self.dir.createFile(path, .{}) catch return error.FileCreateFailed;
-        self.open_files.append(file) catch {
+
+        var entry = FileWriterEntry{
+            .file = file,
+            .buffer = undefined,
+            .writer = undefined,
+        };
+        entry.writer = file.writer(&entry.buffer);
+
+        self.open_files.append(entry) catch {
             file.close();
             return error.OutOfMemory;
         };
 
-        return .{
-            .context = @ptrCast(&self.open_files.items[self.open_files.items.len - 1]),
-            .writeFn = fileWrite,
-        };
+        return &self.open_files.items[self.open_files.items.len - 1].writer.interface;
     }
 
-    fn fileWrite(context: *const anyopaque, bytes: []const u8) anyerror!usize {
-        const file: *std.fs.File = @ptrCast(@alignCast(@constCast(context)));
-        return file.write(bytes);
-    }
-
-    fn finishFile(ptr: *anyopaque, _: std.io.AnyWriter) void {
+    fn finishFile(ptr: *anyopaque, writer: *std.Io.Writer) void {
+        _ = writer;
         const self: *DirExtractWriter = @ptrCast(@alignCast(ptr));
         // Close and remove the last file
         if (self.open_files.items.len > 0) {
             const last_idx = self.open_files.items.len - 1;
-            self.open_files.items[last_idx].close();
+            // Flush before closing
+            self.open_files.items[last_idx].writer.interface.flush() catch {};
+            self.open_files.items[last_idx].file.close();
             _ = self.open_files.orderedRemove(last_idx);
         }
     }
@@ -170,15 +182,16 @@ pub const DirExtractWriter = struct {
 /// Buffer-based extract writer for in-memory extraction
 pub const BufferExtractWriter = struct {
     allocator: std.mem.Allocator,
-    files: std.StringHashMap(std.ArrayList(u8)),
-    directories: std.ArrayList([]u8),
-    current_file: ?*std.ArrayList(u8) = null,
+    files: std.StringHashMap(std.array_list.Managed(u8)),
+    directories: std.array_list.Managed([]u8),
+    current_file_writer: ?std.Io.Writer.Allocating = null,
+    current_file_path: ?[]const u8 = null,
 
     pub fn init(allocator: std.mem.Allocator) BufferExtractWriter {
         return .{
             .allocator = allocator,
-            .files = std.StringHashMap(std.ArrayList(u8)).init(allocator),
-            .directories = std.ArrayList([]u8).init(allocator),
+            .files = std.StringHashMap(std.array_list.Managed(u8)).init(allocator),
+            .directories = std.array_list.Managed([]u8).init(allocator),
         };
     }
 
@@ -209,36 +222,36 @@ pub const BufferExtractWriter = struct {
         .makeDir = makeDir,
     };
 
-    fn createFile(ptr: *anyopaque, path: []const u8) ExtractWriter.CreateFileError!std.io.AnyWriter {
+    fn createFile(ptr: *anyopaque, path: []const u8) ExtractWriter.CreateFileError!*std.Io.Writer {
         const self: *BufferExtractWriter = @ptrCast(@alignCast(ptr));
 
         const key = self.allocator.dupe(u8, path) catch return error.OutOfMemory;
-        errdefer self.allocator.free(key);
+        self.current_file_path = key;
 
-        const result = self.files.getOrPut(key) catch return error.OutOfMemory;
-        if (result.found_existing) {
-            self.allocator.free(key);
-            result.value_ptr.clearRetainingCapacity();
-        } else {
-            result.value_ptr.* = std.ArrayList(u8).init(self.allocator);
-        }
+        // Create allocating writer
+        self.current_file_writer = std.Io.Writer.Allocating.init(self.allocator);
 
-        self.current_file = result.value_ptr;
-        return .{
-            .context = @ptrCast(result.value_ptr),
-            .writeFn = arrayListWrite,
-        };
+        return &self.current_file_writer.?.writer;
     }
 
-    fn arrayListWrite(context: *const anyopaque, bytes: []const u8) anyerror!usize {
-        const list: *std.ArrayList(u8) = @ptrCast(@alignCast(@constCast(context)));
-        try list.appendSlice(bytes);
-        return bytes.len;
-    }
-
-    fn finishFile(ptr: *anyopaque, _: std.io.AnyWriter) void {
+    fn finishFile(ptr: *anyopaque, _: *std.Io.Writer) void {
         const self: *BufferExtractWriter = @ptrCast(@alignCast(ptr));
-        self.current_file = null;
+        if (self.current_file_writer) |*writer| {
+            if (self.current_file_path) |path| {
+                // Convert writer contents to Managed ArrayList
+                const unmanaged_list = writer.toArrayList();
+                var managed_list = std.array_list.Managed(u8).fromOwnedSlice(self.allocator, unmanaged_list.items);
+                self.files.put(path, managed_list) catch {
+                    // If put fails, clean up
+                    managed_list.deinit();
+                    self.allocator.free(path);
+                };
+                self.current_file_path = null;
+            } else {
+                writer.deinit();
+            }
+            self.current_file_writer = null;
+        }
     }
 
     fn makeDir(ptr: *anyopaque, path: []const u8) ExtractWriter.MakeDirError!void {
@@ -380,29 +393,46 @@ pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
     return null;
 }
 
-/// Generic hashing reader that works with any reader type
-fn HashingReader(comptime ReaderType: type) type {
-    return struct {
-        child_reader: ReaderType,
-        hasher: *std.crypto.hash.Blake3,
+const HashingReader = struct {
+    child_reader: *std.Io.Reader,
+    hasher: *std.crypto.hash.Blake3,
+    interface: std.Io.Reader,
 
-        const Self = @This();
-        pub const Error = ReaderType.Error;
-        pub const Reader = std.io.Reader(*Self, Error, read);
+    const Self = @This();
 
-        pub fn read(self: *Self, buffer: []u8) Error!usize {
-            const n = try self.child_reader.read(buffer);
-            if (n > 0) {
-                self.hasher.update(buffer[0..n]);
-            }
-            return n;
+    pub fn init(child_reader: *std.Io.Reader, hasher: *std.crypto.hash.Blake3) Self {
+        var result = Self{
+            .child_reader = child_reader,
+            .hasher = hasher,
+            .interface = undefined,
+        };
+        result.interface = .{
+            .vtable = &.{
+                .stream = stream,
+            },
+            .buffer = &.{},
+            .seek = 0,
+            .end = 0,
+        };
+        return result;
+    }
+
+    fn stream(r: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
+        const self: *Self = @alignCast(@fieldParentPtr("interface", r));
+        const n = self.child_reader.stream(w, limit) catch |err| switch (err) {
+            error.EndOfStream => return std.Io.Reader.StreamError.EndOfStream,
+            error.ReadFailed => return std.Io.Reader.StreamError.ReadFailed,
+            error.WriteFailed => return std.Io.Reader.StreamError.WriteFailed,
+        };
+        if (n == 0) {
+            return std.Io.Reader.StreamError.EndOfStream;
         }
-
-        pub fn reader(self: *Self) Reader {
-            return .{ .context = self };
-        }
-    };
-}
+        // Update hash with data that was written
+        const written_slice = w.buffer[w.buffer.len - n ..];
+        self.hasher.update(written_slice);
+        return n;
+    }
+};
 
 /// Unbundle a compressed tar archive, streaming from input_reader to extract_writer.
 ///
@@ -410,29 +440,22 @@ fn HashingReader(comptime ReaderType: type) type {
 /// unbundling and network-based downloading.
 /// If an InvalidPath error is returned, error_context will contain details about the invalid path.
 pub fn unbundleStream(
-    input_reader: anytype,
+    input_reader: *std.Io.Reader,
     extract_writer: ExtractWriter,
     expected_hash: *const [32]u8,
     error_context: ?*ErrorContext,
 ) UnbundleError!void {
     var hasher = std.crypto.hash.Blake3.init(.{});
-    const ReaderType = @TypeOf(input_reader);
-    const HashingReaderType = HashingReader(ReaderType);
-
-    var hashing_reader = HashingReaderType{
-        .child_reader = input_reader,
-        .hasher = &hasher,
-    };
+    var hashing_reader = HashingReader.init(input_reader, &hasher);
 
     var window_buffer: [ZSTD_WINDOW_BUFFER_SIZE]u8 = undefined;
-    var zstd_stream = std.compress.zstd.decompressor(hashing_reader.reader(), .{
-        .window_buffer = &window_buffer,
-    });
-    const decompressed_reader = zstd_stream.reader();
+
+    const zstd_stream = std.compress.zstd.Decompress.init(&hashing_reader.interface, &window_buffer, .{});
+    var decompressed_reader = zstd_stream.reader;
 
     var file_name_buffer: [std.fs.max_path_bytes]u8 = undefined;
     var link_name_buffer: [std.fs.max_path_bytes]u8 = undefined;
-    var tar_iterator = std.tar.iterator(decompressed_reader, .{
+    var tar_iterator = std.tar.Iterator.init(&decompressed_reader, .{
         .file_name_buffer = &file_name_buffer,
         .link_name_buffer = &link_name_buffer,
     });
@@ -465,15 +488,8 @@ pub fn unbundleStream(
                 const file_writer = try extract_writer.createFile(file_path);
                 defer extract_writer.finishFile(file_writer);
 
-                var buffer: [STREAM_BUFFER_SIZE]u8 = undefined;
-                var bytes_remaining = entry.size;
-                while (bytes_remaining > 0) {
-                    const to_read = @min(buffer.len, bytes_remaining);
-                    const bytes_read = entry.reader().readAll(buffer[0..to_read]) catch return error.UnexpectedEndOfStream;
-                    if (bytes_read == 0) return error.UnexpectedEndOfStream;
-                    file_writer.writeAll(buffer[0..bytes_read]) catch return error.FileWriteFailed;
-                    bytes_remaining -= bytes_read;
-                }
+                try tar_iterator.streamRemaining(entry, file_writer);
+                try file_writer.flush();
 
                 data_extracted = true;
             },
@@ -507,14 +523,6 @@ pub fn unbundleStream(
                 }
 
                 // TODO: Add symlink support to ExtractWriter interface
-                var buffer: [STREAM_BUFFER_SIZE]u8 = undefined;
-                var bytes_remaining = entry.size;
-                while (bytes_remaining > 0) {
-                    const to_read = @min(buffer.len, bytes_remaining);
-                    const bytes_read = entry.reader().readAll(buffer[0..to_read]) catch return error.UnexpectedEndOfStream;
-                    bytes_remaining -= bytes_read;
-                }
-
                 data_extracted = true;
             },
         }
@@ -555,7 +563,7 @@ pub fn validateBase58Hash(base58_str: []const u8) !?[32]u8 {
 /// If an InvalidPath error is returned, error_context will contain details about the invalid path.
 pub fn unbundle(
     allocator: std.mem.Allocator,
-    input_reader: anytype,
+    input_reader: *std.Io.Reader,
     extract_dir: std.fs.Dir,
     filename: []const u8,
     error_context: ?*ErrorContext,

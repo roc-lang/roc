@@ -83,7 +83,7 @@ test "nominal type origin - displays origin in snapshot writer" {
 
     // Test 3: Origin shown with type arguments
     {
-        var buf = std.ArrayList(u8).init(test_allocator);
+        var buf = std.array_list.Managed(u8).init(test_allocator);
         defer buf.deinit();
 
         // Create type arguments

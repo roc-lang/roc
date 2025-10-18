@@ -7,10 +7,10 @@ const DataSpan = @import("DataSpan.zig");
 /// A stack for easily adding and removing index types when doing recursive operations
 pub fn Scratch(comptime T: type) type {
     return struct {
-        items: std.ArrayListUnmanaged(T),
+        items: std.array_list.Managed(T),
 
         const Self = @This();
-        const ArrayList = std.ArrayListUnmanaged(T);
+        const ArrayList = std.array_list.Managed(T);
 
         pub fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
             const items = try ArrayList.initCapacity(gpa, std.math.ceilPowerOfTwoAssert(usize, 64));
@@ -19,8 +19,8 @@ pub fn Scratch(comptime T: type) type {
             };
         }
 
-        pub fn deinit(self: *Self, gpa: std.mem.Allocator) void {
-            self.items.deinit(gpa);
+        pub fn deinit(self: *Self) void {
+            self.items.deinit();
         }
 
         /// Returns the start position for a new Span of indexes in scratch
@@ -29,8 +29,8 @@ pub fn Scratch(comptime T: type) type {
         }
 
         /// Places a new index of type `T` in the scratch
-        pub fn append(self: *Self, gpa: std.mem.Allocator, idx: T) std.mem.Allocator.Error!void {
-            try self.items.append(gpa, idx);
+        pub fn append(self: *Self, idx: T) std.mem.Allocator.Error!void {
+            try self.items.append(idx);
         }
 
         /// Pop an item of the scratch buffer
@@ -50,13 +50,13 @@ pub fn Scratch(comptime T: type) type {
 
         /// Creates a new span starting at start.  Moves the items from scratch
         /// to extra_data as appropriate.
-        pub fn spanFromStart(self: *Self, start: u32, gpa: std.mem.Allocator, data: *std.ArrayListUnmanaged(u32)) std.mem.Allocator.Error!DataSpan {
+        pub fn spanFromStart(self: *Self, start: u32, data: *std.array_list.Managed(u32)) std.mem.Allocator.Error!DataSpan {
             const end = self.items.len;
             defer self.items.shrinkRetainingCapacity(start);
             var i = @as(usize, @intCast(start));
             const data_start = @as(u32, @intCast(data.items.len));
             while (i < end) {
-                data.append(gpa, self.items[i].id);
+                try data.append(self.items[i].id);
                 i += 1;
             }
             return .{ .span = .{ .start = data_start, .len = @as(u32, @intCast(end)) - start } };
