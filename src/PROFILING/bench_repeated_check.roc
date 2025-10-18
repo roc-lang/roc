@@ -3,9 +3,6 @@
 ##
 ## Compiler phase benchmarks use this file, see `src/PROFILING/exec_bench.roc`.
 ## If the file changes, the benchmarks can't track performance over time.
-##
-## Module header removed to fix deprecation warning that caused CI failures.
-## All top-level definitions are now implicitly exported.
 
 x = 3.14
 y = 1.23e45
@@ -19270,4 +19267,3 @@ mixed_301 = {
         list_from_num: [num_301, num_301, num_301],
     },
 }
-
