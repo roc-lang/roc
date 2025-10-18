@@ -27,7 +27,7 @@ It has the type:
     _List(Num(_size)) -> _ret_
 
 But I expected it to be:
-    _List(a), a -> b -> List(b)_
+    _List(a), a -> b -> Error_
 
 # TOKENS
 ~~~zig
@@ -147,9 +147,9 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(a), a -> b -> List(b)"))
+		(patt (type "List(a), a -> b -> Error"))
 		(patt (type "_arg -> _ret")))
 	(expressions
-		(expr (type "List(a), a -> b -> List(b)"))
+		(expr (type "List(a), a -> b -> Error"))
 		(expr (type "_arg -> _ret"))))
 ~~~
