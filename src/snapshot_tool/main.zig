@@ -1222,7 +1222,7 @@ fn processSnapshotContent(
 
     // Auto-inject Set, Dict, Bool, and Result as available imports (if they're loaded)
     // This makes them available without needing explicit `import` statements in tests
-    var module_envs = std.AutoHashMap(base.Ident.Idx, *const ModuleEnv).init(allocator);
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
     defer module_envs.deinit();
 
     var dict_import_idx: ?CIR.Import.Idx = null;
@@ -1231,25 +1231,37 @@ fn processSnapshotContent(
     var result_import_idx: ?CIR.Import.Idx = null;
 
     if (config.dict_module) |dict_env| {
-        const dict_ident = try can_ir.common.idents.internConst("Dict");
+        const dict_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Dict"));
         dict_import_idx = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Dict");
-        try module_envs.put(dict_ident, dict_env);
+        try module_envs.put(dict_ident, .{
+            .env = dict_env,
+            .type_stmt = config.builtin_indices.dict_type,
+        });
     }
     if (config.set_module) |set_env| {
-        const set_ident = try can_ir.common.idents.internConst("Set");
+        const set_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Set"));
         set_import_idx = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Set");
-        try module_envs.put(set_ident, set_env);
+        try module_envs.put(set_ident, .{
+            .env = set_env,
+            .type_stmt = config.builtin_indices.set_type,
+        });
     }
     // Bool and Result are registered as imports to make them available as external types
     if (config.bool_module) |bool_env| {
-        const bool_ident = try can_ir.common.idents.internConst("Bool");
+        const bool_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Bool"));
         bool_import_idx = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Bool");
-        try module_envs.put(bool_ident, bool_env);
+        try module_envs.put(bool_ident, .{
+            .env = bool_env,
+            .type_stmt = config.builtin_indices.bool_type,
+        });
     }
     if (config.result_module) |result_env| {
-        const result_ident = try can_ir.common.idents.internConst("Result");
+        const result_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Result"));
         result_import_idx = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Result");
-        try module_envs.put(result_ident, result_env);
+        try module_envs.put(result_ident, .{
+            .env = result_env,
+            .type_stmt = config.builtin_indices.result_type,
+        });
     }
 
     var czer = try Can.init(can_ir, &parse_ast, &module_envs);

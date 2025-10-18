@@ -43,6 +43,7 @@ Complex : {
 }
 ~~~
 # EXPECTED
+TYPE REDECLARED - type_comprehensive_scope.md:10:1:10:37
 UNDECLARED TYPE - type_comprehensive_scope.md:13:19:13:23
 TYPE REDECLARED - type_comprehensive_scope.md:22:1:22:13
 UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
@@ -59,11 +60,37 @@ Result(ok, err) : [Ok(ok), Err(err)]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 But _Result_ was already declared here:
-**type_comprehensive_scope.md:1:1:1:1:**
+**type_comprehensive_scope.md:1:1:28:1:**
 ```roc
 # Built-in types should work
+MyU64 : U64
+MyString : Str
+MyBool : Bool
+
+# Simple user-defined type
+Person : { name: Str, age: U64 }
+
+# Type with parameters
+Result(ok, err) : [Ok(ok), Err(err)]
+
+# Forward reference - Tree references Node before Node is defined
+Tree(a) : [Branch(Node(a)), Leaf(a)]
+
+# Node definition comes after Tree
+Node(a) : { value: a, children: List(Tree(a)) }
+
+# Using a previously defined type
+MyResult : Result(Str, U64)
+
+# Type redeclaration (should error)
+Person : U64
+
+# Using an undeclared type (should error)
+BadType : SomeUndeclaredType
+
+# Using built-in types with parameters
+MyList : List(Str)
 ```
-^
 
 
 **UNDECLARED TYPE**

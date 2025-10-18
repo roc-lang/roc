@@ -126,7 +126,7 @@ pub const Interpreter = struct {
     /// Map from module name to ModuleEnv for resolving e_lookup_external expressions
     imported_modules: std.StringHashMap(*const can.ModuleEnv),
 
-    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, bool_stmt: can.CIR.Statement.Idx, bool_env: *const can.ModuleEnv, imported_modules_map: ?*const std.StringHashMap(*const can.ModuleEnv)) !Interpreter {
+    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, bool_stmt: can.CIR.Statement.Idx, bool_env: *const can.ModuleEnv, imported_modules_map: ?*const std.AutoHashMap(base_pkg.Ident.Idx, can.Can.AutoImportedType)) !Interpreter {
         const rt_types_ptr = try allocator.create(types.store.Store);
         rt_types_ptr.* = try types.store.Store.initCapacity(allocator, 1024, 512);
         var slots = try std.ArrayList(u32).initCapacity(allocator, 1024);
@@ -161,7 +161,8 @@ pub const Interpreter = struct {
         if (imported_modules_map) |modules_map| {
             var iter = modules_map.iterator();
             while (iter.next()) |entry| {
-                try result.imported_modules.put(entry.key_ptr.*, entry.value_ptr.*);
+                const module_name_text = env.common.idents.getText(entry.key_ptr.*);
+                try result.imported_modules.put(module_name_text, entry.value_ptr.env);
             }
         }
 

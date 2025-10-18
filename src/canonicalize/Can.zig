@@ -57,6 +57,12 @@ const TypeVarProblem = struct {
     ast_anno: AST.TypeAnno.Idx,
 };
 
+/// Information about an auto-imported module type
+pub const AutoImportedType = struct {
+    env: *const ModuleEnv,
+    type_stmt: Statement.Idx,
+};
+
 env: *ModuleEnv,
 parse_ir: *AST,
 scopes: std.ArrayListUnmanaged(Scope) = .{},
@@ -78,8 +84,8 @@ var_function_regions: std.AutoHashMapUnmanaged(Pattern.Idx, Region),
 var_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 /// Tracks which pattern indices have been used/referenced
 used_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
-/// Map of module name identifiers to their ModuleEnv pointers for import validation
-module_envs: ?*const std.AutoHashMap(Ident.Idx, *const ModuleEnv),
+/// Map of module name identifiers to their type information for import validation
+module_envs: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType),
 /// Map from module name string to Import.Idx for tracking unique imports
 import_indices: std.StringHashMapUnmanaged(Import.Idx),
 /// Scratch type variables
@@ -170,7 +176,7 @@ pub fn deinit(
 pub fn init(
     env: *ModuleEnv,
     parse_ir: *AST,
-    module_envs: ?*const std.AutoHashMap(Ident.Idx, *const ModuleEnv),
+    module_envs: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType),
 ) std.mem.Allocator.Error!Self {
     const gpa = env.gpa;
 
@@ -222,8 +228,8 @@ pub fn init(
         // Only auto-import known builtin modules
         const builtin_modules = [_][]const u8{ "Bool", "Result" };
         for (builtin_modules) |module_name_text| {
-            if (envs_map.get(module_name_text)) |_| {
-                const module_name_ident = try env.insertIdent(base.Ident.for_text(module_name_text));
+            const module_name_ident = try env.insertIdent(base.Ident.for_text(module_name_text));
+            if (envs_map.get(module_name_ident)) |_| {
 
                 // Use the same alias as the module name for auto-imports
                 const alias = module_name_ident;
@@ -1617,7 +1623,7 @@ fn processModuleImport(
     // 8. Check that this module actually exists, and if not report an error
     if (self.module_envs) |envs_map| {
         // Check if the module exists
-        if (!envs_map.contains(module_name_text)) {
+        if (!envs_map.contains(module_name)) {
             // Module not found - create diagnostic
             try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
                 .module_name = module_name,
@@ -1833,17 +1839,15 @@ fn introduceExposedItemsIntoScope(
 
     // If we have module_envs, validate the imports
     if (self.module_envs) |envs_map| {
-        const module_name_text = self.env.getIdent(module_name);
-
         // Check if the module exists
-        if (!envs_map.contains(module_name_text)) {
+        if (!envs_map.contains(module_name)) {
             // Module not found - Module existence check is already done in canonicalizeImportStatement,
             // so there is no need to create another diagnostic here for module_not_found
             return;
         }
 
         // Get the module's exposed_items
-        const module_env = envs_map.get(module_name_text).?;
+        const module_env = envs_map.get(module_name).?.env;
 
         // For type modules, auto-introduce the main type with the alias name
         switch (module_env.module_kind) {
@@ -2267,7 +2271,8 @@ pub fn canonicalizeExpr(
                             defer self.env.gpa.free(qualified_name_str);
 
                             const target_node_idx_opt: ?u16 = if (self.module_envs) |envs_map| blk: {
-                                if (envs_map.get(module_text)) |module_env| {
+                                if (envs_map.get(module_name)) |auto_imported_type| {
+                                    const module_env = auto_imported_type.env;
                                     // Try looking up the qualified name first (e.g., "Bool.not")
                                     if (module_env.common.findIdent(qualified_name_str)) |qname_ident| {
                                         break :blk module_env.getExposedNodeIndexById(qname_ident);
@@ -2349,7 +2354,8 @@ pub fn canonicalizeExpr(
                             // Need to convert identifier from current module to target module
                             const field_text = self.env.getIdent(exposed_info.original_name);
                             const target_node_idx_opt: ?u16 = if (self.module_envs) |envs_map| blk: {
-                                if (envs_map.get(module_text)) |module_env| {
+                                if (envs_map.get(exposed_info.module_name)) |auto_imported_type| {
+                                    const module_env = auto_imported_type.env;
                                     if (module_env.common.findIdent(field_text)) |target_ident| {
                                         break :blk module_env.getExposedNodeIndexById(target_ident);
                                     } else {
@@ -3557,8 +3563,8 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
             // Use exposed_info.original_name directly, just like type annotations do
             const target_node_idx = blk: {
                 const envs_map = self.module_envs orelse break :blk 0;
-                const module_env = envs_map.get(module_name_text) orelse break :blk 0;
-                break :blk module_env.getExposedNodeIndexById(exposed_info.original_name) orelse 0;
+                const auto_imported_type = envs_map.get(module_name) orelse break :blk 0;
+                break :blk auto_imported_type.env.getExposedNodeIndexById(exposed_info.original_name) orelse 0;
             };
 
             // Create e_nominal_external for the imported type (target_node_idx can be 0)
@@ -3707,11 +3713,11 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                 break :blk 0;
             };
 
-            const module_env = envs_map.get(module_name_text) orelse {
+            const auto_imported_type = envs_map.get(module_name) orelse {
                 break :blk 0;
             };
 
-            const target_ident = module_env.common.findIdent(type_name) orelse {
+            const target_ident = auto_imported_type.env.common.findIdent(type_name) orelse {
                 // Type is not exposed by the imported file
                 return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
@@ -3720,7 +3726,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                 } }), .free_vars = null };
             };
 
-            const other_module_node_id = module_env.getExposedNodeIndexById(target_ident) orelse {
+            const other_module_node_id = auto_imported_type.env.getExposedNodeIndexById(target_ident) orelse {
                 // Type is not exposed by the imported file
                 return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
@@ -4295,11 +4301,11 @@ fn canonicalizePattern(
                         break :blk .{ 0, Content.err };
                     };
 
-                    const module_env = envs_map.get(module_name_text) orelse {
+                    const auto_imported_type = envs_map.get(module_name) orelse {
                         break :blk .{ 0, Content.err };
                     };
 
-                    const target_ident = module_env.common.findIdent(type_tok_text) orelse {
+                    const target_ident = auto_imported_type.env.common.findIdent(type_tok_text) orelse {
                         // Type is not exposed by the module
                         return try self.env.pushMalformed(Pattern.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                             .module_name = module_name,
@@ -4308,7 +4314,7 @@ fn canonicalizePattern(
                         } });
                     };
 
-                    const other_module_node_id = module_env.getExposedNodeIndexById(target_ident) orelse {
+                    const other_module_node_id = auto_imported_type.env.getExposedNodeIndexById(target_ident) orelse {
                         // Type is not exposed by the module
                         return try self.env.pushMalformed(Pattern.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                             .module_name = module_name,
@@ -5366,8 +5372,8 @@ fn canonicalizeTypeAnnoBasicType(
                 if (self.scopeLookupImportedModule(module_name_text)) |import_idx| {
                     // Get the node index from the imported module
                     if (self.module_envs) |envs_map| {
-                        if (envs_map.get(module_name_text)) |module_env| {
-                            const target_node_idx = module_env.getExposedNodeIndexById(exposed_info.original_name) orelse 0;
+                        if (envs_map.get(exposed_info.module_name)) |auto_imported_type| {
+                            const target_node_idx = auto_imported_type.env.getExposedNodeIndexById(exposed_info.original_name) orelse 0;
                             return try self.env.addTypeAnnoAndTypeVar(CIR.TypeAnno{ .lookup = .{
                                 .name = type_name_ident,
                                 .base = .{ .external = .{
@@ -5444,11 +5450,11 @@ fn canonicalizeTypeAnnoBasicType(
                 break :blk 0;
             };
 
-            const module_env = envs_map.get(module_name_text) orelse {
+            const auto_imported_type = envs_map.get(module_name) orelse {
                 break :blk 0;
             };
 
-            const target_ident = module_env.common.findIdent(type_name_text) orelse {
+            const target_ident = auto_imported_type.env.common.findIdent(type_name_text) orelse {
                 // Type is not exposed by the module
                 return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
@@ -5457,7 +5463,7 @@ fn canonicalizeTypeAnnoBasicType(
                 } });
             };
 
-            const other_module_node_id = module_env.getExposedNodeIndexById(target_ident) orelse {
+            const other_module_node_id = auto_imported_type.env.getExposedNodeIndexById(target_ident) orelse {
                 // Type is not exposed by the module
                 return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
@@ -7067,13 +7073,14 @@ fn scopeIntroduceTypeDecl(
     // Check if trying to redeclare an auto-imported builtin type
     if (self.module_envs) |envs_map| {
         // Check if this name matches an auto-imported module
-        if (envs_map.get(name_ident)) |_| {
+        if (envs_map.get(name_ident)) |imported_type| {
             // This is an auto-imported builtin type - report error
-            // Use region 1:1:1:1 (beginning of file) as the "original" location
-            // since builtins are implicitly available
+            // Get the actual region from the original type declaration in the builtin module
+            const original_region = imported_type.env.store.getStatementRegion(imported_type.type_stmt);
+
             try self.env.pushDiagnostic(Diagnostic{
                 .type_redeclared = .{
-                    .original_region = Region.zero(),
+                    .original_region = original_region,
                     .redeclared_region = region,
                     .name = name_ident,
                 },
@@ -7595,7 +7602,8 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     // Need to convert identifier from current module to target module
     const field_text = self.env.getIdent(field_name);
     const target_node_idx_opt: ?u16 = if (self.module_envs) |envs_map| blk: {
-        if (envs_map.get(module_text)) |module_env| {
+        if (envs_map.get(module_name)) |auto_imported_type| {
+            const module_env = auto_imported_type.env;
             if (module_env.common.findIdent(field_text)) |target_ident| {
                 // Found the identifier in the module - check if it's exposed
                 break :blk module_env.getExposedNodeIndexById(target_ident);
