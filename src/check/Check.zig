@@ -572,6 +572,7 @@ fn copyBuiltinTypes(self: *Self) !void {
     }
 }
 
+/// Check the types for all defs in a file
 pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
