@@ -611,22 +611,12 @@ pub const Store = struct {
 
     /// Given a type var, follow all redirects until finding the root descriptor
     pub fn resolveVar(self: *const Self, initial_var: Var) ResolvedVarDesc {
-        // DEBUG ASSERTION: Check if initial var is valid
-        // This should NEVER fail in correct code - if it does, it indicates type variable
-        // indices from one module are being used with another module's TypesStore!
-        std.debug.assert(@intFromEnum(initial_var) < self.slots.backing.len());
-
         var redirected_slot_idx = Self.varToSlotIdx(initial_var);
         var redirected_slot: Slot = self.slots.get(redirected_slot_idx);
 
-        var redirect_count: usize = 0;
-        const max_redirects: usize = @intCast(self.slots.backing.len()); // Prevent infinite loops
-
-        while (redirect_count < max_redirects) : (redirect_count += 1) {
+        while (true) {
             switch (redirected_slot) {
                 .redirect => |next_redirect_var| {
-                    // DEBUG ASSERTION: Check if redirect target is valid
-                    std.debug.assert(@intFromEnum(next_redirect_var) < self.slots.backing.len());
                     redirected_slot_idx = Self.varToSlotIdx(next_redirect_var);
                     redirected_slot = self.slots.get(redirected_slot_idx);
                 },
@@ -641,10 +631,20 @@ pub const Store = struct {
                 },
             }
         }
+        const redirected_root_var = Self.slotIdxToVar(redirected_slot_idx);
 
-        // DEBUG ASSERTION: Should never hit max redirects - indicates a cycle
-        std.debug.assert(redirect_count < max_redirects);
-        unreachable;
+        // TODO: refactor to remove panic?
+        switch (redirected_slot) {
+            .redirect => |_| @panic("redirected slot was still redirect after following chain"),
+            .root => |desc_idx| {
+                const desc = self.descs.get(desc_idx);
+                return .{
+                    .var_ = redirected_root_var,
+                    .desc_idx = desc_idx,
+                    .desc = desc,
+                };
+            },
+        }
     }
 
     // equivalence //
