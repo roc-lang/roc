@@ -91,7 +91,6 @@ pub fn freezeInterners(self: *CommonEnv) void {
 }
 
 /// Serialized representation of ModuleEnv
-/// Following SafeList.Serialized pattern: NO pointers, NO slices
 pub const Serialized = struct {
     idents: Ident.Store.Serialized,
     strings: StringLiteral.Store.Serialized,

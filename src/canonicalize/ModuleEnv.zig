@@ -1365,7 +1365,6 @@ pub fn getSourceLine(self: *const Self, region: Region) ![]const u8 {
 }
 
 /// Serialized representation of ModuleEnv
-/// Following SafeList.Serialized pattern: NO pointers, NO slices, NO Allocators
 pub const Serialized = struct {
     gpa: [2]u64, // Reserve space for allocator (vtable ptr + context ptr), provided during deserialization
     common: CommonEnv.Serialized,

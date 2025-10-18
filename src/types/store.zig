@@ -737,7 +737,6 @@ pub const Store = struct {
     // serialization //
 
     /// Serialized representation of types store
-    /// Following SafeList.Serialized pattern: NO pointers, NO slices, NO Allocators
     pub const Serialized = struct {
         gpa: [2]u64, // Reserve space for allocator (vtable ptr + context ptr), provided during deserialization
         slots: SlotStore.Serialized,

@@ -3247,7 +3247,6 @@ pub fn matchBranchPatternSpanFrom(store: *NodeStore, start: u32) Allocator.Error
 }
 
 /// Serialized representation of NodeStore
-/// Following SafeList.Serialized pattern: NO pointers, NO slices, NO ArrayLists, NO HashMaps, NO Allocators
 pub const Serialized = struct {
     gpa: [2]u64, // Reserve enough space for 2 64-bit pointers
     nodes: Node.List.Serialized,
