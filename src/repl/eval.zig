@@ -495,10 +495,12 @@ pub const Repl = struct {
         };
 
         // Create canonicalizer with Bool and Result modules available for qualified name resolution
-        var module_envs_map = std.StringHashMap(*const ModuleEnv).init(self.allocator);
+        var module_envs_map = std.AutoHashMap(base.Ident.Idx, *const ModuleEnv).init(self.allocator);
         defer module_envs_map.deinit();
-        try module_envs_map.put("Bool", self.bool_module.env);
-        try module_envs_map.put("Result", self.result_module.env);
+        const bool_ident = try cir.common.idents.internConst("Bool");
+        const result_ident = try cir.common.idents.internConst("Result");
+        try module_envs_map.put(bool_ident, self.bool_module.env);
+        try module_envs_map.put(result_ident, self.result_module.env);
 
         var czer = Can.init(cir, &parse_ast, &module_envs_map) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err});

@@ -78,8 +78,8 @@ var_function_regions: std.AutoHashMapUnmanaged(Pattern.Idx, Region),
 var_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 /// Tracks which pattern indices have been used/referenced
 used_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
-/// Map of module name strings to their ModuleEnv pointers for import validation
-module_envs: ?*const std.StringHashMap(*const ModuleEnv),
+/// Map of module name identifiers to their ModuleEnv pointers for import validation
+module_envs: ?*const std.AutoHashMap(Ident.Idx, *const ModuleEnv),
 /// Map from module name string to Import.Idx for tracking unique imports
 import_indices: std.StringHashMapUnmanaged(Import.Idx),
 /// Scratch type variables
@@ -170,7 +170,7 @@ pub fn deinit(
 pub fn init(
     env: *ModuleEnv,
     parse_ir: *AST,
-    module_envs: ?*const std.StringHashMap(*const ModuleEnv),
+    module_envs: ?*const std.AutoHashMap(Ident.Idx, *const ModuleEnv),
 ) std.mem.Allocator.Error!Self {
     const gpa = env.gpa;
 
@@ -7063,6 +7063,24 @@ fn scopeIntroduceTypeDecl(
 ) std.mem.Allocator.Error!void {
     const gpa = self.env.gpa;
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+
+    // Check if trying to redeclare an auto-imported builtin type
+    if (self.module_envs) |envs_map| {
+        // Check if this name matches an auto-imported module
+        if (envs_map.get(name_ident)) |_| {
+            // This is an auto-imported builtin type - report error
+            // Use region 1:1:1:1 (beginning of file) as the "original" location
+            // since builtins are implicitly available
+            try self.env.pushDiagnostic(Diagnostic{
+                .type_redeclared = .{
+                    .original_region = Region.zero(),
+                    .redeclared_region = region,
+                    .name = name_ident,
+                },
+            });
+            return;
+        }
+    }
 
     // Check for shadowing in parent scopes
     var shadowed_in_parent: ?Statement.Idx = null;
