@@ -50,9 +50,15 @@ DUPLICATE DEFINITION - can_import_type_annotations.md:1:1:1:1
 MODULE NOT FOUND - can_import_type_annotations.md:3:1:3:38
 UNDECLARED TYPE - can_import_type_annotations.md:5:18:5:25
 UNDECLARED TYPE - can_import_type_annotations.md:5:29:5:37
+UNDEFINED VARIABLE - can_import_type_annotations.md:6:24:6:44
 UNUSED VARIABLE - can_import_type_annotations.md:6:19:6:22
+UNDEFINED VARIABLE - can_import_type_annotations.md:9:21:9:31
+UNDEFINED VARIABLE - can_import_type_annotations.md:13:14:13:25
+UNDEFINED VARIABLE - can_import_type_annotations.md:15:24:15:36
+UNDEFINED VARIABLE - can_import_type_annotations.md:21:10:21:28
 MODULE NOT IMPORTED - can_import_type_annotations.md:24:18:24:36
 MODULE NOT IMPORTED - can_import_type_annotations.md:24:64:24:81
+UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `http.Client` was not found in this Roc project.
@@ -127,6 +133,17 @@ processRequest : Request -> Response
                             ^^^^^^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named `Http.defaultResponse` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_type_annotations.md:6:24:6:44:**
+```roc
+processRequest = |req| Http.defaultResponse
+```
+                       ^^^^^^^^^^^^^^^^^^^^
+
+
 **UNUSED VARIABLE**
 Variable `req` is not used anywhere in your code.
 
@@ -137,6 +154,50 @@ The unused variable is declared here:
 processRequest = |req| Http.defaultResponse
 ```
                   ^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `Json.parse` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_type_annotations.md:9:21:9:31:**
+```roc
+parseJson = |input| Json.parse(input)
+```
+                    ^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `Json.decode` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_type_annotations.md:13:14:13:25:**
+```roc
+    result = Json.decode(request.body)
+```
+             ^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `Http.success` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_type_annotations.md:15:24:15:36:**
+```roc
+        Ok(data) => Ok(Http.success(data))
+```
+                       ^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `Json.defaultConfig` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_type_annotations.md:21:10:21:28:**
+```roc
+config = Json.defaultConfig
+```
+         ^^^^^^^^^^^^^^^^^^
 
 
 **MODULE NOT IMPORTED**
@@ -159,6 +220,17 @@ You're attempting to use this module here:
 advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
 ```
                                                                ^^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `Json.Parser.parseWith` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_type_annotations.md:25:40:25:61:**
+```roc
+advancedParser = |parserConfig, input| Json.Parser.parseWith(parserConfig, input)
+```
+                                       ^^^^^^^^^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -391,9 +463,7 @@ combineResults = |result1, result2|
 		(e-lambda
 			(args
 				(p-assign (ident "req")))
-			(e-lookup-external
-				(module-idx "4")
-				(target-node-idx "0")))
+			(e-runtime-error (tag "ident_not_in_scope")))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
@@ -405,9 +475,7 @@ combineResults = |result1, result2|
 			(args
 				(p-assign (ident "input")))
 			(e-call
-				(e-lookup-external
-					(module-idx "5")
-					(target-node-idx "0"))
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local
 					(p-assign (ident "input")))))
 		(annotation
@@ -428,9 +496,7 @@ combineResults = |result1, result2|
 					(s-let
 						(p-assign (ident "result"))
 						(e-call
-							(e-lookup-external
-								(module-idx "5")
-								(target-node-idx "0"))
+							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-dot-access (field "body")
 								(receiver
 									(e-lookup-local
@@ -449,9 +515,7 @@ combineResults = |result1, result2|
 										(e-tag (name "Ok")
 											(args
 												(e-call
-													(e-lookup-external
-														(module-idx "4")
-														(target-node-idx "0"))
+													(e-runtime-error (tag "ident_not_in_scope"))
 													(e-lookup-local
 														(p-assign (ident "data"))))))))
 								(branch
@@ -472,9 +536,7 @@ combineResults = |result1, result2|
 						(ty-lookup (name "Error") (external (module-idx "5") (target-node-idx "0"))))))))
 	(d-let
 		(p-assign (ident "config"))
-		(e-lookup-external
-			(module-idx "5")
-			(target-node-idx "0"))
+		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation
 			(declared-type
 				(ty-lookup (name "Config") (external (module-idx "5") (target-node-idx "0"))))))
@@ -485,9 +547,7 @@ combineResults = |result1, result2|
 				(p-assign (ident "parserConfig"))
 				(p-assign (ident "input")))
 			(e-call
-				(e-lookup-external
-					(module-idx "5")
-					(target-node-idx "0"))
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local
 					(p-assign (ident "parserConfig")))
 				(e-lookup-local
@@ -504,10 +564,10 @@ combineResults = |result1, result2|
 		(p-assign (ident "combineResults"))
 		(e-closure
 			(captures
-				(capture (ident "value1"))
+				(capture (ident "err"))
 				(capture (ident "err"))
 				(capture (ident "value2"))
-				(capture (ident "err")))
+				(capture (ident "value1")))
 			(e-lambda
 				(args
 					(p-assign (ident "result1"))

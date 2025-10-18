@@ -20,6 +20,7 @@ main! = |_| {
 ~~~
 # EXPECTED
 MODULE NOT FOUND - hello_world_with_block.md:6:1:6:17
+UNDEFINED VARIABLE - hello_world_with_block.md:11:2:11:14
 UNUSED VARIABLE - hello_world_with_block.md:9:2:9:7
 # PROBLEMS
 **MODULE NOT FOUND**
@@ -31,6 +32,17 @@ You're attempting to use this module here:
 import pf.Stdout
 ```
 ^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `Stdout.line!` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**hello_world_with_block.md:11:2:11:14:**
+```roc
+	Stdout.line!("Hello, world!")
+```
+	^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -105,9 +117,7 @@ NO CHANGE
 					(e-string
 						(e-literal (string "World"))))
 				(e-call
-					(e-lookup-external
-						(module-idx "4")
-						(target-node-idx "0"))
+					(e-runtime-error (tag "ident_not_in_scope"))
 					(e-string
 						(e-literal (string "Hello, world!")))))))
 	(s-import (module "pf.Stdout")

@@ -18,6 +18,7 @@ main! = |_| {}
 ~~~
 # EXPECTED
 MODULE NOT FOUND - type_record_effectful.md:3:1:3:17
+UNDEFINED VARIABLE - type_record_effectful.md:7:5:7:17
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `pf.Stdout` was not found in this Roc project.
@@ -28,6 +29,17 @@ You're attempting to use this module here:
 import pf.Stdout
 ```
 ^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `Stdout.line!` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**type_record_effectful.md:7:5:7:17:**
+```roc
+    Stdout.line!(person.name)
+```
+    ^^^^^^^^^^^^
 
 
 # TOKENS
@@ -112,9 +124,7 @@ main! = |_| {}
 			(e-block
 				(s-expr
 					(e-call
-						(e-lookup-external
-							(module-idx "4")
-							(target-node-idx "0"))
+						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-dot-access (field "name")
 							(receiver
 								(e-lookup-local

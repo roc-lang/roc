@@ -2266,22 +2266,33 @@ pub fn canonicalizeExpr(
                             );
                             defer self.env.gpa.free(qualified_name_str);
 
-                            const target_node_idx = if (self.module_envs) |envs_map| blk: {
+                            const target_node_idx_opt: ?u16 = if (self.module_envs) |envs_map| blk: {
                                 if (envs_map.get(module_text)) |module_env| {
                                     // Try looking up the qualified name first (e.g., "Bool.not")
                                     if (module_env.common.findIdent(qualified_name_str)) |qname_ident| {
-                                        break :blk module_env.getExposedNodeIndexById(qname_ident) orelse 0;
+                                        break :blk module_env.getExposedNodeIndexById(qname_ident);
                                     }
                                     // Fall back to unqualified name
                                     if (module_env.common.findIdent(field_text)) |target_ident| {
-                                        break :blk module_env.getExposedNodeIndexById(target_ident) orelse 0;
+                                        break :blk module_env.getExposedNodeIndexById(target_ident);
                                     } else {
-                                        break :blk 0;
+                                        break :blk null;
                                     }
                                 } else {
-                                    break :blk 0;
+                                    break :blk null;
                                 }
-                            } else 0;
+                            } else null;
+
+                            const target_node_idx = target_node_idx_opt orelse {
+                                // The identifier doesn't exist in the module or isn't exposed
+                                return CanonicalizedExpr{
+                                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .ident_not_in_scope = .{
+                                        .ident = qualified_ident,
+                                        .region = region,
+                                    } }),
+                                    .free_vars = null,
+                                };
+                            };
 
                             // Create the e_lookup_external expression with Import.Idx
                             const expr_idx = try self.env.addExprAndTypeVar(CIR.Expr{ .e_lookup_external = .{
@@ -2320,6 +2331,7 @@ pub fn canonicalizeExpr(
                     .not_found => {
                         // Check if this identifier is an exposed item from an import
                         if (self.scopeLookupExposedItem(ident)) |exposed_info| {
+
                             // Get the Import.Idx for the module this item comes from
                             const module_text = self.env.getIdent(exposed_info.module_name);
                             const import_idx = self.scopeLookupImportedModule(module_text) orelse {
@@ -2336,17 +2348,31 @@ pub fn canonicalizeExpr(
                             // Look up the target node index in the module's exposed_items
                             // Need to convert identifier from current module to target module
                             const field_text = self.env.getIdent(exposed_info.original_name);
-                            const target_node_idx = if (self.module_envs) |envs_map| blk: {
+                            const target_node_idx_opt: ?u16 = if (self.module_envs) |envs_map| blk: {
                                 if (envs_map.get(module_text)) |module_env| {
                                     if (module_env.common.findIdent(field_text)) |target_ident| {
-                                        break :blk module_env.getExposedNodeIndexById(target_ident) orelse 0;
+                                        break :blk module_env.getExposedNodeIndexById(target_ident);
                                     } else {
-                                        break :blk 0;
+                                        break :blk null;
                                     }
                                 } else {
-                                    break :blk 0;
+                                    break :blk null;
                                 }
-                            } else 0;
+                            } else null;
+
+                            // If we didn't find a valid node index, this is an error - the identifier doesn't exist or isn't exposed
+                            const target_node_idx = target_node_idx_opt orelse {
+                                // The exposed item doesn't actually exist in the module - fall through to normal error handling
+                                // This can happen with qualified identifiers like "Result.withDefault" where Result is a type module
+                                // but withDefault doesn't exist
+                                return CanonicalizedExpr{
+                                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .ident_not_in_scope = .{
+                                        .ident = ident,
+                                        .region = region,
+                                    } }),
+                                    .free_vars = null,
+                                };
+                            };
 
                             // Create the e_lookup_external expression with Import.Idx
                             const expr_idx = try self.env.addExprAndTypeVar(CIR.Expr{ .e_lookup_external = .{
@@ -7550,17 +7576,23 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     // Look up the target node index in the module's exposed_items
     // Need to convert identifier from current module to target module
     const field_text = self.env.getIdent(field_name);
-    const target_node_idx = if (self.module_envs) |envs_map| blk: {
+    const target_node_idx_opt: ?u16 = if (self.module_envs) |envs_map| blk: {
         if (envs_map.get(module_text)) |module_env| {
             if (module_env.common.findIdent(field_text)) |target_ident| {
-                break :blk module_env.getExposedNodeIndexById(target_ident) orelse 0;
+                // Found the identifier in the module - check if it's exposed
+                break :blk module_env.getExposedNodeIndexById(target_ident);
             } else {
-                break :blk 0;
+                // The identifier doesn't exist in the module at all
+                break :blk null;
             }
         } else {
-            break :blk 0;
+            // Module not found in envs (shouldn't happen since we checked import_idx exists)
+            break :blk null;
         }
-    } else 0;
+    } else null;
+
+    // If we didn't find a valid node index, return null to fall through to error handling
+    const target_node_idx = target_node_idx_opt orelse return null;
 
     // Create the e_lookup_external expression with Import.Idx
     const expr_idx = try self.env.addExprAndTypeVar(CIR.Expr{ .e_lookup_external = .{

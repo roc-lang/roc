@@ -8,9 +8,19 @@ type=expr
 { name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - record_mixed_types.md:1:35:1:44
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named `Bool.true` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**record_mixed_types.md:1:35:1:44:**
+```roc
+{ name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
+```
+                                  ^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,UpperIdent,NoSpaceDotLowerIdent,Comma,LowerIdent,OpColon,OpenSquare,Int,Comma,Int,Comma,Int,CloseSquare,Comma,LowerIdent,OpColon,Float,CloseCurly,
@@ -48,9 +58,7 @@ NO CHANGE
 		(field (name "age")
 			(e-num (value "30")))
 		(field (name "active")
-			(e-lookup-external
-				(module-idx "2")
-				(target-node-idx "0")))
+			(e-runtime-error (tag "ident_not_in_scope")))
 		(field (name "scores")
 			(e-list
 				(elems
@@ -62,5 +70,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ active: _field, age: Num(_size), balance: Num(Frac(_size2)), name: Str, scores: List(Num(_size3)) }"))
+(expr (type "{ active: Error, age: Num(_size), balance: Num(Frac(_size2)), name: Str, scores: List(Num(_size3)) }"))
 ~~~

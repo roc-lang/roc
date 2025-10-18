@@ -68,21 +68,29 @@ DUPLICATE DEFINITION - can_import_exposing_types.md:1:1:1:1
 MODULE NOT FOUND - can_import_exposing_types.md:3:1:3:38
 UNDECLARED TYPE - can_import_exposing_types.md:6:27:6:32
 UNDECLARED TYPE - can_import_exposing_types.md:6:34:6:39
+UNDEFINED VARIABLE - can_import_exposing_types.md:7:21:7:31
 UNDECLARED TYPE - can_import_exposing_types.md:10:17:10:24
 UNDECLARED TYPE - can_import_exposing_types.md:10:28:10:36
+UNDEFINED VARIABLE - can_import_exposing_types.md:12:14:12:25
+UNDEFINED VARIABLE - can_import_exposing_types.md:14:22:14:29
+UNDEFINED VARIABLE - can_import_exposing_types.md:15:23:15:38
 UNDECLARED TYPE - can_import_exposing_types.md:20:15:20:21
 UNDECLARED TYPE - can_import_exposing_types.md:20:28:20:33
 UNDECLARED TYPE - can_import_exposing_types.md:20:50:20:55
 UNDECLARED TYPE - can_import_exposing_types.md:20:58:20:63
 UNDEFINED VARIABLE - can_import_exposing_types.md:22:5:22:16
+UNDEFINED VARIABLE - can_import_exposing_types.md:24:13:24:30
 UNDECLARED TYPE - can_import_exposing_types.md:35:16:35:22
+UNDEFINED VARIABLE - can_import_exposing_types.md:36:25:36:40
 UNDECLARED TYPE - can_import_exposing_types.md:39:18:39:26
+UNDEFINED VARIABLE - can_import_exposing_types.md:42:23:42:42
 UNDEFINED VARIABLE - can_import_exposing_types.md:43:23:43:37
 UNDECLARED TYPE - can_import_exposing_types.md:47:25:47:30
 UNDECLARED TYPE - can_import_exposing_types.md:47:32:47:37
 UNDECLARED TYPE - can_import_exposing_types.md:47:40:47:46
 UNDECLARED TYPE - can_import_exposing_types.md:47:57:47:65
 UNDECLARED TYPE - can_import_exposing_types.md:47:67:47:72
+UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Config_ is not declared in this scope.
@@ -190,6 +198,17 @@ parseJson : Str -> Result(Value, Error)
                                  ^^^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named `Json.parse` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_exposing_types.md:7:21:7:31:**
+```roc
+parseJson = |input| Json.parse(input)
+```
+                    ^^^^^^^^^^
+
+
 **UNDECLARED TYPE**
 The type _Request_ is not declared in this scope.
 
@@ -210,6 +229,39 @@ This type is referenced here:
 handleRequest : Request -> Response
 ```
                            ^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `Json.decode` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_exposing_types.md:12:14:12:25:**
+```roc
+    result = Json.decode(req.body)
+```
+             ^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `Http.ok` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_exposing_types.md:14:22:14:29:**
+```roc
+        Ok(value) => Http.ok(value)
+```
+                     ^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `Http.badRequest` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_exposing_types.md:15:23:15:38:**
+```roc
+        Err(error) => Http.badRequest(error)
+```
+                      ^^^^^^^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -267,6 +319,17 @@ Is there an `import` or `exposing` missing up-top?
     ^^^^^^^^^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named `Json.validateWith` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_exposing_types.md:24:13:24:30:**
+```roc
+        |v| Json.validateWith(config, v),
+```
+            ^^^^^^^^^^^^^^^^^
+
+
 **UNDECLARED TYPE**
 The type _Config_ is not declared in this scope.
 
@@ -278,6 +341,17 @@ createClient : Config -> Http.Client
                ^^^^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named `Http.clientWith` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_exposing_types.md:36:25:36:40:**
+```roc
+createClient = |config| Http.clientWith(config)
+```
+                        ^^^^^^^^^^^^^^^
+
+
 **UNDECLARED TYPE**
 The type _Response_ is not declared in this scope.
 
@@ -287,6 +361,17 @@ This type is referenced here:
 handleResponse : Response -> Str
 ```
                  ^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `Http.statusToString` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_exposing_types.md:42:23:42:42:**
+```roc
+        Ok(status) => Http.statusToString(status)
+```
+                      ^^^^^^^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -353,6 +438,17 @@ This type is referenced here:
 combineResults : Result(Value, Error), Status -> Result(Response, Error)
 ```
                                                                   ^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `Json.encode` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_exposing_types.md:50:33:50:44:**
+```roc
+        Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })
+```
+                                ^^^^^^^^^^^
 
 
 # TOKENS
@@ -642,9 +738,7 @@ combineResults = |jsonResult, httpStatus|
 			(args
 				(p-assign (ident "input")))
 			(e-call
-				(e-lookup-external
-					(module-idx "4")
-					(target-node-idx "0"))
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local
 					(p-assign (ident "input")))))
 		(annotation
@@ -667,9 +761,7 @@ combineResults = |jsonResult, httpStatus|
 					(s-let
 						(p-assign (ident "result"))
 						(e-call
-							(e-lookup-external
-								(module-idx "4")
-								(target-node-idx "0"))
+							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-dot-access (field "body")
 								(receiver
 									(e-lookup-local
@@ -686,9 +778,7 @@ combineResults = |jsonResult, httpStatus|
 											(p-applied-tag)))
 									(value
 										(e-call
-											(e-lookup-external
-												(module-idx "5")
-												(target-node-idx "0"))
+											(e-runtime-error (tag "ident_not_in_scope"))
 											(e-lookup-local
 												(p-assign (ident "value"))))))
 								(branch
@@ -697,9 +787,7 @@ combineResults = |jsonResult, httpStatus|
 											(p-applied-tag)))
 									(value
 										(e-call
-											(e-lookup-external
-												(module-idx "5")
-												(target-node-idx "0"))
+											(e-runtime-error (tag "ident_not_in_scope"))
 											(e-lookup-local
 												(p-assign (ident "error"))))))))))))
 		(annotation
@@ -724,9 +812,7 @@ combineResults = |jsonResult, httpStatus|
 						(args
 							(p-assign (ident "v")))
 						(e-call
-							(e-lookup-external
-								(module-idx "4")
-								(target-node-idx "0"))
+							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local
 								(p-assign (ident "config")))
 							(e-lookup-local
@@ -747,9 +833,7 @@ combineResults = |jsonResult, httpStatus|
 			(args
 				(p-assign (ident "config")))
 			(e-call
-				(e-lookup-external
-					(module-idx "5")
-					(target-node-idx "0"))
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local
 					(p-assign (ident "config")))))
 		(annotation
@@ -761,8 +845,8 @@ combineResults = |jsonResult, httpStatus|
 		(p-assign (ident "handleResponse"))
 		(e-closure
 			(captures
-				(capture (ident "error"))
-				(capture (ident "status")))
+				(capture (ident "status"))
+				(capture (ident "error")))
 			(e-lambda
 				(args
 					(p-assign (ident "response")))
@@ -780,9 +864,7 @@ combineResults = |jsonResult, httpStatus|
 										(p-applied-tag)))
 								(value
 									(e-call
-										(e-lookup-external
-											(module-idx "5")
-											(target-node-idx "0"))
+										(e-runtime-error (tag "ident_not_in_scope"))
 										(e-lookup-local
 											(p-assign (ident "status"))))))
 							(branch
@@ -803,8 +885,8 @@ combineResults = |jsonResult, httpStatus|
 		(p-assign (ident "combineResults"))
 		(e-closure
 			(captures
-				(capture (ident "error"))
-				(capture (ident "value")))
+				(capture (ident "value"))
+				(capture (ident "error")))
 			(e-lambda
 				(args
 					(p-assign (ident "jsonResult"))
@@ -826,9 +908,7 @@ combineResults = |jsonResult, httpStatus|
 												(fields
 													(field (name "body")
 														(e-call
-															(e-lookup-external
-																(module-idx "4")
-																(target-node-idx "0"))
+															(e-runtime-error (tag "ident_not_in_scope"))
 															(e-lookup-local
 																(p-assign (ident "value")))))
 													(field (name "status")

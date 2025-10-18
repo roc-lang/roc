@@ -31,10 +31,22 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
+UNDEFINED VARIABLE - rigid_var_no_instantiation_error.md:17:21:17:30
 UNUSED VARIABLE - rigid_var_no_instantiation_error.md:13:5:13:12
 UNUSED VARIABLE - rigid_var_no_instantiation_error.md:17:5:17:12
 UNUSED VARIABLE - rigid_var_no_instantiation_error.md:21:5:21:12
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `Bool.true` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**rigid_var_no_instantiation_error.md:17:21:17:30:**
+```roc
+    result2 = swap((Bool.true, [1, 2, 3]))
+```
+                    ^^^^^^^^^
+
+
 **UNUSED VARIABLE**
 Variable `result1` is not used anywhere in your code.
 
@@ -245,9 +257,7 @@ main! = |_| {
 								(p-assign (ident "swap")))
 							(e-tuple
 								(elems
-									(e-lookup-external
-										(module-idx "2")
-										(target-node-idx "0"))
+									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-list
 										(elems
 											(e-num (value "1"))

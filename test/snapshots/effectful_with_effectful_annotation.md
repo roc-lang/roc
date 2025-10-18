@@ -17,6 +17,7 @@ main! = print_msg!("Hello, world!")
 ~~~
 # EXPECTED
 MODULE NOT FOUND - effectful_with_effectful_annotation.md:3:1:3:17
+UNDEFINED VARIABLE - effectful_with_effectful_annotation.md:7:20:7:32
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `pf.Stdout` was not found in this Roc project.
@@ -27,6 +28,17 @@ You're attempting to use this module here:
 import pf.Stdout
 ```
 ^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `Stdout.line!` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**effectful_with_effectful_annotation.md:7:20:7:32:**
+```roc
+print_msg! = |msg| Stdout.line!(msg)
+```
+                   ^^^^^^^^^^^^
 
 
 # TOKENS
@@ -86,9 +98,7 @@ NO CHANGE
 			(args
 				(p-assign (ident "msg")))
 			(e-call
-				(e-lookup-external
-					(module-idx "4")
-					(target-node-idx "0"))
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local
 					(p-assign (ident "msg")))))
 		(annotation

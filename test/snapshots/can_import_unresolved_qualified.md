@@ -34,9 +34,15 @@ parser = Json.Parser.Advanced.NonExistent.create
 # EXPECTED
 MODULE NOT FOUND - can_import_unresolved_qualified.md:1:1:1:17
 MODULE NOT FOUND - can_import_unresolved_qualified.md:2:1:2:27
+UNDEFINED VARIABLE - can_import_unresolved_qualified.md:5:8:5:31
+UNDEFINED VARIABLE - can_import_unresolved_qualified.md:9:20:9:34
 MODULE NOT IMPORTED - can_import_unresolved_qualified.md:12:18:12:37
 MODULE NOT IMPORTED - can_import_unresolved_qualified.md:12:41:12:61
+UNDEFINED VARIABLE - can_import_unresolved_qualified.md:13:24:13:51
 UNUSED VARIABLE - can_import_unresolved_qualified.md:13:19:13:22
+UNDEFINED VARIABLE - can_import_unresolved_qualified.md:16:10:16:20
+UNDEFINED VARIABLE - can_import_unresolved_qualified.md:22:10:22:28
+UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `json.Json` was not found in this Roc project.
@@ -58,6 +64,28 @@ You're attempting to use this module here:
 import http.Client as Http
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `Json.NonExistent.method` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_unresolved_qualified.md:5:8:5:31:**
+```roc
+main = Json.NonExistent.method
+```
+       ^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `Json.stringify` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_unresolved_qualified.md:9:20:9:34:**
+```roc
+parseData = |data| Json.stringify(data)
+```
+                   ^^^^^^^^^^^^^^
 
 
 **MODULE NOT IMPORTED**
@@ -82,6 +110,17 @@ processRequest : Http.Server.Request -> Http.Server.Response
                                         ^^^^^^^^^^^^^^^^^^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named `Http.Server.defaultResponse` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_unresolved_qualified.md:13:24:13:51:**
+```roc
+processRequest = |req| Http.Server.defaultResponse
+```
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **UNUSED VARIABLE**
 Variable `req` is not used anywhere in your code.
 
@@ -92,6 +131,39 @@ The unused variable is declared here:
 processRequest = |req| Http.Server.defaultResponse
 ```
                   ^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `Json.prase` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_unresolved_qualified.md:16:10:16:20:**
+```roc
+result = Json.prase("test")
+```
+         ^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `Http.invalidMethod` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_unresolved_qualified.md:22:10:22:28:**
+```roc
+client = Http.invalidMethod
+```
+         ^^^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `Json.Parser.Advanced.NonExistent.create` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_unresolved_qualified.md:25:10:25:49:**
+```roc
+parser = Json.Parser.Advanced.NonExistent.create
+```
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -166,18 +238,14 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "main"))
-		(e-lookup-external
-			(module-idx "4")
-			(target-node-idx "0")))
+		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "parseData"))
 		(e-lambda
 			(args
 				(p-assign (ident "data")))
 			(e-call
-				(e-lookup-external
-					(module-idx "4")
-					(target-node-idx "0"))
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local
 					(p-assign (ident "data")))))
 		(annotation
@@ -190,9 +258,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "req")))
-			(e-lookup-external
-				(module-idx "5")
-				(target-node-idx "0")))
+			(e-runtime-error (tag "ident_not_in_scope")))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
@@ -201,9 +267,7 @@ NO CHANGE
 	(d-let
 		(p-assign (ident "result"))
 		(e-call
-			(e-lookup-external
-				(module-idx "4")
-				(target-node-idx "0"))
+			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-string
 				(e-literal (string "test")))))
 	(d-let
@@ -212,14 +276,10 @@ NO CHANGE
 			(p-assign (ident "config"))))
 	(d-let
 		(p-assign (ident "client"))
-		(e-lookup-external
-			(module-idx "5")
-			(target-node-idx "0")))
+		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "parser"))
-		(e-lookup-external
-			(module-idx "4")
-			(target-node-idx "0")))
+		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-import (module "json.Json")
 		(exposes))
 	(s-import (module "http.Client")

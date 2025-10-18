@@ -44,9 +44,11 @@ UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:5:11:5:12
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:5:26:5:27
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:6:5:6:8
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:6:8:6:9
+UNDEFINED VARIABLE - record_different_fields_reserved_error.md:6:10:6:19
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:6:19:6:20
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:5:7:7
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:7:7:8
+UNDEFINED VARIABLE - record_different_fields_reserved_error.md:7:9:7:19
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:19:7:20
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -362,6 +364,17 @@ I don't recognize this syntax.
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
+**UNDEFINED VARIABLE**
+Nothing is named `Bool.true` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**record_different_fields_reserved_error.md:6:10:6:19:**
+```roc
+    and: Bool.true,
+```
+         ^^^^^^^^^
+
+
 **UNRECOGNIZED SYNTAX**
 I don't recognize this syntax.
 
@@ -394,6 +407,17 @@ I don't recognize this syntax.
       ^
 
 This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNDEFINED VARIABLE**
+Nothing is named `Bool.false` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**record_different_fields_reserved_error.md:7:9:7:19:**
+```roc
+    or: Bool.false,
+```
+        ^^^^^^^^^^
+
 
 **UNRECOGNIZED SYNTAX**
 I don't recognize this syntax.
@@ -495,9 +519,7 @@ EndOfFile,
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
-		(e-lookup-external
-			(module-idx "2")
-			(target-node-idx "0")))
+		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
@@ -505,9 +527,7 @@ EndOfFile,
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
-		(e-lookup-external
-			(module-idx "2")
-			(target-node-idx "0")))
+		(e-runtime-error (tag "ident_not_in_scope")))
 	(e-runtime-error (tag "expr_not_canonicalized")))
 ~~~
 # TYPES

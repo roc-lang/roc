@@ -264,6 +264,7 @@ UNDEFINED VARIABLE - fuzz_crash_023.md:185:4:185:10
 UNDEFINED VARIABLE - fuzz_crash_023.md:188:22:188:25
 NOT IMPLEMENTED - :0:0:0:0
 NOT IMPLEMENTED - :0:0:0:0
+UNDEFINED VARIABLE - fuzz_crash_023.md:191:2:191:14
 UNDEFINED VARIABLE - fuzz_crash_023.md:193:4:193:13
 UNUSED VARIABLE - fuzz_crash_023.md:164:2:164:18
 UNUSED VARIABLE - fuzz_crash_023.md:165:2:165:14
@@ -779,6 +780,17 @@ This error doesn't have a proper diagnostic report yet. Let us know if you want 
 This feature is not yet implemented: canonicalize suffix_single_question expression
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+**UNDEFINED VARIABLE**
+Nothing is named `Stdout.line!` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_023.md:191:2:191:14:**
+```roc
+	Stdout.line!(
+```
+	^^^^^^^^^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `toStr` in this scope.
@@ -2333,9 +2345,7 @@ expect {
 					(s-expr
 						(e-runtime-error (tag "not_implemented")))
 					(e-call
-						(e-lookup-external
-							(module-idx "4")
-							(target-node-idx "0"))
+						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-string
 							(e-literal (string "How about "))
 							(e-call
