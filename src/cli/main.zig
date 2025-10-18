@@ -2799,24 +2799,6 @@ fn checkFileWithBuildEnv(
     // Build the file (works for both app and module files)
     try build_env.build(filepath);
 
-    // Force processing to ensure type checking happens
-    var sched_iter = build_env.schedulers.iterator();
-    if (sched_iter.next()) |sched_entry| {
-        const package_env = sched_entry.value_ptr.*;
-        if (package_env.modules.items.len > 0) {
-            const module_name = package_env.modules.items[0].name;
-
-            // Keep processing until the module is done
-            var max_iterations: u32 = 20;
-            while (max_iterations > 0) : (max_iterations -= 1) {
-                const phase = package_env.modules.items[0].phase;
-                if (phase == .Done) break;
-
-                package_env.processModuleByName(module_name) catch break;
-            }
-        }
-    }
-
     // Drain all reports
     const drained = try build_env.drainReports();
 

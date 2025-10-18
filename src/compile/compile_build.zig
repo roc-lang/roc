@@ -519,10 +519,13 @@ pub const BuildEnv = struct {
             try e.value_ptr.*.buildRoot(pkg.root_file);
         }
 
-        // Wait for global queue to drain only when using the global queue
+        // Wait for all work to complete
         if (builtin.target.cpu.arch != .wasm32 and self.mode == .multi_threaded) {
+            // Multi-threaded mode: wait for global queue to drain
             self.global_queue.waitForIdle();
         }
+        // Note: In single-threaded mode, buildRoot() runs synchronously and blocks
+        // until all modules are complete, so no additional waiting is needed.
 
         // Deterministic emission: globally order reports by (min dependency depth from app, then module name)
         try self.emitDeterministic();
