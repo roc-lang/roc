@@ -268,6 +268,32 @@ test "error test - divide by zero" {
     try runExpectError("10 % 0", error.DivisionByZero, .no_trace);
 }
 
+test "simple lambda with if-else" {
+    // Copy of working test - verify it runs
+    try runExpectInt("(|x| if x > 0 x else 0)(5)", 5, .no_trace);
+    try runExpectInt("(|x| if x > 0 x else 0)(-3)", 0, .no_trace);
+}
+
+test "crash in else branch inside lambda" {
+    // Test crash in else branch evaluated at runtime
+    try runExpectError(
+        \\(|x| if x > 0 x else {
+        \\    crash "crash in else!"
+        \\    0
+        \\})(-5)
+    , error.Crash, .no_trace);
+}
+
+test "crash NOT taken when condition true" {
+    // Test that crash in else branch is NOT executed when if branch is taken
+    try runExpectInt(
+        \\(|x| if x > 0 x else {
+        \\    crash "this should not execute"
+        \\    0
+        \\})(10)
+    , 10, .no_trace);
+}
+
 test "error test - crash statement" {
     // Test crash statement in a block (crash is a statement, not an expression)
     try runExpectError(
@@ -406,7 +432,7 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interpreter = try Interpreter.init(testing.allocator, resources.module_env);
+    var interpreter = try Interpreter.init(testing.allocator, resources.module_env, &.{});
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -722,7 +748,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
     // Test 1: Evaluate with the original ModuleEnv
     {
-        var interpreter = try Interpreter.init(gpa, &original_env);
+        var interpreter = try Interpreter.init(gpa, &original_env, &.{});
         defer interpreter.deinit();
 
         const ops = test_env_instance.get_ops();
@@ -786,7 +812,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         // Test 4: Evaluate the same expression using the deserialized ModuleEnv
         // The original expression index should still be valid since the NodeStore structure is preserved
         {
-            var interpreter = try Interpreter.init(gpa, deserialized_env);
+            var interpreter = try Interpreter.init(gpa, deserialized_env, &.{});
             defer interpreter.deinit();
 
             const ops = test_env_instance.get_ops();

@@ -44,9 +44,16 @@ pub const Problem = union(enum) {
     invalid_record_ext: VarProblem1,
     invalid_tag_union_ext: VarProblem1,
     bug: Bug,
+    comptime_crash: ComptimeCrash,
 
     pub const Idx = enum(u32) { _ };
     pub const Tag = std.meta.Tag(@This());
+};
+
+/// A crash that occurred during compile-time evaluation
+pub const ComptimeCrash = struct {
+    message: []const u8,
+    region: base.Region,
 };
 
 /// A single var problem
@@ -305,6 +312,7 @@ pub const ReportBuilder = struct {
             .invalid_record_ext => |_| return self.buildUnimplementedReport("invalid_record_ext"),
             .invalid_tag_union_ext => |_| return self.buildUnimplementedReport("invalid_tag_union_ext"),
             .bug => |_| return self.buildUnimplementedReport("bug"),
+            .comptime_crash => |data| return self.buildComptimeCrashReport(data),
         }
     }
 
@@ -1727,6 +1735,37 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "UNIMPLEMENTED: ", .runtime_error);
         const owned_bytes = try report.addOwnedString(bytes);
         try report.document.addText(owned_bytes);
+        return report;
+    }
+
+    /// Build a report for compile-time crash
+    fn buildComptimeCrashReport(self: *Self, data: ComptimeCrash) !Report {
+        var report = Report.init(self.gpa, "COMPTIME CRASH", .runtime_error);
+        errdefer report.deinit();
+
+        const owned_message = try report.addOwnedString(data.message);
+
+        try report.document.addText("This definition crashed during compile-time evaluation:");
+        try report.document.addLineBreak();
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addText("The ");
+        try report.document.addAnnotated("crash", .keyword);
+        try report.document.addText(" happened with this message:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(owned_message, .emphasized);
+
         return report;
     }
 

@@ -103,6 +103,7 @@ pub const Interpreter = struct {
 
     // Runtime unification context
     env: *can.ModuleEnv,
+    other_envs: []const *const can.ModuleEnv,
     problems: problem_mod.Store,
     snapshots: snapshot_mod.Store,
     unify_scratch: unify.Scratch,
@@ -118,7 +119,7 @@ pub const Interpreter = struct {
     // Used to unwrap extensible tags
     scratch_tags: std.ArrayList(types.Tag),
 
-    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv) !Interpreter {
+    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, other_envs: []const *const can.ModuleEnv) !Interpreter {
         const rt_types_ptr = try allocator.create(types.store.Store);
         rt_types_ptr.* = try types.store.Store.initCapacity(allocator, 1024, 512);
         var slots = try std.ArrayList(u32).initCapacity(allocator, 1024);
@@ -133,6 +134,7 @@ pub const Interpreter = struct {
             .translate_cache = std.AutoHashMap(u64, types.Var).init(allocator),
             .poly_cache = HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80).init(allocator),
             .env = env,
+            .other_envs = other_envs,
             .problems = try problem_mod.Store.initCapacity(allocator, 64),
             .snapshots = try snapshot_mod.Store.initCapacity(allocator, 256),
             .unify_scratch = try unify.Scratch.init(allocator),
@@ -1606,6 +1608,34 @@ pub const Interpreter = struct {
                     }
                 }
                 return error.NotImplemented;
+            },
+            .e_lookup_external => |lookup| {
+                // Cross-module reference - look up in imported module
+                const import_idx: usize = @intFromEnum(lookup.module_idx);
+                if (import_idx >= self.other_envs.len) {
+                    return error.NotImplemented;
+                }
+                const other_env = self.other_envs[import_idx];
+
+                // The target_node_idx is a Def.Idx in the other module
+                const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+                const target_def = other_env.store.getDef(target_def_idx);
+
+                // Save both env and bindings state
+                const saved_env = self.env;
+                const saved_bindings_len = self.bindings.items.len;
+                self.env = @constCast(other_env);
+                defer {
+                    self.env = saved_env;
+                    self.bindings.shrinkRetainingCapacity(saved_bindings_len);
+                }
+
+                // Evaluate the definition's expression in the other module's context
+                const target_ct_var = can.ModuleEnv.varFrom(target_def.expr);
+                const target_rt_var = try self.translateTypeVar(self.env, target_ct_var);
+                const result = try self.evalExprMinimal(target_def.expr, roc_ops, target_rt_var);
+
+                return result;
             },
             .e_unary_minus => |unary| {
                 const operand_ct_var = can.ModuleEnv.varFrom(unary.expr);
@@ -3709,7 +3739,7 @@ test "interpreter: Var->Layout slot caches computed layout" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    var interp = try Interpreter.init(gpa, &env, &.{});
     defer interp.deinit();
 
     // Create a concrete runtime type: Str
@@ -3734,7 +3764,7 @@ test "interpreter: translateTypeVar for str" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    var interp = try Interpreter.init(gpa, &env, &.{});
     defer interp.deinit();
 
     const ct_str = try env.types.freshFromContent(.{ .structure = .str });
@@ -3752,7 +3782,7 @@ test "interpreter: translateTypeVar for int64" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    var interp = try Interpreter.init(gpa, &env, &.{});
     defer interp.deinit();
 
     const ct_int = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
@@ -3778,7 +3808,7 @@ test "interpreter: translateTypeVar for f64" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    var interp = try Interpreter.init(gpa, &env, &.{});
     defer interp.deinit();
 
     const ct_frac = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } });
@@ -3804,7 +3834,7 @@ test "interpreter: translateTypeVar for tuple(Str, I64)" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    var interp = try Interpreter.init(gpa, &env, &.{});
     defer interp.deinit();
 
     const ct_str = try env.types.freshFromContent(.{ .structure = .str });
@@ -3848,7 +3878,7 @@ test "interpreter: translateTypeVar for record {first: Str, second: I64}" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    var interp = try Interpreter.init(gpa, &env, &.{});
     defer interp.deinit();
 
     // Build compile-time record content
@@ -3906,7 +3936,7 @@ test "interpreter: translateTypeVar for alias of Str" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    var interp = try Interpreter.init(gpa, &env, &.{});
     defer interp.deinit();
 
     const alias_name = try env.common.idents.insert(gpa, @import("base").Ident.for_text("MyAlias"));
@@ -3933,7 +3963,7 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    var interp = try Interpreter.init(gpa, &env, &.{});
     defer interp.deinit();
 
     const name_nominal = try env.common.idents.insert(gpa, @import("base").Ident.for_text("Point"));
@@ -3965,7 +3995,7 @@ test "interpreter: translateTypeVar for flex var" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    var interp = try Interpreter.init(gpa, &env, &.{});
     defer interp.deinit();
 
     const ct_flex = try env.types.freshFromContent(.{ .flex = types.Flex.init() });
@@ -3981,7 +4011,7 @@ test "interpreter: translateTypeVar for rigid var" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    var interp = try Interpreter.init(gpa, &env, &.{});
     defer interp.deinit();
 
     const name_a = try env.common.idents.insert(gpa, @import("base").Ident.for_text("A"));
@@ -3999,7 +4029,7 @@ test "interpreter: poly cache insert and lookup" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    var interp = try Interpreter.init(gpa, &env, &.{});
     defer interp.deinit();
 
     const f_id: u32 = 12345;
@@ -4035,7 +4065,7 @@ test "interpreter: prepareCall miss then hit" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    var interp = try Interpreter.init(gpa, &env, &.{});
     defer interp.deinit();
 
     const func_id: u32 = 7777;
@@ -4065,7 +4095,7 @@ test "interpreter: prepareCallWithFuncVar populates cache" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    var interp = try Interpreter.init(gpa, &env, &.{});
     defer interp.deinit();
 
     const func_id: u32 = 9999;
@@ -4095,7 +4125,7 @@ test "interpreter: unification constrains (a->a) with Str" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    var interp = try Interpreter.init(gpa, &env, &.{});
     defer interp.deinit();
 
     const func_id: u32 = 42;
