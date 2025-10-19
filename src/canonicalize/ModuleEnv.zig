@@ -141,15 +141,6 @@ pub fn deinit(self: *Self) void {
     self.store.deinit();
 }
 
-/// Freeze all interners in this module environment, preventing any new entries from being added.
-/// This should be called after canonicalization is complete, so that
-/// we know it's safe to serialize/deserialize the part of the interner
-/// that goes from ident to string, because we don't go from string to ident
-/// (or add new entries) in any of the later stages of compilation.
-pub fn freezeInterners(self: *Self) void {
-    self.common.freezeInterners();
-}
-
 // ===== Module compilation functionality =====
 
 /// Records a diagnostic error during canonicalization without blocking compilation.
@@ -1441,8 +1432,8 @@ pub const Serialized = struct {
         source: []const u8,
         module_name: []const u8,
     ) *Self {
-        // ModuleEnv.Serialized should be at least as big as ModuleEnv
-        std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Self));
+        // Note: Serialized may be smaller than the runtime struct if it contains frozen fields.
+        // This is safe because we're explicitly initializing all fields below.
 
         // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
         const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));

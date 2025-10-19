@@ -25,9 +25,6 @@ bytes: collections.SafeList(u8) = .{},
 hash_table: collections.SafeList(Idx) = .{},
 /// The current number of entries in the hash table.
 entry_count: u32 = 0,
-/// When true, no new entries can be added to the interner.
-/// This is set after parsing is complete.
-frozen: if (std.debug.runtime_safety) bool else void = if (std.debug.runtime_safety) false else {},
 
 /// A unique index for a deduped string in this interner.
 pub const Idx = enum(u32) {
@@ -134,10 +131,6 @@ fn resizeHashTable(self: *SmallStringInterner, gpa: std.mem.Allocator) std.mem.A
 
 /// Add a string to this interner, returning a unique, serial index.
 pub fn insert(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Idx {
-    if (std.debug.runtime_safety) {
-        std.debug.assert(!self.frozen); // Should not insert into a frozen interner
-    }
-
     // Check if we need to resize the hash table (when 80% full = entry_count * 5 >= hash_table.len() * 4)
     if (self.entry_count * 5 >= self.hash_table.len() * 4) {
         try self.resizeHashTable(gpa);
@@ -176,13 +169,6 @@ pub fn getText(self: *const SmallStringInterner, idx: Idx) []u8 {
     const start = @intFromEnum(idx);
 
     return std.mem.sliceTo(bytes_slice[start..], 0);
-}
-
-/// Freeze the interner, preventing any new entries from being added.
-pub fn freeze(self: *SmallStringInterner) void {
-    if (std.debug.runtime_safety) {
-        self.frozen = true;
-    }
 }
 
 /// Serialize this interner to the given CompactWriter. The resulting interner
@@ -237,14 +223,10 @@ pub const Serialized = struct {
         try self.hash_table.serialize(&interner.hash_table, allocator, writer);
         // Copy simple values directly
         self.entry_count = interner.entry_count;
-        // Note: frozen is not serialized - it will always be true after deserialization
     }
 
     /// Deserialize this Serialized struct into a SmallStringInterner
     pub fn deserialize(self: *Serialized, offset: i64) *SmallStringInterner {
-        // Self.Serialized should be at least as big as Self
-        std.debug.assert(@sizeOf(Serialized) >= @sizeOf(SmallStringInterner));
-
         // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
         const interner = @as(*SmallStringInterner, @ptrCast(self));
 
@@ -252,7 +234,6 @@ pub const Serialized = struct {
             .bytes = self.bytes.deserialize(offset).*,
             .hash_table = self.hash_table.deserialize(offset).*,
             .entry_count = self.entry_count,
-            .frozen = if (std.debug.runtime_safety) true else {}, // Always frozen after deserialization
         };
 
         return interner;

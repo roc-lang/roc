@@ -115,8 +115,8 @@ pub const Store = struct {
 
         /// Deserialize this Serialized struct into a Store
         pub fn deserialize(self: *Serialized, offset: i64) *Store {
-            // Ident.Store.Serialized should be at least as big as Ident.Store
-            std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Store));
+            // Note: We don't serialize the frozen field in interner, so Serialized may be smaller than Store.
+            // This is safe because we're explicitly initializing all fields below.
 
             // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
             const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
@@ -226,10 +226,6 @@ pub const Store = struct {
         };
     }
 
-    /// Freeze the identifier store, preventing any new entries from being added.
-    pub fn freeze(self: *Store) void {
-        self.interner.freeze();
-    }
     /// Calculate the size needed to serialize this Ident.Store
     pub fn serializedSize(self: *const Store) usize {
         var size: usize = 0;

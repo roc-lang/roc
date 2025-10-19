@@ -588,9 +588,6 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     for (defs_slice) |def_idx| {
         try self.checkDef(def_idx);
     }
-
-    // Freeze interners after type-checking is complete
-    self.cir.freezeInterners();
 }
 
 // repl //

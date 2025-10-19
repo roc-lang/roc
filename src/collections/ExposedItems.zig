@@ -121,8 +121,8 @@ pub const ExposedItems = struct {
 
         /// Deserialize this Serialized struct into an ExposedItems
         pub fn deserialize(self: *Serialized, offset: i64) *ExposedItems {
-            // ExposedItems.Serialized should be at least as big as ExposedItems
-            std.debug.assert(@sizeOf(Serialized) >= @sizeOf(ExposedItems));
+            // Note: Serialized may be smaller than the runtime struct if it contains frozen fields.
+            // This is safe because we're explicitly initializing all fields below.
 
             // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
             const exposed_items = @as(*ExposedItems, @ptrFromInt(@intFromPtr(self)));

@@ -1592,9 +1592,6 @@ fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) !voi
                 // Skip hidden files and special directories
                 if (entry.name[0] == '.') continue;
 
-                // Skip TODO directories (tests for unimplemented features)
-                if (std.mem.eql(u8, entry.name, "todo_cross_module_calls")) continue;
-
                 const full_path = try std.fs.path.join(gpa, &[_][]const u8{ canonical_path, entry.name });
                 defer gpa.free(full_path);
 
