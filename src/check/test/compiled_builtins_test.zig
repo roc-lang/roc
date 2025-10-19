@@ -66,6 +66,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .module_name = module_name,
         .diagnostics = serialized_ptr.diagnostics,
         .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+        .evaluation_order = null,
     };
 
     return LoadedModule{

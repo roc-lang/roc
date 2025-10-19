@@ -481,55 +481,85 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8, def_ident: ?[]co
     defer interpreter.deinit();
 
     // If we have past definitions or a def_ident, we need to evaluate all the defs (except main!)
-    // to populate bindings for associated items
+    // to populate bindings
     if (self.past_defs.items.len > 0 or def_ident != null) {
-        const defs_slice = cir.store.sliceDefs(czer.env.all_defs);
+        // Use dependency-ordered evaluation if available
+        if (czer.env.evaluation_order) |eval_order| {
+            // Evaluate SCCs in topological order
+            for (eval_order.sccs) |scc| {
+                // Handle recursive SCCs (for now, treat them the same as non-recursive)
+                // In the future, we could:
+                // 1. Check if all defs are functions (OK - create closures)
+                // 2. Check if any are non-function values (ERROR - circular dependency)
 
-        // Evaluate all defs except main! and the current def (if there are past defs)
-        for (defs_slice) |def_idx| {
-            const def = cir.store.getDef(def_idx);
-            const pattern = cir.store.getPattern(def.pattern);
+                for (scc.defs) |def_idx| {
+                    const def = cir.store.getDef(def_idx);
+                    const pattern = cir.store.getPattern(def.pattern);
 
-            // Skip main! since we extract its body separately
-            // Skip the current def ONLY if it's a NEW definition (not a redefinition)
-            if (pattern == .assign) {
-                const ident_idx = pattern.assign.ident;
-                const ident_text = cir.getIdent(ident_idx);
-                if (std.mem.eql(u8, ident_text, "main!")) {
-                    continue;
-                }
-                // Skip the current def only if it's a NEW definition
-                if (self.past_defs.items.len > 0 and def_ident != null) {
-                    if (std.mem.eql(u8, ident_text, def_ident.?)) {
-                        // Check if this is a redefinition
-                        var is_redefinition = false;
-                        for (self.past_defs.items) |past_def| {
-                            if (past_def.kind == .assignment) {
-                                if (std.mem.eql(u8, past_def.kind.assignment, ident_text)) {
-                                    is_redefinition = true;
-                                    break;
+                    // Skip main!
+                    if (pattern == .assign) {
+                        const ident_idx = pattern.assign.ident;
+                        const ident_text = cir.getIdent(ident_idx);
+                        if (std.mem.eql(u8, ident_text, "main!")) {
+                            continue;
+                        }
+                        // Skip the current def only if it's a NEW definition
+                        if (self.past_defs.items.len > 0 and def_ident != null) {
+                            if (std.mem.eql(u8, ident_text, def_ident.?)) {
+                                // Check if this is a redefinition
+                                var is_redefinition = false;
+                                for (self.past_defs.items) |past_def| {
+                                    if (past_def.kind == .assignment) {
+                                        if (std.mem.eql(u8, past_def.kind.assignment, ident_text)) {
+                                            is_redefinition = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                // Only skip if it's a NEW definition
+                                if (!is_redefinition) {
+                                    continue;
                                 }
                             }
                         }
-                        // Only skip if it's a NEW definition
-                        if (!is_redefinition) {
-                            continue;
-                        }
                     }
+
+                    // All dependencies are guaranteed to be in bindings already
+                    const value = interpreter.evalMinimal(def.expr, self.roc_ops) catch |err| {
+                        return try std.fmt.allocPrint(self.allocator, "Error evaluating definition: {}", .{err});
+                    };
+
+                    try interpreter.bindings.append(.{
+                        .pattern_idx = def.pattern,
+                        .value = value,
+                    });
                 }
             }
+        } else {
+            // Fallback: no evaluation order available, use old approach
+            // This shouldn't happen, but keep as safety net
+            const defs_slice = cir.store.sliceDefs(czer.env.all_defs);
+            for (defs_slice) |def_idx| {
+                const def = cir.store.getDef(def_idx);
+                const pattern = cir.store.getPattern(def.pattern);
 
-            // Evaluate the def's expression
-            const value = interpreter.evalMinimal(def.expr, self.roc_ops) catch |err| {
-                return try std.fmt.allocPrint(self.allocator, "Error evaluating definition: {}", .{err});
-            };
-            // Don't defer value.decref here because we're storing it in bindings
+                if (pattern == .assign) {
+                    const ident_idx = pattern.assign.ident;
+                    const ident_text = cir.getIdent(ident_idx);
+                    if (std.mem.eql(u8, ident_text, "main!")) {
+                        continue;
+                    }
+                }
 
-            // Create a binding for this pattern
-            try interpreter.bindings.append(.{
-                .pattern_idx = def.pattern,
-                .value = value,
-            });
+                const value = interpreter.evalMinimal(def.expr, self.roc_ops) catch |err| {
+                    return try std.fmt.allocPrint(self.allocator, "Error evaluating definition: {}", .{err});
+                };
+
+                try interpreter.bindings.append(.{
+                    .pattern_idx = def.pattern,
+                    .value = value,
+                });
+            }
         }
     }
 

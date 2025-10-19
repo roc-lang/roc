@@ -72,6 +72,10 @@ diagnostics: CIR.Diagnostic.Span,
 /// Uses an efficient data structure, and provides helpers for storing and retrieving nodes.
 store: NodeStore,
 
+/// Dependency analysis results (evaluation order for defs)
+/// Only computed after canonicalization is complete
+evaluation_order: ?*@import("DependencyGraph.zig").EvaluationOrder,
+
 /// Relocate all pointers in the ModuleEnv by the given offset.
 /// This is used when loading a ModuleEnv from shared memory at a different address.
 pub fn relocate(self: *Self, offset: isize) void {
@@ -103,6 +107,7 @@ pub fn initCIRFields(self: *Self, gpa: std.mem.Allocator, module_name: []const u
     self.module_name = module_name;
     self.diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
     // Note: self.store already exists from ModuleEnv.init(), so we don't create a new one
+    self.evaluation_order = null; // Will be computed after canonicalization
 }
 
 /// Alias for initCIRFields for backwards compatibility with tests
@@ -128,6 +133,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .module_name = "", // Will be set later during canonicalization
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
         .store = try NodeStore.initCapacity(gpa, 10_000), // Default node store capacity
+        .evaluation_order = null, // Will be computed after canonicalization
     };
 }
 
@@ -139,6 +145,11 @@ pub fn deinit(self: *Self) void {
     self.imports.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
+
+    if (self.evaluation_order) |eval_order| {
+        eval_order.deinit();
+        self.gpa.destroy(eval_order);
+    }
 }
 
 /// Freeze all interners in this module environment, preventing any new entries from being added.
@@ -1439,6 +1450,7 @@ pub const Serialized = struct {
             .module_name = module_name,
             .diagnostics = self.diagnostics,
             .store = self.store.deserialize(offset, gpa).*,
+            .evaluation_order = null, // Not serialized, will be recomputed if needed
         };
 
         return env;

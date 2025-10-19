@@ -1256,6 +1256,20 @@ pub fn canonicalizeFile(
     // Create the span of exported defs by finding definitions that correspond to exposed items
     try self.populateExports();
 
+    // Compute dependency-based evaluation order using SCC analysis
+    const DependencyGraph = @import("DependencyGraph.zig");
+    var graph = try DependencyGraph.buildDependencyGraph(
+        self.env,
+        self.env.all_defs,
+        self.env.gpa,
+    );
+    defer graph.deinit();
+
+    const eval_order = try DependencyGraph.computeSCCs(&graph, self.env.gpa);
+    const eval_order_ptr = try self.env.gpa.create(DependencyGraph.EvaluationOrder);
+    eval_order_ptr.* = eval_order;
+    self.env.evaluation_order = eval_order_ptr;
+
     // Assert that everything is in-sync
     self.env.debugAssertArraysInSync();
 }
