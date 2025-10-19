@@ -129,7 +129,7 @@ pub const Interpreter = struct {
 
     pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, imported_modules_map: ?*const std.AutoHashMap(base_pkg.Ident.Idx, can.Can.AutoImportedType)) !Interpreter {
         // Convert imported modules map to other_envs slice
-        var other_envs_list = std.ArrayList(*const can.ModuleEnv).init(allocator);
+        var other_envs_list = std.array_list.Managed(*const can.ModuleEnv).init(allocator);
         errdefer other_envs_list.deinit();
 
         if (imported_modules_map) |modules_map| {
@@ -140,8 +140,19 @@ pub const Interpreter = struct {
         }
 
         // Transfer ownership of the slice to the Interpreter
+        // Note: The caller is responsible for freeing this via deinitAndFreeOtherEnvs()
         const other_envs = try other_envs_list.toOwnedSlice();
         return initWithOtherEnvs(allocator, env, other_envs, builtin_types);
+    }
+
+    /// Deinit the interpreter and also free the other_envs slice if it was allocated by init()
+    pub fn deinitAndFreeOtherEnvs(self: *Interpreter) void {
+        const other_envs = self.other_envs;
+        const allocator = self.allocator;
+        self.deinit();
+        if (other_envs.len > 0) {
+            allocator.free(other_envs);
+        }
     }
 
     pub fn initWithOtherEnvs(allocator: std.mem.Allocator, env: *can.ModuleEnv, other_envs: []const *const can.ModuleEnv, builtin_types: BuiltinTypes) !Interpreter {
@@ -2816,7 +2827,9 @@ pub const Interpreter = struct {
 
     fn compareValues(self: *Interpreter, lhs: StackValue, rhs: StackValue, op: can.CIR.Expr.Binop.Op) !bool {
         // Handle numeric comparisons
-        if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
+        if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar and
+            lhs.layout.data.scalar.tag == .int and rhs.layout.data.scalar.tag == .int)
+        {
             const lhs_val = lhs.asI128();
             const rhs_val = rhs.asI128();
 
@@ -2831,7 +2844,21 @@ pub const Interpreter = struct {
             };
         }
 
-        // For now, only numeric comparisons are supported
+        // Handle bool comparisons (like True == False)
+        if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar and
+            lhs.layout.data.scalar.tag == .bool and rhs.layout.data.scalar.tag == .bool)
+        {
+            const lhs_val = lhs.asBool();
+            const rhs_val = rhs.asBool();
+
+            return switch (op) {
+                .eq => lhs_val == rhs_val,
+                .ne => lhs_val != rhs_val,
+                else => error.NotImplemented,
+            };
+        }
+
+        // For now, only numeric and bool comparisons are supported
         _ = self;
         return error.NotImplemented;
     }

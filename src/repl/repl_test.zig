@@ -23,7 +23,7 @@ const testing = std.testing;
 /// Wrapper for a loaded compiled module that tracks the buffer
 const LoadedModule = struct {
     env: *ModuleEnv,
-    buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT) u8,
+    buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
     gpa: std.mem.Allocator,
 
     fn deinit(self: *LoadedModule) void {
@@ -41,7 +41,7 @@ const LoadedModule = struct {
 /// Deserialize BuiltinIndices from the binary data generated at build time
 fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !CIR.BuiltinIndices {
     // Copy to properly aligned memory
-    const aligned_buffer = try gpa.alignedAlloc(u8, @alignOf(CIR.BuiltinIndices), bin_data.len);
+    const aligned_buffer = try gpa.alignedAlloc(u8, @enumFromInt(@alignOf(CIR.BuiltinIndices)), bin_data.len);
     defer gpa.free(aligned_buffer);
     @memcpy(aligned_buffer, bin_data);
 
@@ -338,7 +338,7 @@ test "Repl - minimal interpreter integration" {
     // Step 6: Create interpreter
     const builtin_types = eval.BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
     var interpreter = try Interpreter.init(gpa, &module_env, builtin_types, null);
-    defer interpreter.deinit();
+    defer interpreter.deinitAndFreeOtherEnvs();
 
     // Step 7: Evaluate
     const result = try interpreter.evalMinimal(canonical_expr_idx.get_idx(), test_env.get_ops());

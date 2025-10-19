@@ -709,7 +709,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
 
 /// Deserialize BuiltinIndices from the binary data generated at build time
 fn deserializeBuiltinIndices(gpa: Allocator, bin_data: []const u8) !CIR.BuiltinIndices {
-    const aligned_buffer = try gpa.alignedAlloc(u8, @alignOf(CIR.BuiltinIndices), bin_data.len);
+    const aligned_buffer = try gpa.alignedAlloc(u8, @enumFromInt(@alignOf(CIR.BuiltinIndices)), bin_data.len);
     defer gpa.free(aligned_buffer);
     @memcpy(aligned_buffer, bin_data);
     const indices_ptr = @as(*const CIR.BuiltinIndices, @ptrCast(aligned_buffer.ptr));

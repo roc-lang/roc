@@ -10,7 +10,7 @@ const Allocator = std.mem.Allocator;
 /// Wrapper for a loaded compiled builtin module that tracks the buffer
 pub const LoadedModule = struct {
     env: *ModuleEnv,
-    buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT) u8,
+    buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
     gpa: std.mem.Allocator,
 
     pub fn deinit(self: *LoadedModule) void {
@@ -28,7 +28,7 @@ pub const LoadedModule = struct {
 /// Deserialize BuiltinIndices from the binary data generated at build time
 pub fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !can.CIR.BuiltinIndices {
     // Copy to properly aligned memory
-    const aligned_buffer = try gpa.alignedAlloc(u8, @alignOf(can.CIR.BuiltinIndices), bin_data.len);
+    const aligned_buffer = try gpa.alignedAlloc(u8, @enumFromInt(@alignOf(can.CIR.BuiltinIndices)), bin_data.len);
     defer gpa.free(aligned_buffer);
     @memcpy(aligned_buffer, bin_data);
 

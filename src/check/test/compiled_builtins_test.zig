@@ -37,7 +37,7 @@ const LoadedModule = struct {
 /// Deserialize BuiltinIndices from the binary data generated at build time
 fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !CIR.BuiltinIndices {
     // Copy to properly aligned memory
-    const aligned_buffer = try gpa.alignedAlloc(u8, @alignOf(CIR.BuiltinIndices), bin_data.len);
+    const aligned_buffer = try gpa.alignedAlloc(u8, @enumFromInt(@alignOf(CIR.BuiltinIndices)), bin_data.len);
     defer gpa.free(aligned_buffer);
     @memcpy(aligned_buffer, bin_data);
 

@@ -23,7 +23,7 @@ const RocOps = builtins.host_abi.RocOps;
 /// Wrapper for a loaded compiled builtin module that tracks the buffer
 const LoadedModule = struct {
     env: *ModuleEnv,
-    buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT) u8,
+    buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
     gpa: std.mem.Allocator,
 
     fn deinit(self: *LoadedModule) void {
@@ -46,7 +46,7 @@ const LoadedModule = struct {
 fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !can.CIR.BuiltinIndices {
     // Copy embedded data to properly aligned memory
     const alignment = @alignOf(can.CIR.BuiltinIndices);
-    const buffer = try gpa.alignedAlloc(u8, alignment, bin_data.len);
+    const buffer = try gpa.alignedAlloc(u8, @enumFromInt(alignment), bin_data.len);
     defer gpa.free(buffer);
 
     @memcpy(buffer, bin_data);
@@ -540,7 +540,7 @@ pub const Repl = struct {
         var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, &module_envs_map) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
         };
-        defer interpreter.deinit();
+        defer interpreter.deinitAndFreeOtherEnvs();
 
         if (self.crash_ctx) |ctx| {
             ctx.reset();

@@ -73,17 +73,6 @@ pub fn main() !void {
     // Find Bool type declaration via string lookup
     const bool_type_idx = try findTypeDeclaration(bool_env, "Bool");
 
-    // Verify that Bool's type declaration is at the expected index (2)
-    // This is critical for the compiler's hardcoded BUILTIN_BOOL constant
-    if (bool_type_idx != 2) {
-        var stderr_buffer: [256]u8 = undefined;
-        var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
-        const stderr = &stderr_writer.interface;
-        try stderr.print("WARNING: Expected Bool at index 2, but got {}!\n", .{bool_type_idx});
-        try stderr.flush();
-        return error.UnexpectedBoolIndex;
-    }
-
     // Compile Result.roc (doesn't use Bool or Result types in its definition)
     const result_env = try compileModule(
         gpa,

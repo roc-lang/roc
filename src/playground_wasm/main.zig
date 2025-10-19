@@ -912,7 +912,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     // (following the pattern from eval.zig and TestEnv.zig)
     const LoadedModule = struct {
         env: *ModuleEnv,
-        buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT) u8,
+        buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
         gpa: Allocator,
 
         fn deinit(self: *@This()) void {
@@ -987,7 +987,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     logDebug("compileSource: Loading builtin indices\n", .{});
     const builtin_indices = blk: {
-        const aligned_buffer = try allocator.alignedAlloc(u8, @alignOf(can.CIR.BuiltinIndices), compiled_builtins.builtin_indices_bin.len);
+        const aligned_buffer = try allocator.alignedAlloc(u8, @enumFromInt(@alignOf(can.CIR.BuiltinIndices)), compiled_builtins.builtin_indices_bin.len);
         defer allocator.free(aligned_buffer);
         @memcpy(aligned_buffer, compiled_builtins.builtin_indices_bin);
         const indices_ptr = @as(*const can.CIR.BuiltinIndices, @ptrCast(aligned_buffer.ptr));

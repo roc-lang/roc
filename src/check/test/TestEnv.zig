@@ -20,7 +20,7 @@ const compiled_builtins = @import("compiled_builtins");
 /// Wrapper for a loaded compiled module that tracks the buffer
 const LoadedModule = struct {
     env: *ModuleEnv,
-    buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT) u8,
+    buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
     gpa: std.mem.Allocator,
 
     fn deinit(self: *LoadedModule) void {
@@ -38,7 +38,7 @@ const LoadedModule = struct {
 /// Deserialize BuiltinIndices from the binary data generated at build time
 fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !CIR.BuiltinIndices {
     // Copy to properly aligned memory
-    const aligned_buffer = try gpa.alignedAlloc(u8, @alignOf(CIR.BuiltinIndices), bin_data.len);
+    const aligned_buffer = try gpa.alignedAlloc(u8, @enumFromInt(@alignOf(CIR.BuiltinIndices)), bin_data.len);
     defer gpa.free(aligned_buffer);
     @memcpy(aligned_buffer, bin_data);
 
@@ -366,7 +366,7 @@ pub fn init(source: []const u8) !TestEnv {
     };
 
     // Build other_envs array to match the import indices assigned by canonicalizer
-    var other_envs = std.ArrayList(*const ModuleEnv).init(gpa);
+    // (other_envs already declared above as std.array_list.Managed)
 
     // Only build the array if there are actual imports
     if (can.import_indices.size > 0) {
