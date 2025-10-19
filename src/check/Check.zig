@@ -568,9 +568,12 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
                     try self.checkDef(def_idx);
                 }
             } else {
-                // Non-recursive SCC - check the single def normally
-                std.debug.assert(scc.defs.len == 1);
-                try self.checkDef(scc.defs[0]);
+                // Non-recursive SCC - check the def(s) normally
+                // Note: A non-recursive SCC might still have multiple defs if they form
+                // a connected component but with no back edges
+                for (scc.defs) |def_idx| {
+                    try self.checkDef(def_idx);
+                }
             }
         }
     } else {

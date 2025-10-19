@@ -322,9 +322,10 @@ pub fn computeSCCs(
         }
     }
 
-    // state.sccs is in reverse topological order (leaves first)
-    // We want roots first, so reverse it
-    std.mem.reverse(SCC, state.sccs.items);
+    // Note: state.sccs is already in topological order (dependencies before dependents)
+    // because Tarjan's algorithm adds SCCs in post-order of DFS traversal.
+    // When we follow edges from A to B (A depends on B), B finishes first,
+    // so B's SCC is added before A's SCC.
 
     return EvaluationOrder{
         .sccs = try state.sccs.toOwnedSlice(allocator),

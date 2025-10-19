@@ -1390,6 +1390,7 @@ pub const Serialized = struct {
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
     module_kind: ModuleKind,
+    evaluation_order_padding: u64, // Padding for evaluation_order field (not serialized, recomputed on load)
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -1416,10 +1417,11 @@ pub const Serialized = struct {
         // Serialize NodeStore
         try self.store.serialize(&env.store, allocator, writer);
 
-        // Set gpa and module_name to all zeros; the space needs to be here,
+        // Set gpa, module_name, and evaluation_order_padding to all zeros; the space needs to be here,
         // but the values will be set separately during deserialization.
         self.gpa = .{ 0, 0 };
         self.module_name = .{ 0, 0 };
+        self.evaluation_order_padding = 0;
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place

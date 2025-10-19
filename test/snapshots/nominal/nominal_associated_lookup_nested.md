@@ -127,8 +127,8 @@ myNum = Foo.Bar.baz
 (inferred-types
 	(defs
 		(patt (type "Error"))
-		(patt (type "Num(_size)"))
-		(patt (type "Num(_size)")))
+		(patt (type "Num(Int(Unsigned64))"))
+		(patt (type "Num(Int(Unsigned64))")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
@@ -136,6 +136,6 @@ myNum = Foo.Bar.baz
 			(ty-header (name "Foo.Bar"))))
 	(expressions
 		(expr (type "Error"))
-		(expr (type "Num(_size)"))
-		(expr (type "Num(_size)"))))
+		(expr (type "Num(Int(Unsigned64))"))
+		(expr (type "Num(Int(Unsigned64))"))))
 ~~~
