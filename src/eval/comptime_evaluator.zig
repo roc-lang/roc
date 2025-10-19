@@ -338,7 +338,7 @@ pub const ComptimeEvaluator = struct {
             else => return error.NotImplemented, // Don't fold other scalar types yet
         };
 
-        // CRITICAL: We need to maintain the type information for the new expression.
+        // We need to maintain the type information for the new expression.
         // We're adding a new CIR node AFTER type checking has completed, so we need
         // to create a new type variable for it that redirects to the original expression's type.
         // This ensures the 1-to-1 mapping between CIR nodes and type variables is maintained.
