@@ -3,6 +3,13 @@
 //! This module provides dependency analysis for top-level definitions to enable
 //! proper evaluation ordering. It computes Strongly Connected Components (SCCs)
 //! using Tarjan's algorithm and provides a topologically sorted evaluation order.
+//!
+//! NOTE: This handles ALL top-level definitions including:
+//! - Regular top-level definitions (e.g., `foo = 42`)
+//! - Associated items (e.g., `TypeName.itemName = 5` from `TypeName := T.{ itemName = 5 }`)
+//!
+//! Associated items are definitions nested under nominal type declarations and have
+//! qualified names. They are stored in `all_defs` alongside regular top-level defs.
 
 const std = @import("std");
 const base = @import("base");
@@ -225,9 +232,7 @@ fn collectExprDependencies(
         },
 
         // Literals have no dependencies
-        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small,
-        .e_str, .e_str_segment, .e_empty_list, .e_empty_record,
-        .e_zero_argument_tag, .e_ellipsis => {},
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_ellipsis => {},
 
         // External lookups reference other modules - skip for now
         .e_lookup_external => {},
