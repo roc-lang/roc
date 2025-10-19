@@ -97,23 +97,20 @@ fn comptimeRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque)
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
     const msg_slice = expect_args.utf8_bytes[0..expect_args.len];
     evaluator.expect.recordCrash(msg_slice) catch {
-        // If we can't record the crash, set a generic message
-        // The halted flag will stop evaluation anyway
+        // If we can't record the expect failure, halt evaluation
+        // This is the only case where expect should halt
         evaluator.halted = true;
         return;
     };
-    evaluator.halted = true;
+    // expect never halts execution - it only records the failure
 }
 
 fn comptimeRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
     const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
-    evaluator.crash.recordCrash(msg_slice) catch {
-        // If we can't record the crash, set a generic message
-        // The halted flag will stop evaluation anyway
-        evaluator.halted = true;
-        return;
-    };
+    // Try to record the crash message, but if we can't, just continue
+    // Either way, we halt evaluation
+    evaluator.crash.recordCrash(msg_slice) catch {};
     evaluator.halted = true;
 }
 
@@ -221,7 +218,6 @@ pub const ComptimeEvaluator = struct {
         }
         self.crash.reset();
         self.expect.reset();
-        // Note: We do NOT reset self.halted here because it needs to persist across the evaluation loop
         return &(self.roc_ops.?);
     }
 
@@ -237,6 +233,9 @@ pub const ComptimeEvaluator = struct {
             .e_lambda, .e_closure => return EvalResult.success,
             else => {},
         }
+
+        // Reset halted flag at the start of each def - crashes only halt within a single def
+        self.halted = false;
 
         // Track the current expression region for stack traces
         self.current_expr_region = region;
@@ -327,11 +326,6 @@ pub const ComptimeEvaluator = struct {
 
         const defs = self.env.store.sliceDefs(self.env.all_defs);
         for (defs) |def_idx| {
-            // Check if evaluation has been halted due to a crash
-            if (self.halted) {
-                break;
-            }
-
             evaluated += 1;
 
             const eval_result = self.evalDecl(def_idx) catch |err| {

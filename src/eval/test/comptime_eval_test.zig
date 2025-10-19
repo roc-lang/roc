@@ -281,13 +281,13 @@ test "comptime eval - multiple declarations with mixed results" {
 
     const summary = try result.evaluator.evalAll();
 
-    // Should evaluate 2 declarations (good1 and bad1) with 1 crash
-    // Remaining declarations are not evaluated because the crash halts evaluation
-    try testing.expectEqual(@as(u32, 2), summary.evaluated);
-    try testing.expectEqual(@as(u32, 1), summary.crashed);
+    // Should evaluate all 5 declarations with 2 crashes
+    // All defs are evaluated regardless of crashes in other defs
+    try testing.expectEqual(@as(u32, 5), summary.evaluated);
+    try testing.expectEqual(@as(u32, 2), summary.crashed);
 
-    // Should have 1 problem reported
-    try testing.expectEqual(@as(usize, 1), result.problems.len());
+    // Should have 2 problems reported (one for each crash)
+    try testing.expectEqual(@as(usize, 2), result.problems.len());
 }
 
 // Cross-module tests
@@ -431,11 +431,17 @@ test "comptime eval - expect success does not report" {
     try testing.expectEqual(@as(usize, 0), result.problems.len());
 }
 
-test "comptime eval - expect failure is reported" {
+test "comptime eval - expect failure is reported but does not halt within def" {
     const src =
         \\x = {
         \\    expect 1 == 2
         \\    42
+        \\}
+        \\y = {
+        \\    _before = 1
+        \\    expect True == False
+        \\    _after = 2
+        \\    100
         \\}
     ;
 
@@ -444,16 +450,17 @@ test "comptime eval - expect failure is reported" {
 
     const summary = try result.evaluator.evalAll();
 
-    // Should evaluate 1 declaration with no crashes but 1 expect failure
-    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    // Should evaluate both declarations with no crashes but 2 expect failures
+    // expect never halts execution - even within the same def
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 
-    // Should have 1 problem reported (expect failure)
-    try testing.expectEqual(@as(usize, 1), result.problems.len());
+    // Should have 2 problems reported (expect failures)
+    try testing.expectEqual(@as(usize, 2), result.problems.len());
 
-    // Verify it's an expect_failed problem
-    const problem = result.problems.problems.items[0];
-    try testing.expect(problem == .comptime_expect_failed);
+    // Verify both are expect_failed problems
+    try testing.expect(result.problems.problems.items[0] == .comptime_expect_failed);
+    try testing.expect(result.problems.problems.items[1] == .comptime_expect_failed);
 }
 
 test "comptime eval - multiple expect failures are reported" {
@@ -473,19 +480,20 @@ test "comptime eval - multiple expect failures are reported" {
 
     const summary = try result.evaluator.evalAll();
 
-    // Should evaluate 1 declaration with no crashes but 1 expect failure
-    // The second declaration is not evaluated because expect failure halts evaluation
-    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    // Should evaluate both declarations with no crashes but 2 expect failures
+    // All defs are evaluated regardless of expect failures in other defs
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 
-    // Should have 1 problem reported
-    try testing.expectEqual(@as(usize, 1), result.problems.len());
+    // Should have 2 problems reported (one for each expect failure)
+    try testing.expectEqual(@as(usize, 2), result.problems.len());
 
-    // Verify it's an expect_failed problem
+    // Verify both are expect_failed problems
     try testing.expect(result.problems.problems.items[0] == .comptime_expect_failed);
+    try testing.expect(result.problems.problems.items[1] == .comptime_expect_failed);
 }
 
-test "comptime eval - crash halts evaluation" {
+test "comptime eval - crash does not halt other defs" {
     const src =
         \\good1 = 42
         \\bad = {
@@ -501,16 +509,16 @@ test "comptime eval - crash halts evaluation" {
 
     const summary = try result.evaluator.evalAll();
 
-    // Should only evaluate 2 declarations (good1 and bad)
-    // good2 and good3 should not be evaluated because crash halts evaluation
-    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    // Should evaluate all 4 declarations even though one crashes
+    // Crashes only halt within a single def, not across defs
+    try testing.expectEqual(@as(u32, 4), summary.evaluated);
     try testing.expectEqual(@as(u32, 1), summary.crashed);
 
     // Should have 1 problem reported
     try testing.expectEqual(@as(usize, 1), result.problems.len());
 }
 
-test "comptime eval - expect failure halts evaluation" {
+test "comptime eval - expect failure does not halt evaluation" {
     const src =
         \\good1 = 42
         \\bad = {
@@ -526,9 +534,9 @@ test "comptime eval - expect failure halts evaluation" {
 
     const summary = try result.evaluator.evalAll();
 
-    // Should only evaluate 2 declarations (good1 and bad)
-    // good2 and good3 should not be evaluated because expect failure halts evaluation
-    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    // Should evaluate all 4 declarations even though one has expect failure
+    // expect never halts evaluation - not within defs, not across defs
+    try testing.expectEqual(@as(u32, 4), summary.evaluated);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 
     // Should have 1 problem reported (expect failure)
@@ -553,7 +561,7 @@ test "comptime eval - dbg does not halt evaluation" {
     try testing.expectEqual(@as(usize, 0), result.problems.len());
 }
 
-test "comptime eval - crash in first declaration halts immediately" {
+test "comptime eval - crash in first def does not halt other defs" {
     const src =
         \\bad = crash "immediate crash"
         \\good1 = 42
@@ -565,9 +573,34 @@ test "comptime eval - crash in first declaration halts immediately" {
 
     const summary = try result.evaluator.evalAll();
 
-    // Should only evaluate 1 declaration (bad)
-    // good1 and good2 should not be evaluated
-    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    // Should evaluate all 3 declarations even though the first one crashes
+    // Crashes only halt within a single def, not across defs
+    try testing.expectEqual(@as(u32, 3), summary.evaluated);
+    try testing.expectEqual(@as(u32, 1), summary.crashed);
+    try testing.expectEqual(@as(usize, 1), result.problems.len());
+}
+
+test "comptime eval - crash halts within single def" {
+    // This test verifies that when a crash occurs inside a def,
+    // evaluation of the rest of that def stops (within-def halting),
+    // but other defs continue to be evaluated
+    const src =
+        \\x = {
+        \\    _beforeCrash = 1
+        \\    crash "halt here"
+        \\    _afterCrash = 2  # This should never be evaluated
+        \\    42
+        \\}
+        \\y = 100  # But this should still be evaluated
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate both defs even though x crashes
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
     try testing.expectEqual(@as(u32, 1), summary.crashed);
     try testing.expectEqual(@as(usize, 1), result.problems.len());
 }

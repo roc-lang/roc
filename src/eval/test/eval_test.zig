@@ -269,7 +269,6 @@ test "error test - divide by zero" {
 }
 
 test "simple lambda with if-else" {
-    // Copy of working test - verify it runs
     try runExpectInt("(|x| if x > 0 x else 0)(5)", 5, .no_trace);
     try runExpectInt("(|x| if x > 0 x else 0)(-3)", 0, .no_trace);
 }
