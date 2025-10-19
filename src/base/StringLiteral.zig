@@ -115,7 +115,6 @@ pub const Store = struct {
     /// Serialized representation of a Store
     pub const Serialized = struct {
         buffer: collections.SafeList(u8).Serialized,
-        frozen: if (std.debug.runtime_safety) bool else void,
 
         /// Serialize a Store into this Serialized struct, appending data to the writer
         pub fn serialize(
@@ -126,8 +125,7 @@ pub const Store = struct {
         ) std.mem.Allocator.Error!void {
             // Serialize the buffer SafeList
             try self.buffer.serialize(&store.buffer, allocator, writer);
-            // Copy the frozen field
-            self.frozen = store.frozen;
+            // Note: frozen is not serialized - it will always be true after deserialization
         }
 
         /// Deserialize this Serialized struct into a Store
@@ -140,7 +138,7 @@ pub const Store = struct {
 
             store.* = Store{
                 .buffer = self.buffer.deserialize(offset).*,
-                .frozen = self.frozen,
+                .frozen = if (std.debug.runtime_safety) true else {}, // Always frozen after deserialization
             };
 
             return store;

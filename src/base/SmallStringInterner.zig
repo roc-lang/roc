@@ -223,7 +223,6 @@ pub const Serialized = struct {
     bytes: collections.SafeList(u8).Serialized,
     hash_table: collections.SafeList(Idx).Serialized,
     entry_count: u32,
-    frozen: if (std.debug.runtime_safety) bool else void,
 
     /// Serialize a SmallStringInterner into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -238,7 +237,7 @@ pub const Serialized = struct {
         try self.hash_table.serialize(&interner.hash_table, allocator, writer);
         // Copy simple values directly
         self.entry_count = interner.entry_count;
-        self.frozen = interner.frozen;
+        // Note: frozen is not serialized - it will always be true after deserialization
     }
 
     /// Deserialize this Serialized struct into a SmallStringInterner
@@ -253,7 +252,7 @@ pub const Serialized = struct {
             .bytes = self.bytes.deserialize(offset).*,
             .hash_table = self.hash_table.deserialize(offset).*,
             .entry_count = self.entry_count,
-            .frozen = self.frozen,
+            .frozen = if (std.debug.runtime_safety) true else {}, // Always frozen after deserialization
         };
 
         return interner;
