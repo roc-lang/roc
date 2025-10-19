@@ -227,11 +227,15 @@ pub const ComptimeEvaluator = struct {
         const expr_idx = def.expr;
         const region = self.env.store.getExprRegion(expr_idx);
 
-        // Skip function definitions (lambdas/closures) - they can't be evaluated at compile time
         const expr = self.env.store.getExpr(expr_idx);
-        switch (expr) {
-            .e_lambda, .e_closure => return EvalResult.success,
-            else => {},
+        const is_lambda = switch (expr) {
+            .e_lambda, .e_closure => true,
+            else => false,
+        };
+
+        // Skip e_runtime_error (compile error already reported)
+        if (expr == .e_runtime_error) {
+            return EvalResult.success;
         }
 
         // Reset halted flag at the start of each def - crashes only halt within a single def
@@ -242,7 +246,23 @@ pub const ComptimeEvaluator = struct {
         defer self.current_expr_region = null;
 
         const ops = self.get_ops();
+
         const result = self.interpreter.evalMinimal(expr_idx, ops) catch |err| {
+            // If this is a lambda/closure and it failed to evaluate, just skip it
+            // Top-level function definitions can fail for various reasons and that's ok
+            // The interpreter will evaluate them on-demand when they're called
+            // IMPORTANT: We do NOT skip blocks - blocks can have side effects like crash/expect
+            if (is_lambda) {
+                std.debug.print("Skipping lambda def_idx={}\n", .{def_idx});
+                return EvalResult.success;
+            }
+
+            std.debug.print("Eval failed for def_idx={}, expr={s}, error={}\n", .{
+                def_idx,
+                @tagName(expr),
+                err,
+            });
+
             if (err == error.Crash) {
                 if (self.expect.crashMessage()) |msg| {
                     return EvalResult{
@@ -272,9 +292,24 @@ pub const ComptimeEvaluator = struct {
         const layout_cache = &self.interpreter.runtime_layout_store;
         defer result.decref(layout_cache, ops);
 
+        std.debug.print("Evaluated def_idx={}, expr={s}, layout={s}\n", .{
+            def_idx,
+            @tagName(expr),
+            @tagName(result.layout.tag),
+        });
+
         // Try to fold the result to a constant expression
-        self.tryFoldConstant(def_idx, result) catch {
+        self.tryFoldConstant(def_idx, result) catch |err| {
             // If folding fails, just continue - the original expression is still valid
+            // NotImplemented is expected for non-foldable types
+            const def_for_debug = self.env.store.getDef(def_idx);
+            const expr_for_debug = self.env.store.getExpr(def_for_debug.expr);
+            std.debug.print("Fold failed for def_idx={}, expr={s}, error={}, layout={s}\n", .{
+                def_idx,
+                @tagName(expr_for_debug),
+                err,
+                @tagName(result.layout.tag),
+            });
         };
 
         return EvalResult.success;

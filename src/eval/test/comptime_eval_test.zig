@@ -725,13 +725,13 @@ test "comptime eval - constant folding with function calls" {
     const src =
         \\add = |x, y| x + y
         \\multiply = |x, y| x * y
-        \\double = |x| multiply x 2
+        \\double = |x| multiply(x, 2)
         \\
         \\# Top-level values that call the functions
-        \\value1 = add 10 5
-        \\value2 = multiply 6 7
-        \\value3 = double 21
-        \\value4 = add (multiply 3 4) (double 5)
+        \\value1 = add(10, 5)
+        \\value2 = multiply(6, 7)
+        \\value3 = double(21)
+        \\value4 = add(multiply(3, 4), double(5))
     ;
 
     var result = try parseCheckAndEvalModule(src);
@@ -753,7 +753,7 @@ test "comptime eval - constant folding with function calls" {
 
     // The last 4 defs are the values - they SHOULD be folded to constants
 
-    // Check value1 = add 10 5 => 15
+    // Check value1 = add(10, 5) => 15
     {
         const def = result.module_env.store.getDef(defs[3]);
         const expr = result.module_env.store.getExpr(def.expr);
@@ -762,7 +762,7 @@ test "comptime eval - constant folding with function calls" {
         try testing.expectEqual(@as(i128, 15), value);
     }
 
-    // Check value2 = multiply 6 7 => 42
+    // Check value2 = multiply(6, 7) => 42
     {
         const def = result.module_env.store.getDef(defs[4]);
         const expr = result.module_env.store.getExpr(def.expr);
@@ -771,7 +771,7 @@ test "comptime eval - constant folding with function calls" {
         try testing.expectEqual(@as(i128, 42), value);
     }
 
-    // Check value3 = double 21 => 42
+    // Check value3 = double(21) => 42
     {
         const def = result.module_env.store.getDef(defs[5]);
         const expr = result.module_env.store.getExpr(def.expr);
@@ -796,12 +796,12 @@ test "comptime eval - constant folding with recursive function" {
         \\    if n <= 1
         \\        1
         \\    else
-        \\        n * (factorial (n - 1))
+        \\        n * factorial(n - 1)
         \\
         \\# Top-level values using the recursive function
-        \\fact5 = factorial 5
-        \\fact6 = factorial 6
-        \\fact0 = factorial 0
+        \\fact5 = factorial(5)
+        \\fact6 = factorial(6)
+        \\fact0 = factorial(0)
     ;
 
     var result = try parseCheckAndEvalModule(src);
@@ -847,13 +847,13 @@ test "comptime eval - constant folding with recursive function" {
 test "comptime eval - constant folding with helper functions" {
     const src =
         \\square = |x| x * x
-        \\sumOfSquares = |a, b| (square a) + (square b)
+        \\sumOfSquares = |a, b| square(a) + square(b)
         \\
         \\# Multiple top-level values using the helper functions
-        \\sq5 = square 5
-        \\sq12 = square 12
-        \\pythag_3_4 = sumOfSquares 3 4
-        \\pythag_5_12 = sumOfSquares 5 12
+        \\sq5 = square(5)
+        \\sq12 = square(12)
+        \\pythag_3_4 = sumOfSquares(3, 4)
+        \\pythag_5_12 = sumOfSquares(5, 12)
     ;
 
     var result = try parseCheckAndEvalModule(src);
