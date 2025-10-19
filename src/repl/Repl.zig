@@ -485,37 +485,17 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8, def_ident: ?[]co
     if (self.past_defs.items.len > 0 or def_ident != null) {
         const defs_slice = cir.store.sliceDefs(czer.env.all_defs);
 
-        // Evaluate all defs except main! and the current def (if there are past defs)
+        // Evaluate all defs except main! to populate bindings
         for (defs_slice) |def_idx| {
             const def = cir.store.getDef(def_idx);
             const pattern = cir.store.getPattern(def.pattern);
 
-            // Skip main! since we extract its body separately
-            // Skip the current def ONLY if it's a NEW definition (not a redefinition)
+            // Skip main! since we extract its body separately and evaluate it directly
             if (pattern == .assign) {
                 const ident_idx = pattern.assign.ident;
                 const ident_text = cir.getIdent(ident_idx);
                 if (std.mem.eql(u8, ident_text, "main!")) {
                     continue;
-                }
-                // Skip the current def only if it's a NEW definition
-                if (self.past_defs.items.len > 0 and def_ident != null) {
-                    if (std.mem.eql(u8, ident_text, def_ident.?)) {
-                        // Check if this is a redefinition
-                        var is_redefinition = false;
-                        for (self.past_defs.items) |past_def| {
-                            if (past_def.kind == .assignment) {
-                                if (std.mem.eql(u8, past_def.kind.assignment, ident_text)) {
-                                    is_redefinition = true;
-                                    break;
-                                }
-                            }
-                        }
-                        // Only skip if it's a NEW definition
-                        if (!is_redefinition) {
-                            continue;
-                        }
-                    }
                 }
             }
 

@@ -116,7 +116,7 @@ fn comptimeRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv
 
 /// Result of evaluating a single declaration
 const EvalResult = union(enum) {
-    success,
+    success: ?eval_mod.StackValue, // Optional value to add to bindings (null for lambdas)
     crash: struct {
         message: []const u8,
         region: base.Region,
@@ -257,7 +257,9 @@ pub const ComptimeEvaluator = struct {
             // The interpreter will evaluate them on-demand when they're called
             // IMPORTANT: We do NOT skip blocks - blocks can have side effects like crash/expect
             if (is_lambda) {
-                return EvalResult.success;
+                // Lambdas that fail to evaluate won't be added to bindings
+                // They'll be re-evaluated on-demand when called
+                return EvalResult{ .success = null };
             }
 
             if (err == error.Crash) {
@@ -285,16 +287,17 @@ pub const ComptimeEvaluator = struct {
             };
         };
 
-        const layout_cache = &self.interpreter.runtime_layout_store;
-        defer result.decref(layout_cache, ops);
+        // Try to fold the result to a constant expression (only for non-lambdas)
+        if (!is_lambda) {
+            self.tryFoldConstant(def_idx, result) catch {
+                // If folding fails, just continue - the original expression is still valid
+                // NotImplemented is expected for non-foldable types
+            };
+        }
 
-        // Try to fold the result to a constant expression
-        self.tryFoldConstant(def_idx, result) catch {
-            // If folding fails, just continue - the original expression is still valid
-            // NotImplemented is expected for non-foldable types
-        };
-
-        return EvalResult.success;
+        // Return the value WITHOUT decref - it will be stored in bindings
+        // The bindings will own the value and will decref it when the interpreter is destroyed
+        return EvalResult{ .success = result };
     }
 
     /// Attempts to fold constant values in-place
@@ -412,8 +415,16 @@ pub const ComptimeEvaluator = struct {
             };
 
             switch (eval_result) {
-                .success => {
-                    // Declaration evaluated successfully, nothing to report
+                .success => |maybe_value| {
+                    // Declaration evaluated successfully
+                    // If we got a value, add it to bindings so later defs can reference it
+                    if (maybe_value) |value| {
+                        const def = self.env.store.getDef(def_idx);
+                        try self.interpreter.bindings.append(.{
+                            .pattern_idx = def.pattern,
+                            .value = value,
+                        });
+                    }
                 },
                 .crash => |crash_info| {
                     crashed += 1;
