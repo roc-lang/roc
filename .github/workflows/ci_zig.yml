@@ -140,7 +140,7 @@ jobs:
       - name: zig snapshot tests
         run: zig build snapshot -- --debug
 
-      - name: build repro executables
+      - name: build tests and repro executables
         uses: ./.github/actions/flaky-retry
         with:
           command: 'zig build test -Dfuzz -Dsystem-afl=false'

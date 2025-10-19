@@ -19,6 +19,7 @@ const parse = @import("parse");
 const can = @import("can");
 const check = @import("check");
 const reporting = @import("reporting");
+const eval = @import("eval");
 
 const Check = check.Check;
 const Can = can.Can;
@@ -106,12 +107,16 @@ const ModuleState = struct {
     working: if (@import("builtin").target.cpu.arch != .wasm32) std.atomic.Value(u8) else u8 = if (@import("builtin").target.cpu.arch != .wasm32) std.atomic.Value(u8).init(0) else 0,
 
     fn deinit(self: *ModuleState, gpa: Allocator) void {
+        // Save source before deinitiating env so we can free it
+        const source = if (self.env) |*e| e.common.source else null;
         if (self.env) |*e| e.deinit();
+        if (source) |s| gpa.free(s);
         self.imports.deinit();
         self.external_imports.deinit();
         self.dependents.deinit();
-        // Free reports
-        for (self.reports.items) |*r| r.deinit();
+        // NOTE: Do NOT deinit reports here! Ownership has been transferred to OrderedSink
+        // when reports were emitted via sink.emitFn. The OrderedSink is responsible for
+        // deinitiating the reports after they've been drained and rendered.
         self.reports.deinit();
         gpa.free(self.path);
     }
@@ -513,8 +518,10 @@ pub const PackageEnv = struct {
 
         try env.common.calcLineStarts(self.gpa);
 
-        // replace env
+        // replace env - save old source to free it after deinit
+        const old_source = if (st.env) |*old| old.common.source else null;
         if (st.env) |*old| old.deinit();
+        if (old_source) |s| self.gpa.free(s);
         st.env = env;
 
         st.phase = .Canonicalize;
@@ -704,7 +711,7 @@ pub const PackageEnv = struct {
 
     fn doTypeCheck(self: *PackageEnv, module_id: ModuleId) !void {
         var st = &self.modules.items[module_id];
-        var env = st.env.?;
+        var env = &st.env.?;
 
         const module_common_idents: Check.CommonIdents = .{
             .module_name = try env.insertIdent(base.Ident.for_text("test")),
@@ -715,18 +722,17 @@ pub const PackageEnv = struct {
         // Build other_modules array according to env.imports order
         const import_count = env.imports.imports.items.items.len;
         var others = try std.array_list.Managed(*ModuleEnv).initCapacity(self.gpa, import_count);
-        defer others.deinit();
+        // NOTE: Don't deinit 'others' yet - comptime_evaluator holds a reference to others.items
         for (env.imports.imports.items.items[0..import_count]) |str_idx| {
             const import_name = env.getString(str_idx);
             // Determine external vs local from CIR s_import qualifier metadata directly
-            const is_ext = hadQualifiedImport(&env, import_name);
+            const is_ext = hadQualifiedImport(env, import_name);
 
             if (is_ext) {
                 if (self.resolver) |r| {
                     if (r.getEnv(r.ctx, self.package_name, import_name)) |ext_env_ptr| {
-                        const box = try self.gpa.create(ModuleEnv);
-                        box.* = ext_env_ptr.*;
-                        try others.append(box);
+                        // External env is already a pointer, use it directly
+                        try others.append(ext_env_ptr);
                     } else {
                         // External env not ready; skip (tryUnblock should have prevented this)
                     }
@@ -734,15 +740,14 @@ pub const PackageEnv = struct {
             } else {
                 const child_id = self.module_names.get(import_name).?;
                 const child = &self.modules.items[child_id];
-                const child_env_ptr = child.env.?; // value copy
-                // Ensure pointer stable by storing in a temporary allocation
-                const box = try self.gpa.create(ModuleEnv);
-                box.* = child_env_ptr;
-                try others.append(box);
+                // Get a pointer to the child's env (stored in the modules ArrayList)
+                // This is safe because we don't modify the modules ArrayList during type checking
+                const child_env_ptr = &child.env.?;
+                try others.append(child_env_ptr);
             }
         }
 
-        var checker = try Check.init(self.gpa, &env.types, &env, others.items, &env.store.regions, module_common_idents);
+        var checker = try Check.init(self.gpa, &env.types, env, others.items, &env.store.regions, module_common_idents);
         defer checker.deinit();
         // Note: checkDefs runs type checking for module
         const check_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
@@ -752,9 +757,13 @@ pub const PackageEnv = struct {
             self.total_type_checking_ns += @intCast(check_end - check_start);
         }
 
+        // After type checking, evaluate top-level declarations at compile time
+        var comptime_evaluator = try eval.ComptimeEvaluator.init(self.gpa, env, others.items, &checker.problems);
+        _ = try comptime_evaluator.evalAll();
+
         // Build reports from problems
         const check_diag_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        var rb = ReportBuilder.init(self.gpa, &env, &env, &checker.snapshots, st.path, others.items);
+        var rb = ReportBuilder.init(self.gpa, env, env, &checker.snapshots, st.path, others.items);
         defer rb.deinit();
         for (checker.problems.problems.items) |prob| {
             const rep = rb.build(prob) catch continue;
@@ -765,8 +774,14 @@ pub const PackageEnv = struct {
             self.total_check_diagnostics_ns += @intCast(check_diag_end - check_diag_start);
         }
 
-        // Free temporary ModuleEnv copies created for others
-        for (others.items) |ptr| self.gpa.destroy(ptr);
+        // Clean up comptime evaluator AFTER building reports (crash messages must stay alive until reports are built)
+        comptime_evaluator.deinit();
+
+        // Now we can safely deinit the 'others' ArrayList
+        others.deinit();
+
+        // Note: We no longer need to free the 'others' items because they now point directly
+        // to ModuleEnv instances stored in the modules ArrayList, not to heap-allocated copies.
 
         // Done
         st.phase = .Done;

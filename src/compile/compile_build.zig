@@ -520,10 +520,13 @@ pub const BuildEnv = struct {
             try e.value_ptr.*.buildRoot(pkg.root_file);
         }
 
-        // Wait for global queue to drain only when using the global queue
+        // Wait for all work to complete
         if (builtin.target.cpu.arch != .wasm32 and self.mode == .multi_threaded) {
+            // Multi-threaded mode: wait for global queue to drain
             self.global_queue.waitForIdle();
         }
+        // Note: In single-threaded mode, buildRoot() runs synchronously and blocks
+        // until all modules are complete, so no additional waiting is needed.
 
         // Deterministic emission: globally order reports by (min dependency depth from app, then module name)
         try self.emitDeterministic();
@@ -729,7 +732,7 @@ pub const BuildEnv = struct {
     }
 
     fn parseHeaderDeps(self: *BuildEnv, file_path: []const u8) !HeaderInfo {
-        // Read source; ModuleEnv takes ownership of source
+        // Read source
         const file_abs = try std.fs.path.resolve(self.gpa, &.{file_path});
         defer self.gpa.free(file_abs);
         const src = try std.fs.cwd().readFileAlloc(self.gpa, file_abs, std.math.maxInt(usize));
@@ -1280,12 +1283,10 @@ pub const OrderedSink = struct {
 
     pub fn deinit(self: *OrderedSink) void {
         // Free entries
-        for (self.entries.items) |e| {
+        for (self.entries.items) |*e| {
             // pkg_name and module_name are borrowed, don't free
             // Deinit all reports for this module
-            var i: usize = 0;
-            while (i < e.reports.items.len) : (i += 1) {
-                var rep = e.reports.items[i];
+            for (e.reports.items) |*rep| {
                 rep.deinit();
             }
             e.reports.deinit();
@@ -1472,6 +1473,8 @@ pub const OrderedSink = struct {
                 .reports = reps,
             };
 
+            // Reinitialize the reports ArrayList since toOwnedSlice() moved ownership
+            e.reports = std.array_list.Managed(Report).init(self.gpa);
             e.ready = false;
             e.emitted = false;
         }
