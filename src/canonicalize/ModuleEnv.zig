@@ -73,7 +73,7 @@ diagnostics: CIR.Diagnostic.Span,
 store: NodeStore,
 
 /// Dependency analysis results (evaluation order for defs)
-/// Only computed after canonicalization is complete
+/// Set after canonicalization completes. Must not be accessed before then.
 evaluation_order: ?*@import("DependencyGraph.zig").EvaluationOrder,
 
 /// Relocate all pointers in the ModuleEnv by the given offset.
@@ -107,7 +107,7 @@ pub fn initCIRFields(self: *Self, gpa: std.mem.Allocator, module_name: []const u
     self.module_name = module_name;
     self.diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
     // Note: self.store already exists from ModuleEnv.init(), so we don't create a new one
-    self.evaluation_order = null; // Will be computed after canonicalization
+    self.evaluation_order = null; // Will be set after canonicalization completes
 }
 
 /// Alias for initCIRFields for backwards compatibility with tests
@@ -133,7 +133,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .module_name = "", // Will be set later during canonicalization
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
         .store = try NodeStore.initCapacity(gpa, 10_000), // Default node store capacity
-        .evaluation_order = null, // Will be computed after canonicalization
+        .evaluation_order = null, // Will be set after canonicalization completes
     };
 }
 
