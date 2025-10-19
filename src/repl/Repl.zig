@@ -486,36 +486,6 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8, def_ident: ?[]co
         const defs_slice = cir.store.sliceDefs(czer.env.all_defs);
 
         // Evaluate all defs except main! to populate bindings
-        // We need to evaluate associated items (like Foo.x) before regular defs that might reference them
-        // So we make two passes: first for associated items, then for everything else
-
-        // Pass 1: Evaluate associated items (identifiers containing '.')
-        for (defs_slice) |def_idx| {
-            const def = cir.store.getDef(def_idx);
-            const pattern = cir.store.getPattern(def.pattern);
-
-            // Only process .assign patterns with dots in the name (associated items)
-            if (pattern != .assign) continue;
-            const ident_text = cir.getIdent(pattern.assign.ident);
-            const is_associated_item = std.mem.indexOf(u8, ident_text, ".") != null;
-            if (!is_associated_item) continue;
-
-            // Skip main! (though it shouldn't have a dot anyway)
-            if (std.mem.eql(u8, ident_text, "main!")) continue;
-
-            // Evaluate the def's expression
-            const value = interpreter.evalMinimal(def.expr, self.roc_ops) catch |err| {
-                return try std.fmt.allocPrint(self.allocator, "Error evaluating definition: {}", .{err});
-            };
-
-            // Create a binding for this pattern
-            try interpreter.bindings.append(.{
-                .pattern_idx = def.pattern,
-                .value = value,
-            });
-        }
-
-        // Pass 2: Evaluate all other defs (non-associated items)
         for (defs_slice) |def_idx| {
             const def = cir.store.getDef(def_idx);
             const pattern = cir.store.getPattern(def.pattern);
@@ -524,21 +494,16 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8, def_ident: ?[]co
             if (pattern == .assign) {
                 const ident_idx = pattern.assign.ident;
                 const ident_text = cir.getIdent(ident_idx);
-
-                // Skip main!
                 if (std.mem.eql(u8, ident_text, "main!")) {
                     continue;
                 }
-
-                // Skip associated items (already processed in pass 1)
-                const is_associated_item = std.mem.indexOf(u8, ident_text, ".") != null;
-                if (is_associated_item) continue;
             }
 
             // Evaluate the def's expression
             const value = interpreter.evalMinimal(def.expr, self.roc_ops) catch |err| {
                 return try std.fmt.allocPrint(self.allocator, "Error evaluating definition: {}", .{err});
             };
+            // Don't defer value.decref here because we're storing it in bindings
 
             // Create a binding for this pattern
             try interpreter.bindings.append(.{
