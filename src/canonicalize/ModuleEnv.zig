@@ -1385,12 +1385,12 @@ pub fn getSourceLine(self: *const Self, region: Region) ![]const u8 {
     return self.common.getSourceLine(region);
 }
 
-/// Serialized representation of ModuleEnv
+/// Serialized representation of ModuleEnv.
+/// NOTE: Field order matters for cross-platform compatibility! Keep `module_kind` at the end.
 pub const Serialized = struct {
     gpa: [2]u64, // Reserve space for allocator (vtable ptr + context ptr), provided during deserialization
     common: CommonEnv.Serialized,
     types: TypeStore.Serialized,
-    module_kind: ModuleKind, // Must match field order in Self
     all_defs: CIR.Def.Span,
     all_statements: CIR.Statement.Span,
     exports: CIR.Def.Span,
@@ -1400,6 +1400,7 @@ pub const Serialized = struct {
     module_name: [2]u64, // Reserve space for slice (ptr + len), provided during deserialization
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
+    module_kind: ModuleKind,
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(

@@ -140,7 +140,7 @@ pub fn build(b: *std.Build) void {
             .name = "builtin_compiler",
             .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
             .target = b.graph.host, // this runs at build time on the *host* machine!
-            .optimize = .Debug, // No need to optimize - only compiles builtin modules
+            .optimize = .ReleaseFast, // Must match playground optimization to ensure struct compatibility
             // Note: libc linking is handled by add_tracy below (required when tracy is enabled)
         });
 
@@ -234,7 +234,7 @@ pub fn build(b: *std.Build) void {
         .name = "builtin_compiler",
         .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .ReleaseFast, // Must match playground optimization to ensure struct compatibility
     });
 
     builtin_compiler_exe_force.root_module.addImport("base", roc_modules.base);
