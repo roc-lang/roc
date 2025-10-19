@@ -408,38 +408,79 @@ pub const ComptimeEvaluator = struct {
         var evaluated: u32 = 0;
         var crashed: u32 = 0;
 
-        const defs = self.env.store.sliceDefs(self.env.all_defs);
-        for (defs) |def_idx| {
-            evaluated += 1;
+        // Use dependency-ordered evaluation if available (from SCC analysis)
+        if (self.env.evaluation_order) |eval_order| {
+            // Evaluate SCCs in topological order (dependencies before dependents)
+            for (eval_order.sccs) |scc| {
+                for (scc.defs) |def_idx| {
+                    evaluated += 1;
 
-            const eval_result = self.evalDecl(def_idx) catch |err| {
-                // If we get an allocation error, propagate it
-                return err;
-            };
+                    const eval_result = self.evalDecl(def_idx) catch |err| {
+                        // If we get an allocation error, propagate it
+                        return err;
+                    };
 
-            switch (eval_result) {
-                .success => |maybe_value| {
-                    // Declaration evaluated successfully
-                    // If we got a value, add it to bindings so later defs can reference it
-                    if (maybe_value) |value| {
-                        const def = self.env.store.getDef(def_idx);
-                        try self.interpreter.bindings.append(.{
-                            .pattern_idx = def.pattern,
-                            .value = value,
-                        });
+                    switch (eval_result) {
+                        .success => |maybe_value| {
+                            // Declaration evaluated successfully
+                            // If we got a value, add it to bindings so later defs can reference it
+                            if (maybe_value) |value| {
+                                const def = self.env.store.getDef(def_idx);
+                                try self.interpreter.bindings.append(.{
+                                    .pattern_idx = def.pattern,
+                                    .value = value,
+                                });
+                            }
+                        },
+                        .crash => |crash_info| {
+                            crashed += 1;
+                            try self.reportProblem(crash_info.message, crash_info.region, .crash);
+                        },
+                        .expect_failed => |expect_info| {
+                            try self.reportProblem(expect_info.message, expect_info.region, .expect_failed);
+                        },
+                        .error_eval => |error_info| {
+                            const error_name = @errorName(error_info.err);
+                            try self.reportProblem(error_name, error_info.region, .error_eval);
+                        },
                     }
-                },
-                .crash => |crash_info| {
-                    crashed += 1;
-                    try self.reportProblem(crash_info.message, crash_info.region, .crash);
-                },
-                .expect_failed => |expect_info| {
-                    try self.reportProblem(expect_info.message, expect_info.region, .expect_failed);
-                },
-                .error_eval => |error_info| {
-                    const error_name = @errorName(error_info.err);
-                    try self.reportProblem(error_name, error_info.region, .error_eval);
-                },
+                }
+            }
+        } else {
+            // Fallback: no evaluation order available, use original order
+            const defs = self.env.store.sliceDefs(self.env.all_defs);
+            for (defs) |def_idx| {
+                evaluated += 1;
+
+                const eval_result = self.evalDecl(def_idx) catch |err| {
+                    // If we get an allocation error, propagate it
+                    return err;
+                };
+
+                switch (eval_result) {
+                    .success => |maybe_value| {
+                        // Declaration evaluated successfully
+                        // If we got a value, add it to bindings so later defs can reference it
+                        if (maybe_value) |value| {
+                            const def = self.env.store.getDef(def_idx);
+                            try self.interpreter.bindings.append(.{
+                                .pattern_idx = def.pattern,
+                                .value = value,
+                            });
+                        }
+                    },
+                    .crash => |crash_info| {
+                        crashed += 1;
+                        try self.reportProblem(crash_info.message, crash_info.region, .crash);
+                    },
+                    .expect_failed => |expect_info| {
+                        try self.reportProblem(expect_info.message, expect_info.region, .expect_failed);
+                    },
+                    .error_eval => |error_info| {
+                        const error_name = @errorName(error_info.err);
+                        try self.reportProblem(error_name, error_info.region, .error_eval);
+                    },
+                }
             }
         }
 
