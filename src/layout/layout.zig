@@ -117,6 +117,8 @@ pub const Closure = struct {
     captures_layout_idx: Idx,
     // Original lambda expression index for accessing captures
     lambda_expr_idx: CIR.Expr.Idx,
+    // Module environment where this closure was created (for correct expression evaluation)
+    source_env: *const @import("can").ModuleEnv,
 };
 
 /// The union portion of the Layout packed tagged union (the tag being LayoutTag).

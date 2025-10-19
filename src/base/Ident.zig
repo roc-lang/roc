@@ -541,13 +541,8 @@ test "Ident.Store frozen state CompactWriter roundtrip" {
     _ = try original.insert(gpa, Ident.for_text("test1"));
     _ = try original.insert(gpa, Ident.for_text("test2"));
 
-    // Freeze the store
-    original.freeze();
-
-    // Verify interner is frozen
-    if (std.debug.runtime_safety) {
-        try std.testing.expect(original.interner.frozen);
-    }
+    // Note: Frozen field removed - no longer needed
+    // Test serialization works correctly without frozen field
 
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});

@@ -86,7 +86,6 @@ pub const Store = struct {
         // Then serialize the buffer SafeList and update the struct
         offset_self.* = .{
             .buffer = (try self.buffer.serialize(allocator, writer)).*,
-            .frozen = self.frozen,
         };
 
         return @constCast(offset_self);
@@ -316,13 +315,8 @@ test "Store frozen state CompactWriter roundtrip" {
     _ = try original.insert(gpa, "test1");
     _ = try original.insert(gpa, "test2");
 
-    // Freeze the store
-    original.freeze();
-
-    // Verify store is frozen
-    if (std.debug.runtime_safety) {
-        try std.testing.expect(original.frozen);
-    }
+    // Note: Frozen field removed - no longer needed
+    // Test serialization works correctly without frozen field
 
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -373,8 +367,7 @@ test "Store.Serialized roundtrip" {
     const idx2 = try original.insert(gpa, "world");
     const idx3 = try original.insert(gpa, "foo bar baz");
 
-    // Freeze the store in debug mode
-    original.freeze();
+    // Note: Frozen field removed - no longer needed
 
     // Create a CompactWriter and arena
     var arena = std.heap.ArenaAllocator.init(gpa);

@@ -191,7 +191,6 @@ pub fn serialize(
         .bytes = serialized_bytes.*,
         .hash_table = serialized_hash_table.*,
         .entry_count = self.entry_count,
-        .frozen = self.frozen,
     };
 
     // Return the version of Self that's in the writer's buffer
@@ -450,13 +449,8 @@ test "SmallStringInterner frozen state CompactWriter roundtrip" {
     _ = try original.insert(gpa, "test1");
     _ = try original.insert(gpa, "test2");
 
-    // Freeze the interner
-    original.freeze();
-
-    // Verify it's frozen
-    if (std.debug.runtime_safety) {
-        try std.testing.expect(original.frozen);
-    }
+    // Note: Frozen field removed - no longer needed
+    // Test serialization works correctly without frozen field
 
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});

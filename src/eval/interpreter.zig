@@ -335,6 +335,7 @@ pub const Interpreter = struct {
                                     .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
                                     .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
                                     .lambda_expr_idx = rhs_expr,
+                                    .source_env = self_interp.env,
                                 };
                             }
                             try self_interp.bindings.append(.{ .pattern_idx = patt_idx, .value = ph });
@@ -1212,6 +1213,7 @@ pub const Interpreter = struct {
                         .captures_pattern_idx = @enumFromInt(@as(u32, 0)), // no captures in minimal path
                         .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
                         .lambda_expr_idx = expr_idx,
+                        .source_env = self.env,
                     };
                 }
                 return value;
@@ -1284,6 +1286,7 @@ pub const Interpreter = struct {
                         .captures_pattern_idx = @enumFromInt(@as(u32, 0)), // not used in minimal path
                         .captures_layout_idx = captures_layout_idx,
                         .lambda_expr_idx = cls.lambda_idx,
+                        .source_env = self.env,
                     };
                     // Copy captures into record area following header (aligned)
                     const header_size = @sizeOf(layout.Closure);
@@ -1343,6 +1346,16 @@ pub const Interpreter = struct {
                 // Support calling closures produced by evaluating expressions (including nested calls)
                 if (func_val.layout.tag == .closure) {
                     const header: *const layout.Closure = @ptrCast(@alignCast(func_val.ptr.?));
+
+                    // Switch to the closure's source module for correct expression evaluation
+                    const saved_env = self.env;
+                    const saved_bindings_len = self.bindings.items.len;
+                    self.env = @constCast(header.source_env);
+                    defer {
+                        self.env = saved_env;
+                        self.bindings.shrinkRetainingCapacity(saved_bindings_len);
+                    }
+
                     const params = self.env.store.slicePatterns(header.params);
                     if (params.len != arg_indices.len) return error.TypeMismatch;
                     // Provide closure context for capture lookup during body eval
