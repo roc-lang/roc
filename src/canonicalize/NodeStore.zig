@@ -3280,8 +3280,9 @@ pub const Serialized = struct {
 
     /// Deserialize this Serialized struct into a NodeStore
     pub fn deserialize(self: *Serialized, offset: i64, gpa: Allocator) *NodeStore {
-        // Note: Serialized may be smaller than the runtime struct if it contains frozen fields.
-        // This is safe because we're explicitly initializing all fields below.
+        // Verify that Serialized has the same size as the runtime struct.
+        // This is required because we're reusing the same memory location.
+        comptime std.debug.assert(@sizeOf(@This()) == @sizeOf(NodeStore));
 
         // CRITICAL: On 32-bit platforms, deserializing nodes in-place corrupts the adjacent
         // regions and extra_data fields. We must deserialize in REVERSE order (last to first)

@@ -116,8 +116,9 @@ pub const Serialized = struct {
         offset: i64,
         source: []const u8,
     ) *CommonEnv {
-        // Note: We don't serialize frozen fields in idents/strings, so Serialized may be smaller than CommonEnv.
-        // This is safe because we're explicitly initializing all fields below.
+        // Verify that Serialized has the same size as the runtime struct.
+        // This is required because we're reusing the same memory location.
+        comptime std.debug.assert(@sizeOf(@This()) == @sizeOf(CommonEnv));
 
         // Overwrite ourself with the deserialized version, and return our pointer after casting it to CommonEnv.
         const env = @as(*CommonEnv, @ptrFromInt(@intFromPtr(self)));

@@ -299,8 +299,9 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
 
             /// Deserialize this Serialized struct into a SortedArrayBuilder
             pub fn deserialize(self: *Serialized, offset: i64) *SortedArrayBuilder(K, V) {
-                // Note: Serialized may be smaller than the runtime struct if it contains frozen fields.
-                // This is safe because we're explicitly initializing all fields below.
+                // Verify that Serialized has the same size as the runtime struct.
+                // This is required because we're reusing the same memory location.
+                comptime std.debug.assert(@sizeOf(@This()) == @sizeOf(SortedArrayBuilder(K, V)));
 
                 // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
                 const builder = @as(*SortedArrayBuilder(K, V), @ptrFromInt(@intFromPtr(self)));

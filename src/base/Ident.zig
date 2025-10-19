@@ -115,8 +115,9 @@ pub const Store = struct {
 
         /// Deserialize this Serialized struct into a Store
         pub fn deserialize(self: *Serialized, offset: i64) *Store {
-            // Note: We don't serialize the frozen field in interner, so Serialized may be smaller than Store.
-            // This is safe because we're explicitly initializing all fields below.
+            // Verify that Serialized has the same size as the runtime struct.
+            // This is required because we're reusing the same memory location.
+            comptime std.debug.assert(@sizeOf(@This()) == @sizeOf(Store));
 
             // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
             const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
