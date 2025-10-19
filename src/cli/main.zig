@@ -2386,6 +2386,19 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
         std.process.exit(1);
     };
 
+    // Evaluate all top-level declarations at compile time
+    var comptime_evaluator = eval.ComptimeEvaluator.init(allocs.gpa, &env, &.{}, &checker.problems) catch |err| {
+        try stderr.print("Failed to create compile-time evaluator: {}\n", .{err});
+        std.process.exit(1);
+    };
+    // Note: comptime_evaluator must be deinitialized AFTER building reports from checker.problems
+    // because the crash messages are owned by the evaluator but referenced by the problems
+
+    _ = comptime_evaluator.evalAll() catch |err| {
+        try stderr.print("Failed to evaluate declarations: {}\n", .{err});
+        std.process.exit(1);
+    };
+
     // Create test runner infrastructure for test evaluation
     var test_runner = TestRunner.init(allocs.gpa, &env) catch |err| {
         try stderr.print("Failed to create test runner: {}\n", .{err});
@@ -2405,8 +2418,40 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     const elapsed_ns = @as(u64, @intCast(end_time - start_time));
     const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
 
+    // Report any compile-time crashes
+    const has_comptime_crashes = checker.problems.len() > 0;
+    if (has_comptime_crashes) {
+        const problem = @import("check").problem;
+        var report_builder = problem.ReportBuilder.init(
+            allocs.gpa,
+            &env,
+            &env,
+            &checker.snapshots,
+            args.path,
+            &.{},
+        );
+        defer report_builder.deinit();
+
+        for (0..checker.problems.len()) |i| {
+            const problem_idx: problem.Problem.Idx = @enumFromInt(i);
+            const prob = checker.problems.get(problem_idx);
+            var report = report_builder.build(prob) catch |err| {
+                try stderr.print("Failed to build problem report: {}\n", .{err});
+                continue;
+            };
+            defer report.deinit();
+
+            const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+            const config = reporting.ReportingConfig.initColorTerminal();
+            try reporting.renderReportToTerminal(&report, stderr.any(), palette, config);
+        }
+    }
+
+    // Clean up comptime evaluator AFTER building reports (crash messages must stay alive until reports are built)
+    comptime_evaluator.deinit();
+
     // Report results
-    if (failed == 0) {
+    if (failed == 0 and !has_comptime_crashes) {
         // Success case: only print if verbose, exit with 0
         if (args.verbose) {
             try stdout.print("Ran {} test(s): {} passed, 0 failed in {d:.1}ms\n", .{ passed, passed, elapsed_ms });
@@ -2419,7 +2464,10 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
         return; // Exit with 0
     } else {
         // Failure case: always print summary with timing
-        try stderr.print("Ran {} test(s): {} passed, {} failed in {d:.1}ms\n", .{ passed + failed, passed, failed, elapsed_ms });
+        const total_tests = passed + failed;
+        if (total_tests > 0) {
+            try stderr.print("Ran {} test(s): {} passed, {} failed in {d:.1}ms\n", .{ total_tests, passed, failed, elapsed_ms });
+        }
 
         if (args.verbose) {
             for (test_runner.test_results.items) |test_result| {
@@ -2669,10 +2717,7 @@ fn checkFileWithBuildEnvPreserved(
                 const phase = package_env.modules.items[0].phase;
                 if (phase == .Done) break;
 
-                package_env.processModuleByName(module_name) catch |err| {
-                    std.debug.print("Error processing module: {}\n", .{err});
-                    break;
-                };
+                package_env.processModuleByName(module_name) catch break;
             }
         }
     }
