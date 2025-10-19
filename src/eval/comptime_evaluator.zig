@@ -233,9 +233,13 @@ pub const ComptimeEvaluator = struct {
             else => false,
         };
 
-        // Skip e_runtime_error (compile error already reported)
         if (expr == .e_runtime_error) {
-            return EvalResult.success;
+            return EvalResult{
+                .crash = .{
+                    .message = "Runtime error in expression",
+                    .region = region,
+                },
+            };
         }
 
         // Reset halted flag at the start of each def - crashes only halt within a single def
@@ -265,18 +269,10 @@ pub const ComptimeEvaluator = struct {
                         },
                     };
                 }
-                if (self.crash.crashMessage()) |msg| {
-                    return EvalResult{
-                        .crash = .{
-                            .message = msg,
-                            .region = region,
-                        },
-                    };
-                }
-                // If we got error.Crash but no message was recorded, still return crash with a default message
+                const msg = self.crash.crashMessage() orelse unreachable;
                 return EvalResult{
                     .crash = .{
-                        .message = "Crash occurred but no message was recorded",
+                        .message = msg,
                         .region = region,
                     },
                 };
