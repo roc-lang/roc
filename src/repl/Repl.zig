@@ -475,7 +475,7 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8, def_ident: ?[]co
     }
 
     // Create interpreter
-    var interpreter = eval.Interpreter.init(self.allocator, cir, &.{}) catch |err| {
+    var interpreter = eval.Interpreter.init(self.allocator, cir) catch |err| {
         return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
     };
     defer interpreter.deinit();
@@ -795,7 +795,7 @@ test "Repl - minimal interpreter integration" {
     _ = try checker.checkExprRepl(canonical_expr_idx.get_idx());
 
     // Step 6: Create interpreter
-    var interpreter = try eval.Interpreter.init(gpa, cir, &.{});
+    var interpreter = try eval.Interpreter.init(gpa, cir);
     defer interpreter.deinit();
 
     // Step 7: Evaluate

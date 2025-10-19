@@ -128,7 +128,7 @@ pub const ComptimeEvaluator = struct {
         return ComptimeEvaluator{
             .allocator = allocator,
             .env = cir,
-            .interpreter = try Interpreter.init(allocator, cir, other_envs),
+            .interpreter = try Interpreter.initWithOtherEnvs(allocator, cir, other_envs),
             .crash = CrashContext.init(allocator),
             .roc_ops = null,
             .problems = problems,

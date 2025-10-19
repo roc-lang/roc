@@ -400,7 +400,7 @@ pub const Repl = struct {
         };
 
         // Create interpreter instance
-        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, &.{}) catch |err| {
+        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
         };
         defer interpreter.deinit();
