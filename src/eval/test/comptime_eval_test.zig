@@ -720,3 +720,187 @@ test "comptime eval - constant folding multiple defs" {
         try testing.expectEqual(@as(i128, 42), value);
     }
 }
+
+test "comptime eval - constant folding with function calls" {
+    const src =
+        \\add = |x, y| x + y
+        \\multiply = |x, y| x * y
+        \\double = |x| multiply x 2
+        \\
+        \\# Top-level values that call the functions
+        \\value1 = add 10 5
+        \\value2 = multiply 6 7
+        \\value3 = double 21
+        \\value4 = add (multiply 3 4) (double 5)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 7 declarations (3 lambdas + 4 values)
+    // Lambdas are skipped (not evaluated), but values are evaluated
+    try testing.expectEqual(@as(u32, 7), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Get all the defs
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    try testing.expectEqual(@as(usize, 7), defs.len);
+
+    // The first 3 defs are the lambdas (add, multiply, double) - they should NOT be folded
+    // (lambdas are skipped during comptime evaluation)
+
+    // The last 4 defs are the values - they SHOULD be folded to constants
+
+    // Check value1 = add 10 5 => 15
+    {
+        const def = result.module_env.store.getDef(defs[3]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 15), value);
+    }
+
+    // Check value2 = multiply 6 7 => 42
+    {
+        const def = result.module_env.store.getDef(defs[4]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 42), value);
+    }
+
+    // Check value3 = double 21 => 42
+    {
+        const def = result.module_env.store.getDef(defs[5]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 42), value);
+    }
+
+    // Check value4 = add (multiply 3 4) (double 5) => add 12 10 => 22
+    {
+        const def = result.module_env.store.getDef(defs[6]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 22), value);
+    }
+}
+
+test "comptime eval - constant folding with recursive function" {
+    const src =
+        \\factorial = |n|
+        \\    if n <= 1
+        \\        1
+        \\    else
+        \\        n * (factorial (n - 1))
+        \\
+        \\# Top-level values using the recursive function
+        \\fact5 = factorial 5
+        \\fact6 = factorial 6
+        \\fact0 = factorial 0
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 4 declarations (1 lambda + 3 values)
+    try testing.expectEqual(@as(u32, 4), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    try testing.expectEqual(@as(usize, 4), defs.len);
+
+    // Check fact5 = factorial 5 => 120
+    {
+        const def = result.module_env.store.getDef(defs[1]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 120), value);
+    }
+
+    // Check fact6 = factorial 6 => 720
+    {
+        const def = result.module_env.store.getDef(defs[2]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 720), value);
+    }
+
+    // Check fact0 = factorial 0 => 1
+    {
+        const def = result.module_env.store.getDef(defs[3]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 1), value);
+    }
+}
+
+test "comptime eval - constant folding with helper functions" {
+    const src =
+        \\square = |x| x * x
+        \\sumOfSquares = |a, b| (square a) + (square b)
+        \\
+        \\# Multiple top-level values using the helper functions
+        \\sq5 = square 5
+        \\sq12 = square 12
+        \\pythag_3_4 = sumOfSquares 3 4
+        \\pythag_5_12 = sumOfSquares 5 12
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 6 declarations (2 lambdas + 4 values)
+    try testing.expectEqual(@as(u32, 6), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    try testing.expectEqual(@as(usize, 6), defs.len);
+
+    // Check sq5 = square 5 => 25
+    {
+        const def = result.module_env.store.getDef(defs[2]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 25), value);
+    }
+
+    // Check sq12 = square 12 => 144
+    {
+        const def = result.module_env.store.getDef(defs[3]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 144), value);
+    }
+
+    // Check pythag_3_4 = sumOfSquares 3 4 => 9 + 16 => 25
+    {
+        const def = result.module_env.store.getDef(defs[4]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 25), value);
+    }
+
+    // Check pythag_5_12 = sumOfSquares 5 12 => 25 + 144 => 169
+    {
+        const def = result.module_env.store.getDef(defs[5]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 169), value);
+    }
+}
