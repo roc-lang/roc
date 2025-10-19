@@ -47,6 +47,7 @@ pub fn deinit(self: *CommonEnv, gpa: std.mem.Allocator) void {
     self.strings.deinit(gpa);
     self.exposed_items.deinit(gpa);
     self.line_starts.deinit(gpa);
+    // NOTE: Caller owns source and is responsible for freeing it.
 }
 
 /// Add the given offset to the memory addresses of all pointers in `self`.

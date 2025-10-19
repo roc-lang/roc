@@ -105,6 +105,7 @@ pub const Interpreter = struct {
 
     // Runtime unification context
     env: *can.ModuleEnv,
+    other_envs: []const *const can.ModuleEnv,
     problems: problem_mod.Store,
     snapshots: snapshot_mod.Store,
     unify_scratch: unify.Scratch,
@@ -127,6 +128,23 @@ pub const Interpreter = struct {
     imported_modules: std.StringHashMap(*const can.ModuleEnv),
 
     pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, bool_stmt: can.CIR.Statement.Idx, bool_env: *const can.ModuleEnv, imported_modules_map: ?*const std.AutoHashMap(base_pkg.Ident.Idx, can.Can.AutoImportedType)) !Interpreter {
+        // Convert imported modules map to other_envs slice
+        var other_envs_list = std.ArrayList(*const can.ModuleEnv).init(allocator);
+        errdefer other_envs_list.deinit();
+
+        if (imported_modules_map) |modules_map| {
+            var iter = modules_map.iterator();
+            while (iter.next()) |entry| {
+                try other_envs_list.append(entry.value_ptr.env);
+            }
+        }
+
+        // Transfer ownership of the slice to the Interpreter
+        const other_envs = try other_envs_list.toOwnedSlice();
+        return initWithOtherEnvs(allocator, env, other_envs, bool_stmt, bool_env);
+    }
+
+    pub fn initWithOtherEnvs(allocator: std.mem.Allocator, env: *can.ModuleEnv, other_envs: []const *const can.ModuleEnv, bool_stmt: can.CIR.Statement.Idx, bool_env: *const can.ModuleEnv) !Interpreter {
         const rt_types_ptr = try allocator.create(types.store.Store);
         rt_types_ptr.* = try types.store.Store.initCapacity(allocator, 1024, 512);
         var slots = try std.ArrayList(u32).initCapacity(allocator, 1024);
@@ -141,6 +159,7 @@ pub const Interpreter = struct {
             .translate_cache = std.AutoHashMap(u64, types.Var).init(allocator),
             .poly_cache = HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80).init(allocator),
             .env = env,
+            .other_envs = other_envs,
             .problems = try problem_mod.Store.initCapacity(allocator, 64),
             .snapshots = try snapshot_mod.Store.initCapacity(allocator, 256),
             .unify_scratch = try unify.Scratch.init(allocator),
@@ -156,15 +175,6 @@ pub const Interpreter = struct {
             .imported_modules = std.StringHashMap(*const can.ModuleEnv).init(allocator),
         };
         result.runtime_layout_store = try layout.Store.init(env, result.runtime_types);
-
-        // Copy imported modules map if provided
-        if (imported_modules_map) |modules_map| {
-            var iter = modules_map.iterator();
-            while (iter.next()) |entry| {
-                const module_name_text = env.common.idents.getText(entry.key_ptr.*);
-                try result.imported_modules.put(module_name_text, entry.value_ptr.env);
-            }
-        }
 
         return result;
     }
@@ -1546,40 +1556,32 @@ pub const Interpreter = struct {
                 return error.NotImplemented;
             },
             .e_lookup_external => |lookup| {
-                // Look up a symbol from an imported module (e.g., Bool.not)
-                // Get the module name from the Import.Idx
-                const import_idx_int = @intFromEnum(lookup.module_idx);
-                if (import_idx_int >= self.env.imports.imports.len()) {
-                    return error.TypeMismatch;
-                }
-
-                const string_idx = self.env.imports.imports.items.items[import_idx_int];
-                const module_name = self.env.common.strings.get(string_idx);
-
-                // Look up the module environment
-                const target_module = self.imported_modules.get(module_name) orelse {
-                    return error.TypeMismatch;
-                };
-
-                // The target_node_idx points to a definition (like Bool.not)
-                // Both Def.Idx and Node.Idx use the same underlying values
-                const target_node_idx: can.CIR.Node.Idx = @enumFromInt(lookup.target_node_idx);
-                const target_node = target_module.store.nodes.get(target_node_idx);
-
-                if (target_node.tag != .def) {
-                    // Node is not a def - this shouldn't happen for properly compiled modules
+                // Cross-module reference - look up in imported module
+                const import_idx: usize = @intFromEnum(lookup.module_idx);
+                if (import_idx >= self.other_envs.len) {
                     return error.NotImplemented;
                 }
+                const other_env = self.other_envs[import_idx];
 
-                // TODO: Cross-module function calls are not yet implemented in the interpreter.
-                // The issue is that when we evaluate a lambda from an external module and return it,
-                // that lambda's body contains expression indices specific to the external module.
-                // When the lambda is later invoked, those indices are evaluated in the current
-                // module's context, causing index out of bounds errors.
-                //
-                // A proper fix requires architectural changes to track each closure's source module
-                // and switch module context when invoking cross-module closures.
-                return error.NotImplemented;
+                // The target_node_idx is a Def.Idx in the other module
+                const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+                const target_def = other_env.store.getDef(target_def_idx);
+
+                // Save both env and bindings state
+                const saved_env = self.env;
+                const saved_bindings_len = self.bindings.items.len;
+                self.env = @constCast(other_env);
+                defer {
+                    self.env = saved_env;
+                    self.bindings.shrinkRetainingCapacity(saved_bindings_len);
+                }
+
+                // Evaluate the definition's expression in the other module's context
+                const target_ct_var = can.ModuleEnv.varFrom(target_def.expr);
+                const target_rt_var = try self.translateTypeVar(self.env, target_ct_var);
+                const result = try self.evalExprMinimal(target_def.expr, roc_ops, target_rt_var);
+
+                return result;
             },
             .e_unary_minus => |unary| {
                 const operand_ct_var = can.ModuleEnv.varFrom(unary.expr);

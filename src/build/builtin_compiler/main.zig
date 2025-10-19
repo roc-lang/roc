@@ -47,17 +47,14 @@ pub fn main() !void {
     // Ignore command-line arguments - they're only used by Zig's build system for cache tracking
 
     // Read the .roc source files at runtime
+    // NOTE: ModuleEnv takes ownership of these sources and will free them in deinit()
     const bool_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Bool.roc", 1024 * 1024);
-    defer gpa.free(bool_roc_source);
 
     const result_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Result.roc", 1024 * 1024);
-    defer gpa.free(result_roc_source);
 
     const dict_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Dict.roc", 1024 * 1024);
-    defer gpa.free(dict_roc_source);
 
     const set_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Set.roc", 1024 * 1024);
-    defer gpa.free(set_roc_source);
 
     // Compile Bool.roc (it's completely self-contained, doesn't use Bool or Result types)
     const bool_env = try compileModule(
