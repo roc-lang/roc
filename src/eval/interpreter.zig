@@ -1,6 +1,7 @@
 //! Interpreter implementing the type-carrying architecture.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base_pkg = @import("base");
 const types = @import("types");
 const layout = @import("layout");
@@ -1623,14 +1624,23 @@ pub const Interpreter = struct {
                     }
                 }
 
-                // If still not found, try to find and evaluate the top-level def with this pattern
-                // This supports referencing top-level defs during compile-time evaluation
-                const all_defs = self.env.store.sliceDefs(self.env.all_defs);
-                for (all_defs) |def_idx| {
-                    const def = self.env.store.getDef(def_idx);
-                    if (def.pattern == lookup.pattern_idx) {
-                        // Found the def! Evaluate its expression
-                        return self.evalMinimal(def.expr, roc_ops);
+                if (builtin.mode == .Debug) {
+                    // In debug builds, check if this pattern corresponds to a top-level def
+                    // If we find it, that means it should have been in bindings - this is a compiler bug
+                    const all_defs = self.env.store.sliceDefs(self.env.all_defs);
+                    for (all_defs) |def_idx| {
+                        const def = self.env.store.getDef(def_idx);
+                        if (def.pattern == lookup.pattern_idx) {
+                            const pat = self.env.store.getPattern(lookup.pattern_idx);
+                            const var_name = switch (pat) {
+                                .assign => |a| self.env.getIdent(a.ident),
+                                else => "(non-assign pattern)",
+                            };
+                            std.debug.panic(
+                                "Bug in compiler: top-level definition '{s}' (pattern_idx={}) should have been added to bindings but wasn't found there",
+                                .{ var_name, lookup.pattern_idx },
+                            );
+                        }
                     }
                 }
 
