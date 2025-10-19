@@ -604,3 +604,119 @@ test "comptime eval - crash halts within single def" {
     try testing.expectEqual(@as(u32, 1), summary.crashed);
     try testing.expectEqual(@as(usize, 1), result.problems.len());
 }
+
+// Constant folding tests
+
+test "comptime eval - constant folding simple addition" {
+    const src = "x = 1 + 1";
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate successfully
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify the expression was folded to a constant
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    try testing.expectEqual(@as(usize, 1), defs.len);
+
+    const def = result.module_env.store.getDef(defs[0]);
+    const expr = result.module_env.store.getExpr(def.expr);
+
+    // The expression should now be e_num with value 2
+    try testing.expect(expr == .e_num);
+    const value = expr.e_num.value.toI128();
+    try testing.expectEqual(@as(i128, 2), value);
+}
+
+test "comptime eval - constant folding multiplication" {
+    const src = "x = 21 * 2";
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify the expression was folded
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    const def = result.module_env.store.getDef(defs[0]);
+    const expr = result.module_env.store.getExpr(def.expr);
+
+    try testing.expect(expr == .e_num);
+    const value = expr.e_num.value.toI128();
+    try testing.expectEqual(@as(i128, 42), value);
+}
+
+test "comptime eval - constant folding preserves literal" {
+    const src = "x = 42";
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // The expression should stay as e_num with value 42
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    const def = result.module_env.store.getDef(defs[0]);
+    const expr = result.module_env.store.getExpr(def.expr);
+
+    try testing.expect(expr == .e_num);
+    const value = expr.e_num.value.toI128();
+    try testing.expectEqual(@as(i128, 42), value);
+}
+
+test "comptime eval - constant folding multiple defs" {
+    const src =
+        \\a = 10 + 5
+        \\b = 20 * 2
+        \\c = 100 - 58
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    try testing.expectEqual(@as(u32, 3), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify all expressions were folded
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    try testing.expectEqual(@as(usize, 3), defs.len);
+
+    // Check a = 15
+    {
+        const def = result.module_env.store.getDef(defs[0]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 15), value);
+    }
+
+    // Check b = 40
+    {
+        const def = result.module_env.store.getDef(defs[1]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 40), value);
+    }
+
+    // Check c = 42
+    {
+        const def = result.module_env.store.getDef(defs[2]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 42), value);
+    }
+}

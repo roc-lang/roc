@@ -272,7 +272,88 @@ pub const ComptimeEvaluator = struct {
         const layout_cache = &self.interpreter.runtime_layout_store;
         defer result.decref(layout_cache, ops);
 
+        // Try to fold the result to a constant expression
+        self.tryFoldConstant(def_idx, result) catch {
+            // If folding fails, just continue - the original expression is still valid
+        };
+
         return EvalResult.success;
+    }
+
+    /// Attempts to replace an expression with its constant-folded result
+    fn tryFoldConstant(self: *ComptimeEvaluator, def_idx: CIR.Def.Idx, stack_value: eval_mod.StackValue) !void {
+        const def = self.env.store.getDef(def_idx);
+        const expr_idx = def.expr;
+        const region = self.env.store.getExprRegion(expr_idx);
+
+        // Convert StackValue to CIR expression based on layout
+        const layout = stack_value.layout;
+
+        // Check if this is a scalar type (including integers)
+        if (layout.tag != .scalar) {
+            return error.NotImplemented; // Don't fold non-scalar types yet
+        }
+
+        const scalar_tag = layout.data.scalar.tag;
+        const new_expr_idx = switch (scalar_tag) {
+            .int => blk: {
+                // Extract integer value
+                const value = stack_value.asI128();
+                const precision = layout.data.scalar.data.int;
+
+                // Map precision to NumKind
+                const num_kind: CIR.NumKind = switch (precision) {
+                    .i8 => .i8,
+                    .i16 => .i16,
+                    .i32 => .i32,
+                    .i64 => .i64,
+                    .i128 => .i128,
+                    .u8 => .u8,
+                    .u16 => .u16,
+                    .u32 => .u32,
+                    .u64 => .u64,
+                    .u128 => .u128,
+                };
+
+                // Create IntValue
+                const int_value = CIR.IntValue{
+                    .bytes = @bitCast(value),
+                    .kind = switch (precision) {
+                        .u8, .u16, .u32, .u64, .u128 => .u128,
+                        .i8, .i16, .i32, .i64, .i128 => .i128,
+                    },
+                };
+
+                // Create e_num expression
+                const folded_expr = CIR.Expr{
+                    .e_num = .{
+                        .value = int_value,
+                        .kind = num_kind,
+                    },
+                };
+
+                // Add the new expression to the store
+                break :blk try self.env.store.addExpr(folded_expr, region);
+            },
+            else => return error.NotImplemented, // Don't fold other scalar types yet
+        };
+
+        // CRITICAL: We need to maintain the type information for the new expression.
+        // We're adding a new CIR node AFTER type checking has completed, so we need
+        // to create a new type variable for it that redirects to the original expression's type.
+        // This ensures the 1-to-1 mapping between CIR nodes and type variables is maintained.
+        const original_type_var = ModuleEnv.varFrom(expr_idx);
+
+        // Create a new type variable that redirects to the original's type
+        // This properly extends the types store
+        _ = try self.env.types.freshRedirect(original_type_var);
+
+        // Replace the expr field in the Def
+        // The Def is stored in extra_data with expr at index 1
+        const nid: CIR.Node.Idx = @enumFromInt(@intFromEnum(def_idx));
+        const node = self.env.store.nodes.get(nid);
+        const extra_start = node.data_1;
+        self.env.store.extra_data.items.items[extra_start + 1] = @intFromEnum(new_expr_idx);
     }
 
     /// Helper to report a problem and track allocated message
