@@ -531,7 +531,7 @@ test "Ident.Store with genUnique CompactWriter roundtrip" {
     try std.testing.expectEqual(@as(u32, 3), deserialized.next_unique_name);
 }
 
-test "Ident.Store frozen state CompactWriter roundtrip" {
+test "Ident.Store CompactWriter roundtrip" {
     const gpa = std.testing.allocator;
 
     // Create and populate store
@@ -540,9 +540,6 @@ test "Ident.Store frozen state CompactWriter roundtrip" {
 
     _ = try original.insert(gpa, Ident.for_text("test1"));
     _ = try original.insert(gpa, Ident.for_text("test2"));
-
-    // Note: Frozen field removed - no longer needed
-    // Test serialization works correctly without frozen field
 
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -583,10 +580,6 @@ test "Ident.Store frozen state CompactWriter roundtrip" {
 
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
-    // Verify frozen state is preserved
-    if (std.debug.runtime_safety) {
-        try std.testing.expect(deserialized.interner.frozen);
-    }
 }
 
 test "Ident.Store comprehensive CompactWriter roundtrip" {

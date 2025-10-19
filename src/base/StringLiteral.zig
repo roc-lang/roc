@@ -305,7 +305,7 @@ test "Store comprehensive CompactWriter roundtrip" {
     }
 }
 
-test "Store frozen state CompactWriter roundtrip" {
+test "Store CompactWriter roundtrip" {
     const gpa = std.testing.allocator;
 
     // Create and populate store
@@ -314,9 +314,6 @@ test "Store frozen state CompactWriter roundtrip" {
 
     _ = try original.insert(gpa, "test1");
     _ = try original.insert(gpa, "test2");
-
-    // Note: Frozen field removed - no longer needed
-    // Test serialization works correctly without frozen field
 
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -350,10 +347,6 @@ test "Store frozen state CompactWriter roundtrip" {
     const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr)));
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
-    // Verify frozen state is preserved
-    if (std.debug.runtime_safety) {
-        try std.testing.expect(deserialized.frozen);
-    }
 }
 
 test "Store.Serialized roundtrip" {
@@ -404,10 +397,6 @@ test "Store.Serialized roundtrip" {
     try std.testing.expectEqualStrings("world", store.get(idx2));
     try std.testing.expectEqualStrings("foo bar baz", store.get(idx3));
 
-    // Verify frozen state is preserved
-    if (std.debug.runtime_safety) {
-        try std.testing.expect(store.frozen);
-    }
 }
 
 test "Store edge case indices CompactWriter roundtrip" {

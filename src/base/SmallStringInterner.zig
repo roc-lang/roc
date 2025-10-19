@@ -439,7 +439,7 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
     try std.testing.expect(original_entry_count > 0);
 }
 
-test "SmallStringInterner frozen state CompactWriter roundtrip" {
+test "SmallStringInterner CompactWriter roundtrip" {
     const gpa = std.testing.allocator;
 
     // Create and populate interner
@@ -448,9 +448,6 @@ test "SmallStringInterner frozen state CompactWriter roundtrip" {
 
     _ = try original.insert(gpa, "test1");
     _ = try original.insert(gpa, "test2");
-
-    // Note: Frozen field removed - no longer needed
-    // Test serialization works correctly without frozen field
 
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -483,11 +480,6 @@ test "SmallStringInterner frozen state CompactWriter roundtrip" {
     // Cast and relocate
     const deserialized = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr)));
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
-
-    // Verify frozen state is preserved
-    if (std.debug.runtime_safety) {
-        try std.testing.expect(deserialized.frozen);
-    }
 
     // Verify strings are still accessible
     // Note: Index 0 is reserved for the unused marker, so strings start at index 1
@@ -656,14 +648,11 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
 //     try std.testing.expectEqualStrings("interner1_string2", deserialized1.getText(idx1_2));
 //     try std.testing.expectEqual(@as(u32, 2), deserialized1.entry_count);
 
-//     // Verify interner 2 (frozen)
+//     // Verify interner 2
 //     try std.testing.expectEqualStrings("interner2_string1", deserialized2.getText(idx2_1));
 //     try std.testing.expectEqualStrings("interner2_string2", deserialized2.getText(idx2_2));
 //     try std.testing.expectEqualStrings("interner2_string3", deserialized2.getText(idx2_3));
 //     try std.testing.expectEqual(@as(u32, 3), deserialized2.entry_count);
-//     if (std.debug.runtime_safety) {
-//         try std.testing.expect(deserialized2.frozen);
-//     }
 
 //     // Verify interner 3
 //     try std.testing.expectEqualStrings("interner3_string1", deserialized3.getText(idx3_1));
