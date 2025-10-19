@@ -410,3 +410,77 @@ test "comptime eval - unexposed constant cannot be accessed" {
 
     try testing.expect(found_value_not_exposed);
 }
+
+test "comptime eval - expect success does not report" {
+    const src =
+        \\x = {
+        \\    expect 1 == 1
+        \\    42
+        \\}
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate successfully - expect passes
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
+}
+
+test "comptime eval - expect failure is reported" {
+    const src =
+        \\x = {
+        \\    expect 1 == 2
+        \\    42
+        \\}
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 1 declaration with no crashes but 1 expect failure
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Should have 1 problem reported (expect failure)
+    try testing.expectEqual(@as(usize, 1), result.problems.len());
+
+    // Verify it's an expect_failed problem
+    const problem = result.problems.problems.items[0];
+    try testing.expect(problem == .comptime_expect_failed);
+}
+
+test "comptime eval - multiple expect failures are reported" {
+    const src =
+        \\x = {
+        \\    expect 1 == 2
+        \\    42
+        \\}
+        \\y = {
+        \\    expect True == False
+        \\    100
+        \\}
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 2 declarations with no crashes but 2 expect failures
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Should have 2 problems reported
+    try testing.expectEqual(@as(usize, 2), result.problems.len());
+
+    // Verify both are expect_failed problems
+    try testing.expect(result.problems.problems.items[0] == .comptime_expect_failed);
+    try testing.expect(result.problems.problems.items[1] == .comptime_expect_failed);
+}
+

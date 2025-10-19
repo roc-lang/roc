@@ -220,20 +220,24 @@ pub const ComptimeEvaluator = struct {
 
         const ops = self.get_ops();
         const result = self.interpreter.evalMinimal(expr_idx, ops) catch |err| {
-            // Check if this was a crash
             if (err == error.Crash) {
+                if (self.expect.crashMessage()) |msg| {
+                    return EvalResult{
+                        .expect_failed = .{
+                            .message = msg,
+                            .region = region,
+                        },
+                    };
+                }
                 if (self.crash.crashMessage()) |msg| {
-                    // Allocate a copy of the crash message that will persist
-                    const owned_msg = try self.allocator.dupe(u8, msg);
                     return EvalResult{
                         .crash = .{
-                            .message = owned_msg,
+                            .message = msg,
                             .region = region,
                         },
                     };
                 }
             }
-            // For all other errors, report them as evaluation errors
             return EvalResult{
                 .error_eval = .{
                     .err = err,
@@ -244,18 +248,6 @@ pub const ComptimeEvaluator = struct {
 
         const layout_cache = &self.interpreter.runtime_layout_store;
         defer result.decref(layout_cache, ops);
-
-        // Check if an expect failed during evaluation
-        if (self.expect.crashMessage()) |msg| {
-            // Allocate a copy of the expect failure message that will persist
-            const owned_msg = try self.allocator.dupe(u8, msg);
-            return EvalResult{
-                .expect_failed = .{
-                    .message = owned_msg,
-                    .region = region,
-                },
-            };
-        }
 
         return EvalResult.success;
     }
