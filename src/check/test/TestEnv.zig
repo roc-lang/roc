@@ -329,6 +329,12 @@ pub fn init(source: []const u8) !TestEnv {
     module_env.module_name = module_name;
     try module_env.common.calcLineStarts(gpa);
 
+    // Add Bool and Result to module_envs for auto-importing
+    const bool_ident = try module_env.insertIdent(base.Ident.for_text("Bool"));
+    const result_ident = try module_env.insertIdent(base.Ident.for_text("Result"));
+    try module_envs.put(bool_ident, .{ .env = bool_module.env });
+    try module_envs.put(result_ident, .{ .env = result_module.env });
+
     // Parse the AST
     parse_ast.* = try parse.parse(&module_env.common, gpa);
     errdefer parse_ast.deinit(gpa);

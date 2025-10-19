@@ -9,9 +9,15 @@ const builtins = @import("builtins");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 
+const eval_mod = @import("../mod.zig");
+const builtin_loading_mod = eval_mod.builtin_loading;
 const TestEnv = @import("TestEnv.zig");
-const Interpreter = @import("../interpreter.zig").Interpreter;
-const StackValue = @import("../StackValue.zig");
+const Interpreter = eval_mod.Interpreter;
+const StackValue = eval_mod.StackValue;
+const BuiltinTypes = eval_mod.BuiltinTypes;
+const LoadedModule = builtin_loading_mod.LoadedModule;
+const deserializeBuiltinIndices = builtin_loading_mod.deserializeBuiltinIndices;
+const loadCompiledModule = builtin_loading_mod.loadCompiledModule;
 
 const Check = check.Check;
 const Can = can.Can;
@@ -21,82 +27,6 @@ const test_allocator = std.testing.allocator;
 
 const TestParseError = parse.Parser.Error || error{ TokenizeError, SyntaxError };
 
-/// Wrapper for a loaded compiled module that tracks the buffer
-pub const LoadedModule = struct {
-    env: *ModuleEnv,
-    buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT) u8,
-    gpa: std.mem.Allocator,
-
-    pub fn deinit(self: *LoadedModule) void {
-        // Only free the hashmap that was allocated during deserialization
-        // Most other data (like the SafeList contents) points into the buffer
-        self.env.imports.map.deinit(self.gpa);
-
-        // Free the buffer (the env points into this buffer for most data)
-        self.gpa.free(self.buffer);
-        // Free the env struct itself
-        self.gpa.destroy(self.env);
-    }
-};
-
-/// Deserialize BuiltinIndices from the binary data generated at build time
-pub fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !CIR.BuiltinIndices {
-    // Copy to properly aligned memory
-    const aligned_buffer = try gpa.alignedAlloc(u8, @alignOf(CIR.BuiltinIndices), bin_data.len);
-    defer gpa.free(aligned_buffer);
-    @memcpy(aligned_buffer, bin_data);
-
-    const indices_ptr = @as(*const CIR.BuiltinIndices, @ptrCast(aligned_buffer.ptr));
-    return indices_ptr.*;
-}
-
-/// Load a compiled ModuleEnv from embedded binary data
-pub fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) !LoadedModule {
-    // Copy the embedded data to properly aligned memory
-    // CompactWriter requires specific alignment for serialization
-    const CompactWriter = collections.CompactWriter;
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
-    @memcpy(buffer, bin_data);
-
-    // Cast to the serialized structure
-    const serialized_ptr = @as(
-        *ModuleEnv.Serialized,
-        @ptrCast(@alignCast(buffer.ptr)),
-    );
-
-    const env = try gpa.create(ModuleEnv);
-    errdefer gpa.destroy(env);
-
-    // Deserialize
-    const base_ptr = @intFromPtr(buffer.ptr);
-
-    // Deserialize store in-place (returns the same pointer, just cast to NodeStore)
-    const deserialized_store_ptr = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa);
-    const deserialized_store = deserialized_store_ptr.*;
-
-    env.* = ModuleEnv{
-        .gpa = gpa,
-        .common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), source).*,
-        .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*, // Pass gpa to types deserialize
-        .module_kind = serialized_ptr.module_kind,
-        .all_defs = serialized_ptr.all_defs,
-        .all_statements = serialized_ptr.all_statements,
-        .exports = serialized_ptr.exports,
-        .builtin_statements = serialized_ptr.builtin_statements,
-        .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
-        .imports = serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
-        .module_name = module_name,
-        .diagnostics = serialized_ptr.diagnostics,
-        .store = deserialized_store,
-    };
-
-    return LoadedModule{
-        .env = env,
-        .buffer = buffer,
-        .gpa = gpa,
-    };
-}
-
 /// Helper function to run an expression and expect a specific error.
 pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
@@ -105,7 +35,8 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: e
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt, resources.bool_module.env, null);
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.bool_module.env, resources.result_module.env);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, null);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -132,7 +63,8 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt, resources.bool_module.env, null);
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.bool_module.env, resources.result_module.env);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, null);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -157,7 +89,8 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt, resources.bool_module.env, null);
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.bool_module.env, resources.result_module.env);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, null);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -191,7 +124,8 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt, resources.bool_module.env, null);
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.bool_module.env, resources.result_module.env);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, null);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -239,7 +173,8 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt, resources.bool_module.env, null);
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.bool_module.env, resources.result_module.env);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, null);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -282,7 +217,8 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt, resources.bool_module.env, null);
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.bool_module.env, resources.result_module.env);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, null);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -341,6 +277,8 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     bool_stmt: CIR.Statement.Idx,
     bool_module: LoadedModule,
     result_module: LoadedModule,
+    builtin_indices: CIR.BuiltinIndices,
+    builtin_types: BuiltinTypes,
 } {
     // Load builtin modules (following TestEnv.zig pattern)
     const builtin_indices = try deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
@@ -428,6 +366,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
         // Pass Bool and Result as imported modules
         const other_modules = [_]*const ModuleEnv{ bool_module.env, result_module.env };
         checker.* = try Check.init(allocator, &module_env.types, module_env, &other_modules, &module_env.store.regions, common_idents);
+        const builtin_types = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
         return .{
             .module_env = module_env,
             .parse_ast = parse_ast,
@@ -439,6 +378,8 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
             .bool_stmt = bool_stmt_in_bool_module,
             .bool_module = bool_module,
             .result_module = result_module,
+            .builtin_indices = builtin_indices,
+            .builtin_types = builtin_types,
         };
     };
     const canonical_expr_idx = canonical_expr.get_idx();
@@ -451,6 +392,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     // Type check the expression
     _ = try checker.checkExprRepl(canonical_expr_idx);
 
+    const builtin_types = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
     return .{
         .module_env = module_env,
         .parse_ast = parse_ast,
@@ -460,6 +402,8 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
         .bool_stmt = bool_stmt_in_bool_module,
         .bool_module = bool_module,
         .result_module = result_module,
+        .builtin_indices = builtin_indices,
+        .builtin_types = builtin_types,
     };
 }
 
@@ -492,7 +436,8 @@ test "eval tag - already primitive" {
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt, resources.bool_module.env, null);
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.bool_module.env, resources.result_module.env);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, null);
     defer interpreter.deinit();
 
     const ops = test_env_instance.get_ops();
@@ -521,7 +466,7 @@ test "interpreter reuse across multiple evaluations" {
         var test_env_instance = TestEnv.init(test_allocator);
         defer test_env_instance.deinit();
 
-        var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.bool_stmt, resources.bool_module.env, null);
+        var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.builtin_types, null);
         defer interpreter.deinit();
 
         const ops = test_env_instance.get_ops();

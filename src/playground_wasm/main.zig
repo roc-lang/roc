@@ -132,6 +132,7 @@ const CompilerStageData = struct {
     parse_ast: ?parse.AST = null,
     solver: ?Check = null,
     bool_stmt: ?can.CIR.Statement.Idx = null,
+    builtin_types: ?eval.BuiltinTypes = null,
 
     // Pre-canonicalization HTML representations
     tokens_html: ?[]const u8 = null,
@@ -1054,8 +1055,9 @@ fn compileSource(source: []const u8) !CompilerStageData {
     logDebug("compileSource: Using Result statement from Result module, idx={}\n", .{@intFromEnum(result_stmt_in_result_module)});
     logDebug("compileSource: Builtin injection complete\n", .{});
 
-    // Store bool_stmt in result for later use (e.g., in test runner)
+    // Store bool_stmt and builtin_types in result for later use (e.g., in test runner)
     result.bool_stmt = bool_stmt_in_bool_module;
+    result.builtin_types = eval.BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
 
     const module_common_idents: Check.CommonIdents = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("main")),
@@ -1579,14 +1581,14 @@ fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) Re
     var local_arena = std.heap.ArenaAllocator.init(allocator);
     defer local_arena.deinit();
 
-    // Check if bool_stmt is available
-    const bool_stmt = data.bool_stmt orelse {
-        try writeErrorResponse(response_buffer, .ERROR, "Bool statement not available for test evaluation.");
+    // Check if builtin_types is available
+    const builtin_types_for_tests = data.builtin_types orelse {
+        try writeErrorResponse(response_buffer, .ERROR, "Builtin types not available for test evaluation.");
         return;
     };
 
     // Create interpreter infrastructure for test evaluation
-    var test_runner = TestRunner.init(local_arena.allocator(), env, bool_stmt) catch {
+    var test_runner = TestRunner.init(local_arena.allocator(), env, builtin_types_for_tests) catch {
         try writeErrorResponse(response_buffer, .ERROR, "Failed to initialize test runner.");
         return;
     };

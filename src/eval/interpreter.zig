@@ -23,7 +23,9 @@ const RocList = builtins.list.RocList;
 const utils = builtins.utils;
 const Layout = layout.Layout;
 const helpers = @import("test/helpers.zig");
+const builtin_loading = @import("builtin_loading.zig");
 const compiled_builtins = @import("compiled_builtins");
+const BuiltinTypes = @import("builtins.zig").BuiltinTypes;
 
 /// Interpreter that evaluates canonical Roc expressions against runtime types/layouts.
 pub const Interpreter = struct {
@@ -120,14 +122,12 @@ pub const Interpreter = struct {
     canonical_bool_rt_var: ?types.Var,
     // Used to unwrap extensible tags
     scratch_tags: std.ArrayList(types.Tag),
-    /// Statement index of Bool type in the Bool module (from Bool.bin)
-    bool_stmt: can.CIR.Statement.Idx,
-    /// Bool module environment (for looking up Bool tag names like "True" and "False")
-    bool_env: *const can.ModuleEnv,
+    /// Builtin types required by the interpreter (Bool, Result, etc.)
+    builtins: BuiltinTypes,
     /// Map from module name to ModuleEnv for resolving e_lookup_external expressions
     imported_modules: std.StringHashMap(*const can.ModuleEnv),
 
-    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, bool_stmt: can.CIR.Statement.Idx, bool_env: *const can.ModuleEnv, imported_modules_map: ?*const std.AutoHashMap(base_pkg.Ident.Idx, can.Can.AutoImportedType)) !Interpreter {
+    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, imported_modules_map: ?*const std.AutoHashMap(base_pkg.Ident.Idx, can.Can.AutoImportedType)) !Interpreter {
         // Convert imported modules map to other_envs slice
         var other_envs_list = std.ArrayList(*const can.ModuleEnv).init(allocator);
         errdefer other_envs_list.deinit();
@@ -141,10 +141,10 @@ pub const Interpreter = struct {
 
         // Transfer ownership of the slice to the Interpreter
         const other_envs = try other_envs_list.toOwnedSlice();
-        return initWithOtherEnvs(allocator, env, other_envs, bool_stmt, bool_env);
+        return initWithOtherEnvs(allocator, env, other_envs, builtin_types);
     }
 
-    pub fn initWithOtherEnvs(allocator: std.mem.Allocator, env: *can.ModuleEnv, other_envs: []const *const can.ModuleEnv, bool_stmt: can.CIR.Statement.Idx, bool_env: *const can.ModuleEnv) !Interpreter {
+    pub fn initWithOtherEnvs(allocator: std.mem.Allocator, env: *can.ModuleEnv, other_envs: []const *const can.ModuleEnv, builtin_types: BuiltinTypes) !Interpreter {
         const rt_types_ptr = try allocator.create(types.store.Store);
         rt_types_ptr.* = try types.store.Store.initCapacity(allocator, 1024, 512);
         var slots = try std.ArrayList(u32).initCapacity(allocator, 1024);
@@ -170,8 +170,7 @@ pub const Interpreter = struct {
             .bool_true_index = 1,
             .canonical_bool_rt_var = null,
             .scratch_tags = try std.ArrayList(types.Tag).initCapacity(allocator, 8),
-            .bool_stmt = bool_stmt,
-            .bool_env = bool_env,
+            .builtins = builtin_types,
             .imported_modules = std.StringHashMap(*const can.ModuleEnv).init(allocator),
         };
         result.runtime_layout_store = try layout.Store.init(env, result.runtime_types);
@@ -490,9 +489,24 @@ pub const Interpreter = struct {
 
                     return try self.evalArithmeticBinop(binop.op, expr_idx, lhs, rhs, lhs_rt_var, rhs_rt_var);
                 } else if (binop.op == .eq or binop.op == .ne or binop.op == .lt or binop.op == .le or binop.op == .gt or binop.op == .ge) {
-                    // Comparison operators are not yet implemented
-                    // Use if/match and Bool.not for boolean testing instead
-                    return error.NotImplemented;
+                    // Comparison operators - evaluate both sides and compare
+                    const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    var result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
+                    result_rt_var = try self.ensureBoolRuntimeVar(self.env, result_ct_var, result_rt_var);
+
+                    const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
+                    const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
+                    const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
+                    const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
+
+                    var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var);
+                    defer lhs.decref(&self.runtime_layout_store, roc_ops);
+                    var rhs = try self.evalExprMinimal(binop.rhs, roc_ops, rhs_rt_var);
+                    defer rhs.decref(&self.runtime_layout_store, roc_ops);
+
+                    // Compare the values
+                    const comparison_result = try self.compareValues(lhs, rhs, binop.op);
+                    return try self.makeBoolValue(result_rt_var, comparison_result);
                 } else if (binop.op == .@"or") {
                     const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
                     var result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
@@ -897,7 +911,7 @@ pub const Interpreter = struct {
                 const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
                 const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
                 // Check if this is Bool by comparing against the dynamic bool_stmt
-                const backing_rt_var = if (nom.nominal_type_decl == self.bool_stmt)
+                const backing_rt_var = if (nom.nominal_type_decl == self.builtins.bool_stmt)
                     try self.getCanonicalBoolRuntimeVar()
                 else switch (nominal_resolved.desc.content) {
                     .structure => |st| switch (st) {
@@ -2550,21 +2564,21 @@ pub const Interpreter = struct {
     fn getCanonicalBoolRuntimeVar(self: *Interpreter) !types.Var {
         if (self.canonical_bool_rt_var) |cached| return cached;
         // Use the dynamic bool_stmt index (from the Bool module)
-        const bool_decl_idx = self.bool_stmt;
+        const bool_decl_idx = self.builtins.bool_stmt;
 
         // Get the statement from the Bool module
-        const bool_stmt = self.bool_env.store.getStatement(bool_decl_idx);
+        const bool_stmt = self.builtins.bool_env.store.getStatement(bool_decl_idx);
 
         // For nominal type declarations, we need to get the backing type, not the nominal wrapper
         const ct_var = switch (bool_stmt) {
             .s_nominal_decl => blk: {
                 // The type of the declaration is the nominal type, but we want its backing
                 const nom_var = can.ModuleEnv.varFrom(bool_decl_idx);
-                const nom_resolved = self.bool_env.types.resolveVar(nom_var);
+                const nom_resolved = self.builtins.bool_env.types.resolveVar(nom_var);
                 if (nom_resolved.desc.content == .structure) {
                     if (nom_resolved.desc.content.structure == .nominal_type) {
                         const nt = nom_resolved.desc.content.structure.nominal_type;
-                        const backing_var = self.bool_env.types.getNominalBackingVar(nt);
+                        const backing_var = self.builtins.bool_env.types.getNominalBackingVar(nt);
                         break :blk backing_var;
                     }
                 }
@@ -2575,7 +2589,7 @@ pub const Interpreter = struct {
 
         // Use bool_env to translate since bool_stmt is from the Bool module
         // Cast away const - translateTypeVar doesn't actually mutate the module
-        const nominal_rt_var = try self.translateTypeVar(@constCast(self.bool_env), ct_var);
+        const nominal_rt_var = try self.translateTypeVar(@constCast(self.builtins.bool_env), ct_var);
         const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
         const backing_rt_var = switch (nominal_resolved.desc.content) {
             .structure => |st| switch (st) {
@@ -2799,6 +2813,28 @@ pub const Interpreter = struct {
             },
             else => return error.NotImplemented,
         }
+    }
+
+    fn compareValues(self: *Interpreter, lhs: StackValue, rhs: StackValue, op: can.CIR.Expr.Binop.Op) !bool {
+        // Handle numeric comparisons
+        if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
+            const lhs_val = lhs.asI128();
+            const rhs_val = rhs.asI128();
+
+            return switch (op) {
+                .eq => lhs_val == rhs_val,
+                .ne => lhs_val != rhs_val,
+                .lt => lhs_val < rhs_val,
+                .le => lhs_val <= rhs_val,
+                .gt => lhs_val > rhs_val,
+                .ge => lhs_val >= rhs_val,
+                else => error.NotImplemented,
+            };
+        }
+
+        // For now, only numeric comparisons are supported
+        _ = self;
+        return error.NotImplemented;
     }
 
     fn makeBoxValueFromLayout(self: *Interpreter, result_layout: Layout, payload: StackValue, roc_ops: *RocOps) !StackValue {
@@ -3743,15 +3779,16 @@ test "interpreter: Var->Layout slot caches computed layout" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    const builtin_indices = try helpers.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try helpers.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
 
-    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
-    const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
-
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     // Create a concrete runtime type: Str
@@ -3776,15 +3813,16 @@ test "interpreter: translateTypeVar for str" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    const builtin_indices = try helpers.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try helpers.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
 
-    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
-    const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
-
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     const ct_str = try env.types.freshFromContent(.{ .structure = .str });
@@ -3802,15 +3840,16 @@ test "interpreter: translateTypeVar for int64" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    const builtin_indices = try helpers.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try helpers.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
 
-    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
-    const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
-
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     const ct_int = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
@@ -3836,15 +3875,16 @@ test "interpreter: translateTypeVar for f64" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    const builtin_indices = try helpers.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try helpers.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
 
-    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
-    const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
-
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     const ct_frac = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } });
@@ -3870,15 +3910,16 @@ test "interpreter: translateTypeVar for tuple(Str, I64)" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    const builtin_indices = try helpers.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try helpers.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
 
-    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
-    const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
-
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     const ct_str = try env.types.freshFromContent(.{ .structure = .str });
@@ -3922,15 +3963,16 @@ test "interpreter: translateTypeVar for record {first: Str, second: I64}" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    const builtin_indices = try helpers.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try helpers.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
 
-    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
-    const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
-
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     // Build compile-time record content
@@ -3988,15 +4030,16 @@ test "interpreter: translateTypeVar for alias of Str" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    const builtin_indices = try helpers.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try helpers.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
 
-    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
-    const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
-
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     const alias_name = try env.common.idents.insert(gpa, @import("base").Ident.for_text("MyAlias"));
@@ -4023,15 +4066,16 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    const builtin_indices = try helpers.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try helpers.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
 
-    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
-    const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
-
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     const name_nominal = try env.common.idents.insert(gpa, @import("base").Ident.for_text("Point"));
@@ -4063,15 +4107,16 @@ test "interpreter: translateTypeVar for flex var" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    const builtin_indices = try helpers.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try helpers.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
 
-    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
-    const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
-
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     const ct_flex = try env.types.freshFromContent(.{ .flex = types.Flex.init() });
@@ -4087,15 +4132,16 @@ test "interpreter: translateTypeVar for rigid var" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    const builtin_indices = try helpers.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try helpers.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
 
-    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
-    const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
-
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     const name_a = try env.common.idents.insert(gpa, @import("base").Ident.for_text("A"));
@@ -4113,15 +4159,16 @@ test "interpreter: poly cache insert and lookup" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    const builtin_indices = try helpers.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try helpers.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
 
-    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
-    const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
-
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     const f_id: u32 = 12345;
@@ -4157,15 +4204,16 @@ test "interpreter: prepareCall miss then hit" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    const builtin_indices = try helpers.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try helpers.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
 
-    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
-    const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
-
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     const func_id: u32 = 7777;
@@ -4195,15 +4243,16 @@ test "interpreter: prepareCallWithFuncVar populates cache" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    const builtin_indices = try helpers.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try helpers.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
 
-    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
-    const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
-
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     const func_id: u32 = 9999;
@@ -4233,15 +4282,16 @@ test "interpreter: unification constrains (a->a) with Str" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    const builtin_indices = try helpers.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";
-    var bool_module = try helpers.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
 
-    const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
-    const actual_bool_idx = try env.store.addStatement(bool_stmt, base_pkg.Region.zero());
-
-    var interp = try Interpreter.init(gpa, &env, actual_bool_idx, &env, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     const func_id: u32 = 42;

@@ -26,6 +26,7 @@ const ProblemStore = check_mod.problem.Store;
 
 const EvalError = Interpreter.Error;
 const CrashContext = eval_mod.CrashContext;
+const BuiltinTypes = eval_mod.BuiltinTypes;
 
 fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
@@ -162,11 +163,12 @@ pub const ComptimeEvaluator = struct {
         cir: *ModuleEnv,
         other_envs: []const *const ModuleEnv,
         problems: *ProblemStore,
+        builtin_types: BuiltinTypes,
     ) !ComptimeEvaluator {
         return ComptimeEvaluator{
             .allocator = allocator,
             .env = cir,
-            .interpreter = try Interpreter.initWithOtherEnvs(allocator, cir, other_envs),
+            .interpreter = try Interpreter.initWithOtherEnvs(allocator, cir, other_envs, builtin_types),
             .crash = CrashContext.init(allocator),
             .expect = CrashContext.init(allocator),
             .roc_ops = null,

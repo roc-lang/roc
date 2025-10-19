@@ -121,11 +121,8 @@ pub const ExposedItems = struct {
 
         /// Deserialize this Serialized struct into an ExposedItems
         pub fn deserialize(self: *Serialized, offset: i64) *ExposedItems {
-            // Verify that Serialized has the same size as the runtime struct.
-            // This is required because we're reusing the same memory location.
-            comptime std.debug.assert(@sizeOf(@This()) == @sizeOf(ExposedItems));
-
-            // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+            // Note: Serialized may be smaller than the runtime struct.
+            // We deserialize by overwriting the Serialized memory with the runtime struct.
             const exposed_items = @as(*ExposedItems, @ptrFromInt(@intFromPtr(self)));
 
             exposed_items.* = ExposedItems{

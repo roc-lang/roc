@@ -346,7 +346,6 @@ test "Store CompactWriter roundtrip" {
     // Cast and relocate
     const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr)));
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
-
 }
 
 test "Store.Serialized roundtrip" {
@@ -396,7 +395,6 @@ test "Store.Serialized roundtrip" {
     try std.testing.expectEqualStrings("hello", store.get(idx1));
     try std.testing.expectEqualStrings("world", store.get(idx2));
     try std.testing.expectEqualStrings("foo bar baz", store.get(idx3));
-
 }
 
 test "Store edge case indices CompactWriter roundtrip" {

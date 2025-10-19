@@ -21,6 +21,8 @@ const fmt = @import("fmt");
 const eval = @import("eval");
 const builtins = @import("builtins");
 const compiled_builtins = @import("compiled_builtins");
+const builtin_loading = eval.builtin_loading;
+const BuiltinTypes = eval.BuiltinTypes;
 
 const cli_args = @import("cli_args.zig");
 const bench = @import("bench.zig");
@@ -2392,7 +2394,26 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     };
 
     // Evaluate all top-level declarations at compile time
-    var comptime_evaluator = eval.ComptimeEvaluator.init(allocs.gpa, &env, &.{}, &checker.problems) catch |err| {
+    // Load builtin modules required by the interpreter
+    const builtin_indices = builtin_loading.deserializeBuiltinIndices(allocs.gpa, compiled_builtins.builtin_indices_bin) catch |err| {
+        try stderr.print("Failed to deserialize builtin indices: {}\n", .{err});
+        std.process.exit(1);
+    };
+    const bool_source = "Bool := [True, False].{}\n";
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var bool_module = builtin_loading.loadCompiledModule(allocs.gpa, compiled_builtins.bool_bin, "Bool", bool_source) catch |err| {
+        try stderr.print("Failed to load Bool module: {}\n", .{err});
+        std.process.exit(1);
+    };
+    defer bool_module.deinit();
+    var result_module = builtin_loading.loadCompiledModule(allocs.gpa, compiled_builtins.result_bin, "Result", result_source) catch |err| {
+        try stderr.print("Failed to load Result module: {}\n", .{err});
+        std.process.exit(1);
+    };
+    defer result_module.deinit();
+
+    const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var comptime_evaluator = eval.ComptimeEvaluator.init(allocs.gpa, &env, &.{}, &checker.problems, builtin_types_for_eval) catch |err| {
         try stderr.print("Failed to create compile-time evaluator: {}\n", .{err});
         std.process.exit(1);
     };
@@ -2404,8 +2425,8 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
         std.process.exit(1);
     };
 
-    // Create test runner infrastructure for test evaluation
-    var test_runner = TestRunner.init(allocs.gpa, &env, module_common_idents.bool_stmt) catch |err| {
+    // Create test runner infrastructure for test evaluation (reuse builtin_types_for_eval from above)
+    var test_runner = TestRunner.init(allocs.gpa, &env, builtin_types_for_eval) catch |err| {
         try stderr.print("Failed to create test runner: {}\n", .{err});
         std.process.exit(1);
     };

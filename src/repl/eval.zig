@@ -12,6 +12,7 @@ const Check = check.Check;
 const builtins = @import("builtins");
 const eval_mod = @import("eval");
 const CrashContext = eval_mod.CrashContext;
+const BuiltinTypes = eval_mod.BuiltinTypes;
 const collections = @import("collections");
 
 const AST = parse.AST;
@@ -534,8 +535,9 @@ pub const Repl = struct {
             return try std.fmt.allocPrint(self.allocator, "Type check expr error: {}", .{err});
         };
 
-        // Create interpreter instance with the Bool statement index and environment from the Bool module
-        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, bool_stmt_in_bool_module, self.bool_module.env, &module_envs_map) catch |err| {
+        // Create interpreter instance with BuiltinTypes containing real Bool and Result modules
+        const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.bool_module.env, self.result_module.env);
+        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, &module_envs_map) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
         };
         defer interpreter.deinit();

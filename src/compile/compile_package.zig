@@ -20,6 +20,9 @@ const can = @import("can");
 const check = @import("check");
 const reporting = @import("reporting");
 const eval = @import("eval");
+const builtin_loading = eval.builtin_loading;
+const compiled_builtins = @import("compiled_builtins");
+const BuiltinTypes = eval.BuiltinTypes;
 
 const Check = check.Check;
 const Can = can.Can;
@@ -28,19 +31,6 @@ const ModuleEnv = can.ModuleEnv;
 const ReportBuilder = check.ReportBuilder;
 
 /// Deserialize BuiltinIndices from the binary data generated at build time
-fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !can.CIR.BuiltinIndices {
-    // Copy embedded data to properly aligned memory
-    const alignment = @alignOf(can.CIR.BuiltinIndices);
-    const buffer = try gpa.alignedAlloc(u8, alignment, bin_data.len);
-    defer gpa.free(buffer);
-
-    @memcpy(buffer, bin_data);
-
-    // Cast to the structure
-    const indices_ptr = @as(*const can.CIR.BuiltinIndices, @ptrCast(buffer.ptr));
-    return indices_ptr.*;
-}
-
 /// Timing information for different phases
 pub const TimingInfo = struct {
     tokenize_parse_ns: u64,
@@ -702,8 +692,7 @@ pub const PackageEnv = struct {
         var env = &st.env.?;
 
         // Load builtin indices from the binary data generated at build time
-        const compiled_builtins = @import("compiled_builtins");
-        const builtin_indices = try deserializeBuiltinIndices(self.gpa, compiled_builtins.builtin_indices_bin);
+        const builtin_indices = try builtin_loading.deserializeBuiltinIndices(self.gpa, compiled_builtins.builtin_indices_bin);
 
         const module_common_idents: Check.CommonIdents = .{
             .module_name = try env.insertIdent(base.Ident.for_text("test")),
@@ -752,7 +741,16 @@ pub const PackageEnv = struct {
         }
 
         // After type checking, evaluate top-level declarations at compile time
-        var comptime_evaluator = try eval.ComptimeEvaluator.init(self.gpa, env, others.items, &checker.problems);
+        // Load builtin modules required by the interpreter (reuse builtin_indices from above)
+        const bool_source = "Bool := [True, False].{}\n";
+        const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+        var bool_module = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+        defer bool_module.deinit();
+        var result_module = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.result_bin, "Result", result_source);
+        defer result_module.deinit();
+
+        const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+        var comptime_evaluator = try eval.ComptimeEvaluator.init(self.gpa, env, others.items, &checker.problems, builtin_types_for_eval);
         _ = try comptime_evaluator.evalAll();
 
         // Build reports from problems

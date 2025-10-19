@@ -24,6 +24,7 @@ const CIR = can.CIR;
 const EvalError = Interpreter.Error;
 const CrashContext = eval_mod.CrashContext;
 const CrashState = eval_mod.CrashState;
+const BuiltinTypes = eval_mod.BuiltinTypes;
 
 fn testRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
     const test_env: *TestRunner = @ptrCast(@alignCast(env));
@@ -139,12 +140,12 @@ pub const TestRunner = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         cir: *ModuleEnv,
-        bool_stmt: CIR.Statement.Idx,
+        builtin_types_param: BuiltinTypes,
     ) !TestRunner {
         return TestRunner{
             .allocator = allocator,
             .env = cir,
-            .interpreter = try Interpreter.init(allocator, cir, bool_stmt, cir, null),
+            .interpreter = try Interpreter.init(allocator, cir, builtin_types_param, null),
             .crash = CrashContext.init(allocator),
             .roc_ops = null,
             .test_results = std.ArrayList(TestResult).init(allocator),
