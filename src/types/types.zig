@@ -51,11 +51,11 @@ pub const VarMap = std.hash_map.HashMap(Var, Var, std.hash_map.AutoContext(Var),
 /// Each HashMap in the list represents a scope level, mapping polymorphic type variables
 /// to their resolved monomorphic equivalents.
 pub const TypeScope = struct {
-    scopes: std.ArrayList(VarMap),
+    scopes: std.array_list.Managed(VarMap),
 
     pub fn init(allocator: std.mem.Allocator) TypeScope {
         return .{
-            .scopes = std.ArrayList(VarMap).init(allocator),
+            .scopes = std.array_list.Managed(VarMap).init(allocator),
         };
     }
 

@@ -223,7 +223,7 @@ pub const ReportBuilder = struct {
 
     gpa: Allocator,
     snapshot_writer: snapshot.SnapshotWriter,
-    bytes_buf: std.ArrayList(u8),
+    bytes_buf: std.array_list.Managed(u8),
     module_env: *ModuleEnv,
     can_ir: *const ModuleEnv,
     snapshots: *const snapshot.Store,
@@ -244,7 +244,7 @@ pub const ReportBuilder = struct {
         return .{
             .gpa = gpa,
             .snapshot_writer = snapshot.SnapshotWriter.init(gpa, snapshots, module_env.getIdentStore()),
-            .bytes_buf = std.ArrayList(u8).init(gpa),
+            .bytes_buf = std.array_list.Managed(u8).init(gpa),
             .module_env = module_env,
             .can_ir = can_ir,
             .snapshots = snapshots,
@@ -1851,7 +1851,7 @@ pub const ReportBuilder = struct {
 
     // Given a buffer and a number, write a the human-readably ordinal number
     // Note that the caller likely needs to clear the buffer before calling this function
-    fn appendOrdinal(buf: *std.ArrayList(u8), n: u32) !void {
+    fn appendOrdinal(buf: *std.array_list.Managed(u8), n: u32) !void {
         switch (n) {
             1 => try buf.appendSlice("first"),
             2 => try buf.appendSlice("second"),
@@ -1928,7 +1928,7 @@ pub const ReportBuilder = struct {
 /// Entry points are `appendProblem` and `deepCopyVar`
 pub const Store = struct {
     const Self = @This();
-    const ALIGNMENT = 16;
+    const ALIGNMENT = std.mem.Alignment.@"16";
 
     problems: std.ArrayListAlignedUnmanaged(Problem, ALIGNMENT) = .{},
 

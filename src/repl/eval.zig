@@ -28,15 +28,15 @@ pub const Repl = struct {
     /// Shared crash context managed by the host (optional)
     crash_ctx: ?*CrashContext,
     /// Optional trace writer for debugging evaluation
-    trace_writer: ?std.io.AnyWriter,
+    //trace_writer: ?std.io.AnyWriter,
     /// ModuleEnv from last successful evaluation (for snapshot generation)
     last_module_env: ?*ModuleEnv,
     /// Debug flag to store rendered HTML for snapshot generation
     debug_store_snapshots: bool,
     /// Storage for rendered CAN HTML at each step (only when debug_store_snapshots is true)
-    debug_can_html: std.ArrayList([]const u8),
+    debug_can_html: std.array_list.Managed([]const u8),
     /// Storage for rendered TYPES HTML at each step (only when debug_store_snapshots is true)
-    debug_types_html: std.ArrayList([]const u8),
+    debug_types_html: std.array_list.Managed([]const u8),
 
     pub fn init(allocator: Allocator, roc_ops: *RocOps, crash_ctx: ?*CrashContext) !Repl {
         return Repl{
@@ -44,17 +44,17 @@ pub const Repl = struct {
             .definitions = std.StringHashMap([]const u8).init(allocator),
             .roc_ops = roc_ops,
             .crash_ctx = crash_ctx,
-            .trace_writer = null,
+            //.trace_writer = null,
             .last_module_env = null,
             .debug_store_snapshots = false,
-            .debug_can_html = std.ArrayList([]const u8).init(allocator),
-            .debug_types_html = std.ArrayList([]const u8).init(allocator),
+            .debug_can_html = std.array_list.Managed([]const u8).init(allocator),
+            .debug_types_html = std.array_list.Managed([]const u8).init(allocator),
         };
     }
 
-    pub fn setTraceWriter(self: *Repl, trace_writer: std.io.AnyWriter) void {
-        self.trace_writer = trace_writer;
-    }
+    // pub fn setTraceWriter(self: *Repl, trace_writer: std.io.AnyWriter) void {
+    //     self.trace_writer = trace_writer;
+    // }
 
     /// Enable debug mode to store snapshot HTML for each REPL step
     pub fn enableDebugSnapshots(self: *Repl) void {
@@ -104,7 +104,7 @@ pub const Repl = struct {
             defer tree.deinit();
             try module_env.pushToSExprTree(expr_idx, &tree);
 
-            var can_buffer = std.ArrayList(u8).init(self.allocator);
+            var can_buffer = std.array_list.Managed(u8).init(self.allocator);
             defer can_buffer.deinit();
             try tree.toStringPretty(can_buffer.writer().any(), .include_linecol);
 
@@ -118,7 +118,7 @@ pub const Repl = struct {
             defer tree.deinit();
             try module_env.pushTypesToSExprTree(expr_idx, &tree);
 
-            var types_buffer = std.ArrayList(u8).init(self.allocator);
+            var types_buffer = std.array_list.Managed(u8).init(self.allocator);
             defer types_buffer.deinit();
             try tree.toStringPretty(types_buffer.writer().any(), .include_linecol);
 
@@ -312,7 +312,7 @@ pub const Repl = struct {
             return try self.allocator.dupe(u8, current_expr);
         }
 
-        var buffer = std.ArrayList(u8).init(self.allocator);
+        var buffer = std.array_list.Managed(u8).init(self.allocator);
         defer buffer.deinit();
 
         // Start block

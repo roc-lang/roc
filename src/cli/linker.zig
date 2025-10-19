@@ -118,7 +118,7 @@ pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
 
     // Use arena allocator for all temporary allocations
     // Pre-allocate capacity to avoid reallocations (typical command has 20-40 args)
-    var args = std.ArrayList([]const u8).initCapacity(allocs.arena, 64) catch return LinkError.OutOfMemory;
+    var args = std.array_list.Managed([]const u8).initCapacity(allocs.arena, 64) catch return LinkError.OutOfMemory;
 
     // Add platform-specific linker name and arguments
     // Use target OS if provided, otherwise fall back to host OS

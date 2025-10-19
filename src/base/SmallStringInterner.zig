@@ -290,7 +290,7 @@ test "SmallStringInterner empty CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -326,7 +326,7 @@ test "SmallStringInterner basic CompactWriter roundtrip" {
         "duplicate", // Should reuse the same index
     };
 
-    var indices = std.ArrayList(SmallStringInterner.Idx).init(gpa);
+    var indices = std.array_list.Managed(SmallStringInterner.Idx).init(gpa);
     defer indices.deinit();
 
     for (test_strings) |str| {
@@ -360,7 +360,7 @@ test "SmallStringInterner basic CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -433,7 +433,7 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -501,7 +501,7 @@ test "SmallStringInterner frozen state CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -541,7 +541,7 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
         " start_with_space",
     };
 
-    var indices = std.ArrayList(SmallStringInterner.Idx).init(gpa);
+    var indices = std.array_list.Managed(SmallStringInterner.Idx).init(gpa);
     defer indices.deinit();
 
     for (edge_cases) |str| {
@@ -572,7 +572,7 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -662,7 +662,7 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
 //     // Read back
 //     try file.seekTo(0);
 //     const file_size = try file.getEndPos();
-//     const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
+//     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
 //     defer gpa.free(buffer);
 
 //     _ = try file.read(buffer);

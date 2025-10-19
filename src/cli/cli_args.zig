@@ -294,7 +294,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
 }
 
 fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
-    var paths = try std.ArrayList([]const u8).initCapacity(alloc, 16);
+    var paths = try std.array_list.Managed([]const u8).initCapacity(alloc, 16);
     var output_dir: ?[]const u8 = null;
     var compression_level: i32 = 3;
 
@@ -359,7 +359,7 @@ fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator
 }
 
 fn parseUnbundle(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
-    var paths = try std.ArrayList([]const u8).initCapacity(alloc, 16);
+    var paths = try std.array_list.Managed([]const u8).initCapacity(alloc, 16);
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
@@ -423,7 +423,7 @@ fn parseUnbundle(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
 }
 
 fn parseFormat(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
-    var paths = try std.ArrayList([]const u8).initCapacity(alloc, 16);
+    var paths = try std.array_list.Managed([]const u8).initCapacity(alloc, 16);
     var stdin = false;
     var check = false;
     for (args) |arg| {
@@ -633,7 +633,7 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
     var opt: OptLevel = .dev;
     var target: ?[]const u8 = null;
     var no_cache: bool = false;
-    var app_args = try std.ArrayList([]const u8).initCapacity(alloc, 16);
+    var app_args = try std.array_list.Managed([]const u8).initCapacity(alloc, 16);
     for (args) |arg| {
         if (isHelpFlag(arg)) {
             // We need to free the paths here because we aren't returning the .run variant

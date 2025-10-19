@@ -258,8 +258,8 @@ fn getArchitecture(allocator: std.mem.Allocator) ![]const u8 {
 }
 
 /// Get library search paths for the given architecture
-fn getSearchPaths(allocator: std.mem.Allocator, arch: []const u8) !std.ArrayList([]const u8) {
-    var paths = std.ArrayList([]const u8).init(allocator);
+fn getSearchPaths(allocator: std.mem.Allocator, arch: []const u8) !std.array_list.Managed([]const u8) {
+    var paths = std.array_list.Managed([]const u8).init(allocator);
     errdefer {
         for (paths.items) |path| {
             allocator.free(path);

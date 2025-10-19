@@ -48,7 +48,7 @@ pub const Store = struct {
 
     env: *ModuleEnv,
     types_store: *const types_store.Store,
-    layouts: collections.SafeMultiList(Layout),
+    layouts: collections.SafeList(Layout),
     tuple_elems: collections.SafeList(Idx),
     record_fields: RecordField.SafeMultiList,
     record_data: collections.SafeList(RecordData),
@@ -110,7 +110,7 @@ pub const Store = struct {
         const capacity = type_store.slots.backing.len();
         const layouts_by_var = try collections.ArrayListMap(Var, Idx).init(env.gpa, @intCast(capacity));
 
-        var layouts = collections.SafeMultiList(Layout){};
+        var layouts = collections.SafeList(Layout){};
 
         // Pre-populate primitive type layouts in order matching the Idx enum.
         // Changing the order of these can break things!
@@ -189,7 +189,7 @@ pub const Store = struct {
         field_layouts: []const Layout,
         field_names: []const Ident.Idx,
     ) std.mem.Allocator.Error!Idx {
-        var temp_fields = std.ArrayList(RecordField).init(self.env.gpa);
+        var temp_fields = std.array_list.Managed(RecordField).init(self.env.gpa);
         defer temp_fields.deinit();
 
         for (field_layouts, field_names) |field_layout, field_name| {
@@ -263,7 +263,7 @@ pub const Store = struct {
     /// Insert a tuple layout from concrete element layouts
     pub fn putTuple(self: *Self, element_layouts: []const Layout) std.mem.Allocator.Error!Idx {
         // Collect fields
-        var temp_fields = std.ArrayList(TupleField).init(self.env.gpa);
+        var temp_fields = std.array_list.Managed(TupleField).init(self.env.gpa);
         defer temp_fields.deinit();
 
         for (element_layouts, 0..) |elem_layout, i| {
@@ -321,7 +321,7 @@ pub const Store = struct {
     }
 
     pub fn getLayout(self: *const Self, idx: Idx) Layout {
-        return self.layouts.get(@enumFromInt(@intFromEnum(idx)));
+        return self.layouts.get(@enumFromInt(@intFromEnum(idx))).*;
     }
 
     pub fn getRecordData(self: *const Self, idx: RecordIdx) *const RecordData {
@@ -620,7 +620,7 @@ pub const Store = struct {
         const field_idxs = self.work.resolved_record_fields.items(.field_idx);
 
         // First, collect the fields into a temporary array so we can sort them
-        var temp_fields = std.ArrayList(RecordField).init(self.env.gpa);
+        var temp_fields = std.array_list.Managed(RecordField).init(self.env.gpa);
         defer temp_fields.deinit();
 
         for (updated_record.resolved_fields_start..resolved_fields_end) |i| {
@@ -721,7 +721,7 @@ pub const Store = struct {
         const field_idxs = self.work.resolved_tuple_fields.items(.field_idx);
 
         // First, collect the fields into a temporary array so we can sort them
-        var temp_fields = std.ArrayList(TupleField).init(self.env.gpa);
+        var temp_fields = std.array_list.Managed(TupleField).init(self.env.gpa);
         defer temp_fields.deinit();
 
         for (updated_tuple.resolved_fields_start..resolved_fields_end) |i| {
