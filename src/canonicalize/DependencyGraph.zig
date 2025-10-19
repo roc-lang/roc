@@ -16,6 +16,8 @@ const base = @import("base");
 const CIR = @import("CIR.zig");
 const ModuleEnv = @import("ModuleEnv.zig");
 
+/// Represents a directed graph of dependencies between top-level definitions.
+/// Edges point from dependent to dependency (A -> B means A depends on B).
 pub const DependencyGraph = struct {
     /// Map from def_idx to list of def_idx it depends on
     edges: std.AutoHashMapUnmanaged(CIR.Def.Idx, std.ArrayListUnmanaged(CIR.Def.Idx)),
@@ -57,6 +59,8 @@ pub const DependencyGraph = struct {
     }
 };
 
+/// A Strongly Connected Component (SCC) in the dependency graph.
+/// Contains one or more definitions that may be mutually recursive.
 pub const SCC = struct {
     /// Definitions in this SCC
     defs: []CIR.Def.Idx,
@@ -67,6 +71,8 @@ pub const SCC = struct {
     pub const Idx = enum(u32) { _ };
 };
 
+/// The computed evaluation order for all definitions in a module.
+/// SCCs are arranged in topological order (dependencies come before dependents).
 pub const EvaluationOrder = struct {
     /// SCCs in topologically sorted order
     /// (dependencies come before dependents)
