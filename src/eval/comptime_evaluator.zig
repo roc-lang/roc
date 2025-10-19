@@ -40,7 +40,10 @@ fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
             .len = msg.len,
         };
         comptimeRocCrashed(&crashed, env);
-        std.debug.panic("Compile-time evaluation crashed", .{});
+        evaluator.halted = true;
+        // Return an invalid pointer - the evaluator is already halted
+        // The value doesn't matter since evaluation will stop
+        return;
     };
     const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
     size_ptr.* = total_size;
@@ -74,7 +77,9 @@ fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) v
             .len = msg.len,
         };
         comptimeRocCrashed(&crashed, env);
-        std.debug.panic("Compile-time evaluation crashed", .{});
+        evaluator.halted = true;
+        // Leave answer unchanged - the interpreter will catch this as error.Crash
+        return;
     };
     const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
     new_size_ptr.* = new_total_size;
@@ -91,17 +96,25 @@ fn comptimeRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.C) void {
 fn comptimeRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.C) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
     const msg_slice = expect_args.utf8_bytes[0..expect_args.len];
-    evaluator.expect.recordCrash(msg_slice) catch |err| {
-        std.debug.panic("failed to record expect failure for comptime evaluator: {}", .{err});
+    evaluator.expect.recordCrash(msg_slice) catch {
+        // If we can't record the crash, set a generic message
+        // The halted flag will stop evaluation anyway
+        evaluator.halted = true;
+        return;
     };
+    evaluator.halted = true;
 }
 
 fn comptimeRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
     const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
-    evaluator.crash.recordCrash(msg_slice) catch |err| {
-        std.debug.panic("failed to record crash message for comptime evaluator: {}", .{err});
+    evaluator.crash.recordCrash(msg_slice) catch {
+        // If we can't record the crash, set a generic message
+        // The halted flag will stop evaluation anyway
+        evaluator.halted = true;
+        return;
     };
+    evaluator.halted = true;
 }
 
 /// Result of evaluating a single declaration
@@ -142,6 +155,10 @@ pub const ComptimeEvaluator = struct {
     expect_messages: std.ArrayList([]const u8),
     /// Track error names we've allocated so we can free them
     error_names: std.ArrayList([]const u8),
+    /// Flag to indicate if evaluation has been halted due to a crash
+    halted: bool,
+    /// Track the current expression being evaluated (for stack traces)
+    current_expr_region: ?base.Region,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -160,6 +177,8 @@ pub const ComptimeEvaluator = struct {
             .crash_messages = std.ArrayList([]const u8).init(allocator),
             .expect_messages = std.ArrayList([]const u8).init(allocator),
             .error_names = std.ArrayList([]const u8).init(allocator),
+            .halted = false,
+            .current_expr_region = null,
         };
     }
 
@@ -202,6 +221,7 @@ pub const ComptimeEvaluator = struct {
         }
         self.crash.reset();
         self.expect.reset();
+        // Note: We do NOT reset self.halted here because it needs to persist across the evaluation loop
         return &(self.roc_ops.?);
     }
 
@@ -217,6 +237,10 @@ pub const ComptimeEvaluator = struct {
             .e_lambda, .e_closure => return EvalResult.success,
             else => {},
         }
+
+        // Track the current expression region for stack traces
+        self.current_expr_region = region;
+        defer self.current_expr_region = null;
 
         const ops = self.get_ops();
         const result = self.interpreter.evalMinimal(expr_idx, ops) catch |err| {
@@ -303,6 +327,11 @@ pub const ComptimeEvaluator = struct {
 
         const defs = self.env.store.sliceDefs(self.env.all_defs);
         for (defs) |def_idx| {
+            // Check if evaluation has been halted due to a crash
+            if (self.halted) {
+                break;
+            }
+
             evaluated += 1;
 
             const eval_result = self.evalDecl(def_idx) catch |err| {

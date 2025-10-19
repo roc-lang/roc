@@ -281,12 +281,13 @@ test "comptime eval - multiple declarations with mixed results" {
 
     const summary = try result.evaluator.evalAll();
 
-    // Should evaluate 5 declarations with 2 crashes
-    try testing.expectEqual(@as(u32, 5), summary.evaluated);
-    try testing.expectEqual(@as(u32, 2), summary.crashed);
+    // Should evaluate 2 declarations (good1 and bad1) with 1 crash
+    // Remaining declarations are not evaluated because the crash halts evaluation
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 1), summary.crashed);
 
-    // Should have 2 problems reported
-    try testing.expectEqual(@as(usize, 2), result.problems.len());
+    // Should have 1 problem reported
+    try testing.expectEqual(@as(usize, 1), result.problems.len());
 }
 
 // Cross-module tests
@@ -472,15 +473,101 @@ test "comptime eval - multiple expect failures are reported" {
 
     const summary = try result.evaluator.evalAll();
 
-    // Should evaluate 2 declarations with no crashes but 2 expect failures
+    // Should evaluate 1 declaration with no crashes but 1 expect failure
+    // The second declaration is not evaluated because expect failure halts evaluation
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Should have 1 problem reported
+    try testing.expectEqual(@as(usize, 1), result.problems.len());
+
+    // Verify it's an expect_failed problem
+    try testing.expect(result.problems.problems.items[0] == .comptime_expect_failed);
+}
+
+test "comptime eval - crash halts evaluation" {
+    const src =
+        \\good1 = 42
+        \\bad = {
+        \\    crash "this crashes"
+        \\    0
+        \\}
+        \\good2 = 100
+        \\good3 = 200
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should only evaluate 2 declarations (good1 and bad)
+    // good2 and good3 should not be evaluated because crash halts evaluation
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 1), summary.crashed);
+
+    // Should have 1 problem reported
+    try testing.expectEqual(@as(usize, 1), result.problems.len());
+}
+
+test "comptime eval - expect failure halts evaluation" {
+    const src =
+        \\good1 = 42
+        \\bad = {
+        \\    expect 1 == 2
+        \\    0
+        \\}
+        \\good2 = 100
+        \\good3 = 200
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should only evaluate 2 declarations (good1 and bad)
+    // good2 and good3 should not be evaluated because expect failure halts evaluation
     try testing.expectEqual(@as(u32, 2), summary.evaluated);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 
-    // Should have 2 problems reported
-    try testing.expectEqual(@as(usize, 2), result.problems.len());
-
-    // Verify both are expect_failed problems
-    try testing.expect(result.problems.problems.items[0] == .comptime_expect_failed);
-    try testing.expect(result.problems.problems.items[1] == .comptime_expect_failed);
+    // Should have 1 problem reported (expect failure)
+    try testing.expectEqual(@as(usize, 1), result.problems.len());
 }
 
+test "comptime eval - dbg does not halt evaluation" {
+    const src =
+        \\good1 = 42
+        \\good2 = 100
+        \\good3 = 200
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // All declarations should be evaluated - no crashes or halts
+    try testing.expectEqual(@as(u32, 3), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+    try testing.expectEqual(@as(usize, 0), result.problems.len());
+}
+
+test "comptime eval - crash in first declaration halts immediately" {
+    const src =
+        \\bad = crash "immediate crash"
+        \\good1 = 42
+        \\good2 = 100
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should only evaluate 1 declaration (bad)
+    // good1 and good2 should not be evaluated
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 1), summary.crashed);
+    try testing.expectEqual(@as(usize, 1), result.problems.len());
+}
