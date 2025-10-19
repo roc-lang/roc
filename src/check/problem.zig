@@ -44,9 +44,30 @@ pub const Problem = union(enum) {
     invalid_record_ext: VarProblem1,
     invalid_tag_union_ext: VarProblem1,
     bug: Bug,
+    comptime_crash: ComptimeCrash,
+    comptime_expect_failed: ComptimeExpectFailed,
+    comptime_eval_error: ComptimeEvalError,
 
     pub const Idx = enum(u32) { _ };
     pub const Tag = std.meta.Tag(@This());
+};
+
+/// A crash that occurred during compile-time evaluation
+pub const ComptimeCrash = struct {
+    message: []const u8,
+    region: base.Region,
+};
+
+/// An expect that failed during compile-time evaluation
+pub const ComptimeExpectFailed = struct {
+    message: []const u8,
+    region: base.Region,
+};
+
+/// An error that occurred during compile-time evaluation
+pub const ComptimeEvalError = struct {
+    error_name: []const u8,
+    region: base.Region,
 };
 
 /// A single var problem
@@ -202,7 +223,7 @@ pub const ReportBuilder = struct {
 
     gpa: Allocator,
     snapshot_writer: snapshot.SnapshotWriter,
-    bytes_buf: std.ArrayList(u8),
+    bytes_buf: std.array_list.Managed(u8),
     module_env: *ModuleEnv,
     can_ir: *const ModuleEnv,
     snapshots: *const snapshot.Store,
@@ -223,7 +244,7 @@ pub const ReportBuilder = struct {
         return .{
             .gpa = gpa,
             .snapshot_writer = snapshot.SnapshotWriter.init(gpa, snapshots, module_env.getIdentStore()),
-            .bytes_buf = std.ArrayList(u8).init(gpa),
+            .bytes_buf = std.array_list.Managed(u8).init(gpa),
             .module_env = module_env,
             .can_ir = can_ir,
             .snapshots = snapshots,
@@ -305,6 +326,9 @@ pub const ReportBuilder = struct {
             .invalid_record_ext => |_| return self.buildUnimplementedReport("invalid_record_ext"),
             .invalid_tag_union_ext => |_| return self.buildUnimplementedReport("invalid_tag_union_ext"),
             .bug => |_| return self.buildUnimplementedReport("bug"),
+            .comptime_crash => |data| return self.buildComptimeCrashReport(data),
+            .comptime_expect_failed => |data| return self.buildComptimeExpectFailedReport(data),
+            .comptime_eval_error => |data| return self.buildComptimeEvalErrorReport(data),
         }
     }
 
@@ -1730,11 +1754,104 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    /// Build a report for compile-time crash
+    fn buildComptimeCrashReport(self: *Self, data: ComptimeCrash) !Report {
+        var report = Report.init(self.gpa, "COMPTIME CRASH", .runtime_error);
+        errdefer report.deinit();
+
+        const owned_message = try report.addOwnedString(data.message);
+
+        try report.document.addText("This definition crashed during compile-time evaluation:");
+        try report.document.addLineBreak();
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addText("The ");
+        try report.document.addAnnotated("crash", .keyword);
+        try report.document.addText(" happened with this message:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(owned_message, .emphasized);
+
+        return report;
+    }
+
+    /// Build a report for compile-time expect failure
+    fn buildComptimeExpectFailedReport(self: *Self, data: ComptimeExpectFailed) !Report {
+        var report = Report.init(self.gpa, "COMPTIME EXPECT FAILED", .runtime_error);
+        errdefer report.deinit();
+
+        const owned_message = try report.addOwnedString(data.message);
+
+        try report.document.addText("This definition contains an ");
+        try report.document.addAnnotated("expect", .keyword);
+        try report.document.addText(" that failed during compile-time evaluation:");
+        try report.document.addLineBreak();
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addText("The ");
+        try report.document.addAnnotated("expect", .keyword);
+        try report.document.addText(" failed with this message:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(owned_message, .emphasized);
+
+        return report;
+    }
+
+    /// Build a report for compile-time evaluation error
+    fn buildComptimeEvalErrorReport(self: *Self, data: ComptimeEvalError) !Report {
+        var report = Report.init(self.gpa, "COMPTIME EVAL ERROR", .runtime_error);
+        errdefer report.deinit();
+
+        const owned_error_name = try report.addOwnedString(data.error_name);
+
+        try report.document.addText("This definition could not be evaluated at compile time:");
+        try report.document.addLineBreak();
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addText("The evaluation failed with error:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(owned_error_name, .emphasized);
+
+        return report;
+    }
+
     // helpers //
 
     // Given a buffer and a number, write a the human-readably ordinal number
     // Note that the caller likely needs to clear the buffer before calling this function
-    fn appendOrdinal(buf: *std.ArrayList(u8), n: u32) !void {
+    fn appendOrdinal(buf: *std.array_list.Managed(u8), n: u32) !void {
         switch (n) {
             1 => try buf.appendSlice("first"),
             2 => try buf.appendSlice("second"),
@@ -1811,7 +1928,7 @@ pub const ReportBuilder = struct {
 /// Entry points are `appendProblem` and `deepCopyVar`
 pub const Store = struct {
     const Self = @This();
-    const ALIGNMENT = 16;
+    const ALIGNMENT = std.mem.Alignment.@"16";
 
     problems: std.ArrayListAlignedUnmanaged(Problem, ALIGNMENT) = .{},
 

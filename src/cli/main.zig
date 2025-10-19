@@ -100,6 +100,30 @@ pub const c = struct {
 // Platform-specific shared memory implementation
 const is_windows = builtin.target.os.tag == .windows;
 
+var stdout_buffer: [4096]u8 = undefined;
+var stdout_writer: std.fs.File.Writer = undefined;
+var stdout_initialized = false;
+
+var stderr_buffer: [4096]u8 = undefined;
+var stderr_writer: std.fs.File.Writer = undefined;
+var stderr_initialized = false;
+
+fn stdoutWriter() *std.Io.Writer {
+    if (is_windows or !stdout_initialized) {
+        stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+        stdout_initialized = true;
+    }
+    return &stdout_writer.interface;
+}
+
+fn stderrWriter() *std.Io.Writer {
+    if (is_windows or !stderr_initialized) {
+        stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+        stderr_initialized = true;
+    }
+    return &stderr_writer.interface;
+}
+
 // POSIX shared memory functions
 const posix = if (!is_windows) struct {
     extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: std.c.mode_t) c_int;
@@ -373,8 +397,8 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
+    const stdout = stdoutWriter();
+    const stderr = stderrWriter();
 
     const parsed_args = try cli_args.parse(allocs.arena, args[1..]);
 
@@ -457,7 +481,7 @@ fn generatePlatformHostShim(allocs: *Allocators, cache_dir: []const u8, entrypoi
     defer llvm_builder.deinit();
 
     // Create entrypoints array from the provided names
-    var entrypoints = try std.ArrayList(platform_host_shim.EntryPoint).initCapacity(allocs.arena, 8);
+    var entrypoints = try std.array_list.Managed(platform_host_shim.EntryPoint).initCapacity(allocs.arena, 8);
 
     for (entrypoint_names, 0..) |name, idx| {
         try entrypoints.append(.{ .name = name, .idx = @intCast(idx) });
@@ -598,7 +622,7 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) void {
     const shim_target = builder.RocTarget.detectNative();
 
     // Extract entrypoints from platform source file
-    var entrypoints = std.ArrayList([]const u8).initCapacity(allocs.arena, 32) catch |err| {
+    var entrypoints = std.array_list.Managed([]const u8).initCapacity(allocs.arena, 32) catch |err| {
         std.log.err("Failed to allocate entrypoints list: {}", .{err});
         std.process.exit(1);
     };
@@ -655,7 +679,7 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) void {
 
         // Link the host.a with our shim to create the interpreter executable using our linker
         // Try LLD first, fallback to clang if LLVM is not available
-        var extra_args = std.ArrayList([]const u8).initCapacity(allocs.arena, 32) catch |err| {
+        var extra_args = std.array_list.Managed([]const u8).initCapacity(allocs.arena, 32) catch |err| {
             std.log.err("Failed to allocate extra args list: {}", .{err});
             std.process.exit(1);
         };
@@ -669,7 +693,7 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) void {
         }
 
         // Create object files list - include platform shim if available
-        var object_files = std.ArrayList([]const u8).initCapacity(allocs.arena, 8) catch |err| {
+        var object_files = std.array_list.Managed([]const u8).initCapacity(allocs.arena, 8) catch |err| {
             std.log.err("Failed to allocate object files list: {}", .{err});
             std.process.exit(1);
         };
@@ -689,11 +713,11 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) void {
         };
 
         // Determine platform-specific dependencies based on platform spec
-        var platform_files_pre = std.ArrayList([]const u8).initCapacity(allocs.arena, 16) catch |err| {
+        var platform_files_pre = std.array_list.Managed([]const u8).initCapacity(allocs.arena, 16) catch |err| {
             std.log.err("Failed to allocate platform files pre list: {}", .{err});
             std.process.exit(1);
         };
-        var platform_files_post = std.ArrayList([]const u8).initCapacity(allocs.arena, 16) catch |err| {
+        var platform_files_post = std.array_list.Managed([]const u8).initCapacity(allocs.arena, 16) catch |err| {
             std.log.err("Failed to allocate platform files post list: {}", .{err});
             std.process.exit(1);
         };
@@ -1023,7 +1047,7 @@ fn runWithWindowsHandleInheritance(allocs: *Allocators, exe_path: []const u8, sh
 
     // Create command line with handle and size as arguments
     const handle_uint = @intFromPtr(shm_handle.fd);
-    const cmd_line = try std.fmt.allocPrintZ(allocs.arena, "\"{s}\" {} {}", .{ exe_path, handle_uint, shm_handle.size });
+    const cmd_line = try std.fmt.allocPrintSentinel(allocs.arena, "\"{s}\" {} {}", .{ exe_path, handle_uint, shm_handle.size }, 0);
     const cmd_line_w = try std.unicode.utf8ToUtf16LeAllocZ(allocs.arena, cmd_line);
 
     // Set up process creation structures
@@ -1678,7 +1702,7 @@ fn resolvePlatformSpecToPaths(allocs: *Allocators, platform_spec: []const u8, ba
 
 /// Extract all entrypoint names from platform header provides record into ArrayList
 /// TODO: Replace this with proper BuildEnv solution in the future
-fn extractEntrypointsFromPlatform(allocs: *Allocators, roc_file_path: []const u8, entrypoints: *std.ArrayList([]const u8)) !void {
+fn extractEntrypointsFromPlatform(allocs: *Allocators, roc_file_path: []const u8, entrypoints: *std.array_list.Managed([]const u8)) !void {
     // Read the Roc file
     const source = std.fs.cwd().readFileAlloc(allocs.gpa, roc_file_path, std.math.maxInt(usize)) catch return error.NoPlatformFound;
     defer allocs.gpa.free(source);
@@ -1802,8 +1826,8 @@ fn formatUnbundlePathValidationReason(reason: unbundle.PathValidationReason) []c
 
 /// Bundles a roc package and its dependencies into a compressed tar archive
 pub fn rocBundle(allocs: *Allocators, args: cli_args.BundleArgs) !void {
-    const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
+    const stdout = stdoutWriter();
+    const stderr = stderrWriter();
 
     // Start timing
     const start_time = std.time.nanoTimestamp();
@@ -1826,7 +1850,7 @@ pub fn rocBundle(allocs: *Allocators, args: cli_args.BundleArgs) !void {
     }
 
     // Collect all files to bundle
-    var file_paths = std.ArrayList([]const u8).init(allocs.arena);
+    var file_paths = std.array_list.Managed([]const u8).init(allocs.arena);
     defer file_paths.deinit();
 
     var uncompressed_size: u64 = 0;
@@ -1912,11 +1936,13 @@ pub fn rocBundle(allocs: *Allocators, args: cli_args.BundleArgs) !void {
     // Bundle the files
     var allocator_copy = allocs.arena;
     var error_ctx: bundle.ErrorContext = undefined;
+    var temp_writer_buffer: [4096]u8 = undefined;
+    var temp_writer = temp_file.writer(&temp_writer_buffer);
     const final_filename = bundle.bundleFiles(
         &iter,
         @intCast(args.compression_level),
         &allocator_copy,
-        temp_file.writer(),
+        &temp_writer.interface,
         cwd,
         null, // path_prefix parameter - null means no stripping
         &error_ctx,
@@ -1928,6 +1954,8 @@ pub fn rocBundle(allocs: *Allocators, args: cli_args.BundleArgs) !void {
         return err;
     };
     // No need to free when using arena allocator
+
+    try temp_writer.interface.flush();
 
     // Get the compressed file size
     const compressed_stat = try temp_file.stat();
@@ -1957,8 +1985,8 @@ pub fn rocBundle(allocs: *Allocators, args: cli_args.BundleArgs) !void {
 }
 
 fn rocUnbundle(allocs: *Allocators, args: cli_args.UnbundleArgs) !void {
-    const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
+    const stdout = stdoutWriter();
+    const stderr = stderrWriter();
     const cwd = std.fs.cwd();
 
     var had_errors = false;
@@ -2006,9 +2034,11 @@ fn rocUnbundle(allocs: *Allocators, args: cli_args.UnbundleArgs) !void {
 
         // Unbundle the archive
         var error_ctx: unbundle.ErrorContext = undefined;
+        var archive_reader_buffer: [4096]u8 = undefined;
+        var archive_reader = archive_file.reader(&archive_reader_buffer);
         unbundle.unbundleFiles(
             allocs.gpa,
-            archive_file.reader(),
+            &archive_reader.interface,
             output_dir,
             basename,
             &error_ctx,
@@ -2086,7 +2116,7 @@ fn rocBuild(allocs: *Allocators, args: cli_args.BuildArgs) !void {
             std.log.info("Cross-compilation from {s} to {s} is supported", .{ @tagName(host_target), @tagName(target) });
         },
         .unsupported_host_target, .unsupported_cross_compilation, .missing_toolchain => {
-            const stderr = std.io.getStdErr().writer();
+            const stderr = stderrWriter();
             try cross_compilation.printCrossCompilationError(stderr, cross_validation);
             std.process.exit(1);
         },
@@ -2176,16 +2206,16 @@ fn rocBuild(allocs: *Allocators, args: cli_args.BuildArgs) !void {
     const crt_files = try target_mod.getVendoredCRTFiles(allocs.arena, target, platform_dir);
 
     // Create object files list for linking
-    var object_files = try std.ArrayList([]const u8).initCapacity(allocs.arena, 16);
+    var object_files = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 16);
 
     // Add our app stub and host library
     try object_files.append(app_stub_obj);
     try object_files.append(host_lib_path);
 
     // Setup platform files based on target
-    var platform_files_pre = try std.ArrayList([]const u8).initCapacity(allocs.arena, 16);
-    var platform_files_post = try std.ArrayList([]const u8).initCapacity(allocs.arena, 16);
-    var extra_args = try std.ArrayList([]const u8).initCapacity(allocs.arena, 32);
+    var platform_files_pre = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 16);
+    var platform_files_post = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 16);
+    var extra_args = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 32);
 
     // Add CRT files in correct order
     if (crt_files.crt1_o) |crt1| try platform_files_pre.append(crt1);
@@ -2311,8 +2341,8 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     // Start timing
     const start_time = std.time.nanoTimestamp();
 
-    const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
+    const stdout = stdoutWriter();
+    const stderr = stderrWriter();
 
     // Read the Roc file
     const source = std.fs.cwd().readFileAlloc(allocs.gpa, args.path, std.math.maxInt(usize)) catch |err| {
@@ -2386,6 +2416,19 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
         std.process.exit(1);
     };
 
+    // Evaluate all top-level declarations at compile time
+    var comptime_evaluator = eval.ComptimeEvaluator.init(allocs.gpa, &env, &.{}, &checker.problems) catch |err| {
+        try stderr.print("Failed to create compile-time evaluator: {}\n", .{err});
+        std.process.exit(1);
+    };
+    // Note: comptime_evaluator must be deinitialized AFTER building reports from checker.problems
+    // because the crash messages are owned by the evaluator but referenced by the problems
+
+    _ = comptime_evaluator.evalAll() catch |err| {
+        try stderr.print("Failed to evaluate declarations: {}\n", .{err});
+        std.process.exit(1);
+    };
+
     // Create test runner infrastructure for test evaluation
     var test_runner = TestRunner.init(allocs.gpa, &env) catch |err| {
         try stderr.print("Failed to create test runner: {}\n", .{err});
@@ -2405,8 +2448,40 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     const elapsed_ns = @as(u64, @intCast(end_time - start_time));
     const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
 
+    // Report any compile-time crashes
+    const has_comptime_crashes = checker.problems.len() > 0;
+    if (has_comptime_crashes) {
+        const problem = @import("check").problem;
+        var report_builder = problem.ReportBuilder.init(
+            allocs.gpa,
+            &env,
+            &env,
+            &checker.snapshots,
+            args.path,
+            &.{},
+        );
+        defer report_builder.deinit();
+
+        for (0..checker.problems.len()) |i| {
+            const problem_idx: problem.Problem.Idx = @enumFromInt(i);
+            const prob = checker.problems.get(problem_idx);
+            var report = report_builder.build(prob) catch |err| {
+                try stderr.print("Failed to build problem report: {}\n", .{err});
+                continue;
+            };
+            defer report.deinit();
+
+            const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+            const config = reporting.ReportingConfig.initColorTerminal();
+            try reporting.renderReportToTerminal(&report, stderr, palette, config);
+        }
+    }
+
+    // Clean up comptime evaluator AFTER building reports (crash messages must stay alive until reports are built)
+    comptime_evaluator.deinit();
+
     // Report results
-    if (failed == 0) {
+    if (failed == 0 and !has_comptime_crashes) {
         // Success case: only print if verbose, exit with 0
         if (args.verbose) {
             try stdout.print("Ran {} test(s): {} passed, 0 failed in {d:.1}ms\n", .{ passed, passed, elapsed_ms });
@@ -2419,7 +2494,10 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
         return; // Exit with 0
     } else {
         // Failure case: always print summary with timing
-        try stderr.print("Ran {} test(s): {} passed, {} failed in {d:.1}ms\n", .{ passed + failed, passed, failed, elapsed_ms });
+        const total_tests = passed + failed;
+        if (total_tests > 0) {
+            try stderr.print("Ran {} test(s): {} passed, {} failed in {d:.1}ms\n", .{ total_tests, passed, failed, elapsed_ms });
+        }
 
         if (args.verbose) {
             for (test_runner.test_results.items) |test_result| {
@@ -2442,7 +2520,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
                     // Render the report to terminal
                     const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
                     const config = reporting.ReportingConfig.initColorTerminal();
-                    try reporting.renderReportToTerminal(&report, stderr.any(), palette, config);
+                    try reporting.renderReportToTerminal(&report, stderr, palette, config);
                 }
             }
         } else {
@@ -2470,7 +2548,7 @@ fn rocFormat(allocs: *Allocators, args: cli_args.FormatArgs) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const stdout = std.io.getStdOut();
+    const stdout = stdoutWriter();
     if (args.stdin) {
         fmt.formatStdin(allocs.gpa) catch std.process.exit(1);
         return;
@@ -2482,7 +2560,7 @@ fn rocFormat(allocs: *Allocators, args: cli_args.FormatArgs) !void {
     var exit_code: u8 = 0;
 
     if (args.check) {
-        var unformatted_files = std.ArrayList([]const u8).init(allocs.gpa);
+        var unformatted_files = std.array_list.Managed([]const u8).init(allocs.gpa);
         defer unformatted_files.deinit();
 
         for (args.paths) |path| {
@@ -2496,17 +2574,17 @@ fn rocFormat(allocs: *Allocators, args: cli_args.FormatArgs) !void {
 
         elapsed = timer.read();
         if (unformatted_files.items.len > 0) {
-            try stdout.writer().print("The following file(s) failed `roc format --check`:", .{});
+            try stdout.print("The following file(s) failed `roc format --check`:", .{});
             for (unformatted_files.items) |file_name| {
-                try stdout.writer().print("    {s}", .{file_name});
+                try stdout.print("    {s}\n", .{file_name});
             }
-            try stdout.writer().print("You can fix this with `roc format FILENAME.roc`.", .{});
+            try stdout.print("You can fix this with `roc format FILENAME.roc`.", .{});
             exit_code = 1;
         } else {
-            try stdout.writer().print("All formatting valid", .{});
+            try stdout.print("All formatting valid", .{});
         }
         if (failure_count > 0) {
-            try stdout.writer().print("Failed to check {} files.", .{failure_count});
+            try stdout.print("Failed to check {} files.", .{failure_count});
             exit_code = 1;
         }
     } else {
@@ -2517,16 +2595,16 @@ fn rocFormat(allocs: *Allocators, args: cli_args.FormatArgs) !void {
             failure_count += result.failure;
         }
         elapsed = timer.read();
-        try stdout.writer().print("Successfully formatted {} files", .{success_count});
+        try stdout.print("Successfully formatted {} files\n", .{success_count});
         if (failure_count > 0) {
-            try stdout.writer().print("Failed to format {} files.", .{failure_count});
+            try stdout.print("Failed to format {} files.\n", .{failure_count});
             exit_code = 1;
         }
     }
 
-    try stdout.writer().print("Took ", .{});
-    try formatElapsedTime(stdout.writer(), elapsed);
-    try stdout.writer().print(".", .{});
+    try stdout.print("Took ", .{});
+    try formatElapsedTime(stdout, elapsed);
+    try stdout.print(".", .{});
 
     std.process.exit(exit_code);
 }
@@ -2669,10 +2747,7 @@ fn checkFileWithBuildEnvPreserved(
                 const phase = package_env.modules.items[0].phase;
                 if (phase == .Done) break;
 
-                package_env.processModuleByName(module_name) catch |err| {
-                    std.debug.print("Error processing module: {}\n", .{err});
-                    break;
-                };
+                package_env.processModuleByName(module_name) catch break;
             }
         }
     }
@@ -2803,9 +2878,8 @@ fn rocCheck(allocs: *Allocators, args: cli_args.CheckArgs) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
-    const stderr_writer = stderr.any();
+    const stdout = stdoutWriter();
+    const stderr = stderrWriter();
 
     var timer = try std.time.Timer.start();
 
@@ -2857,7 +2931,7 @@ fn rocCheck(allocs: *Allocators, args: cli_args.CheckArgs) !void {
             for (module.reports) |*report| {
 
                 // Render the diagnostic report to stderr
-                reporting.renderReportToTerminal(report, stderr_writer, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
+                reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
                     stderr.print("Error rendering diagnostic report: {}", .{render_err}) catch {};
                     // Fallback to just printing the title
                     stderr.print("  {s}", .{report.title}) catch {};
@@ -2915,7 +2989,7 @@ fn printTimingBreakdown(writer: anytype, timing: ?CheckTimingInfo) void {
 
 /// Start an HTTP server to serve the generated documentation
 fn serveDocumentation(allocs: *Allocators, docs_dir: []const u8) !void {
-    const stdout = std.io.getStdOut().writer();
+    const stdout = stdoutWriter();
 
     const address = try std.net.Address.parseIp("127.0.0.1", 8080);
     var server = try address.listen(.{
@@ -2939,7 +3013,13 @@ fn handleConnection(allocs: *Allocators, connection: std.net.Server.Connection, 
     defer connection.stream.close();
 
     var buffer: [4096]u8 = undefined;
-    const bytes_read = try connection.stream.read(&buffer);
+    var reader_buffer: [512]u8 = undefined;
+    var conn_reader = connection.stream.reader(&reader_buffer);
+    var slices = [_][]u8{buffer[0..]};
+    const bytes_read = std.Io.Reader.readVec(conn_reader.interface(), &slices) catch |err| switch (err) {
+        error.EndOfStream => 0,
+        error.ReadFailed => return conn_reader.getError() orelse error.Unexpected,
+    };
 
     if (bytes_read == 0) return;
 
@@ -3053,9 +3133,8 @@ fn rocDocs(allocs: *Allocators, args: cli_args.DocsArgs) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
-    const stderr_writer = stderr.any();
+    const stdout = stdoutWriter();
+    const stderr = stderrWriter();
 
     var timer = try std.time.Timer.start();
 
@@ -3105,7 +3184,7 @@ fn rocDocs(allocs: *Allocators, args: cli_args.DocsArgs) !void {
             for (module.reports) |*report| {
 
                 // Render the diagnostic report to stderr
-                reporting.renderReportToTerminal(report, stderr_writer, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
+                reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
                     stderr.print("Error rendering diagnostic report: {}", .{render_err}) catch {};
                     // Fallback to just printing the title
                     stderr.print("  {s}", .{report.title}) catch {};
@@ -3181,12 +3260,12 @@ pub const ModuleInfo = struct {
 /// Recursively write associated items as nested <ul> elements
 fn writeAssociatedItems(writer: anytype, items: []const AssociatedItem, indent_level: usize) !void {
     // Write opening <ul>
-    try writer.writeByteNTimes(' ', indent_level * 2);
+    try writer.splatByteAll(' ', indent_level * 2);
     try writer.writeAll("<ul>\n");
 
     for (items) |item| {
         // Write <li> with item name
-        try writer.writeByteNTimes(' ', (indent_level + 1) * 2);
+        try writer.splatByteAll(' ', (indent_level + 1) * 2);
         try writer.print("<li>{s}\n", .{item.name});
 
         // Recursively write children if any
@@ -3195,12 +3274,12 @@ fn writeAssociatedItems(writer: anytype, items: []const AssociatedItem, indent_l
         }
 
         // Close <li>
-        try writer.writeByteNTimes(' ', (indent_level + 1) * 2);
+        try writer.splatByteAll(' ', (indent_level + 1) * 2);
         try writer.writeAll("</li>\n");
     }
 
     // Write closing </ul>
-    try writer.writeByteNTimes(' ', indent_level * 2);
+    try writer.splatByteAll(' ', indent_level * 2);
     try writer.writeAll("</ul>\n");
 }
 
@@ -3224,7 +3303,9 @@ pub fn generatePackageIndex(
     const file = try std.fs.cwd().createFile(index_path, .{});
     defer file.close();
 
-    const writer = file.writer();
+    var file_buffer: [4096]u8 = undefined;
+    var file_writer = file.writer(&file_buffer);
+    const writer = &file_writer.interface;
 
     // Write HTML header
     try writer.writeAll("<!DOCTYPE html>\n<html>\n<head>\n");
@@ -3261,6 +3342,7 @@ pub fn generatePackageIndex(
     }
 
     try writer.writeAll("</body>\n</html>\n");
+    try writer.flush();
 }
 
 /// Generate HTML index file for a module
@@ -3281,7 +3363,9 @@ pub fn generateModuleIndex(
     const file = try std.fs.cwd().createFile(index_path, .{});
     defer file.close();
 
-    const writer = file.writer();
+    var file_buffer: [4096]u8 = undefined;
+    var file_writer = file.writer(&file_buffer);
+    const writer = &file_writer.interface;
 
     // Write HTML header
     try writer.writeAll("<!DOCTYPE html>\n<html>\n<head>\n");
@@ -3293,6 +3377,7 @@ pub fn generateModuleIndex(
     try writer.print("  <h1>{s}</h1>\n", .{module_name});
 
     try writer.writeAll("</body>\n</html>\n");
+    try writer.flush();
 }
 
 /// Extract associated items from a record expression (recursively)
@@ -3301,7 +3386,7 @@ fn extractRecordAssociatedItems(
     module_env: *const ModuleEnv,
     record_fields: can.CIR.RecordField.Span,
 ) ![]AssociatedItem {
-    var items = std.ArrayList(AssociatedItem).init(allocs.gpa);
+    var items = std.array_list.Managed(AssociatedItem).init(allocs.gpa);
     errdefer {
         for (items.items) |item| {
             item.deinit(allocs.gpa);
@@ -3343,7 +3428,7 @@ fn extractAssociatedItems(
     allocs: *Allocators,
     module_env: *const ModuleEnv,
 ) ![]AssociatedItem {
-    var items = std.ArrayList(AssociatedItem).init(allocs.gpa);
+    var items = std.array_list.Managed(AssociatedItem).init(allocs.gpa);
     errdefer {
         for (items.items) |item| {
             item.deinit(allocs.gpa);
@@ -3545,7 +3630,7 @@ fn generateAppDocs(
     }
 
     // Convert map to sorted list
-    var modules_list = std.ArrayList(ModuleInfo).init(allocs.gpa);
+    var modules_list = std.array_list.Managed(ModuleInfo).init(allocs.gpa);
     defer modules_list.deinit();
     var map_iter = modules_map.iterator();
     while (map_iter.next()) |entry| {
@@ -3553,7 +3638,7 @@ fn generateAppDocs(
     }
 
     // Collect package shorthands
-    var shorthands_list = std.ArrayList([]const u8).init(allocs.gpa);
+    var shorthands_list = std.array_list.Managed([]const u8).init(allocs.gpa);
     defer {
         for (shorthands_list.items) |item| allocs.gpa.free(item);
         shorthands_list.deinit();
@@ -3593,7 +3678,7 @@ fn generatePackageDocs(
     else
         try std.fs.path.join(allocs.arena, &[_][]const u8{ base_output_dir, relative_path });
 
-    var shorthands_list = std.ArrayList([]const u8).init(allocs.gpa);
+    var shorthands_list = std.array_list.Managed([]const u8).init(allocs.gpa);
     defer {
         for (shorthands_list.items) |item| allocs.gpa.free(item);
         shorthands_list.deinit();
@@ -3628,7 +3713,7 @@ fn generatePackageDocs(
     }
 
     // For standalone modules, extract and display their exports
-    var module_infos = std.ArrayList(ModuleInfo).init(allocs.gpa);
+    var module_infos = std.array_list.Managed(ModuleInfo).init(allocs.gpa);
     defer {
         for (module_infos.items) |mod| mod.deinit(allocs.gpa);
         module_infos.deinit();
@@ -3661,7 +3746,7 @@ fn generatePackageDocs(
 
 /// Log a fatal error and exit the process with a non-zero code.
 pub fn fatal(comptime format: []const u8, args: anytype) noreturn {
-    std.io.getStdErr().writer().print(format, args) catch unreachable;
+    stderrWriter().print(format, args) catch unreachable;
     if (tracy.enable) {
         tracy.waitForShutdown() catch unreachable;
     }

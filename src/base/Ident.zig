@@ -242,7 +242,7 @@ pub const Store = struct {
         size += @sizeOf(u32); // next_unique_name
 
         // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
-        return std.mem.alignForward(usize, size, collections.SERIALIZATION_ALIGNMENT);
+        return std.mem.alignForward(usize, size, collections.SERIALIZATION_ALIGNMENT.toByteUnits());
     }
 
     /// Serialize this Store to the given CompactWriter. The resulting Store
@@ -359,7 +359,7 @@ test "Ident.Store empty CompactWriter roundtrip" {
     // Ensure file size matches what we wrote
     try std.testing.expectEqual(@as(u64, @intCast(writer.total_bytes)), file_size);
 
-    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     const bytes_read = try file.read(buffer);
@@ -428,7 +428,7 @@ test "Ident.Store basic CompactWriter roundtrip" {
     // Ensure file size matches what we wrote
     try std.testing.expectEqual(@as(u64, @intCast(writer.total_bytes)), file_size);
 
-    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     const bytes_read = try file.read(buffer);
@@ -512,7 +512,7 @@ test "Ident.Store with genUnique CompactWriter roundtrip" {
     // Ensure file size matches what we wrote
     try std.testing.expectEqual(@as(u64, @intCast(writer.total_bytes)), file_size);
 
-    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     const bytes_read = try file.read(buffer);
@@ -580,7 +580,7 @@ test "Ident.Store frozen state CompactWriter roundtrip" {
     // Ensure file size matches what we wrote
     try std.testing.expectEqual(@as(u64, @intCast(writer.total_bytes)), file_size);
 
-    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     const bytes_read = try file.read(buffer);
@@ -621,7 +621,7 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
         .{ .text = "hello", .expected_idx = 1 }, // duplicate, should reuse
     };
 
-    var indices = std.ArrayList(Ident.Idx).init(gpa);
+    var indices = std.array_list.Managed(Ident.Idx).init(gpa);
     defer indices.deinit();
 
     for (test_idents) |test_ident| {
@@ -666,7 +666,7 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     // Ensure file size matches what we wrote
     try std.testing.expectEqual(@as(u64, @intCast(writer.total_bytes)), file_size);
 
-    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     const bytes_read = try file.read(buffer);

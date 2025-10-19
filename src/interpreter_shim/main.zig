@@ -13,6 +13,19 @@ const ipc = @import("ipc");
 
 const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
 
+const is_windows = builtin.target.os.tag == .windows;
+
+var stderr_file_writer: std.fs.File.Writer = .{
+    .interface = std.fs.File.Writer.initInterface(&.{}),
+    .file = if (is_windows) undefined else std.fs.File.stderr(),
+    .mode = .streaming,
+};
+
+fn stderrTraceWriter() *std.Io.Writer {
+    if (is_windows) stderr_file_writer.file = std.fs.File.stderr();
+    return &stderr_file_writer.interface;
+}
+
 // Global state for shared memory - initialized once per process
 var shared_memory_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var global_shm: ?SharedMemoryAllocator = null;
@@ -60,7 +73,7 @@ const ShimError = error{
 /// Exported symbol that reads ModuleEnv from shared memory and evaluates it
 /// Returns a RocStr to the caller
 /// Expected format in shared memory: [u64 parent_address][u32 entry_count][ModuleEnv data][u32[] def_indices]
-export fn roc_entrypoint(entry_idx: u32, ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.C) void {
+export fn roc_entrypoint(entry_idx: u32, ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void {
     evaluateFromSharedMemory(entry_idx, ops, ret_ptr, arg_ptr) catch |err| {
         var buf: [256]u8 = undefined;
         const msg2 = std.fmt.bufPrint(&buf, "Error evaluating from shared memory: {s}", .{@errorName(err)}) catch "Error evaluating from shared memory";

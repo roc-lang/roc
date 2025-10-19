@@ -37,17 +37,14 @@ pub fn main() !void {
     // Ignore command-line arguments - they're only used by Zig's build system for cache tracking
 
     // Read the .roc source files at runtime
+    // NOTE: ModuleEnv takes ownership of these sources and will free them in deinit()
     const bool_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Bool.roc", 1024 * 1024);
-    defer gpa.free(bool_roc_source);
 
     const result_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Result.roc", 1024 * 1024);
-    defer gpa.free(result_roc_source);
 
     const dict_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Dict.roc", 1024 * 1024);
-    defer gpa.free(dict_roc_source);
 
     const set_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Set.roc", 1024 * 1024);
-    defer gpa.free(set_roc_source);
 
     // Compile Bool.roc without injecting anything (it's completely self-contained)
     const bool_env = try compileModule(
@@ -66,8 +63,11 @@ pub fn main() !void {
     // This is critical for the compiler's hardcoded BUILTIN_BOOL constant
     const bool_type_idx = bool_env.all_statements.span.start;
     if (bool_type_idx != 2) {
-        const stderr = std.io.getStdErr().writer();
+        var stderr_buffer: [256]u8 = undefined;
+        var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+        const stderr = &stderr_writer.interface;
         try stderr.print("WARNING: Expected Bool at index 2, but got {}!\n", .{bool_type_idx});
+        try stderr.flush();
         return error.UnexpectedBoolIndex;
     }
 
@@ -208,7 +208,7 @@ fn compileModule(
 
     // 6. Type check
     // Build the list of other modules for type checking
-    var other_modules = std.ArrayList(*const ModuleEnv).init(gpa);
+    var other_modules = std.array_list.Managed(*const ModuleEnv).init(gpa);
     defer other_modules.deinit();
 
     // Add dependencies

@@ -8,12 +8,26 @@ const can = @import("can");
 
 const tracy = @import("tracy");
 const fmt = @import("fmt");
+const builtin = @import("builtin");
 
 const tokenize = parse.tokenize;
 const ModuleEnv = can.ModuleEnv;
 const CommonEnv = base.CommonEnv;
 
 const Allocator = std.mem.Allocator;
+
+const is_windows = builtin.target.os.tag == .windows;
+
+var stderr_file_writer: std.fs.File.Writer = .{
+    .interface = std.fs.File.Writer.initInterface(&.{}),
+    .file = if (is_windows) undefined else std.fs.File.stderr(),
+    .mode = .streaming,
+};
+
+fn stderrWriter() *std.Io.Writer {
+    if (is_windows) stderr_file_writer.file = std.fs.File.stderr();
+    return &stderr_file_writer.interface;
+}
 
 const RocFile = struct {
     path: []const u8,
@@ -40,7 +54,7 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
     std.debug.print("Benchmarking {s} on '{s}'\n", .{ operation_name, path });
 
     // Find all .roc files (from file or directory)
-    var roc_files = std.ArrayList(RocFile).init(gpa);
+    var roc_files = std.array_list.Managed(RocFile).init(gpa);
     defer {
         for (roc_files.items) |roc_file| {
             gpa.free(roc_file.path);
@@ -146,7 +160,7 @@ pub fn benchTokenizer(gpa: Allocator, path: []const u8) !void {
     try benchParseOrTokenize(false, gpa, path);
 }
 
-fn collectRocFiles(gpa: Allocator, path: []const u8, roc_files: *std.ArrayList(RocFile)) !void {
+fn collectRocFiles(gpa: Allocator, path: []const u8, roc_files: *std.array_list.Managed(RocFile)) !void {
     // Check if path is a file or directory
     const stat = std.fs.cwd().statFile(path) catch |err| {
         fatal("Failed to access '{s}': {}", .{ path, err });
@@ -169,7 +183,7 @@ fn collectRocFiles(gpa: Allocator, path: []const u8, roc_files: *std.ArrayList(R
     }
 }
 
-fn addRocFile(gpa: Allocator, file_path: []const u8, roc_files: *std.ArrayList(RocFile)) !void {
+fn addRocFile(gpa: Allocator, file_path: []const u8, roc_files: *std.array_list.Managed(RocFile)) !void {
     const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
         std.debug.print("Warning: Failed to open file '{s}': {}\n", .{ file_path, err });
         return;
@@ -191,7 +205,7 @@ fn addRocFile(gpa: Allocator, file_path: []const u8, roc_files: *std.ArrayList(R
     });
 }
 
-fn findRocFiles(gpa: Allocator, dir_path: []const u8, roc_files: *std.ArrayList(RocFile)) !void {
+fn findRocFiles(gpa: Allocator, dir_path: []const u8, roc_files: *std.array_list.Managed(RocFile)) !void {
     var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
         fatal("Failed to open directory '{s}': {}", .{ dir_path, err });
     };
@@ -287,7 +301,7 @@ fn printBenchmarkResults(benchmark_name: []const u8, results: BenchmarkResults) 
 
 /// Log a fatal error and exit the process with a non-zero code.
 pub fn fatal(comptime format: []const u8, args: anytype) noreturn {
-    std.io.getStdErr().writer().print(format, args) catch unreachable;
+    stderrWriter().print(format, args) catch unreachable;
     if (tracy.enable) {
         tracy.waitForShutdown() catch unreachable;
     }

@@ -95,13 +95,13 @@ pub fn SafeRange(comptime Idx: type) type {
 /// less likely since indices are only created for valid list entries.
 pub fn SafeList(comptime T: type) type {
     return struct {
-        items: std.ArrayListUnmanaged(T) = .{},
+        items: std.ArrayList(T) = .{},
 
         /// An index for an item in the list.
         pub const Idx = enum(u32) { _ };
 
         /// A non-type-safe slice of the list.
-        pub const Slice = std.ArrayListUnmanaged(T).Slice;
+        pub const Slice = std.ArrayList(T).Slice;
 
         /// A type-safe range of the list.
         pub const Range = SafeRange(Idx);
@@ -178,7 +178,7 @@ pub fn SafeList(comptime T: type) type {
         /// Initialize the `SafeList` with the specified capacity.
         pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!SafeList(T) {
             return .{
-                .items = try std.ArrayListUnmanaged(T).initCapacity(gpa, capacity),
+                .items = try std.ArrayList(T).initCapacity(gpa, capacity),
             };
         }
 
@@ -835,7 +835,7 @@ test "SafeList empty list CompactWriter roundtrip" {
     const file_size = try file.getEndPos();
     const serialized_size = @sizeOf(SafeList(u64).Serialized);
     const serialized_align = @alignOf(SafeList(u64).Serialized);
-    const buffer = try gpa.alignedAlloc(u8, serialized_align, @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(serialized_align), @intCast(file_size));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -998,7 +998,7 @@ test "SafeList CompactWriter complete roundtrip example" {
     // Step 5: Read file into 16-byte aligned buffer
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, @alignOf(u32), @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(u32)), @intCast(file_size));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -1194,7 +1194,7 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     defer writer.deinit(gpa);
 
     // Track offsets as we go
-    var offsets = std.ArrayList(usize).init(gpa);
+    var offsets = std.array_list.Managed(usize).init(gpa);
     defer offsets.deinit();
 
     // Create temp file

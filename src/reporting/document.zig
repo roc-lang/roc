@@ -234,12 +234,12 @@ pub const DocumentElement = union(enum) {
 
 /// A document composed of structured elements that can be rendered.
 pub const Document = struct {
-    elements: std.ArrayList(DocumentElement),
+    elements: std.array_list.Managed(DocumentElement),
     allocator: Allocator,
 
     pub fn init(allocator: Allocator) Document {
         return Document{
-            .elements = std.ArrayList(DocumentElement).init(allocator),
+            .elements = std.array_list.Managed(DocumentElement).init(allocator),
             .allocator = allocator,
         };
     }
@@ -698,11 +698,11 @@ test "Document string memory safety" {
     defer document.deinit();
 
     // Create temporary strings that would be freed in real usage
-    var temp_text = std.ArrayList(u8).init(gpa);
+    var temp_text = std.array_list.Managed(u8).init(gpa);
     defer temp_text.deinit();
     try temp_text.appendSlice("This is test text");
 
-    var temp_annotated = std.ArrayList(u8).init(gpa);
+    var temp_annotated = std.array_list.Managed(u8).init(gpa);
     defer temp_annotated.deinit();
     try temp_annotated.appendSlice("This is annotated");
 

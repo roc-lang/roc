@@ -9,31 +9,26 @@ const c = @cImport({
     @cInclude("zstd.h");
 });
 
+const WriterError = std.io.Writer.Error;
+
 /// A writer that compresses data with zstd and computes a hash incrementally
 pub const CompressingHashWriter = struct {
     allocator_ptr: *std.mem.Allocator,
     ctx: *c.ZSTD_CCtx,
     hasher: std.crypto.hash.Blake3,
-    output_writer: std.io.AnyWriter,
+    output_writer: *std.io.Writer,
     out_buffer: []u8,
-    in_buffer: []u8,
-    in_pos: usize,
     finished: bool,
+    interface: std.io.Writer,
 
     const Self = @This();
-    const Writer = std.io.Writer(*Self, Error, write);
-    const Error = error{
-        CompressionFailed,
-        WriteFailed,
-        AlreadyFinished,
-    } || std.mem.Allocator.Error;
 
     pub fn init(
         allocator_ptr: *std.mem.Allocator,
         compression_level: c_int,
-        output_writer: std.io.AnyWriter,
-        allocForZstd: *const fn (?*anyopaque, usize) callconv(.C) ?*anyopaque,
-        freeForZstd: *const fn (?*anyopaque, ?*anyopaque) callconv(.C) void,
+        output_writer: *std.io.Writer,
+        allocForZstd: *const fn (?*anyopaque, usize) callconv(.c) ?*anyopaque,
+        freeForZstd: *const fn (?*anyopaque, ?*anyopaque) callconv(.c) void,
     ) !Self {
         const custom_mem = c.ZSTD_customMem{
             .customAlloc = allocForZstd,
@@ -50,65 +45,74 @@ pub const CompressingHashWriter = struct {
         const out_buffer = try allocator_ptr.alloc(u8, out_buffer_size);
         errdefer allocator_ptr.free(out_buffer);
 
-        const in_buffer_size = c.ZSTD_CStreamInSize();
-        const in_buffer = try allocator_ptr.alloc(u8, in_buffer_size);
-        errdefer allocator_ptr.free(in_buffer);
+        // Allocate buffer for the Io.Writer interface
+        const write_buffer_size = c.ZSTD_CStreamInSize();
+        const writer_buffer = try allocator_ptr.alloc(u8, write_buffer_size);
+        errdefer allocator_ptr.free(writer_buffer);
 
-        return Self{
+        var result = Self{
             .allocator_ptr = allocator_ptr,
             .ctx = ctx,
             .hasher = std.crypto.hash.Blake3.init(.{}),
             .output_writer = output_writer,
             .out_buffer = out_buffer,
-            .in_buffer = in_buffer,
-            .in_pos = 0,
             .finished = false,
+            .interface = undefined,
         };
+        result.interface = .{
+            .vtable = &.{
+                .drain = drain,
+                .flush = flush,
+            },
+            .buffer = writer_buffer,
+        };
+        return result;
     }
 
     pub fn deinit(self: *Self) void {
         _ = c.ZSTD_freeCCtx(self.ctx);
         self.allocator_ptr.free(self.out_buffer);
-        self.allocator_ptr.free(self.in_buffer);
+        self.allocator_ptr.free(self.interface.buffer);
     }
 
-    pub fn writer(self: *Self) Writer {
-        return .{ .context = self };
+    fn flush(w: *std.io.Writer) WriterError!void {
+        const self: *Self = @alignCast(@fieldParentPtr("interface", w));
+        if (self.finished and w.end != 0) return WriterError.WriteFailed;
+        _ = self.compressAndHash(w.buffer[0..w.end], false) catch return error.WriteFailed;
+        w.end = 0;
+        return;
     }
 
-    fn write(self: *Self, bytes: []const u8) Error!usize {
-        if (self.finished) return error.AlreadyFinished;
+    fn drain(w: *std.io.Writer, data: []const []const u8, splat: usize) WriterError!usize {
+        const self: *Self = @alignCast(@fieldParentPtr("interface", w));
+        if (self.finished) return WriterError.WriteFailed;
+        _ = self.compressAndHash(w.buffer[0..w.end], false) catch return error.WriteFailed;
+        w.end = 0;
+        if (data.len == 0) return 0;
 
         var written: usize = 0;
-        while (written < bytes.len) {
-            // Fill input buffer
-            const space_available = self.in_buffer.len - self.in_pos;
-            const to_copy = @min(space_available, bytes.len - written);
-            @memcpy(self.in_buffer[self.in_pos..][0..to_copy], bytes[written..][0..to_copy]);
-            self.in_pos += to_copy;
-            written += to_copy;
+        for (data[0 .. data.len - 1]) |bytes| {
+            const len = self.compressAndHash(bytes, false) catch return error.WriteFailed;
+            written += len;
+        }
 
-            // If buffer is full, compress it
-            if (self.in_pos == self.in_buffer.len) {
-                try self.compressBuffer(false);
-            }
+        const pattern = data[data.len - 1];
+        for (0..splat) |_| {
+            const len = self.compressAndHash(pattern, false) catch return error.WriteFailed;
+            written += len;
         }
         return written;
     }
 
-    fn compressBuffer(self: *Self, end_stream: bool) Error!void {
-        if (self.in_pos == 0 and !end_stream) return;
-
-        var in_buf = c.ZSTD_inBuffer{ .src = self.in_buffer.ptr, .size = self.in_pos, .pos = 0 };
-
+    fn compressAndHash(self: *Self, data: []const u8, end_stream: bool) WriterError!usize {
+        var in_buf = c.ZSTD_inBuffer{ .src = data.ptr, .size = data.len, .pos = 0 };
         const mode: c_uint = if (end_stream) c.ZSTD_e_end else c.ZSTD_e_continue;
-
         while (in_buf.pos < in_buf.size or end_stream) {
             var out_buf = c.ZSTD_outBuffer{ .dst = self.out_buffer.ptr, .size = self.out_buffer.len, .pos = 0 };
 
             const remaining = c.ZSTD_compressStream2(self.ctx, &out_buf, &in_buf, mode);
             if (c.ZSTD_isError(remaining) != 0) {
-                return error.CompressionFailed;
+                return WriterError.WriteFailed;
             }
 
             if (out_buf.pos > 0) {
@@ -119,13 +123,13 @@ pub const CompressingHashWriter = struct {
 
             if (end_stream and remaining == 0) break;
         }
-
-        self.in_pos = 0;
+        return 0;
     }
 
-    pub fn finish(self: *Self) Error!void {
+    pub fn finish(self: *Self) WriterError!void {
         if (self.finished) return;
-        try self.compressBuffer(true);
+        _ = self.compressAndHash(self.interface.buffer[0..self.interface.end], true) catch return error.WriteFailed;
+        self.interface.end = 0;
         self.finished = true;
     }
 

@@ -19,6 +19,7 @@ const parse = @import("parse");
 const can = @import("can");
 const check = @import("check");
 const reporting = @import("reporting");
+const eval = @import("eval");
 
 const Check = check.Check;
 const Can = can.Can;
@@ -94,11 +95,11 @@ const ModuleState = struct {
     path: []const u8,
     env: ?ModuleEnv = null,
     phase: Phase = .Parse,
-    imports: std.ArrayListUnmanaged(ModuleId) = .{},
+    imports: std.array_list.Managed(ModuleId),
     /// External imports qualified via package shorthand (e.g. "cli.Stdout") - still strings as they reference other packages
-    external_imports: std.ArrayListUnmanaged([]const u8) = .{},
-    dependents: std.ArrayListUnmanaged(ModuleId) = .{},
-    reports: std.ArrayListUnmanaged(Report) = .{},
+    external_imports: std.array_list.Managed([]const u8),
+    dependents: std.array_list.Managed(ModuleId),
+    reports: std.array_list.Managed(Report),
     depth: u32 = std.math.maxInt(u32), // min depth from root
     /// DFS visitation color for cycle detection: 0=white (unvisited), 1=gray (visiting), 2=black (finished)
     visit_color: u8 = 0,
@@ -106,14 +107,29 @@ const ModuleState = struct {
     working: if (@import("builtin").target.cpu.arch != .wasm32) std.atomic.Value(u8) else u8 = if (@import("builtin").target.cpu.arch != .wasm32) std.atomic.Value(u8).init(0) else 0,
 
     fn deinit(self: *ModuleState, gpa: Allocator) void {
+        // Save source before deinitiating env so we can free it
+        const source = if (self.env) |*e| e.common.source else null;
         if (self.env) |*e| e.deinit();
-        self.imports.deinit(gpa);
-        self.external_imports.deinit(gpa);
-        self.dependents.deinit(gpa);
-        // Free reports
-        for (self.reports.items) |*r| r.deinit();
-        self.reports.deinit(gpa);
+        if (source) |s| gpa.free(s);
+        self.imports.deinit();
+        self.external_imports.deinit();
+        self.dependents.deinit();
+        // NOTE: Do NOT deinit reports here! Ownership has been transferred to OrderedSink
+        // when reports were emitted via sink.emitFn. The OrderedSink is responsible for
+        // deinitiating the reports after they've been drained and rendered.
+        self.reports.deinit();
         gpa.free(self.path);
+    }
+
+    fn init(gpa: Allocator, name: []const u8, path: []const u8) ModuleState {
+        return .{
+            .name = name,
+            .path = path,
+            .imports = std.array_list.Managed(ModuleId).init(gpa),
+            .external_imports = std.array_list.Managed([]const u8).init(gpa),
+            .dependents = std.array_list.Managed(ModuleId).init(gpa),
+            .reports = std.array_list.Managed(Report).init(gpa),
+        };
     }
 };
 
@@ -137,10 +153,10 @@ pub const PackageEnv = struct {
     cond: Condition = .{},
 
     // Work queue
-    injector: std.ArrayListUnmanaged(Task) = .{},
+    injector: std.array_list.Managed(Task),
 
     // Module storage
-    modules: std.ArrayListUnmanaged(ModuleState) = .{},
+    modules: std.array_list.Managed(ModuleState),
     // String intern table: module name -> module ID
     module_names: std.StringHashMapUnmanaged(ModuleId) = .{},
 
@@ -148,7 +164,7 @@ pub const PackageEnv = struct {
     remaining_modules: usize = 0,
 
     // Track module discovery order and which modules have had their reports emitted
-    discovered: std.ArrayListUnmanaged(ModuleId) = .{},
+    discovered: std.array_list.Managed(ModuleId),
     emitted: std.bit_set.DynamicBitSetUnmanaged = .{},
 
     // Timing collection (accumulated across all modules)
@@ -159,7 +175,19 @@ pub const PackageEnv = struct {
     total_check_diagnostics_ns: u64 = 0,
 
     pub fn init(gpa: Allocator, package_name: []const u8, root_dir: []const u8, mode: Mode, max_threads: usize, sink: ReportSink, schedule_hook: ScheduleHook, compiler_version: []const u8) PackageEnv {
-        return .{ .gpa = gpa, .package_name = package_name, .root_dir = root_dir, .mode = mode, .max_threads = max_threads, .sink = sink, .schedule_hook = schedule_hook, .compiler_version = compiler_version };
+        return .{
+            .gpa = gpa,
+            .package_name = package_name,
+            .root_dir = root_dir,
+            .mode = mode,
+            .max_threads = max_threads,
+            .sink = sink,
+            .schedule_hook = schedule_hook,
+            .compiler_version = compiler_version,
+            .injector = std.array_list.Managed(Task).init(gpa),
+            .modules = std.array_list.Managed(ModuleState).init(gpa),
+            .discovered = std.array_list.Managed(ModuleId).init(gpa),
+        };
     }
 
     pub fn initWithResolver(
@@ -183,6 +211,9 @@ pub const PackageEnv = struct {
             .resolver = resolver,
             .schedule_hook = schedule_hook,
             .compiler_version = compiler_version,
+            .injector = std.array_list.Managed(Task).init(gpa),
+            .modules = std.array_list.Managed(ModuleState).init(gpa),
+            .discovered = std.array_list.Managed(ModuleId).init(gpa),
         };
     }
 
@@ -191,7 +222,7 @@ pub const PackageEnv = struct {
         for (self.modules.items) |*ms| {
             ms.deinit(self.gpa);
         }
-        self.modules.deinit(self.gpa);
+        self.modules.deinit();
 
         // Free interned strings
         var it = self.module_names.iterator();
@@ -200,8 +231,8 @@ pub const PackageEnv = struct {
         }
         self.module_names.deinit(self.gpa);
 
-        self.injector.deinit(self.gpa);
-        self.discovered.deinit(self.gpa);
+        self.injector.deinit();
+        self.discovered.deinit();
         self.emitted.deinit(self.gpa);
     }
 
@@ -310,8 +341,8 @@ pub const PackageEnv = struct {
             // This is a new module
             const owned_path = try self.gpa.dupe(u8, path);
             const owned_name = self.module_names.getKey(name).?; // We just interned it
-            try self.modules.append(self.gpa, .{ .name = owned_name, .path = owned_path });
-            try self.discovered.append(self.gpa, module_id);
+            try self.modules.append(ModuleState.init(self.gpa, owned_name, owned_path));
+            try self.discovered.append(module_id);
 
             // Invoke scheduling hook for new module discovery/scheduling
             self.schedule_hook.onSchedule(self.schedule_hook.ctx, self.package_name, owned_name, owned_path, 0);
@@ -356,7 +387,7 @@ pub const PackageEnv = struct {
             self.schedule_hook.onSchedule(self.schedule_hook.ctx, self.package_name, st.name, st.path, st.depth);
         } else {
             // Default behavior: use internal injector
-            try self.injector.append(self.gpa, .{ .module_id = module_id });
+            try self.injector.append(.{ .module_id = module_id });
             if (@import("builtin").target.cpu.arch != .wasm32) self.cond.signal();
         }
     }
@@ -487,8 +518,10 @@ pub const PackageEnv = struct {
 
         try env.common.calcLineStarts(self.gpa);
 
-        // replace env
+        // replace env - save old source to free it after deinit
+        const old_source = if (st.env) |*old| old.common.source else null;
         if (st.env) |*old| old.deinit();
+        if (old_source) |s| self.gpa.free(s);
         st.env = env;
 
         st.phase = .Canonicalize;
@@ -525,7 +558,7 @@ pub const PackageEnv = struct {
         defer self.gpa.free(diags);
         for (diags) |d| {
             const report = try env.diagnosticToReport(d, self.gpa, st.path);
-            try st.reports.append(self.gpa, report);
+            try st.reports.append(report);
         }
         const canon_diag_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         if (@import("builtin").target.cpu.arch != .wasm32) {
@@ -545,7 +578,7 @@ pub const PackageEnv = struct {
 
             if (qualified) {
                 // Qualified imports refer to external packages; track and schedule externally
-                try st.external_imports.append(self.gpa, mod_name);
+                try st.external_imports.append(mod_name);
                 if (self.resolver) |r| r.scheduleExternal(r.ctx, self.package_name, mod_name);
                 // External dependencies are resolved by the workspace; skip local scheduling/cycle detection
                 continue;
@@ -555,13 +588,13 @@ pub const PackageEnv = struct {
             const import_path = try self.resolveModulePath(mod_name);
             const child_id = try self.ensureModule(mod_name, import_path);
             const existed = child_id < self.modules.items.len - 1;
-            try st.imports.append(self.gpa, child_id);
+            try st.imports.append(child_id);
             // parent depth + 1
             try self.setDepthIfSmaller(child_id, st.depth + 1);
 
             // Cycle detection for local deps
             var child = &self.modules.items[child_id];
-            try child.dependents.append(self.gpa, module_id);
+            try child.dependents.append(module_id);
 
             if (child.visit_color == 1 or child_id == module_id) {
                 // Build a report on the current module describing the cycle
@@ -593,7 +626,7 @@ pub const PackageEnv = struct {
                 }
 
                 // Store the report on both modules for clarity
-                try st.reports.append(self.gpa, rep);
+                try st.reports.append(rep);
                 // Duplicate for child as well so it gets emitted too
                 var rep_child = Report.init(self.gpa, "Import cycle detected", .runtime_error);
                 const child_msg = try rep_child.addOwnedString("This module participates in an import cycle. Cycles between modules are not allowed.");
@@ -604,7 +637,7 @@ pub const PackageEnv = struct {
                 try rep_child.document.addText(" -> ");
                 try rep_child.document.addAnnotated(mod_name, .emphasized);
                 try rep_child.document.addLineBreak();
-                try child.reports.append(self.gpa, rep_child);
+                try child.reports.append(rep_child);
 
                 // Mark both Done and adjust counters
                 if (st.phase != .Done) {
@@ -678,7 +711,7 @@ pub const PackageEnv = struct {
 
     fn doTypeCheck(self: *PackageEnv, module_id: ModuleId) !void {
         var st = &self.modules.items[module_id];
-        var env = st.env.?;
+        var env = &st.env.?;
 
         const module_common_idents: Check.CommonIdents = .{
             .module_name = try env.insertIdent(base.Ident.for_text("test")),
@@ -688,19 +721,18 @@ pub const PackageEnv = struct {
 
         // Build other_modules array according to env.imports order
         const import_count = env.imports.imports.items.items.len;
-        var others = try std.ArrayList(*ModuleEnv).initCapacity(self.gpa, import_count);
-        defer others.deinit();
+        var others = try std.array_list.Managed(*ModuleEnv).initCapacity(self.gpa, import_count);
+        // NOTE: Don't deinit 'others' yet - comptime_evaluator holds a reference to others.items
         for (env.imports.imports.items.items[0..import_count]) |str_idx| {
             const import_name = env.getString(str_idx);
             // Determine external vs local from CIR s_import qualifier metadata directly
-            const is_ext = hadQualifiedImport(&env, import_name);
+            const is_ext = hadQualifiedImport(env, import_name);
 
             if (is_ext) {
                 if (self.resolver) |r| {
                     if (r.getEnv(r.ctx, self.package_name, import_name)) |ext_env_ptr| {
-                        const box = try self.gpa.create(ModuleEnv);
-                        box.* = ext_env_ptr.*;
-                        try others.append(box);
+                        // External env is already a pointer, use it directly
+                        try others.append(ext_env_ptr);
                     } else {
                         // External env not ready; skip (tryUnblock should have prevented this)
                     }
@@ -708,15 +740,14 @@ pub const PackageEnv = struct {
             } else {
                 const child_id = self.module_names.get(import_name).?;
                 const child = &self.modules.items[child_id];
-                const child_env_ptr = child.env.?; // value copy
-                // Ensure pointer stable by storing in a temporary allocation
-                const box = try self.gpa.create(ModuleEnv);
-                box.* = child_env_ptr;
-                try others.append(box);
+                // Get a pointer to the child's env (stored in the modules ArrayList)
+                // This is safe because we don't modify the modules ArrayList during type checking
+                const child_env_ptr = &child.env.?;
+                try others.append(child_env_ptr);
             }
         }
 
-        var checker = try Check.init(self.gpa, &env.types, &env, others.items, &env.store.regions, module_common_idents);
+        var checker = try Check.init(self.gpa, &env.types, env, others.items, &env.store.regions, module_common_idents);
         defer checker.deinit();
         // Note: checkDefs runs type checking for module
         const check_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
@@ -726,21 +757,31 @@ pub const PackageEnv = struct {
             self.total_type_checking_ns += @intCast(check_end - check_start);
         }
 
+        // After type checking, evaluate top-level declarations at compile time
+        var comptime_evaluator = try eval.ComptimeEvaluator.init(self.gpa, env, others.items, &checker.problems);
+        _ = try comptime_evaluator.evalAll();
+
         // Build reports from problems
         const check_diag_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        var rb = ReportBuilder.init(self.gpa, &env, &env, &checker.snapshots, st.path, others.items);
+        var rb = ReportBuilder.init(self.gpa, env, env, &checker.snapshots, st.path, others.items);
         defer rb.deinit();
         for (checker.problems.problems.items) |prob| {
             const rep = rb.build(prob) catch continue;
-            try st.reports.append(self.gpa, rep);
+            try st.reports.append(rep);
         }
         const check_diag_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         if (@import("builtin").target.cpu.arch != .wasm32) {
             self.total_check_diagnostics_ns += @intCast(check_diag_end - check_diag_start);
         }
 
-        // Free temporary ModuleEnv copies created for others
-        for (others.items) |ptr| self.gpa.destroy(ptr);
+        // Clean up comptime evaluator AFTER building reports (crash messages must stay alive until reports are built)
+        comptime_evaluator.deinit();
+
+        // Now we can safely deinit the 'others' ArrayList
+        others.deinit();
+
+        // Note: We no longer need to free the 'others' items because they now point directly
+        // to ModuleEnv instances stored in the modules ArrayList, not to heap-allocated copies.
 
         // Done
         st.phase = .Done;
@@ -758,7 +799,7 @@ pub const PackageEnv = struct {
         }
 
         // Default: convert dotted module name to path under root_dir
-        var buffer = std.ArrayList(u8).init(self.gpa);
+        var buffer = std.array_list.Managed(u8).init(self.gpa);
         defer buffer.deinit();
         var it = std.mem.splitScalar(u8, mod_name, '.');
         var first = true;
@@ -800,10 +841,10 @@ pub const PackageEnv = struct {
         try visited.resize(self.gpa, self.modules.items.len, false);
 
         const Frame = struct { id: ModuleId, next_idx: usize };
-        var frames = std.ArrayList(Frame).init(self.gpa);
+        var frames = std.array_list.Managed(Frame).init(self.gpa);
         defer frames.deinit();
 
-        var stack_ids = std.ArrayList(ModuleId).init(self.gpa);
+        var stack_ids = std.array_list.Managed(ModuleId).init(self.gpa);
         defer stack_ids.deinit();
 
         visited.set(start);
