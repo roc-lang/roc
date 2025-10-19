@@ -199,9 +199,7 @@ jobs:
           }
 
       - name: Test inside nix too
-        if: |
-          (startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macos')) &&
-          !(startsWith(matrix.os, 'macos') && matrix.arch == 'x64')
+        if: ${{ runner.os == 'Linux' || (runner.os == 'macOS' && runner.arch != 'X64') }}
         run: |
           git clean -fdx
           git reset --hard HEAD
