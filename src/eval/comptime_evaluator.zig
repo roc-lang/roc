@@ -348,12 +348,8 @@ pub const ComptimeEvaluator = struct {
         // This properly extends the types store
         _ = try self.env.types.freshRedirect(original_type_var);
 
-        // Replace the expr field in the Def
-        // The Def is stored in extra_data with expr at index 1
-        const nid: CIR.Node.Idx = @enumFromInt(@intFromEnum(def_idx));
-        const node = self.env.store.nodes.get(nid);
-        const extra_start = node.data_1;
-        self.env.store.extra_data.items.items[extra_start + 1] = @intFromEnum(new_expr_idx);
+        // Replace the expr field in the Def using the safe helper function
+        self.env.store.setDefExpr(def_idx, new_expr_idx);
     }
 
     /// Helper to report a problem and track allocated message

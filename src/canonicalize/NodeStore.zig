@@ -2137,6 +2137,20 @@ pub fn getDef(store: *const NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
     };
 }
 
+/// Updates the expression field of an existing definition.
+/// This is used during constant folding to replace expressions with their folded equivalents.
+pub fn setDefExpr(store: *NodeStore, def_idx: CIR.Def.Idx, new_expr: CIR.Expr.Idx) void {
+    const nid: Node.Idx = @enumFromInt(@intFromEnum(def_idx));
+    const node = store.nodes.get(nid);
+
+    std.debug.assert(node.tag == .def);
+
+    const extra_start = node.data_1;
+    // The expr field is at offset 1 in the extra_data layout for Def
+    // Layout: [0]=pattern, [1]=expr, [2-3]=kind, [4]=annotation
+    store.extra_data.items.items[extra_start + 1] = @intFromEnum(new_expr);
+}
+
 /// Retrieves a capture from the store.
 pub fn getCapture(store: *const NodeStore, capture_idx: CIR.Expr.Capture.Idx) CIR.Expr.Capture {
     const nid: Node.Idx = @enumFromInt(@intFromEnum(capture_idx));
