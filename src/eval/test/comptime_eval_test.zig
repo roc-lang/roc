@@ -563,7 +563,10 @@ test "comptime eval - dbg does not halt evaluation" {
 
 test "comptime eval - crash in first def does not halt other defs" {
     const src =
-        \\bad = crash "immediate crash"
+        \\bad = {
+        \\    crash "immediate crash"
+        \\    0
+        \\}
         \\good1 = 42
         \\good2 = 100
     ;

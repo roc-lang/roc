@@ -253,15 +253,8 @@ pub const ComptimeEvaluator = struct {
             // The interpreter will evaluate them on-demand when they're called
             // IMPORTANT: We do NOT skip blocks - blocks can have side effects like crash/expect
             if (is_lambda) {
-                std.debug.print("Skipping lambda def_idx={}\n", .{def_idx});
                 return EvalResult.success;
             }
-
-            std.debug.print("Eval failed for def_idx={}, expr={s}, error={}\n", .{
-                def_idx,
-                @tagName(expr),
-                err,
-            });
 
             if (err == error.Crash) {
                 if (self.expect.crashMessage()) |msg| {
@@ -280,6 +273,13 @@ pub const ComptimeEvaluator = struct {
                         },
                     };
                 }
+                // If we got error.Crash but no message was recorded, still return crash with a default message
+                return EvalResult{
+                    .crash = .{
+                        .message = "Crash occurred but no message was recorded",
+                        .region = region,
+                    },
+                };
             }
             return EvalResult{
                 .error_eval = .{
@@ -292,25 +292,12 @@ pub const ComptimeEvaluator = struct {
         const layout_cache = &self.interpreter.runtime_layout_store;
         defer result.decref(layout_cache, ops);
 
-        std.debug.print("Evaluated def_idx={}, expr={s}, layout={s}\n", .{
-            def_idx,
-            @tagName(expr),
-            @tagName(result.layout.tag),
-        });
-
+        // TODO: Re-enable constant folding after fixing type system integration
         // Try to fold the result to a constant expression
-        self.tryFoldConstant(def_idx, result) catch |err| {
-            // If folding fails, just continue - the original expression is still valid
-            // NotImplemented is expected for non-foldable types
-            const def_for_debug = self.env.store.getDef(def_idx);
-            const expr_for_debug = self.env.store.getExpr(def_for_debug.expr);
-            std.debug.print("Fold failed for def_idx={}, expr={s}, error={}, layout={s}\n", .{
-                def_idx,
-                @tagName(expr_for_debug),
-                err,
-                @tagName(result.layout.tag),
-            });
-        };
+        // self.tryFoldConstant(def_idx, result) catch {
+        //     // If folding fails, just continue - the original expression is still valid
+        //     // NotImplemented is expected for non-foldable types
+        // };
 
         return EvalResult.success;
     }
@@ -373,18 +360,22 @@ pub const ComptimeEvaluator = struct {
             else => return error.NotImplemented, // Don't fold other scalar types yet
         };
 
-        // We need to maintain the type information for the new expression.
-        // We're adding a new CIR node AFTER type checking has completed, so we need
-        // to create a new type variable for it that redirects to the original expression's type.
-        // This ensures the 1-to-1 mapping between CIR nodes and type variables is maintained.
-        const original_type_var = ModuleEnv.varFrom(expr_idx);
-
-        // Create a new type variable that redirects to the original's type
-        // This properly extends the types store
-        _ = try self.env.types.freshRedirect(original_type_var);
+        // Don't fold if the expression is already e_num (already a constant)
+        const old_expr = self.env.store.getExpr(expr_idx);
+        if (old_expr == .e_num) {
+            return; // Already folded, nothing to do
+        }
 
         // Replace the expr field in the Def using the safe helper function
         self.env.store.setDefExpr(def_idx, new_expr_idx);
+
+        // We need to maintain type information for the new expression.
+        // We're adding a new CIR node AFTER type checking has completed.
+        // The type system expects a 1-to-1 mapping between CIR Expr indices and type variables.
+        // By calling freshRedirect, we create a new type variable for the new expression
+        // that redirects to the original expression's type.
+        const original_type_var = ModuleEnv.varFrom(expr_idx);
+        _ = try self.env.types.freshRedirect(original_type_var);
     }
 
     /// Helper to report a problem and track allocated message
