@@ -680,10 +680,6 @@ const Formatter = struct {
         }
 
         for (clause_slice, 0..) |clause, i| {
-            if (clauses_are_multiline) {
-                const clause_region = fmt.nodeRegion(@intFromEnum(clause));
-                _ = try fmt.flushCommentsBefore(clause_region.start);
-            }
             if (i > 0) {
                 if (clauses_are_multiline) {
                     try fmt.push(',');

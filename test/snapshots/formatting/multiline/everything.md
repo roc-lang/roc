@@ -568,12 +568,10 @@ import I2 exposing [
 A(a) : a
 	where
 		[
-
 			a.a1 : (
 			a,
 			a,
-		) -> Str
-,
+		) -> Str,
 		
 			a.a2 : (
 			a,
@@ -582,12 +580,10 @@ A(a) : a
 B(b) : b
 	where
 		[
-
 			b.b1 : (
 			b,
 			b,
-		) -> Str
-,
+		) -> Str,
 		
 			b.b2 : (
 			b,
@@ -619,9 +615,7 @@ F : [
 
 g : e -> e
 	where
-		[
-e.A
-,
+		[e.A,
 		e.B]
 
 h = |x, y| {
