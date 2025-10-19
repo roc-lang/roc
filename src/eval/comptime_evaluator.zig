@@ -292,21 +292,25 @@ pub const ComptimeEvaluator = struct {
         const layout_cache = &self.interpreter.runtime_layout_store;
         defer result.decref(layout_cache, ops);
 
-        // TODO: Re-enable constant folding after fixing type system integration
         // Try to fold the result to a constant expression
-        // self.tryFoldConstant(def_idx, result) catch {
-        //     // If folding fails, just continue - the original expression is still valid
-        //     // NotImplemented is expected for non-foldable types
-        // };
+        self.tryFoldConstant(def_idx, result) catch {
+            // If folding fails, just continue - the original expression is still valid
+            // NotImplemented is expected for non-foldable types
+        };
 
         return EvalResult.success;
     }
 
-    /// Attempts to replace an expression with its constant-folded result
+    /// Attempts to fold constant values in-place
     fn tryFoldConstant(self: *ComptimeEvaluator, def_idx: CIR.Def.Idx, stack_value: eval_mod.StackValue) !void {
         const def = self.env.store.getDef(def_idx);
         const expr_idx = def.expr;
-        const region = self.env.store.getExprRegion(expr_idx);
+
+        // Don't fold if the expression is already e_num (already a constant)
+        const old_expr = self.env.store.getExpr(expr_idx);
+        if (old_expr == .e_num) {
+            return; // Already folded, nothing to do
+        }
 
         // Convert StackValue to CIR expression based on layout
         const layout = stack_value.layout;
@@ -317,8 +321,8 @@ pub const ComptimeEvaluator = struct {
         }
 
         const scalar_tag = layout.data.scalar.tag;
-        const new_expr_idx = switch (scalar_tag) {
-            .int => blk: {
+        switch (scalar_tag) {
+            .int => {
                 // Extract integer value
                 const value = stack_value.asI128();
                 const precision = layout.data.scalar.data.int;
@@ -346,36 +350,11 @@ pub const ComptimeEvaluator = struct {
                     },
                 };
 
-                // Create e_num expression
-                const folded_expr = CIR.Expr{
-                    .e_num = .{
-                        .value = int_value,
-                        .kind = num_kind,
-                    },
-                };
-
-                // Add the new expression to the store
-                break :blk try self.env.store.addExpr(folded_expr, region);
+                // Replace the expression with e_num in-place
+                try self.env.store.replaceExprWithNum(expr_idx, int_value, num_kind);
             },
             else => return error.NotImplemented, // Don't fold other scalar types yet
-        };
-
-        // Don't fold if the expression is already e_num (already a constant)
-        const old_expr = self.env.store.getExpr(expr_idx);
-        if (old_expr == .e_num) {
-            return; // Already folded, nothing to do
         }
-
-        // Replace the expr field in the Def using the safe helper function
-        self.env.store.setDefExpr(def_idx, new_expr_idx);
-
-        // We need to maintain type information for the new expression.
-        // We're adding a new CIR node AFTER type checking has completed.
-        // The type system expects a 1-to-1 mapping between CIR Expr indices and type variables.
-        // By calling freshRedirect, we create a new type variable for the new expression
-        // that redirects to the original expression's type.
-        const original_type_var = ModuleEnv.varFrom(expr_idx);
-        _ = try self.env.types.freshRedirect(original_type_var);
     }
 
     /// Helper to report a problem and track allocated message

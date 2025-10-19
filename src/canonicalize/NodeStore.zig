@@ -675,6 +675,33 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
     }
 }
 
+/// Replaces an existing expression with an e_num expression in-place.
+/// This is used for constant folding during compile-time evaluation.
+/// IMPORTANT: This modifies the expression node in-place and should only be called
+/// after type-checking is complete, since it doesn't update type variables.
+pub fn replaceExprWithNum(store: *NodeStore, expr_idx: CIR.Expr.Idx, value: CIR.IntValue, num_kind: CIR.NumKind) !void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+
+    // Store i128 value in extra_data
+    const extra_data_start = store.extra_data.len();
+
+    // Store the IntLiteralValue as i128 (16 bytes = 4 u32s)
+    const value_as_i128: i128 = @bitCast(value.bytes);
+    const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
+    for (value_as_u32s) |word| {
+        _ = try store.extra_data.append(store.gpa, word);
+    }
+
+    // Update the node to be an expr_num
+    // Access the node through the safe multi list set method
+    store.nodes.set(node_idx, .{
+        .tag = .expr_num,
+        .data_1 = @intFromEnum(num_kind),
+        .data_2 = @intFromEnum(value.kind),
+        .data_3 = @intCast(extra_data_start),
+    });
+}
+
 /// Get the more-specific expr index. Used to make error messages nicer.
 ///
 /// For example, if the provided expr is a `block`, then this will return the
