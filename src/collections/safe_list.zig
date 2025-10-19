@@ -200,7 +200,7 @@ pub fn SafeList(comptime T: type) type {
             return @enumFromInt(@as(u32, @intCast(length)));
         }
 
-        /// Add a new item to the end of this list assuming cpacity is sufficient to hold an additional item.
+        /// Add a new item to the end of this list assuming capacity is sufficient to hold an additional item.
         pub fn appendAssumeCapacity(self: *SafeList(T), item: T) Idx {
             const length = self.len();
             self.items.appendAssumeCapacity(item);
@@ -440,7 +440,7 @@ pub fn SafeMultiList(comptime T: type) type {
             return @enumFromInt(@as(u32, @intCast(length)));
         }
 
-        /// Add a new item to the end of this list assuming cpacity is sufficient to hold an additional item.
+        /// Add a new item to the end of this list assuming capacity is sufficient to hold an additional item.
         pub fn appendAssumeCapacity(self: *SafeMultiList(T), item: T) Idx {
             const length = self.len();
             self.items.appendAssumeCapacity(item);
