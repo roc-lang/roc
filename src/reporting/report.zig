@@ -28,7 +28,7 @@ pub const Report = struct {
     severity: Severity,
     document: Document,
     allocator: Allocator,
-    owned_strings: std.ArrayList([]const u8),
+    owned_strings: std.array_list.Managed([]const u8),
 
     pub fn init(allocator: Allocator, title: []const u8, severity: Severity) Report {
         return Report{
@@ -36,7 +36,7 @@ pub const Report = struct {
             .severity = severity,
             .document = Document.init(allocator),
             .allocator = allocator,
-            .owned_strings = std.ArrayList([]const u8).init(allocator),
+            .owned_strings = std.array_list.Managed([]const u8).init(allocator),
         };
     }
 
@@ -57,7 +57,7 @@ pub const Report = struct {
     }
 
     /// Render the report to the specified writer and target format.
-    pub fn render(self: *const Report, writer: anytype, target: RenderTarget) !void {
+    pub fn render(self: *const Report, writer: *std.Io.Writer, target: RenderTarget) !void {
         try renderReport(self, writer, target);
     }
 

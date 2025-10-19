@@ -198,7 +198,7 @@ pub fn getCompilerVersionDir(allocator: Allocator) ![]u8 {
 
     // Use first 16 bytes (32 hex chars) for directory name
     const hex_chars = try allocator.alloc(u8, 32);
-    _ = std.fmt.bufPrint(hex_chars, "{}", .{std.fmt.fmtSliceHexLower(hash[0..16])}) catch unreachable;
+    _ = std.fmt.bufPrint(hex_chars, "{x}", .{hash[0..16]}) catch unreachable;
 
     return hex_chars;
 }

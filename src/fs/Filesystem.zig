@@ -96,7 +96,7 @@ pub const FileInfo = struct {
 pub const Dir = struct {
     dir: std.fs.Dir,
 
-    const openOptions = std.fs.Dir.OpenDirOptions{
+    const openOptions = std.fs.Dir.OpenOptions{
         .access_sub_paths = true,
         .iterate = true,
         // packages should have no symlinks, so don't follow them for better security!
@@ -161,8 +161,8 @@ pub const Dir = struct {
         dir: *Dir,
         gpa: std.mem.Allocator,
         string_arena: *std.heap.ArenaAllocator,
-    ) !std.ArrayListUnmanaged([]const u8) {
-        var files = std.ArrayListUnmanaged([]const u8){};
+    ) !std.array_list.Managed([]const u8) {
+        var files = std.array_list.Managed([]const u8){};
         errdefer files.deinit(gpa);
 
         var walker = try dir.dir.walk(gpa);
@@ -202,7 +202,7 @@ fn readFileDefault(relative_path: []const u8, allocator: std.mem.Allocator) Read
     const file = try std.fs.cwd().openFile(relative_path, .{});
     defer file.close();
 
-    const contents = try file.reader().readAllAlloc(allocator, max_file_size);
+    const contents = try file.readToEndAlloc(allocator, max_file_size);
 
     return contents;
 }
@@ -213,7 +213,7 @@ fn readFileIntoDefault(path: []const u8, buffer: []u8) ReadError!usize {
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
-    return try file.reader().readAll(buffer);
+    return try file.readAll(buffer);
 }
 
 fn openDirDefault(absolute_path: []const u8) OpenError!Dir {

@@ -15,6 +15,20 @@ const Filesystem = fs_mod.Filesystem;
 const CacheStats = @import("cache_config.zig").CacheStats;
 const CacheConfig = @import("cache_config.zig").CacheConfig;
 const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
+const builtin = @import("builtin");
+
+const is_windows = builtin.target.os.tag == .windows;
+
+var stderr_file_writer: std.fs.File.Writer = .{
+    .interface = std.fs.File.Writer.initInterface(&.{}),
+    .file = if (is_windows) undefined else std.fs.File.stderr(),
+    .mode = .streaming,
+};
+
+fn stderrWriter() *std.Io.Writer {
+    if (is_windows) stderr_file_writer.file = std.fs.File.stderr();
+    return &stderr_file_writer.interface;
+}
 
 /// Result of a cache lookup operation
 pub const CacheResult = union(enum) {
@@ -208,11 +222,11 @@ pub const CacheManager = struct {
 
         // Split key: first 2 chars for subdirectory, rest for filename
         var subdir_buf: [2]u8 = undefined;
-        _ = std.fmt.bufPrint(&subdir_buf, "{}", .{std.fmt.fmtSliceHexLower(cache_key[0..1])}) catch unreachable;
+        _ = std.fmt.bufPrint(&subdir_buf, "{x}", .{cache_key[0..1]}) catch unreachable;
         const subdir = subdir_buf[0..];
 
         var filename_buf: [62]u8 = undefined;
-        _ = std.fmt.bufPrint(&filename_buf, "{}", .{std.fmt.fmtSliceHexLower(cache_key[1..32])}) catch unreachable;
+        _ = std.fmt.bufPrint(&filename_buf, "{x}", .{cache_key[1..32]}) catch unreachable;
         const filename = filename_buf[0..];
 
         const cache_subdir = try std.fs.path.join(self.allocator, &[_][]const u8{ entries_dir, subdir });
@@ -228,7 +242,7 @@ pub const CacheManager = struct {
 
         // Print the hex of the first byte into a fixed-size buffer for the subdir
         var subdir_buf: [2]u8 = undefined;
-        _ = std.fmt.bufPrint(&subdir_buf, "{}", .{std.fmt.fmtSliceHexLower(cache_key[0..1])}) catch unreachable;
+        _ = std.fmt.bufPrint(&subdir_buf, "{x}", .{cache_key[0..1]}) catch unreachable;
         const subdir = subdir_buf[0..];
         const full_subdir = try std.fs.path.join(self.allocator, &[_][]const u8{ entries_dir, subdir });
         defer self.allocator.free(full_subdir);
@@ -249,7 +263,7 @@ pub const CacheManager = struct {
     pub fn printStats(self: *const Self, allocator: Allocator) void {
         if (!self.config.verbose) return;
 
-        const stderr = std.io.getStdErr().writer();
+        const stderr = stderrWriter();
         CacheReporting.renderCacheStatsToTerminal(allocator, self.stats, stderr) catch {
             // If we can't print stats, just continue
         };

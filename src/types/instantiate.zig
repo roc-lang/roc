@@ -194,7 +194,7 @@ pub const Instantiator = struct {
     }
 
     fn instantiateAlias(self: *Self, alias: Alias) std.mem.Allocator.Error!Content {
-        var fresh_vars = std.ArrayList(Var).init(self.store.gpa);
+        var fresh_vars = std.array_list.Managed(Var).init(self.store.gpa);
         defer fresh_vars.deinit();
 
         var iter = self.store.iterAliasArgs(alias);
@@ -233,7 +233,7 @@ pub const Instantiator = struct {
         const backing_var = self.store.getNominalBackingVar(nominal);
         const fresh_backing_var = try self.instantiateVar(backing_var);
 
-        var fresh_vars = std.ArrayList(Var).init(self.store.gpa);
+        var fresh_vars = std.array_list.Managed(Var).init(self.store.gpa);
         defer fresh_vars.deinit();
 
         var iter = self.store.iterNominalArgs(nominal);
@@ -247,7 +247,7 @@ pub const Instantiator = struct {
 
     fn instantiateTuple(self: *Self, tuple: Tuple) std.mem.Allocator.Error!Tuple {
         const elems_slice = self.store.sliceVars(tuple.elems);
-        var fresh_elems = std.ArrayList(Var).init(self.store.gpa);
+        var fresh_elems = std.array_list.Managed(Var).init(self.store.gpa);
         defer fresh_elems.deinit();
 
         for (elems_slice) |elem_var| {
@@ -276,7 +276,7 @@ pub const Instantiator = struct {
 
     fn instantiateFunc(self: *Self, func: Func) std.mem.Allocator.Error!Func {
         const args_slice = self.store.sliceVars(func.args);
-        var fresh_args = std.ArrayList(Var).init(self.store.gpa);
+        var fresh_args = std.array_list.Managed(Var).init(self.store.gpa);
         defer fresh_args.deinit();
 
         for (args_slice) |arg_var| {
@@ -296,7 +296,7 @@ pub const Instantiator = struct {
     fn instantiateRecordFields(self: *Self, fields: RecordField.SafeMultiList.Range) std.mem.Allocator.Error!RecordField.SafeMultiList.Range {
         const fields_slice = self.store.getRecordFieldsSlice(fields);
 
-        var fresh_fields = std.ArrayList(RecordField).init(self.store.gpa);
+        var fresh_fields = std.array_list.Managed(RecordField).init(self.store.gpa);
         defer fresh_fields.deinit();
 
         for (fields_slice.items(.name), fields_slice.items(.var_)) |name, type_var| {
@@ -313,7 +313,7 @@ pub const Instantiator = struct {
     fn instantiateRecord(self: *Self, record: Record) std.mem.Allocator.Error!Record {
         const fields_slice = self.store.getRecordFieldsSlice(record.fields);
 
-        var fresh_fields = std.ArrayList(RecordField).init(self.store.gpa);
+        var fresh_fields = std.array_list.Managed(RecordField).init(self.store.gpa);
         defer fresh_fields.deinit();
 
         for (fields_slice.items(.name), fields_slice.items(.var_)) |name, type_var| {
@@ -334,11 +334,11 @@ pub const Instantiator = struct {
     fn instantiateTagUnion(self: *Self, tag_union: TagUnion) std.mem.Allocator.Error!TagUnion {
         const tags_slice = self.store.getTagsSlice(tag_union.tags);
 
-        var fresh_tags = std.ArrayList(Tag).init(self.store.gpa);
+        var fresh_tags = std.array_list.Managed(Tag).init(self.store.gpa);
         defer fresh_tags.deinit();
 
         for (tags_slice.items(.name), tags_slice.items(.args)) |tag_name, tag_args| {
-            var fresh_args = std.ArrayList(Var).init(self.store.gpa);
+            var fresh_args = std.array_list.Managed(Var).init(self.store.gpa);
             defer fresh_args.deinit();
 
             const args_slice = self.store.sliceVars(tag_args);
@@ -371,7 +371,7 @@ pub const Instantiator = struct {
         if (constraints_len == 0) {
             return StaticDispatchConstraint.SafeList.Range.empty();
         } else {
-            var fresh_constraints = try std.ArrayList(StaticDispatchConstraint).initCapacity(self.store.gpa, constraints.len());
+            var fresh_constraints = try std.array_list.Managed(StaticDispatchConstraint).initCapacity(self.store.gpa, constraints.len());
             defer fresh_constraints.deinit();
 
             for (self.store.sliceStaticDispatchConstraints(constraints)) |constraint| {
@@ -385,7 +385,7 @@ pub const Instantiator = struct {
     }
 
     fn instantiateStaticDispatchConstraint(self: *Self, constraint: StaticDispatchConstraint) std.mem.Allocator.Error!StaticDispatchConstraint {
-        var fresh_vars = std.ArrayList(Var).init(self.store.gpa);
+        var fresh_vars = std.array_list.Managed(Var).init(self.store.gpa);
         defer fresh_vars.deinit();
 
         // Copy the args

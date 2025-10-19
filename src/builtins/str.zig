@@ -466,19 +466,19 @@ pub fn init(
     bytes_ptr: [*]const u8,
     length: usize,
     roc_ops: *RocOps,
-) callconv(.C) RocStr {
+) callconv(.c) RocStr {
     return @call(.always_inline, RocStr.init, .{ bytes_ptr, length, roc_ops });
 }
 
 // Str.equal
 /// TODO: Document strEqual.
-pub fn strEqual(self: RocStr, other: RocStr) callconv(.C) bool {
+pub fn strEqual(self: RocStr, other: RocStr) callconv(.c) bool {
     return self.eq(other);
 }
 
 // Str.numberOfBytes
 /// TODO: Document strNumberOfBytes.
-pub fn strNumberOfBytes(string: RocStr) callconv(.C) usize {
+pub fn strNumberOfBytes(string: RocStr) callconv(.c) usize {
     return string.len();
 }
 
@@ -492,7 +492,7 @@ pub fn exportFromInt(
         fn func(
             int: T,
             roc_ops: *RocOps,
-        ) callconv(.C) RocStr {
+        ) callconv(.c) RocStr {
             return @call(.always_inline, strFromIntHelp, .{ T, int, roc_ops });
         }
     }.func;
@@ -531,7 +531,7 @@ pub fn exportFromFloat(
         fn func(
             float: T,
             roc_ops: *RocOps,
-        ) callconv(.C) RocStr {
+        ) callconv(.c) RocStr {
             return @call(.always_inline, strFromFloatHelp, .{ T, float, roc_ops });
         }
     }.func;
@@ -556,7 +556,7 @@ pub fn strSplitOn(
     string: RocStr,
     delimiter: RocStr,
     roc_ops: *RocOps,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     const segment_count = countSegments(string, delimiter);
     const list = RocList.list_allocate(@alignOf(RocStr), segment_count, @sizeOf(RocStr), true, roc_ops);
 
@@ -612,7 +612,7 @@ pub fn strSplitOnHelp(
 // needs to be broken into, so that we can allocate a array
 // of that size. It always returns at least 1.
 /// TODO: Document countSegments.
-pub fn countSegments(string: RocStr, delimiter: RocStr) callconv(.C) usize {
+pub fn countSegments(string: RocStr, delimiter: RocStr) callconv(.c) usize {
     if (delimiter.isEmpty()) {
         return 1;
     }
@@ -626,17 +626,17 @@ pub fn countSegments(string: RocStr, delimiter: RocStr) callconv(.C) usize {
 }
 
 /// TODO: Document countUtf8Bytes.
-pub fn countUtf8Bytes(string: RocStr) callconv(.C) u64 {
+pub fn countUtf8Bytes(string: RocStr) callconv(.c) u64 {
     return @intCast(string.len());
 }
 
 /// TODO: Document isEmpty.
-pub fn isEmpty(string: RocStr) callconv(.C) bool {
+pub fn isEmpty(string: RocStr) callconv(.c) bool {
     return string.isEmpty();
 }
 
 /// TODO: Document getCapacity.
-pub fn getCapacity(string: RocStr) callconv(.C) usize {
+pub fn getCapacity(string: RocStr) callconv(.c) usize {
     return string.getCapacity();
 }
 
@@ -646,7 +646,7 @@ pub fn substringUnsafeC(
     start_u64: u64,
     length_u64: u64,
     roc_ops: *RocOps,
-) callconv(.C) RocStr {
+) callconv(.c) RocStr {
     const start: usize = @intCast(start_u64);
     const length: usize = @intCast(length_u64);
 
@@ -692,13 +692,13 @@ pub fn substringUnsafe(
 }
 
 /// TODO: Document getUnsafeC.
-pub fn getUnsafeC(string: RocStr, index: u64) callconv(.C) u8 {
+pub fn getUnsafeC(string: RocStr, index: u64) callconv(.c) u8 {
     return string.getUnchecked(@intCast(index));
 }
 
 // Str.startsWith
 /// TODO: Document startsWith.
-pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.C) bool {
+pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.c) bool {
     const bytes_len = string.len();
     const bytes_ptr = string.asU8ptr();
 
@@ -726,7 +726,7 @@ pub fn repeatC(
     string: RocStr,
     count_u64: u64,
     roc_ops: *RocOps,
-) callconv(.C) RocStr {
+) callconv(.c) RocStr {
     const count: usize = @intCast(count_u64);
     const bytes_len = string.len();
     const bytes_ptr = string.asU8ptr();
@@ -744,7 +744,7 @@ pub fn repeatC(
 }
 
 /// Str.endsWith
-pub fn endsWith(string: RocStr, suffix: RocStr) callconv(.C) bool {
+pub fn endsWith(string: RocStr, suffix: RocStr) callconv(.c) bool {
     const bytes_len = string.len();
     const bytes_ptr = string.asU8ptr();
 
@@ -771,7 +771,7 @@ pub fn strConcatC(
     arg1: RocStr,
     arg2: RocStr,
     roc_ops: *RocOps,
-) callconv(.C) RocStr {
+) callconv(.c) RocStr {
     return @call(.always_inline, strConcat, .{ arg1, arg2, roc_ops });
 }
 
@@ -808,7 +808,7 @@ pub fn strJoinWithC(
     list: RocList,
     separator: RocStr,
     roc_ops: *RocOps,
-) callconv(.C) RocStr {
+) callconv(.c) RocStr {
     const roc_list_str = RocListStr{
         .list_elements = @as(?[*]RocStr, @ptrCast(@alignCast(list.bytes))),
         .list_length = list.length,
@@ -864,7 +864,7 @@ pub fn strJoinWith(
 pub fn strToUtf8C(
     arg: RocStr,
     roc_ops: *RocOps,
-) callconv(.C) RocList {
+) callconv(.c) RocList {
     return strToBytes(arg, roc_ops);
 }
 
@@ -900,7 +900,7 @@ pub fn fromUtf8C(
     list: RocList,
     update_mode: UpdateMode,
     roc_ops: *RocOps,
-) callconv(.C) FromUtf8Result {
+) callconv(.c) FromUtf8Result {
     return fromUtf8(list, update_mode, roc_ops);
 }
 
@@ -980,7 +980,7 @@ fn utf8EncodeLossy(c: u32, out: []u8) u3 {
 pub fn fromUtf8Lossy(
     list: RocList,
     roc_ops: *RocOps,
-) callconv(.C) RocStr {
+) callconv(.c) RocStr {
     if (list.len() == 0) {
         return RocStr.empty();
     }
@@ -1219,7 +1219,7 @@ pub fn isWhitespace(codepoint: u21) bool {
 pub fn strTrim(
     input_string: RocStr,
     roc_ops: *RocOps,
-) callconv(.C) RocStr {
+) callconv(.c) RocStr {
     var string = input_string;
 
     if (string.isEmpty()) {
@@ -1272,7 +1272,7 @@ pub fn strTrim(
 pub fn strTrimStart(
     input_string: RocStr,
     roc_ops: *RocOps,
-) callconv(.C) RocStr {
+) callconv(.c) RocStr {
     var string = input_string;
 
     if (string.isEmpty()) {
@@ -1324,7 +1324,7 @@ pub fn strTrimStart(
 pub fn strTrimEnd(
     input_string: RocStr,
     roc_ops: *RocOps,
-) callconv(.C) RocStr {
+) callconv(.c) RocStr {
     var string = input_string;
 
     if (string.isEmpty()) {
@@ -1408,7 +1408,7 @@ fn countTrailingWhitespaceBytes(string: RocStr) usize {
 pub fn strWithAsciiLowercased(
     string: RocStr,
     roc_ops: *RocOps,
-) callconv(.C) RocStr {
+) callconv(.c) RocStr {
     var new_str = if (string.isUnique())
         string
     else blk: {
@@ -1427,7 +1427,7 @@ pub fn strWithAsciiLowercased(
 pub fn strWithAsciiUppercased(
     string: RocStr,
     roc_ops: *RocOps,
-) callconv(.C) RocStr {
+) callconv(.c) RocStr {
     var new_str = if (string.isUnique())
         string
     else blk: {
@@ -1443,7 +1443,7 @@ pub fn strWithAsciiUppercased(
 }
 
 /// TODO: Document strCaselessAsciiEquals.
-pub fn strCaselessAsciiEquals(self: RocStr, other: RocStr) callconv(.C) bool {
+pub fn strCaselessAsciiEquals(self: RocStr, other: RocStr) callconv(.c) bool {
     if (self.bytes == other.bytes and self.length == other.length) {
         return true;
     }
@@ -1451,7 +1451,7 @@ pub fn strCaselessAsciiEquals(self: RocStr, other: RocStr) callconv(.C) bool {
     return ascii.eqlIgnoreCase(self.asSlice(), other.asSlice());
 }
 
-fn decStr(ptr: ?[*]u8) callconv(.C) void {
+fn decStr(ptr: ?[*]u8) callconv(.c) void {
     const str_ptr = @as(*RocStr, @ptrCast(@alignCast(ptr orelse unreachable)));
     str_ptr.decref();
 }
@@ -1523,7 +1523,7 @@ pub fn reserveC(
     string: RocStr,
     spare_u64: u64,
     roc_ops: *RocOps,
-) callconv(.C) RocStr {
+) callconv(.c) RocStr {
     return reserve(string, @intCast(spare_u64), roc_ops);
 }
 
@@ -1548,7 +1548,7 @@ pub fn reserve(
 pub fn withCapacityC(
     capacity: u64,
     roc_ops: *RocOps,
-) callconv(.C) RocStr {
+) callconv(.c) RocStr {
     var str = RocStr.allocate(@intCast(capacity), roc_ops);
     str.setLen(0);
     return str;
@@ -1560,7 +1560,7 @@ pub fn strCloneTo(
     ptr: [*]u8,
     offset: usize,
     extra_offset: usize,
-) callconv(.C) usize {
+) callconv(.c) usize {
     const WIDTH: usize = @sizeOf(RocStr);
     if (string.isSmallStr()) {
         const array: [@sizeOf(RocStr)]u8 = @as([@sizeOf(RocStr)]u8, @bitCast(string));
@@ -1591,7 +1591,7 @@ pub fn strCloneTo(
 /// Returns a pointer to the allocation backing the given RocStr
 pub fn strAllocationPtr(
     string: RocStr,
-) callconv(.C) ?[*]u8 {
+) callconv(.c) ?[*]u8 {
     return string.getAllocationPtr();
 }
 
@@ -1599,7 +1599,7 @@ pub fn strAllocationPtr(
 pub fn strReleaseExcessCapacity(
     roc_ops: *RocOps,
     string: RocStr,
-) callconv(.C) RocStr {
+) callconv(.c) RocStr {
     const old_length = string.len();
     // We use the direct list.capacity_or_alloc_ptr to make sure both that there is no extra capacity and that it isn't a seamless slice.
     if (string.isSmallStr()) {

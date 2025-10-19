@@ -41,7 +41,7 @@ fn extendWithAggregatorFilters(
     const extras = aggregatorFilters(module_type);
     if (extras.len == 0) return base;
 
-    var list = std.ArrayList([]const u8).init(b.allocator);
+    var list = std.array_list.Managed([]const u8).init(b.allocator);
     list.ensureTotalCapacity(base.len + extras.len) catch @panic("OOM while extending module test filters");
     list.appendSlice(base) catch @panic("OOM while extending module test filters");
 
@@ -326,14 +326,16 @@ pub const RocModules = struct {
             const module_filters = extendWithAggregatorFilters(b, test_filters, module_type);
             const test_step = b.addTest(.{
                 .name = b.fmt("{s}", .{@tagName(module_type)}),
-                .root_source_file = module.root_source_file.?,
-                .target = target,
-                .optimize = optimize,
+                .root_module = b.createModule(.{
+                    .root_source_file = module.root_source_file.?,
+                    .target = target,
+                    .optimize = optimize,
+                    // IPC module needs libc for mmap, munmap, close on POSIX systems
+                    // Bundle module needs libc for zstd
+                    // Unbundle module doesn't need libc (uses Zig's std zstandard)
+                    .link_libc = (module_type == .ipc or module_type == .bundle),
+                }),
                 .filters = module_filters,
-                // IPC module needs libc for mmap, munmap, close on POSIX systems
-                // Bundle module needs libc for zstd
-                // Unbundle module doesn't need libc (uses Zig's std zstandard)
-                .link_libc = (module_type == .ipc or module_type == .bundle),
             });
 
             // Watch module needs Core Foundation and FSEvents on macOS (only when not cross-compiling)

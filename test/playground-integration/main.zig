@@ -280,10 +280,11 @@ const TestData = struct {
 /// Helper to send a message to the WASM Playground and get a response.
 fn sendMessageToWasm(wasm_interface: *const WasmInterface, allocator: std.mem.Allocator, message: WasmMessage) !WasmResponse {
     // Serialize message to JSON
-    var message_json_buffer = std.ArrayList(u8).init(allocator);
+    var message_json_buffer: std.Io.Writer.Allocating = .init(allocator);
     defer message_json_buffer.deinit();
-    try std.json.stringify(message, .{}, message_json_buffer.writer());
-    const message_json = message_json_buffer.items;
+    try std.json.Stringify.value(message, .{}, &message_json_buffer.writer);
+    const message_json = message_json_buffer.written();
+    try message_json_buffer.writer.flush();
 
     // Allocate a buffer in WASM for the message.
     // The WASM module's allocateMessageBuffer export handles this.
@@ -358,10 +359,7 @@ fn sendMessageToWasm(wasm_interface: *const WasmInterface, allocator: std.mem.Al
     const response_json_slice = response_slice[0..null_terminator_idx];
 
     // Parse JSON response
-    const parsed_response = std.json.parseFromSlice(WasmResponse, allocator, response_json_slice, .{
-        .allocate = .alloc_always,
-    }) catch |err| {
-        logDebug("[ERROR] Failed to parse JSON response: {}. JSON was: {s}\n", .{ err, response_json_slice });
+    const parsed_response = parseWasmResponseJson(allocator, response_json_slice) catch |err| {
         // Free the WASM string before returning error
         _ = wasm_interface.module_instance.invoke(wasm_interface.freeWasmString_handle, &[_]bytebox.Val{bytebox.Val{ .I32 = @intCast(response_ptr) }}, &[_]bytebox.Val{}, .{}) catch {};
         return err;
@@ -373,6 +371,47 @@ fn sendMessageToWasm(wasm_interface: *const WasmInterface, allocator: std.mem.Al
     };
 
     return parsed_response.value;
+}
+
+fn parseWasmResponseJson(allocator: std.mem.Allocator, response_json_slice: []const u8) !std.json.Parsed(WasmResponse) {
+    const parse_options = std.json.ParseOptions{
+        .allocate = .alloc_always,
+    };
+
+    return std.json.parseFromSlice(WasmResponse, allocator, response_json_slice, parse_options) catch |err| {
+        if (err != error.SyntaxError) {
+            logDebug("[ERROR] Failed to parse JSON response: {}. JSON was: {s}\n", .{ err, response_json_slice });
+            logDebug("[ERROR] JSON bytes: {x}\n", .{response_json_slice});
+            return err;
+        }
+
+        logDebug("[WARNING] JSON response contained invalid bytes; attempting to sanitize. Parse error: {}\n", .{err});
+        logDebug("[WARNING] Raw JSON bytes: {x}\n", .{response_json_slice});
+
+        var sanitized = try allocator.dupe(u8, response_json_slice);
+        defer allocator.free(sanitized);
+
+        var replacements: usize = 0;
+        for (sanitized, 0..) |byte, idx| {
+            if (byte >= 0x80) {
+                sanitized[idx] = '?';
+                replacements += 1;
+            }
+        }
+
+        if (replacements == 0) {
+            logDebug("[ERROR] No high-bit bytes detected while attempting to sanitize JSON.\n", .{});
+            return err;
+        }
+
+        logDebug("[WARNING] Replaced {} invalid byte(s) in WASM response JSON before retrying parse.\n", .{replacements});
+
+        return std.json.parseFromSlice(WasmResponse, allocator, sanitized, parse_options) catch |retry_err| {
+            logDebug("[ERROR] Failed to parse sanitized JSON response: {}. Sanitized JSON: {s}\n", .{ retry_err, sanitized });
+            logDebug("[ERROR] Sanitized JSON bytes: {x}\n", .{sanitized});
+            return retry_err;
+        };
+    };
 }
 
 /// Initialize WASM module and interface
@@ -802,7 +841,7 @@ fn runTests(arena: std.mem.Allocator, gpa: std.mem.Allocator, test_cases: []cons
         .skipped = 0,
     };
 
-    var failures = std.ArrayList(TestFailure).init(arena);
+    var failures = std.array_list.Managed(TestFailure).init(arena);
     defer failures.deinit();
 
     for (test_cases) |case| {
@@ -889,7 +928,7 @@ pub fn main() !void {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    const stdout = std.io.getStdOut();
+    const stdout = std.fs.File.stdout().deprecatedWriter();
 
     // Handle CLI arguments
     const args = try std.process.argsAlloc(allocator);
@@ -902,16 +941,16 @@ pub fn main() !void {
         if (std.mem.eql(u8, arg, "--verbose")) {
             verbose_mode = true;
         } else if (std.mem.eql(u8, arg, "--help")) {
-            try stdout.writer().print("Usage: test-playground [options] [wasm-path]\n", .{});
-            try stdout.writer().print("Options:\n", .{});
-            try stdout.writer().print("  --verbose           Enable verbose mode\n", .{});
-            try stdout.writer().print("  --wasm-path PATH    Path to the playground WASM file\n", .{});
-            try stdout.writer().print("  --help              Display this help message\n", .{});
+            try stdout.print("Usage: test-playground [options] [wasm-path]\n", .{});
+            try stdout.print("Options:\n", .{});
+            try stdout.print("  --verbose           Enable verbose mode\n", .{});
+            try stdout.print("  --wasm-path PATH    Path to the playground WASM file\n", .{});
+            try stdout.print("  --help              Display this help message\n", .{});
             return;
         } else if (std.mem.eql(u8, arg, "--wasm-path")) {
             i += 1;
             if (i >= args.len) {
-                try stdout.writer().print("Error: --wasm-path requires a path argument\n", .{});
+                try stdout.print("Error: --wasm-path requires a path argument\n", .{});
                 return;
             }
             wasm_path = args[i];
@@ -925,7 +964,7 @@ pub fn main() !void {
     const playground_wasm_path = wasm_path orelse "zig-out/bin/playground.wasm";
 
     // Setup our test cases
-    var test_cases = std.ArrayList(TestCase).init(allocator);
+    var test_cases = std.array_list.Managed(TestCase).init(allocator);
     defer test_cases.deinit(); // This will free the TestCase structs and their `steps` slices.
 
     // Functional Test

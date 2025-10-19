@@ -27,7 +27,7 @@ const ProblemStore = check_mod.problem.Store;
 const EvalError = Interpreter.Error;
 const CrashContext = eval_mod.CrashContext;
 
-fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
+fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
     const size_storage_bytes = @max(alloc_args.alignment, @alignOf(usize));
@@ -36,7 +36,7 @@ fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
     const base_ptr = result orelse {
         const msg = "Out of memory during compile-time evaluation (alloc)";
         const crashed = RocCrashed{
-            .utf8_bytes = @constCast(@ptrCast(msg.ptr)),
+            .utf8_bytes = @ptrCast(@constCast(msg.ptr)),
             .len = msg.len,
         };
         comptimeRocCrashed(&crashed, env);
@@ -50,7 +50,7 @@ fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
     alloc_args.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
 }
 
-fn comptimeRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.C) void {
+fn comptimeRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
     const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
     const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
@@ -62,7 +62,7 @@ fn comptimeRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.C) v
     evaluator.allocator.rawFree(slice, align_enum, @returnAddress());
 }
 
-fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) void {
+fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
     const size_storage_bytes = @max(realloc_args.alignment, @alignOf(usize));
     const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(realloc_args.answer) - @sizeOf(usize));
@@ -73,7 +73,7 @@ fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) v
     const new_slice = evaluator.allocator.realloc(old_slice, new_total_size) catch {
         const msg = "Out of memory during compile-time evaluation (realloc)";
         const crashed = RocCrashed{
-            .utf8_bytes = @constCast(@ptrCast(msg.ptr)),
+            .utf8_bytes = @ptrCast(@constCast(msg.ptr)),
             .len = msg.len,
         };
         comptimeRocCrashed(&crashed, env);
@@ -86,14 +86,17 @@ fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) v
     realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
 }
 
-fn comptimeRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.C) void {
+fn comptimeRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
     _ = env;
-    const stderr = std.io.getStdErr().writer();
+    var stderr_buffer: [256]u8 = undefined;
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+    const stderr = &stderr_writer.interface;
     const msg_slice = dbg_args.utf8_bytes[0..dbg_args.len];
     stderr.print("[dbg] {s}\n", .{msg_slice}) catch {};
+    stderr.flush() catch {};
 }
 
-fn comptimeRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.C) void {
+fn comptimeRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
     const msg_slice = expect_args.utf8_bytes[0..expect_args.len];
     evaluator.expect.recordCrash(msg_slice) catch {
@@ -105,7 +108,7 @@ fn comptimeRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque)
     // expect never halts execution - it only records the failure
 }
 
-fn comptimeRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {
+fn comptimeRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
     const msg_slice = crashed_args.utf8_bytes[0..crashed_args.len];
     // Try to record the crash message, but if we can't, just continue
@@ -147,11 +150,11 @@ pub const ComptimeEvaluator = struct {
     roc_ops: ?RocOps,
     problems: *ProblemStore,
     /// Track crash messages we've allocated so we can free them
-    crash_messages: std.ArrayList([]const u8),
+    crash_messages: std.array_list.Managed([]const u8),
     /// Track expect failure messages we've allocated so we can free them
-    expect_messages: std.ArrayList([]const u8),
+    expect_messages: std.array_list.Managed([]const u8),
     /// Track error names we've allocated so we can free them
-    error_names: std.ArrayList([]const u8),
+    error_names: std.array_list.Managed([]const u8),
     /// Flag to indicate if evaluation has been halted due to a crash
     halted: bool,
     /// Track the current expression being evaluated (for stack traces)
@@ -171,9 +174,9 @@ pub const ComptimeEvaluator = struct {
             .expect = CrashContext.init(allocator),
             .roc_ops = null,
             .problems = problems,
-            .crash_messages = std.ArrayList([]const u8).init(allocator),
-            .expect_messages = std.ArrayList([]const u8).init(allocator),
-            .error_names = std.ArrayList([]const u8).init(allocator),
+            .crash_messages = std.array_list.Managed([]const u8).init(allocator),
+            .expect_messages = std.array_list.Managed([]const u8).init(allocator),
+            .error_names = std.array_list.Managed([]const u8).init(allocator),
             .halted = false,
             .current_expr_region = null,
         };
