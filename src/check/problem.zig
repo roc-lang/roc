@@ -45,6 +45,8 @@ pub const Problem = union(enum) {
     invalid_tag_union_ext: VarProblem1,
     bug: Bug,
     comptime_crash: ComptimeCrash,
+    comptime_expect_failed: ComptimeExpectFailed,
+    comptime_eval_error: ComptimeEvalError,
 
     pub const Idx = enum(u32) { _ };
     pub const Tag = std.meta.Tag(@This());
@@ -53,6 +55,18 @@ pub const Problem = union(enum) {
 /// A crash that occurred during compile-time evaluation
 pub const ComptimeCrash = struct {
     message: []const u8,
+    region: base.Region,
+};
+
+/// An expect that failed during compile-time evaluation
+pub const ComptimeExpectFailed = struct {
+    message: []const u8,
+    region: base.Region,
+};
+
+/// An error that occurred during compile-time evaluation
+pub const ComptimeEvalError = struct {
+    error_name: []const u8,
     region: base.Region,
 };
 
@@ -313,6 +327,8 @@ pub const ReportBuilder = struct {
             .invalid_tag_union_ext => |_| return self.buildUnimplementedReport("invalid_tag_union_ext"),
             .bug => |_| return self.buildUnimplementedReport("bug"),
             .comptime_crash => |data| return self.buildComptimeCrashReport(data),
+            .comptime_expect_failed => |data| return self.buildComptimeExpectFailedReport(data),
+            .comptime_eval_error => |data| return self.buildComptimeEvalErrorReport(data),
         }
     }
 
@@ -1765,6 +1781,68 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(owned_message, .emphasized);
+
+        return report;
+    }
+
+    /// Build a report for compile-time expect failure
+    fn buildComptimeExpectFailedReport(self: *Self, data: ComptimeExpectFailed) !Report {
+        var report = Report.init(self.gpa, "COMPTIME EXPECT FAILED", .runtime_error);
+        errdefer report.deinit();
+
+        const owned_message = try report.addOwnedString(data.message);
+
+        try report.document.addText("This definition contains an ");
+        try report.document.addAnnotated("expect", .keyword);
+        try report.document.addText(" that failed during compile-time evaluation:");
+        try report.document.addLineBreak();
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addText("The ");
+        try report.document.addAnnotated("expect", .keyword);
+        try report.document.addText(" failed with this message:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(owned_message, .emphasized);
+
+        return report;
+    }
+
+    /// Build a report for compile-time evaluation error
+    fn buildComptimeEvalErrorReport(self: *Self, data: ComptimeEvalError) !Report {
+        var report = Report.init(self.gpa, "COMPTIME EVAL ERROR", .runtime_error);
+        errdefer report.deinit();
+
+        const owned_error_name = try report.addOwnedString(data.error_name);
+
+        try report.document.addText("This definition could not be evaluated at compile time:");
+        try report.document.addLineBreak();
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addText("The evaluation failed with error:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(owned_error_name, .emphasized);
 
         return report;
     }

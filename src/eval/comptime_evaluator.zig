@@ -34,7 +34,13 @@ fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.C) void {
     const total_size = alloc_args.length + size_storage_bytes;
     const result = evaluator.allocator.rawAlloc(total_size, align_enum, @returnAddress());
     const base_ptr = result orelse {
-        std.debug.panic("Out of memory during comptimeRocAlloc", .{});
+        const msg = "Out of memory during compile-time evaluation (alloc)";
+        const crashed = RocCrashed{
+            .utf8_bytes = @constCast(@ptrCast(msg.ptr)),
+            .len = msg.len,
+        };
+        comptimeRocCrashed(&crashed, env);
+        std.debug.panic("Compile-time evaluation crashed", .{});
     };
     const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
     size_ptr.* = total_size;
@@ -62,7 +68,13 @@ fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) v
     const new_total_size = realloc_args.new_length + size_storage_bytes;
     const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
     const new_slice = evaluator.allocator.realloc(old_slice, new_total_size) catch {
-        std.debug.panic("Out of memory during comptimeRocRealloc", .{});
+        const msg = "Out of memory during compile-time evaluation (realloc)";
+        const crashed = RocCrashed{
+            .utf8_bytes = @constCast(@ptrCast(msg.ptr)),
+            .len = msg.len,
+        };
+        comptimeRocCrashed(&crashed, env);
+        std.debug.panic("Compile-time evaluation crashed", .{});
     };
     const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
     new_size_ptr.* = new_total_size;
@@ -70,15 +82,18 @@ fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.C) v
 }
 
 fn comptimeRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.C) void {
-    _ = dbg_args;
     _ = env;
-    // For compile-time evaluation, dbg is a no-op (or could be logged)
+    const stderr = std.io.getStdErr().writer();
+    const msg_slice = dbg_args.utf8_bytes[0..dbg_args.len];
+    stderr.print("[dbg] {s}\n", .{msg_slice}) catch {};
 }
 
 fn comptimeRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.C) void {
-    _ = expect_args;
-    _ = env;
-    // For compile-time evaluation, expects are a no-op
+    const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
+    const msg_slice = expect_args.utf8_bytes[0..expect_args.len];
+    evaluator.expect.recordCrash(msg_slice) catch |err| {
+        std.debug.panic("failed to record expect failure for comptime evaluator: {}", .{err});
+    };
 }
 
 fn comptimeRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.C) void {
@@ -93,6 +108,10 @@ fn comptimeRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv
 const EvalResult = union(enum) {
     success,
     crash: struct {
+        message: []const u8,
+        region: base.Region,
+    },
+    expect_failed: struct {
         message: []const u8,
         region: base.Region,
     },
@@ -114,10 +133,15 @@ pub const ComptimeEvaluator = struct {
     env: *ModuleEnv,
     interpreter: Interpreter,
     crash: CrashContext,
+    expect: CrashContext, // Reuse CrashContext for expect failures
     roc_ops: ?RocOps,
     problems: *ProblemStore,
     /// Track crash messages we've allocated so we can free them
     crash_messages: std.ArrayList([]const u8),
+    /// Track expect failure messages we've allocated so we can free them
+    expect_messages: std.ArrayList([]const u8),
+    /// Track error names we've allocated so we can free them
+    error_names: std.ArrayList([]const u8),
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -130,9 +154,12 @@ pub const ComptimeEvaluator = struct {
             .env = cir,
             .interpreter = try Interpreter.initWithOtherEnvs(allocator, cir, other_envs),
             .crash = CrashContext.init(allocator),
+            .expect = CrashContext.init(allocator),
             .roc_ops = null,
             .problems = problems,
             .crash_messages = std.ArrayList([]const u8).init(allocator),
+            .expect_messages = std.ArrayList([]const u8).init(allocator),
+            .error_names = std.ArrayList([]const u8).init(allocator),
         };
     }
 
@@ -143,8 +170,21 @@ pub const ComptimeEvaluator = struct {
         }
         self.crash_messages.deinit();
 
+        // Free all expect failure messages we allocated
+        for (self.expect_messages.items) |msg| {
+            self.allocator.free(msg);
+        }
+        self.expect_messages.deinit();
+
+        // Free all error names we allocated
+        for (self.error_names.items) |name| {
+            self.allocator.free(name);
+        }
+        self.error_names.deinit();
+
         self.interpreter.deinit();
         self.crash.deinit();
+        self.expect.deinit();
     }
 
     fn get_ops(self: *ComptimeEvaluator) *RocOps {
@@ -161,6 +201,7 @@ pub const ComptimeEvaluator = struct {
             };
         }
         self.crash.reset();
+        self.expect.reset();
         return &(self.roc_ops.?);
     }
 
@@ -192,15 +233,75 @@ pub const ComptimeEvaluator = struct {
                     };
                 }
             }
-            // For all other errors (like trying to evaluate unevaluatable expressions),
-            // we silently skip them - the type checker has already validated the code
-            return EvalResult.success;
+            // For all other errors, report them as evaluation errors
+            return EvalResult{
+                .error_eval = .{
+                    .err = err,
+                    .region = region,
+                },
+            };
         };
 
         const layout_cache = &self.interpreter.runtime_layout_store;
         defer result.decref(layout_cache, ops);
 
+        // Check if an expect failed during evaluation
+        if (self.expect.crashMessage()) |msg| {
+            // Allocate a copy of the expect failure message that will persist
+            const owned_msg = try self.allocator.dupe(u8, msg);
+            return EvalResult{
+                .expect_failed = .{
+                    .message = owned_msg,
+                    .region = region,
+                },
+            };
+        }
+
         return EvalResult.success;
+    }
+
+    /// Helper to report a problem and track allocated message
+    fn reportProblem(
+        self: *ComptimeEvaluator,
+        message: []const u8,
+        region: base.Region,
+        problem_type: enum { crash, expect_failed, error_eval },
+    ) !void {
+        // Allocate and track the message
+        const owned_message = try self.allocator.dupe(u8, message);
+
+        switch (problem_type) {
+            .crash => {
+                try self.crash_messages.append(owned_message);
+                const problem = Problem{
+                    .comptime_crash = .{
+                        .message = owned_message,
+                        .region = region,
+                    },
+                };
+                _ = try self.problems.appendProblem(self.allocator, problem);
+            },
+            .expect_failed => {
+                try self.expect_messages.append(owned_message);
+                const problem = Problem{
+                    .comptime_expect_failed = .{
+                        .message = owned_message,
+                        .region = region,
+                    },
+                };
+                _ = try self.problems.appendProblem(self.allocator, problem);
+            },
+            .error_eval => {
+                try self.error_names.append(owned_message);
+                const problem = Problem{
+                    .comptime_eval_error = .{
+                        .error_name = owned_message,
+                        .region = region,
+                    },
+                };
+                _ = try self.problems.appendProblem(self.allocator, problem);
+            },
+        }
     }
 
     /// Evaluates all top-level declarations in the module
@@ -223,20 +324,14 @@ pub const ComptimeEvaluator = struct {
                 },
                 .crash => |crash_info| {
                     crashed += 1;
-                    // Track the crash message so we can free it later
-                    try self.crash_messages.append(crash_info.message);
-                    // Create a crash problem and add it to the problem store
-                    const problem = Problem{
-                        .comptime_crash = .{
-                            .message = crash_info.message,
-                            .region = crash_info.region,
-                        },
-                    };
-                    _ = try self.problems.appendProblem(self.allocator, problem);
+                    try self.reportProblem(crash_info.message, crash_info.region, .crash);
                 },
-                .error_eval => {
-                    // For non-crash errors, we could also report them, but for now
-                    // we just silently continue (type checker should have caught most issues)
+                .expect_failed => |expect_info| {
+                    try self.reportProblem(expect_info.message, expect_info.region, .expect_failed);
+                },
+                .error_eval => |error_info| {
+                    const error_name = @errorName(error_info.err);
+                    try self.reportProblem(error_name, error_info.region, .error_eval);
                 },
             }
         }
