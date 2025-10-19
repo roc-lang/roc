@@ -716,13 +716,13 @@ is_named_color = |str| {
 		(p-assign (ident "hex"))
 		(e-closure
 			(captures
-				(capture (ident "is_valid"))
-				(capture (ident "d"))
-				(capture (ident "f"))
 				(capture (ident "a"))
-				(capture (ident "b"))
+				(capture (ident "d"))
+				(capture (ident "e"))
 				(capture (ident "c"))
-				(capture (ident "e")))
+				(capture (ident "f"))
+				(capture (ident "b"))
+				(capture (ident "is_valid")))
 			(e-lambda
 				(args
 					(p-assign (ident "str")))
@@ -879,14 +879,14 @@ is_named_color = |str| {
 			(captures
 				(capture (ident "b"))
 				(capture (ident "a"))
+				(capture (ident "r"))
+				(capture (ident "inner"))
+				(capture (ident "to_str"))
+				(capture (ident "r"))
 				(capture (ident "inner"))
 				(capture (ident "g"))
 				(capture (ident "b"))
-				(capture (ident "to_str"))
-				(capture (ident "r"))
-				(capture (ident "g"))
-				(capture (ident "inner"))
-				(capture (ident "r")))
+				(capture (ident "g")))
 			(e-lambda
 				(args
 					(p-assign (ident "color")))
@@ -1111,7 +1111,7 @@ is_named_color = |str| {
 		(patt (type "Str -> Result(Color, [InvalidHex(Str)])"))
 		(patt (type "Error -> Error"))
 		(patt (type "Str -> Result(Color, [UnknownColor(Str)])"))
-		(patt (type "_arg -> _ret")))
+		(patt (type "_arg -> Error")))
 	(type_decls
 		(nominal (type "Color")
 			(ty-header (name "Color"))))
@@ -1121,5 +1121,5 @@ is_named_color = |str| {
 		(expr (type "Str -> Result(Color, [InvalidHex(Str)])"))
 		(expr (type "Error -> Error"))
 		(expr (type "Str -> Result(Color, [UnknownColor(Str)])"))
-		(expr (type "_arg -> _ret"))))
+		(expr (type "_arg -> Error"))))
 ~~~

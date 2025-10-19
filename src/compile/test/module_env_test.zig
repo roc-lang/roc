@@ -2,6 +2,7 @@
 const std = @import("std");
 const base = @import("base");
 const can = @import("can");
+const types = @import("types");
 const collections = @import("collections");
 
 const ModuleEnv = can.ModuleEnv;
@@ -389,10 +390,12 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
     const str_literal_idx = try env.insertString("hello");
 
     // Add a string segment expression
-    const segment_idx = try env.addExprAndTypeVar(.{ .e_str_segment = .{ .literal = str_literal_idx } }, .{ .structure = .str }, base.Region.from_raw_offsets(0, 5));
+    const segment_idx = try env.addExpr(.{ .e_str_segment = .{ .literal = str_literal_idx } }, base.Region.from_raw_offsets(0, 5));
+    _ = try env.types.freshFromContent(.{ .structure = .str });
 
     // Now create a string expression that references the segment
-    const expr_idx = try env.addExprAndTypeVar(.{ .e_str = .{ .span = Expr.Span{ .span = base.DataSpan{ .start = @intFromEnum(segment_idx), .len = 1 } } } }, .{ .structure = .str }, base.Region.from_raw_offsets(0, 5));
+    const expr_idx = try env.addExpr(.{ .e_str = .{ .span = Expr.Span{ .span = base.DataSpan{ .start = @intFromEnum(segment_idx), .len = 1 } } } }, base.Region.from_raw_offsets(0, 5));
+    _ = try env.types.freshFromContent(.{ .structure = .str });
 
     // Create an S-expression tree
     var tree = base.SExprTree.init(gpa);

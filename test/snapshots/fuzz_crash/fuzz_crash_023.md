@@ -1962,8 +1962,8 @@ expect {
 		(e-closure
 			(captures
 				(capture (ident "x"))
-				(capture (ident "x"))
-				(capture (ident "dude")))
+				(capture (ident "dude"))
+				(capture (ident "x")))
 			(e-lambda
 				(args
 					(p-assign (ident "a"))
@@ -2177,8 +2177,8 @@ expect {
 		(p-assign (ident "main!"))
 		(e-closure
 			(captures
-				(capture (ident "match_time"))
-				(capture (ident "add_one")))
+				(capture (ident "add_one"))
+				(capture (ident "match_time")))
 			(e-lambda
 				(args
 					(p-underscore))

@@ -683,10 +683,10 @@ h = |x, y| {
 		(p-assign (ident "h"))
 		(e-closure
 			(captures
-				(capture (ident "a"))
-				(capture (ident "a"))
-				(capture (ident "a"))
 				(capture (ident "h"))
+				(capture (ident "a"))
+				(capture (ident "a"))
+				(capture (ident "a"))
 				(capture (ident "a")))
 			(e-lambda
 				(args

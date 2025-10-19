@@ -200,6 +200,14 @@ pub fn SafeList(comptime T: type) type {
             return @enumFromInt(@as(u32, @intCast(length)));
         }
 
+        /// Add a new item to the end of this list assuming capacity is sufficient to hold an additional item.
+        pub fn appendAssumeCapacity(self: *SafeList(T), item: T) Idx {
+            const length = self.len();
+            self.items.appendAssumeCapacity(item);
+
+            return @enumFromInt(@as(u32, @intCast(length)));
+        }
+
         /// Create a range from the provided idx to the end of the list
         pub fn rangeToEnd(self: *SafeList(T), start_int: u32) Range {
             const len_int = self.len();
@@ -428,6 +436,14 @@ pub fn SafeMultiList(comptime T: type) type {
         pub fn append(self: *SafeMultiList(T), gpa: Allocator, item: T) std.mem.Allocator.Error!Idx {
             const length = self.len();
             try self.items.append(gpa, item);
+
+            return @enumFromInt(@as(u32, @intCast(length)));
+        }
+
+        /// Add a new item to the end of this list assuming capacity is sufficient to hold an additional item.
+        pub fn appendAssumeCapacity(self: *SafeMultiList(T), item: T) Idx {
+            const length = self.len();
+            self.items.appendAssumeCapacity(item);
 
             return @enumFromInt(@as(u32, @intCast(length)));
         }
