@@ -385,7 +385,7 @@ test "CommonEnv.Serialized roundtrip with large data" {
     const gpa = testing.allocator;
 
     // Create a larger source with many lines
-    var source_builder = std.ArrayList(u8).init(gpa);
+    var source_builder = std.array_list.Managed(u8).init(gpa);
     defer source_builder.deinit();
 
     for (0..100) |i| {
@@ -398,11 +398,11 @@ test "CommonEnv.Serialized roundtrip with large data" {
     defer original.deinit(gpa);
 
     // Add many identifiers
-    var ident_indices = std.ArrayList(Ident.Idx).init(gpa);
+    var ident_indices = std.array_list.Managed(Ident.Idx).init(gpa);
     defer ident_indices.deinit();
 
     for (0..50) |i| {
-        var ident_name = std.ArrayList(u8).init(gpa);
+        var ident_name = std.array_list.Managed(u8).init(gpa);
         defer ident_name.deinit();
         try ident_name.writer().print("ident_{}", .{i});
         const idx = try original.insertIdent(gpa, Ident.for_text(ident_name.items));
@@ -410,11 +410,11 @@ test "CommonEnv.Serialized roundtrip with large data" {
     }
 
     // Add many strings and track their indices
-    var string_indices = std.ArrayList(StringLiteral.Idx).init(gpa);
+    var string_indices = std.array_list.Managed(StringLiteral.Idx).init(gpa);
     defer string_indices.deinit();
 
     for (0..25) |i| {
-        var string_content = std.ArrayList(u8).init(gpa);
+        var string_content = std.array_list.Managed(u8).init(gpa);
         defer string_content.deinit();
         try string_content.writer().print("string_literal_{}", .{i});
         const idx = try original.insertString(gpa, string_content.items);

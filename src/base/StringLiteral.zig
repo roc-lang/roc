@@ -170,7 +170,7 @@ test "Store empty CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -222,7 +222,7 @@ test "Store basic CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -257,7 +257,7 @@ test "Store comprehensive CompactWriter roundtrip" {
         "very long string " ** 50, // long string
     };
 
-    var indices = std.ArrayList(Idx).init(gpa);
+    var indices = std.array_list.Managed(Idx).init(gpa);
     defer indices.deinit();
 
     for (test_strings) |str| {
@@ -288,7 +288,7 @@ test "Store comprehensive CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -338,7 +338,7 @@ test "Store CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -447,7 +447,7 @@ test "Store edge case indices CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, @as(usize, @intCast(file_size)));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @as(usize, @intCast(file_size)));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);

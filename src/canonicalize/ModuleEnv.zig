@@ -93,7 +93,7 @@ pub fn relocate(self: *Self, offset: isize) void {
 /// Initialize the compilation fields in an existing ModuleEnv
 pub fn initCIRFields(self: *Self, gpa: std.mem.Allocator, module_name: []const u8) !void {
     _ = gpa; // unused since we don't create new allocations
-    self.module_kind = undefined; // Set during canonicalization
+    self.module_kind = .deprecated_module; // default until canonicalization sets the actual kind
     self.all_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.all_statements = .{ .span = .{ .start = 0, .len = 0 } };
     self.exports = .{ .span = .{ .start = 0, .len = 0 } };
@@ -118,7 +118,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .gpa = gpa,
         .common = try CommonEnv.init(gpa, source),
         .types = try TypeStore.initCapacity(gpa, 2048, 512),
-        .module_kind = undefined, // Set during canonicalization
+        .module_kind = .deprecated_module, // Set during canonicalization
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .exports = .{ .span = .{ .start = 0, .len = 0 } },
@@ -1414,6 +1414,7 @@ pub const Serialized = struct {
         try self.imports.serialize(&env.imports, allocator, writer);
 
         self.diagnostics = env.diagnostics;
+        self.module_kind = env.module_kind;
 
         // Serialize NodeStore
         try self.store.serialize(&env.store, allocator, writer);

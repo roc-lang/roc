@@ -189,26 +189,18 @@ pub fn createMapping(size: usize) SharedMemoryError!Handle {
         },
         .macos, .freebsd, .openbsd, .netbsd => {
             // Use shm_open with a random name
-            const random_name = std.fmt.allocPrint(
-                std.heap.page_allocator,
-                "/roc_shm_{}",
-                .{std.crypto.random.int(u64)},
-            ) catch {
+            const random_name = std.fmt.allocPrintSentinel(std.heap.page_allocator, "/roc_shm_{}", .{std.crypto.random.int(u64)}, 0) catch {
                 return error.OutOfMemory;
             };
             defer std.heap.page_allocator.free(random_name);
 
-            const shm_name = std.fmt.allocPrintZ(
-                std.heap.page_allocator,
-                "{s}",
-                .{random_name},
-            ) catch {
+            const shm_name = std.fmt.allocPrintSentinel(std.heap.page_allocator, "{s}", .{random_name}, 0) catch {
                 return error.OutOfMemory;
             };
             defer std.heap.page_allocator.free(shm_name);
-
+            const shm_name_null_terminated = shm_name[0.. :0];
             const fd = posix.shm_open(
-                shm_name.ptr,
+                shm_name_null_terminated,
                 @as(u32, @bitCast(std.posix.O{ .ACCMODE = .RDWR, .CREAT = true, .EXCL = true })),
                 0o600,
             );
@@ -218,7 +210,7 @@ pub fn createMapping(size: usize) SharedMemoryError!Handle {
             }
 
             // Immediately unlink so it gets cleaned up when all references are closed
-            _ = posix.shm_unlink(shm_name.ptr);
+            _ = posix.shm_unlink(shm_name_null_terminated);
 
             // Set the size of the shared memory
             std.posix.ftruncate(fd, size) catch {
@@ -254,13 +246,13 @@ pub fn openMapping(allocator: std.mem.Allocator, name: []const u8) SharedMemoryE
             return handle.?;
         },
         .macos, .freebsd, .openbsd, .netbsd => {
-            const shm_name = std.fmt.allocPrintZ(allocator, "/{s}", .{name}) catch {
+            const shm_name = std.fmt.allocPrint(allocator, "/{s}\x00", .{name}) catch {
                 return error.OutOfMemory;
             };
             defer allocator.free(shm_name);
-
+            const shm_name_null_terminated = shm_name[0 .. shm_name.len - 1 :0];
             const fd = posix.shm_open(
-                shm_name.ptr,
+                shm_name_null_terminated,
                 @as(u32, @bitCast(std.posix.O{ .ACCMODE = .RDWR })),
                 0,
             );

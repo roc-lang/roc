@@ -140,18 +140,18 @@ const CompilerStageData = struct {
     formatted_code: ?[]const u8 = null,
 
     // Diagnostic reports from each stage
-    tokenize_reports: std.ArrayList(reporting.Report),
-    parse_reports: std.ArrayList(reporting.Report),
-    can_reports: std.ArrayList(reporting.Report),
-    type_reports: std.ArrayList(reporting.Report),
+    tokenize_reports: std.array_list.Managed(reporting.Report),
+    parse_reports: std.array_list.Managed(reporting.Report),
+    can_reports: std.array_list.Managed(reporting.Report),
+    type_reports: std.array_list.Managed(reporting.Report),
 
     pub fn init(alloc: Allocator, module_env: *ModuleEnv) CompilerStageData {
         return CompilerStageData{
             .module_env = module_env,
-            .tokenize_reports = std.ArrayList(reporting.Report).init(alloc),
-            .parse_reports = std.ArrayList(reporting.Report).init(alloc),
-            .can_reports = std.ArrayList(reporting.Report).init(alloc),
-            .type_reports = std.ArrayList(reporting.Report).init(alloc),
+            .tokenize_reports = std.array_list.Managed(reporting.Report).init(alloc),
+            .parse_reports = std.array_list.Managed(reporting.Report).init(alloc),
+            .can_reports = std.array_list.Managed(reporting.Report).init(alloc),
+            .type_reports = std.array_list.Managed(reporting.Report).init(alloc),
         };
     }
 
@@ -354,6 +354,7 @@ pub const WasmError = enum(u8) {
 /// Errors that can occur during response writing
 const ResponseWriteError = error{
     OutOfBufferSpace,
+    WriteFailed,
 };
 
 /// Clean up REPL state and free associated memory.
@@ -389,7 +390,7 @@ fn createWasmRocOps(crash_ctx: *CrashContext) !*RocOps {
     return roc_ops;
 }
 
-fn wasmRocAlloc(alloc_args: *builtins.host_abi.RocAlloc, _: *anyopaque) callconv(.C) void {
+fn wasmRocAlloc(alloc_args: *builtins.host_abi.RocAlloc, _: *anyopaque) callconv(.c) void {
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alloc_args.alignment)));
     const result = allocator.rawAlloc(alloc_args.length, align_enum, @returnAddress());
     if (result) |ptr| {
@@ -401,7 +402,7 @@ fn wasmRocAlloc(alloc_args: *builtins.host_abi.RocAlloc, _: *anyopaque) callconv
     }
 }
 
-fn wasmRocDealloc(dealloc_args: *builtins.host_abi.RocDealloc, _: *anyopaque) callconv(.C) void {
+fn wasmRocDealloc(dealloc_args: *builtins.host_abi.RocDealloc, _: *anyopaque) callconv(.c) void {
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(dealloc_args.alignment)));
     // For WASM, we need to handle this carefully since we can't create slices from raw pointers
     // We'll use a dummy slice for now - this is a limitation of the WASM target
@@ -409,7 +410,7 @@ fn wasmRocDealloc(dealloc_args: *builtins.host_abi.RocDealloc, _: *anyopaque) ca
     allocator.rawFree(dummy_slice, align_enum, @returnAddress());
 }
 
-fn wasmRocRealloc(realloc_args: *builtins.host_abi.RocRealloc, _: *anyopaque) callconv(.C) void {
+fn wasmRocRealloc(realloc_args: *builtins.host_abi.RocRealloc, _: *anyopaque) callconv(.c) void {
     // For WASM, we'll just allocate new memory for now
     // A proper implementation would need to handle reallocation carefully
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(realloc_args.alignment)));
@@ -423,17 +424,17 @@ fn wasmRocRealloc(realloc_args: *builtins.host_abi.RocRealloc, _: *anyopaque) ca
     }
 }
 
-fn wasmRocDbg(dbg_args: *const builtins.host_abi.RocDbg, _: *anyopaque) callconv(.C) void {
+fn wasmRocDbg(dbg_args: *const builtins.host_abi.RocDbg, _: *anyopaque) callconv(.c) void {
     // No-op in WASM playground
     _ = dbg_args;
 }
 
-fn wasmRocExpectFailed(expect_failed_args: *const builtins.host_abi.RocExpectFailed, _: *anyopaque) callconv(.C) void {
+fn wasmRocExpectFailed(expect_failed_args: *const builtins.host_abi.RocExpectFailed, _: *anyopaque) callconv(.c) void {
     // No-op in WASM playground
     _ = expect_failed_args;
 }
 
-fn wasmRocCrashed(crashed_args: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.C) void {
+fn wasmRocCrashed(crashed_args: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.c) void {
     const ctx: *CrashContext = @ptrCast(@alignCast(env));
     ctx.recordCrash(crashed_args.utf8_bytes[0..crashed_args.len]) catch |err| {
         std.debug.panic("failed to record crash in wasm playground: {}", .{err});
@@ -549,6 +550,7 @@ export fn processMessage(message_ptr: [*]const u8, message_len: usize, response_
 
     return if (result) |_| @intFromEnum(WasmError.success) else |err| switch (err) {
         error.OutOfBufferSpace => @intFromEnum(WasmError.response_buffer_too_small),
+        error.WriteFailed => @intFromEnum(WasmError.internal_error),
     };
 }
 
@@ -834,13 +836,12 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     // Generate Tokens HTML
     logDebug("compileSource: Generating tokens HTML\n", .{});
-    var tokens_html_buffer = std.ArrayList(u8).init(temp_alloc);
-    const tokens_writer = tokens_html_buffer.writer().any();
-    AST.tokensToHtml(&parse_ast, &module_env.common, tokens_writer) catch |err| {
+    var tokens_writer: std.Io.Writer.Allocating = .init(temp_alloc);
+    AST.tokensToHtml(&parse_ast, &module_env.common, &tokens_writer.writer) catch |err| {
         logDebug("compileSource: tokensToHtml failed: {}\n", .{err});
     };
     logDebug("compileSource: Tokens HTML generated, duping to main allocator\n", .{});
-    result.tokens_html = allocator.dupe(u8, tokens_html_buffer.items) catch |err| {
+    result.tokens_html = allocator.dupe(u8, tokens_writer.written()) catch |err| {
         logDebug("compileSource: failed to dupe tokens_html: {}\n", .{err});
         return err;
     };
@@ -848,23 +849,19 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     // Generate AST HTML
     logDebug("compileSource: Generating AST HTML\n", .{});
-    var ast_html_buffer = std.ArrayList(u8).init(temp_alloc);
-    const ast_writer = ast_html_buffer.writer().any();
-    {
-        const file = parse_ast.store.getFile();
+    var ast_writer: std.Io.Writer.Allocating = .init(temp_alloc);
+    const file = parse_ast.store.getFile();
 
-        var tree = SExprTree.init(temp_alloc);
-        defer tree.deinit();
+    var tree = SExprTree.init(temp_alloc);
 
-        logDebug("compileSource: Call pushToSExprTree\n", .{});
-        try file.pushToSExprTree(module_env.gpa, &module_env.common, &parse_ast, &tree);
+    logDebug("compileSource: Call pushToSExprTree\n", .{});
+    try file.pushToSExprTree(module_env.gpa, &module_env.common, &parse_ast, &tree);
 
-        logDebug("compileSource: Call toHtml\n", .{});
-        try tree.toHtml(ast_writer, .include_linecol);
-    }
+    logDebug("compileSource: Call toHtml\n", .{});
+    try tree.toHtml(&ast_writer.writer, .include_linecol);
     logDebug("compileSource: AST HTML generated\n", .{});
 
-    result.ast_html = allocator.dupe(u8, ast_html_buffer.items) catch |err| {
+    result.ast_html = allocator.dupe(u8, ast_writer.written()) catch |err| {
         logDebug("compileSource: failed to dupe ast_html: {}\n", .{err});
         return err;
     };
@@ -872,14 +869,15 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     // Generate formatted code
     logDebug("compileSource: Generating formatted code\n", .{});
-    var formatted_code_buffer = std.ArrayList(u8).init(temp_alloc);
-    fmt.formatAst(parse_ast, formatted_code_buffer.writer().any()) catch |err| {
+    var formatted_code_buffer: std.Io.Writer.Allocating = .init(temp_alloc);
+    defer formatted_code_buffer.deinit();
+    fmt.formatAst(parse_ast, &formatted_code_buffer.writer) catch |err| {
         logDebug("compileSource: formatAst failed: {}\n", .{err});
         return err;
     };
     logDebug("compileSource: Formatted code generated\n", .{});
 
-    result.formatted_code = allocator.dupe(u8, formatted_code_buffer.items) catch |err| {
+    result.formatted_code = allocator.dupe(u8, formatted_code_buffer.written()) catch |err| {
         logDebug("compileSource: failed to dupe formatted_code: {}\n", .{err});
         return err;
     };
@@ -1179,10 +1177,36 @@ fn writeResponseWithLength(response_buffer: []u8, json_payload: []const u8) Resp
 const ResponseWriter = struct {
     buffer: []u8,
     pos: usize = 0,
+    interface: std.Io.Writer,
 
     const Self = @This();
     pub const Error = ResponseWriteError;
-    pub const Writer = std.io.Writer(*Self, Error, write);
+
+    fn init(buffer: []u8) Self {
+        var result = Self{
+            .buffer = buffer,
+            .pos = 0,
+            .interface = undefined,
+        };
+        result.interface = .{
+            .vtable = &.{
+                .drain = drain,
+            },
+            .buffer = &.{}, // Use internal buffer tracking
+        };
+        return result;
+    }
+
+    fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
+        _ = splat;
+        const self: *Self = @alignCast(@fieldParentPtr("interface", w));
+        var total: usize = 0;
+        for (data) |bytes| {
+            const n = self.write(bytes) catch return std.Io.Writer.Error.WriteFailed;
+            total += n;
+        }
+        return total;
+    }
 
     fn write(self: *Self, bytes: []const u8) Error!usize {
         if (self.pos + bytes.len > self.buffer.len) {
@@ -1191,10 +1215,6 @@ const ResponseWriter = struct {
         @memcpy(self.buffer[self.pos..][0..bytes.len], bytes);
         self.pos += bytes.len;
         return bytes.len;
-    }
-
-    fn writer(self: *Self) Writer {
-        return .{ .context = self };
     }
 
     /// Finalizes the response by writing the length prefix at the beginning.
@@ -1208,11 +1228,11 @@ const ResponseWriter = struct {
 
 /// Write an error response.
 fn writeErrorResponse(response_buffer: []u8, status: ResponseStatus, message: []const u8) ResponseWriteError!void {
-    var resp_writer = ResponseWriter{ .buffer = response_buffer };
+    var resp_writer = ResponseWriter.init(response_buffer);
     // Advance past length prefix, will be written by finalize
     resp_writer.pos = @sizeOf(u32);
 
-    const w = resp_writer.writer();
+    const w = &resp_writer.interface;
     try w.print("{{\"status\":\"{s}\",\"message\":\"", .{status.toString()});
     try writeJsonString(w, message);
     try w.writeAll("\"}");
@@ -1222,10 +1242,10 @@ fn writeErrorResponse(response_buffer: []u8, status: ResponseStatus, message: []
 
 /// Write a success response
 fn writeSuccessResponse(response_buffer: []u8, message: []const u8, data: ?[]const u8) ResponseWriteError!void {
-    var resp_writer = ResponseWriter{ .buffer = response_buffer };
+    var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
 
-    const w = resp_writer.writer();
+    const w = &resp_writer.interface;
     try w.writeAll("{\"status\":\"SUCCESS\",\"message\":\"");
     try writeJsonString(w, message);
     try w.writeAll("\"");
@@ -1242,13 +1262,13 @@ fn writeSuccessResponse(response_buffer: []u8, message: []const u8, data: ?[]con
 
 /// Write response for LOADED state with diagnostics
 fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
-    var resp_writer = ResponseWriter{ .buffer = response_buffer };
+    var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
 
-    const w = resp_writer.writer();
+    const w = &resp_writer.interface;
 
     // TIER 1: Extract diagnostics for VISUAL INDICATORS (gutter markers, squiggly lines)
-    var diagnostics = std.ArrayList(Diagnostic).init(allocator);
+    var diagnostics = std.array_list.Managed(Diagnostic).init(allocator);
     defer diagnostics.deinit();
     extractDiagnosticsFromReports(&diagnostics, data.tokenize_reports) catch {};
     extractDiagnosticsFromReports(&diagnostics, data.parse_reports) catch {};
@@ -1282,31 +1302,30 @@ fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 
     // Collect HTML in a buffer first, then escape it for JSON
     var html_buffer: [65536]u8 = undefined;
-    var html_stream = std.io.fixedBufferStream(&html_buffer);
-    const html_writer = html_stream.writer();
+    var html_writer = std.io.Writer.fixed(&html_buffer);
 
     if (data.tokenize_reports.items.len > 0) {
         for (data.tokenize_reports.items) |report| {
-            writeDiagnosticHtml(html_writer, report) catch return error.OutOfBufferSpace;
+            writeDiagnosticHtml(&html_writer, report) catch return error.OutOfBufferSpace;
         }
     }
     if (data.parse_reports.items.len > 0) {
         for (data.parse_reports.items) |report| {
-            writeDiagnosticHtml(html_writer, report) catch return error.OutOfBufferSpace;
+            writeDiagnosticHtml(&html_writer, report) catch return error.OutOfBufferSpace;
         }
     }
     if (data.can_reports.items.len > 0) {
         for (data.can_reports.items) |report| {
-            writeDiagnosticHtml(html_writer, report) catch return error.OutOfBufferSpace;
+            writeDiagnosticHtml(&html_writer, report) catch return error.OutOfBufferSpace;
         }
     }
     if (data.type_reports.items.len > 0) {
         for (data.type_reports.items) |report| {
-            writeDiagnosticHtml(html_writer, report) catch return error.OutOfBufferSpace;
+            writeDiagnosticHtml(&html_writer, report) catch return error.OutOfBufferSpace;
         }
     }
 
-    const html_content = html_stream.getWritten();
+    const html_content = html_writer.buffer[0..html_writer.end];
     try writeJsonString(w, html_content);
     try w.writeAll("\"}}");
 
@@ -1315,9 +1334,9 @@ fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 
 /// Write REPL initialization response
 fn writeReplInitResponse(response_buffer: []u8) ResponseWriteError!void {
-    var resp_writer = ResponseWriter{ .buffer = response_buffer };
+    var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
-    const w = resp_writer.writer();
+    const w = &resp_writer.interface;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"message\":\"REPL initialized\",\"repl_info\":{");
     try w.print("\"compiler_version\":\"{s}\",", .{build_options.compiler_version});
@@ -1397,9 +1416,9 @@ fn extractErrorDetails(message: []const u8) ?[]const u8 {
 
 /// Write REPL step result as JSON
 fn writeReplStepResultJson(response_buffer: []u8, result: ReplStepResult) ResponseWriteError!void {
-    var resp_writer = ResponseWriter{ .buffer = response_buffer };
+    var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
-    const w = resp_writer.writer();
+    const w = &resp_writer.interface;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"result\":{");
 
@@ -1433,9 +1452,9 @@ fn writeReplStepResultJson(response_buffer: []u8, result: ReplStepResult) Respon
 
 /// Write REPL clear response
 fn writeReplClearResponse(response_buffer: []u8) ResponseWriteError!void {
-    var resp_writer = ResponseWriter{ .buffer = response_buffer };
+    var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
-    const w = resp_writer.writer();
+    const w = &resp_writer.interface;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"message\":\"REPL cleared\",\"repl_info\":{");
     try w.print("\"compiler_version\":\"{s}\",", .{build_options.compiler_version});
@@ -1447,9 +1466,9 @@ fn writeReplClearResponse(response_buffer: []u8) ResponseWriteError!void {
 
 /// Write tokens response with direct HTML generation
 fn writeTokensResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
-    var resp_writer = ResponseWriter{ .buffer = response_buffer };
+    var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
-    const w = resp_writer.writer();
+    const w = &resp_writer.interface;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
 
@@ -1465,9 +1484,9 @@ fn writeTokensResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 
 /// Write parse AST response in S-expression format
 fn writeParseAstResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
-    var resp_writer = ResponseWriter{ .buffer = response_buffer };
+    var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
-    const w = resp_writer.writer();
+    const w = &resp_writer.interface;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
 
@@ -1483,9 +1502,9 @@ fn writeParseAstResponse(response_buffer: []u8, data: CompilerStageData) Respons
 
 /// Write formatted response with formatted Roc code
 fn writeFormattedResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
-    var resp_writer = ResponseWriter{ .buffer = response_buffer };
+    var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
-    const w = resp_writer.writer();
+    const w = &resp_writer.interface;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
 
@@ -1501,18 +1520,15 @@ fn writeFormattedResponse(response_buffer: []u8, data: CompilerStageData) Respon
 
 /// Write canonicalized CIR response for REPL mode using ModuleEnv directly
 fn writeReplCanCirResponse(response_buffer: []u8, module_env: *ModuleEnv) ResponseWriteError!void {
-    var resp_writer = ResponseWriter{ .buffer = response_buffer };
+    var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
-    const w = resp_writer.writer();
+    const w = &resp_writer.interface;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
 
     var local_arena = std.heap.ArenaAllocator.init(allocator);
     defer local_arena.deinit();
-    var sexpr_buffer = std.ArrayList(u8).init(local_arena.allocator());
-    defer sexpr_buffer.deinit();
-    const sexpr_writer = sexpr_buffer.writer().any();
-
+    var sexpr_writer_allocating: std.Io.Writer.Allocating = .init(local_arena.allocator());
     var tree = SExprTree.init(local_arena.allocator());
     defer tree.deinit();
 
@@ -1529,27 +1545,26 @@ fn writeReplCanCirResponse(response_buffer: []u8, module_env: *ModuleEnv) Respon
 
     const mutable_cir = @constCast(module_env);
     ModuleEnv.pushToSExprTree(mutable_cir, null, &tree) catch {};
-    tree.toHtml(sexpr_writer, .include_linecol) catch {};
+    tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch {};
+    sexpr_writer_allocating.writer.flush() catch {};
 
-    try writeJsonString(w, sexpr_buffer.items);
+    try writeJsonString(w, sexpr_writer_allocating.written());
     try w.writeAll("\"}");
     try resp_writer.finalize();
 }
 
 /// Write canonicalized CIR response in S-expression format
 fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
-    var resp_writer = ResponseWriter{ .buffer = response_buffer };
+    var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
-    const w = resp_writer.writer();
+    const w = &resp_writer.interface;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
 
     const cir = data.module_env;
     var local_arena = std.heap.ArenaAllocator.init(allocator);
     defer local_arena.deinit();
-    var sexpr_buffer = std.ArrayList(u8).init(local_arena.allocator());
-    defer sexpr_buffer.deinit();
-    const sexpr_writer = sexpr_buffer.writer().any();
+    var sexpr_writer_allocating: std.Io.Writer.Allocating = .init(local_arena.allocator());
 
     var tree = SExprTree.init(local_arena.allocator());
     defer tree.deinit();
@@ -1567,9 +1582,10 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 
     const mutable_cir = @constCast(cir);
     ModuleEnv.pushToSExprTree(mutable_cir, null, &tree) catch {};
-    tree.toHtml(sexpr_writer, .include_linecol) catch {};
+    tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch {};
+    sexpr_writer_allocating.writer.flush() catch {};
 
-    try writeJsonString(w, sexpr_buffer.items);
+    try writeJsonString(w, sexpr_writer_allocating.written());
     try w.writeAll("\"}");
     try resp_writer.finalize();
 }
@@ -1599,21 +1615,20 @@ fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) Re
         return;
     };
 
-    var html_buffer = std.ArrayList(u8).init(local_arena.allocator());
-    const html_writer = html_buffer.writer().any();
+    var html_writer_allocating: std.Io.Writer.Allocating = .init(local_arena.allocator());
 
-    test_runner.write_html_report(html_writer) catch {
+    test_runner.write_html_report(&html_writer_allocating.writer) catch {
         try writeErrorResponse(response_buffer, .ERROR, "Failed to generate test report.");
         return;
     };
 
-    var resp_writer = ResponseWriter{ .buffer = response_buffer };
+    var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
-    const w = resp_writer.writer();
+    const w = &resp_writer.interface;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
 
-    try writeJsonString(w, html_buffer.items);
+    try writeJsonString(w, html_writer_allocating.written());
 
     try w.writeAll("\"}");
     try resp_writer.finalize();
@@ -1636,9 +1651,9 @@ const HoverInfo = struct {
 
 /// Write hover info response for a specific position
 fn writeHoverInfoResponse(response_buffer: []u8, data: CompilerStageData, message_json: std.json.Value) ResponseWriteError!void {
-    var resp_writer = ResponseWriter{ .buffer = response_buffer };
+    var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
-    const w = resp_writer.writer();
+    const w = &resp_writer.interface;
 
     const line_val = message_json.object.get("line") orelse {
         try writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Missing line parameter");
@@ -1788,9 +1803,9 @@ fn findHoverInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier
 
 /// Write types response in S-expression format
 fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
-    var resp_writer = ResponseWriter{ .buffer = response_buffer };
+    var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
-    const w = resp_writer.writer();
+    const w = &resp_writer.interface;
 
     if (data.solver == null) {
         try writeErrorResponse(response_buffer, .ERROR, "Type checking not completed.");
@@ -1800,10 +1815,7 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) ResponseWr
     const cir = data.module_env;
     var local_arena = std.heap.ArenaAllocator.init(allocator);
     defer local_arena.deinit();
-    var sexpr_buffer = std.ArrayList(u8).init(local_arena.allocator());
-    defer sexpr_buffer.deinit();
-    const sexpr_writer = sexpr_buffer.writer().any();
-
+    var sexpr_writer_allocating: std.Io.Writer.Allocating = .init(local_arena.allocator());
     var tree = SExprTree.init(local_arena.allocator());
     defer tree.deinit();
 
@@ -1816,16 +1828,17 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) ResponseWr
         try writeErrorResponse(response_buffer, .ERROR, error_msg);
         return;
     };
-    tree.toHtml(sexpr_writer, .include_linecol) catch {};
+    tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch {};
+    sexpr_writer_allocating.writer.flush() catch {};
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
-    try writeJsonString(w, sexpr_buffer.items);
+    try writeJsonString(w, sexpr_writer_allocating.written());
     try w.writeAll("\"}");
     try resp_writer.finalize();
 }
 
 /// Write a diagnostic as JSON
-fn writeDiagnosticHtml(writer: anytype, report: reporting.Report) !void {
+fn writeDiagnosticHtml(writer: *std.io.Writer, report: reporting.Report) !void {
     try reporting.renderReportToHtml(&report, writer, reporting.ReportingConfig.initHtml());
 }
 
@@ -1843,8 +1856,8 @@ fn countDiagnostics(reports: []reporting.Report) struct { errors: u32, warnings:
 }
 
 fn extractDiagnosticsFromReports(
-    diagnostics: *std.ArrayList(Diagnostic),
-    reports: std.ArrayList(reporting.Report),
+    diagnostics: *std.array_list.Managed(Diagnostic),
+    reports: std.array_list.Managed(reporting.Report),
 ) !void {
     var count: usize = 0;
     const max_diagnostics = 100;
@@ -1887,7 +1900,7 @@ fn writeDiagnosticJson(writer: anytype, diagnostic: Diagnostic) !void {
 }
 
 /// Write a string with JSON escaping
-fn writeJsonString(writer: anytype, str: []const u8) !void {
+fn writeJsonString(writer: *std.io.Writer, str: []const u8) !void {
     for (str) |char| {
         switch (char) {
             '"' => try writer.writeAll("\\\""),
@@ -1982,7 +1995,7 @@ export fn freeWasmString(ptr: [*]u8) void {
 /// Helper to create a simple error JSON string, following the length-prefix allocation pattern.
 fn createSimpleErrorJson(error_message: []const u8) ?[*:0]u8 {
     // 1. Format the string into a temporary buffer to determine its length.
-    var temp_buffer = std.ArrayList(u8).init(allocator);
+    var temp_buffer = std.array_list.Managed(u8).init(allocator);
     defer temp_buffer.deinit();
     temp_buffer.writer().print("{{\"status\":\"ERROR\",\"message\":\"{s}\"}}", .{error_message}) catch return null;
     const json_len = temp_buffer.items.len;

@@ -16,7 +16,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
       - uses: mlugg/setup-zig@8d6198c65fb0feaa111df26e6b467fea8345e46f # ratchet:mlugg/setup-zig@v2.0.5
         with:
-          version: 0.14.1
+          version: 0.15.2
           use-cache: true
 
       - name: zig lints
@@ -88,7 +88,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
       - uses: mlugg/setup-zig@8d6198c65fb0feaa111df26e6b467fea8345e46f # ratchet:mlugg/setup-zig@v2.0.5
         with:
-          version: 0.14.1
+          version: 0.15.2
           use-cache: true
       - if: startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macos')
         uses: cachix/install-nix-action@02a151ada4993995686f9ed4f1be7cfbb229e56f # ratchet:cachix/install-nix-action@v31
@@ -203,7 +203,7 @@ jobs:
           }
 
       - name: Test inside nix too
-        if: startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macos')
+        if: ${{ runner.os == 'Linux' || (runner.os == 'macOS' && runner.arch != 'X64') }}
         run: |
           git clean -fdx
           git reset --hard HEAD
@@ -230,7 +230,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
       - uses: mlugg/setup-zig@8d6198c65fb0feaa111df26e6b467fea8345e46f # ratchet:mlugg/setup-zig@v2.0.5
         with:
-          version: 0.14.1
+          version: 0.15.2
           use-cache: true
 
       - name: cross compile with llvm

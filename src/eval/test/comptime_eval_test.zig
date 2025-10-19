@@ -154,7 +154,7 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     try czer.canonicalizeFile();
 
     // Set up other_envs for type checking
-    var other_envs_list = std.ArrayList(*const ModuleEnv).init(gpa);
+    var other_envs_list = std.array_list.Managed(*const ModuleEnv).init(gpa);
     defer other_envs_list.deinit();
     try other_envs_list.append(imported_module);
 

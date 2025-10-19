@@ -101,7 +101,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     // Generic tag union: use tag_index to look up the tag name
                     if (tag_index < tags.len) {
                         const tag_name = ctx.env.getIdent(tags.items(.name)[tag_index]);
-                        var out = std.ArrayList(u8).init(gpa);
+                        var out = std.array_list.AlignedManaged(u8, null).init(gpa);
                         errdefer out.deinit();
                         try out.appendSlice(tag_name);
                         return out.toOwnedSlice();
@@ -123,7 +123,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                 }
                 if (have_tag and tag_index < tags.len) {
                     const tag_name = ctx.env.getIdent(tags.items(.name)[tag_index]);
-                    var out = std.ArrayList(u8).init(gpa);
+                    var out = std.array_list.AlignedManaged(u8, null).init(gpa);
                     errdefer out.deinit();
                     try out.appendSlice(tag_name);
                     if (acc.findFieldIndex(ctx.env, "payload")) |pidx| {
@@ -204,7 +204,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                 if (arg_vars.len != 1) return error.TypeMismatch;
                 const payload_var = arg_vars[0];
 
-                var out = std.ArrayList(u8).init(gpa);
+                var out = std.array_list.AlignedManaged(u8, null).init(gpa);
                 errdefer out.deinit();
                 try out.appendSlice("Box(");
 
@@ -254,7 +254,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
             if (use_placeholder) {
                 return try gpa.dupe(u8, "<record>");
             }
-            var out = std.ArrayList(u8).init(gpa);
+            var out = std.array_list.AlignedManaged(u8, null).init(gpa);
             errdefer out.deinit();
             try out.appendSlice("{ ");
             var acc = try value.asRecord(ctx.layout_store);
@@ -292,7 +292,7 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
             .str => {
                 const rs: *const builtins.str.RocStr = @ptrCast(@alignCast(value.ptr.?));
                 const s = rs.asSlice();
-                var buf = std.ArrayList(u8).init(gpa);
+                var buf = std.array_list.AlignedManaged(u8, null).init(gpa);
                 errdefer buf.deinit();
                 try buf.append('"');
                 for (s) |ch| {
@@ -330,7 +330,7 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
         }
     }
     if (value.layout.tag == .tuple) {
-        var out = std.ArrayList(u8).init(gpa);
+        var out = std.array_list.AlignedManaged(u8, null).init(gpa);
         errdefer out.deinit();
         try out.append('(');
         var acc = try value.asTuple(ctx.layout_store);
@@ -350,7 +350,7 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
         return try gpa.dupe(u8, "<list_of_zst>");
     }
     if (value.layout.tag == .record) {
-        var out = std.ArrayList(u8).init(gpa);
+        var out = std.array_list.AlignedManaged(u8, null).init(gpa);
         errdefer out.deinit();
         const rec_data = ctx.layout_store.getRecordData(value.layout.data.record.idx);
         if (rec_data.fields.count == 0) {
@@ -386,7 +386,7 @@ fn renderDecimal(gpa: std.mem.Allocator, dec: RocDec) ![]u8 {
         return try gpa.dupe(u8, "0");
     }
 
-    var out = std.ArrayList(u8).init(gpa);
+    var out = std.array_list.AlignedManaged(u8, null).init(gpa);
     errdefer out.deinit();
 
     var num = dec.num;

@@ -76,22 +76,22 @@ const Scratch = struct {
     }
 
     fn deinit(self: *@This(), gpa: Allocator) void {
-        self.statements.deinit(gpa);
-        self.exprs.deinit(gpa);
-        self.record_fields.deinit(gpa);
-        self.match_branches.deinit(gpa);
-        self.match_branch_patterns.deinit(gpa);
-        self.if_branches.deinit(gpa);
-        self.where_clauses.deinit(gpa);
-        self.patterns.deinit(gpa);
-        self.pattern_record_fields.deinit(gpa);
-        self.record_destructs.deinit(gpa);
-        self.type_annos.deinit(gpa);
-        self.anno_record_fields.deinit(gpa);
-        self.exposed_items.deinit(gpa);
-        self.defs.deinit(gpa);
-        self.diagnostics.deinit(gpa);
-        self.captures.deinit(gpa);
+        self.statements.deinit();
+        self.exprs.deinit();
+        self.record_fields.deinit();
+        self.match_branches.deinit();
+        self.match_branch_patterns.deinit();
+        self.if_branches.deinit();
+        self.where_clauses.deinit();
+        self.patterns.deinit();
+        self.pattern_record_fields.deinit();
+        self.record_destructs.deinit();
+        self.type_annos.deinit();
+        self.anno_record_fields.deinit();
+        self.exposed_items.deinit();
+        self.defs.deinit();
+        self.diagnostics.deinit();
+        self.captures.deinit();
         gpa.destroy(self);
     }
 };
@@ -2207,7 +2207,7 @@ pub fn scratchTop(store: *NodeStore, comptime field_name: []const u8) u32 {
 
 /// Generic function to add an item to any scratch buffer
 pub fn addScratch(store: *NodeStore, comptime field_name: []const u8, idx: anytype) Allocator.Error!void {
-    try @field(store.scratch.?, field_name).append(store.gpa, idx);
+    try @field(store.scratch.?, field_name).append(idx);
 }
 
 /// Generic function to clear any scratch buffer from a given position
@@ -3333,7 +3333,7 @@ test "NodeStore empty CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -3400,7 +3400,7 @@ test "NodeStore basic CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);
@@ -3502,7 +3502,7 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     // Read back
     try file.seekTo(0);
     const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, 16, @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
 
     _ = try file.read(buffer);

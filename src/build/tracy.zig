@@ -404,7 +404,7 @@ extern fn ___tracy_wait_shutdown() void;
 pub fn waitForShutdown() !void {
     if (!enable) return;
 
-    try std.io.getStdErr().writeAll("Program ended, waiting for tracy to finish collecting data.\n");
+    try std.fs.File.stderr().writeAll("Program ended, waiting for tracy to finish collecting data.\n");
     ___tracy_wait_shutdown();
 }
 

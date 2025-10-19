@@ -95,7 +95,7 @@ pub const Interpreter = struct {
     runtime_types: *types.store.Store,
     runtime_layout_store: layout.Store,
     // O(1) Var -> Layout slot cache (0 = unset, else layout_idx + 1)
-    var_to_layout_slot: std.ArrayList(u32),
+    var_to_layout_slot: std.array_list.Managed(u32),
     // Empty scope used when converting runtime vars to layouts
     empty_scope: TypeScope,
     // Translation cache: (env_ptr, compile_var) -> runtime_var
@@ -114,14 +114,14 @@ pub const Interpreter = struct {
 
     // Minimal eval support
     stack_memory: stack.Stack,
-    bindings: std.ArrayList(Binding),
+    bindings: std.array_list.Managed(Binding),
     // Track active closures during calls (for capture lookup)
-    active_closures: std.ArrayList(StackValue),
+    active_closures: std.array_list.Managed(StackValue),
     bool_false_index: u8,
     bool_true_index: u8,
     canonical_bool_rt_var: ?types.Var,
     // Used to unwrap extensible tags
-    scratch_tags: std.ArrayList(types.Tag),
+    scratch_tags: std.array_list.Managed(types.Tag),
     /// Builtin types required by the interpreter (Bool, Result, etc.)
     builtins: BuiltinTypes,
     /// Map from module name to ModuleEnv for resolving e_lookup_external expressions
@@ -147,7 +147,7 @@ pub const Interpreter = struct {
     pub fn initWithOtherEnvs(allocator: std.mem.Allocator, env: *can.ModuleEnv, other_envs: []const *const can.ModuleEnv, builtin_types: BuiltinTypes) !Interpreter {
         const rt_types_ptr = try allocator.create(types.store.Store);
         rt_types_ptr.* = try types.store.Store.initCapacity(allocator, 1024, 512);
-        var slots = try std.ArrayList(u32).initCapacity(allocator, 1024);
+        var slots = try std.array_list.Managed(u32).initCapacity(allocator, 1024);
         slots.appendNTimesAssumeCapacity(0, 1024);
         const scope = TypeScope.init(allocator);
         var result = Interpreter{
@@ -164,12 +164,12 @@ pub const Interpreter = struct {
             .snapshots = try snapshot_mod.Store.initCapacity(allocator, 256),
             .unify_scratch = try unify.Scratch.init(allocator),
             .stack_memory = try stack.Stack.initCapacity(allocator, 4096),
-            .bindings = try std.ArrayList(Binding).initCapacity(allocator, 8),
-            .active_closures = try std.ArrayList(StackValue).initCapacity(allocator, 4),
+            .bindings = try std.array_list.Managed(Binding).initCapacity(allocator, 8),
+            .active_closures = try std.array_list.Managed(StackValue).initCapacity(allocator, 4),
             .bool_false_index = 0,
             .bool_true_index = 1,
             .canonical_bool_rt_var = null,
-            .scratch_tags = try std.ArrayList(types.Tag).initCapacity(allocator, 8),
+            .scratch_tags = try std.array_list.Managed(types.Tag).initCapacity(allocator, 8),
             .builtins = builtin_types,
             .imported_modules = std.StringHashMap(*const can.ModuleEnv).init(allocator),
         };
@@ -183,9 +183,8 @@ pub const Interpreter = struct {
         return try self.evalExprMinimal(expr_idx, roc_ops, null);
     }
 
-    pub fn startTrace(self: *Interpreter, writer: std.io.AnyWriter) void {
+    pub fn startTrace(self: *Interpreter) void {
         _ = self;
-        _ = writer;
     }
 
     pub fn endTrace(self: *Interpreter) void {
@@ -215,7 +214,7 @@ pub const Interpreter = struct {
 
             const base_binding_len = self.bindings.items.len;
 
-            var temp_binds = try std.ArrayList(Binding).initCapacity(self.allocator, params.len);
+            var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, params.len);
             defer {
                 self.trimBindingList(&temp_binds, 0, roc_ops);
                 temp_binds.deinit();
@@ -368,7 +367,7 @@ pub const Interpreter = struct {
                         .s_decl => |d| {
                             const expr_ct_var = can.ModuleEnv.varFrom(d.expr);
                             const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
-                            var temp_binds = try std.ArrayList(Binding).initCapacity(self.allocator, 4);
+                            var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
                             defer {
                                 self.trimBindingList(&temp_binds, 0, roc_ops);
                                 temp_binds.deinit();
@@ -389,7 +388,7 @@ pub const Interpreter = struct {
                         .s_var => |v| {
                             const expr_ct_var = can.ModuleEnv.varFrom(v.expr);
                             const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
-                            var temp_binds = try std.ArrayList(Binding).initCapacity(self.allocator, 4);
+                            var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
                             defer {
                                 self.trimBindingList(&temp_binds, 0, roc_ops);
                                 temp_binds.deinit();
@@ -573,7 +572,7 @@ pub const Interpreter = struct {
                     return value;
                 }
 
-                var segment_strings = std.ArrayList(RocStr).init(self.allocator);
+                var segment_strings = std.array_list.AlignedManaged(RocStr, null).init(self.allocator);
                 defer {
                     for (segment_strings.items) |segment_str| {
                         segment_str.decref(roc_ops);
@@ -684,7 +683,7 @@ pub const Interpreter = struct {
             .e_tuple => |tup| {
                 // Evaluate all elements first to drive runtime unification
                 const elems = self.env.store.sliceExpr(tup.elems);
-                var values = try std.ArrayList(StackValue).initCapacity(self.allocator, elems.len);
+                var values = try std.array_list.AlignedManaged(StackValue, null).initCapacity(self.allocator, elems.len);
                 defer values.deinit();
                 for (elems) |e_idx| {
                     const v = try self.evalExprMinimal(e_idx, roc_ops, null);
@@ -723,7 +722,7 @@ pub const Interpreter = struct {
                 const elem_rt_var = try self.translateTypeVar(self.env, first_elem_var);
                 const elem_layout = try self.getRuntimeLayout(elem_rt_var);
 
-                var values = try std.ArrayList(StackValue).initCapacity(self.allocator, elem_indices.len);
+                var values = try std.array_list.AlignedManaged(StackValue, null).initCapacity(self.allocator, elem_indices.len);
                 defer values.deinit();
 
                 for (elem_indices) |elem_idx| {
@@ -773,14 +772,14 @@ pub const Interpreter = struct {
                 const ct_var = can.ModuleEnv.varFrom(expr_idx);
                 const rt_var = try self.translateTypeVar(self.env, ct_var);
 
-                var union_names = std.ArrayList(base_pkg.Ident.Idx).init(self.allocator);
+                var union_names = std.array_list.AlignedManaged(base_pkg.Ident.Idx, null).init(self.allocator);
                 defer union_names.deinit();
-                var union_layouts = std.ArrayList(layout.Layout).init(self.allocator);
+                var union_layouts = std.array_list.AlignedManaged(layout.Layout, null).init(self.allocator);
                 defer union_layouts.deinit();
                 var union_indices = std.AutoHashMap(u32, usize).init(self.allocator);
                 defer union_indices.deinit();
 
-                var field_values = std.ArrayList(StackValue).init(self.allocator);
+                var field_values = std.array_list.AlignedManaged(StackValue, null).init(self.allocator);
                 defer {
                     for (field_values.items) |val| {
                         val.decref(&self.runtime_layout_store, roc_ops);
@@ -790,8 +789,8 @@ pub const Interpreter = struct {
 
                 const upsert = struct {
                     fn go(
-                        names: *std.ArrayList(base_pkg.Ident.Idx),
-                        layouts: *std.ArrayList(layout.Layout),
+                        names: *std.array_list.AlignedManaged(base_pkg.Ident.Idx, null),
+                        layouts: *std.array_list.AlignedManaged(layout.Layout, null),
                         indices: *std.AutoHashMap(u32, usize),
                         name: base_pkg.Ident.Idx,
                         layout_value: layout.Layout,
@@ -1014,7 +1013,7 @@ pub const Interpreter = struct {
                 const resolved = self.resolveBaseVar(rt_var);
                 if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) return error.NotImplemented;
                 const name_text = self.env.getIdent(tag.name);
-                var tag_list = std.ArrayList(types.Tag).init(self.allocator);
+                var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
                 defer tag_list.deinit();
                 try self.appendUnionTags(rt_var, &tag_list);
                 var tag_index: usize = 0;
@@ -1143,7 +1142,7 @@ pub const Interpreter = struct {
                 for (branches) |br_idx| {
                     const br = self.env.store.getMatchBranch(br_idx);
                     const patterns = self.env.store.sliceMatchBranchPatterns(br.patterns);
-                    var temp_binds = try std.ArrayList(Binding).initCapacity(self.allocator, 4);
+                    var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
                     defer {
                         self.trimBindingList(&temp_binds, 0, roc_ops);
                         temp_binds.deinit();
@@ -2412,7 +2411,7 @@ pub const Interpreter = struct {
         rhs: StackValue,
         union_var: types.Var,
     ) StructuralEqError!bool {
-        var tag_list = std.ArrayList(types.Tag).init(self.allocator);
+        var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
         defer tag_list.deinit();
         try self.appendUnionTags(union_var, &tag_list);
 
@@ -2638,8 +2637,8 @@ pub const Interpreter = struct {
         }
     }
 
-    fn appendUnionTags(self: *Interpreter, runtime_var: types.Var, list: *std.ArrayList(types.Tag)) !void {
-        var var_stack = try std.ArrayList(types.Var).initCapacity(self.allocator, 4);
+    fn appendUnionTags(self: *Interpreter, runtime_var: types.Var, list: *std.array_list.AlignedManaged(types.Tag, null)) !void {
+        var var_stack = try std.array_list.AlignedManaged(types.Var, null).initCapacity(self.allocator, 4);
         defer var_stack.deinit();
         try var_stack.append(runtime_var);
 
@@ -2717,7 +2716,7 @@ pub const Interpreter = struct {
                 if (acc.findFieldIndex(self.env, "payload")) |payload_idx| {
                     payload_value = try acc.getFieldByIndex(payload_idx);
                     if (payload_value) |field_value| {
-                        var tag_list = std.ArrayList(types.Tag).init(self.allocator);
+                        var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
                         defer tag_list.deinit();
                         try self.appendUnionTags(union_rt_var, &tag_list);
                         if (tag_index >= tag_list.items.len) return error.TypeMismatch;
@@ -2946,7 +2945,7 @@ pub const Interpreter = struct {
     fn markListElementCount(list: *RocList, elements_refcounted: bool) void {
         if (elements_refcounted and !list.isSeamlessSlice()) {
             if (list.getAllocationDataPtr()) |source| {
-                const ptr = @as([*]usize, @alignCast(@ptrCast(source))) - 2;
+                const ptr = @as([*]usize, @ptrCast(@alignCast(source))) - 2;
                 ptr[0] = list.length;
             }
         }
@@ -2973,7 +2972,7 @@ pub const Interpreter = struct {
 
     fn trimBindingList(
         self: *Interpreter,
-        list: *std.ArrayList(Binding),
+        list: *std.array_list.AlignedManaged(Binding, null),
         new_len: usize,
         roc_ops: *RocOps,
     ) void {
@@ -2991,7 +2990,7 @@ pub const Interpreter = struct {
         value: StackValue,
         value_rt_var: types.Var,
         roc_ops: *RocOps,
-        out_binds: *std.ArrayList(Binding),
+        out_binds: *std.array_list.AlignedManaged(Binding, null),
     ) !bool {
         const pat = self.env.store.getPattern(pattern_idx);
         switch (pat) {
@@ -3164,7 +3163,7 @@ pub const Interpreter = struct {
                 const union_resolved = self.resolveBaseVar(value_rt_var);
                 if (union_resolved.desc.content != .structure or union_resolved.desc.content.structure != .tag_union) return false;
 
-                var tag_list = std.ArrayList(types.Tag).init(self.allocator);
+                var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
                 defer tag_list.deinit();
                 try self.appendUnionTags(value_rt_var, &tag_list);
 
@@ -3294,12 +3293,12 @@ pub const Interpreter = struct {
     }
 
     const FieldAccumulator = struct {
-        fields: std.ArrayList(types.RecordField),
+        fields: std.array_list.AlignedManaged(types.RecordField, null),
         name_to_index: std.AutoHashMap(u32, usize),
 
         fn init(allocator: std.mem.Allocator) !FieldAccumulator {
             return FieldAccumulator{
-                .fields = std.ArrayList(types.RecordField).init(allocator),
+                .fields = std.array_list.Managed(types.RecordField).init(allocator),
                 .name_to_index = std.AutoHashMap(u32, usize).init(allocator),
             };
         }

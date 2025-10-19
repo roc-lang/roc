@@ -53,12 +53,12 @@ const TypeWriter = @This();
 
 types: *const TypesStore,
 idents: *const Ident.Store,
-buf: std.ArrayList(u8),
-seen: std.ArrayList(Var),
+buf: std.array_list.Managed(u8),
+seen: std.array_list.Managed(Var),
 next_name_index: u32,
 name_counters: std.EnumMap(TypeContext, u32),
 flex_var_names_map: std.AutoHashMap(Var, FlexVarNameRange),
-flex_var_names: std.ArrayList(u8),
+flex_var_names: std.array_list.Managed(u8),
 
 const FlexVarNameRange = struct { start: usize, end: usize };
 
@@ -67,12 +67,12 @@ pub fn initFromParts(gpa: std.mem.Allocator, types_store: *const TypesStore, ide
     return .{
         .types = types_store,
         .idents = idents,
-        .buf = try std.ArrayList(u8).initCapacity(gpa, 32),
-        .seen = try std.ArrayList(Var).initCapacity(gpa, 16),
+        .buf = try std.array_list.Managed(u8).initCapacity(gpa, 32),
+        .seen = try std.array_list.Managed(Var).initCapacity(gpa, 16),
         .next_name_index = 0,
         .name_counters = std.EnumMap(TypeContext, u32).init(.{}),
         .flex_var_names_map = std.AutoHashMap(Var, FlexVarNameRange).init(gpa),
-        .flex_var_names = try std.ArrayList(u8).initCapacity(gpa, 32),
+        .flex_var_names = try std.array_list.Managed(u8).initCapacity(gpa, 32),
     };
 }
 

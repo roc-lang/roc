@@ -28,6 +28,17 @@ const runExpectBool = helpers.runExpectBool;
 const runExpectError = helpers.runExpectError;
 const runExpectStr = helpers.runExpectStr;
 
+const TraceWriterState = struct {
+    buffer: [256]u8 = undefined,
+    writer: std.fs.File.Writer = undefined,
+
+    fn init() TraceWriterState {
+        var state = TraceWriterState{};
+        state.writer = std.fs.File.stderr().writer(&state.buffer);
+        return state;
+    }
+};
+
 test "eval simple number" {
     try runExpectInt("1", 1, .no_trace);
     try runExpectInt("42", 42, .no_trace);
@@ -443,7 +454,7 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
 
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
-        interpreter.startTrace(std.io.getStdErr().writer().any());
+        interpreter.startTrace();
     }
     defer if (enable_trace) interpreter.endTrace();
 
@@ -823,7 +834,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
         // Read back from file
         const file_size = try tmp_file.getEndPos();
-        const buffer = try gpa.alignedAlloc(u8, @alignOf(ModuleEnv), @intCast(file_size));
+        const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(ModuleEnv)), @intCast(file_size));
         defer gpa.free(buffer);
         _ = try tmp_file.pread(buffer, 0);
 
