@@ -675,6 +675,26 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
     }
 }
 
+/// Replaces an existing expression with an e_num expression in-place.
+/// This is used for constant folding during compile-time evaluation.
+/// Note: This modifies only the CIR node and should only be called after type-checking
+/// is complete. Type information is stored separately and remains unchanged.
+pub fn replaceExprWithNum(store: *NodeStore, expr_idx: CIR.Expr.Idx, value: CIR.IntValue, num_kind: CIR.NumKind) !void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+
+    const extra_data_start = store.extra_data.len();
+    const value_as_i128: i128 = @bitCast(value.bytes);
+    const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
+    _ = try store.extra_data.appendSlice(store.gpa, &value_as_u32s);
+
+    store.nodes.set(node_idx, .{
+        .tag = .expr_num,
+        .data_1 = @intFromEnum(num_kind),
+        .data_2 = @intFromEnum(value.kind),
+        .data_3 = @intCast(extra_data_start),
+    });
+}
+
 /// Get the more-specific expr index. Used to make error messages nicer.
 ///
 /// For example, if the provided expr is a `block`, then this will return the
@@ -2135,6 +2155,20 @@ pub fn getDef(store: *const NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
         .annotation = annotation,
         .kind = kind,
     };
+}
+
+/// Updates the expression field of an existing definition.
+/// This is used during constant folding to replace expressions with their folded equivalents.
+pub fn setDefExpr(store: *NodeStore, def_idx: CIR.Def.Idx, new_expr: CIR.Expr.Idx) void {
+    const nid: Node.Idx = @enumFromInt(@intFromEnum(def_idx));
+    const node = store.nodes.get(nid);
+
+    std.debug.assert(node.tag == .def);
+
+    const extra_start = node.data_1;
+    // The expr field is at offset 1 in the extra_data layout for Def
+    // Layout: [0]=pattern, [1]=expr, [2-3]=kind, [4]=annotation
+    store.extra_data.items.items[extra_start + 1] = @intFromEnum(new_expr);
 }
 
 /// Retrieves a capture from the store.

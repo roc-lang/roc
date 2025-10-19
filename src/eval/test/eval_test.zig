@@ -700,6 +700,20 @@ test "string refcount - simple string closure" {
     try runExpectStr("(|s| s)(\"Test\")", "Test", .no_trace);
 }
 
+test "recursive factorial function" {
+    // Test standalone evaluation of recursive factorial without comptime
+    try runExpectInt(
+        \\{
+        \\    factorial = |n|
+        \\        if n <= 1
+        \\            1
+        \\        else
+        \\            n * factorial(n - 1)
+        \\    factorial(5)
+        \\}
+    , 120, .no_trace);
+}
+
 test "ModuleEnv serialization and interpreter evaluation" {
     // This test demonstrates that a ModuleEnv can be successfully:
     // 1. Created and used with the Interpreter to evaluate expressions

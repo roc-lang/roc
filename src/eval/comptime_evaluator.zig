@@ -119,7 +119,7 @@ fn comptimeRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv
 
 /// Result of evaluating a single declaration
 const EvalResult = union(enum) {
-    success,
+    success: ?eval_mod.StackValue, // Optional value to add to bindings (null for lambdas)
     crash: struct {
         message: []const u8,
         region: base.Region,
@@ -230,11 +230,19 @@ pub const ComptimeEvaluator = struct {
         const expr_idx = def.expr;
         const region = self.env.store.getExprRegion(expr_idx);
 
-        // Skip function definitions (lambdas/closures) - they can't be evaluated at compile time
         const expr = self.env.store.getExpr(expr_idx);
-        switch (expr) {
-            .e_lambda, .e_closure => return EvalResult.success,
-            else => {},
+        const is_lambda = switch (expr) {
+            .e_lambda, .e_closure => true,
+            else => false,
+        };
+
+        if (expr == .e_runtime_error) {
+            return EvalResult{
+                .crash = .{
+                    .message = "Runtime error in expression",
+                    .region = region,
+                },
+            };
         }
 
         // Reset halted flag at the start of each def - crashes only halt within a single def
@@ -245,7 +253,18 @@ pub const ComptimeEvaluator = struct {
         defer self.current_expr_region = null;
 
         const ops = self.get_ops();
+
         const result = self.interpreter.evalMinimal(expr_idx, ops) catch |err| {
+            // If this is a lambda/closure and it failed to evaluate, just skip it
+            // Top-level function definitions can fail for various reasons and that's ok
+            // The interpreter will evaluate them on-demand when they're called
+            // IMPORTANT: We do NOT skip blocks - blocks can have side effects like crash/expect
+            if (is_lambda) {
+                // Lambdas that fail to evaluate won't be added to bindings
+                // They'll be re-evaluated on-demand when called
+                return EvalResult{ .success = null };
+            }
+
             if (err == error.Crash) {
                 if (self.expect.crashMessage()) |msg| {
                     return EvalResult{
@@ -255,14 +274,13 @@ pub const ComptimeEvaluator = struct {
                         },
                     };
                 }
-                if (self.crash.crashMessage()) |msg| {
-                    return EvalResult{
-                        .crash = .{
-                            .message = msg,
-                            .region = region,
-                        },
-                    };
-                }
+                const msg = self.crash.crashMessage() orelse unreachable;
+                return EvalResult{
+                    .crash = .{
+                        .message = msg,
+                        .region = region,
+                    },
+                };
             }
             return EvalResult{
                 .error_eval = .{
@@ -272,10 +290,73 @@ pub const ComptimeEvaluator = struct {
             };
         };
 
-        const layout_cache = &self.interpreter.runtime_layout_store;
-        defer result.decref(layout_cache, ops);
+        // Try to fold the result to a constant expression (only for non-lambdas)
+        if (!is_lambda) {
+            self.tryFoldConstant(def_idx, result) catch {
+                // If folding fails, just continue - the original expression is still valid
+                // NotImplemented is expected for non-foldable types
+            };
+        }
 
-        return EvalResult.success;
+        // Return the value WITHOUT decref - it will be stored in bindings
+        // The bindings will own the value and will decref it when the interpreter is destroyed
+        return EvalResult{ .success = result };
+    }
+
+    /// Attempts to fold constant values in-place
+    fn tryFoldConstant(self: *ComptimeEvaluator, def_idx: CIR.Def.Idx, stack_value: eval_mod.StackValue) !void {
+        const def = self.env.store.getDef(def_idx);
+        const expr_idx = def.expr;
+
+        // Don't fold if the expression is already e_num (already a constant)
+        const old_expr = self.env.store.getExpr(expr_idx);
+        if (old_expr == .e_num) {
+            return; // Already folded, nothing to do
+        }
+
+        // Convert StackValue to CIR expression based on layout
+        const layout = stack_value.layout;
+
+        // Check if this is a scalar type (including integers)
+        if (layout.tag != .scalar) {
+            return error.NotImplemented; // Don't fold non-scalar types yet
+        }
+
+        const scalar_tag = layout.data.scalar.tag;
+        switch (scalar_tag) {
+            .int => {
+                // Extract integer value
+                const value = stack_value.asI128();
+                const precision = layout.data.scalar.data.int;
+
+                // Map precision to NumKind
+                const num_kind: CIR.NumKind = switch (precision) {
+                    .i8 => .i8,
+                    .i16 => .i16,
+                    .i32 => .i32,
+                    .i64 => .i64,
+                    .i128 => .i128,
+                    .u8 => .u8,
+                    .u16 => .u16,
+                    .u32 => .u32,
+                    .u64 => .u64,
+                    .u128 => .u128,
+                };
+
+                // Create IntValue
+                const int_value = CIR.IntValue{
+                    .bytes = @bitCast(value),
+                    .kind = switch (precision) {
+                        .u8, .u16, .u32, .u64, .u128 => .u128,
+                        .i8, .i16, .i32, .i64, .i128 => .i128,
+                    },
+                };
+
+                // Replace the expression with e_num in-place
+                try self.env.store.replaceExprWithNum(expr_idx, int_value, num_kind);
+            },
+            else => return error.NotImplemented, // Don't fold other scalar types yet
+        }
     }
 
     /// Helper to report a problem and track allocated message
@@ -337,8 +418,16 @@ pub const ComptimeEvaluator = struct {
             };
 
             switch (eval_result) {
-                .success => {
-                    // Declaration evaluated successfully, nothing to report
+                .success => |maybe_value| {
+                    // Declaration evaluated successfully
+                    // If we got a value, add it to bindings so later defs can reference it
+                    if (maybe_value) |value| {
+                        const def = self.env.store.getDef(def_idx);
+                        try self.interpreter.bindings.append(.{
+                            .pattern_idx = def.pattern,
+                            .value = value,
+                        });
+                    }
                 },
                 .crash => |crash_info| {
                     crashed += 1;

@@ -1,6 +1,7 @@
 //! Interpreter implementing the type-carrying architecture.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base_pkg = @import("base");
 const types = @import("types");
 const layout = @import("layout");
@@ -1286,9 +1287,9 @@ pub const Interpreter = struct {
                 var field_names = try self.allocator.alloc(@import("base").Ident.Idx, caps.len);
                 defer self.allocator.free(field_names);
 
-                // Helper: resolve a capture value (from local bindings or active closure captures)
+                // Helper: resolve a capture value (from local bindings, active closure captures, or top-level defs)
                 const resolveCapture = struct {
-                    fn go(self_interp: *Interpreter, cap: can.CIR.Expr.Capture) ?StackValue {
+                    fn go(self_interp: *Interpreter, cap: can.CIR.Expr.Capture, ops: *RocOps) ?StackValue {
                         // First try local bindings by pattern idx
                         var i: usize = self_interp.bindings.items.len;
                         while (i > 0) {
@@ -1316,6 +1317,15 @@ pub const Interpreter = struct {
                                 }
                             }
                         }
+                        // Finally try top-level defs by pattern idx
+                        const all_defs = self_interp.env.store.sliceDefs(self_interp.env.all_defs);
+                        for (all_defs) |def_idx| {
+                            const def = self_interp.env.store.getDef(def_idx);
+                            if (def.pattern == cap.pattern_idx) {
+                                // Found the def! Evaluate it to get the captured value
+                                return self_interp.evalMinimal(def.expr, ops) catch null;
+                            }
+                        }
                         return null;
                     }
                 }.go;
@@ -1323,7 +1333,7 @@ pub const Interpreter = struct {
                 for (caps, 0..) |cap_idx, i| {
                     const cap = self.env.store.getCapture(cap_idx);
                     field_names[i] = cap.name;
-                    const captured_val = resolveCapture(self, cap) orelse return error.NotImplemented;
+                    const captured_val = resolveCapture(self, cap, roc_ops) orelse return error.NotImplemented;
                     field_layouts[i] = captured_val.layout;
                 }
 
@@ -1352,7 +1362,7 @@ pub const Interpreter = struct {
                     var accessor = try rec_val.asRecord(&self.runtime_layout_store);
                     for (caps) |cap_idx2| {
                         const cap2 = self.env.store.getCapture(cap_idx2);
-                        const cap_val2 = resolveCapture(self, cap2) orelse return error.NotImplemented;
+                        const cap_val2 = resolveCapture(self, cap2, roc_ops) orelse return error.NotImplemented;
                         const idx_opt = accessor.findFieldIndex(self.env, self.env.getIdent(cap2.name)) orelse return error.NotImplemented;
                         try accessor.setFieldByIndex(idx_opt, cap_val2, roc_ops);
                     }
@@ -1364,6 +1374,7 @@ pub const Interpreter = struct {
                 if (all.len == 0) return error.TypeMismatch;
                 const func_idx = call.func;
                 const arg_indices = all[0..];
+
                 // Runtime unification for call: constrain return type from arg types
                 const func_ct_var = can.ModuleEnv.varFrom(func_idx);
                 const func_rt_var = try self.translateTypeVar(self.env, func_ct_var);
@@ -1391,6 +1402,7 @@ pub const Interpreter = struct {
                 );
 
                 const func_val = try self.evalExprMinimal(func_idx, roc_ops, null);
+
                 var arg_values = try self.allocator.alloc(StackValue, arg_indices.len);
                 defer self.allocator.free(arg_values);
                 var j: usize = 0;
@@ -1610,6 +1622,27 @@ pub const Interpreter = struct {
                         }
                     }
                 }
+
+                if (builtin.mode == .Debug) {
+                    // In debug builds, check if this pattern corresponds to a top-level def
+                    // If we find it, that means it should have been in bindings - this is a compiler bug
+                    const all_defs = self.env.store.sliceDefs(self.env.all_defs);
+                    for (all_defs) |def_idx| {
+                        const def = self.env.store.getDef(def_idx);
+                        if (def.pattern == lookup.pattern_idx) {
+                            const pat = self.env.store.getPattern(lookup.pattern_idx);
+                            const var_name = switch (pat) {
+                                .assign => |a| self.env.getIdent(a.ident),
+                                else => "(non-assign pattern)",
+                            };
+                            std.debug.panic(
+                                "Bug in compiler: top-level definition '{s}' (pattern_idx={}) should have been added to bindings but wasn't found there",
+                                .{ var_name, lookup.pattern_idx },
+                            );
+                        }
+                    }
+                }
+
                 return error.NotImplemented;
             },
             .e_lookup_external => |lookup| {
@@ -1772,7 +1805,7 @@ pub const Interpreter = struct {
         return StackValue{ .layout = layout_val, .ptr = ptr, .is_initialized = true };
     }
 
-    fn pushCopy(self: *Interpreter, src: StackValue, roc_ops: *RocOps) !StackValue {
+    pub fn pushCopy(self: *Interpreter, src: StackValue, roc_ops: *RocOps) !StackValue {
         const size: u32 = if (src.layout.tag == .closure) src.getTotalSize(&self.runtime_layout_store) else self.runtime_layout_store.layoutSize(src.layout);
         const target_usize = self.runtime_layout_store.targetUsize();
         var alignment = src.layout.alignment(target_usize);
