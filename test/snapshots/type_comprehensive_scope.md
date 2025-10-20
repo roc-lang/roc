@@ -47,6 +47,7 @@ TYPE REDECLARED - type_comprehensive_scope.md:10:1:10:37
 UNDECLARED TYPE - type_comprehensive_scope.md:13:19:13:23
 TYPE REDECLARED - type_comprehensive_scope.md:22:1:22:13
 UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
+TOO MANY ARGS - type_comprehensive_scope.md:29:10:29:24
 # PROBLEMS
 **TYPE REDECLARED**
 The type _Result_ is being redeclared.

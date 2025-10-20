@@ -14,6 +14,7 @@ main! = |_| processDict(Dict.empty().insert("one", 1))
 ~~~
 # EXPECTED
 DOES NOT EXIST - type_app_multiple_args.md:6:25:6:35
+TOO MANY ARGS - type_app_multiple_args.md:3:15:3:29
 # PROBLEMS
 **DOES NOT EXIST**
 `Dict.empty` does not exist.

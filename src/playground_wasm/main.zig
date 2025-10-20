@@ -942,48 +942,11 @@ fn compileSource(source: []const u8) !CompilerStageData {
             const base_ptr = @intFromPtr(buffer.ptr);
 
             logDebug("loadCompiledModule: About to deserialize common\n", .{});
-            const deserialized_common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), module_source).*;
-            logDebug("loadCompiledModule: common deserialized successfully\n", .{});
-
-            logDebug("loadCompiledModule: About to deserialize types\n", .{});
-            const deserialized_types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*;
-            logDebug("loadCompiledModule: types deserialized successfully\n", .{});
-
-            logDebug("loadCompiledModule: About to deserialize external_decls\n", .{});
-            const deserialized_external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*;
-            logDebug("loadCompiledModule: external_decls deserialized successfully\n", .{});
-
-            logDebug("loadCompiledModule: About to deserialize imports\n", .{});
-            const deserialized_imports = serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa).*;
-            logDebug("loadCompiledModule: imports deserialized successfully\n", .{});
-
-            logDebug("loadCompiledModule: About to deserialize store\n", .{});
-            const deserialized_store_ptr = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa);
-            const deserialized_store = deserialized_store_ptr.*;
-            logDebug("loadCompiledModule: store deserialized successfully\n", .{});
-
-            // Intern the module name for fast comparisons
-            const module_name_idx = module_env_ptr.common.idents.insert(gpa, base.Ident.for_text(module_name_param)) catch unreachable;
-
-            logDebug("loadCompiledModule: All deserialized, constructing ModuleEnv\n", .{});
-            module_env_ptr.* = ModuleEnv{
-                .gpa = gpa,
-                .common = deserialized_common,
-                .types = deserialized_types,
-                .module_kind = serialized_ptr.module_kind,
-                .all_defs = serialized_ptr.all_defs,
-                .all_statements = serialized_ptr.all_statements,
-                .exports = serialized_ptr.exports,
-                .builtin_statements = serialized_ptr.builtin_statements,
-                .external_decls = deserialized_external_decls,
-                .imports = deserialized_imports,
-                .module_name = module_name_param,
-                .module_name_idx = module_name_idx,
-                .diagnostics = serialized_ptr.diagnostics,
-                .store = deserialized_store,
-                .evaluation_order = null,
-            };
-            logDebug("loadCompiledModule: ModuleEnv constructed successfully\n", .{});
+            // Use the built-in deserialize method instead of manually deserializing each field
+            // This ensures proper offset calculations when the struct layout changes
+            logDebug("loadCompiledModule: About to deserialize ModuleEnv\n", .{});
+            module_env_ptr.* = serialized_ptr.deserialize(@as(i64, @intCast(base_ptr)), gpa, module_source, module_name_param).*;
+            logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});
 
             logDebug("loadCompiledModule: Returning LoadedModule\n", .{});
             return .{ .env = module_env_ptr, .buffer = buffer, .gpa = gpa };
