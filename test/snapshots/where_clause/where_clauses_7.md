@@ -90,7 +90,8 @@ Hash(a, hasher) # After header
 					a.hash : hasher # After method
 					-> # After arrow
 						hasher, # After first clause
-				hasher.Hasher]
+				hasher.Hasher
+			]
 
 Decode(a) : a
 	where [a.decode : List(U8) -> a]

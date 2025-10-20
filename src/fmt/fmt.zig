@@ -680,28 +680,45 @@ const Formatter = struct {
         }
 
         for (clause_slice, 0..) |clause, i| {
+            const clause_is_multiline = fmt.nodeWillBeMultiline(AST.WhereClause.Idx, clause);
+
             if (i > 0) {
                 if (clauses_are_multiline) {
+                    // For non-first clauses, flush comments between previous comma and this clause
+                    // BUT only if the clause itself is single-line (multiline clauses flush themselves)
+                    if (!clause_is_multiline) {
+                        const clause_region = fmt.nodeRegion(@intFromEnum(clause));
+                        _ = try fmt.flushCommentsBefore(clause_region.start);
+                    }
+                    // ensureNewline is idempotent with flush - only adds newline if flush didn't
                     try fmt.ensureNewline();
                     try fmt.pushIndent();
                 } else {
                     try fmt.pushAll(", ");
                 }
+            } else if (clauses_are_multiline) {
+                // First clause in multiline collection
+                // Only add newline+indent if clause is single-line (multiline clauses handle it themselves)
+                if (!clause_is_multiline) {
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
+                }
             }
+
             try fmt.formatWhereClause(clause);
 
-            // Add comma and flush comments after the clause if not the last item
-            if (i < clause_slice.len - 1) {
-                if (clauses_are_multiline) {
-                    try fmt.push(',');
-                    const clause_region = fmt.nodeRegion(@intFromEnum(clause));
-                    _ = try fmt.flushCommentsAfter(clause_region.end);
-                } else {
-                    // For single-line, comma is already added above in ", "
-                }
+            // Add comma after each non-last clause
+            if (i < clause_slice.len - 1 and clauses_are_multiline) {
+                try fmt.push(',');
             }
         }
 
+        // Close bracket
+        if (clauses_are_multiline) {
+            fmt.curr_indent = start_indent;
+            try fmt.ensureNewline();
+            try fmt.pushIndent();
+        }
         try fmt.push(']');
     }
 
