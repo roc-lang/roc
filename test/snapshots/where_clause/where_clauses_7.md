@@ -89,7 +89,7 @@ Hash(a, hasher) # After header
 				[ # After where
 					a.hash : hasher # After method
 					-> # After arrow
-						hasher,
+						hasher, # After first clause
 				hasher.Hasher]
 
 Decode(a) : a

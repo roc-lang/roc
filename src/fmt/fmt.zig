@@ -682,7 +682,6 @@ const Formatter = struct {
         for (clause_slice, 0..) |clause, i| {
             if (i > 0) {
                 if (clauses_are_multiline) {
-                    try fmt.push(',');
                     try fmt.ensureNewline();
                     try fmt.pushIndent();
                 } else {
@@ -690,6 +689,17 @@ const Formatter = struct {
                 }
             }
             try fmt.formatWhereClause(clause);
+
+            // Add comma and flush comments after the clause if not the last item
+            if (i < clause_slice.len - 1) {
+                if (clauses_are_multiline) {
+                    try fmt.push(',');
+                    const clause_region = fmt.nodeRegion(@intFromEnum(clause));
+                    _ = try fmt.flushCommentsAfter(clause_region.end);
+                } else {
+                    // For single-line, comma is already added above in ", "
+                }
+            }
         }
 
         try fmt.push(']');
