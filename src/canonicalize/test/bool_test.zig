@@ -21,7 +21,6 @@ test "canonicalize True as Bool" {
     // Get the expression
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    // Without builtin injection, True is just a tag (not a nominal)
     try testing.expectEqual(.e_tag, std.meta.activeTag(expr));
 
     // The tag should be "True"
@@ -39,7 +38,6 @@ test "canonicalize False as Bool" {
     // Get the expression
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
-    // Without builtin injection, False is just a tag (not a nominal)
     try testing.expectEqual(.e_tag, std.meta.activeTag(expr));
 
     // The tag should be "False"
