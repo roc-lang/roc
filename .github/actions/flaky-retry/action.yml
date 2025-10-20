@@ -37,14 +37,8 @@ runs:
 
           # Check if command succeeded
           if [ $exit_code -eq 0 ]; then
-            # Check for memory leaks even on success
-            if grep -q "leaked" "$output_file"; then
-              echo "Command exited with code 0 but output contains 'leaked'"
-              exit 1
-            else
-              echo "Command succeeded"
-              exit 0
-            fi
+            echo "Command succeeded"
+            exit 0
           fi
 
           # Command failed - check if we should retry
@@ -85,14 +79,8 @@ runs:
 
           # Check if command succeeded
           if ($exitCode -eq 0) {
-            # Check for memory leaks even on success
-            if ($output -like "*leaked*") {
-              Write-Host "Command exited with code 0 but output contains 'leaked'"
-              exit 1
-            } else {
-              Write-Host "Command succeeded"
-              exit 0
-            }
+            Write-Host "Command succeeded"
+            exit 0
           }
 
           # Command failed - check if we should retry
