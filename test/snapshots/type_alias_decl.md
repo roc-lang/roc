@@ -329,7 +329,7 @@ main! = |_| {
 		(ty-header (name "ApiResponse")
 			(ty-args
 				(ty-rigid-var (name "data"))))
-		(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+		(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 			(ty-rigid-var-lookup (ty-rigid-var (name "data")))
 			(ty-lookup (name "Str") (builtin))))
 	(s-alias-decl

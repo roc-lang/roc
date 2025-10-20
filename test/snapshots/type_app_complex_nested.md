@@ -101,6 +101,26 @@ deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
              ^^^^^
 
 
+**TOO MANY ARGS**
+The type _Dict_ expects  argument, but got  instead.
+**type_app_complex_nested.md:18:44:18:63:**
+```roc
+ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
+```
+                                           ^^^^^^^^^^^^^^^^^^^
+
+
+
+**TOO MANY ARGS**
+The type _Dict_ expects  argument, but got  instead.
+**type_app_complex_nested.md:4:41:4:61:**
+```roc
+processComplex : Result(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
+```
+                                        ^^^^^^^^^^^^^^^^^^^^
+
+
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -276,10 +296,10 @@ main! = |_| processComplex(Ok([Some(42), None]))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-apply (name "List") (builtin)
 							(ty-malformed))
-						(ty-apply (name "Dict") (external (module-idx "0") (target-node-idx "0"))
+						(ty-apply (name "Dict") (external (module-idx "0") (target-node-idx "1"))
 							(ty-lookup (name "Str") (builtin))
 							(ty-malformed)))
 					(ty-apply (name "List") (builtin)
@@ -320,10 +340,10 @@ main! = |_| processComplex(Ok([Some(42), None]))
 			(ty-args
 				(ty-rigid-var (name "a"))
 				(ty-rigid-var (name "b"))))
-		(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+		(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 			(ty-apply (name "List") (builtin)
 				(ty-malformed))
-			(ty-apply (name "Dict") (external (module-idx "0") (target-node-idx "0"))
+			(ty-apply (name "Dict") (external (module-idx "0") (target-node-idx "1"))
 				(ty-lookup (name "Str") (builtin))
 				(ty-malformed)))))
 ~~~
@@ -331,7 +351,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> List(Error)"))
+		(patt (type "Result(List(Error), Error) -> List(Error)"))
 		(patt (type "Error -> Error"))
 		(patt (type "_arg -> List(Error)")))
 	(type_decls
@@ -341,7 +361,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "b"))))))
 	(expressions
-		(expr (type "Error -> List(Error)"))
+		(expr (type "Result(List(Error), Error) -> List(Error)"))
 		(expr (type "Error -> Error"))
 		(expr (type "_arg -> List(Error)"))))
 ~~~

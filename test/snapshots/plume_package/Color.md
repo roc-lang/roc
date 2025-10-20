@@ -125,6 +125,32 @@ The unused variable is declared here:
 
 
 **TYPE MISMATCH**
+This expression is used in an unexpected way:
+**Color.md:32:5:45:6:**
+```roc
+    match bytes {
+        ['#', a, b, c, d, e, f] => {
+            is_valid =
+                a.is_char_in_hex_range()
+                and b.is_char_in_hex_range()
+                and c.is_char_in_hex_range()
+                and d.is_char_in_hex_range()
+                and e.is_char_in_hex_range()
+                and f.is_char_in_hex_range()
+
+            if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
+        }
+        _ => Err(InvalidHex("Expected Hex must start with # and be 7 characters long, got ${str}"))
+    }
+```
+
+It has the type:
+    _[InvalidHex(Str), Err([InvalidHex(Str)]_others)][Ok(Color)]_others2_
+
+But the type annotation says it should have the type:
+    _Result(Color, [InvalidHex(Str)])_
+
+**TYPE MISMATCH**
 The first argument being passed to this function has the wrong type:
 **Color.md:51:104:51:105:**
 ```roc
@@ -864,7 +890,7 @@ is_named_color = |str| {
 			(declared-type
 				(ty-fn (effectful false)
 					(ty-lookup (name "Str") (builtin))
-					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-lookup (name "Color") (local))
 						(ty-tag-union
 							(ty-tag-name (name "InvalidHex")
@@ -1005,7 +1031,7 @@ is_named_color = |str| {
 			(declared-type
 				(ty-fn (effectful false)
 					(ty-lookup (name "Str") (builtin))
-					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-lookup (name "Color") (local))
 						(ty-tag-union
 							(ty-tag-name (name "UnknownColor")
@@ -1103,7 +1129,7 @@ is_named_color = |str| {
 		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
 		(patt (type "Str -> Error"))
 		(patt (type "Error -> Error"))
-		(patt (type "Str -> Error"))
+		(patt (type "Str -> Result(Color, [UnknownColor(Str)])"))
 		(patt (type "_arg -> Error")))
 	(type_decls
 		(nominal (type "Color")
@@ -1113,6 +1139,6 @@ is_named_color = |str| {
 		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
 		(expr (type "Str -> Error"))
 		(expr (type "Error -> Error"))
-		(expr (type "Str -> Error"))
+		(expr (type "Str -> Result(Color, [UnknownColor(Str)])"))
 		(expr (type "_arg -> Error"))))
 ~~~

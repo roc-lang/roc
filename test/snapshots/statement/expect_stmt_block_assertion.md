@@ -69,21 +69,21 @@ foo = |a| {
 							(p-assign (ident "a")))
 						(e-nominal-external
 							(module-idx "2")
-							(target-node-idx "0")
+							(target-node-idx "1")
 							(e-tag (name "True")))))
 				(e-lookup-local
 					(p-assign (ident "a")))))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "0")))
-					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "0"))))))))
+					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "1")))
+					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "1"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Error")))
+		(patt (type "Bool -> Bool")))
 	(expressions
-		(expr (type "Error -> Error"))))
+		(expr (type "Bool -> Bool"))))
 ~~~

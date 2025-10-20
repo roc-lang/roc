@@ -745,7 +745,7 @@ combineResults = |jsonResult, httpStatus|
 			(declared-type
 				(ty-fn (effectful false)
 					(ty-lookup (name "Str") (builtin))
-					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-malformed)
 						(ty-malformed))))))
 	(d-let
@@ -823,7 +823,7 @@ combineResults = |jsonResult, httpStatus|
 					(ty-malformed)
 					(ty-apply (name "List") (builtin)
 						(ty-malformed))
-					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-apply (name "List") (builtin)
 							(ty-malformed))
 						(ty-malformed))))))
@@ -926,11 +926,11 @@ combineResults = |jsonResult, httpStatus|
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-malformed)
 						(ty-malformed))
 					(ty-malformed)
-					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-malformed)
 						(ty-malformed))))))
 	(s-alias-decl
@@ -960,20 +960,20 @@ combineResults = |jsonResult, httpStatus|
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str -> Error"))
+		(patt (type "Str -> Result(Error, Error)"))
 		(patt (type "Error -> Error"))
-		(patt (type "Error, List(Error) -> Error"))
+		(patt (type "Error, List(Error) -> Result(List(Error), Error)"))
 		(patt (type "Error -> Error"))
 		(patt (type "Error -> Str"))
-		(patt (type "Error, Error -> Error")))
+		(patt (type "Result(Error, Error), Error -> Result(Error, Error)")))
 	(type_decls
 		(alias (type "ServerConfig")
 			(ty-header (name "ServerConfig"))))
 	(expressions
-		(expr (type "Str -> Error"))
+		(expr (type "Str -> Result(Error, Error)"))
 		(expr (type "Error -> Error"))
-		(expr (type "Error, List(Error) -> Error"))
+		(expr (type "Error, List(Error) -> Result(List(Error), Error)"))
 		(expr (type "Error -> Error"))
 		(expr (type "Error -> Str"))
-		(expr (type "Error, Error -> Error"))))
+		(expr (type "Result(Error, Error), Error -> Result(Error, Error)"))))
 ~~~

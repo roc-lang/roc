@@ -2277,7 +2277,7 @@ expect {
 				(ty-fn (effectful false)
 					(ty-apply (name "List") (builtin)
 						(ty-malformed))
-					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-record)
 						(ty-underscore))))))
 	(d-let
@@ -2419,7 +2419,7 @@ expect {
 		(patt (type "Bool -> Num(_size)"))
 		(patt (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(patt (type "[Red][Blue, Green]_others, _arg -> Error"))
-		(patt (type "List(Error) -> Error"))
+		(patt (type "List(Error) -> Result({  }, _d)"))
 		(patt (type "{}")))
 	(type_decls
 		(alias (type "Map(a, b)")
@@ -2464,6 +2464,6 @@ expect {
 		(expr (type "Bool -> Num(_size)"))
 		(expr (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(expr (type "[Red][Blue, Green]_others, _arg -> Error"))
-		(expr (type "List(Error) -> Error"))
+		(expr (type "List(Error) -> Result({  }, _d)"))
 		(expr (type "{}"))))
 ~~~

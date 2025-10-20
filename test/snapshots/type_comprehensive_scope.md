@@ -106,6 +106,16 @@ BadType : SomeUndeclaredType
           ^^^^^^^^^^^^^^^^^^
 
 
+**TOO MANY ARGS**
+The type _Dict_ expects  argument, but got  instead.
+**type_comprehensive_scope.md:29:10:29:24:**
+```roc
+MyDict : Dict(Str, U64)
+```
+         ^^^^^^^^^^^^^^
+
+
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,UpperIdent,
@@ -286,7 +296,7 @@ Complex : {
 		(ty-lookup (name "Str") (builtin)))
 	(s-alias-decl
 		(ty-header (name "MyBool"))
-		(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "0"))))
+		(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "1"))))
 	(s-alias-decl
 		(ty-header (name "Person"))
 		(ty-record
@@ -326,7 +336,7 @@ Complex : {
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(s-alias-decl
 		(ty-header (name "MyResult"))
-		(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+		(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 			(ty-lookup (name "Str") (builtin))
 			(ty-lookup (name "U64") (builtin))))
 	(s-alias-decl
@@ -341,7 +351,7 @@ Complex : {
 			(ty-lookup (name "Str") (builtin))))
 	(s-alias-decl
 		(ty-header (name "MyDict"))
-		(ty-apply (name "Dict") (external (module-idx "0") (target-node-idx "0"))
+		(ty-apply (name "Dict") (external (module-idx "0") (target-node-idx "1"))
 			(ty-lookup (name "Str") (builtin))
 			(ty-lookup (name "U64") (builtin))))
 	(s-alias-decl
@@ -350,8 +360,8 @@ Complex : {
 			(field (field "person")
 				(ty-lookup (name "Person") (local)))
 			(field (field "result")
-				(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
-					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "0")))
+				(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
+					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "1")))
 					(ty-lookup (name "Str") (builtin))))
 			(field (field "tree")
 				(ty-apply (name "Tree") (local)

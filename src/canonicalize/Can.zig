@@ -3541,7 +3541,13 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                 // This is an auto-imported type - create the import and return e_nominal_external
                 const module_name_text = auto_imported_type.env.module_name;
                 const import_idx = try self.getOrCreateAutoImport(module_name_text);
-                const target_node_idx = auto_imported_type.env.getExposedNodeIndexById(type_tok_ident) orelse 0;
+
+                // Convert identifier from current module to target module's interner
+                const type_tok_text = self.env.getIdent(type_tok_ident);
+                const target_node_idx = if (auto_imported_type.env.common.findIdent(type_tok_text)) |target_ident|
+                    auto_imported_type.env.getExposedNodeIndexById(target_ident) orelse 0
+                else
+                    0;
 
                 const expr_idx = try self.env.addExpr(CIR.Expr{
                     .e_nominal_external = .{
@@ -3577,11 +3583,13 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
             };
 
             // Look up the target node index in the imported module
-            // Use exposed_info.original_name directly, just like type annotations do
+            // Convert identifier from current module to target module's interner
             const target_node_idx = blk: {
                 const envs_map = self.module_envs orelse break :blk 0;
                 const auto_imported_type = envs_map.get(module_name) orelse break :blk 0;
-                break :blk auto_imported_type.env.getExposedNodeIndexById(exposed_info.original_name) orelse 0;
+                const original_name_text = self.env.getIdent(exposed_info.original_name);
+                const target_ident = auto_imported_type.env.common.findIdent(original_name_text) orelse break :blk 0;
+                break :blk auto_imported_type.env.getExposedNodeIndexById(target_ident) orelse 0;
             };
 
             // Create e_nominal_external for the imported type (target_node_idx can be 0)
@@ -5362,7 +5370,13 @@ fn canonicalizeTypeAnnoBasicType(
                     // We need to create an import for it and return the type annotation
                     const module_name_text = auto_imported_type.env.module_name;
                     const import_idx = try self.getOrCreateAutoImport(module_name_text);
-                    const target_node_idx = auto_imported_type.env.getExposedNodeIndexById(type_name_ident) orelse 0;
+
+                    // Convert identifier from current module to target module's interner
+                    const type_name_text = self.env.getIdent(type_name_ident);
+                    const target_node_idx = if (auto_imported_type.env.common.findIdent(type_name_text)) |target_ident|
+                        auto_imported_type.env.getExposedNodeIndexById(target_ident) orelse 0
+                    else
+                        0;
                     return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
                         .name = type_name_ident,
                         .base = .{ .external = .{
@@ -5380,7 +5394,12 @@ fn canonicalizeTypeAnnoBasicType(
                     // Get the node index from the imported module
                     if (self.module_envs) |envs_map| {
                         if (envs_map.get(exposed_info.module_name)) |auto_imported_type| {
-                            const target_node_idx = auto_imported_type.env.getExposedNodeIndexById(exposed_info.original_name) orelse 0;
+                            // Convert identifier from current module to target module's interner
+                            const original_name_text = self.env.getIdent(exposed_info.original_name);
+                            const target_node_idx = if (auto_imported_type.env.common.findIdent(original_name_text)) |target_ident|
+                                auto_imported_type.env.getExposedNodeIndexById(target_ident) orelse 0
+                            else
+                                0;
                             return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
                                 .name = type_name_ident,
                                 .base = .{ .external = .{

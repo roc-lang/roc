@@ -521,7 +521,7 @@ transform = |result|
 		(p-assign (ident "resultType"))
 		(e-nominal-external
 			(module-idx "3")
-			(target-node-idx "0")
+			(target-node-idx "3")
 			(e-tag (name "Ok")
 				(args
 					(e-num (value "42")))))
@@ -603,7 +603,7 @@ transform = |result|
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "Error"))
-		(patt (type "Error"))
+		(patt (type "Result(Num(Int(Signed32)), Str)"))
 		(patt (type "{  } -> Error"))
 		(patt (type "Error -> Str"))
 		(patt (type "Result(Error, Error) -> Error")))
@@ -611,7 +611,7 @@ transform = |result|
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))
-		(expr (type "Error"))
+		(expr (type "Result(Num(Int(Signed32)), Str)"))
 		(expr (type "{  } -> Error"))
 		(expr (type "Error -> Str"))
 		(expr (type "Result(Error, Error) -> Error"))))
