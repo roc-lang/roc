@@ -6,7 +6,7 @@
 //!
 //! NOTE: This handles ALL top-level definitions including:
 //! - Regular top-level definitions (e.g., `foo = 42`)
-//! - Associated items (e.g., `TypeName.itemName = 5` from `TypeName := T.{ itemName = 5 }`)
+//! - Associated items (e.g., `TypeName.item_name = 5` from `TypeName := T.{ item_name = 5 }`)
 //!
 //! Associated items are definitions nested under nominal type declarations and have
 //! qualified names. They are stored in `all_defs` alongside regular top-level defs.

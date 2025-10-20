@@ -552,7 +552,7 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     // Type-check definitions in SCC (Strongly Connected Components) order
     // This ensures that definitions are checked in dependency order,
     // and handles mutually recursive definitions correctly.
-    // NOTE: This includes both top-level defs AND associated items (e.g. TypeName.itemName)
+    // NOTE: This includes both top-level defs AND associated items (e.g. TypeName.item_name)
     // evaluation_order must be set by canonicalization before calling checkFile()
     const eval_order = self.cir.evaluation_order.?;
 
