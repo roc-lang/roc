@@ -139,13 +139,6 @@ pub fn main() !void {
         .result_type = result_type_idx,
     };
     try serializeBuiltinIndices(builtin_indices, "zig-out/builtins/builtin_indices.bin");
-
-    // // Print info for debugging
-    // const stdout = std.io.getStdOut().writer();
-    // try stdout.print("Builtin indices generated:\n", .{});
-    // try stdout.print("  Bool type: {}\n", .{bool_type_idx});
-    // try stdout.print("  Result type: {}\n", .{result_type_idx});
-    // try stdout.print("Native (64-bit) @sizeOf(ModuleEnv.Serialized) = {}\n", .{@sizeOf(ModuleEnv.Serialized)});
 }
 
 const ModuleDep = struct {
@@ -289,14 +282,6 @@ fn serializeModuleEnv(
     // Create output file
     const file = try std.fs.cwd().createFile(output_path, .{ .read = true });
     defer file.close();
-
-    // Log the actual values BEFORE serialization
-    // const stdout = std.io.getStdOut().writer();
-    // try stdout.print("Serializing {s}: all_statements.span.start={}, .len={}\n", .{
-    //     output_path,
-    //     env.all_statements.span.start,
-    //     env.all_statements.span.len,
-    // });
 
     // Serialize using CompactWriter
     var writer = collections.CompactWriter.init();
