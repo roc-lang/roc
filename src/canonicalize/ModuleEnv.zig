@@ -1447,9 +1447,10 @@ pub const Serialized = struct {
         source: []const u8,
         module_name: []const u8,
     ) *Self {
-        // Verify that Serialized has the same size as the runtime struct.
+        // Verify that Serialized is at least as large as the runtime struct.
         // This is required because we're reusing the same memory location.
-        comptime std.debug.assert(@sizeOf(@This()) == @sizeOf(Self));
+        // On 32-bit platforms, Serialized may be larger due to using fixed-size types for platform-independent serialization.
+        comptime std.debug.assert(@sizeOf(@This()) >= @sizeOf(Self));
 
         // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
         const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
