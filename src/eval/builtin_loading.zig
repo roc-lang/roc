@@ -1,11 +1,13 @@
 //! Utilities for loading compiled builtin modules
 
 const std = @import("std");
+const base = @import("base");
 const can = @import("can");
 const collections = @import("collections");
 
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
+const Ident = base.Ident;
 
 /// Wrapper for a loaded compiled builtin module that tracks the buffer
 pub const LoadedModule = struct {
@@ -60,6 +62,9 @@ pub fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_n
     const deserialized_store_ptr = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa);
     const deserialized_store = deserialized_store_ptr.*;
 
+    // Intern the module name for fast comparisons
+    const module_name_idx = env.common.idents.insert(gpa, Ident.for_text(module_name)) catch unreachable;
+
     env.* = ModuleEnv{
         .gpa = gpa,
         .common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), source).*,
@@ -72,6 +77,7 @@ pub fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_n
         .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
         .imports = serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
         .module_name = module_name,
+        .module_name_idx = module_name_idx,
         .diagnostics = serialized_ptr.diagnostics,
         .store = deserialized_store,
         .evaluation_order = null,

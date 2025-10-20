@@ -67,6 +67,8 @@ imports: CIR.Import.Store,
 /// The module's name as a string
 /// This is needed for import resolution to match import names to modules
 module_name: []const u8,
+/// The module's name as an interned identifier (for fast comparisons)
+module_name_idx: Ident.Idx,
 /// Diagnostics collected during canonicalization (optional)
 diagnostics: CIR.Diagnostic.Span,
 /// Stores the raw nodes which represent the intermediate representation
@@ -106,6 +108,7 @@ pub fn initCIRFields(self: *Self, gpa: std.mem.Allocator, module_name: []const u
     // Note: external_decls already exists from ModuleEnv.init(), so we don't create a new one
     self.imports = CIR.Import.Store.init();
     self.module_name = module_name;
+    self.module_name_idx = try self.insertIdent(Ident.for_text(module_name));
     self.diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
     // Note: self.store already exists from ModuleEnv.init(), so we don't create a new one
     self.evaluation_order = null; // Will be set after canonicalization completes
@@ -131,7 +134,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .builtin_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = try CIR.ExternalDecl.SafeList.initCapacity(gpa, 16),
         .imports = CIR.Import.Store.init(),
-        .module_name = "", // Will be set later during canonicalization
+        .module_name = undefined, // Will be set later during canonicalization
+        .module_name_idx = undefined, // Will be set later during canonicalization
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
         .store = try NodeStore.initCapacity(gpa, 10_000), // Default node store capacity
         .evaluation_order = null, // Will be set after canonicalization completes
@@ -1401,6 +1405,7 @@ pub const Serialized = struct {
     external_decls: CIR.ExternalDecl.SafeList.Serialized,
     imports: CIR.Import.Store.Serialized,
     module_name: [2]u64, // Reserve space for slice (ptr + len), provided during deserialization
+    module_name_idx_reserved: u32, // Reserved space for module_name_idx field (interned during deserialization)
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
     module_kind: ModuleKind,
@@ -1432,10 +1437,11 @@ pub const Serialized = struct {
         // Serialize NodeStore
         try self.store.serialize(&env.store, allocator, writer);
 
-        // Set gpa, module_name, and evaluation_order_reserved to all zeros; the space needs to be here,
-        // but the values will be set separately during deserialization (evaluation_order is runtime-only).
+        // Set gpa, module_name, module_name_idx_reserved, and evaluation_order_reserved to all zeros; the space needs to be here,
+        // but the values will be set separately during deserialization (module_name_idx and evaluation_order are runtime-only).
         self.gpa = .{ 0, 0 };
         self.module_name = .{ 0, 0 };
+        self.module_name_idx_reserved = 0;
         self.evaluation_order_reserved = 0;
     }
 
@@ -1459,6 +1465,9 @@ pub const Serialized = struct {
         const deserialized_store_ptr = self.store.deserialize(offset, gpa);
         const deserialized_store = deserialized_store_ptr.*;
 
+        // Intern the module name for fast comparisons
+        const module_name_idx = env.common.idents.insert(gpa, Ident.for_text(module_name)) catch unreachable;
+
         env.* = Self{
             .gpa = gpa,
             .common = self.common.deserialize(offset, source).*,
@@ -1471,6 +1480,7 @@ pub const Serialized = struct {
             .external_decls = self.external_decls.deserialize(offset).*,
             .imports = self.imports.deserialize(offset, gpa).*,
             .module_name = module_name,
+            .module_name_idx = module_name_idx,
             .diagnostics = self.diagnostics,
             .store = deserialized_store,
             .evaluation_order = null, // Not serialized, will be recomputed if needed

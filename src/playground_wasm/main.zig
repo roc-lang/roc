@@ -962,6 +962,9 @@ fn compileSource(source: []const u8) !CompilerStageData {
             const deserialized_store = deserialized_store_ptr.*;
             logDebug("loadCompiledModule: store deserialized successfully\n", .{});
 
+            // Intern the module name for fast comparisons
+            const module_name_idx = module_env_ptr.common.idents.insert(gpa, base.Ident.for_text(module_name_param)) catch unreachable;
+
             logDebug("loadCompiledModule: All deserialized, constructing ModuleEnv\n", .{});
             module_env_ptr.* = ModuleEnv{
                 .gpa = gpa,
@@ -975,6 +978,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
                 .external_decls = deserialized_external_decls,
                 .imports = deserialized_imports,
                 .module_name = module_name_param,
+                .module_name_idx = module_name_idx,
                 .diagnostics = serialized_ptr.diagnostics,
                 .store = deserialized_store,
                 .evaluation_order = null,

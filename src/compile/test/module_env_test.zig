@@ -87,6 +87,9 @@ test "ModuleEnv.Serialized roundtrip" {
     const deserialized_store_ptr = deserialized_ptr.store.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), deser_alloc);
     const deserialized_store = deserialized_store_ptr.*;
 
+    // Intern the module name for fast comparisons
+    const module_name_idx = env.common.idents.insert(gpa, base.Ident.for_text("TestModule")) catch unreachable;
+
     env.* = ModuleEnv{
         .gpa = gpa,
         .common = deserialized_ptr.common.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), source).*,
@@ -99,6 +102,7 @@ test "ModuleEnv.Serialized roundtrip" {
         .external_decls = deserialized_ptr.external_decls.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
         .imports = deserialized_ptr.imports.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), deser_alloc).*,
         .module_name = "TestModule",
+        .module_name_idx = module_name_idx,
         .diagnostics = deserialized_ptr.diagnostics,
         .store = deserialized_store,
         .evaluation_order = null,
