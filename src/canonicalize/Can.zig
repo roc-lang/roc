@@ -3544,10 +3544,8 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
 
                 // Convert identifier from current module to target module's interner
                 const type_tok_text = self.env.getIdent(type_tok_ident);
-                const target_node_idx = if (auto_imported_type.env.common.findIdent(type_tok_text)) |target_ident|
-                    auto_imported_type.env.getExposedNodeIndexById(target_ident) orelse 0
-                else
-                    0;
+                const target_ident = auto_imported_type.env.common.findIdent(type_tok_text) orelse unreachable; // Auto-imported type must exist in its module
+                const target_node_idx = auto_imported_type.env.getExposedNodeIndexById(target_ident) orelse unreachable; // Auto-imported type must be exposed
 
                 const expr_idx = try self.env.addExpr(CIR.Expr{
                     .e_nominal_external = .{
@@ -3584,15 +3582,43 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
 
             // Look up the target node index in the imported module
             // Convert identifier from current module to target module's interner
-            const target_node_idx = blk: {
-                const envs_map = self.module_envs orelse break :blk 0;
-                const auto_imported_type = envs_map.get(module_name) orelse break :blk 0;
+            const target_node_idx: u16 = blk: {
+                const envs_map = self.module_envs orelse {
+                    // Module envs not available - can't resolve external type
+                    return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
+                        .module_name = module_name,
+                        .type_name = type_tok_ident,
+                        .region = type_tok_region,
+                    } }), .free_vars = null };
+                };
+                const auto_imported_type = envs_map.get(module_name) orelse {
+                    // Module not in envs - can't resolve external type
+                    return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
+                        .module_name = module_name,
+                        .type_name = type_tok_ident,
+                        .region = type_tok_region,
+                    } }), .free_vars = null };
+                };
                 const original_name_text = self.env.getIdent(exposed_info.original_name);
-                const target_ident = auto_imported_type.env.common.findIdent(original_name_text) orelse break :blk 0;
-                break :blk auto_imported_type.env.getExposedNodeIndexById(target_ident) orelse 0;
+                const target_ident = auto_imported_type.env.common.findIdent(original_name_text) orelse {
+                    // Type identifier doesn't exist in the target module
+                    return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
+                        .module_name = module_name,
+                        .type_name = type_tok_ident,
+                        .region = type_tok_region,
+                    } }), .free_vars = null };
+                };
+                break :blk auto_imported_type.env.getExposedNodeIndexById(target_ident) orelse {
+                    // Type is not exposed by the imported module
+                    return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
+                        .module_name = module_name,
+                        .type_name = type_tok_ident,
+                        .region = type_tok_region,
+                    } }), .free_vars = null };
+                };
             };
 
-            // Create e_nominal_external for the imported type (target_node_idx can be 0)
+            // Create e_nominal_external for the imported type
             const expr_idx = try self.env.addExpr(CIR.Expr{
                 .e_nominal_external = .{
                     .module_idx = import_idx,
@@ -5373,10 +5399,8 @@ fn canonicalizeTypeAnnoBasicType(
 
                     // Convert identifier from current module to target module's interner
                     const type_name_text = self.env.getIdent(type_name_ident);
-                    const target_node_idx = if (auto_imported_type.env.common.findIdent(type_name_text)) |target_ident|
-                        auto_imported_type.env.getExposedNodeIndexById(target_ident) orelse 0
-                    else
-                        0;
+                    const target_ident = auto_imported_type.env.common.findIdent(type_name_text) orelse unreachable; // Auto-imported type must exist in its module
+                    const target_node_idx = auto_imported_type.env.getExposedNodeIndexById(target_ident) orelse unreachable; // Auto-imported type must be exposed
                     return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
                         .name = type_name_ident,
                         .base = .{ .external = .{
@@ -5396,10 +5420,22 @@ fn canonicalizeTypeAnnoBasicType(
                         if (envs_map.get(exposed_info.module_name)) |auto_imported_type| {
                             // Convert identifier from current module to target module's interner
                             const original_name_text = self.env.getIdent(exposed_info.original_name);
-                            const target_node_idx = if (auto_imported_type.env.common.findIdent(original_name_text)) |target_ident|
-                                auto_imported_type.env.getExposedNodeIndexById(target_ident) orelse 0
-                            else
-                                0;
+                            const target_ident = auto_imported_type.env.common.findIdent(original_name_text) orelse {
+                                // Type identifier doesn't exist in the target module
+                                return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_not_exposed = .{
+                                    .module_name = exposed_info.module_name,
+                                    .type_name = type_name_ident,
+                                    .region = type_name_region,
+                                } });
+                            };
+                            const target_node_idx = auto_imported_type.env.getExposedNodeIndexById(target_ident) orelse {
+                                // Type is not exposed by the imported module
+                                return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_not_exposed = .{
+                                    .module_name = exposed_info.module_name,
+                                    .type_name = type_name_ident,
+                                    .region = type_name_region,
+                                } });
+                            };
                             return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
                                 .name = type_name_ident,
                                 .base = .{ .external = .{
