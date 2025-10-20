@@ -96,6 +96,7 @@ test "ModuleEnv.Serialized roundtrip" {
         .module_name = "TestModule",
         .diagnostics = deserialized_ptr.diagnostics,
         .store = deserialized_ptr.store.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), deser_alloc).*,
+        .evaluation_order = null,
     };
 
     // Verify the data was preserved

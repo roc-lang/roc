@@ -571,9 +571,34 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
         try self.generateStmtTypeDeclType(stmt_idx);
     }
 
-    const defs_slice = self.cir.store.sliceDefs(self.cir.all_defs);
-    for (defs_slice) |def_idx| {
-        try self.checkDef(def_idx);
+    // Type-check definitions in SCC (Strongly Connected Components) order
+    // This ensures that definitions are checked in dependency order,
+    // and handles mutually recursive definitions correctly.
+    // NOTE: This includes both top-level defs AND associated items (e.g. TypeName.item_name)
+    // evaluation_order must be set by canonicalization before calling checkFile()
+    const eval_order = self.cir.evaluation_order.?;
+
+    // Iterate through SCCs in topologically sorted order
+    for (eval_order.sccs) |scc| {
+        if (scc.is_recursive) {
+            // TODO: Implement proper recursive type-checking for mutually recursive definitions
+            // For now, we check each def in the cycle independently, which may produce
+            // less precise error messages for recursive definitions.
+            // The old Rust compiler used IllegalCycleMark to handle this - see:
+            // crates/compiler/can/src/def.rs for reference implementation
+
+            // Check each def in the recursive group
+            for (scc.defs) |def_idx| {
+                try self.checkDef(def_idx);
+            }
+        } else {
+            // Non-recursive SCC - check the def(s) normally
+            // Note: A non-recursive SCC might still have multiple defs if they form
+            // a connected component but with no back edges
+            for (scc.defs) |def_idx| {
+                try self.checkDef(def_idx);
+            }
+        }
     }
 
     // Freeze interners after type-checking is complete

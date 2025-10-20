@@ -481,35 +481,41 @@ fn evaluatePureExpression(self: *Repl, expr_source: []const u8, def_ident: ?[]co
     defer interpreter.deinit();
 
     // If we have past definitions or a def_ident, we need to evaluate all the defs (except main!)
-    // to populate bindings for associated items
+    // to populate bindings
     if (self.past_defs.items.len > 0 or def_ident != null) {
-        const defs_slice = cir.store.sliceDefs(czer.env.all_defs);
+        // evaluation_order must be set after successful canonicalization
+        const eval_order = czer.env.evaluation_order.?;
 
-        // Evaluate all defs except main! to populate bindings
-        for (defs_slice) |def_idx| {
-            const def = cir.store.getDef(def_idx);
-            const pattern = cir.store.getPattern(def.pattern);
+        // Evaluate SCCs in topological order (dependencies before dependents)
+        for (eval_order.sccs) |scc| {
+            // Handle recursive SCCs (for now, treat them the same as non-recursive)
+            // In the future, we could:
+            // 1. Check if all defs are functions (OK - create closures)
+            // 2. Check if any are non-function values (ERROR - circular dependency)
 
-            // Skip main! since we extract its body separately and evaluate it directly
-            if (pattern == .assign) {
-                const ident_idx = pattern.assign.ident;
-                const ident_text = cir.getIdent(ident_idx);
-                if (std.mem.eql(u8, ident_text, "main!")) {
-                    continue;
+            for (scc.defs) |def_idx| {
+                const def = cir.store.getDef(def_idx);
+                const pattern = cir.store.getPattern(def.pattern);
+
+                // Skip main! since we extract its body separately and evaluate it directly
+                if (pattern == .assign) {
+                    const ident_idx = pattern.assign.ident;
+                    const ident_text = cir.getIdent(ident_idx);
+                    if (std.mem.eql(u8, ident_text, "main!")) {
+                        continue;
+                    }
                 }
+
+                // All dependencies are guaranteed to be in bindings already
+                const value = interpreter.evalMinimal(def.expr, self.roc_ops) catch |err| {
+                    return try std.fmt.allocPrint(self.allocator, "Error evaluating definition: {}", .{err});
+                };
+
+                try interpreter.bindings.append(.{
+                    .pattern_idx = def.pattern,
+                    .value = value,
+                });
             }
-
-            // Evaluate the def's expression
-            const value = interpreter.evalMinimal(def.expr, self.roc_ops) catch |err| {
-                return try std.fmt.allocPrint(self.allocator, "Error evaluating definition: {}", .{err});
-            };
-            // Don't defer value.decref here because we're storing it in bindings
-
-            // Create a binding for this pattern
-            try interpreter.bindings.append(.{
-                .pattern_idx = def.pattern,
-                .value = value,
-            });
         }
     }
 
@@ -794,81 +800,73 @@ test "Repl - minimal interpreter integration" {
 }
 
 test "Repl - type with associated value" {
-    // TODO: Re-enable after implementing SCC-based dependency ordering
-    return error.SkipZigTest;
-    // var test_env = TestEnv.init(std.testing.allocator);
-    // defer test_env.deinit();
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
 
-    // var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
-    // defer repl.deinit();
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
 
-    // // Define a type with an associated value
-    // const result1 = try repl.step("Foo := [A, B].{ x = 5 }");
-    // defer std.testing.allocator.free(result1);
-    // try testing.expectEqualStrings("Foo", result1);
+    // Define a type with an associated value
+    const result1 = try repl.step("Foo := [A, B].{ x = 5 }");
+    defer std.testing.allocator.free(result1);
+    try testing.expectEqualStrings("Foo", result1);
 
-    // // Use the associated value
-    // const result2 = try repl.step("Foo.x");
-    // defer std.testing.allocator.free(result2);
+    // Use the associated value
+    const result2 = try repl.step("Foo.x");
+    defer std.testing.allocator.free(result2);
 }
 
 test "Repl - nested type declaration" {
-    // TODO: Re-enable after implementing SCC-based dependency ordering
-    return error.SkipZigTest;
-    // var test_env = TestEnv.init(std.testing.allocator);
-    // defer test_env.deinit();
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
 
-    // var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
-    // defer repl.deinit();
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
 
-    // // Define a type with a nested type
-    // const result1 = try repl.step("Foo := [Whatever].{ Bar := [X, Y, Z] }");
-    // defer std.testing.allocator.free(result1);
-    // try testing.expectEqualStrings("Foo", result1);
+    // Define a type with a nested type
+    const result1 = try repl.step("Foo := [Whatever].{ Bar := [X, Y, Z] }");
+    defer std.testing.allocator.free(result1);
+    try testing.expectEqualStrings("Foo", result1);
 
-    // // Use a tag from the nested type
-    // const result2 = try repl.step("Foo.Bar.X");
-    // defer std.testing.allocator.free(result2);
+    // Use a tag from the nested type
+    const result2 = try repl.step("Foo.Bar.X");
+    defer std.testing.allocator.free(result2);
 }
 
 test "Repl - associated value with type annotation" {
-    // TODO: Re-enable after implementing SCC-based dependency ordering
-    return error.SkipZigTest;
-    // var test_env = TestEnv.init(std.testing.allocator);
-    // defer test_env.deinit();
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
 
-    // var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
-    // defer repl.deinit();
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
 
-    // // Define a type with an associated value
-    // const result1 = try repl.step("Foo := [A, B].{ defaultNum = 42 }");
-    // defer std.testing.allocator.free(result1);
-    // try testing.expectEqualStrings("Foo", result1);
+    // Define a type with an associated value
+    const result1 = try repl.step("Foo := [A, B].{ defaultNum = 42 }");
+    defer std.testing.allocator.free(result1);
+    try testing.expectEqualStrings("Foo", result1);
 
-    // // Define a value using the associated item
-    // const result2 = try repl.step("x = Foo.defaultNum");
-    // defer std.testing.allocator.free(result2);
+    // Define a value using the associated item
+    const result2 = try repl.step("x = Foo.defaultNum");
+    defer std.testing.allocator.free(result2);
 }
 
 test "Repl - nested type with tag constructor" {
-    // TODO: Re-enable after implementing SCC-based dependency ordering
-    return error.SkipZigTest;
-    // var test_env = TestEnv.init(std.testing.allocator);
-    // defer test_env.deinit();
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
 
-    // var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
-    // defer repl.deinit();
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
 
-    // // Define nested types
-    // const result1 = try repl.step("Foo := [Whatever].{ Bar := [X, Y, Z] }");
-    // defer std.testing.allocator.free(result1);
-    // try testing.expectEqualStrings("Foo", result1);
+    // Define nested types
+    const result1 = try repl.step("Foo := [Whatever].{ Bar := [X, Y, Z] }");
+    defer std.testing.allocator.free(result1);
+    try testing.expectEqualStrings("Foo", result1);
 
-    // // Create a value with type annotation
-    // const result2 = try repl.step("x : Foo.Bar");
-    // defer std.testing.allocator.free(result2);
+    // Create a value with type annotation
+    const result2 = try repl.step("x : Foo.Bar");
+    defer std.testing.allocator.free(result2);
 
-    // // Assign the value
-    // const result3 = try repl.step("x = Foo.Bar.X");
-    // defer std.testing.allocator.free(result3);
+    // Assign the value
+    const result3 = try repl.step("x = Foo.Bar.X");
+    defer std.testing.allocator.free(result3);
 }

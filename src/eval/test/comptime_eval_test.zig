@@ -860,3 +860,91 @@ test "comptime eval - constant folding with helper functions" {
         try testing.expectEqual(@as(i128, 169), value);
     }
 }
+
+test "comptime eval - associated item dependency order" {
+    // This tests the exact scenario from SCC.md:
+    // x = Foo.defaultNum should work even if x is defined before Foo.defaultNum
+    // in all_defs (which can have arbitrary order)
+    const src =
+        \\Foo := [A, B].{
+        \\    defaultNum = 42
+        \\}
+        \\
+        \\x = Foo.defaultNum
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate successfully
+    // 2 defs: Foo.defaultNum and x
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Find the def for 'x' and verify it was folded to 42
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+
+    for (defs) |def_idx| {
+        const def = result.module_env.store.getDef(def_idx);
+        const pattern = result.module_env.store.getPattern(def.pattern);
+
+        if (pattern == .assign) {
+            const ident_text = result.module_env.getIdent(pattern.assign.ident);
+            if (std.mem.eql(u8, ident_text, "x")) {
+                const expr = result.module_env.store.getExpr(def.expr);
+                try testing.expect(expr == .e_num);
+                const value = expr.e_num.value.toI128();
+                try testing.expectEqual(@as(i128, 42), value);
+                return; // Test passed
+            }
+        }
+    }
+
+    return error.TestExpectedDefNotFound;
+}
+
+test "comptime eval - multiple associated items with dependencies" {
+    const src =
+        \\Config := [Debug, Release].{
+        \\    verbosity = 2
+        \\    maxRetries = 5
+        \\}
+        \\
+        \\# These should all be evaluated correctly regardless of order in all_defs
+        \\v = Config.verbosity
+        \\r = Config.maxRetries
+        \\total = v + r
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 5 defs: Config.verbosity, Config.maxRetries, v, r, total
+    try testing.expectEqual(@as(u32, 5), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify 'total' was folded to 7
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+
+    for (defs) |def_idx| {
+        const def = result.module_env.store.getDef(def_idx);
+        const pattern = result.module_env.store.getPattern(def.pattern);
+
+        if (pattern == .assign) {
+            const ident_text = result.module_env.getIdent(pattern.assign.ident);
+            if (std.mem.eql(u8, ident_text, "total")) {
+                const expr = result.module_env.store.getExpr(def.expr);
+                try testing.expect(expr == .e_num);
+                const value = expr.e_num.value.toI128();
+                try testing.expectEqual(@as(i128, 7), value);
+                return; // Test passed
+            }
+        }
+    }
+
+    return error.TestExpectedDefNotFound;
+}

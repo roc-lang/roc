@@ -14,6 +14,7 @@ const base = @import("base");
 const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");
 const CIR = @import("CIR.zig");
+const DependencyGraph = @import("DependencyGraph.zig");
 
 const TypeWriter = types_mod.TypeWriter;
 const CompactWriter = collections.CompactWriter;
@@ -72,6 +73,10 @@ diagnostics: CIR.Diagnostic.Span,
 /// Uses an efficient data structure, and provides helpers for storing and retrieving nodes.
 store: NodeStore,
 
+/// Dependency analysis results (evaluation order for defs)
+/// Set after canonicalization completes. Must not be accessed before then.
+evaluation_order: ?*DependencyGraph.EvaluationOrder,
+
 /// Relocate all pointers in the ModuleEnv by the given offset.
 /// This is used when loading a ModuleEnv from shared memory at a different address.
 pub fn relocate(self: *Self, offset: isize) void {
@@ -103,6 +108,7 @@ pub fn initCIRFields(self: *Self, gpa: std.mem.Allocator, module_name: []const u
     self.module_name = module_name;
     self.diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
     // Note: self.store already exists from ModuleEnv.init(), so we don't create a new one
+    self.evaluation_order = null; // Will be set after canonicalization completes
 }
 
 /// Alias for initCIRFields for backwards compatibility with tests
@@ -128,6 +134,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .module_name = "", // Will be set later during canonicalization
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
         .store = try NodeStore.initCapacity(gpa, 10_000), // Default node store capacity
+        .evaluation_order = null, // Will be set after canonicalization completes
     };
 }
 
@@ -139,6 +146,11 @@ pub fn deinit(self: *Self) void {
     self.imports.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
+
+    if (self.evaluation_order) |eval_order| {
+        eval_order.deinit();
+        self.gpa.destroy(eval_order);
+    }
 }
 
 /// Freeze all interners in this module environment, preventing any new entries from being added.
@@ -1379,6 +1391,7 @@ pub const Serialized = struct {
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
     module_kind: ModuleKind,
+    evaluation_order_padding: u64, // Padding for evaluation_order field (not serialized, recomputed on load)
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -1405,10 +1418,11 @@ pub const Serialized = struct {
         // Serialize NodeStore
         try self.store.serialize(&env.store, allocator, writer);
 
-        // Set gpa and module_name to all zeros; the space needs to be here,
+        // Set gpa, module_name, and evaluation_order_padding to all zeros; the space needs to be here,
         // but the values will be set separately during deserialization.
         self.gpa = .{ 0, 0 };
         self.module_name = .{ 0, 0 };
+        self.evaluation_order_padding = 0;
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
@@ -1439,6 +1453,7 @@ pub const Serialized = struct {
             .module_name = module_name,
             .diagnostics = self.diagnostics,
             .store = self.store.deserialize(offset, gpa).*,
+            .evaluation_order = null, // Not serialized, will be recomputed if needed
         };
 
         return env;

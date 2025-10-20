@@ -160,9 +160,9 @@ deepType = C
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(_size)"))
+		(patt (type "Num(Int(Unsigned64))"))
 		(patt (type "Error"))
-		(patt (type "Num(_size)")))
+		(patt (type "Num(Int(Unsigned64))")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
@@ -173,7 +173,7 @@ deepType = C
 		(nominal (type "Foo.Level1.Level2.Level3")
 			(ty-header (name "Foo.Level1.Level2.Level3"))))
 	(expressions
-		(expr (type "Num(_size)"))
+		(expr (type "Num(Int(Unsigned64))"))
 		(expr (type "Error"))
-		(expr (type "Num(_size)"))))
+		(expr (type "Num(Int(Unsigned64))"))))
 ~~~
