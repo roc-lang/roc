@@ -359,8 +359,6 @@ test "Store.Serialized roundtrip" {
     const idx2 = try original.insert(gpa, "world");
     const idx3 = try original.insert(gpa, "foo bar baz");
 
-    // Note: Frozen field removed - no longer needed
-
     // Create a CompactWriter and arena
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
