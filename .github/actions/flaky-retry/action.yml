@@ -23,6 +23,7 @@ runs:
 
         while [ $attempt -le $max_attempts ]; do
           echo "Attempt $attempt of $max_attempts"
+          echo "Running command: ${{ inputs.command }}"
 
           # Run command and capture output and exit code
           output_file=$(mktemp)
@@ -36,8 +37,14 @@ runs:
 
           # Check if command succeeded
           if [ $exit_code -eq 0 ]; then
-            echo "Command succeeded"
-            exit 0
+            # Check for memory leaks even on success
+            if grep -q "leaked" "$output_file"; then
+              echo "Command exited with code 0 but output contains 'leaked'"
+              exit_code=1
+            else
+              echo "Command succeeded"
+              exit 0
+            fi
           fi
 
           # Command failed - check if we should retry
@@ -68,6 +75,7 @@ runs:
 
         while ($attempt -le $maxAttempts) {
           Write-Host "Attempt $attempt of $maxAttempts"
+          Write-Host "Running command: ${{ inputs.command }}"
 
           # Run command and capture output
           $ErrorActionPreference = 'Continue'
@@ -77,8 +85,14 @@ runs:
 
           # Check if command succeeded
           if ($exitCode -eq 0) {
-            Write-Host "Command succeeded"
-            exit 0
+            # Check for memory leaks even on success
+            if ($output -like "*leaked*") {
+              Write-Host "Command exited with code 0 but output contains 'leaked'"
+              $exitCode = 1
+            } else {
+              Write-Host "Command succeeded"
+              exit 0
+            }
           }
 
           # Command failed - check if we should retry
