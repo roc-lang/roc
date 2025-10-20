@@ -1432,11 +1432,11 @@ pub const Serialized = struct {
         // Serialize NodeStore
         try self.store.serialize(&env.store, allocator, writer);
 
-        // Set gpa, module_name, and evaluation_order_padding to all zeros; the space needs to be here,
+        // Set gpa, module_name, and evaluation_order_reserved to all zeros; the space needs to be here,
         // but the values will be set separately during deserialization (evaluation_order is runtime-only).
         self.gpa = .{ 0, 0 };
         self.module_name = .{ 0, 0 };
-        self.evaluation_order_padding = 0;
+        self.evaluation_order_reserved = 0;
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place

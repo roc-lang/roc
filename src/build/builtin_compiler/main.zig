@@ -47,7 +47,7 @@ pub fn main() !void {
     // Ignore command-line arguments - they're only used by Zig's build system for cache tracking
 
     // Read the .roc source files at runtime
-    // NOTE: ModuleEnv takes ownership of these sources and will free them in deinit()
+    // NOTE: We must free these sources manually; CommonEnv.deinit() does not free the source.
     const bool_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Bool.roc", 1024 * 1024);
 
     const result_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Result.roc", 1024 * 1024);
@@ -68,6 +68,7 @@ pub fn main() !void {
     defer {
         bool_env.deinit();
         gpa.destroy(bool_env);
+        gpa.free(bool_roc_source);
     }
 
     // Find Bool type declaration via string lookup
@@ -85,6 +86,7 @@ pub fn main() !void {
     defer {
         result_env.deinit();
         gpa.destroy(result_env);
+        gpa.free(result_roc_source);
     }
 
     // Find Result type declaration via string lookup
@@ -102,6 +104,7 @@ pub fn main() !void {
     defer {
         dict_env.deinit();
         gpa.destroy(dict_env);
+        gpa.free(dict_roc_source);
     }
 
     // Compile Set.roc (imports Dict, may use Result)
@@ -118,6 +121,7 @@ pub fn main() !void {
     defer {
         set_env.deinit();
         gpa.destroy(set_env);
+        gpa.free(set_roc_source);
     }
 
     // Create output directory
