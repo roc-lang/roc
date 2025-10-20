@@ -1124,6 +1124,7 @@ test "roc help" {
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
 }
+
 test "roc licenses" {
     const gpa = testing.allocator;
     {
