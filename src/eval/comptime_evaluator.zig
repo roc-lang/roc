@@ -120,7 +120,7 @@ fn comptimeRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv
 
 /// Result of evaluating a single declaration
 const EvalResult = union(enum) {
-    success,
+    success: ?eval_mod.StackValue, // Optional value to add to bindings (null for lambdas)
     crash: struct {
         message: []const u8,
         region: base.Region,
@@ -235,7 +235,7 @@ pub const ComptimeEvaluator = struct {
         // Skip function definitions (lambdas/closures) - they can't be evaluated at compile time
         const expr = self.env.store.getExpr(expr_idx);
         switch (expr) {
-            .e_lambda, .e_closure => return EvalResult.success,
+            .e_lambda, .e_closure => return EvalResult{ .success = null },
             else => {},
         }
 
@@ -274,10 +274,66 @@ pub const ComptimeEvaluator = struct {
             };
         };
 
-        const layout_cache = &self.interpreter.runtime_layout_store;
-        defer result.decref(layout_cache, ops);
+        // Return the result value so it can be stored in bindings
+        // Note: We don't decref here because the value needs to stay alive in bindings
+        return EvalResult{ .success = result };
+    }
 
-        return EvalResult.success;
+    /// Try to fold a successfully evaluated constant into an e_num expression
+    /// This replaces the expression in-place so future references see the constant value
+    fn tryFoldConstant(self: *ComptimeEvaluator, def_idx: CIR.Def.Idx, stack_value: eval_mod.StackValue) !void {
+        const def = self.env.store.getDef(def_idx);
+        const expr_idx = def.expr;
+
+        // Don't fold if the expression is already e_num (already a constant)
+        const old_expr = self.env.store.getExpr(expr_idx);
+        if (old_expr == .e_num) {
+            return; // Already folded, nothing to do
+        }
+
+        // Convert StackValue to CIR expression based on layout
+        const layout = stack_value.layout;
+
+        // Check if this is a scalar type (including integers)
+        if (layout.tag != .scalar) {
+            return error.NotImplemented; // Don't fold non-scalar types yet
+        }
+
+        const scalar_tag = layout.data.scalar.tag;
+        switch (scalar_tag) {
+            .int => {
+                // Extract integer value
+                const value = stack_value.asI128();
+                const precision = layout.data.scalar.data.int;
+
+                // Map precision to NumKind
+                const num_kind: CIR.NumKind = switch (precision) {
+                    .i8 => .i8,
+                    .i16 => .i16,
+                    .i32 => .i32,
+                    .i64 => .i64,
+                    .i128 => .i128,
+                    .u8 => .u8,
+                    .u16 => .u16,
+                    .u32 => .u32,
+                    .u64 => .u64,
+                    .u128 => .u128,
+                };
+
+                // Create IntValue
+                const int_value = CIR.IntValue{
+                    .bytes = @bitCast(value),
+                    .kind = switch (precision) {
+                        .u8, .u16, .u32, .u64, .u128 => .u128,
+                        .i8, .i16, .i32, .i64, .i128 => .i128,
+                    },
+                };
+
+                // Replace the expression with e_num in-place
+                try self.env.store.replaceExprWithNum(expr_idx, int_value, num_kind);
+            },
+            else => return error.NotImplemented, // Don't fold other scalar types yet
+        }
     }
 
     /// Helper to report a problem and track allocated message
@@ -339,8 +395,20 @@ pub const ComptimeEvaluator = struct {
             };
 
             switch (eval_result) {
-                .success => {
-                    // Declaration evaluated successfully, nothing to report
+                .success => |maybe_value| {
+                    // Declaration evaluated successfully
+                    // If we got a value, try to fold it to a constant and add it to bindings
+                    if (maybe_value) |value| {
+                        // Try to fold the constant (replace expression with e_num if possible)
+                        // If folding fails (e.g., non-scalar type), that's ok - we'll still store the value
+                        self.tryFoldConstant(def_idx, value) catch {};
+
+                        const def = self.env.store.getDef(def_idx);
+                        try self.interpreter.bindings.append(.{
+                            .pattern_idx = def.pattern,
+                            .value = value,
+                        });
+                    }
                 },
                 .crash => |crash_info| {
                     crashed += 1;

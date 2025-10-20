@@ -1007,47 +1007,11 @@ fn compileSource(source: []const u8) !CompilerStageData {
     defer result_module.deinit();
     logDebug("compileSource: Result module loaded\n", .{});
 
-    // Inject Bool and Result type declarations into the current module
-    // Use .err content to match the old builtin injection system behavior
-    logDebug("compileSource: Loading builtin modules\n", .{});
-
-    logDebug("compileSource: About to slice Bool statements\n", .{});
-    logDebug("compileSource: Bool extra_data.items.items.len={}, all_statements.span={{start={}, len={}}}\n", .{
-        bool_module.env.store.extra_data.items.items.len,
-        bool_module.env.all_statements.span.start,
-        bool_module.env.all_statements.span.len,
-    });
-    const bool_stmts = bool_module.env.store.sliceStatements(bool_module.env.all_statements);
-    logDebug("compileSource: Sliced Bool statements successfully, count={}\n", .{bool_stmts.len});
-
-    logDebug("compileSource: Bool all_statements span: start={}, len={}\n", .{
-        bool_module.env.all_statements.span.start,
-        bool_module.env.all_statements.span.len,
-    });
-
-    // Get Bool statement from the sliced statements (bool_stmts[0] is the Bool type declaration)
-    logDebug("compileSource: About to get Bool statement from sliced statements\n", .{});
-    logDebug("compileSource: bool_stmts[0] = {}, nodes.len() = {}\n", .{
-        @intFromEnum(bool_stmts[0]),
-        bool_module.env.store.nodes.len(),
-    });
-
-    // Check if we can safely access node at index 1
-    const node_idx_to_access = @intFromEnum(bool_stmts[0]);
-    logDebug("compileSource: Attempting to access node at index {}\n", .{node_idx_to_access});
-
-    if (node_idx_to_access >= bool_module.env.store.nodes.len()) {
-        logDebug("compileSource: ERROR - node index {} is out of bounds (nodes.len={})\n", .{
-            node_idx_to_access,
-            bool_module.env.store.nodes.len(),
-        });
-        return error.NodeIndexOutOfBounds;
-    }
-
-    // Get Bool and Result statement indices from IMPORTED modules (not copied!)
-    const bool_stmt_in_bool_module = bool_stmts[0];
-    const result_stmts = result_module.env.store.sliceStatements(result_module.env.all_statements);
-    const result_stmt_in_result_module = result_stmts[0];
+    // Get Bool and Result statement indices from the IMPORTED modules (not copied!)
+    // Use builtin_indices directly - these are the correct statement indices
+    logDebug("compileSource: Getting Bool and Result statement indices from builtin_indices\n", .{});
+    const bool_stmt_in_bool_module = builtin_indices.bool_type;
+    const result_stmt_in_result_module = builtin_indices.result_type;
 
     logDebug("compileSource: Using Bool statement from Bool module, idx={}\n", .{@intFromEnum(bool_stmt_in_bool_module)});
     logDebug("compileSource: Using Result statement from Result module, idx={}\n", .{@intFromEnum(result_stmt_in_result_module)});

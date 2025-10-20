@@ -675,6 +675,26 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
     }
 }
 
+/// Replace an expression node with an e_num node (for constant folding)
+/// This modifies the expression in-place, replacing it with a numeric constant
+pub fn replaceExprWithNum(store: *NodeStore, expr_idx: CIR.Expr.Idx, value: CIR.IntValue, num_kind: CIR.NumKind) !void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+
+    // Prepare the value in extra_data (stored as 4 u32s)
+    const extra_data_start = store.extra_data.len();
+    const value_as_i128: i128 = @bitCast(value.bytes);
+    const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
+    _ = try store.extra_data.appendSlice(store.gpa, &value_as_u32s);
+
+    // Replace the node with an expr_num node
+    store.nodes.set(node_idx, .{
+        .tag = .expr_num,
+        .data_1 = @intFromEnum(num_kind),
+        .data_2 = @intFromEnum(value.kind),
+        .data_3 = @intCast(extra_data_start),
+    });
+}
+
 /// Get the more-specific expr index. Used to make error messages nicer.
 ///
 /// For example, if the provided expr is a `block`, then this will return the

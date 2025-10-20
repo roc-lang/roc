@@ -438,8 +438,15 @@ pub const Interpreter = struct {
                         },
                         .s_expect => |expect_stmt| {
                             const bool_rt_var = try self.getCanonicalBoolRuntimeVar();
+                            // Get the actual type of the expression
+                            const expr_ct_var = can.ModuleEnv.varFrom(expect_stmt.body);
+                            const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
                             const cond_val = try self.evalExprMinimal(expect_stmt.body, roc_ops, bool_rt_var);
-                            if (!(try self.boolValueIsTrue(cond_val, bool_rt_var))) {
+                            // Try using the expression's actual type first, then fall back to canonical Bool type
+                            const is_true = self.boolValueIsTrue(cond_val, expr_rt_var) catch blk: {
+                                break :blk try self.boolValueIsTrue(cond_val, bool_rt_var);
+                            };
+                            if (!is_true) {
                                 try self.handleExpectFailure(expect_stmt.body, roc_ops);
                                 return error.Crash;
                             }
@@ -2561,7 +2568,6 @@ pub const Interpreter = struct {
         if (false_idx == null and true_idx == null) {
             return false;
         }
-
         // IMPORTANT: Bool values are ALWAYS stored with canonical indices: False=0, True=1
         // This is true regardless of the tag order in the type.
         // The tag list indices (false_idx, true_idx) tell us which tag is which,
