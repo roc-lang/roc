@@ -44,7 +44,7 @@ pub const DependencyGraph = struct {
     }
 
     /// Add an edge: from_def depends on to_def
-    pub fn addEdge(self: *DependencyGraph, from_def: CIR.Def.Idx, to_def: CIR.Def.Idx) !void {
+    pub fn addEdge(self: *DependencyGraph, from_def: CIR.Def.Idx, to_def: CIR.Def.Idx) std.mem.Allocator.Error!void {
         const gop = try self.edges.getOrPut(self.allocator, from_def);
         if (!gop.found_existing) {
             gop.value_ptr.* = .{};
@@ -95,7 +95,7 @@ fn collectExprDependencies(
     expr_idx: CIR.Expr.Idx,
     dependencies: *std.AutoHashMapUnmanaged(base.Ident.Idx, void),
     allocator: std.mem.Allocator,
-) !void {
+) std.mem.Allocator.Error!void {
     const expr = cir.store.getExpr(expr_idx);
 
     switch (expr) {
@@ -117,7 +117,8 @@ fn collectExprDependencies(
 
         .e_lambda => |lambda| {
             // Recurse into lambda body
-            // Note: We should skip parameters in the lambda's scope
+            // Note: Lambda parameters are collected here but filtered out later in buildDependencyGraph()
+            // when converting idents to def indices (they won't be in the ident_to_def map)
             try collectExprDependencies(cir, lambda.body, dependencies, allocator);
         },
 
@@ -267,7 +268,7 @@ pub fn buildDependencyGraph(
     cir: *const ModuleEnv,
     all_defs: CIR.Def.Span,
     allocator: std.mem.Allocator,
-) !DependencyGraph {
+) std.mem.Allocator.Error!DependencyGraph {
     const defs_slice = cir.store.sliceDefs(all_defs);
     var graph = DependencyGraph.init(allocator, defs_slice);
     errdefer graph.deinit();
@@ -317,7 +318,7 @@ pub fn buildDependencyGraph(
 pub fn computeSCCs(
     graph: *const DependencyGraph,
     allocator: std.mem.Allocator,
-) !EvaluationOrder {
+) std.mem.Allocator.Error!EvaluationOrder {
     var state = TarjanState.init(allocator);
     defer state.deinit();
 
@@ -390,7 +391,7 @@ const TarjanState = struct {
         self: *TarjanState,
         graph: *const DependencyGraph,
         v: CIR.Def.Idx,
-    ) !void {
+    ) std.mem.Allocator.Error!void {
         // Set the depth index for v
         try self.indices.put(self.allocator, v, self.index);
         try self.lowlinks.put(self.allocator, v, self.index);
