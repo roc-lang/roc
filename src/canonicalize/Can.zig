@@ -2437,8 +2437,8 @@ pub fn canonicalizeExpr(
 
                                 if (module_exists) {
                                     // The exposed item doesn't actually exist in the module
-                                    // This can happen with qualified identifiers like "Result.withDefault" where Result is a type module
-                                    // but withDefault doesn't exist
+                                    // This can happen with qualified identifiers like `Result.blah`
+                                    // where `Result` is a valid type module but `blah` doesn't exist
                                     return CanonicalizedExpr{
                                         .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .qualified_ident_does_not_exist = .{
                                             .ident = ident,
