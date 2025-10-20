@@ -1461,10 +1461,6 @@ pub const Serialized = struct {
         // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
         const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
 
-        // Deserialize store separately (returns a pointer that must be freed after copying)
-        const deserialized_store_ptr = self.store.deserialize(offset, gpa);
-        const deserialized_store = deserialized_store_ptr.*;
-
         // Intern the module name for fast comparisons
         const module_name_idx = env.common.idents.insert(gpa, Ident.for_text(module_name)) catch unreachable;
 
@@ -1482,7 +1478,7 @@ pub const Serialized = struct {
             .module_name = module_name,
             .module_name_idx = module_name_idx,
             .diagnostics = self.diagnostics,
-            .store = deserialized_store,
+            .store = self.store.deserialize(offset, gpa).*,
             .evaluation_order = null, // Not serialized, will be recomputed if needed
         };
 
@@ -1844,8 +1840,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
 
         // Iterate through all definitions to extract pattern types
         const defs_slice = self.store.sliceDefs(self.all_defs);
-        for (defs_slice, 0..) |def_idx, i| {
-            _ = i;
+        for (defs_slice) |def_idx| {
             const def = self.store.getDef(def_idx);
 
             // Only process assign patterns - skip destructuring patterns
