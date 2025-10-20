@@ -14,6 +14,7 @@ const base = @import("base");
 const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");
 const CIR = @import("CIR.zig");
+const DependencyGraph = @import("DependencyGraph.zig");
 
 const TypeWriter = types_mod.TypeWriter;
 const CompactWriter = collections.CompactWriter;
@@ -74,7 +75,7 @@ store: NodeStore,
 
 /// Dependency analysis results (evaluation order for defs)
 /// Set after canonicalization completes. Must not be accessed before then.
-evaluation_order: ?*@import("DependencyGraph.zig").EvaluationOrder,
+evaluation_order: ?*DependencyGraph.EvaluationOrder,
 
 /// Relocate all pointers in the ModuleEnv by the given offset.
 /// This is used when loading a ModuleEnv from shared memory at a different address.
