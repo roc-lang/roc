@@ -63,5 +63,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ age: _field, name: _field2 } -> Str"))
+(expr (type "{ age: _field, name: _field2 } -> Error"))
 ~~~

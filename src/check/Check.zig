@@ -166,6 +166,16 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
     }
 }
 
+/// Fills the type store with fresh variables up to the number of regions
+inline fn ensureTypeStoreIsFilled(self: *Self) Allocator.Error!void {
+    const region_nodes: usize = @intCast(self.regions.len());
+    const type_nodes: usize = @intCast(self.types.len());
+    try self.types.ensureTotalCapacity(region_nodes);
+    for (type_nodes..region_nodes) |_| {
+        _ = self.types.appendFromContentAssumeCapacity(.err);
+    }
+}
+
 // import caches //
 
 /// Key for the import cache: module index + expression index in that module
@@ -206,7 +216,7 @@ const ImportCache = std.HashMapUnmanaged(ImportCacheKey, Var, struct {
 // unify //
 
 /// Unify two types
-pub fn unify(self: *Self, a: Var, b: Var, rank: Rank) std.mem.Allocator.Error!unifier.Result {
+fn unify(self: *Self, a: Var, b: Var, rank: Rank) std.mem.Allocator.Error!unifier.Result {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -240,12 +250,15 @@ pub fn unify(self: *Self, a: Var, b: Var, rank: Rank) std.mem.Allocator.Error!un
 
     for (self.unify_scratch.fresh_vars.items.items) |fresh_var| {
         try self.var_pool.addVarToRank(fresh_var, rank);
+        const region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(a));
+        try self.fillInRegionsThrough(fresh_var);
+        self.setRegionAt(fresh_var, region);
     }
 
     for (self.unify_scratch.deferred_constraints.items.items) |deferred_constraint| {
         _ = try self.deferred_static_dispatch_constraints.append(self.gpa, deferred_constraint);
     }
-
+    self.debugAssertArraysInSync();
     return result;
 }
 
@@ -279,7 +292,7 @@ fn findConstraintOriginForVars(self: *Self, a: Var, b: Var) ?Var {
 
 /// Unify two variables where the second represents an annotation type.
 /// This sets from_annotation=true to ensure proper error region highlighting.
-pub fn unifyFromAnno(self: *Self, a: Var, b: Var, rank: Rank) std.mem.Allocator.Error!unifier.Result {
+fn unifyFromAnno(self: *Self, a: Var, b: Var, rank: Rank) std.mem.Allocator.Error!unifier.Result {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -311,13 +324,20 @@ pub fn unifyFromAnno(self: *Self, a: Var, b: Var, rank: Rank) std.mem.Allocator.
             try self.var_pool.addVarToRank(fresh_var, rank);
         }
     }
+    for (self.unify_scratch.fresh_vars.items.items) |fresh_var| {
+        const region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(a));
+        try self.fillInRegionsThrough(fresh_var);
+        self.setRegionAt(fresh_var, region);
+    }
+
+    self.debugAssertArraysInSync();
 
     return result;
 }
 
 /// Unify two variables with a specific constraint origin for better error reporting.
 /// The constraint_origin_var should point to the expression that created the constraint.
-pub fn unifyWithConstraintOrigin(self: *Self, a: Var, b: Var, constraint_origin_var: Var) std.mem.Allocator.Error!unifier.Result {
+fn unifyWithConstraintOrigin(self: *Self, a: Var, b: Var, constraint_origin_var: Var) std.mem.Allocator.Error!unifier.Result {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -533,6 +553,8 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    try ensureTypeStoreIsFilled(self);
+
     // First, iterate over the statements, generating types for each type declaration
     const builtin_stmts_slice = self.cir.store.sliceStatements(self.cir.builtin_statements);
     for (builtin_stmts_slice) |builtin_stmt_idx| {
@@ -587,6 +609,7 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 
 /// Check an expr for the repl
 pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
+    try ensureTypeStoreIsFilled(self);
     // First, iterate over the statements, generating types for each type declaration
     const stms_slice = self.cir.store.sliceStatements(self.cir.builtin_statements);
     for (stms_slice) |stmt_idx| {
@@ -2187,10 +2210,19 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                         const check_mode = blk: {
                             if (decl_stmt.anno) |anno_idx| {
                                 const annotation = self.cir.store.getAnnotation(anno_idx);
+
+                                // Generate the annotation type var in-place
+                                self.seen_annos.clearRetainingCapacity();
                                 try self.generateAnnoTypeInPlace(annotation.type_anno, .annotation);
+
+                                // Update the outer anno to redirect to the inner anno
                                 const anno_var = ModuleEnv.varFrom(anno_idx);
+                                const type_anno_var = ModuleEnv.varFrom(annotation.type_anno);
+                                try self.types.setVarRedirect(anno_var, type_anno_var);
+
+                                // Return the expectation
                                 break :blk Expected{
-                                    .expected = .{ .var_ = anno_var, .from_annotation = true },
+                                    .expected = .{ .var_ = type_anno_var, .from_annotation = true },
                                 };
                             } else {
                                 break :blk Expected.no_expectation;
@@ -2247,6 +2279,30 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
 
                         const bool_var = try self.freshBool(rank, expr_region);
                         _ = try self.unify(bool_var, stmt_expr, rank);
+                    },
+                    .s_var => |var_stmt| {
+
+                        // Check the pattern
+                        try self.checkPattern(var_stmt.pattern_idx, rank, .no_expectation);
+                        const var_pattern_var: Var = ModuleEnv.varFrom(var_stmt.pattern_idx);
+
+                        {
+                            // Enter a new rank
+                            try self.var_pool.pushRank();
+                            defer self.var_pool.popRank();
+
+                            const next_rank = rank.next();
+                            std.debug.assert(next_rank == self.var_pool.current_rank);
+
+                            does_fx = try self.checkExpr(var_stmt.expr, next_rank, Expected.no_expectation) or does_fx;
+
+                            // Now that we are existing the scope, we must generalize then pop this rank
+                            try self.generalizer.generalize(&self.var_pool, next_rank);
+                        }
+
+                        // Unify the pattern with the expression
+                        const var_expr_var: Var = ModuleEnv.varFrom(var_stmt.expr);
+                        _ = try self.unify(var_pattern_var, var_expr_var, rank);
                     },
                     else => {
                         // TODO
@@ -2940,6 +2996,9 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: Rank, match: CIR.Ex
     does_fx = try self.checkExpr(first_branch.value, rank, .no_expectation) or does_fx;
     const branch_var = ModuleEnv.varFrom(first_branch.value);
 
+    // Redirect the match expr to the first branch.
+    try self.types.setVarRedirect(ModuleEnv.varFrom(expr_idx), branch_var);
+
     // Then iterate over the rest of the branches
     for (branch_idxs[1..], 1..) |branch_idx, branch_cur_index| {
         const branch = self.cir.store.getMatchBranch(branch_idx);
@@ -3032,9 +3091,11 @@ fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region,
     } } };
     const num_var = try self.freshFromContent(num_content, rank, expr_region);
 
-    // Unify operand and result with the number type
+    // Redirect the result to the number type
+    try self.types.setVarRedirect(result_var, num_var);
+
+    // Unify result with the number type
     _ = try self.unify(num_var, operand_var, rank);
-    _ = try self.unify(num_var, result_var, rank);
 
     return does_fx;
 }
@@ -3055,9 +3116,11 @@ fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, r
     // Create a fresh boolean variable for the operation
     const bool_var = try self.freshBool(rank, expr_region);
 
-    // Unify operand and result with the boolean type
+    // Redirect the result to the boolean type
+    try self.types.setVarRedirect(result_var, bool_var);
+
+    // Unify result with the boolean type
     _ = try self.unify(bool_var, operand_var, rank);
-    _ = try self.unify(bool_var, result_var, rank);
 
     return does_fx;
 }

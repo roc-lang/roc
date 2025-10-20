@@ -1304,14 +1304,14 @@ fn processSnapshotContent(
     );
     defer solver.deinit();
 
-    // Assert that we have regions for every type variable
-    solver.debugAssertArraysInSync();
-
     if (maybe_expr_idx) |expr_idx| {
         _ = try solver.checkExprRepl(expr_idx.idx);
     } else {
         try solver.checkFile();
     }
+
+    // Assert that we have regions for every type variable
+    solver.debugAssertArraysInSync();
 
     // Cache round-trip validation - ensure ModuleCache serialization/deserialization works
     {
