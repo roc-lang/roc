@@ -695,7 +695,7 @@ test "numeric literal patterns use pattern idx as type var" {
             },
         };
 
-        const pattern_idx = try env.addPatternAndTypeVar(int_pattern, .err, base.Region.zero());
+        const pattern_idx = try env.addPattern(int_pattern, base.Region.zero());
 
         // Verify the stored pattern
         const stored_pattern = env.store.getPattern(pattern_idx);
@@ -718,7 +718,7 @@ test "numeric literal patterns use pattern idx as type var" {
             },
         };
 
-        const pattern_idx = try env.addPatternAndTypeVar(dec_pattern, .err, base.Region.zero());
+        const pattern_idx = try env.addPattern(dec_pattern, base.Region.zero());
 
         // Verify the stored pattern
         const stored_pattern = env.store.getPattern(pattern_idx);

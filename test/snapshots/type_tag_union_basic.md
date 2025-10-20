@@ -208,7 +208,7 @@ main! = |_| {}
 							(ty-rigid-var (name "_ok")))
 						(ty-tag-name (name "Err2")
 							(ty-rigid-var (name "_err"))))
-					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "1")))))))
+					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "0")))))))
 	(d-let
 		(p-assign (ident "is_ok_ret_bool"))
 		(e-lambda
@@ -227,7 +227,7 @@ main! = |_| {}
 							(value
 								(e-nominal-external
 									(module-idx "2")
-									(target-node-idx "1")
+									(target-node-idx "0")
 									(e-tag (name "True")))))
 						(branch
 							(patterns
@@ -236,7 +236,7 @@ main! = |_| {}
 							(value
 								(e-nominal-external
 									(module-idx "2")
-									(target-node-idx "1")
+									(target-node-idx "0")
 									(e-tag (name "False")))))))))
 		(annotation
 			(declared-type
@@ -246,7 +246,7 @@ main! = |_| {}
 							(ty-rigid-var (name "_ok2")))
 						(ty-tag-name (name "Err2")
 							(ty-rigid-var (name "_err2"))))
-					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "1")))))))
+					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "0")))))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda
@@ -259,12 +259,12 @@ main! = |_| {}
 (inferred-types
 	(defs
 		(patt (type "[None, Some(Str)] -> Str"))
-		(patt (type "[Err2(_err), Ok2(_ok)] -> Bool"))
-		(patt (type "[Err2(_err2), Ok2(_ok2)] -> Bool"))
+		(patt (type "[Err2(_err), Ok2(_ok)] -> Error"))
+		(patt (type "[Err2(_err2), Ok2(_ok2)] -> Error"))
 		(patt (type "_arg -> {}")))
 	(expressions
 		(expr (type "[None, Some(Str)] -> Str"))
-		(expr (type "[Err2(_err), Ok2(_ok)] -> Bool"))
-		(expr (type "[Err2(_err2), Ok2(_ok2)] -> Bool"))
+		(expr (type "[Err2(_err), Ok2(_ok)] -> Error"))
+		(expr (type "[Err2(_err2), Ok2(_ok2)] -> Error"))
 		(expr (type "_arg -> {}"))))
 ~~~

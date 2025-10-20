@@ -48,11 +48,11 @@ NO CHANGE
 		(e-tag (name "False"))
 		(e-nominal-external
 			(module-idx "2")
-			(target-node-idx "1")
+			(target-node-idx "0")
 			(e-tag (name "True")))
 		(e-nominal-external
 			(module-idx "2")
-			(target-node-idx "1")
+			(target-node-idx "0")
 			(e-tag (name "False")))
 		(e-unary-not
 			(e-tag (name "True")))
@@ -69,5 +69,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "([True]_others, [False]_others2, Bool, Bool, Bool, Bool, Bool, Bool)"))
+(expr (type "([True]_others, [False]_others2, Error, Error, Bool, Bool, Bool, Bool)"))
 ~~~

@@ -530,11 +530,11 @@ main! = |_| {
 		(e-closure
 			(captures
 				(capture (ident "identity"))
-				(capture (ident "f"))
 				(capture (ident "a"))
+				(capture (ident "f"))
 				(capture (ident "anotherIdentity"))
-				(capture (ident "yetAnotherIdentity"))
 				(capture (ident "combine"))
+				(capture (ident "yetAnotherIdentity"))
 				(capture (ident "finalIdentity")))
 			(e-lambda
 				(args

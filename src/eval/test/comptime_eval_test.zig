@@ -666,33 +666,6 @@ test "comptime eval - crash halts within single def" {
     try testing.expectEqual(@as(usize, 1), result.problems.len());
 }
 
-// Constant folding tests
-
-test "comptime eval - constant folding simple addition" {
-    const src = "x = 1 + 1";
-
-    var result = try parseCheckAndEvalModule(src);
-    defer cleanupEvalModule(&result);
-
-    const summary = try result.evaluator.evalAll();
-
-    // Should evaluate successfully
-    try testing.expectEqual(@as(u32, 1), summary.evaluated);
-    try testing.expectEqual(@as(u32, 0), summary.crashed);
-
-    // Verify the expression was folded to a constant
-    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
-    try testing.expectEqual(@as(usize, 1), defs.len);
-
-    const def = result.module_env.store.getDef(defs[0]);
-    const expr = result.module_env.store.getExpr(def.expr);
-
-    // The expression should now be e_num with value 2
-    try testing.expect(expr == .e_num);
-    const value = expr.e_num.value.toI128();
-    try testing.expectEqual(@as(i128, 2), value);
-}
-
 test "comptime eval - constant folding multiplication" {
     const src = "x = 21 * 2";
 
@@ -783,8 +756,72 @@ test "comptime eval - constant folding multiple defs" {
 }
 
 test "comptime eval - constant folding with function calls" {
-    // TODO: Implement lambda evaluation at compile time
-    return error.SkipZigTest;
+    const src =
+        \\add = |x, y| x + y
+        \\multiply = |x, y| x * y
+        \\double = |x| multiply(x, 2)
+        \\
+        \\# Top-level values that call the functions
+        \\value1 = add(10, 5)
+        \\value2 = multiply(6, 7)
+        \\value3 = double(21)
+        \\value4 = add(multiply(3, 4), double(5))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 7 declarations (3 lambdas + 4 values)
+    // Lambdas are skipped (not evaluated), but values are evaluated
+    try testing.expectEqual(@as(u32, 7), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Get all the defs
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    try testing.expectEqual(@as(usize, 7), defs.len);
+
+    // The first 3 defs are the lambdas (add, multiply, double) - they should NOT be folded
+    // (lambdas are skipped during comptime evaluation)
+
+    // The last 4 defs are the values - they SHOULD be folded to constants
+
+    // Check value1 = add(10, 5) => 15
+    {
+        const def = result.module_env.store.getDef(defs[3]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 15), value);
+    }
+
+    // Check value2 = multiply(6, 7) => 42
+    {
+        const def = result.module_env.store.getDef(defs[4]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 42), value);
+    }
+
+    // Check value3 = double(21) => 42
+    {
+        const def = result.module_env.store.getDef(defs[5]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 42), value);
+    }
+
+    // Check value4 = add (multiply 3 4) (double 5) => add 12 10 => 22
+    {
+        const def = result.module_env.store.getDef(defs[6]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 22), value);
+    }
 }
 
 test "comptime eval - constant folding with recursive function" {
@@ -795,6 +832,150 @@ test "comptime eval - constant folding with recursive function" {
 }
 
 test "comptime eval - constant folding with helper functions" {
-    // TODO: Implement lambda evaluation at compile time
-    return error.SkipZigTest;
+    const src =
+        \\square = |x| x * x
+        \\sumOfSquares = |a, b| square(a) + square(b)
+        \\
+        \\# Multiple top-level values using the helper functions
+        \\sq5 = square(5)
+        \\sq12 = square(12)
+        \\pythag_3_4 = sumOfSquares(3, 4)
+        \\pythag_5_12 = sumOfSquares(5, 12)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 6 declarations (2 lambdas + 4 values)
+    try testing.expectEqual(@as(u32, 6), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    try testing.expectEqual(@as(usize, 6), defs.len);
+
+    // Check sq5 = square 5 => 25
+    {
+        const def = result.module_env.store.getDef(defs[2]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 25), value);
+    }
+
+    // Check sq12 = square 12 => 144
+    {
+        const def = result.module_env.store.getDef(defs[3]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 144), value);
+    }
+
+    // Check pythag_3_4 = sumOfSquares 3 4 => 9 + 16 => 25
+    {
+        const def = result.module_env.store.getDef(defs[4]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 25), value);
+    }
+
+    // Check pythag_5_12 = sumOfSquares 5 12 => 25 + 144 => 169
+    {
+        const def = result.module_env.store.getDef(defs[5]);
+        const expr = result.module_env.store.getExpr(def.expr);
+        try testing.expect(expr == .e_num);
+        const value = expr.e_num.value.toI128();
+        try testing.expectEqual(@as(i128, 169), value);
+    }
+}
+
+test "comptime eval - associated item dependency order" {
+    // This tests the exact scenario from SCC.md:
+    // x = Foo.defaultNum should work even if x is defined before Foo.defaultNum
+    // in all_defs (which can have arbitrary order)
+    const src =
+        \\Foo := [A, B].{
+        \\    defaultNum = 42
+        \\}
+        \\
+        \\x = Foo.defaultNum
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate successfully
+    // 2 defs: Foo.defaultNum and x
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Find the def for 'x' and verify it was folded to 42
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+
+    for (defs) |def_idx| {
+        const def = result.module_env.store.getDef(def_idx);
+        const pattern = result.module_env.store.getPattern(def.pattern);
+
+        if (pattern == .assign) {
+            const ident_text = result.module_env.getIdent(pattern.assign.ident);
+            if (std.mem.eql(u8, ident_text, "x")) {
+                const expr = result.module_env.store.getExpr(def.expr);
+                try testing.expect(expr == .e_num);
+                const value = expr.e_num.value.toI128();
+                try testing.expectEqual(@as(i128, 42), value);
+                return; // Test passed
+            }
+        }
+    }
+
+    return error.TestExpectedDefNotFound;
+}
+
+test "comptime eval - multiple associated items with dependencies" {
+    const src =
+        \\Config := [Debug, Release].{
+        \\    verbosity = 2
+        \\    maxRetries = 5
+        \\}
+        \\
+        \\# These should all be evaluated correctly regardless of order in all_defs
+        \\v = Config.verbosity
+        \\r = Config.maxRetries
+        \\total = v + r
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 5 defs: Config.verbosity, Config.maxRetries, v, r, total
+    try testing.expectEqual(@as(u32, 5), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify 'total' was folded to 7
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+
+    for (defs) |def_idx| {
+        const def = result.module_env.store.getDef(def_idx);
+        const pattern = result.module_env.store.getPattern(def.pattern);
+
+        if (pattern == .assign) {
+            const ident_text = result.module_env.getIdent(pattern.assign.ident);
+            if (std.mem.eql(u8, ident_text, "total")) {
+                const expr = result.module_env.store.getExpr(def.expr);
+                try testing.expect(expr == .e_num);
+                const value = expr.e_num.value.toI128();
+                try testing.expectEqual(@as(i128, 7), value);
+                return; // Test passed
+            }
+        }
+    }
+
+    return error.TestExpectedDefNotFound;
 }

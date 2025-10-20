@@ -34,20 +34,14 @@ test "record literal uses record_unbound" {
             return error.CanonicalizeError;
         };
 
-        // Get the type of the expression
-        const expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(canonical_expr_idx.get_idx())));
-        const resolved = env.types.resolveVar(expr_var);
-
-        // Check that it's a record_unbound
-        switch (resolved.desc.content) {
-            .structure => |structure| switch (structure) {
-                .record_unbound => |fields| {
-                    // Success! The record literal created a record_unbound type
-                    try std.testing.expect(fields.len() == 2);
-                },
-                else => return error.ExpectedRecordUnbound,
+        const canonical_expr = env.store.getExpr(canonical_expr_idx.idx);
+        // Check that it's a record
+        switch (canonical_expr) {
+            .e_record => |record| {
+                // Success! The record literal created a record
+                try std.testing.expect(record.fields.span.len == 2);
             },
-            else => return error.ExpectedStructure,
+            else => return error.ExpectedRecord,
         }
     }
 
@@ -71,19 +65,13 @@ test "record literal uses record_unbound" {
             return error.CanonicalizeError;
         };
 
-        // Get the type of the expression
-        const expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(canonical_expr_idx.get_idx())));
-        const resolved = env.types.resolveVar(expr_var);
-
+        const canonical_expr = env.store.getExpr(canonical_expr_idx.idx);
         // Check that it's an empty_record
-        switch (resolved.desc.content) {
-            .structure => |structure| switch (structure) {
-                .empty_record => {
-                    // Success! Empty record literal created empty_record type
-                },
-                else => return error.ExpectedEmptyRecord,
+        switch (canonical_expr) {
+            .e_empty_record => {
+                // Success! Empty record literal created empty_record
             },
-            else => return error.ExpectedStructure,
+            else => return error.ExpectedEmptyRecord,
         }
     }
 
@@ -108,25 +96,21 @@ test "record literal uses record_unbound" {
             return error.CanonicalizeError;
         };
 
-        // Get the type of the expression
-        const expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(canonical_expr_idx.get_idx())));
-        const resolved = env.types.resolveVar(expr_var);
+        const canonical_expr = env.store.getExpr(canonical_expr_idx.idx);
+        // Check that it's a record
+        switch (canonical_expr) {
+            .e_record => |record| {
+                // Success! The record literal created a record
+                try std.testing.expect(record.fields.span.len == 1);
 
-        // Check that it's a record_unbound
-        switch (resolved.desc.content) {
-            .structure => |structure| switch (structure) {
-                .record_unbound => |fields| {
-                    // Success! The record literal created a record_unbound type
-                    try std.testing.expect(fields.len() == 1);
+                const cir_fields = env.store.sliceRecordFields(record.fields);
 
-                    // Check the field
-                    const fields_slice = env.types.getRecordFieldsSlice(fields);
-                    const field_name = env.getIdent(fields_slice.get(0).name);
-                    try std.testing.expectEqualStrings("value", field_name);
-                },
-                else => return error.ExpectedRecordUnbound,
+                const cir_field = env.store.getRecordField(cir_fields[0]);
+
+                const field_name = env.getIdent(cir_field.name);
+                try std.testing.expectEqualStrings("value", field_name);
             },
-            else => return error.ExpectedStructure,
+            else => return error.ExpectedRecord,
         }
     }
 }
@@ -153,25 +137,23 @@ test "record_unbound basic functionality" {
         return error.CanonicalizeError;
     };
 
-    // Get the type of the expression
-    const expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(canonical_expr_idx.get_idx())));
-    const resolved = env.types.resolveVar(expr_var);
+    const canonical_expr = env.store.getExpr(canonical_expr_idx.idx);
+    // Check that it's a record
+    switch (canonical_expr) {
+        .e_record => |record| {
+            // Success! The record literal created a record
+            try std.testing.expect(record.fields.span.len == 2);
 
-    // Verify it starts as record_unbound
-    switch (resolved.desc.content) {
-        .structure => |structure| switch (structure) {
-            .record_unbound => |fields| {
-                // Success! Record literal created record_unbound type
-                try std.testing.expect(fields.len() == 2);
+            const cir_fields = env.store.sliceRecordFields(record.fields);
 
-                // Check field names
-                const field_slice = env.types.getRecordFieldsSlice(fields);
-                try std.testing.expectEqualStrings("x", env.getIdent(field_slice.get(0).name));
-                try std.testing.expectEqualStrings("y", env.getIdent(field_slice.get(1).name));
-            },
-            else => return error.ExpectedRecordUnbound,
+            const cir_field_0 = env.store.getRecordField(cir_fields[0]);
+            const cir_field_1 = env.store.getRecordField(cir_fields[1]);
+
+            // Check field names
+            try std.testing.expectEqualStrings("x", env.getIdent(cir_field_0.name));
+            try std.testing.expectEqualStrings("y", env.getIdent(cir_field_1.name));
         },
-        else => return error.ExpectedStructure,
+        else => return error.ExpectedRecord,
     }
 }
 
@@ -197,24 +179,25 @@ test "record_unbound with multiple fields" {
         return error.CanonicalizeError;
     };
 
-    const expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(canonical_expr_idx.get_idx())));
-    const resolved = env.types.resolveVar(expr_var);
+    const canonical_expr = env.store.getExpr(canonical_expr_idx.idx);
+    // Check that it's a record
+    switch (canonical_expr) {
+        .e_record => |record| {
+            // Success! The record literal created a record
+            try std.testing.expect(record.fields.span.len == 3);
 
-    // Should be record_unbound
-    switch (resolved.desc.content) {
-        .structure => |s| switch (s) {
-            .record_unbound => |fields| {
-                try std.testing.expect(fields.len() == 3);
+            const cir_fields = env.store.sliceRecordFields(record.fields);
 
-                // Check field names
-                const field_slice = env.types.getRecordFieldsSlice(fields);
-                try std.testing.expectEqualStrings("a", env.getIdent(field_slice.get(0).name));
-                try std.testing.expectEqualStrings("b", env.getIdent(field_slice.get(1).name));
-                try std.testing.expectEqualStrings("c", env.getIdent(field_slice.get(2).name));
-            },
-            else => return error.ExpectedRecordUnbound,
+            const cir_field_0 = env.store.getRecordField(cir_fields[0]);
+            const cir_field_1 = env.store.getRecordField(cir_fields[1]);
+            const cir_field_2 = env.store.getRecordField(cir_fields[2]);
+
+            // Check field names
+            try std.testing.expectEqualStrings("a", env.getIdent(cir_field_0.name));
+            try std.testing.expectEqualStrings("b", env.getIdent(cir_field_1.name));
+            try std.testing.expectEqualStrings("c", env.getIdent(cir_field_2.name));
         },
-        else => return error.ExpectedStructure,
+        else => return error.ExpectedRecord,
     }
 }
 

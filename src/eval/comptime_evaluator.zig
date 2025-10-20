@@ -232,11 +232,19 @@ pub const ComptimeEvaluator = struct {
         const expr_idx = def.expr;
         const region = self.env.store.getExprRegion(expr_idx);
 
-        // Skip function definitions (lambdas/closures) - they can't be evaluated at compile time
         const expr = self.env.store.getExpr(expr_idx);
-        switch (expr) {
-            .e_lambda, .e_closure => return EvalResult{ .success = null },
-            else => {},
+        const is_lambda = switch (expr) {
+            .e_lambda, .e_closure => true,
+            else => false,
+        };
+
+        if (expr == .e_runtime_error) {
+            return EvalResult{
+                .crash = .{
+                    .message = "Runtime error in expression",
+                    .region = region,
+                },
+            };
         }
 
         // Reset halted flag at the start of each def - crashes only halt within a single def
@@ -247,7 +255,18 @@ pub const ComptimeEvaluator = struct {
         defer self.current_expr_region = null;
 
         const ops = self.get_ops();
+
         const result = self.interpreter.evalMinimal(expr_idx, ops) catch |err| {
+            // If this is a lambda/closure and it failed to evaluate, just skip it
+            // Top-level function definitions can fail for various reasons and that's ok
+            // The interpreter will evaluate them on-demand when they're called
+            // IMPORTANT: We do NOT skip blocks - blocks can have side effects like crash/expect
+            if (is_lambda) {
+                // Lambdas that fail to evaluate won't be added to bindings
+                // They'll be re-evaluated on-demand when called
+                return EvalResult{ .success = null };
+            }
+
             if (err == error.Crash) {
                 if (self.expect.crashMessage()) |msg| {
                     return EvalResult{
@@ -257,14 +276,13 @@ pub const ComptimeEvaluator = struct {
                         },
                     };
                 }
-                if (self.crash.crashMessage()) |msg| {
-                    return EvalResult{
-                        .crash = .{
-                            .message = msg,
-                            .region = region,
-                        },
-                    };
-                }
+                const msg = self.crash.crashMessage() orelse unreachable;
+                return EvalResult{
+                    .crash = .{
+                        .message = msg,
+                        .region = region,
+                    },
+                };
             }
             return EvalResult{
                 .error_eval = .{
@@ -273,6 +291,14 @@ pub const ComptimeEvaluator = struct {
                 },
             };
         };
+
+        // Try to fold the result to a constant expression (only for non-lambdas)
+        if (!is_lambda) {
+            self.tryFoldConstant(def_idx, result) catch {
+                // If folding fails, just continue - the original expression is still valid
+                // NotImplemented is expected for non-foldable types
+            };
+        }
 
         // Return the result value so it can be stored in bindings
         // Note: We don't decref here because the value needs to stay alive in bindings
@@ -385,42 +411,43 @@ pub const ComptimeEvaluator = struct {
         var evaluated: u32 = 0;
         var crashed: u32 = 0;
 
-        const defs = self.env.store.sliceDefs(self.env.all_defs);
-        for (defs) |def_idx| {
-            evaluated += 1;
+        // evaluation_order must be set after successful canonicalization
+        const eval_order = self.env.evaluation_order.?;
 
-            const eval_result = self.evalDecl(def_idx) catch |err| {
-                // If we get an allocation error, propagate it
-                return err;
-            };
+        // Evaluate SCCs in topological order (dependencies before dependents)
+        for (eval_order.sccs) |scc| {
+            for (scc.defs) |def_idx| {
+                evaluated += 1;
 
-            switch (eval_result) {
-                .success => |maybe_value| {
-                    // Declaration evaluated successfully
-                    // If we got a value, try to fold it to a constant and add it to bindings
-                    if (maybe_value) |value| {
-                        // Try to fold the constant (replace expression with e_num if possible)
-                        // If folding fails (e.g., non-scalar type), that's ok - we'll still store the value
-                        self.tryFoldConstant(def_idx, value) catch {};
+                const eval_result = self.evalDecl(def_idx) catch |err| {
+                    // If we get an allocation error, propagate it
+                    return err;
+                };
 
-                        const def = self.env.store.getDef(def_idx);
-                        try self.interpreter.bindings.append(.{
-                            .pattern_idx = def.pattern,
-                            .value = value,
-                        });
-                    }
-                },
-                .crash => |crash_info| {
-                    crashed += 1;
-                    try self.reportProblem(crash_info.message, crash_info.region, .crash);
-                },
-                .expect_failed => |expect_info| {
-                    try self.reportProblem(expect_info.message, expect_info.region, .expect_failed);
-                },
-                .error_eval => |error_info| {
-                    const error_name = @errorName(error_info.err);
-                    try self.reportProblem(error_name, error_info.region, .error_eval);
-                },
+                switch (eval_result) {
+                    .success => |maybe_value| {
+                        // Declaration evaluated successfully
+                        // If we got a value, add it to bindings so later defs can reference it
+                        if (maybe_value) |value| {
+                            const def = self.env.store.getDef(def_idx);
+                            try self.interpreter.bindings.append(.{
+                                .pattern_idx = def.pattern,
+                                .value = value,
+                            });
+                        }
+                    },
+                    .crash => |crash_info| {
+                        crashed += 1;
+                        try self.reportProblem(crash_info.message, crash_info.region, .crash);
+                    },
+                    .expect_failed => |expect_info| {
+                        try self.reportProblem(expect_info.message, expect_info.region, .expect_failed);
+                    },
+                    .error_eval => |error_info| {
+                        const error_name = @errorName(error_info.err);
+                        try self.reportProblem(error_name, error_info.region, .error_eval);
+                    },
+                }
             }
         }
 

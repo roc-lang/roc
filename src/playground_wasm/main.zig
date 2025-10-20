@@ -977,6 +977,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
                 .module_name = module_name_param,
                 .diagnostics = serialized_ptr.diagnostics,
                 .store = deserialized_store,
+                .evaluation_order = null,
             };
             logDebug("loadCompiledModule: ModuleEnv constructed successfully\n", .{});
 

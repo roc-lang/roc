@@ -182,7 +182,7 @@ NO CHANGE
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-lookup (name "Result") (external (module-idx "3") (target-node-idx "3")))
+					(ty-lookup (name "Result") (external (module-idx "3") (target-node-idx "0")))
 					(ty-lookup (name "Str") (builtin))))))
 	(d-let
 		(p-assign (ident "handleResponse"))
@@ -222,7 +222,7 @@ NO CHANGE
 		(ty-header (name "Response"))
 		(ty-tag-union
 			(ty-tag-name (name "Ok")
-				(ty-lookup (name "Result") (external (module-idx "3") (target-node-idx "3"))))
+				(ty-lookup (name "Result") (external (module-idx "3") (target-node-idx "0"))))
 			(ty-tag-name (name "NetworkError"))
 			(ty-tag-name (name "ParseError"))))
 	(s-alias-decl
@@ -245,7 +245,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Result(ok, err) -> Str"))
+		(patt (type "ok -> Str"))
 		(patt (type "Response -> Str"))
 		(patt (type "_arg -> {}")))
 	(type_decls
@@ -260,7 +260,7 @@ NO CHANGE
 		(alias (type "ConnectionState")
 			(ty-header (name "ConnectionState"))))
 	(expressions
-		(expr (type "Result(ok, err) -> Str"))
+		(expr (type "ok -> Str"))
 		(expr (type "Response -> Str"))
 		(expr (type "_arg -> {}"))))
 ~~~

@@ -228,7 +228,6 @@ TOO FEW ARGS - fuzz_crash_027.md:21:3:22:4
 INVALID IF CONDITION - fuzz_crash_027.md:50:5:50:5
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
 TYPE MISMATCH - fuzz_crash_027.md:111:2:113:3
-TYPE MISMATCH - fuzz_crash_027.md:143:2:147:3
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.
@@ -930,23 +929,6 @@ It has the type:
 
 But I expected it to be:
     _[Red, Blue]_others, _arg -> Error_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_027.md:143:2:147:3:**
-```roc
-	Stdoline!(
-		"How about ${ #
-			Num.toStr(number) # on expr
-		} as a",
-	)
-```
-
-It has the type:
-    _[Stdoline!(Str)][Err(_d), Ok({  })]_
-
-But the type annotation says it should have the type:
-    _Result({  }, _d)_
 
 # TOKENS
 ~~~zig
@@ -2091,7 +2073,7 @@ expect {
 				(ty-fn (effectful false)
 					(ty-apply (name "List") (builtin)
 						(ty-malformed))
-					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
 						(ty-record)
 						(ty-underscore))))))
 	(d-let

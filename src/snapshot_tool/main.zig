@@ -698,6 +698,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .module_name = module_name,
         .diagnostics = serialized_ptr.diagnostics,
         .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+        .evaluation_order = null,
     };
 
     return LoadedModule{
@@ -1331,6 +1332,23 @@ fn processSnapshotContent(
     // Assert that everything is in-sync
     can_ir.debugAssertArraysInSync();
 
+    // Compute dependency-based evaluation order if not already set
+    // (canonicalizeFile sets it, but other paths like .statement don't)
+    if (can_ir.evaluation_order == null) {
+        const DependencyGraph = @import("can").DependencyGraph;
+        var graph = try DependencyGraph.buildDependencyGraph(
+            can_ir,
+            can_ir.all_defs,
+            allocator,
+        );
+        defer graph.deinit();
+
+        const eval_order = try DependencyGraph.computeSCCs(&graph, allocator);
+        const eval_order_ptr = try allocator.create(DependencyGraph.EvaluationOrder);
+        eval_order_ptr.* = eval_order;
+        can_ir.evaluation_order = eval_order_ptr;
+    }
+
     // Types - include Set, Dict, Bool, and Result modules if loaded
     var builtin_modules = std.array_list.Managed(*const ModuleEnv).init(allocator);
     defer builtin_modules.deinit();
@@ -1358,14 +1376,14 @@ fn processSnapshotContent(
     );
     defer solver.deinit();
 
-    // Assert that we have regions for every type variable
-    solver.debugAssertArraysInSync();
-
     if (maybe_expr_idx) |expr_idx| {
         _ = try solver.checkExprRepl(expr_idx.idx);
     } else {
         try solver.checkFile();
     }
+
+    // Assert that we have regions for every type variable
+    solver.debugAssertArraysInSync();
 
     // Cache round-trip validation - ensure ModuleCache serialization/deserialization works
     {

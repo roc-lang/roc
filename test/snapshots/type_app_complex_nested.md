@@ -28,14 +28,11 @@ main! = |_| processComplex(Ok([Some(42), None]))
 ~~~
 # EXPECTED
 UNDECLARED TYPE - type_app_complex_nested.md:18:33:18:38
-UNDECLARED TYPE - type_app_complex_nested.md:18:44:18:48
 UNDECLARED TYPE - type_app_complex_nested.md:18:54:18:59
 UNDECLARED TYPE - type_app_complex_nested.md:4:30:4:35
-UNDECLARED TYPE - type_app_complex_nested.md:4:41:4:45
 UNDECLARED TYPE - type_app_complex_nested.md:4:51:4:56
 UNUSED VARIABLE - type_app_complex_nested.md:7:12:7:21
 UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
-UNDECLARED TYPE - type_app_complex_nested.md:12:32:12:36
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Maybe_ is not declared in this scope.
@@ -46,17 +43,6 @@ This type is referenced here:
 ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
 ```
                                 ^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Dict_ is not declared in this scope.
-
-This type is referenced here:
-**type_app_complex_nested.md:18:44:18:48:**
-```roc
-ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
-```
-                                           ^^^^
 
 
 **UNDECLARED TYPE**
@@ -79,17 +65,6 @@ This type is referenced here:
 processComplex : Result(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
 ```
                              ^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Dict_ is not declared in this scope.
-
-This type is referenced here:
-**type_app_complex_nested.md:4:41:4:45:**
-```roc
-processComplex : Result(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
-```
-                                        ^^^^
 
 
 **UNDECLARED TYPE**
@@ -124,17 +99,6 @@ This type is referenced here:
 deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
 ```
              ^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Dict_ is not declared in this scope.
-
-This type is referenced here:
-**type_app_complex_nested.md:12:32:12:36:**
-```roc
-deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
-```
-                               ^^^^
 
 
 # TOKENS
@@ -312,10 +276,12 @@ main! = |_| processComplex(Ok([Some(42), None]))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
 						(ty-apply (name "List") (builtin)
 							(ty-malformed))
-						(ty-malformed))
+						(ty-apply (name "Dict") (external (module-idx "0") (target-node-idx "0"))
+							(ty-lookup (name "Str") (builtin))
+							(ty-malformed)))
 					(ty-apply (name "List") (builtin)
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(d-let
@@ -354,18 +320,20 @@ main! = |_| processComplex(Ok([Some(42), None]))
 			(ty-args
 				(ty-rigid-var (name "a"))
 				(ty-rigid-var (name "b"))))
-		(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
+		(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
 			(ty-apply (name "List") (builtin)
 				(ty-malformed))
-			(ty-malformed))))
+			(ty-apply (name "Dict") (external (module-idx "0") (target-node-idx "0"))
+				(ty-lookup (name "Str") (builtin))
+				(ty-malformed)))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Result(List(Error), Error) -> List(a)"))
-		(patt (type "Error -> a"))
-		(patt (type "_arg -> List(a)")))
+		(patt (type "Error -> List(Error)"))
+		(patt (type "Error -> Error"))
+		(patt (type "_arg -> List(Error)")))
 	(type_decls
 		(alias (type "ComplexType(a, b)")
 			(ty-header (name "ComplexType")
@@ -373,7 +341,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "b"))))))
 	(expressions
-		(expr (type "Result(List(Error), Error) -> List(a)"))
-		(expr (type "Error -> a"))
-		(expr (type "_arg -> List(a)"))))
+		(expr (type "Error -> List(Error)"))
+		(expr (type "Error -> Error"))
+		(expr (type "_arg -> List(Error)"))))
 ~~~

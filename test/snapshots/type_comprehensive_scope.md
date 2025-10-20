@@ -47,7 +47,6 @@ TYPE REDECLARED - type_comprehensive_scope.md:10:1:10:37
 UNDECLARED TYPE - type_comprehensive_scope.md:13:19:13:23
 TYPE REDECLARED - type_comprehensive_scope.md:22:1:22:13
 UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
-UNDECLARED TYPE - type_comprehensive_scope.md:29:10:29:14
 # PROBLEMS
 **TYPE REDECLARED**
 The type _Result_ is being redeclared.
@@ -105,17 +104,6 @@ This type is referenced here:
 BadType : SomeUndeclaredType
 ```
           ^^^^^^^^^^^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Dict_ is not declared in this scope.
-
-This type is referenced here:
-**type_comprehensive_scope.md:29:10:29:14:**
-```roc
-MyDict : Dict(Str, U64)
-```
-         ^^^^
 
 
 # TOKENS
@@ -298,7 +286,7 @@ Complex : {
 		(ty-lookup (name "Str") (builtin)))
 	(s-alias-decl
 		(ty-header (name "MyBool"))
-		(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "1"))))
+		(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "0"))))
 	(s-alias-decl
 		(ty-header (name "Person"))
 		(ty-record
@@ -338,7 +326,7 @@ Complex : {
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(s-alias-decl
 		(ty-header (name "MyResult"))
-		(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
+		(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
 			(ty-lookup (name "Str") (builtin))
 			(ty-lookup (name "U64") (builtin))))
 	(s-alias-decl
@@ -353,15 +341,17 @@ Complex : {
 			(ty-lookup (name "Str") (builtin))))
 	(s-alias-decl
 		(ty-header (name "MyDict"))
-		(ty-malformed))
+		(ty-apply (name "Dict") (external (module-idx "0") (target-node-idx "0"))
+			(ty-lookup (name "Str") (builtin))
+			(ty-lookup (name "U64") (builtin))))
 	(s-alias-decl
 		(ty-header (name "Complex"))
 		(ty-record
 			(field (field "person")
 				(ty-lookup (name "Person") (local)))
 			(field (field "result")
-				(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
-					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "1")))
+				(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "0"))
+					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "0")))
 					(ty-lookup (name "Str") (builtin))))
 			(field (field "tree")
 				(ty-apply (name "Tree") (local)

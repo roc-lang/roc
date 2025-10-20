@@ -74,6 +74,7 @@ pub fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_n
         .module_name = module_name,
         .diagnostics = serialized_ptr.diagnostics,
         .store = deserialized_store,
+        .evaluation_order = null,
     };
 
     return LoadedModule{

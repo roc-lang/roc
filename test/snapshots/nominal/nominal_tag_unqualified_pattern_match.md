@@ -96,7 +96,7 @@ isRed = |color| match color {
 							(value
 								(e-nominal-external
 									(module-idx "2")
-									(target-node-idx "1")
+									(target-node-idx "0")
 									(e-tag (name "True")))))
 						(branch
 							(patterns
@@ -105,7 +105,7 @@ isRed = |color| match color {
 							(value
 								(e-nominal-external
 									(module-idx "2")
-									(target-node-idx "1")
+									(target-node-idx "0")
 									(e-tag (name "False")))))
 						(branch
 							(patterns
@@ -114,13 +114,13 @@ isRed = |color| match color {
 							(value
 								(e-nominal-external
 									(module-idx "2")
-									(target-node-idx "1")
+									(target-node-idx "0")
 									(e-tag (name "False")))))))))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
 					(ty-lookup (name "Color") (local))
-					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "1")))))))
+					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "0")))))))
 	(s-nominal-decl
 		(ty-header (name "Color"))
 		(ty-tag-union
@@ -132,10 +132,10 @@ isRed = |color| match color {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Color -> Bool")))
+		(patt (type "Color -> Error")))
 	(type_decls
 		(nominal (type "Color")
 			(ty-header (name "Color"))))
 	(expressions
-		(expr (type "Color -> Bool"))))
+		(expr (type "Color -> Error"))))
 ~~~

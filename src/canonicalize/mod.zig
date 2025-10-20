@@ -10,6 +10,8 @@ pub const CIR = @import("CIR.zig");
 pub const ModuleEnv = @import("ModuleEnv.zig");
 /// Scope management for canonicalization
 pub const Scope = @import("Scope.zig");
+/// Dependency graph and SCC (Strongly Connected Components) analysis
+pub const DependencyGraph = @import("DependencyGraph.zig");
 
 test "compile tests" {
     std.testing.refAllDecls(@This());

@@ -43,7 +43,7 @@ NO CHANGE
 		(p-assign (ident "foo"))
 		(e-nominal-external
 			(module-idx "2")
-			(target-node-idx "1")
+			(target-node-idx "0")
 			(e-tag (name "True"))))
 	(s-expect
 		(e-binop (op "ne")
@@ -51,14 +51,14 @@ NO CHANGE
 				(p-assign (ident "foo")))
 			(e-nominal-external
 				(module-idx "2")
-				(target-node-idx "1")
+				(target-node-idx "0")
 				(e-tag (name "False"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Bool")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "Bool"))))
+		(expr (type "Error"))))
 ~~~

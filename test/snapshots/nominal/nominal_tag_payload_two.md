@@ -141,7 +141,7 @@ is_ok = |result| match result {
 							(value
 								(e-nominal-external
 									(module-idx "2")
-									(target-node-idx "1")
+									(target-node-idx "0")
 									(e-tag (name "True")))))
 						(branch
 							(patterns
@@ -151,7 +151,7 @@ is_ok = |result| match result {
 							(value
 								(e-nominal-external
 									(module-idx "2")
-									(target-node-idx "1")
+									(target-node-idx "0")
 									(e-tag (name "False")))))))))
 		(annotation
 			(declared-type
@@ -159,7 +159,7 @@ is_ok = |result| match result {
 					(ty-apply (name "MyResult") (local)
 						(ty-rigid-var (name "_ok"))
 						(ty-rigid-var (name "_err")))
-					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "1")))))))
+					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "0")))))))
 	(s-nominal-decl
 		(ty-header (name "MyResult")
 			(ty-args
@@ -176,7 +176,7 @@ is_ok = |result| match result {
 (inferred-types
 	(defs
 		(patt (type "ok -> MyResult(ok, err)"))
-		(patt (type "MyResult(_ok, _err) -> Bool")))
+		(patt (type "MyResult(_ok, _err) -> Error")))
 	(type_decls
 		(nominal (type "MyResult(ok, err)")
 			(ty-header (name "MyResult")
@@ -185,5 +185,5 @@ is_ok = |result| match result {
 					(ty-rigid-var (name "err"))))))
 	(expressions
 		(expr (type "ok -> MyResult(ok, err)"))
-		(expr (type "MyResult(_ok, _err) -> Bool"))))
+		(expr (type "MyResult(_ok, _err) -> Error"))))
 ~~~
