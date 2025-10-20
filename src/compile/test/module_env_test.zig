@@ -83,13 +83,6 @@ test "ModuleEnv.Serialized roundtrip" {
     // Now manually construct the ModuleEnv using the deserialized CommonEnv
     const env = @as(*ModuleEnv, @ptrCast(@alignCast(deserialized_ptr)));
 
-    // Deserialize store separately (returns a pointer that must be freed after copying)
-    const deserialized_store_ptr = deserialized_ptr.store.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), deser_alloc);
-    const deserialized_store = deserialized_store_ptr.*;
-
-    // Intern the module name for fast comparisons
-    const module_name_idx = env.common.idents.insert(gpa, base.Ident.for_text("TestModule")) catch unreachable;
-
     env.* = ModuleEnv{
         .gpa = gpa,
         .common = deserialized_ptr.common.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), source).*,
@@ -102,9 +95,9 @@ test "ModuleEnv.Serialized roundtrip" {
         .external_decls = deserialized_ptr.external_decls.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
         .imports = deserialized_ptr.imports.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), deser_alloc).*,
         .module_name = "TestModule",
-        .module_name_idx = module_name_idx,
+        .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
         .diagnostics = deserialized_ptr.diagnostics,
-        .store = deserialized_store,
+        .store = deserialized_ptr.store.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), deser_alloc).*,
         .evaluation_order = null,
     };
 
@@ -112,7 +105,8 @@ test "ModuleEnv.Serialized roundtrip" {
     // try testing.expectEqual(@as(usize, 2), env.ident_ids_for_slicing.len());
 
     // Verify original data before serialization was correct
-    try testing.expectEqual(@as(u32, 2), original.common.idents.interner.entry_count);
+    // initCIRFields inserts the module name ("TestModule") into the interner, so we have 3 total: hello, world, TestModule
+    try testing.expectEqual(@as(u32, 3), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
 
@@ -121,7 +115,8 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(usize, 2), original.imports.imports.len()); // Should have 2 unique imports
 
     // First verify that the CommonEnv data was preserved after deserialization
-    try testing.expectEqual(@as(u32, 2), env.common.idents.interner.entry_count);
+    // Should have same 3 identifiers as original: hello, world, TestModule
+    try testing.expectEqual(@as(u32, 3), env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
     try testing.expectEqual(@as(?u16, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));

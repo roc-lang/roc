@@ -76,13 +76,6 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
     // Deserialize
     const base_ptr = @intFromPtr(buffer.ptr);
 
-    // Deserialize store in-place (returns the same pointer, just cast to NodeStore)
-    const deserialized_store_ptr = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa);
-    const deserialized_store = deserialized_store_ptr.*;
-
-    // Intern the module name for fast comparisons
-    const module_name_idx = env.common.idents.insert(gpa, base.Ident.for_text(module_name)) catch unreachable;
-
     env.* = ModuleEnv{
         .gpa = gpa,
         .common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), source).*,
@@ -95,9 +88,9 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
         .imports = serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
         .module_name = module_name,
-        .module_name_idx = module_name_idx,
+        .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
         .diagnostics = serialized_ptr.diagnostics,
-        .store = deserialized_store,
+        .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
         .evaluation_order = null,
     };
 

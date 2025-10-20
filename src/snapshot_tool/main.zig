@@ -685,9 +685,6 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
     // Deserialize
     const base_ptr = @intFromPtr(buffer.ptr);
 
-    // Intern the module name for fast comparisons
-    const module_name_idx = env.common.idents.insert(gpa, base.Ident.for_text(module_name)) catch unreachable;
-
     env.* = ModuleEnv{
         .gpa = gpa,
         .common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), source).*,
@@ -700,7 +697,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
         .imports = serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
         .module_name = module_name,
-        .module_name_idx = module_name_idx,
+        .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
         .diagnostics = serialized_ptr.diagnostics,
         .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
         .evaluation_order = null,
@@ -1354,21 +1351,35 @@ fn processSnapshotContent(
         can_ir.evaluation_order = eval_order_ptr;
     }
 
-    // Types - include Set, Dict, Bool, and Result modules if loaded
+    // Types - include Set, Dict, Bool, and Result modules in the order they appear in imports
+    // The order MUST match the import order in can_ir.imports because module_idx in external
+    // type references is based on the import index
     var builtin_modules = std.array_list.Managed(*const ModuleEnv).init(allocator);
     defer builtin_modules.deinit();
 
-    if (config.dict_module) |dict_env| {
-        try builtin_modules.append(dict_env);
-    }
-    if (config.set_module) |set_env| {
-        try builtin_modules.append(set_env);
-    }
-    if (config.bool_module) |bool_env| {
-        try builtin_modules.append(bool_env);
-    }
-    if (config.result_module) |result_env| {
-        try builtin_modules.append(result_env);
+    // Build builtin_modules array in the same order as can_ir.imports
+    const import_count = can_ir.imports.imports.items.items.len;
+    for (can_ir.imports.imports.items.items[0..import_count]) |str_idx| {
+        const import_name = can_ir.getString(str_idx);
+
+        // Match the import name to the corresponding loaded builtin module
+        if (std.mem.eql(u8, import_name, "Dict")) {
+            if (config.dict_module) |dict_env| {
+                try builtin_modules.append(dict_env);
+            }
+        } else if (std.mem.eql(u8, import_name, "Set")) {
+            if (config.set_module) |set_env| {
+                try builtin_modules.append(set_env);
+            }
+        } else if (std.mem.eql(u8, import_name, "Bool")) {
+            if (config.bool_module) |bool_env| {
+                try builtin_modules.append(bool_env);
+            }
+        } else if (std.mem.eql(u8, import_name, "Result")) {
+            if (config.result_module) |result_env| {
+                try builtin_modules.append(result_env);
+            }
+        }
     }
 
     var solver = try Check.init(

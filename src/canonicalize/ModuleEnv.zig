@@ -1461,9 +1461,6 @@ pub const Serialized = struct {
         // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
         const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
 
-        // Intern the module name for fast comparisons
-        const module_name_idx = env.common.idents.insert(gpa, Ident.for_text(module_name)) catch unreachable;
-
         env.* = Self{
             .gpa = gpa,
             .common = self.common.deserialize(offset, source).*,
@@ -1476,7 +1473,7 @@ pub const Serialized = struct {
             .external_decls = self.external_decls.deserialize(offset).*,
             .imports = self.imports.deserialize(offset, gpa).*,
             .module_name = module_name,
-            .module_name_idx = module_name_idx,
+            .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
             .diagnostics = self.diagnostics,
             .store = self.store.deserialize(offset, gpa).*,
             .evaluation_order = null, // Not serialized, will be recomputed if needed
