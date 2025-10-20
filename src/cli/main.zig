@@ -22,6 +22,12 @@ const eval = @import("eval");
 const builtins = @import("builtins");
 
 const cli_args = @import("cli_args.zig");
+
+comptime {
+    if (builtin.is_test) {
+        std.testing.refAllDecls(cli_args);
+    }
+}
 const bench = @import("bench.zig");
 const linker = @import("linker.zig");
 const platform_host_shim = @import("platform_host_shim.zig");
@@ -445,8 +451,14 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
         .repl => rocRepl(allocs),
         .version => stdout.print("Roc compiler version {s}", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(allocs, docs_args),
-        .help => |help_message| stdout.writeAll(help_message),
-        .licenses => stdout.writeAll(legalDetailsFileContent),
+        .help => |help_message| {
+            try stdout.writeAll(help_message);
+            try stdout.flush();
+        },
+        .licenses => {
+            try stdout.writeAll(legalDetailsFileContent);
+            try stdout.flush();
+        },
         .problem => |problem| {
             try switch (problem) {
                 .missing_flag_value => |details| stderr.print("Error: no value was supplied for {s}", .{details.flag}),
