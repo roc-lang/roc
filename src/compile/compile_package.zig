@@ -730,8 +730,8 @@ pub const PackageEnv = struct {
 
         // Build other_modules array according to env.imports order
         const import_count = env.imports.imports.items.items.len;
-        var others = try std.array_list.Managed(*ModuleEnv).initCapacity(self.gpa, import_count);
-        // NOTE: Don't deinit 'others' yet - comptime_evaluator holds a reference to others.items
+        var imported_envs = try std.array_list.Managed(*ModuleEnv).initCapacity(self.gpa, import_count);
+        // NOTE: Don't deinit 'imported_envs' yet - comptime_evaluator holds a reference to imported_envs.items
         for (env.imports.imports.items.items[0..import_count]) |str_idx| {
             const import_name = env.getString(str_idx);
             // Determine external vs local from CIR s_import qualifier metadata directly
@@ -741,7 +741,7 @@ pub const PackageEnv = struct {
                 if (self.resolver) |r| {
                     if (r.getEnv(r.ctx, self.package_name, import_name)) |ext_env_ptr| {
                         // External env is already a pointer, use it directly
-                        try others.append(ext_env_ptr);
+                        try imported_envs.append(ext_env_ptr);
                     } else {
                         // External env not ready; skip (tryUnblock should have prevented this)
                     }
@@ -752,11 +752,19 @@ pub const PackageEnv = struct {
                 // Get a pointer to the child's env (stored in the modules ArrayList)
                 // This is safe because we don't modify the modules ArrayList during type checking
                 const child_env_ptr = &child.env.?;
-                try others.append(child_env_ptr);
+                try imported_envs.append(child_env_ptr);
             }
         }
 
-        var checker = try Check.init(self.gpa, &env.types, env, others.items, &env.store.regions, module_common_idents);
+        var checker = try Check.init(
+            self.gpa,
+            &env.types,
+            env,
+            imported_envs.items,
+            null, // TODO: Propagate other module envs map from Can
+            &env.store.regions,
+            module_common_idents,
+        );
         defer checker.deinit();
         // Note: checkDefs runs type checking for module
         const check_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
@@ -776,12 +784,12 @@ pub const PackageEnv = struct {
         defer result_module.deinit();
 
         const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-        var comptime_evaluator = try eval.ComptimeEvaluator.init(self.gpa, env, others.items, &checker.problems, builtin_types_for_eval);
+        var comptime_evaluator = try eval.ComptimeEvaluator.init(self.gpa, env, imported_envs.items, &checker.problems, builtin_types_for_eval);
         _ = try comptime_evaluator.evalAll();
 
         // Build reports from problems
         const check_diag_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        var rb = ReportBuilder.init(self.gpa, env, env, &checker.snapshots, st.path, others.items);
+        var rb = ReportBuilder.init(self.gpa, env, env, &checker.snapshots, st.path, imported_envs.items);
         defer rb.deinit();
         for (checker.problems.problems.items) |prob| {
             const rep = rb.build(prob) catch continue;
@@ -795,10 +803,10 @@ pub const PackageEnv = struct {
         // Clean up comptime evaluator AFTER building reports (crash messages must stay alive until reports are built)
         comptime_evaluator.deinit();
 
-        // Now we can safely deinit the 'others' ArrayList
-        others.deinit();
+        // Now we can safely deinit the 'imported_envs' ArrayList
+        imported_envs.deinit();
 
-        // Note: We no longer need to free the 'others' items because they now point directly
+        // Note: We no longer need to free the 'imported_envs' items because they now point directly
         // to ModuleEnv instances stored in the modules ArrayList, not to heap-allocated copies.
 
         // Done

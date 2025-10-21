@@ -327,8 +327,8 @@ test "Repl - minimal interpreter integration" {
     };
 
     // Step 5: Type check - Pass Bool and Result as imported modules
-    const other_modules = [_]*const ModuleEnv{ bool_module.env, result_module.env };
-    var checker = try Check.init(gpa, &module_env.types, cir, &other_modules, &cir.store.regions, common_idents);
+    const imported_envs = [_]*const ModuleEnv{ bool_module.env, result_module.env };
+    var checker = try Check.init(gpa, &module_env.types, cir, &imported_envs, null, &cir.store.regions, common_idents);
     defer checker.deinit();
 
     _ = try checker.checkExprRepl(canonical_expr_idx.get_idx());

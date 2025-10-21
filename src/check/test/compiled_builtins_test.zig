@@ -227,16 +227,17 @@ test "compiled builtins - use Set and Dict together" {
     try can_result.validateForChecking();
 
     // Type check
-    var other_envs = std.array_list.Managed(*const ModuleEnv).init(gpa);
-    defer other_envs.deinit();
-    try other_envs.append(set_loaded.env);
-    try other_envs.append(dict_loaded.env);
+    var imported_envs = std.array_list.Managed(*const ModuleEnv).init(gpa);
+    defer imported_envs.deinit();
+    try imported_envs.append(set_loaded.env);
+    try imported_envs.append(dict_loaded.env);
 
     var checker = try Check.init(
         gpa,
         &module_env.types,
         module_env,
-        other_envs.items,
+        imported_envs.items,
+        &module_envs,
         &module_env.store.regions,
         module_common_idents,
     );

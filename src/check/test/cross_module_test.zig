@@ -155,7 +155,7 @@ test "cross-module - check type - static dispatch - no annotation & indirection"
         \\import A
         \\
         \\val1 = A.A("hello")
-        \\val2 = A.A("wolrd")
+        \\val2 = A.A("world")
         \\
         \\main = (val1.to_str(), val1.to_str2(), val2.to_str2())
         \\

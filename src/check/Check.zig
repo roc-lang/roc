@@ -49,10 +49,10 @@ types: *types_mod.Store,
 cir: *ModuleEnv,
 /// A list of regions. Parallel with type vars & CIR nodes
 regions: *Region.List,
-/// List of directly imported  module. Import indexs in CIR refer to this list
+/// List of directly imported  module. Import indexes in CIR refer to this list
 imported_modules: []const *const ModuleEnv,
 /// Map of module name identifiers to their env. This includes all modules
-/// "below" this one in the dependecy graph
+/// "below" this one in the dependency graph
 module_envs: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
 /// Common module-wide identified
 common_idents: CommonIdents,
@@ -2959,11 +2959,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             // E.g. thing.val
             //      ^^^^^
             does_fx = try self.checkExpr(dot_access.receiver, rank, .no_expectation) or does_fx;
-
             const receiver_var = ModuleEnv.varFrom(dot_access.receiver);
 
             if (dot_access.args) |dispatch_args| {
                 // If this dot access has args, then it's static dispatch
+
+                // Resolve the receiver var
+                const resolved_receiver = self.types.resolveVar(receiver_var).desc.content;
+                var did_err = resolved_receiver == .err;
 
                 // Check the args
                 // E.g. thing.dispatch(a, b)
@@ -2971,50 +2974,59 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                 const dispatch_arg_expr_idxs = self.cir.store.sliceExpr(dispatch_args);
                 for (dispatch_arg_expr_idxs) |dispatch_arg_expr_idx| {
                     does_fx = try self.checkExpr(dispatch_arg_expr_idx, rank, .no_expectation) or does_fx;
+
+                    // Check if this arg errored
+                    did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(dispatch_arg_expr_idx)).desc.content == .err);
                 }
 
-                // For static dispatch to be used like `thing.dispatch(...)` the
-                // method being dispatched on must accept the type of `thing` as
-                // it's first arg. So, we prepend the `receiver_var` to the args list
-                const first_arg_range = try self.types.appendVars(&.{receiver_var});
-                const rest_args_range = try self.types.appendVars(@ptrCast(dispatch_arg_expr_idxs));
-                const dispatch_arg_vars_range = Var.SafeList.Range{
-                    .start = first_arg_range.start,
-                    .count = rest_args_range.count + 1,
-                };
+                if (did_err) {
+                    // If the receiver or any arguments are errors, then
+                    // propgate the error without doing any static dispatch work
+                    try self.updateVar(expr_var, .err, rank);
+                } else {
+                    // For static dispatch to be used like `thing.dispatch(...)` the
+                    // method being dispatched on must accept the type of `thing` as
+                    // it's first arg. So, we prepend the `receiver_var` to the args list
+                    const first_arg_range = try self.types.appendVars(&.{receiver_var});
+                    const rest_args_range = try self.types.appendVars(@ptrCast(dispatch_arg_expr_idxs));
+                    const dispatch_arg_vars_range = Var.SafeList.Range{
+                        .start = first_arg_range.start,
+                        .count = rest_args_range.count + 1,
+                    };
 
-                // Since the return type of this dispatch is unknown, create a
-                // flex to represent it
-                const dispatch_ret_var = try self.fresh(rank, expr_region);
-                try self.var_pool.addVarToRank(dispatch_ret_var, rank);
+                    // Since the return type of this dispatch is unknown, create a
+                    // flex to represent it
+                    const dispatch_ret_var = try self.fresh(rank, expr_region);
+                    try self.var_pool.addVarToRank(dispatch_ret_var, rank);
 
-                // Now, create the function being dispatched
-                const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
-                    .args = dispatch_arg_vars_range,
-                    .ret = dispatch_ret_var,
-                    .needs_instantiation = false,
-                } } }, rank, expr_region);
-                try self.var_pool.addVarToRank(constraint_fn_var, rank);
+                    // Now, create the function being dispatched
+                    const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+                        .args = dispatch_arg_vars_range,
+                        .ret = dispatch_ret_var,
+                        .needs_instantiation = false,
+                    } } }, rank, expr_region);
+                    try self.var_pool.addVarToRank(constraint_fn_var, rank);
 
-                // Then, create the static dispatch constraint
-                const constraint = StaticDispatchConstraint{
-                    .fn_name = dot_access.field_name,
-                    .fn_var = constraint_fn_var,
-                };
-                const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+                    // Then, create the static dispatch constraint
+                    const constraint = StaticDispatchConstraint{
+                        .fn_name = dot_access.field_name,
+                        .fn_var = constraint_fn_var,
+                    };
+                    const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
-                // Create our constrained flex, and unify it with the receiver
-                const constrained_var = try self.freshFromContent(
-                    .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
-                    rank,
-                    expr_region,
-                );
-                try self.var_pool.addVarToRank(constrained_var, rank);
+                    // Create our constrained flex, and unify it with the receiver
+                    const constrained_var = try self.freshFromContent(
+                        .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
+                        rank,
+                        expr_region,
+                    );
+                    try self.var_pool.addVarToRank(constrained_var, rank);
 
-                _ = try self.unify(constrained_var, receiver_var, rank);
+                    _ = try self.unify(constrained_var, receiver_var, rank);
 
-                // Then, set the root expr to redirect to the ret var
-                try self.types.setVarRedirect(expr_var, dispatch_ret_var);
+                    // Then, set the root expr to redirect to the ret var
+                    try self.types.setVarRedirect(expr_var, dispatch_ret_var);
+                }
             } else {
                 // Otherwise, this is dot access on a record
 

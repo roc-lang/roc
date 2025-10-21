@@ -522,8 +522,16 @@ pub const Repl = struct {
         const final_expr_idx = canonical_expr.get_idx();
 
         // Type check - Pass Bool and Result as imported modules
-        const other_modules = [_]*const ModuleEnv{ self.bool_module.env, self.result_module.env };
-        var checker = Check.init(self.allocator, &module_env.types, cir, &other_modules, &cir.store.regions, module_common_idents) catch |err| {
+        const imported_modules = [_]*const ModuleEnv{ self.bool_module.env, self.result_module.env };
+        var checker = Check.init(
+            self.allocator,
+            &module_env.types,
+            cir,
+            &imported_modules,
+            &module_envs_map,
+            &cir.store.regions,
+            module_common_idents,
+        ) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Type check init error: {}", .{err});
         };
         defer checker.deinit();

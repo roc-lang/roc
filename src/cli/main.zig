@@ -1399,7 +1399,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     }
 
     // Type check the module
-    var checker = try Check.init(shm_allocator, &env.types, &env, &.{}, &env.store.regions, common_idents);
+    var checker = try Check.init(shm_allocator, &env.types, &env, &.{}, null, &env.store.regions, common_idents);
     try checker.checkFile();
 
     // Copy the ModuleEnv to the allocated space
@@ -2424,7 +2424,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     };
 
     // Type check the module
-    var checker = Check.init(allocs.gpa, &env.types, &env, &.{}, &env.store.regions, module_common_idents) catch |err| {
+    var checker = Check.init(allocs.gpa, &env.types, &env, &.{}, null, &env.store.regions, module_common_idents) catch |err| {
         try stderr.print("Failed to initialize type checker: {}", .{err});
         std.process.exit(1);
     };

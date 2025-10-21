@@ -1387,6 +1387,7 @@ fn processSnapshotContent(
         &can_ir.types,
         can_ir,
         builtin_modules.items,
+        &module_envs,
         &can_ir.store.regions,
         common_idents,
     );

@@ -34,7 +34,7 @@ test "infers type for small nums" {
     };
 
     inline for (test_cases) |tc| {
-        var test_env = try TestEnv.initExpr(tc.source);
+        var test_env = try TestEnv.initExpr("Test", tc.source);
         defer test_env.deinit();
 
         try test_env.assertLastDefType(tc.expected);
@@ -60,7 +60,7 @@ test "infers type for nums with specific requirements" {
     };
 
     inline for (test_cases) |tc| {
-        var test_env = try TestEnv.initExpr(tc.source);
+        var test_env = try TestEnv.initExpr("Test", tc.source);
         defer test_env.deinit();
 
         const typ = (try test_env.getLastExprType()).content;
@@ -101,7 +101,7 @@ test "infers num requirements correctly" {
     };
 
     inline for (test_cases) |tc| {
-        var test_env = try TestEnv.initExpr(tc.source);
+        var test_env = try TestEnv.initExpr("Test", tc.source);
         defer test_env.deinit();
 
         const typ = (try test_env.getLastExprType()).content;
@@ -139,7 +139,7 @@ test "fail to infer num literals outside supported range" {
     };
 
     inline for (test_cases) |source| {
-        var test_env = try TestEnv.initExpr(source);
+        var test_env = try TestEnv.initExpr("Test", source);
         defer test_env.deinit();
 
         const typ = (try test_env.getLastExprType()).content;
@@ -149,7 +149,7 @@ test "fail to infer num literals outside supported range" {
 
 test "edge case: negative 0" {
     const source = "-0";
-    var test_env = try TestEnv.initExpr(source);
+    var test_env = try TestEnv.initExpr("Test", source);
     defer test_env.deinit();
 
     const typ = (try test_env.getLastExprType()).content;
@@ -169,7 +169,7 @@ test "edge case: negative 0" {
 
 test "edge case: positive 0" {
     const source = "0";
-    var test_env = try TestEnv.initExpr(source);
+    var test_env = try TestEnv.initExpr("Test", source);
     defer test_env.deinit();
 
     const typ = (try test_env.getLastExprType()).content;
@@ -222,7 +222,7 @@ test "infer hexadecimal literals as unbound integer" {
     };
 
     inline for (test_cases) |tc| {
-        var test_env = try TestEnv.initExpr(tc.source);
+        var test_env = try TestEnv.initExpr("Test", tc.source);
         defer test_env.deinit();
 
         const typ = (try test_env.getLastExprType()).content;
@@ -274,7 +274,7 @@ test "infer binary literals as unbound integer" {
     };
 
     inline for (test_cases) |tc| {
-        var test_env = try TestEnv.initExpr(tc.source);
+        var test_env = try TestEnv.initExpr("Test", tc.source);
         defer test_env.deinit();
 
         const typ = (try test_env.getLastExprType()).content;
@@ -326,7 +326,7 @@ test "infer octal literals as unbound integer" {
     };
 
     inline for (test_cases) |tc| {
-        var test_env = try TestEnv.initExpr(tc.source);
+        var test_env = try TestEnv.initExpr("Test", tc.source);
         defer test_env.deinit();
 
         const typ = (try test_env.getLastExprType()).content;
