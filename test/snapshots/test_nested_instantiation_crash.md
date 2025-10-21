@@ -154,14 +154,13 @@ answer = composed([42])
 						(e-string
 							(e-literal (string "data")))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-rigid-var (name "a"))
-					(ty-record
-						(field (field "value")
-							(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-						(field (field "tag")
-							(ty-lookup (name "Str") (builtin))))))))
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "a"))
+				(ty-record
+					(field (field "value")
+						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
+					(field (field "tag")
+						(ty-lookup (name "Str") (builtin)))))))
 	(d-let
 		(p-assign (ident "get_value"))
 		(e-lambda
@@ -172,14 +171,13 @@ answer = composed([42])
 					(e-lookup-local
 						(p-assign (ident "r"))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-record
-						(field (field "value")
-							(ty-rigid-var (name "a")))
-						(field (field "tag")
-							(ty-lookup (name "Str") (builtin))))
-					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
+			(ty-fn (effectful false)
+				(ty-record
+					(field (field "value")
+						(ty-rigid-var (name "a")))
+					(field (field "tag")
+						(ty-lookup (name "Str") (builtin))))
+				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(d-let
 		(p-assign (ident "composed"))
 		(e-closure
@@ -198,11 +196,10 @@ answer = composed([42])
 						(e-lookup-local
 							(p-assign (ident "n")))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "List") (builtin)
-						(ty-rigid-var (name "a")))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-apply (name "List") (builtin)
+					(ty-rigid-var (name "a")))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "answer"))
 		(e-call

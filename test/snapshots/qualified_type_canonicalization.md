@@ -500,8 +500,7 @@ transform = |result|
 		(p-assign (ident "simpleQualified"))
 		(e-runtime-error (tag "undeclared_type"))
 		(annotation
-			(declared-type
-				(ty-lookup (name "RGB") (external (module-idx "4") (target-node-idx "0"))))))
+			(ty-lookup (name "RGB") (external (module-idx "4") (target-node-idx "0")))))
 	(d-let
 		(p-assign (ident "aliasedQualified"))
 		(e-nominal-external
@@ -509,14 +508,12 @@ transform = |result|
 			(target-node-idx "0")
 			(e-tag (name "Default")))
 		(annotation
-			(declared-type
-				(ty-lookup (name "DataType") (external (module-idx "6") (target-node-idx "0"))))))
+			(ty-lookup (name "DataType") (external (module-idx "6") (target-node-idx "0")))))
 	(d-let
 		(p-assign (ident "multiLevelQualified"))
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation
-			(declared-type
-				(ty-malformed))))
+			(ty-malformed)))
 	(d-let
 		(p-assign (ident "resultType"))
 		(e-nominal-external
@@ -526,10 +523,9 @@ transform = |result|
 				(args
 					(e-num (value "42")))))
 		(annotation
-			(declared-type
-				(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
-					(ty-lookup (name "I32") (builtin))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
+				(ty-lookup (name "I32") (builtin))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "getColor"))
 		(e-lambda
@@ -537,10 +533,9 @@ transform = |result|
 				(p-underscore))
 			(e-runtime-error (tag "undeclared_type")))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-record)
-					(ty-lookup (name "RGB") (external (module-idx "4") (target-node-idx "0")))))))
+			(ty-fn (effectful false)
+				(ty-record)
+				(ty-lookup (name "RGB") (external (module-idx "4") (target-node-idx "0"))))))
 	(d-let
 		(p-assign (ident "processColor"))
 		(e-lambda
@@ -549,10 +544,9 @@ transform = |result|
 			(e-string
 				(e-literal (string "Color processed"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "RGB") (external (module-idx "4") (target-node-idx "0")))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "RGB") (external (module-idx "4") (target-node-idx "0")))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "transform"))
 		(e-closure
@@ -583,12 +577,11 @@ transform = |result|
 								(value
 									(e-runtime-error (tag "ident_not_in_scope")))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
-						(ty-lookup (name "RGB") (external (module-idx "4") (target-node-idx "0")))
-						(ty-lookup (name "Error") (external (module-idx "6") (target-node-idx "0"))))
-					(ty-malformed)))))
+			(ty-fn (effectful false)
+				(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
+					(ty-lookup (name "RGB") (external (module-idx "4") (target-node-idx "0")))
+					(ty-lookup (name "Error") (external (module-idx "6") (target-node-idx "0"))))
+				(ty-malformed))))
 	(s-import (module "Color")
 		(exposes))
 	(s-import (module "ModuleA")

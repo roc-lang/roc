@@ -102,10 +102,9 @@ NO CHANGE
 					(p-assign (ident "x")))
 				(e-num (value "42"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "Str") (builtin))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "wrong_type_function"))
 		(e-lambda
@@ -116,10 +115,9 @@ NO CHANGE
 					(p-assign (ident "x")))
 				(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "I64") (builtin))
-					(ty-lookup (name "I64") (builtin)))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "I64") (builtin))
+				(ty-lookup (name "I64") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure

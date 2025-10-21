@@ -76,7 +76,7 @@ test "Import.Store empty CompactWriter roundtrip" {
 
     // Cast to Serialized and deserialize
     const serialized_ptr = @as(*Import.Store.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa);
+    const deserialized = try serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa);
 
     // Verify empty
     try testing.expectEqual(@as(usize, 0), deserialized.imports.len());
@@ -130,7 +130,7 @@ test "Import.Store basic CompactWriter roundtrip" {
 
     // Cast to Serialized and deserialize
     const serialized_ptr: *Import.Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    var deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa);
+    var deserialized = try serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa);
     defer deserialized.map.deinit(gpa);
 
     // Verify the imports are accessible
@@ -195,7 +195,7 @@ test "Import.Store duplicate imports CompactWriter roundtrip" {
 
     // Cast to Serialized and deserialize
     const serialized_ptr: *Import.Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    var deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa);
+    var deserialized = try serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa);
     defer deserialized.map.deinit(gpa);
 
     // Verify correct number of imports

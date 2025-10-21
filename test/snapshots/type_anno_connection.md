@@ -65,10 +65,9 @@ NO CHANGE
 					(p-assign (ident "x")))
 				(e-num (value "1"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "U64") (builtin))
-					(ty-lookup (name "U64") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "U64") (builtin))
+				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "my_number"))
 		(e-call
@@ -76,8 +75,7 @@ NO CHANGE
 				(p-assign (ident "add_one")))
 			(e-num (value "42")))
 		(annotation
-			(declared-type
-				(ty-lookup (name "U64") (builtin))))))
+			(ty-lookup (name "U64") (builtin)))))
 ~~~
 # TYPES
 ~~~clojure

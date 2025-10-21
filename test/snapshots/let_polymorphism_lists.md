@@ -445,7 +445,7 @@ main = |_| {
 		(patt (type "_arg -> List(_elem)"))
 		(patt (type "List(_elem)"))
 		(patt (type "List(_elem)"))
-		(patt (type "_arg -> Num(_size)")))
+		(patt (type "_arg -> Error")))
 	(expressions
 		(expr (type "List(_elem)"))
 		(expr (type "List(Num(_size))"))
@@ -457,5 +457,5 @@ main = |_| {
 		(expr (type "_arg -> List(_elem)"))
 		(expr (type "List(_elem)"))
 		(expr (type "List(_elem)"))
-		(expr (type "_arg -> Num(_size)"))))
+		(expr (type "_arg -> Error"))))
 ~~~

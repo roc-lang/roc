@@ -170,13 +170,12 @@ main! = |_| {}
 			(e-string
 				(e-literal (string "result"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-tag-union
-						(ty-tag-name (name "Some")
-							(ty-lookup (name "Str") (builtin)))
-						(ty-tag-name (name "None")))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-tag-union
+					(ty-tag-name (name "Some")
+						(ty-lookup (name "Str") (builtin)))
+					(ty-tag-name (name "None")))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "is_ok_ret_unqualified_bool"))
 		(e-lambda
@@ -201,14 +200,13 @@ main! = |_| {}
 							(value
 								(e-tag (name "False"))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-tag-union
-						(ty-tag-name (name "Ok2")
-							(ty-rigid-var (name "_ok")))
-						(ty-tag-name (name "Err2")
-							(ty-rigid-var (name "_err"))))
-					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "1")))))))
+			(ty-fn (effectful false)
+				(ty-tag-union
+					(ty-tag-name (name "Ok2")
+						(ty-rigid-var (name "_ok")))
+					(ty-tag-name (name "Err2")
+						(ty-rigid-var (name "_err"))))
+				(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "1"))))))
 	(d-let
 		(p-assign (ident "is_ok_ret_bool"))
 		(e-lambda
@@ -239,14 +237,13 @@ main! = |_| {}
 									(target-node-idx "1")
 									(e-tag (name "False")))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-tag-union
-						(ty-tag-name (name "Ok2")
-							(ty-rigid-var (name "_ok2")))
-						(ty-tag-name (name "Err2")
-							(ty-rigid-var (name "_err2"))))
-					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "1")))))))
+			(ty-fn (effectful false)
+				(ty-tag-union
+					(ty-tag-name (name "Ok2")
+						(ty-rigid-var (name "_ok2")))
+					(ty-tag-name (name "Err2")
+						(ty-rigid-var (name "_err2"))))
+				(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "1"))))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda

@@ -98,10 +98,9 @@ NO CHANGE
 					(e-string
 						(e-literal (string "small"))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "UserId") (local))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "UserId") (local))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-closure

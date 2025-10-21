@@ -75,7 +75,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .exports = serialized_ptr.exports,
         .builtin_statements = serialized_ptr.builtin_statements,
         .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
-        .imports = serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+        .imports = (try serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa)).*,
         .module_name = module_name,
         .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
         .diagnostics = serialized_ptr.diagnostics,
@@ -189,7 +189,7 @@ test "compiled builtins - use Set and Dict together" {
     try module_envs.put(dict_ident, .{ .env = dict_loaded.env });
 
     // Canonicalize
-    try module_env.initCIRFields(gpa, "test");
+    try module_env.initCIRFields(gpa, module_env.module_name);
 
     // Inject builtin type declarations (Bool and Result) following TestEnv.zig pattern
     const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
@@ -227,16 +227,17 @@ test "compiled builtins - use Set and Dict together" {
     try can_result.validateForChecking();
 
     // Type check
-    var other_envs = std.array_list.Managed(*const ModuleEnv).init(gpa);
-    defer other_envs.deinit();
-    try other_envs.append(set_loaded.env);
-    try other_envs.append(dict_loaded.env);
+    var imported_envs = std.array_list.Managed(*const ModuleEnv).init(gpa);
+    defer imported_envs.deinit();
+    try imported_envs.append(set_loaded.env);
+    try imported_envs.append(dict_loaded.env);
 
     var checker = try Check.init(
         gpa,
         &module_env.types,
         module_env,
-        other_envs.items,
+        imported_envs.items,
+        &module_envs,
         &module_env.store.regions,
         module_common_idents,
     );

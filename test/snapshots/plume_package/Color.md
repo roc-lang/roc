@@ -83,6 +83,15 @@ UNUSED VARIABLE - Color.md:30:5:30:25
 DOES NOT EXIST - Color.md:68:14:68:27
 TYPE MISMATCH - Color.md:32:5:45:6
 TYPE MISMATCH - Color.md:51:104:51:105
+TYPE DOES NOT HAVE METHODS - Color.md:22:15:22:26
+TYPE DOES NOT HAVE METHODS - Color.md:29:13:29:26
+TYPE DOES NOT HAVE METHODS - Color.md:35:17:35:41
+TYPE DOES NOT HAVE METHODS - Color.md:36:21:36:45
+TYPE DOES NOT HAVE METHODS - Color.md:37:21:37:45
+TYPE DOES NOT HAVE METHODS - Color.md:38:21:38:45
+TYPE DOES NOT HAVE METHODS - Color.md:39:21:39:45
+TYPE DOES NOT HAVE METHODS - Color.md:40:21:40:45
+TYPE DOES NOT HAVE METHODS - Color.md:62:8:62:28
 # PROBLEMS
 **MODULE HEADER DEPRECATED**
 The `module` header is deprecated.
@@ -164,6 +173,96 @@ This argument has the type:
 
 But `to_str` needs the first argument to be:
     _Num(Int(Unsigned8))_
+
+**TYPE DOES NOT HAVE METHODS**
+You're trying to call the `to_frac` method on a `Num(Int(Unsigned8))`:
+**Color.md:22:15:22:26:**
+```roc
+    rounded = a.to_frac() / 255.0
+```
+              ^^^^^^^^^^^
+
+But `Num(Int(Unsigned8))` doesn't support methods.
+
+**TYPE DOES NOT HAVE METHODS**
+You're trying to call the `to_utf8` method on a `Str`:
+**Color.md:29:13:29:26:**
+```roc
+    bytes = str.to_utf8()
+```
+            ^^^^^^^^^^^^^
+
+But `Str` doesn't support methods.
+
+**TYPE DOES NOT HAVE METHODS**
+You're trying to call the `is_char_in_hex_range` method on a `Num(Int(_size))`:
+**Color.md:35:17:35:41:**
+```roc
+                a.is_char_in_hex_range()
+```
+                ^^^^^^^^^^^^^^^^^^^^^^^^
+
+But `Num(Int(_size))` doesn't support methods.
+
+**TYPE DOES NOT HAVE METHODS**
+You're trying to call the `is_char_in_hex_range` method on a `Num(Int(_size))`:
+**Color.md:36:21:36:45:**
+```roc
+                and b.is_char_in_hex_range()
+```
+                    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+But `Num(Int(_size))` doesn't support methods.
+
+**TYPE DOES NOT HAVE METHODS**
+You're trying to call the `is_char_in_hex_range` method on a `Num(Int(_size))`:
+**Color.md:37:21:37:45:**
+```roc
+                and c.is_char_in_hex_range()
+```
+                    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+But `Num(Int(_size))` doesn't support methods.
+
+**TYPE DOES NOT HAVE METHODS**
+You're trying to call the `is_char_in_hex_range` method on a `Num(Int(_size))`:
+**Color.md:38:21:38:45:**
+```roc
+                and d.is_char_in_hex_range()
+```
+                    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+But `Num(Int(_size))` doesn't support methods.
+
+**TYPE DOES NOT HAVE METHODS**
+You're trying to call the `is_char_in_hex_range` method on a `Num(Int(_size))`:
+**Color.md:39:21:39:45:**
+```roc
+                and e.is_char_in_hex_range()
+```
+                    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+But `Num(Int(_size))` doesn't support methods.
+
+**TYPE DOES NOT HAVE METHODS**
+You're trying to call the `is_char_in_hex_range` method on a `Num(Int(_size))`:
+**Color.md:40:21:40:45:**
+```roc
+                and f.is_char_in_hex_range()
+```
+                    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+But `Num(Int(_size))` doesn't support methods.
+
+**TYPE DOES NOT HAVE METHODS**
+You're trying to call the `is_named_color` method on a `Str`:
+**Color.md:62:8:62:28:**
+```roc
+    if str.is_named_color()
+```
+       ^^^^^^^^^^^^^^^^^^^^
+
+But `Str` doesn't support methods.
 
 # TOKENS
 ~~~zig
@@ -695,12 +794,11 @@ is_named_color = |str| {
 						(e-lookup-local
 							(p-assign (ident "b")))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "U8") (builtin))
-					(ty-lookup (name "U8") (builtin))
-					(ty-lookup (name "U8") (builtin))
-					(ty-lookup (name "Color") (local))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "U8") (builtin))
+				(ty-lookup (name "U8") (builtin))
+				(ty-lookup (name "U8") (builtin))
+				(ty-lookup (name "Color") (local)))))
 	(d-let
 		(p-assign (ident "rgba"))
 		(e-lambda
@@ -731,23 +829,22 @@ is_named_color = |str| {
 							(e-lookup-local
 								(p-assign (ident "rounded"))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "U8") (builtin))
-					(ty-lookup (name "U8") (builtin))
-					(ty-lookup (name "U8") (builtin))
-					(ty-lookup (name "U8") (builtin))
-					(ty-lookup (name "Color") (local))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "U8") (builtin))
+				(ty-lookup (name "U8") (builtin))
+				(ty-lookup (name "U8") (builtin))
+				(ty-lookup (name "U8") (builtin))
+				(ty-lookup (name "Color") (local)))))
 	(d-let
 		(p-assign (ident "hex"))
 		(e-closure
 			(captures
-				(capture (ident "f"))
-				(capture (ident "d"))
-				(capture (ident "b"))
+				(capture (ident "c"))
 				(capture (ident "e"))
 				(capture (ident "a"))
-				(capture (ident "c"))
+				(capture (ident "b"))
+				(capture (ident "d"))
+				(capture (ident "f"))
 				(capture (ident "is_valid")))
 			(e-lambda
 				(args
@@ -888,26 +985,25 @@ is_named_color = |str| {
 																(p-assign (ident "str")))
 															(e-literal (string "")))))))))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "Str") (builtin))
-					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
-						(ty-lookup (name "Color") (local))
-						(ty-tag-union
-							(ty-tag-name (name "InvalidHex")
-								(ty-lookup (name "Str") (builtin)))))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "Str") (builtin))
+				(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
+					(ty-lookup (name "Color") (local))
+					(ty-tag-union
+						(ty-tag-name (name "InvalidHex")
+							(ty-lookup (name "Str") (builtin))))))))
 	(d-let
 		(p-assign (ident "to_str"))
 		(e-closure
 			(captures
-				(capture (ident "b"))
-				(capture (ident "g"))
 				(capture (ident "r"))
-				(capture (ident "to_str"))
+				(capture (ident "g"))
 				(capture (ident "b"))
 				(capture (ident "inner"))
-				(capture (ident "r"))
+				(capture (ident "to_str"))
 				(capture (ident "g"))
+				(capture (ident "b"))
+				(capture (ident "r"))
 				(capture (ident "a"))
 				(capture (ident "inner")))
 			(e-lambda
@@ -994,10 +1090,9 @@ is_named_color = |str| {
 									(e-lookup-local
 										(p-assign (ident "inner"))))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "Color") (local))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "Color") (local))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "named"))
 		(e-lambda
@@ -1029,14 +1124,13 @@ is_named_color = |str| {
 											(p-assign (ident "str")))
 										(e-literal (string ""))))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "Str") (builtin))
-					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
-						(ty-lookup (name "Color") (local))
-						(ty-tag-union
-							(ty-tag-name (name "UnknownColor")
-								(ty-lookup (name "Str") (builtin)))))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "Str") (builtin))
+				(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
+					(ty-lookup (name "Color") (local))
+					(ty-tag-union
+						(ty-tag-name (name "UnknownColor")
+							(ty-lookup (name "Str") (builtin))))))))
 	(d-let
 		(p-assign (ident "is_named_color"))
 		(e-lambda

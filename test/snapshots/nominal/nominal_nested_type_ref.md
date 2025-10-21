@@ -68,8 +68,7 @@ x = Foo.Bar.X
 		(e-nominal (nominal "Foo.Bar")
 			(e-tag (name "X")))
 		(annotation
-			(declared-type
-				(ty-lookup (name "Foo.Bar") (local)))))
+			(ty-lookup (name "Foo.Bar") (local))))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
 		(ty-tag-union

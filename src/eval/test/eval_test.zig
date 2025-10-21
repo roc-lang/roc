@@ -799,8 +799,8 @@ test "ModuleEnv serialization and interpreter evaluation" {
     };
 
     // Type check the expression - pass Bool and Result as imported modules
-    const other_modules = [_]*const ModuleEnv{ bool_module.env, result_module.env };
-    var checker = try Check.init(gpa, &original_env.types, &original_env, &other_modules, &original_env.store.regions, common_idents);
+    const imported_envs = [_]*const ModuleEnv{ bool_module.env, result_module.env };
+    var checker = try Check.init(gpa, &original_env.types, &original_env, &imported_envs, &module_envs_map, &original_env.store.regions, common_idents);
     defer checker.deinit();
 
     _ = try checker.checkExprRepl(canonicalized_expr_idx.get_idx());
@@ -854,7 +854,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
         // Deserialize the ModuleEnv
         const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr + env_start_offset)));
-        var deserialized_env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa, source, "TestModule");
+        var deserialized_env = try deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa, source, "TestModule");
         // Free the imports map that was allocated during deserialization
         defer deserialized_env.imports.map.deinit(gpa);
 

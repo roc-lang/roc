@@ -55,10 +55,12 @@ types: *const TypesStore,
 idents: *const Ident.Store,
 buf: std.array_list.Managed(u8),
 seen: std.array_list.Managed(Var),
+seen_count_var_occurrences: std.array_list.Managed(Var),
 next_name_index: u32,
 name_counters: std.EnumMap(TypeContext, u32),
 flex_var_names_map: std.AutoHashMap(Var, FlexVarNameRange),
 flex_var_names: std.array_list.Managed(u8),
+static_dispatch_constraints: std.array_list.Managed(types_mod.StaticDispatchConstraint),
 
 const FlexVarNameRange = struct { start: usize, end: usize };
 
@@ -69,18 +71,36 @@ pub fn initFromParts(gpa: std.mem.Allocator, types_store: *const TypesStore, ide
         .idents = idents,
         .buf = try std.array_list.Managed(u8).initCapacity(gpa, 32),
         .seen = try std.array_list.Managed(Var).initCapacity(gpa, 16),
+        .seen_count_var_occurrences = try std.array_list.Managed(Var).initCapacity(gpa, 16),
         .next_name_index = 0,
         .name_counters = std.EnumMap(TypeContext, u32).init(.{}),
         .flex_var_names_map = std.AutoHashMap(Var, FlexVarNameRange).init(gpa),
         .flex_var_names = try std.array_list.Managed(u8).initCapacity(gpa, 32),
+        .static_dispatch_constraints = try std.array_list.Managed(types_mod.StaticDispatchConstraint).initCapacity(gpa, 32),
     };
 }
 
+/// Deinit type writer
 pub fn deinit(self: *TypeWriter) void {
     self.buf.deinit();
     self.seen.deinit();
+    self.seen_count_var_occurrences.deinit();
     self.flex_var_names_map.deinit();
     self.flex_var_names.deinit();
+    self.static_dispatch_constraints.deinit();
+}
+
+/// Reset type writer state
+pub fn reset(self: *TypeWriter) void {
+    self.buf.clearRetainingCapacity();
+    self.seen.clearRetainingCapacity();
+    self.seen_count_var_occurrences.clearRetainingCapacity();
+    self.flex_var_names_map.clearRetainingCapacity();
+    self.flex_var_names.clearRetainingCapacity();
+    self.static_dispatch_constraints.clearRetainingCapacity();
+
+    self.next_name_index = 0;
+    self.name_counters = std.EnumMap(TypeContext, u32).init(.{});
 }
 
 /// Writes the current var into the the writers buffer and returns a bytes slice
@@ -98,10 +118,39 @@ pub fn get(self: *const TypeWriter) []const u8 {
 /// Writes a type variable to the buffer, formatting it as a human-readable string.
 /// This clears any existing content in the buffer before writing.
 pub fn write(self: *TypeWriter, var_: Var) std.mem.Allocator.Error!void {
-    self.buf.clearRetainingCapacity();
-    self.next_name_index = 0;
-    self.name_counters = std.EnumMap(TypeContext, u32).init(.{});
+    self.reset();
     try self.writeVar(var_, var_);
+
+    if (self.static_dispatch_constraints.items.len > 0) {
+        _ = try self.buf.writer().write(" where [");
+        for (self.static_dispatch_constraints.items) |constraint| {
+            // TODO: Find a better way to do this
+            const dispatcher_var = blk: {
+                const fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
+                std.debug.assert(fn_resolved == .structure);
+
+                const fn_args = switch (fn_resolved.structure) {
+                    .fn_effectful => |func| func.args,
+                    .fn_pure => |func| func.args,
+                    .fn_unbound => |func| func.args,
+                    else => {
+                        std.debug.assert(false);
+                        continue;
+                    },
+                };
+                std.debug.assert(fn_args.len() > 0);
+
+                break :blk self.types.sliceVars(fn_args)[0];
+            };
+
+            try self.writeVar(dispatcher_var, var_);
+            _ = try self.buf.writer().write(".");
+            _ = try self.buf.writer().write(self.idents.getText(constraint.fn_name));
+            _ = try self.buf.writer().write(" : ");
+            try self.writeVar(constraint.fn_var, var_);
+        }
+        _ = try self.buf.writer().write("]");
+    }
 }
 
 fn generateNextName(self: *TypeWriter) !void {
@@ -255,6 +304,12 @@ fn writeVarWithContext(self: *TypeWriter, var_: Var, context: TypeContext, root_
 
     const resolved = self.types.resolveVar(var_);
 
+    if (@intFromEnum(resolved.var_) >= self.types.slots.backing.len()) {
+        // Variable is out of bounds - this can happen with corrupted type data
+        _ = try self.buf.writer().write("Error");
+        return;
+    }
+
     // Check if resolution returned an error descriptor - bail immediately
     if (resolved.desc.content == .err) {
         _ = try self.buf.writer().write("Error");
@@ -264,12 +319,6 @@ fn writeVarWithContext(self: *TypeWriter, var_: Var, context: TypeContext, root_
     if (self.hasSeenVar(resolved.var_)) {
         _ = try self.buf.writer().write("...");
     } else {
-        // Bounds check the resolved var as well
-        if (@intFromEnum(resolved.var_) >= self.types.slots.backing.len()) {
-            _ = try self.buf.writer().write("Error");
-            return;
-        }
-
         try self.seen.append(var_);
         defer _ = self.seen.pop();
 
@@ -280,11 +329,19 @@ fn writeVarWithContext(self: *TypeWriter, var_: Var, context: TypeContext, root_
                 } else {
                     try self.writeFlexVarName(var_, context, root_var);
                 }
+
+                for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
+                    try self.static_dispatch_constraints.append(constraint);
+                }
             },
             .rigid => |rigid| {
                 _ = try self.buf.writer().write(self.getIdent(rigid.name));
                 // Useful in debugging to see if a var is rigid or not
                 // _ = try self.buf.writer().write("[r]");
+
+                for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                    try self.static_dispatch_constraints.append(constraint);
+                }
             },
             .alias => |alias| {
                 try self.writeAlias(alias, root_var);
@@ -296,6 +353,9 @@ fn writeVarWithContext(self: *TypeWriter, var_: Var, context: TypeContext, root_
                 _ = try self.buf.writer().write("Error");
             },
         }
+
+        // Useful in debugging to see the idx of a var
+        // _ = try self.buf.writer().print("[{}]", .{@intFromEnum(resolved.var_)});
     }
 }
 
@@ -473,47 +533,7 @@ fn writeRecord(self: *TypeWriter, record: Record, root_var: Var) std.mem.Allocat
         try self.writeVarWithContext(field_var, .RecordFieldContent, root_var);
     }
 
-    // Show extension variable if it's not empty
-    const ext_resolved = self.types.resolveVar(record.ext);
-    switch (ext_resolved.desc.content) {
-        .structure => |flat_type| switch (flat_type) {
-            .empty_record => {}, // Don't show empty extension
-            .record => |ext_record| {
-                // Flatten nested record extensions
-                const ext_fields = self.types.getRecordFieldsSlice(ext_record.fields);
-                for (ext_fields.items(.name), ext_fields.items(.var_)) |field_name, field_var| {
-                    if (fields.len > 0 or ext_fields.len > 0) _ = try self.buf.writer().write(", ");
-                    _ = try self.buf.writer().write(self.getIdent(field_name));
-                    _ = try self.buf.writer().write(": ");
-                    try self.writeVarWithContext(field_var, .RecordFieldContent, root_var);
-                }
-                // Recursively handle the extension's extension
-                try self.writeRecordExtension(ext_record.ext, fields.len + ext_fields.len, root_var);
-            },
-            else => {
-                if (fields.len > 0) _ = try self.buf.writer().write(", ");
-                try self.writeVarWithContext(record.ext, .RecordExtension, root_var);
-            },
-        },
-        .flex => |flex| {
-            // Only show flex vars if they have a name
-            if (flex.name) |_| {
-                if (fields.len > 0) _ = try self.buf.writer().write(", ");
-                try self.writeVarWithContext(record.ext, .RecordExtension, root_var);
-            }
-            // Otherwise hide unnamed flex vars, so they render as no extension.
-        },
-        .rigid => |rigid| {
-            // Show rigid vars with .. syntax
-            if (fields.len > 0) _ = try self.buf.writer().write(", ");
-            _ = try self.buf.writer().write("..");
-            _ = try self.buf.writer().write(self.getIdent(rigid.name));
-        },
-        else => {
-            if (fields.len > 0) _ = try self.buf.writer().write(", ");
-            try self.writeVarWithContext(record.ext, .RecordExtension, root_var);
-        },
-    }
+    try self.writeRecordExtension(record.ext, fields.len, root_var);
 
     _ = try self.buf.writer().write(" }");
 }
@@ -542,18 +562,25 @@ fn writeRecordExtension(self: *TypeWriter, ext_var: Var, num_fields: usize, root
             },
         },
         .flex => |flex| {
-            // Only show flex vars if they have a name
-            if (flex.name) |_| {
+            // Only show flex vars if they have a name or if there are constraints
+            if (flex.name != null or flex.constraints.len() > 0) {
                 if (num_fields > 0) _ = try self.buf.writer().write(", ");
                 try self.writeVarWithContext(ext_var, .RecordExtension, root_var);
             }
-            // Otherwise hide unnamed flex vars, so they render as no extension.
+
+            for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
+                try self.static_dispatch_constraints.append(constraint);
+            }
         },
         .rigid => |rigid| {
             // Show rigid vars with .. syntax
             if (num_fields > 0) _ = try self.buf.writer().write(", ");
             _ = try self.buf.writer().write("..");
             _ = try self.buf.writer().write(self.getIdent(rigid.name));
+
+            for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                try self.static_dispatch_constraints.append(constraint);
+            }
         },
         else => {
             // Show other types (aliases, errors, etc)
@@ -598,6 +625,10 @@ fn writeTagUnion(self: *TypeWriter, tag_union: TagUnion, root_var: Var) std.mem.
             } else {
                 try self.writeFlexVarName(tag_union.ext, .TagUnionExtension, root_var);
             }
+
+            for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
+                try self.static_dispatch_constraints.append(constraint);
+            }
         },
         .structure => |flat_type| switch (flat_type) {
             .empty_tag_union => {}, // Don't show empty extension
@@ -608,6 +639,10 @@ fn writeTagUnion(self: *TypeWriter, tag_union: TagUnion, root_var: Var) std.mem.
         .rigid => |rigid| {
             _ = try self.buf.writer().write(self.getIdent(rigid.name));
             // _ = try self.buf.writer().write("[r]");
+
+            for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                try self.static_dispatch_constraints.append(constraint);
+            }
         },
         .err => {
             // Extension resolved to error - write error indicator
@@ -759,9 +794,9 @@ pub fn writeFlexVarName(self: *TypeWriter, var_: Var, context: TypeContext, root
     } else {
         // Check if this variable appears multiple times
         // Note: counting can fail with corrupted data, so we treat it as appearing once
-        const occurrences = self.countVarOccurrences(resolved_var, root_var);
+        const occurrences = try self.countVarOccurrences(resolved_var, root_var);
         if (occurrences <= 1) {
-            // If it appears once (or we couldn't count due to corruption), generate a simple name
+            // If it appears once, then generate and write the name
             _ = try self.buf.writer().write("_");
             try self.generateContextualName(context);
         } else {
@@ -785,24 +820,16 @@ pub fn writeFlexVarName(self: *TypeWriter, var_: Var, context: TypeContext, root
 }
 
 /// Count how many times a variable appears in a type
-fn countVarOccurrences(self: *const TypeWriter, search_var: Var, root_var: Var) usize {
-    // Check if root resolves to error - if so, don't try to traverse (data may be corrupt)
-    const root_resolved = self.types.resolveVar(root_var);
-    if (root_resolved.desc.content == .err) {
-        return 1; // Treat as appearing once to avoid traversing corrupt data
-    }
+fn countVarOccurrences(self: *TypeWriter, search_var: Var, root_var: Var) std.mem.Allocator.Error!usize {
+    self.seen_count_var_occurrences.clearRetainingCapacity();
 
     var count: usize = 0;
-    var visited = std.AutoHashMap(Var, void).init(self.types.gpa);
-    defer visited.deinit();
-    self.countVar(search_var, root_var, &count, &visited);
+    try self.countVar(search_var, root_var, &count);
     return count;
 }
 
-fn countVar(self: *const TypeWriter, search_var: Var, current_var: Var, count: *usize, visited: *std.AutoHashMap(Var, void)) void {
-    if (@intFromEnum(current_var) >= self.types.slots.backing.len()) {
-        return;
-    }
+fn countVar(self: *TypeWriter, search_var: Var, current_var: Var, count: *usize) std.mem.Allocator.Error!void {
+    if (@intFromEnum(current_var) >= self.types.slots.backing.len()) return;
 
     const resolved = self.types.resolveVar(current_var);
 
@@ -812,73 +839,86 @@ fn countVar(self: *const TypeWriter, search_var: Var, current_var: Var, count: *
     }
 
     // Count if this is the search var
+
+    // First, check if this is the var we are counting
     if (resolved.var_ == search_var) {
         count.* += 1;
     }
 
-    // Check if we've already visited this resolved var to prevent infinite recursion
-    // Do this AFTER counting so we count multiple occurrences
-    const gop = visited.getOrPut(resolved.var_) catch return;
-    if (gop.found_existing) {
-        return; // Already visited this var's structure, stop to prevent infinite recursion
+    // Check if we've already seen this var
+    // This avoids infinite recursion
+    for (self.seen_count_var_occurrences.items) |seen| {
+        if (seen == resolved.var_) return;
     }
 
+    // Record that we've seen this var
+    try self.seen_count_var_occurrences.append(resolved.var_);
+    defer _ = self.seen_count_var_occurrences.pop();
+
+    // Then recurse
     switch (resolved.desc.content) {
-        .flex, .rigid => {},
-        .err => {},
+        .flex => |flex| {
+            const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
+            for (constraints) |constraint| {
+                try self.countVar(search_var, constraint.fn_var, count);
+            }
+        },
+        .rigid => |rigid| {
+            const constraints = self.types.sliceStaticDispatchConstraints(rigid.constraints);
+            for (constraints) |constraint| {
+                try self.countVar(search_var, constraint.fn_var, count);
+            }
+        },
         .alias => |alias| {
             // For aliases, we only count occurrences in the type arguments
             var args_iter = self.types.iterAliasArgs(alias);
             while (args_iter.next()) |arg_var| {
-                self.countVar(search_var, arg_var, count, visited);
+                try self.countVar(search_var, arg_var, count);
             }
         },
         .structure => |flat_type| {
-            self.countVarInFlatType(search_var, flat_type, count, visited);
+            try self.countVarInFlatType(search_var, flat_type, count);
         },
+        .err => {},
     }
 }
 
-fn countVarInFlatType(self: *const TypeWriter, search_var: Var, flat_type: FlatType, count: *usize, visited: *std.AutoHashMap(Var, void)) void {
+fn countVarInFlatType(self: *TypeWriter, search_var: Var, flat_type: FlatType, count: *usize) std.mem.Allocator.Error!void {
     switch (flat_type) {
         .str, .empty_record, .empty_tag_union => {},
-        .box => |sub_var| {
-            self.countVar(search_var, sub_var, count, visited);
-        },
-        .list => |sub_var| {
-            self.countVar(search_var, sub_var, count, visited);
-        },
+        .box => |sub_var| try self.countVar(search_var, sub_var, count),
+        .list => |sub_var| try self.countVar(search_var, sub_var, count),
         .list_unbound, .num => {},
         .tuple => |tuple| {
             const elems = self.types.sliceVars(tuple.elems);
             for (elems) |elem| {
-                self.countVar(search_var, elem, count, visited);
+                try self.countVar(search_var, elem, count);
             }
         },
         .nominal_type => |nominal_type| {
             var args_iter = self.types.iterNominalArgs(nominal_type);
             while (args_iter.next()) |arg_var| {
-                self.countVar(search_var, arg_var, count, visited);
+                try self.countVar(search_var, arg_var, count);
             }
         },
         .fn_pure, .fn_effectful, .fn_unbound => |func| {
             const args = self.types.sliceVars(func.args);
             for (args) |arg| {
-                self.countVar(search_var, arg, count, visited);
+                try self.countVar(search_var, arg, count);
             }
-            self.countVar(search_var, func.ret, count, visited);
+            try self.countVar(search_var, func.ret, count);
         },
         .record => |record| {
             const fields = self.types.getRecordFieldsSlice(record.fields);
             for (fields.items(.var_)) |field_var| {
-                self.countVar(search_var, field_var, count, visited);
+                try self.countVar(search_var, field_var, count);
             }
-            self.countVar(search_var, record.ext, count, visited);
+            try self.countVar(search_var, record.ext, count);
         },
         .record_unbound => |fields| {
             const fields_slice = self.types.getRecordFieldsSlice(fields);
             for (fields_slice.items(.var_)) |field_var| {
-                self.countVar(search_var, field_var, count, visited);
+                try self.countVar(search_var, field_var, count);
             }
         },
         .tag_union => |tag_union| {
@@ -895,10 +935,10 @@ fn countVarInFlatType(self: *const TypeWriter, search_var: Var, flat_type: FlatT
                 const tag = self.types.tags.get(tag_idx);
                 const args = self.types.sliceVars(tag.args);
                 for (args) |arg_var| {
-                    self.countVar(search_var, arg_var, count, visited);
+                    try self.countVar(search_var, arg_var, count);
                 }
             }
-            self.countVar(search_var, tag_union.ext, count, visited);
+            try self.countVar(search_var, tag_union.ext, count);
         },
     }
 }

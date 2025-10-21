@@ -117,7 +117,14 @@ main! = |_| {}
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-empty_record))))
+			(e-empty_record)))
+	(s-type-anno (name "runEffect!")
+		(ty-fn (effectful false)
+			(ty-parens
+				(ty-fn (effectful true)
+					(ty-rigid-var (name "_a"))
+					(ty-rigid-var (name "_b"))))
+			(ty-rigid-var-lookup (ty-rigid-var (name "_a"))))))
 ~~~
 # TYPES
 ~~~clojure

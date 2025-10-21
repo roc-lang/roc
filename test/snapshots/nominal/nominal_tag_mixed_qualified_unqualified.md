@@ -118,10 +118,9 @@ isRed = |color| match color {
 									(target-node-idx "1")
 									(e-tag (name "False")))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "Color") (local))
-					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "1")))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "Color") (local))
+				(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "1"))))))
 	(s-nominal-decl
 		(ty-header (name "Color"))
 		(ty-tag-union

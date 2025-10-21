@@ -60,20 +60,17 @@ NO CHANGE
 		(p-assign (ident "a"))
 		(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14"))
 		(annotation
-			(declared-type
-				(ty-lookup (name "F32") (builtin)))))
+			(ty-lookup (name "F32") (builtin))))
 	(d-let
 		(p-assign (ident "b"))
 		(e-frac-dec (value "2.71828"))
 		(annotation
-			(declared-type
-				(ty-lookup (name "F64") (builtin)))))
+			(ty-lookup (name "F64") (builtin))))
 	(d-let
 		(p-assign (ident "c"))
 		(e-frac-dec (value "123.456"))
 		(annotation
-			(declared-type
-				(ty-lookup (name "Dec") (builtin))))))
+			(ty-lookup (name "Dec") (builtin)))))
 ~~~
 # TYPES
 ~~~clojure

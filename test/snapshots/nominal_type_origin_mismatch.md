@@ -110,10 +110,9 @@ main =
 			(e-string
 				(e-literal (string "Got a person"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-malformed)
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-malformed)
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "main"))
 		(e-call

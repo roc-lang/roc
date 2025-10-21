@@ -232,14 +232,13 @@ main = {
 					(e-lookup-local
 						(p-assign (ident "x"))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "Pair") (local)
-						(ty-rigid-var (name "a"))
-						(ty-rigid-var (name "b")))
-					(ty-apply (name "Pair") (local)
-						(ty-rigid-var-lookup (ty-rigid-var (name "b")))
-						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
+			(ty-fn (effectful false)
+				(ty-apply (name "Pair") (local)
+					(ty-rigid-var (name "a"))
+					(ty-rigid-var (name "b")))
+				(ty-apply (name "Pair") (local)
+					(ty-rigid-var-lookup (ty-rigid-var (name "b")))
+					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
 		(p-assign (ident "map_pair"))
 		(e-lambda
@@ -263,22 +262,21 @@ main = {
 						(e-lookup-local
 							(p-assign (ident "y")))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "Pair") (local)
-						(ty-rigid-var (name "a"))
-						(ty-rigid-var (name "b")))
-					(ty-parens
-						(ty-fn (effectful false)
-							(ty-rigid-var-lookup (ty-rigid-var (name "a")))
-							(ty-rigid-var (name "c"))))
-					(ty-parens
-						(ty-fn (effectful false)
-							(ty-rigid-var-lookup (ty-rigid-var (name "b")))
-							(ty-rigid-var (name "d"))))
-					(ty-apply (name "Pair") (local)
-						(ty-rigid-var-lookup (ty-rigid-var (name "c")))
-						(ty-rigid-var-lookup (ty-rigid-var (name "d"))))))))
+			(ty-fn (effectful false)
+				(ty-apply (name "Pair") (local)
+					(ty-rigid-var (name "a"))
+					(ty-rigid-var (name "b")))
+				(ty-parens
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-rigid-var (name "c"))))
+				(ty-parens
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "b")))
+						(ty-rigid-var (name "d"))))
+				(ty-apply (name "Pair") (local)
+					(ty-rigid-var-lookup (ty-rigid-var (name "c")))
+					(ty-rigid-var-lookup (ty-rigid-var (name "d")))))))
 	(d-let
 		(p-assign (ident "main"))
 		(e-block

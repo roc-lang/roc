@@ -75,10 +75,9 @@ NO CHANGE
 		(p-assign (ident "entrypoint"))
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "Str") (builtin))
-					(ty-lookup (name "Str") (builtin)))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure

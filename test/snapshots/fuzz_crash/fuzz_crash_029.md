@@ -455,7 +455,9 @@ pkg :
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(s-type-anno (name "pkg")
+		(ty-malformed)))
 ~~~
 # TYPES
 ~~~clojure
