@@ -166,7 +166,6 @@ fn compileModule(
     module_env.* = try ModuleEnv.init(gpa, source);
     errdefer module_env.deinit();
 
-    module_env.common.source = source;
     module_env.module_name = module_name;
     try module_env.common.calcLineStarts(gpa);
 

@@ -162,17 +162,8 @@ test "streaming read with hash mismatch" {
     );
     defer reader.deinit();
 
-    var buffer: [1024]u8 = undefined;
-    while (true) {
-        const n = reader.read(&buffer) catch |err| {
-            try std.testing.expectEqual(err, error.HashMismatch);
-            return;
-        };
-        if (n == 0) break;
-    }
-
-    // Should have gotten hash mismatch error
-    try std.testing.expect(false);
+    // verifyComplete discards remaining data and checks hash
+    try std.testing.expectEqual(error.HashMismatch, reader.verifyComplete());
 }
 
 test "different compression levels" {
@@ -218,17 +209,12 @@ test "different compression levels" {
         );
         defer reader.deinit();
 
-        var decompressed = std.array_list.Managed(u8).init(allocator);
-        defer decompressed.deinit();
+        var decompressed_writer: std.Io.Writer.Allocating = .init(allocator);
+        defer decompressed_writer.deinit();
 
-        var buffer: [1024]u8 = undefined;
-        while (true) {
-            const n = try reader.read(&buffer);
-            if (n == 0) break;
-            try decompressed.appendSlice(buffer[0..n]);
-        }
+        _ = try reader.interface.streamRemaining(&decompressed_writer.writer);
 
-        try std.testing.expectEqualStrings(test_data, decompressed.items);
+        try std.testing.expectEqualStrings(test_data, decompressed_writer.written());
     }
 
     // Higher compression levels should generally produce smaller output
@@ -280,8 +266,7 @@ test "large file streaming extraction" {
     defer allocator.free(filename);
 
     // Just verify we successfully bundled a large file
-    var bundle_list = bundle_writer.toArrayList();
-    defer bundle_list.deinit(allocator);
-    try std.testing.expect(bundle_list.items.len > 512); // Should include header and compressed data
+    const bundle_list = bundle_writer.written();
+    try std.testing.expect(bundle_list.len > 512); // Should include header and compressed data
     // Note: Full round-trip testing with unbundle is done in integration tests
 }

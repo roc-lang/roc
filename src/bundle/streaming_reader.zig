@@ -17,10 +17,8 @@ pub const DecompressingHashReader = struct {
     input_reader: *std.Io.Reader,
     expected_hash: [32]u8,
     in_buffer: []u8,
-    out_buffer: []u8,
-    out_pos: usize,
-    out_end: usize,
-    finished: bool,
+    in_pos: usize,
+    in_end: usize,
     hash_verified: bool,
     interface: std.Io.Reader,
 
@@ -62,19 +60,16 @@ pub const DecompressingHashReader = struct {
             .input_reader = input_reader,
             .expected_hash = expected_hash,
             .in_buffer = in_buffer,
-            .out_buffer = out_buffer,
-            .out_pos = 0,
-            .out_end = 0,
-            .finished = false,
+            .in_pos = 0,
+            .in_end = 0,
             .hash_verified = false,
             .interface = undefined,
         };
         result.interface = .{
             .vtable = &.{
                 .stream = stream,
-                .discard = discard,
             },
-            .buffer = &.{}, // No buffer needed, we have internal buffering
+            .buffer = out_buffer,
             .seek = 0,
             .end = 0,
         };
@@ -84,172 +79,84 @@ pub const DecompressingHashReader = struct {
     pub fn deinit(self: *Self) void {
         _ = c.ZSTD_freeDCtx(self.dctx);
         self.allocator_ptr.free(self.in_buffer);
-        self.allocator_ptr.free(self.out_buffer);
+        self.allocator_ptr.free(self.interface.buffer);
     }
 
     fn stream(r: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
+        // This implementation just adds the decompressed data to the buffer and returns 0.
+        // This simplifies the logic a bit which is encouraged by the Zig reader API.
+        _ = w;
+        _ = limit;
+        if (r.end == r.seek) {
+            r.end = 0;
+            r.seek = 0;
+        }
         const self: *Self = @alignCast(@fieldParentPtr("interface", r));
-        const dest = limit.slice(try w.writableSliceGreedy(1));
-        const n = self.read(dest) catch |err| switch (err) {
-            error.DecompressionFailed, error.HashMismatch => return std.Io.Reader.StreamError.ReadFailed,
-            error.UnexpectedEndOfStream => return std.Io.Reader.StreamError.EndOfStream,
-            error.OutOfMemory => return std.Io.Reader.StreamError.ReadFailed,
+
+        var in_writer = std.Io.Writer.fixed(self.in_buffer[self.in_end..]);
+        var reached_end = false;
+        const bytes_read = self.input_reader.stream(&in_writer, std.Io.Limit.limited(self.in_buffer.len)) catch |err| switch (err) {
+            error.EndOfStream => blk: {
+                reached_end = true;
+                break :blk 0;
+            },
+            error.ReadFailed => return error.ReadFailed,
+            error.WriteFailed => unreachable, // fixed buffer writer doesn't fail
         };
-        if (n == 0) {
-            return std.Io.Reader.StreamError.EndOfStream;
+
+        if (reached_end) {
+            // verify hash if not already done
+            if (!self.hash_verified) {
+                var actual_hash: [32]u8 = undefined;
+                self.hasher.final(&actual_hash);
+                if (std.mem.eql(u8, &actual_hash, &self.expected_hash)) {
+                    self.hash_verified = true;
+                }
+            }
+            return error.EndOfStream;
         }
-        w.advance(n);
-        return n;
+
+        // Update hash with compressed data
+        self.hasher.update(self.in_buffer[self.in_end..][0..bytes_read]);
+        self.in_end += bytes_read;
+
+        // Decompress just to fill the buffer
+        var in_buf = c.ZSTD_inBuffer{ .src = self.in_buffer.ptr, .size = self.in_end, .pos = self.in_pos };
+
+        var out_buf = c.ZSTD_outBuffer{ .dst = r.buffer.ptr, .size = r.buffer.len, .pos = r.end };
+
+        const result = c.ZSTD_decompressStream(self.dctx, &out_buf, &in_buf);
+        if (c.ZSTD_isError(result) != 0) {
+            // this is still a read failed, as we are not writing to the writer but the internal buffer
+            return error.ReadFailed;
+        }
+        if (in_buf.pos < in_buf.size) {
+            self.in_pos = in_buf.pos;
+            self.in_end = in_buf.size;
+        } else {
+            self.in_pos = 0;
+            self.in_end = 0;
+        }
+
+        r.end = out_buf.pos;
+
+        return 0;
     }
 
-    fn discard(r: *std.Io.Reader, limit: std.Io.Limit) std.Io.Reader.Error!usize {
-        const self: *Self = @alignCast(@fieldParentPtr("interface", r));
-
-        var total: usize = 0;
-        var remaining: ?usize = limit.toInt();
-
-        // Consume any buffered output data first.
-        if (self.out_pos < self.out_end) {
-            const available = self.out_end - self.out_pos;
-            const to_consume = if (remaining) |rem| @min(available, rem) else available;
-            self.out_pos += to_consume;
-            total += to_consume;
-            if (remaining) |*rem| {
-                rem.* -= to_consume;
-                if (rem.* == 0) return total;
-            }
-        }
-
-        var discard_buffer: [4096]u8 = undefined;
-
-        while (true) {
-            if (remaining) |rem| {
-                if (rem == 0) break;
-            }
-
-            const chunk_len = if (remaining) |rem| @min(discard_buffer.len, rem) else discard_buffer.len;
-            const n = self.read(discard_buffer[0..chunk_len]) catch |err| switch (err) {
-                error.DecompressionFailed, error.HashMismatch => return std.Io.Reader.Error.ReadFailed,
-                error.UnexpectedEndOfStream => return std.Io.Reader.Error.EndOfStream,
-                error.OutOfMemory => return std.Io.Reader.Error.ReadFailed,
-            };
-
-            if (n == 0) break;
-
-            total += n;
-            if (remaining) |*rem| {
-                rem.* -= n;
-                if (rem.* == 0) break;
-            }
-        }
-
-        return total;
-    }
-
-    pub fn read(self: *Self, dest: []u8) Error!usize {
-        if (dest.len == 0) return 0;
-
-        var total_read: usize = 0;
-
-        while (total_read < dest.len) {
-            // If we have data in the output buffer, copy it
-            if (self.out_pos < self.out_end) {
-                const available = self.out_end - self.out_pos;
-                const to_copy = @min(available, dest.len - total_read);
-                @memcpy(dest[total_read..][0..to_copy], self.out_buffer[self.out_pos..][0..to_copy]);
-                self.out_pos += to_copy;
-                total_read += to_copy;
-
-                if (total_read == dest.len) {
-                    return total_read;
-                }
-            }
-
-            // If finished and no more data in buffer, we're done
-            if (self.finished) {
-                break;
-            }
-
-            // Read more compressed data using a fixed writer
-            var in_writer = std.Io.Writer.fixed(self.in_buffer);
-            var reached_end = false;
-            const bytes_read = self.input_reader.stream(&in_writer, std.Io.Limit.limited(self.in_buffer.len)) catch |err| switch (err) {
-                error.EndOfStream => blk: {
-                    reached_end = true;
-                    break :blk 0;
-                },
-                error.ReadFailed => return error.UnexpectedEndOfStream,
-                error.WriteFailed => unreachable, // fixed buffer writer doesn't fail
-            };
-
-            if (bytes_read == 0) {
-                if (reached_end) {
-                    if (!self.hash_verified) {
-                        var actual_hash: [32]u8 = undefined;
-                        self.hasher.final(&actual_hash);
-                        if (!std.mem.eql(u8, &actual_hash, &self.expected_hash)) {
-                            return error.HashMismatch;
-                        }
-                        self.hash_verified = true;
-                    }
-                    self.finished = true;
-                    break;
-                }
-
-                if (total_read > 0) {
-                    break;
-                }
-                continue;
-            }
-
-            // Update hash with compressed data
-            self.hasher.update(self.in_buffer[0..bytes_read]);
-
-            // Decompress
-            var in_buf = c.ZSTD_inBuffer{ .src = self.in_buffer.ptr, .size = bytes_read, .pos = 0 };
-
-            while (in_buf.pos < in_buf.size) {
-                var out_buf = c.ZSTD_outBuffer{ .dst = self.out_buffer.ptr, .size = self.out_buffer.len, .pos = 0 };
-
-                const result = c.ZSTD_decompressStream(self.dctx, &out_buf, &in_buf);
-                if (c.ZSTD_isError(result) != 0) {
-                    return error.DecompressionFailed;
-                }
-
-                if (out_buf.pos > 0) {
-                    self.out_pos = 0;
-                    self.out_end = out_buf.pos;
-
-                    // Copy what we can to dest
-                    const to_copy = @min(out_buf.pos, dest.len - total_read);
-                    @memcpy(dest[total_read..][0..to_copy], self.out_buffer[0..to_copy]);
-                    self.out_pos = to_copy;
-                    total_read += to_copy;
-
-                    if (total_read == dest.len) {
-                        return total_read;
-                    }
-                }
-
-                // If decompression is complete
-                if (result == 0) {
-                    break;
-                }
-            }
-        }
-
-        return total_read;
-    }
-
+    /// Verify that the hash matches. This should be called after reading is complete.
+    /// If there is remaining data, it will be discarded.
     pub fn verifyComplete(self: *Self) !void {
         // Read any remaining data to ensure we process the entire stream
-        var discard_buffer: [1024]u8 = undefined;
         while (true) {
-            const n = try self.read(&discard_buffer);
-            if (n == 0) break;
+            _ = self.interface.discard(std.Io.Limit.unlimited) catch |err| {
+                switch (err) {
+                    error.EndOfStream => break,
+                    error.ReadFailed => return error.ReadFailed,
+                }
+            };
         }
 
-        // The hash should have been verified during reading
+        // The hash should have been verified during stream
         if (!self.hash_verified) {
             return error.HashMismatch;
         }

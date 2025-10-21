@@ -1,7 +1,7 @@
 .{
     .name = .roc,
     .version = "0.0.0",
-    .minimum_zig_version = "0.15.1",
+    .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .afl_kit = .{
             .url = "git+https://github.com/bhansconnect/zig-afl-kit?ref=main#b863c41ca47ed05729e0b509fb1926c111aa2800",
