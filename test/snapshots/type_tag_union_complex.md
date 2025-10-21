@@ -182,7 +182,7 @@ NO CHANGE
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-lookup (name "Result") (external (module-idx "3") (target-node-idx "3")))
+					(ty-lookup (name "Result") (module "Result"))
 					(ty-lookup (name "Str") (builtin))))))
 	(d-let
 		(p-assign (ident "handleResponse"))
@@ -222,7 +222,7 @@ NO CHANGE
 		(ty-header (name "Response"))
 		(ty-tag-union
 			(ty-tag-name (name "Ok")
-				(ty-lookup (name "Result") (external (module-idx "3") (target-node-idx "3"))))
+				(ty-lookup (name "Result") (module "Result")))
 			(ty-tag-name (name "NetworkError"))
 			(ty-tag-name (name "ParseError"))))
 	(s-alias-decl

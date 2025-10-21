@@ -37,8 +37,7 @@ NO CHANGE
 	(if-branches
 		(if-branch
 			(e-nominal-external
-				(module-idx "2")
-				(target-node-idx "1")
+				(module "Bool")
 				(e-tag (name "True")))
 			(e-tag (name "Ok")
 				(args

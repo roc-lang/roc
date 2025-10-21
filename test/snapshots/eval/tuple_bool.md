@@ -47,12 +47,10 @@ NO CHANGE
 		(e-tag (name "True"))
 		(e-tag (name "False"))
 		(e-nominal-external
-			(module-idx "2")
-			(target-node-idx "1")
+			(module "Bool")
 			(e-tag (name "True")))
 		(e-nominal-external
-			(module-idx "2")
-			(target-node-idx "1")
+			(module "Bool")
 			(e-tag (name "False")))
 		(e-unary-not
 			(e-tag (name "True")))

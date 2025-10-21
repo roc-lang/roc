@@ -30,8 +30,7 @@ NO CHANGE
 (can-ir
 	(s-return
 		(e-nominal-external
-			(module-idx "2")
-			(target-node-idx "1")
+			(module "Bool")
 			(e-tag (name "True")))))
 ~~~
 # TYPES

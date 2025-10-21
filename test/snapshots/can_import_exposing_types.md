@@ -745,7 +745,7 @@ combineResults = |jsonResult, httpStatus|
 			(declared-type
 				(ty-fn (effectful false)
 					(ty-lookup (name "Str") (builtin))
-					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
+					(ty-apply (name "Result") (module "Result")
 						(ty-malformed)
 						(ty-malformed))))))
 	(d-let
@@ -823,7 +823,7 @@ combineResults = |jsonResult, httpStatus|
 					(ty-malformed)
 					(ty-apply (name "List") (builtin)
 						(ty-malformed))
-					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
+					(ty-apply (name "Result") (module "Result")
 						(ty-apply (name "List") (builtin)
 							(ty-malformed))
 						(ty-malformed))))))
@@ -840,7 +840,7 @@ combineResults = |jsonResult, httpStatus|
 			(declared-type
 				(ty-fn (effectful false)
 					(ty-malformed)
-					(ty-lookup (name "Client") (external (module-idx "5") (target-node-idx "0")))))))
+					(ty-lookup (name "Client") (module "http.Client"))))))
 	(d-let
 		(p-assign (ident "handleResponse"))
 		(e-closure
@@ -926,11 +926,11 @@ combineResults = |jsonResult, httpStatus|
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
+					(ty-apply (name "Result") (module "Result")
 						(ty-malformed)
 						(ty-malformed))
 					(ty-malformed)
-					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
+					(ty-apply (name "Result") (module "Result")
 						(ty-malformed)
 						(ty-malformed))))))
 	(s-alias-decl
