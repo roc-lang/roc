@@ -20,54 +20,9 @@ nested : { bar : Foo.Bar, count : U64 }
 nested = { bar: A, count: 1 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - nominal_associated_lookup_in_containers.md:7:9:7:18
-TYPE MISMATCH - nominal_associated_lookup_in_containers.md:10:10:10:15
-TYPE MISMATCH - nominal_associated_lookup_in_containers.md:13:10:13:30
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_associated_lookup_in_containers.md:7:9:7:18:**
-```roc
-items = [A, B, C]
-```
-        ^^^^^^^^^
-
-It has the type:
-    _List([A, B, C]_others)_
-
-But the type annotation says it should have the type:
-    _List(Foo.Bar)_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_associated_lookup_in_containers.md:10:10:10:15:**
-```roc
-result = Ok(A)
-```
-         ^^^^^
-
-It has the type:
-    _Result([A]_others, err)_
-
-But the type annotation says it should have the type:
-    _Result(Foo.Bar, Foo.Error)_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_associated_lookup_in_containers.md:13:10:13:30:**
-```roc
-nested = { bar: A, count: 1 }
-```
-         ^^^^^^^^^^^^^^^^^^^^
-
-It has the type:
-    _{ bar: [A]_others, count: Num(_size) }_
-
-But the type annotation says it should have the type:
-    _{ bar: Foo.Bar, count: Num(Int(Unsigned64)) }_
-
-**Hint:** This might be because the numeric literal is either negative or too large to fit in the unsigned type.
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -175,13 +130,12 @@ nested = { bar: A, count: 1 }
 					(ty-lookup (name "Foo.Bar") (local))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-nominal (nominal "Result")
-			(e-tag (name "Ok")
-				(args
-					(e-tag (name "A")))))
+		(e-tag (name "Ok")
+			(args
+				(e-tag (name "A"))))
 		(annotation
 			(declared-type
-				(ty-apply (name "Result") (local)
+				(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 					(ty-lookup (name "Foo.Bar") (local))
 					(ty-lookup (name "Foo.Error") (local))))))
 	(d-let
@@ -219,9 +173,9 @@ nested = { bar: A, count: 1 }
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error")))
+		(patt (type "List(Foo.Bar)"))
+		(patt (type "Result(Foo.Bar, Foo.Error)"))
+		(patt (type "{ bar: Foo.Bar, count: Num(Int(Unsigned64)) }")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
@@ -230,7 +184,7 @@ nested = { bar: A, count: 1 }
 		(nominal (type "Foo.Error")
 			(ty-header (name "Foo.Error"))))
 	(expressions
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))))
+		(expr (type "List(Foo.Bar)"))
+		(expr (type "Result(Foo.Bar, Foo.Error)"))
+		(expr (type "{ bar: Foo.Bar, count: Num(Int(Unsigned64)) }"))))
 ~~~

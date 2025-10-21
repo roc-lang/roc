@@ -210,7 +210,21 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*Modu
 /// Create and initialize interpreter with heap-allocated stable objects
 fn createInterpreter(env_ptr: *ModuleEnv, roc_ops: *RocOps) ShimError!Interpreter {
     const allocator = std.heap.page_allocator;
-    const interpreter = eval.Interpreter.init(allocator, env_ptr) catch {
+
+    // Extract builtin statement indices from the builtin_statements span
+    // The span contains Bool and Result statements
+    const bool_stmt: CIR.Statement.Idx = @enumFromInt(env_ptr.builtin_statements.span.start);
+    const result_stmt: CIR.Statement.Idx = @enumFromInt(env_ptr.builtin_statements.span.start + 1);
+
+    // In the shim context, builtins are embedded in the main module_env
+    const builtin_types = eval.BuiltinTypes{
+        .bool_stmt = bool_stmt,
+        .result_stmt = result_stmt,
+        .bool_env = env_ptr,
+        .result_env = env_ptr,
+    };
+
+    const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, null) catch {
         roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
         return error.InterpreterSetupFailed;
     };

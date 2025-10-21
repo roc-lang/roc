@@ -60,8 +60,8 @@ NO CHANGE
 							(p-assign (ident "middle")))
 						(e-closure
 							(captures
-								(capture (ident "middle"))
-								(capture (ident "outer")))
+								(capture (ident "outer"))
+								(capture (ident "middle")))
 							(e-lambda
 								(args
 									(p-assign (ident "inner")))

@@ -136,8 +136,7 @@ NO CHANGE
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-nominal
-							(p-applied-tag)))
+						(p-applied-tag))
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value

@@ -138,7 +138,7 @@ main = {
 						(p-assign (ident "encoded")))))
 			(e-lookup-local
 				(p-assign (ident "decoded")))))
-	(s-import (module "json.Json") (qualifier "json")
+	(s-import (module "json.Json")
 		(exposes
 			(exposed (name "decode") (wildcard false))
 			(exposed (name "encode") (wildcard false)))))

@@ -258,10 +258,10 @@ main! = |_| {
 		(p-assign (ident "main!"))
 		(e-closure
 			(captures
-				(capture (ident "multiply"))
+				(capture (ident "process"))
 				(capture (ident "add"))
-				(capture (ident "double"))
-				(capture (ident "process")))
+				(capture (ident "multiply"))
+				(capture (ident "double")))
 			(e-lambda
 				(args
 					(p-underscore))

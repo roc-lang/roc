@@ -64,24 +64,33 @@ UNDECLARED TYPE - can_import_exposing_types.md:30:18:30:24
 UNDECLARED TYPE - can_import_exposing_types.md:31:23:31:31
 MODULE NOT FOUND - can_import_exposing_types.md:1:1:1:49
 MODULE NOT FOUND - can_import_exposing_types.md:2:1:2:64
+DUPLICATE DEFINITION - can_import_exposing_types.md:1:1:1:1
 MODULE NOT FOUND - can_import_exposing_types.md:3:1:3:38
 UNDECLARED TYPE - can_import_exposing_types.md:6:27:6:32
 UNDECLARED TYPE - can_import_exposing_types.md:6:34:6:39
+UNDEFINED VARIABLE - can_import_exposing_types.md:7:21:7:31
 UNDECLARED TYPE - can_import_exposing_types.md:10:17:10:24
 UNDECLARED TYPE - can_import_exposing_types.md:10:28:10:36
+UNDEFINED VARIABLE - can_import_exposing_types.md:12:14:12:25
+UNDEFINED VARIABLE - can_import_exposing_types.md:14:22:14:29
+UNDEFINED VARIABLE - can_import_exposing_types.md:15:23:15:38
 UNDECLARED TYPE - can_import_exposing_types.md:20:15:20:21
 UNDECLARED TYPE - can_import_exposing_types.md:20:28:20:33
 UNDECLARED TYPE - can_import_exposing_types.md:20:50:20:55
 UNDECLARED TYPE - can_import_exposing_types.md:20:58:20:63
 UNDEFINED VARIABLE - can_import_exposing_types.md:22:5:22:16
+UNDEFINED VARIABLE - can_import_exposing_types.md:24:13:24:30
 UNDECLARED TYPE - can_import_exposing_types.md:35:16:35:22
+UNDEFINED VARIABLE - can_import_exposing_types.md:36:25:36:40
 UNDECLARED TYPE - can_import_exposing_types.md:39:18:39:26
+UNDEFINED VARIABLE - can_import_exposing_types.md:42:23:42:42
 UNDEFINED VARIABLE - can_import_exposing_types.md:43:23:43:37
 UNDECLARED TYPE - can_import_exposing_types.md:47:25:47:30
 UNDECLARED TYPE - can_import_exposing_types.md:47:32:47:37
 UNDECLARED TYPE - can_import_exposing_types.md:47:40:47:46
 UNDECLARED TYPE - can_import_exposing_types.md:47:57:47:65
 UNDECLARED TYPE - can_import_exposing_types.md:47:67:47:72
+UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Config_ is not declared in this scope.
@@ -138,6 +147,24 @@ import http.Client as Http exposing [Request, Response, Status]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
+**DUPLICATE DEFINITION**
+The name `Result` is being redeclared in this scope.
+
+The redeclaration is here:
+**can_import_exposing_types.md:1:1:1:1:**
+```roc
+import json.Json exposing [Value, Error, Config]
+```
+^
+
+But `Result` was already defined here:
+**can_import_exposing_types.md:1:1:1:1:**
+```roc
+import json.Json exposing [Value, Error, Config]
+```
+^
+
+
 **MODULE NOT FOUND**
 The module `utils.Result` was not found in this Roc project.
 
@@ -171,6 +198,17 @@ parseJson : Str -> Result(Value, Error)
                                  ^^^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named `parse` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_exposing_types.md:7:21:7:31:**
+```roc
+parseJson = |input| Json.parse(input)
+```
+                    ^^^^^^^^^^
+
+
 **UNDECLARED TYPE**
 The type _Request_ is not declared in this scope.
 
@@ -191,6 +229,39 @@ This type is referenced here:
 handleRequest : Request -> Response
 ```
                            ^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `decode` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_exposing_types.md:12:14:12:25:**
+```roc
+    result = Json.decode(req.body)
+```
+             ^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `ok` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_exposing_types.md:14:22:14:29:**
+```roc
+        Ok(value) => Http.ok(value)
+```
+                     ^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `badRequest` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_exposing_types.md:15:23:15:38:**
+```roc
+        Err(error) => Http.badRequest(error)
+```
+                      ^^^^^^^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -248,6 +319,17 @@ Is there an `import` or `exposing` missing up-top?
     ^^^^^^^^^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named `validateWith` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_exposing_types.md:24:13:24:30:**
+```roc
+        |v| Json.validateWith(config, v),
+```
+            ^^^^^^^^^^^^^^^^^
+
+
 **UNDECLARED TYPE**
 The type _Config_ is not declared in this scope.
 
@@ -259,6 +341,17 @@ createClient : Config -> Http.Client
                ^^^^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named `clientWith` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_exposing_types.md:36:25:36:40:**
+```roc
+createClient = |config| Http.clientWith(config)
+```
+                        ^^^^^^^^^^^^^^^
+
+
 **UNDECLARED TYPE**
 The type _Response_ is not declared in this scope.
 
@@ -268,6 +361,17 @@ This type is referenced here:
 handleResponse : Response -> Str
 ```
                  ^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `statusToString` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_exposing_types.md:42:23:42:42:**
+```roc
+        Ok(status) => Http.statusToString(status)
+```
+                      ^^^^^^^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -334,6 +438,17 @@ This type is referenced here:
 combineResults : Result(Value, Error), Status -> Result(Response, Error)
 ```
                                                                   ^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `encode` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_exposing_types.md:50:33:50:44:**
+```roc
+        Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })
+```
+                                ^^^^^^^^^^^
 
 
 # TOKENS
@@ -623,24 +738,22 @@ combineResults = |jsonResult, httpStatus|
 			(args
 				(p-assign (ident "input")))
 			(e-call
-				(e-lookup-external
-					(module-idx "2")
-					(target-node-idx "0"))
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local
 					(p-assign (ident "input")))))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
 					(ty-lookup (name "Str") (builtin))
-					(ty-apply (name "Result") (local)
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-malformed)
 						(ty-malformed))))))
 	(d-let
 		(p-assign (ident "handleRequest"))
 		(e-closure
 			(captures
-				(capture (ident "value"))
-				(capture (ident "error")))
+				(capture (ident "error"))
+				(capture (ident "value")))
 			(e-lambda
 				(args
 					(p-assign (ident "req")))
@@ -648,9 +761,7 @@ combineResults = |jsonResult, httpStatus|
 					(s-let
 						(p-assign (ident "result"))
 						(e-call
-							(e-lookup-external
-								(module-idx "2")
-								(target-node-idx "0"))
+							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-dot-access (field "body")
 								(receiver
 									(e-lookup-local
@@ -664,25 +775,19 @@ combineResults = |jsonResult, httpStatus|
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-nominal
-												(p-applied-tag))))
+											(p-applied-tag)))
 									(value
 										(e-call
-											(e-lookup-external
-												(module-idx "3")
-												(target-node-idx "0"))
+											(e-runtime-error (tag "ident_not_in_scope"))
 											(e-lookup-local
 												(p-assign (ident "value"))))))
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-nominal
-												(p-applied-tag))))
+											(p-applied-tag)))
 									(value
 										(e-call
-											(e-lookup-external
-												(module-idx "3")
-												(target-node-idx "0"))
+											(e-runtime-error (tag "ident_not_in_scope"))
 											(e-lookup-local
 												(p-assign (ident "error"))))))))))))
 		(annotation
@@ -707,9 +812,7 @@ combineResults = |jsonResult, httpStatus|
 						(args
 							(p-assign (ident "v")))
 						(e-call
-							(e-lookup-external
-								(module-idx "2")
-								(target-node-idx "0"))
+							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local
 								(p-assign (ident "config")))
 							(e-lookup-local
@@ -720,7 +823,7 @@ combineResults = |jsonResult, httpStatus|
 					(ty-malformed)
 					(ty-apply (name "List") (builtin)
 						(ty-malformed))
-					(ty-apply (name "Result") (local)
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-apply (name "List") (builtin)
 							(ty-malformed))
 						(ty-malformed))))))
@@ -730,16 +833,14 @@ combineResults = |jsonResult, httpStatus|
 			(args
 				(p-assign (ident "config")))
 			(e-call
-				(e-lookup-external
-					(module-idx "3")
-					(target-node-idx "0"))
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local
 					(p-assign (ident "config")))))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
 					(ty-malformed)
-					(ty-lookup (name "Client") (external (module-idx "3") (target-node-idx "0")))))))
+					(ty-lookup (name "Client") (external (module-idx "5") (target-node-idx "0")))))))
 	(d-let
 		(p-assign (ident "handleResponse"))
 		(e-closure
@@ -760,20 +861,16 @@ combineResults = |jsonResult, httpStatus|
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal
-											(p-applied-tag))))
+										(p-applied-tag)))
 								(value
 									(e-call
-										(e-lookup-external
-											(module-idx "3")
-											(target-node-idx "0"))
+										(e-runtime-error (tag "ident_not_in_scope"))
 										(e-lookup-local
 											(p-assign (ident "status"))))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal
-											(p-applied-tag))))
+										(p-applied-tag)))
 								(value
 									(e-call
 										(e-runtime-error (tag "ident_not_in_scope"))
@@ -788,8 +885,8 @@ combineResults = |jsonResult, httpStatus|
 		(p-assign (ident "combineResults"))
 		(e-closure
 			(captures
-				(capture (ident "error"))
-				(capture (ident "value")))
+				(capture (ident "value"))
+				(capture (ident "error")))
 			(e-lambda
 				(args
 					(p-assign (ident "jsonResult"))
@@ -803,43 +900,37 @@ combineResults = |jsonResult, httpStatus|
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal
-											(p-applied-tag))))
+										(p-applied-tag)))
 								(value
-									(e-nominal (nominal "Result")
-										(e-tag (name "Ok")
-											(args
-												(e-record
-													(fields
-														(field (name "body")
-															(e-call
-																(e-lookup-external
-																	(module-idx "2")
-																	(target-node-idx "0"))
-																(e-lookup-local
-																	(p-assign (ident "value")))))
-														(field (name "status")
+									(e-tag (name "Ok")
+										(args
+											(e-record
+												(fields
+													(field (name "body")
+														(e-call
+															(e-runtime-error (tag "ident_not_in_scope"))
 															(e-lookup-local
-																(p-assign (ident "httpStatus")))))))))))
+																(p-assign (ident "value")))))
+													(field (name "status")
+														(e-lookup-local
+															(p-assign (ident "httpStatus"))))))))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal
-											(p-applied-tag))))
+										(p-applied-tag)))
 								(value
-									(e-nominal (nominal "Result")
-										(e-tag (name "Err")
-											(args
-												(e-lookup-local
-													(p-assign (ident "error")))))))))))))
+									(e-tag (name "Err")
+										(args
+											(e-lookup-local
+												(p-assign (ident "error"))))))))))))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-apply (name "Result") (local)
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-malformed)
 						(ty-malformed))
 					(ty-malformed)
-					(ty-apply (name "Result") (local)
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-malformed)
 						(ty-malformed))))))
 	(s-alias-decl
@@ -851,17 +942,17 @@ combineResults = |jsonResult, httpStatus|
 				(ty-malformed))
 			(field (field "defaultResponse")
 				(ty-malformed))))
-	(s-import (module "json.Json") (qualifier "json")
+	(s-import (module "json.Json")
 		(exposes
 			(exposed (name "Value") (wildcard false))
 			(exposed (name "Error") (wildcard false))
 			(exposed (name "Config") (wildcard false))))
-	(s-import (module "http.Client") (qualifier "http") (alias "Http")
+	(s-import (module "http.Client")
 		(exposes
 			(exposed (name "Request") (wildcard false))
 			(exposed (name "Response") (wildcard false))
 			(exposed (name "Status") (wildcard false))))
-	(s-import (module "utils.Result") (qualifier "utils")
+	(s-import (module "utils.Result")
 		(exposes
 			(exposed (name "Result") (wildcard false)))))
 ~~~

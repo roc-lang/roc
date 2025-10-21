@@ -33,11 +33,6 @@ pub const Store = struct {
     /// the first 7 bit would signal the length, the last bit would signal that the length
     /// continues to the previous byte
     buffer: collections.SafeList(u8) = .{},
-    /// When true, no new entries can be added to the store.
-    /// This is set after canonicalization is complete, so that
-    /// we know it's safe to serialize/deserialize the part of the interner
-    /// that goes from ident to string, because we don't go from string to ident anymore.
-    frozen: if (std.debug.runtime_safety) bool else void = if (std.debug.runtime_safety) false else {},
 
     /// Intiizalizes a `Store` with capacity `bytes` of space.
     /// Note this specifically is the number of bytes for storing strings.
@@ -57,9 +52,6 @@ pub const Store = struct {
     ///
     /// Does not deduplicate, as string literals are expected to be large and mostly unique.
     pub fn insert(self: *Store, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Idx {
-        if (std.debug.runtime_safety) {
-            std.debug.assert(!self.frozen); // Should not insert into a frozen store
-        }
         const str_len: u32 = @truncate(string.len);
 
         const str_len_bytes = std.mem.asBytes(&str_len);
@@ -79,13 +71,6 @@ pub const Store = struct {
         return self.buffer.items.items[idx_u32 .. idx_u32 + str_len];
     }
 
-    /// Freeze the store, preventing any new entries from being added.
-    pub fn freeze(self: *Store) void {
-        if (std.debug.runtime_safety) {
-            self.frozen = true;
-        }
-    }
-
     /// Serialize this Store to the given CompactWriter. The resulting Store
     /// in the writer's buffer will have offsets instead of pointers. Calling any
     /// methods on it or dereferencing its internal "pointers" (which are now
@@ -101,7 +86,6 @@ pub const Store = struct {
         // Then serialize the buffer SafeList and update the struct
         offset_self.* = .{
             .buffer = (try self.buffer.serialize(allocator, writer)).*,
-            .frozen = self.frozen,
         };
 
         return @constCast(offset_self);
@@ -115,7 +99,6 @@ pub const Store = struct {
     /// Serialized representation of a Store
     pub const Serialized = struct {
         buffer: collections.SafeList(u8).Serialized,
-        frozen: if (std.debug.runtime_safety) bool else void,
 
         /// Serialize a Store into this Serialized struct, appending data to the writer
         pub fn serialize(
@@ -126,21 +109,15 @@ pub const Store = struct {
         ) std.mem.Allocator.Error!void {
             // Serialize the buffer SafeList
             try self.buffer.serialize(&store.buffer, allocator, writer);
-            // Copy the frozen field
-            self.frozen = store.frozen;
         }
 
         /// Deserialize this Serialized struct into a Store
         pub fn deserialize(self: *Serialized, offset: i64) *Store {
-            // Store.Serialized should be at least as big as Store
-            std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Store));
-
             // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
             const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
 
             store.* = Store{
                 .buffer = self.buffer.deserialize(offset).*,
-                .frozen = self.frozen,
             };
 
             return store;
@@ -328,7 +305,7 @@ test "Store comprehensive CompactWriter roundtrip" {
     }
 }
 
-test "Store frozen state CompactWriter roundtrip" {
+test "Store CompactWriter roundtrip" {
     const gpa = std.testing.allocator;
 
     // Create and populate store
@@ -337,14 +314,6 @@ test "Store frozen state CompactWriter roundtrip" {
 
     _ = try original.insert(gpa, "test1");
     _ = try original.insert(gpa, "test2");
-
-    // Freeze the store
-    original.freeze();
-
-    // Verify store is frozen
-    if (std.debug.runtime_safety) {
-        try std.testing.expect(original.frozen);
-    }
 
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -377,11 +346,6 @@ test "Store frozen state CompactWriter roundtrip" {
     // Cast and relocate
     const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr)));
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
-
-    // Verify frozen state is preserved
-    if (std.debug.runtime_safety) {
-        try std.testing.expect(deserialized.frozen);
-    }
 }
 
 test "Store.Serialized roundtrip" {
@@ -394,9 +358,6 @@ test "Store.Serialized roundtrip" {
     const idx1 = try original.insert(gpa, "hello");
     const idx2 = try original.insert(gpa, "world");
     const idx3 = try original.insert(gpa, "foo bar baz");
-
-    // Freeze the store in debug mode
-    original.freeze();
 
     // Create a CompactWriter and arena
     var arena = std.heap.ArenaAllocator.init(gpa);
@@ -432,11 +393,6 @@ test "Store.Serialized roundtrip" {
     try std.testing.expectEqualStrings("hello", store.get(idx1));
     try std.testing.expectEqualStrings("world", store.get(idx2));
     try std.testing.expectEqualStrings("foo bar baz", store.get(idx3));
-
-    // Verify frozen state is preserved
-    if (std.debug.runtime_safety) {
-        try std.testing.expect(store.frozen);
-    }
 }
 
 test "Store edge case indices CompactWriter roundtrip" {

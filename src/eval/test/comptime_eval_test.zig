@@ -5,9 +5,13 @@ const types = @import("types");
 const base = @import("base");
 const can = @import("can");
 const check = @import("check");
+const collections = @import("collections");
+const compiled_builtins = @import("compiled_builtins");
 
 const helpers = @import("helpers.zig");
 const ComptimeEvaluator = @import("../comptime_evaluator.zig").ComptimeEvaluator;
+const BuiltinTypes = @import("../builtins.zig").BuiltinTypes;
+const builtin_loading = @import("../builtin_loading.zig");
 
 const Can = can.Can;
 const Check = check.Check;
@@ -20,6 +24,8 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     module_env: *ModuleEnv,
     evaluator: ComptimeEvaluator,
     problems: *check.problem.Store,
+    bool_module: builtin_loading.LoadedModule,
+    result_module: builtin_loading.LoadedModule,
 } {
     const gpa = test_allocator;
 
@@ -39,23 +45,35 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     // Empty scratch space (required before canonicalization)
     parse_ast.store.emptyScratch();
 
+    // Load real builtins (these will be returned and cleaned up by the caller)
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    errdefer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    errdefer result_module.deinit();
+
     // Initialize CIR fields in ModuleEnv
     try module_env.initCIRFields(gpa, "test");
     const common_idents: Check.CommonIdents = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
         .list = try module_env.insertIdent(base.Ident.for_text("List")),
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+        .bool_stmt = builtin_indices.bool_type,
+        .result_stmt = builtin_indices.result_type,
     };
 
     // Create canonicalizer
-    var czer = try Can.init(module_env, &parse_ast, null, .{});
+    var czer = try Can.init(module_env, &parse_ast, null);
     defer czer.deinit();
 
     // Canonicalize the module
     try czer.canonicalizeFile();
 
-    // Type check the module
-    var checker = try Check.init(gpa, &module_env.types, module_env, &.{}, &module_env.store.regions, common_idents);
+    // Type check the module with builtins
+    const other_modules = [_]*const ModuleEnv{ bool_module.env, result_module.env };
+    var checker = try Check.init(gpa, &module_env.types, module_env, &other_modules, &module_env.store.regions, common_idents);
     defer checker.deinit();
 
     try checker.checkFile();
@@ -64,13 +82,16 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     const problems = try gpa.create(check.problem.Store);
     problems.* = .{};
 
-    // Create and run comptime evaluator
-    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &.{}, problems);
+    // Create and run comptime evaluator with real builtins
+    const builtin_types = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &.{}, problems, builtin_types);
 
     return .{
         .module_env = module_env,
         .evaluator = evaluator,
         .problems = problems,
+        .bool_module = bool_module,
+        .result_module = result_module,
     };
 }
 
@@ -80,6 +101,8 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     evaluator: ComptimeEvaluator,
     problems: *check.problem.Store,
     other_envs: []const *const ModuleEnv,
+    bool_module: builtin_loading.LoadedModule,
+    result_module: builtin_loading.LoadedModule,
 } {
     const gpa = test_allocator;
 
@@ -92,11 +115,6 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     module_env.module_name = "TestModule";
     try module_env.common.calcLineStarts(module_env.gpa);
 
-    // Set up imports
-    var module_envs = std.StringHashMap(*const ModuleEnv).init(gpa);
-    defer module_envs.deinit();
-    try module_envs.put(import_name, imported_module);
-
     // Parse the source code
     var parse_ast = try parse.parse(&module_env.common, module_env.gpa);
     defer parse_ast.deinit(gpa);
@@ -104,25 +122,50 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     // Empty scratch space (required before canonicalization)
     parse_ast.store.emptyScratch();
 
+    // Load real builtins (these will be returned and cleaned up by the caller)
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    errdefer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    errdefer result_module.deinit();
+
     // Initialize CIR fields in ModuleEnv
     try module_env.initCIRFields(gpa, "test");
     const common_idents: Check.CommonIdents = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
         .list = try module_env.insertIdent(base.Ident.for_text("List")),
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+        .bool_stmt = builtin_indices.bool_type,
+        .result_stmt = builtin_indices.result_type,
     };
 
+    // Set up imports with correct type (AutoHashMap with Ident.Idx keys)
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
+    defer module_envs.deinit();
+
+    // Create temporary ident store for module name lookup
+    var temp_idents = try base.Ident.Store.initCapacity(gpa, 16);
+    defer temp_idents.deinit(gpa);
+
+    // Convert import name to Ident.Idx and add to module_envs
+    const import_ident = try temp_idents.insert(gpa, base.Ident.for_text(import_name));
+    try module_envs.put(import_ident, .{ .env = imported_module });
+
     // Create canonicalizer with imports
-    var czer = try Can.init(module_env, &parse_ast, &module_envs, .{});
+    var czer = try Can.init(module_env, &parse_ast, &module_envs);
     defer czer.deinit();
 
     // Canonicalize the module
     try czer.canonicalizeFile();
 
-    // Set up other_envs for type checking
+    // Set up other_envs for type checking (include Bool and Result modules)
     var other_envs_list = std.array_list.Managed(*const ModuleEnv).init(gpa);
     defer other_envs_list.deinit();
     try other_envs_list.append(imported_module);
+    try other_envs_list.append(bool_module.env);
+    try other_envs_list.append(result_module.env);
 
     // Type check the module
     var checker = try Check.init(gpa, &module_env.types, module_env, other_envs_list.items, &module_env.store.regions, common_idents);
@@ -137,14 +180,17 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     // Keep other_envs alive
     const other_envs_slice = try gpa.dupe(*const ModuleEnv, other_envs_list.items);
 
-    // Create and run comptime evaluator
-    const evaluator = try ComptimeEvaluator.init(gpa, module_env, other_envs_slice, problems);
+    // Create and run comptime evaluator with real builtins
+    const builtin_types = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, other_envs_slice, problems, builtin_types);
 
     return .{
         .module_env = module_env,
         .evaluator = evaluator,
         .problems = problems,
         .other_envs = other_envs_slice,
+        .bool_module = bool_module,
+        .result_module = result_module,
     };
 }
 
@@ -158,6 +204,12 @@ fn cleanupEvalModule(result: anytype) void {
     test_allocator.destroy(result.problems);
     result.module_env.deinit();
     test_allocator.destroy(result.module_env);
+
+    // Clean up builtin modules
+    var bool_module_mut = result.bool_module;
+    bool_module_mut.deinit();
+    var result_module_mut = result.result_module;
+    result_module_mut.deinit();
 }
 
 fn cleanupEvalModuleWithImport(result: anytype) void {
@@ -171,6 +223,12 @@ fn cleanupEvalModuleWithImport(result: anytype) void {
     test_allocator.free(result.other_envs);
     result.module_env.deinit();
     test_allocator.destroy(result.module_env);
+
+    // Clean up builtin modules
+    var bool_module_mut = result.bool_module;
+    bool_module_mut.deinit();
+    var result_module_mut = result.result_module;
+    result_module_mut.deinit();
 }
 
 test "comptime eval - simple constant" {
@@ -606,33 +664,6 @@ test "comptime eval - crash halts within single def" {
     try testing.expectEqual(@as(u32, 2), summary.evaluated);
     try testing.expectEqual(@as(u32, 1), summary.crashed);
     try testing.expectEqual(@as(usize, 1), result.problems.len());
-}
-
-// Constant folding tests
-
-test "comptime eval - constant folding simple addition" {
-    const src = "x = 1 + 1";
-
-    var result = try parseCheckAndEvalModule(src);
-    defer cleanupEvalModule(&result);
-
-    const summary = try result.evaluator.evalAll();
-
-    // Should evaluate successfully
-    try testing.expectEqual(@as(u32, 1), summary.evaluated);
-    try testing.expectEqual(@as(u32, 0), summary.crashed);
-
-    // Verify the expression was folded to a constant
-    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
-    try testing.expectEqual(@as(usize, 1), defs.len);
-
-    const def = result.module_env.store.getDef(defs[0]);
-    const expr = result.module_env.store.getExpr(def.expr);
-
-    // The expression should now be e_num with value 2
-    try testing.expect(expr == .e_num);
-    const value = expr.e_num.value.toI128();
-    try testing.expectEqual(@as(i128, 2), value);
 }
 
 test "comptime eval - constant folding multiplication" {

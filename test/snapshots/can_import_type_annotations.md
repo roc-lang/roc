@@ -46,12 +46,19 @@ combineResults = |result1, result2|
 # EXPECTED
 MODULE NOT FOUND - can_import_type_annotations.md:1:1:1:56
 MODULE NOT FOUND - can_import_type_annotations.md:2:1:2:17
+DUPLICATE DEFINITION - can_import_type_annotations.md:1:1:1:1
 MODULE NOT FOUND - can_import_type_annotations.md:3:1:3:38
 UNDECLARED TYPE - can_import_type_annotations.md:5:18:5:25
 UNDECLARED TYPE - can_import_type_annotations.md:5:29:5:37
+UNDEFINED VARIABLE - can_import_type_annotations.md:6:24:6:44
 UNUSED VARIABLE - can_import_type_annotations.md:6:19:6:22
+UNDEFINED VARIABLE - can_import_type_annotations.md:9:21:9:31
+UNDEFINED VARIABLE - can_import_type_annotations.md:13:14:13:25
+UNDEFINED VARIABLE - can_import_type_annotations.md:15:24:15:36
+UNDEFINED VARIABLE - can_import_type_annotations.md:21:10:21:28
 MODULE NOT IMPORTED - can_import_type_annotations.md:24:18:24:36
 MODULE NOT IMPORTED - can_import_type_annotations.md:24:64:24:81
+UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `http.Client` was not found in this Roc project.
@@ -73,6 +80,24 @@ You're attempting to use this module here:
 import json.Json
 ```
 ^^^^^^^^^^^^^^^^
+
+
+**DUPLICATE DEFINITION**
+The name `Result` is being redeclared in this scope.
+
+The redeclaration is here:
+**can_import_type_annotations.md:1:1:1:1:**
+```roc
+import http.Client as Http exposing [Request, Response]
+```
+^
+
+But `Result` was already defined here:
+**can_import_type_annotations.md:1:1:1:1:**
+```roc
+import http.Client as Http exposing [Request, Response]
+```
+^
 
 
 **MODULE NOT FOUND**
@@ -108,6 +133,17 @@ processRequest : Request -> Response
                             ^^^^^^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named `defaultResponse` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_type_annotations.md:6:24:6:44:**
+```roc
+processRequest = |req| Http.defaultResponse
+```
+                       ^^^^^^^^^^^^^^^^^^^^
+
+
 **UNUSED VARIABLE**
 Variable `req` is not used anywhere in your code.
 
@@ -118,6 +154,50 @@ The unused variable is declared here:
 processRequest = |req| Http.defaultResponse
 ```
                   ^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `parse` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_type_annotations.md:9:21:9:31:**
+```roc
+parseJson = |input| Json.parse(input)
+```
+                    ^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `decode` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_type_annotations.md:13:14:13:25:**
+```roc
+    result = Json.decode(request.body)
+```
+             ^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `success` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_type_annotations.md:15:24:15:36:**
+```roc
+        Ok(data) => Ok(Http.success(data))
+```
+                       ^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `defaultConfig` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_type_annotations.md:21:10:21:28:**
+```roc
+config = Json.defaultConfig
+```
+         ^^^^^^^^^^^^^^^^^^
 
 
 **MODULE NOT IMPORTED**
@@ -140,6 +220,17 @@ You're attempting to use this module here:
 advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
 ```
                                                                ^^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `parseWith` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_type_annotations.md:25:40:25:61:**
+```roc
+advancedParser = |parserConfig, input| Json.Parser.parseWith(parserConfig, input)
+```
+                                       ^^^^^^^^^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -372,9 +463,7 @@ combineResults = |result1, result2|
 		(e-lambda
 			(args
 				(p-assign (ident "req")))
-			(e-lookup-external
-				(module-idx "2")
-				(target-node-idx "0")))
+			(e-runtime-error (tag "ident_not_in_scope")))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
@@ -386,22 +475,20 @@ combineResults = |result1, result2|
 			(args
 				(p-assign (ident "input")))
 			(e-call
-				(e-lookup-external
-					(module-idx "3")
-					(target-node-idx "0"))
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local
 					(p-assign (ident "input")))))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
 					(ty-lookup (name "Str") (builtin))
-					(ty-lookup (name "Value") (external (module-idx "3") (target-node-idx "0")))))))
+					(ty-lookup (name "Value") (external (module-idx "5") (target-node-idx "0")))))))
 	(d-let
 		(p-assign (ident "handleApi"))
 		(e-closure
 			(captures
-				(capture (ident "data"))
-				(capture (ident "err")))
+				(capture (ident "err"))
+				(capture (ident "data")))
 			(e-lambda
 				(args
 					(p-assign (ident "request")))
@@ -409,9 +496,7 @@ combineResults = |result1, result2|
 					(s-let
 						(p-assign (ident "result"))
 						(e-call
-							(e-lookup-external
-								(module-idx "3")
-								(target-node-idx "0"))
+							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-dot-access (field "body")
 								(receiver
 									(e-lookup-local
@@ -425,44 +510,36 @@ combineResults = |result1, result2|
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-nominal
-												(p-applied-tag))))
+											(p-applied-tag)))
 									(value
-										(e-nominal (nominal "Result")
-											(e-tag (name "Ok")
-												(args
-													(e-call
-														(e-lookup-external
-															(module-idx "2")
-															(target-node-idx "0"))
-														(e-lookup-local
-															(p-assign (ident "data")))))))))
+										(e-tag (name "Ok")
+											(args
+												(e-call
+													(e-runtime-error (tag "ident_not_in_scope"))
+													(e-lookup-local
+														(p-assign (ident "data"))))))))
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-nominal
-												(p-applied-tag))))
+											(p-applied-tag)))
 									(value
-										(e-nominal (nominal "Result")
-											(e-tag (name "Err")
-												(args
-													(e-lookup-local
-														(p-assign (ident "err"))))))))))))))
+										(e-tag (name "Err")
+											(args
+												(e-lookup-local
+													(p-assign (ident "err")))))))))))))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-lookup (name "Request") (external (module-idx "2") (target-node-idx "0")))
-					(ty-apply (name "Result") (local)
-						(ty-lookup (name "Response") (external (module-idx "2") (target-node-idx "0")))
-						(ty-lookup (name "Error") (external (module-idx "3") (target-node-idx "0"))))))))
+					(ty-lookup (name "Request") (external (module-idx "4") (target-node-idx "0")))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
+						(ty-lookup (name "Response") (external (module-idx "4") (target-node-idx "0")))
+						(ty-lookup (name "Error") (external (module-idx "5") (target-node-idx "0"))))))))
 	(d-let
 		(p-assign (ident "config"))
-		(e-lookup-external
-			(module-idx "3")
-			(target-node-idx "0"))
+		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation
 			(declared-type
-				(ty-lookup (name "Config") (external (module-idx "3") (target-node-idx "0"))))))
+				(ty-lookup (name "Config") (external (module-idx "5") (target-node-idx "0"))))))
 	(d-let
 		(p-assign (ident "advancedParser"))
 		(e-lambda
@@ -470,9 +547,7 @@ combineResults = |result1, result2|
 				(p-assign (ident "parserConfig"))
 				(p-assign (ident "input")))
 			(e-call
-				(e-lookup-external
-					(module-idx "3")
-					(target-node-idx "0"))
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local
 					(p-assign (ident "parserConfig")))
 				(e-lookup-local
@@ -482,8 +557,8 @@ combineResults = |result1, result2|
 				(ty-fn (effectful false)
 					(ty-malformed)
 					(ty-lookup (name "Str") (builtin))
-					(ty-apply (name "Result") (local)
-						(ty-lookup (name "Value") (external (module-idx "3") (target-node-idx "0")))
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
+						(ty-lookup (name "Value") (external (module-idx "5") (target-node-idx "0")))
 						(ty-malformed))))))
 	(d-let
 		(p-assign (ident "combineResults"))
@@ -506,8 +581,7 @@ combineResults = |result1, result2|
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal
-											(p-applied-tag))))
+										(p-applied-tag)))
 								(value
 									(e-match
 										(match
@@ -518,61 +592,55 @@ combineResults = |result1, result2|
 												(branch
 													(patterns
 														(pattern (degenerate false)
-															(p-nominal
-																(p-applied-tag))))
+															(p-applied-tag)))
 													(value
-														(e-nominal (nominal "Result")
-															(e-tag (name "Ok")
-																(args
-																	(e-tuple
-																		(elems
-																			(e-lookup-local
-																				(p-assign (ident "value1")))
-																			(e-lookup-local
-																				(p-assign (ident "value2"))))))))))
+														(e-tag (name "Ok")
+															(args
+																(e-tuple
+																	(elems
+																		(e-lookup-local
+																			(p-assign (ident "value1")))
+																		(e-lookup-local
+																			(p-assign (ident "value2")))))))))
 												(branch
 													(patterns
 														(pattern (degenerate false)
-															(p-nominal
-																(p-applied-tag))))
+															(p-applied-tag)))
 													(value
-														(e-nominal (nominal "Result")
-															(e-tag (name "Err")
-																(args
-																	(e-lookup-local
-																		(p-assign (ident "err")))))))))))))
+														(e-tag (name "Err")
+															(args
+																(e-lookup-local
+																	(p-assign (ident "err"))))))))))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal
-											(p-applied-tag))))
+										(p-applied-tag)))
 								(value
-									(e-nominal (nominal "Result")
-										(e-tag (name "Err")
-											(args
-												(e-lookup-local
-													(p-assign (ident "err")))))))))))))
+									(e-tag (name "Err")
+										(args
+											(e-lookup-local
+												(p-assign (ident "err"))))))))))))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-apply (name "Result") (local)
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-rigid-var (name "a"))
 						(ty-rigid-var (name "err")))
-					(ty-apply (name "Result") (local)
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-rigid-var (name "b"))
 						(ty-rigid-var-lookup (ty-rigid-var (name "err"))))
-					(ty-apply (name "Result") (local)
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-tuple
 							(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 							(ty-rigid-var-lookup (ty-rigid-var (name "b"))))
 						(ty-rigid-var-lookup (ty-rigid-var (name "err"))))))))
-	(s-import (module "http.Client") (qualifier "http") (alias "Http")
+	(s-import (module "http.Client")
 		(exposes
 			(exposed (name "Request") (wildcard false))
 			(exposed (name "Response") (wildcard false))))
-	(s-import (module "json.Json") (qualifier "json")
+	(s-import (module "json.Json")
 		(exposes))
-	(s-import (module "utils.Result") (qualifier "utils")
+	(s-import (module "utils.Result")
 		(exposes
 			(exposed (name "Result") (wildcard false)))))
 ~~~

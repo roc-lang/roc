@@ -26,6 +26,7 @@ const ProblemStore = check_mod.problem.Store;
 
 const EvalError = Interpreter.Error;
 const CrashContext = eval_mod.CrashContext;
+const BuiltinTypes = eval_mod.BuiltinTypes;
 
 fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
@@ -165,11 +166,12 @@ pub const ComptimeEvaluator = struct {
         cir: *ModuleEnv,
         other_envs: []const *const ModuleEnv,
         problems: *ProblemStore,
+        builtin_types: BuiltinTypes,
     ) !ComptimeEvaluator {
         return ComptimeEvaluator{
             .allocator = allocator,
             .env = cir,
-            .interpreter = try Interpreter.initWithOtherEnvs(allocator, cir, other_envs),
+            .interpreter = try Interpreter.initWithOtherEnvs(allocator, cir, other_envs, builtin_types),
             .crash = CrashContext.init(allocator),
             .expect = CrashContext.init(allocator),
             .roc_ops = null,
@@ -298,12 +300,13 @@ pub const ComptimeEvaluator = struct {
             };
         }
 
-        // Return the value WITHOUT decref - it will be stored in bindings
-        // The bindings will own the value and will decref it when the interpreter is destroyed
+        // Return the result value so it can be stored in bindings
+        // Note: We don't decref here because the value needs to stay alive in bindings
         return EvalResult{ .success = result };
     }
 
-    /// Attempts to fold constant values in-place
+    /// Try to fold a successfully evaluated constant into an e_num expression
+    /// This replaces the expression in-place so future references see the constant value
     fn tryFoldConstant(self: *ComptimeEvaluator, def_idx: CIR.Def.Idx, stack_value: eval_mod.StackValue) !void {
         const def = self.env.store.getDef(def_idx);
         const expr_idx = def.expr;

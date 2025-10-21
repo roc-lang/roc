@@ -20,6 +20,9 @@ const can = @import("can");
 const check = @import("check");
 const reporting = @import("reporting");
 const eval = @import("eval");
+const builtin_loading = eval.builtin_loading;
+const compiled_builtins = @import("compiled_builtins");
+const BuiltinTypes = eval.BuiltinTypes;
 
 const Check = check.Check;
 const Can = can.Can;
@@ -27,6 +30,7 @@ const Report = reporting.Report;
 const ModuleEnv = can.ModuleEnv;
 const ReportBuilder = check.ReportBuilder;
 
+/// Deserialize BuiltinIndices from the binary data generated at build time
 /// Timing information for different phases
 pub const TimingInfo = struct {
     tokenize_parse_ns: u64,
@@ -544,7 +548,7 @@ pub const PackageEnv = struct {
 
         // canonicalize using the AST
         const canon_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        var czer = try Can.init(env, &parse_ast, null, .{});
+        var czer = try Can.init(env, &parse_ast, null);
         try czer.canonicalizeFile();
         czer.deinit();
         const canon_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
@@ -713,10 +717,15 @@ pub const PackageEnv = struct {
         var st = &self.modules.items[module_id];
         var env = &st.env.?;
 
+        // Load builtin indices from the binary data generated at build time
+        const builtin_indices = try builtin_loading.deserializeBuiltinIndices(self.gpa, compiled_builtins.builtin_indices_bin);
+
         const module_common_idents: Check.CommonIdents = .{
             .module_name = try env.insertIdent(base.Ident.for_text("test")),
             .list = try env.insertIdent(base.Ident.for_text("List")),
             .box = try env.insertIdent(base.Ident.for_text("Box")),
+            .bool_stmt = builtin_indices.bool_type,
+            .result_stmt = builtin_indices.result_type,
         };
 
         // Build other_modules array according to env.imports order
@@ -758,7 +767,16 @@ pub const PackageEnv = struct {
         }
 
         // After type checking, evaluate top-level declarations at compile time
-        var comptime_evaluator = try eval.ComptimeEvaluator.init(self.gpa, env, others.items, &checker.problems);
+        // Load builtin modules required by the interpreter (reuse builtin_indices from above)
+        const bool_source = "Bool := [True, False].{}\n";
+        const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+        var bool_module = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+        defer bool_module.deinit();
+        var result_module = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.result_bin, "Result", result_source);
+        defer result_module.deinit();
+
+        const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+        var comptime_evaluator = try eval.ComptimeEvaluator.init(self.gpa, env, others.items, &checker.problems, builtin_types_for_eval);
         _ = try comptime_evaluator.evalAll();
 
         // Build reports from problems

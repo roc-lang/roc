@@ -15,7 +15,6 @@ useBar = Something
 ~~~
 # EXPECTED
 TYPE MODULE MISSING MATCHING TYPE - nominal_associated_vs_module.md:1:1:7:19
-TYPE MISMATCH - nominal_associated_vs_module.md:7:10:7:19
 # PROBLEMS
 **TYPE MODULE MISSING MATCHING TYPE**
 Type modules must have a type declaration matching the module name.
@@ -37,20 +36,6 @@ useBar : Foo.Bar
 useBar = Something
 ```
 
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_associated_vs_module.md:7:10:7:19:**
-```roc
-useBar = Something
-```
-         ^^^^^^^^^
-
-It has the type:
-    _[Something]_others_
-
-But the type annotation says it should have the type:
-    _Foo.Bar_
 
 # TOKENS
 ~~~zig
@@ -117,12 +102,12 @@ useBar = Something
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "Foo.Bar")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
 		(nominal (type "Foo.Bar")
 			(ty-header (name "Foo.Bar"))))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "Foo.Bar"))))
 ~~~

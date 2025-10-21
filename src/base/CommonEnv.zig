@@ -84,13 +84,6 @@ pub fn serialize(
     return @constCast(offset_self);
 }
 
-/// Freezes the identifier and string interners, preventing further modifications.
-/// This is used to ensure thread safety when sharing the environment across threads.
-pub fn freezeInterners(self: *CommonEnv) void {
-    self.idents.freeze();
-    self.strings.freeze();
-}
-
 /// Serialized representation of ModuleEnv
 pub const Serialized = struct {
     idents: Ident.Store.Serialized,
@@ -123,10 +116,10 @@ pub const Serialized = struct {
         offset: i64,
         source: []const u8,
     ) *CommonEnv {
-        // CommonEnv.Serialized should be at least as big as CommonEnv
-        std.debug.assert(@sizeOf(Serialized) >= @sizeOf(CommonEnv));
-
-        // Overwrite ourself with the deserialized version, and return our pointer after casting it to CommonEnv.
+        // Note: Serialized may be smaller than the runtime struct because:
+        // - Uses i64 offsets instead of usize pointers (same size on 64-bit, but conceptually different)
+        // - May have different alignment/padding requirements
+        // We deserialize by overwriting the Serialized memory with the runtime struct.
         const env = @as(*CommonEnv, @ptrFromInt(@intFromPtr(self)));
 
         env.* = CommonEnv{

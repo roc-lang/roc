@@ -232,8 +232,8 @@ main = |_| {
 		(p-assign (ident "main"))
 		(e-closure
 			(captures
-				(capture (ident "int_add"))
-				(capture (ident "int_multiply")))
+				(capture (ident "int_multiply"))
+				(capture (ident "int_add")))
 			(e-lambda
 				(args
 					(p-underscore))

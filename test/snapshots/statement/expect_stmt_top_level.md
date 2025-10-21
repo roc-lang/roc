@@ -41,13 +41,17 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "foo"))
-		(e-nominal (nominal "Bool")
+		(e-nominal-external
+			(module-idx "2")
+			(target-node-idx "1")
 			(e-tag (name "True"))))
 	(s-expect
 		(e-binop (op "ne")
 			(e-lookup-local
 				(p-assign (ident "foo")))
-			(e-nominal (nominal "Bool")
+			(e-nominal-external
+				(module-idx "2")
+				(target-node-idx "1")
 				(e-tag (name "False"))))))
 ~~~
 # TYPES

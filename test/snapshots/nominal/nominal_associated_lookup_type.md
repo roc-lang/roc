@@ -13,22 +13,9 @@ myBar : Foo.Bar
 myBar = Something
 ~~~
 # EXPECTED
-TYPE MISMATCH - nominal_associated_lookup_type.md:6:9:6:18
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_associated_lookup_type.md:6:9:6:18:**
-```roc
-myBar = Something
-```
-        ^^^^^^^^^
-
-It has the type:
-    _[Something]_others_
-
-But the type annotation says it should have the type:
-    _Foo.Bar_
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -93,12 +80,12 @@ myBar = Something
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "Foo.Bar")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
 		(nominal (type "Foo.Bar")
 			(ty-header (name "Foo.Bar"))))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "Foo.Bar"))))
 ~~~

@@ -21,22 +21,9 @@ external : Foo.Bar
 external = Foo.defaultBar
 ~~~
 # EXPECTED
-TYPE MISMATCH - nominal_associated_self_reference.md:5:18:5:19
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_associated_self_reference.md:5:18:5:19:**
-```roc
-    defaultBar = X
-```
-                 ^
-
-It has the type:
-    _[X]_others_
-
-But the type annotation says it should have the type:
-    _Foo.Bar_
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -161,8 +148,8 @@ external = Foo.defaultBar
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
-		(patt (type "Error"))
+		(patt (type "Foo.Bar"))
+		(patt (type "Foo.Bar"))
 		(patt (type "Foo.Bar -> Foo.Bar"))
 		(patt (type "Foo.Bar")))
 	(type_decls
@@ -171,8 +158,8 @@ external = Foo.defaultBar
 		(nominal (type "Foo.Bar")
 			(ty-header (name "Foo.Bar"))))
 	(expressions
-		(expr (type "Error"))
-		(expr (type "Error"))
+		(expr (type "Foo.Bar"))
+		(expr (type "Foo.Bar"))
 		(expr (type "Foo.Bar -> Foo.Bar"))
 		(expr (type "Foo.Bar"))))
 ~~~

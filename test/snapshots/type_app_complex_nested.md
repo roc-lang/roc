@@ -28,14 +28,13 @@ main! = |_| processComplex(Ok([Some(42), None]))
 ~~~
 # EXPECTED
 UNDECLARED TYPE - type_app_complex_nested.md:18:33:18:38
-UNDECLARED TYPE - type_app_complex_nested.md:18:44:18:48
 UNDECLARED TYPE - type_app_complex_nested.md:18:54:18:59
 UNDECLARED TYPE - type_app_complex_nested.md:4:30:4:35
-UNDECLARED TYPE - type_app_complex_nested.md:4:41:4:45
 UNDECLARED TYPE - type_app_complex_nested.md:4:51:4:56
 UNUSED VARIABLE - type_app_complex_nested.md:7:12:7:21
 UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
-UNDECLARED TYPE - type_app_complex_nested.md:12:32:12:36
+TOO MANY ARGS - type_app_complex_nested.md:18:44:18:63
+TOO MANY ARGS - type_app_complex_nested.md:4:41:4:61
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Maybe_ is not declared in this scope.
@@ -46,17 +45,6 @@ This type is referenced here:
 ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
 ```
                                 ^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Dict_ is not declared in this scope.
-
-This type is referenced here:
-**type_app_complex_nested.md:18:44:18:48:**
-```roc
-ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
-```
-                                           ^^^^
 
 
 **UNDECLARED TYPE**
@@ -79,17 +67,6 @@ This type is referenced here:
 processComplex : Result(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
 ```
                              ^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Dict_ is not declared in this scope.
-
-This type is referenced here:
-**type_app_complex_nested.md:4:41:4:45:**
-```roc
-processComplex : Result(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
-```
-                                        ^^^^
 
 
 **UNDECLARED TYPE**
@@ -126,15 +103,24 @@ deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
              ^^^^^
 
 
-**UNDECLARED TYPE**
-The type _Dict_ is not declared in this scope.
-
-This type is referenced here:
-**type_app_complex_nested.md:12:32:12:36:**
+**TOO MANY ARGS**
+The type _Dict_ expects  argument, but got  instead.
+**type_app_complex_nested.md:18:44:18:63:**
 ```roc
-deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
+ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
 ```
-                               ^^^^
+                                           ^^^^^^^^^^^^^^^^^^^
+
+
+
+**TOO MANY ARGS**
+The type _Dict_ expects  argument, but got  instead.
+**type_app_complex_nested.md:4:41:4:61:**
+```roc
+processComplex : Result(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
+```
+                                        ^^^^^^^^^^^^^^^^^^^^
+
 
 
 # TOKENS
@@ -300,24 +286,24 @@ main! = |_| processComplex(Ok([Some(42), None]))
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-nominal
-										(p-applied-tag))))
+									(p-applied-tag)))
 							(value
 								(e-empty_list)))
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-nominal
-										(p-applied-tag))))
+									(p-applied-tag)))
 							(value
 								(e-empty_list)))))))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-apply (name "Result") (local)
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-apply (name "List") (builtin)
 							(ty-malformed))
-						(ty-malformed))
+						(ty-apply (name "Dict") (external (module-idx "0") (target-node-idx "1"))
+							(ty-lookup (name "Str") (builtin))
+							(ty-malformed)))
 					(ty-apply (name "List") (builtin)
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(d-let
@@ -343,24 +329,25 @@ main! = |_| processComplex(Ok([Some(42), None]))
 				(e-call
 					(e-lookup-local
 						(p-assign (ident "processComplex")))
-					(e-nominal (nominal "Result")
-						(e-tag (name "Ok")
-							(args
-								(e-list
-									(elems
-										(e-tag (name "Some")
-											(args
-												(e-num (value "42"))))
-										(e-tag (name "None")))))))))))
+					(e-tag (name "Ok")
+						(args
+							(e-list
+								(elems
+									(e-tag (name "Some")
+										(args
+											(e-num (value "42"))))
+									(e-tag (name "None"))))))))))
 	(s-alias-decl
 		(ty-header (name "ComplexType")
 			(ty-args
 				(ty-rigid-var (name "a"))
 				(ty-rigid-var (name "b"))))
-		(ty-apply (name "Result") (local)
+		(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 			(ty-apply (name "List") (builtin)
 				(ty-malformed))
-			(ty-malformed))))
+			(ty-apply (name "Dict") (external (module-idx "0") (target-node-idx "1"))
+				(ty-lookup (name "Str") (builtin))
+				(ty-malformed)))))
 ~~~
 # TYPES
 ~~~clojure

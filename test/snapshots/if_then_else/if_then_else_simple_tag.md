@@ -36,19 +36,19 @@ NO CHANGE
 (e-if
 	(if-branches
 		(if-branch
-			(e-nominal (nominal "Bool")
+			(e-nominal-external
+				(module-idx "2")
+				(target-node-idx "1")
 				(e-tag (name "True")))
-			(e-nominal (nominal "Result")
-				(e-tag (name "Ok")
-					(args
-						(e-num (value "0")))))))
-	(if-else
-		(e-nominal (nominal "Result")
-			(e-tag (name "Err")
+			(e-tag (name "Ok")
 				(args
-					(e-num (value "1")))))))
+					(e-num (value "0"))))))
+	(if-else
+		(e-tag (name "Err")
+			(args
+				(e-num (value "1"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Result(Num(_size), Num(_size2))"))
+(expr (type "[Ok(Num(_size)), Err(Num(_size2))]_others"))
 ~~~

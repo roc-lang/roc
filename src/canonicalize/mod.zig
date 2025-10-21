@@ -8,6 +8,8 @@ pub const Can = @import("Can.zig");
 pub const CIR = @import("CIR.zig");
 /// The Module Environment after canonicalization (used also for type checking and serialization)
 pub const ModuleEnv = @import("ModuleEnv.zig");
+/// Scope management for canonicalization
+pub const Scope = @import("Scope.zig");
 /// Dependency graph and SCC (Strongly Connected Components) analysis
 pub const DependencyGraph = @import("DependencyGraph.zig");
 

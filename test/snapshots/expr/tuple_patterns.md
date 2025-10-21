@@ -358,8 +358,7 @@ EndOfFile,
 					(e-literal (string "Alice")))
 				(e-string
 					(e-literal (string "fixed")))
-				(e-nominal (nominal "Bool")
-					(e-tag (name "True"))))))
+				(e-tag (name "True")))))
 	(s-let
 		(p-tuple
 			(patterns

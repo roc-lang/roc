@@ -151,6 +151,7 @@ pub const Tag = enum {
     diag_empty_tuple,
     diag_ident_already_in_scope,
     diag_ident_not_in_scope,
+    diag_qualified_ident_does_not_exist,
     diag_invalid_top_level_statement,
     diag_expr_not_canonicalized,
     diag_invalid_string_interpolation,

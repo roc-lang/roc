@@ -8,11 +8,10 @@ type=expr
 { name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - record_mixed_types.md:1:35:1:44
+DOES NOT EXIST - record_mixed_types.md:1:35:1:44
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `true` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Bool.true` does not exist.
 
 **record_mixed_types.md:1:35:1:44:**
 ```roc
@@ -58,7 +57,7 @@ NO CHANGE
 		(field (name "age")
 			(e-num (value "30")))
 		(field (name "active")
-			(e-runtime-error (tag "ident_not_in_scope")))
+			(e-runtime-error (tag "qualified_ident_does_not_exist")))
 		(field (name "scores")
 			(e-list
 				(elems

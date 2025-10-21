@@ -264,6 +264,7 @@ UNDEFINED VARIABLE - fuzz_crash_023.md:185:4:185:10
 UNDEFINED VARIABLE - fuzz_crash_023.md:188:22:188:25
 NOT IMPLEMENTED - :0:0:0:0
 NOT IMPLEMENTED - :0:0:0:0
+UNDEFINED VARIABLE - fuzz_crash_023.md:191:2:191:14
 UNDEFINED VARIABLE - fuzz_crash_023.md:193:4:193:13
 UNUSED VARIABLE - fuzz_crash_023.md:164:2:164:18
 UNUSED VARIABLE - fuzz_crash_023.md:165:2:165:14
@@ -779,6 +780,17 @@ This error doesn't have a proper diagnostic report yet. Let us know if you want 
 This feature is not yet implemented: canonicalize suffix_single_question expression
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+**UNDEFINED VARIABLE**
+Nothing is named `line!` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_023.md:191:2:191:14:**
+```roc
+	Stdout.line!(
+```
+	^^^^^^^^^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `toStr` in this scope.
@@ -2155,15 +2167,13 @@ expect {
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal
-											(p-applied-tag))))
+										(p-applied-tag)))
 								(value
 									(e-num (value "123"))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal
-											(p-applied-tag))))
+										(p-applied-tag)))
 								(value
 									(e-lookup-local
 										(p-assign (ident "dude")))))
@@ -2177,8 +2187,8 @@ expect {
 		(p-assign (ident "main!"))
 		(e-closure
 			(captures
-				(capture (ident "add_one"))
-				(capture (ident "match_time")))
+				(capture (ident "match_time"))
+				(capture (ident "add_one")))
 			(e-lambda
 				(args
 					(p-underscore))
@@ -2215,11 +2225,10 @@ expect {
 					(s-crash (msg "Unreachable!"))
 					(s-let
 						(p-assign (ident "tag_with_payload"))
-						(e-nominal (nominal "Result")
-							(e-tag (name "Ok")
-								(args
-									(e-lookup-local
-										(p-assign (ident "number")))))))
+						(e-tag (name "Ok")
+							(args
+								(e-lookup-local
+									(p-assign (ident "number"))))))
 					(s-let
 						(p-assign (ident "interpolated"))
 						(e-string
@@ -2259,11 +2268,10 @@ expect {
 									(e-literal (string "World")))
 								(e-lookup-local
 									(p-assign (ident "tag")))
-								(e-nominal (nominal "Result")
-									(e-tag (name "Ok")
-										(args
-											(e-lookup-local
-												(p-assign (ident "world"))))))
+								(e-tag (name "Ok")
+									(args
+										(e-lookup-local
+											(p-assign (ident "world")))))
 								(e-tuple
 									(elems
 										(e-runtime-error (tag "ident_not_in_scope"))
@@ -2282,11 +2290,10 @@ expect {
 								(e-string
 									(e-literal (string "World")))
 								(e-runtime-error (tag "ident_not_in_scope"))
-								(e-nominal (nominal "Result")
-									(e-tag (name "Ok")
-										(args
-											(e-lookup-local
-												(p-assign (ident "world"))))))
+								(e-tag (name "Ok")
+									(args
+										(e-lookup-local
+											(p-assign (ident "world")))))
 								(e-tuple
 									(elems
 										(e-runtime-error (tag "ident_not_in_scope"))
@@ -2302,10 +2309,9 @@ expect {
 						(e-binop (op "or")
 							(e-binop (op "gt")
 								(e-binop (op "null_coalesce")
-									(e-nominal (nominal "Result")
-										(e-tag (name "Err")
-											(args
-												(e-runtime-error (tag "ident_not_in_scope")))))
+									(e-tag (name "Err")
+										(args
+											(e-runtime-error (tag "ident_not_in_scope"))))
 									(e-num (value "12")))
 								(e-binop (op "mul")
 									(e-num (value "5"))
@@ -2339,9 +2345,7 @@ expect {
 					(s-expr
 						(e-runtime-error (tag "not_implemented")))
 					(e-call
-						(e-lookup-external
-							(module-idx "2")
-							(target-node-idx "0"))
+						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-string
 							(e-literal (string "How about "))
 							(e-call
@@ -2354,7 +2358,7 @@ expect {
 				(ty-fn (effectful false)
 					(ty-apply (name "List") (builtin)
 						(ty-malformed))
-					(ty-apply (name "Result") (local)
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-record)
 						(ty-underscore))))))
 	(d-let
@@ -2454,22 +2458,22 @@ expect {
 			(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 			(ty-apply (name "Maybe") (local)
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
-	(s-import (module "pf.Stdout") (qualifier "pf")
+	(s-import (module "pf.Stdout")
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false))))
-	(s-import (module "MALFORMED_IMPORT") (qualifier "pf")
+	(s-import (module "MALFORMED_IMPORT")
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false))))
-	(s-import (module "pkg.Something") (qualifier "pkg")
+	(s-import (module "pkg.Something")
 		(exposes
 			(exposed (name "func") (alias "function") (wildcard false))
 			(exposed (name "Type") (alias "ValueCategory") (wildcard false))
 			(exposed (name "Custom") (wildcard true))))
-	(s-import (module "BadName") (alias "GoodName")
+	(s-import (module "BadName")
 		(exposes))
-	(s-import (module "BadNameMultiline") (alias "GoodNameMultiline")
+	(s-import (module "BadNameMultiline")
 		(exposes))
 	(s-expect
 		(e-binop (op "eq")

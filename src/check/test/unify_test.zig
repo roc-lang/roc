@@ -1709,6 +1709,178 @@ test "unify - a & b are both the same nominal type with diff args (fail)" {
     try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
+// unification - nominal types with anonymous tag unions //
+
+test "unify - anonymous tag union unifies with nominal tag union (nominal on left)" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create nominal type: Foo := [A(Str), B]
+    const str_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const tag_a = try env.mkTag("A", &[_]Var{str_var});
+    const tag_b = try env.mkTag("B", &[_]Var{});
+    const backing_tu = try env.mkTagUnionClosed(&[_]Tag{ tag_a, tag_b });
+    const backing_var = try env.module_env.types.freshFromContent(backing_tu.content);
+    const nominal_var = try env.module_env.types.freshFromContent(
+        try env.mkNominalType("Foo", backing_var, &[_]Var{}),
+    );
+
+    // Create anonymous tag union: [A(Str)]
+    const anon_tag_a = try env.mkTag("A", &[_]Var{str_var});
+    const anon_tu = try env.mkTagUnionOpen(&[_]Tag{anon_tag_a});
+    const anon_var = try env.module_env.types.freshFromContent(anon_tu.content);
+
+    // Unify: Foo ~ [A(Str)]
+    const result = try env.unify(nominal_var, anon_var);
+
+    // Should succeed and merge to nominal type
+    try std.testing.expectEqual(.ok, result);
+    const resolved = env.module_env.types.resolveVar(anon_var);
+    try std.testing.expect(resolved.desc.content == .structure);
+    try std.testing.expect(resolved.desc.content.structure == .nominal_type);
+}
+
+test "unify - anonymous tag union unifies with nominal (nominal on right)" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create nominal type: Foo := [A, B, C]
+    const tag_a = try env.mkTag("A", &[_]Var{});
+    const tag_b = try env.mkTag("B", &[_]Var{});
+    const tag_c = try env.mkTag("C", &[_]Var{});
+    const backing_tu = try env.mkTagUnionClosed(&[_]Tag{ tag_a, tag_b, tag_c });
+    const backing_var = try env.module_env.types.freshFromContent(backing_tu.content);
+    const nominal_var = try env.module_env.types.freshFromContent(
+        try env.mkNominalType("Foo", backing_var, &[_]Var{}),
+    );
+
+    // Create anonymous tag union: [B]
+    const anon_tag_b = try env.mkTag("B", &[_]Var{});
+    const anon_tu = try env.mkTagUnionOpen(&[_]Tag{anon_tag_b});
+    const anon_var = try env.module_env.types.freshFromContent(anon_tu.content);
+
+    // Unify: [B] ~ Foo  (swapped order)
+    const result = try env.unify(anon_var, nominal_var);
+
+    // Should succeed and merge to nominal type
+    try std.testing.expectEqual(.ok, result);
+    const resolved = env.module_env.types.resolveVar(anon_var);
+    try std.testing.expect(resolved.desc.content == .structure);
+    try std.testing.expect(resolved.desc.content.structure == .nominal_type);
+}
+
+test "unify - anonymous tag union with wrong tag fails" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create nominal type: Foo := [A, B]
+    const tag_a = try env.mkTag("A", &[_]Var{});
+    const tag_b = try env.mkTag("B", &[_]Var{});
+    const backing_tu = try env.mkTagUnionClosed(&[_]Tag{ tag_a, tag_b });
+    const backing_var = try env.module_env.types.freshFromContent(backing_tu.content);
+    const nominal_var = try env.module_env.types.freshFromContent(
+        try env.mkNominalType("Foo", backing_var, &[_]Var{}),
+    );
+
+    // Create anonymous tag union: [D]  (D doesn't exist in Foo)
+    const anon_tag_d = try env.mkTag("D", &[_]Var{});
+    const anon_tu = try env.mkTagUnionOpen(&[_]Tag{anon_tag_d});
+    const anon_var = try env.module_env.types.freshFromContent(anon_tu.content);
+
+    // Unify: Foo ~ [D]  - should fail
+    const result = try env.unify(nominal_var, anon_var);
+
+    // Should fail
+    try std.testing.expectEqual(false, result.isOk());
+}
+
+test "unify - anonymous tag union with wrong payload type fails" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create nominal type: Foo := [A(Str)]
+    const str_var = try env.module_env.types.freshFromContent(Content{ .structure = .str });
+    const tag_a = try env.mkTag("A", &[_]Var{str_var});
+    const backing_tu = try env.mkTagUnionClosed(&[_]Tag{tag_a});
+    const backing_var = try env.module_env.types.freshFromContent(backing_tu.content);
+    const nominal_var = try env.module_env.types.freshFromContent(
+        try env.mkNominalType("Foo", backing_var, &[_]Var{}),
+    );
+
+    // Create anonymous tag union: [A(I32)]  (wrong payload type)
+    const i32_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
+    const anon_tag_a = try env.mkTag("A", &[_]Var{i32_var});
+    const anon_tu = try env.mkTagUnionOpen(&[_]Tag{anon_tag_a});
+    const anon_var = try env.module_env.types.freshFromContent(anon_tu.content);
+
+    // Unify: Foo ~ [A(I32)]  - should fail
+    const result = try env.unify(nominal_var, anon_var);
+
+    // Should fail
+    try std.testing.expectEqual(false, result.isOk());
+}
+
+test "unify - anonymous tag union with multiple tags unifies" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create nominal type: Foo := [A, B, C]
+    const tag_a = try env.mkTag("A", &[_]Var{});
+    const tag_b = try env.mkTag("B", &[_]Var{});
+    const tag_c = try env.mkTag("C", &[_]Var{});
+    const backing_tu = try env.mkTagUnionClosed(&[_]Tag{ tag_a, tag_b, tag_c });
+    const backing_var = try env.module_env.types.freshFromContent(backing_tu.content);
+    const nominal_var = try env.module_env.types.freshFromContent(
+        try env.mkNominalType("Foo", backing_var, &[_]Var{}),
+    );
+
+    // Create anonymous tag union: [A, B]
+    const anon_tag_a = try env.mkTag("A", &[_]Var{});
+    const anon_tag_b = try env.mkTag("B", &[_]Var{});
+    const anon_tu = try env.mkTagUnionOpen(&[_]Tag{ anon_tag_a, anon_tag_b });
+    const anon_var = try env.module_env.types.freshFromContent(anon_tu.content);
+
+    // Unify: Foo ~ [A, B]
+    const result = try env.unify(nominal_var, anon_var);
+
+    // Should succeed
+    try std.testing.expectEqual(.ok, result);
+    const resolved = env.module_env.types.resolveVar(anon_var);
+    try std.testing.expect(resolved.desc.content == .structure);
+    try std.testing.expect(resolved.desc.content.structure == .nominal_type);
+}
+
+test "unify - anonymous tag union cannot unify with nominal record" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create nominal type: Bar := { x: I32 }
+    const i32_var = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
+    const record_field = try env.mkRecordField("x", i32_var);
+    const record_info = try env.mkRecord(&[_]RecordField{record_field}, try env.module_env.types.freshFromContent(.{ .structure = .empty_record }));
+    const backing_var = try env.module_env.types.freshFromContent(record_info.content);
+    const nominal_var = try env.module_env.types.freshFromContent(
+        try env.mkNominalType("Bar", backing_var, &[_]Var{}),
+    );
+
+    // Create anonymous tag union: [A]
+    const anon_tag_a = try env.mkTag("A", &[_]Var{});
+    const anon_tu = try env.mkTagUnionOpen(&[_]Tag{anon_tag_a});
+    const anon_var = try env.module_env.types.freshFromContent(anon_tu.content);
+
+    // Unify: Bar ~ [A]  - should fail (Bar is a record, not a tag union)
+    const result = try env.unify(nominal_var, anon_var);
+
+    // Should fail
+    try std.testing.expectEqual(false, result.isOk());
+}
+
 // unification - records - partition fields //
 
 test "partitionFields - same record" {

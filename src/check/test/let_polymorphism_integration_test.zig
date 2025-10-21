@@ -118,7 +118,7 @@ test "polymorphic record constructor" {
         \\    { pair1, pair2, pair3 }
         \\}
     ;
-    try typeCheck(source, "{ pair1: { first: Num(_size), second: Str }, pair2: { first: Str, second: Num(_size2) }, pair3: { first: Bool, second: Bool } }");
+    try typeCheck(source, "{ pair1: { first: Num(_size), second: Str }, pair2: { first: Str, second: Num(_size2) }, pair3: { first: [True]_others, second: [False]_others2 } }");
 }
 
 test "polymorphic identity with various numeric types" {
@@ -127,11 +127,11 @@ test "polymorphic identity with various numeric types" {
         \\    id = |x| x
         \\    int_val = id(42)
         \\    float_val = id(3.14)
-        \\    bool_val = id(true)
+        \\    bool_val = id(True)
         \\    { int_val, float_val, bool_val }
         \\}
     ;
-    try typeCheck(source, "{ bool_val: Error, float_val: Num(Frac(_size)), int_val: Num(_size2) }");
+    try typeCheck(source, "{ bool_val: [True]_others, float_val: Num(Frac(_size)), int_val: Num(_size2) }");
 }
 
 test "nested polymorphic data structures" {
@@ -173,7 +173,7 @@ test "polymorphic swap function" {
         \\    { swapped1, swapped2 }
         \\}
     ;
-    try typeCheck(source, "{ swapped1: { first: Str, second: Num(_size) }, swapped2: { first: Num(_size2), second: Bool } }");
+    try typeCheck(source, "{ swapped1: { first: Str, second: Num(_size) }, swapped2: { first: Num(_size2), second: [True]_others } }");
 }
 
 test "polymorphic fold function" {
@@ -224,7 +224,7 @@ test "polymorphic const function" {
         \\    always5 = const(5)
         \\    alwaysHello = const("hello")
         \\    num = always5(99)
-        \\    str = alwaysHello(true)
+        \\    str = alwaysHello(True)
         \\    { num, str }
         \\}
     ;
@@ -264,7 +264,7 @@ test "polymorphic pipe function" {
         \\{
         \\    pipe = |x, f| f(x)
         \\    double = |n| n * 2
-        \\    length = |s| 5 
+        \\    length = |_s| 5
         \\    num_result = pipe(21, double)
         \\    str_result = pipe("hello", length)
         \\    { num_result, str_result }

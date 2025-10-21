@@ -80,6 +80,8 @@ scratch_record_fields: base.Scratch(types_mod.RecordField),
 import_cache: ImportCache,
 /// Maps variables to the expressions that constrained them (for better error regions)
 constraint_origins: std.AutoHashMap(Var, Var),
+/// Copied Bool type from Bool module (for use in if conditions, etc.)
+bool_var: Var,
 /// Deferred static dispatch constraints - accumulated during type checking,
 /// then solved for at the end
 deferred_static_dispatch_constraints: DeferredConstraintCheck.SafeList,
@@ -87,11 +89,15 @@ deferred_static_dispatch_constraints: DeferredConstraintCheck.SafeList,
 /// A map of rigid variables that we build up during a branch of type checking
 const FreeVar = struct { ident: base.Ident.Idx, var_: Var };
 
-/// A struct of common idents
+/// A struct of common idents and builtin statement indices
 pub const CommonIdents = struct {
     module_name: base.Ident.Idx,
     list: base.Ident.Idx,
     box: base.Ident.Idx,
+    /// Statement index of Bool type in the current module (injected from Bool.bin)
+    bool_stmt: can.CIR.Statement.Idx,
+    /// Statement index of Result type in the current module (injected from Result.bin)
+    result_stmt: can.CIR.Statement.Idx,
 };
 
 /// Init type solver
@@ -127,6 +133,7 @@ pub fn init(
         .scratch_record_fields = try base.Scratch(types_mod.RecordField).init(gpa),
         .import_cache = ImportCache{},
         .constraint_origins = std.AutoHashMap(Var, Var).init(gpa),
+        .bool_var = undefined, // Will be initialized in copyBuiltinTypes()
         .deferred_static_dispatch_constraints = try DeferredConstraintCheck.SafeList.initCapacity(gpa, 128),
     };
 }
@@ -528,16 +535,8 @@ fn freshFromContent(self: *Self, content: Content, rank: types_mod.Rank, new_reg
 
 /// The the region for a variable
 fn freshBool(self: *Self, rank: Rank, new_region: Region) Allocator.Error!Var {
-    // Look up Bool's actual index from builtin_statements (should be first)
-    const builtin_stmts_slice = self.cir.store.sliceStatements(self.cir.builtin_statements);
-    std.debug.assert(builtin_stmts_slice.len >= 1); // Must have at least Bool
-    const bool_stmt_idx = builtin_stmts_slice[0]; // Bool is always the first builtin
-    // Debug assertion: verify this is a nominal type declaration
-    if (std.debug.runtime_safety) {
-        const stmt = self.cir.store.getStatement(bool_stmt_idx);
-        std.debug.assert(stmt == .s_nominal_decl);
-    }
-    return try self.instantiateVar(ModuleEnv.varFrom(bool_stmt_idx), rank, .{ .explicit = new_region });
+    // Use the copied Bool type from the type store (set by copyBuiltinTypes)
+    return try self.instantiateVar(self.bool_var, rank, .{ .explicit = new_region });
 }
 
 // fresh vars //
@@ -549,11 +548,47 @@ fn updateVar(self: *Self, target_var: Var, content: types_mod.Content, rank: typ
 // file //
 
 /// Check the types for all defs
+/// Copy builtin types (Bool, Result) from their modules into the current module's type store
+/// This is necessary because type variables are module-specific - we can't use Vars from
+/// other modules directly. The Bool and Result types are used in language constructs like
+/// `if` conditions and need to be available in every module's type store.
+fn copyBuiltinTypes(self: *Self) !void {
+    // Find the Bool and Result modules in other_modules
+    var bool_module: ?*const ModuleEnv = null;
+    var result_module: ?*const ModuleEnv = null;
+
+    for (self.other_modules) |module_env| {
+        if (std.mem.eql(u8, module_env.module_name, "Bool")) {
+            bool_module = module_env;
+        } else if (std.mem.eql(u8, module_env.module_name, "Result")) {
+            result_module = module_env;
+        }
+    }
+
+    // Copy Bool type from Bool module
+    if (bool_module) |bool_env| {
+        const bool_stmt_idx = self.common_idents.bool_stmt;
+        const bool_type_var = ModuleEnv.varFrom(bool_stmt_idx);
+        self.bool_var = try self.copyVar(bool_type_var, bool_env);
+    } else {
+        // If Bool module not found, use the statement from the current module
+        // This happens when Bool is loaded as a builtin statement
+        const bool_stmt_idx = self.common_idents.bool_stmt;
+        self.bool_var = ModuleEnv.varFrom(bool_stmt_idx);
+    }
+
+    // Result type is accessed via external references, no need to copy it here
+}
+
+/// Check the types for all defs in a file
 pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     try ensureTypeStoreIsFilled(self);
+
+    // Copy builtin types (Bool, Result) into this module's type store
+    try self.copyBuiltinTypes();
 
     // First, iterate over the statements, generating types for each type declaration
     const builtin_stmts_slice = self.cir.store.sliceStatements(self.cir.builtin_statements);
@@ -600,9 +635,6 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
             }
         }
     }
-
-    // Freeze interners after type-checking is complete
-    self.cir.freezeInterners();
 }
 
 // repl //
@@ -610,6 +642,10 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 /// Check an expr for the repl
 pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
     try ensureTypeStoreIsFilled(self);
+
+    // Copy builtin types (Bool, Result) into this module's type store
+    try self.copyBuiltinTypes();
+
     // First, iterate over the statements, generating types for each type declaration
     const stms_slice = self.cir.store.sliceStatements(self.cir.builtin_statements);
     for (stms_slice) |stmt_idx| {
@@ -1063,19 +1099,34 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenType
 
                         // Get the arguments & name the referenced type
                         const ext_arg_vars, const ext_name = blk: {
-                            if (ext_resolved == .alias) {
-                                const decl_alias = ext_resolved.alias;
-                                break :blk .{ self.types.sliceAliasArgs(decl_alias), decl_alias.ident.ident_idx };
-                            } else if (ext_resolved == .structure and ext_resolved.structure == .nominal_type) {
-                                const decl_nominal = ext_resolved.structure.nominal_type;
-                                break :blk .{ self.types.sliceNominalArgs(decl_nominal), decl_nominal.ident.ident_idx };
-                            } else if (ext_resolved == .err) {
-                                try self.updateVar(anno_var, .err, Rank.generalized);
-                                return;
-                            } else {
-                                std.debug.assert(false);
-                                try self.updateVar(anno_var, .err, Rank.generalized);
-                                return;
+                            switch (ext_resolved) {
+                                .alias => |decl_alias| {
+                                    break :blk .{ self.types.sliceAliasArgs(decl_alias), decl_alias.ident.ident_idx };
+                                },
+                                .structure => |flat_type| {
+                                    if (flat_type == .nominal_type) {
+                                        const decl_nominal = flat_type.nominal_type;
+                                        break :blk .{ self.types.sliceNominalArgs(decl_nominal), decl_nominal.ident.ident_idx };
+                                    } else {
+                                        // External type resolved to a non-nominal structure (e.g., record, func, etc.)
+                                        // This shouldn't happen for type applications, treat as error
+                                        try self.updateVar(anno_var, .err, Rank.generalized);
+                                        return;
+                                    }
+                                },
+                                .err => {
+                                    try self.updateVar(anno_var, .err, Rank.generalized);
+                                    return;
+                                },
+                                .flex, .rigid => {
+                                    // External type resolved to a flex or rigid var.
+                                    // This can happen when the external type is polymorphic but hasn't been
+                                    // instantiated yet. We need to use the variable as-is, but this means
+                                    // we can't get the arity/name information. This is likely a bug in how
+                                    // the external type was set up. For now, treat it as an error.
+                                    try self.updateVar(anno_var, .err, Rank.generalized);
+                                    return;
+                                },
                             }
                         };
 
