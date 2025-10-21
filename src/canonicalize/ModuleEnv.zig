@@ -941,6 +941,38 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .type_from_missing_module => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "TYPE FROM MISSING MODULE", .runtime_error);
+
+            const type_name_bytes = self.getIdent(data.type_name);
+            const type_name = try report.addOwnedString(type_name_bytes);
+
+            const module_name_bytes = self.getIdent(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+
+            try report.document.addText("The type ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(" is not available because the module ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(" was not found.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("You're attempting to use this type here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .module_not_found => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 

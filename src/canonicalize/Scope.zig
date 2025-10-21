@@ -19,6 +19,9 @@ pub const ExternalTypeBinding = struct {
     target_node_idx: ?u16,
     import_idx: ?CIR.Import.Idx,
     origin_region: Region,
+    /// True if the module was attempted to be imported but was not found.
+    /// This allows us to emit a more specific diagnostic when the type is used.
+    module_not_found: bool,
 };
 
 /// A unified type binding that can represent either a locally declared type or an externally imported type.

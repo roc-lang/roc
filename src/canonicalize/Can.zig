@@ -1880,6 +1880,7 @@ fn introduceExposedItemsIntoScope(
                         target_node_idx,
                         module_import_idx,
                         import_region,
+                        .module_was_found,
                     );
                 }
             },
@@ -1944,6 +1945,7 @@ fn introduceExposedItemsIntoScope(
                         target_node_idx,
                         module_import_idx,
                         import_region,
+                        .module_was_found,
                     );
                 }
             } else {
@@ -1982,6 +1984,7 @@ fn introduceExposedItemsIntoScope(
                     null,
                     module_import_idx,
                     import_region,
+                    .module_not_found,
                 );
             }
         }
@@ -7000,6 +7003,11 @@ fn extractMultilineStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.
     return try self.env.store.exprSpanFrom(scratch_start);
 }
 
+const ModuleFoundStatus = enum {
+    module_was_found,
+    module_not_found,
+};
+
 fn setExternalTypeBinding(
     self: *Self,
     scope: *Scope,
@@ -7009,6 +7017,7 @@ fn setExternalTypeBinding(
     target_node_idx: ?u16,
     module_import_idx: CIR.Import.Idx,
     origin_region: Region,
+    module_found_status: ModuleFoundStatus,
 ) !void {
     try scope.type_bindings.put(self.env.gpa, local_ident, Scope.TypeBinding{
         .external_nominal = .{
@@ -7017,6 +7026,7 @@ fn setExternalTypeBinding(
             .target_node_idx = target_node_idx,
             .import_idx = module_import_idx,
             .origin_region = origin_region,
+            .module_not_found = module_found_status == .module_not_found,
         },
     });
 }
@@ -7057,11 +7067,20 @@ fn resolveTypeAnnoLookup(
             };
 
             const target_node_idx = external.target_node_idx orelse {
-                break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .type_not_exposed = .{
-                    .module_name = external.module_ident,
-                    .type_name = name_ident,
-                    .region = type_region,
-                } });
+                // Check if the module was not found
+                if (external.module_not_found) {
+                    break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .type_from_missing_module = .{
+                        .module_name = external.module_ident,
+                        .type_name = name_ident,
+                        .region = type_region,
+                    } });
+                } else {
+                    break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .type_not_exposed = .{
+                        .module_name = external.module_ident,
+                        .type_name = name_ident,
+                        .region = type_region,
+                    } });
+                }
             };
 
             break :blk try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
