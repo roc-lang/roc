@@ -55,7 +55,7 @@ types: *const TypesStore,
 idents: *const Ident.Store,
 buf: std.array_list.Managed(u8),
 seen: std.array_list.Managed(Var),
-seen_count_var_occurences: std.array_list.Managed(Var),
+seen_count_var_occurrences: std.array_list.Managed(Var),
 next_name_index: u32,
 name_counters: std.EnumMap(TypeContext, u32),
 flex_var_names_map: std.AutoHashMap(Var, FlexVarNameRange),
@@ -71,7 +71,7 @@ pub fn initFromParts(gpa: std.mem.Allocator, types_store: *const TypesStore, ide
         .idents = idents,
         .buf = try std.array_list.Managed(u8).initCapacity(gpa, 32),
         .seen = try std.array_list.Managed(Var).initCapacity(gpa, 16),
-        .seen_count_var_occurences = try std.array_list.Managed(Var).initCapacity(gpa, 16),
+        .seen_count_var_occurrences = try std.array_list.Managed(Var).initCapacity(gpa, 16),
         .next_name_index = 0,
         .name_counters = std.EnumMap(TypeContext, u32).init(.{}),
         .flex_var_names_map = std.AutoHashMap(Var, FlexVarNameRange).init(gpa),
@@ -84,7 +84,7 @@ pub fn initFromParts(gpa: std.mem.Allocator, types_store: *const TypesStore, ide
 pub fn deinit(self: *TypeWriter) void {
     self.buf.deinit();
     self.seen.deinit();
-    self.seen_count_var_occurences.deinit();
+    self.seen_count_var_occurrences.deinit();
     self.flex_var_names_map.deinit();
     self.flex_var_names.deinit();
     self.static_dispatch_constraints.deinit();
@@ -94,7 +94,7 @@ pub fn deinit(self: *TypeWriter) void {
 pub fn reset(self: *TypeWriter) void {
     self.buf.clearRetainingCapacity();
     self.seen.clearRetainingCapacity();
-    self.seen_count_var_occurences.clearRetainingCapacity();
+    self.seen_count_var_occurrences.clearRetainingCapacity();
     self.flex_var_names_map.clearRetainingCapacity();
     self.flex_var_names.clearRetainingCapacity();
     self.static_dispatch_constraints.clearRetainingCapacity();
@@ -821,7 +821,7 @@ pub fn writeFlexVarName(self: *TypeWriter, var_: Var, context: TypeContext, root
 
 /// Count how many times a variable appears in a type
 fn countVarOccurrences(self: *TypeWriter, search_var: Var, root_var: Var) std.mem.Allocator.Error!usize {
-    self.seen_count_var_occurences.clearRetainingCapacity();
+    self.seen_count_var_occurrences.clearRetainingCapacity();
 
     var count: usize = 0;
     try self.countVar(search_var, root_var, &count);
@@ -847,13 +847,13 @@ fn countVar(self: *TypeWriter, search_var: Var, current_var: Var, count: *usize)
 
     // Check if we've already seen this var
     // This avoids infinite recursion
-    for (self.seen_count_var_occurences.items) |seen| {
+    for (self.seen_count_var_occurrences.items) |seen| {
         if (seen == resolved.var_) return;
     }
 
     // Record that we've seen this var
-    try self.seen_count_var_occurences.append(resolved.var_);
-    defer _ = self.seen_count_var_occurences.pop();
+    try self.seen_count_var_occurrences.append(resolved.var_);
+    defer _ = self.seen_count_var_occurrences.pop();
 
     // Then recurse
     switch (resolved.desc.content) {

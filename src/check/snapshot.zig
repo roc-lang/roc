@@ -18,7 +18,7 @@ const SnapshotContentList = collections.SafeList(SnapshotContent);
 const SnapshotContentIdxSafeList = collections.SafeList(SnapshotContentIdx);
 const SnapshotRecordFieldSafeList = collections.SafeMultiList(SnapshotRecordField);
 const SnapshotTagSafeList = collections.SafeMultiList(SnapshotTag);
-const SnapshotStaticDispatchContraintSafeList = collections.SafeList(SnapshotStaticDispatchContraint);
+const SnapshotStaticDispatchConstraintSafeList = collections.SafeList(SnapshotStaticDispatchConstraint);
 const MkSafeMultiList = collections.SafeMultiList;
 
 const Var = types.Var;
@@ -49,13 +49,13 @@ pub const Store = struct {
     content_indexes: SnapshotContentIdxSafeList,
     record_fields: SnapshotRecordFieldSafeList,
     tags: SnapshotTagSafeList,
-    static_dispatch_constraints: SnapshotStaticDispatchContraintSafeList,
+    static_dispatch_constraints: SnapshotStaticDispatchConstraintSafeList,
 
     // Scratch
     scratch_content: base.Scratch(SnapshotContentIdx),
     scratch_tags: base.Scratch(SnapshotTag),
     scratch_record_fields: base.Scratch(SnapshotRecordField),
-    scratch_static_dispatch_constraints: base.Scratch(SnapshotStaticDispatchContraint),
+    scratch_static_dispatch_constraints: base.Scratch(SnapshotStaticDispatchConstraint),
 
     pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
         return .{
@@ -65,11 +65,11 @@ pub const Store = struct {
             .content_indexes = try SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
             .record_fields = try SnapshotRecordFieldSafeList.initCapacity(gpa, 256),
             .tags = try SnapshotTagSafeList.initCapacity(gpa, 256),
-            .static_dispatch_constraints = try SnapshotStaticDispatchContraintSafeList.initCapacity(gpa, 64),
+            .static_dispatch_constraints = try SnapshotStaticDispatchConstraintSafeList.initCapacity(gpa, 64),
             .scratch_content = try base.Scratch(SnapshotContentIdx).init(gpa),
             .scratch_tags = try base.Scratch(SnapshotTag).init(gpa),
             .scratch_record_fields = try base.Scratch(SnapshotRecordField).init(gpa),
-            .scratch_static_dispatch_constraints = try base.Scratch(SnapshotStaticDispatchContraint).init(gpa),
+            .scratch_static_dispatch_constraints = try base.Scratch(SnapshotStaticDispatchConstraint).init(gpa),
         };
     }
 
@@ -412,7 +412,7 @@ pub const Store = struct {
         self: *Self,
         store: *const TypesStore,
         range: types.StaticDispatchConstraint.SafeList.Range,
-    ) std.mem.Allocator.Error!SnapshotStaticDispatchContraintSafeList.Range {
+    ) std.mem.Allocator.Error!SnapshotStaticDispatchConstraintSafeList.Range {
         const scratch_top = self.scratch_static_dispatch_constraints.top();
         defer self.scratch_static_dispatch_constraints.clearFrom(scratch_top);
 
@@ -427,8 +427,8 @@ pub const Store = struct {
         self: *Self,
         store: *const TypesStore,
         constraint: types.StaticDispatchConstraint,
-    ) std.mem.Allocator.Error!SnapshotStaticDispatchContraint {
-        return SnapshotStaticDispatchContraint{
+    ) std.mem.Allocator.Error!SnapshotStaticDispatchConstraint {
+        return SnapshotStaticDispatchConstraint{
             .fn_name = constraint.fn_name,
             .fn_content = try self.deepCopyVar(store, constraint.fn_var),
         };
@@ -443,7 +443,7 @@ pub const Store = struct {
         return self.record_fields.sliceRange(range);
     }
 
-    pub fn sliceStaticDispatchConstraints(self: *const Self, range: SnapshotStaticDispatchContraintSafeList.Range) SnapshotStaticDispatchContraintSafeList.Slice {
+    pub fn sliceStaticDispatchConstraints(self: *const Self, range: SnapshotStaticDispatchConstraintSafeList.Range) SnapshotStaticDispatchConstraintSafeList.Slice {
         return self.static_dispatch_constraints.sliceRange(range);
     }
 
@@ -466,13 +466,13 @@ pub const SnapshotContent = union(enum) {
 pub const SnapshotFlex = struct {
     name: ?Ident.Idx,
     var_: Var,
-    constraints: SnapshotStaticDispatchContraintSafeList.Range,
+    constraints: SnapshotStaticDispatchConstraintSafeList.Range,
 };
 
 /// TODO
 pub const SnapshotRigid = struct {
     name: Ident.Idx,
-    constraints: SnapshotStaticDispatchContraintSafeList.Range,
+    constraints: SnapshotStaticDispatchConstraintSafeList.Range,
 };
 
 /// TODO
@@ -558,7 +558,7 @@ pub const SnapshotTag = struct {
 };
 
 /// TODO
-pub const SnapshotStaticDispatchContraint = struct {
+pub const SnapshotStaticDispatchConstraint = struct {
     fn_name: Ident.Idx,
     fn_content: SnapshotContentIdx, // Index into SnapshotStore.contents
 };
@@ -590,7 +590,7 @@ pub const SnapshotWriter = struct {
     name_counters: std.EnumMap(TypeContext, u32),
     flex_var_names_map: std.AutoHashMap(Var, FlexVarNameRange),
     flex_var_names: std.array_list.Managed(u8),
-    static_dispatch_constraints: std.array_list.Managed(SnapshotStaticDispatchContraint),
+    static_dispatch_constraints: std.array_list.Managed(SnapshotStaticDispatchConstraint),
     count_seen_idxs: std.array_list.Managed(SnapshotContentIdx),
 
     const FlexVarNameRange = struct { start: usize, end: usize };
@@ -607,7 +607,7 @@ pub const SnapshotWriter = struct {
             .name_counters = std.EnumMap(TypeContext, u32).init(.{}),
             .flex_var_names_map = std.AutoHashMap(Var, FlexVarNameRange).init(gpa),
             .flex_var_names = std.array_list.Managed(u8).init(gpa),
-            .static_dispatch_constraints = std.array_list.Managed(SnapshotStaticDispatchContraint).init(gpa),
+            .static_dispatch_constraints = std.array_list.Managed(SnapshotStaticDispatchConstraint).init(gpa),
             .count_seen_idxs = std.array_list.Managed(SnapshotContentIdx).init(gpa),
         };
     }
@@ -631,7 +631,7 @@ pub const SnapshotWriter = struct {
             .name_counters = std.EnumMap(TypeContext, u32).init(.{}),
             .flex_var_names_map = std.AutoHashMap(Var, FlexVarNameRange).init(gpa),
             .flex_var_names = std.array_list.Managed(u8).init(gpa),
-            .static_dispatch_constraints = std.array_list.Managed(SnapshotStaticDispatchContraint).init(gpa),
+            .static_dispatch_constraints = std.array_list.Managed(SnapshotStaticDispatchConstraint).init(gpa),
             .count_seen_idxs = try std.array_list.Managed(SnapshotContentIdx).init(gpa),
         };
     }

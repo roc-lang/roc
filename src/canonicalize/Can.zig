@@ -603,7 +603,7 @@ fn processAssociatedItemsSecondPass(
                             // then just add the annotation independently
 
                             // TODO: Capture diagnostic that this anno doesn't
-                            // have a corrosponding def
+                            // have a corresponding def
 
                             const region = self.parse_ir.tokenizedRegionToRegion(ta.region);
 
@@ -1030,7 +1030,7 @@ pub fn canonicalizeFile(
                             // then just add the annotation independently
 
                             // TODO: Capture diagnostic that this anno doesn't
-                            // have a corrosponding def
+                            // have a corresponding def
 
                             const type_anno_stmt = Statement{ .s_type_anno = .{
                                 .name = name_ident,
@@ -6399,7 +6399,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                         // then just add the annotation independently
 
                         // TODO: Capture diagnostic that this anno doesn't
-                        // have a corrosponding def
+                        // have a corresponding def
 
                         const stmt_idx = try self.env.addStatement(Statement{
                             .s_type_anno = .{
@@ -6416,7 +6416,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                 // then just add the annotation independently
 
                 // TODO: Capture diagnostic that this anno doesn't
-                // have a corrosponding def
+                // have a corresponding def
 
                 const stmt_idx = try self.env.addStatement(Statement{
                     .s_type_anno = .{

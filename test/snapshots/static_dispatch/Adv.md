@@ -25,6 +25,17 @@ mismatch = {
 	next_val
 }
 
+mismatch2 = {
+	val = Adv.Val(10, "hello")
+	next_val = val.update_strr(100)
+	next_val
+}
+
+mismatch3 = {
+	next_val = "Hello".update(100)
+	next_val
+}
+
 main : (Str, U64)
 main = {
 	val = Adv.Val(10, "hello")
@@ -34,6 +45,8 @@ main = {
 ~~~
 # EXPECTED
 TYPE MISMATCH - Adv.md:17:13:17:32
+MISSING METHOD - Adv.md:23:13:23:33
+TYPE DOES NOT HAVE METHODS - Adv.md:28:13:28:32
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -48,6 +61,27 @@ It has the type:
 
 But I expected it to be:
     _Adv, Str -> Adv_
+
+**MISSING METHOD**
+The **Adv** type does not have a **update_strr** method:
+**Adv.md:23:13:23:33:**
+```roc
+	next_val = val.update_strr(100)
+```
+	           ^^^^^^^^^^^^^^^^^^^^
+
+
+**Hint:** Did you forget to define **update_strr** in the type's method block?
+
+**TYPE DOES NOT HAVE METHODS**
+You're trying to call the `update` method on a `Str`:
+**Adv.md:28:13:28:32:**
+```roc
+	next_val = "Hello".update(100)
+```
+	           ^^^^^^^^^^^^^^^^^^^
+
+But `Str` doesn't support methods.
 
 # TOKENS
 ~~~zig
@@ -64,6 +98,15 @@ CloseCurly,
 LowerIdent,OpAssign,OpenCurly,
 LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,Int,Comma,StringStart,StringPart,StringEnd,CloseRound,
 LowerIdent,OpAssign,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,Int,CloseRound,
+LowerIdent,
+CloseCurly,
+LowerIdent,OpAssign,OpenCurly,
+LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,Int,Comma,StringStart,StringPart,StringEnd,CloseRound,
+LowerIdent,OpAssign,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,Int,CloseRound,
+LowerIdent,
+CloseCurly,
+LowerIdent,OpAssign,OpenCurly,
+LowerIdent,OpAssign,StringStart,StringPart,StringEnd,NoSpaceDotLowerIdent,NoSpaceOpenRound,Int,CloseRound,
 LowerIdent,
 CloseCurly,
 LowerIdent,OpColon,OpenRound,UpperIdent,Comma,UpperIdent,CloseRound,
@@ -166,6 +209,38 @@ EndOfFile,
 								(e-ident (raw "update_str"))
 								(e-int (raw "100")))))
 					(e-ident (raw "next_val")))))
+		(s-decl
+			(p-ident (raw "mismatch2"))
+			(e-block
+				(statements
+					(s-decl
+						(p-ident (raw "val"))
+						(e-apply
+							(e-tag (raw "Adv.Val"))
+							(e-int (raw "10"))
+							(e-string
+								(e-string-part (raw "hello")))))
+					(s-decl
+						(p-ident (raw "next_val"))
+						(e-field-access
+							(e-ident (raw "val"))
+							(e-apply
+								(e-ident (raw "update_strr"))
+								(e-int (raw "100")))))
+					(e-ident (raw "next_val")))))
+		(s-decl
+			(p-ident (raw "mismatch3"))
+			(e-block
+				(statements
+					(s-decl
+						(p-ident (raw "next_val"))
+						(e-field-access
+							(e-string
+								(e-string-part (raw "Hello")))
+							(e-apply
+								(e-ident (raw "update"))
+								(e-int (raw "100")))))
+					(e-ident (raw "next_val")))))
 		(s-type-anno (name "main")
 			(ty-tuple
 				(ty (name "Str"))
@@ -221,6 +296,17 @@ mismatch = {
 	next_val
 }
 
+mismatch2 = {
+	val = Adv.Val(10, "hello")
+	next_val = val.update_strr(100)
+	next_val
+}
+
+mismatch3 = {
+	next_val = "Hello".update(100)
+	next_val
+}
+
 main : (Str, U64)
 main = {
 	val = Adv.Val(10, "hello")
@@ -248,6 +334,40 @@ main = {
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "val"))))
+					(args
+						(e-num (value "100")))))
+			(e-lookup-local
+				(p-assign (ident "next_val")))))
+	(d-let
+		(p-assign (ident "mismatch2"))
+		(e-block
+			(s-let
+				(p-assign (ident "val"))
+				(e-nominal (nominal "Adv")
+					(e-tag (name "Val")
+						(args
+							(e-num (value "10"))
+							(e-string
+								(e-literal (string "hello")))))))
+			(s-let
+				(p-assign (ident "next_val"))
+				(e-dot-access (field "update_strr")
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "val"))))
+					(args
+						(e-num (value "100")))))
+			(e-lookup-local
+				(p-assign (ident "next_val")))))
+	(d-let
+		(p-assign (ident "mismatch3"))
+		(e-block
+			(s-let
+				(p-assign (ident "next_val"))
+				(e-dot-access (field "update")
+					(receiver
+						(e-string
+							(e-literal (string "Hello"))))
 					(args
 						(e-num (value "100")))))
 			(e-lookup-local
@@ -377,6 +497,8 @@ main = {
 (inferred-types
 	(defs
 		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
 		(patt (type "(Str, Num(Int(Unsigned64)))"))
 		(patt (type "Adv -> Str"))
 		(patt (type "Adv -> Num(Int(Unsigned64))"))
@@ -386,6 +508,8 @@ main = {
 		(nominal (type "Adv")
 			(ty-header (name "Adv"))))
 	(expressions
+		(expr (type "_a"))
+		(expr (type "_a"))
 		(expr (type "_a"))
 		(expr (type "(Str, Num(Int(Unsigned64)))"))
 		(expr (type "Adv -> Str"))

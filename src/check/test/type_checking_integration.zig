@@ -1150,7 +1150,7 @@ const DefExpectation = union(enum) {
 /// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
 ///
 /// Behavior depends on the expectation:
-/// Pass: Asserts whole module type checks, and assert the speicifed def matches the expected type string
+/// Pass: Asserts whole module type checks, and assert the specified def matches the expected type string
 /// Fail: Asserts that there is exactly 1 type error in the module and it's title matches the expected string
 fn checkTypesModule(
     comptime source_expr: []const u8,

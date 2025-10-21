@@ -96,7 +96,7 @@ static_dispatch_method_name_buf: std.ArrayList(u8),
 /// A map of rigid variables that we build up during a branch of type checking
 const FreeVar = struct { ident: base.Ident.Idx, var_: Var };
 
-/// A struct scratch info aout a static dispatch constaint
+/// A struct scratch info about a static dispatch constraint
 const ScratchStaticDispatchConstraint = struct {
     var_: Var,
     constraint: types_mod.StaticDispatchConstraint,
@@ -669,7 +669,7 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     }
 
     // Check any accumulated static dispatch constraints
-    try self.checkDeferredStaticDispatchContraints();
+    try self.checkDeferredStaticDispatchConstraints();
 }
 
 // repl //
@@ -703,7 +703,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     try self.generalizer.generalize(&self.var_pool, rank);
 
     // Check any accumulated static dispatch constraints
-    try self.checkDeferredStaticDispatchContraints();
+    try self.checkDeferredStaticDispatchConstraints();
 }
 
 // defs //
@@ -726,9 +726,6 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
 
     // Initially set to be flex
     const placeholder_ptrn_var = ModuleEnv.varFrom(def.pattern);
-
-    var type_writer = try self.cir.initTypeWriter();
-    defer type_writer.deinit();
 
     // Check the pattern
     //
@@ -779,9 +776,6 @@ fn generateStmtTypeDeclType(
 
     const decl = self.cir.store.getStatement(decl_idx);
     const decl_var = ModuleEnv.varFrom(decl_idx);
-
-    var type_writer = try self.cir.initTypeWriter();
-    defer type_writer.deinit();
 
     switch (decl) {
         .s_alias_decl => |alias| {
@@ -946,14 +940,14 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx) std.m
     _ = try self.types.setVarRedirect(ModuleEnv.varFrom(annotation_idx), ModuleEnv.varFrom(annotation.anno));
 }
 
-/// Given a where clause, generate static dispatchs constraints and add to scratch_static_dispatch_constraints
+/// Given a where clause, generate static dispatch constraints and add to scratch_static_dispatch_constraints
 fn generateStaticDispatchConstraintFromWhere(self: *Self, where_idx: CIR.WhereClause.Idx) std.mem.Allocator.Error!void {
     const where = self.cir.store.getWhereClause(where_idx);
     const where_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(where_idx));
 
     switch (where) {
         .w_method => |method| {
-            // Generate type of the thing dispatch reciever
+            // Generate type of the thing dispatch receiver
             try self.generateAnnoTypeInPlace(method.var_, .annotation);
             const method_var = ModuleEnv.varFrom(method.var_);
 
@@ -2952,9 +2946,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
         .e_dot_access => |dot_access| {
             // Dot access can either indicate record access or static dispatch
 
-            var type_writer = try self.cir.initTypeWriter();
-            defer type_writer.deinit();
-
             // Check the receiver expression
             // E.g. thing.val
             //      ^^^^^
@@ -2975,7 +2966,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
 
                 // For static dispatch to be used like `thing.dispatch(...)` the
                 // method being dispatched on must accept the type of `thing` as
-                // it's first arg. So, we prepend the `reciever_var` to the args list
+                // it's first arg. So, we prepend the `receiver_var` to the args list
                 const first_arg_range = try self.types.appendVars(&.{receiver_var});
                 const rest_args_range = try self.types.appendVars(@ptrCast(dispatch_arg_expr_idxs));
                 const dispatch_arg_vars_range = Var.SafeList.Range{
@@ -2997,13 +2988,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                 try self.var_pool.addVarToRank(constraint_fn_var, rank);
 
                 // Then, create the static dispatch constraint
-                const contraint = StaticDispatchConstraint{
+                const constraint = StaticDispatchConstraint{
                     .fn_name = dot_access.field_name,
                     .fn_var = constraint_fn_var,
                 };
-                const constraint_range = try self.types.appendStaticDispatchConstraints(&.{contraint});
+                const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
-                // Create our constrained flex, and unify it with the reciever
+                // Create our constrained flex, and unify it with the receiver
                 const constrained_var = try self.freshFromContent(
                     .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
                     rank,
@@ -3620,10 +3611,7 @@ fn copyVar(self: *Self, other_module_var: Var, other_module_env: *const ModuleEn
 ///
 /// Initially, we only have to check constraint for `Test.to_str2`. But when we
 /// process that, we then have to check `Test.to_str`.
-fn checkDeferredStaticDispatchContraints(self: *Self) std.mem.Allocator.Error!void {
-    var type_writer = try self.cir.initTypeWriter();
-    defer type_writer.deinit();
-
+fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!void {
     var deferred_constraint_len = self.deferred_static_dispatch_constraints.items.items.len;
     var deferred_constraint_index: usize = 0;
     while (deferred_constraint_index < deferred_constraint_len) : ({
@@ -3706,7 +3694,7 @@ fn checkDeferredStaticDispatchContraints(self: *Self) std.mem.Allocator.Error!vo
 
                 // Get the def index in the original env
                 const node_idx_in_original_env = original_env.getExposedNodeIndexById(ident_in_original_env) orelse {
-                    // This can happen if somehow, the orignal module has
+                    // This can happen if somehow, the original module has
                     // an ident that matches the method/type, but it doesn't
                     // actually have/expose the method. This should be
                     // impossible, but we handle it gracefully
