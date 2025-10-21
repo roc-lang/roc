@@ -374,8 +374,7 @@ import I2 exposing [
 
 # Where constraint
 A(a) : a
-	where
-		[a.a1 : (
+	where [a.a1 : (
 			a,
 			a,
 		) -> Str,
@@ -385,8 +384,7 @@ A(a) : a
 		) -> Str
 	]
 B(b) : b
-	where
-		[b.b1 : (
+	where [b.b1 : (
 			b,
 			b,
 		) -> Str,
@@ -420,8 +418,7 @@ F : [
 ]
 
 g : e -> e
-	where
-		[
+	where [
 		e.A,
 		e.B
 	]

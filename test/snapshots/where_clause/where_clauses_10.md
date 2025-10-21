@@ -10,8 +10,7 @@ import Decode exposing [Decode]
 decode_things # After member name
 	: # After colon
 		List(List(U8)) -> List(a) # After anno
-			where # after where
-				[a.Decode]
+			where [a.Decode]
 ~~~
 # EXPECTED
 MODULE NOT FOUND - where_clauses_10.md:1:1:1:32
@@ -33,8 +32,7 @@ KwImport,UpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,
 LowerIdent,
 OpColon,
 UpperIdent,NoSpaceOpenRound,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseRound,OpArrow,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
-KwWhere,
-OpenSquare,LowerIdent,NoSpaceDotUpperIdent,CloseSquare,
+KwWhere,OpenSquare,LowerIdent,NoSpaceDotUpperIdent,CloseSquare,
 EndOfFile,
 ~~~
 # PARSE
@@ -60,15 +58,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-import Decode exposing [Decode]
-
-decode_things # After member name
-	: # After colon
-		List(List(U8)) -> List(a) # After anno
-			where
-				[
-				a.Decode
-			]
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
