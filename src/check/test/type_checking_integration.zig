@@ -1157,7 +1157,7 @@ fn checkTypesModule(
     comptime expectation: ModuleExpectation,
     comptime expected: []const u8,
 ) !void {
-    var test_env = try TestEnv.init(source_expr);
+    var test_env = try TestEnv.init("Test", source_expr);
     defer test_env.deinit();
 
     switch (expectation) {
@@ -1196,7 +1196,7 @@ fn checkTypesExpr(
     comptime expectation: ExprExpectation,
     comptime expected: []const u8,
 ) !void {
-    var test_env = try TestEnv.initExpr(source_expr);
+    var test_env = try TestEnv.initExpr("Test", source_expr);
     defer test_env.deinit();
 
     switch (expectation) {

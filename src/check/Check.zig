@@ -43,11 +43,18 @@ const ProblemStore = @import("problem.zig").Store;
 const Self = @This();
 
 gpa: std.mem.Allocator,
-// not owned
+// This module's types store
 types: *types_mod.Store,
+/// This module's env
 cir: *ModuleEnv,
+/// A list of regions. Parallel with type vars & CIR nodes
 regions: *Region.List,
-other_modules: []const *const ModuleEnv,
+/// List of directly imported  module. Import indexs in CIR refer to this list
+imported_modules: []const *const ModuleEnv,
+/// Map of module name identifiers to their env. This includes all modules
+/// "below" this one in the dependecy graph
+module_envs: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
+/// Common module-wide identified
 common_idents: CommonIdents,
 
 /// type snapshots used in error messages
@@ -119,7 +126,8 @@ pub fn init(
     gpa: std.mem.Allocator,
     types: *types_mod.Store,
     cir: *const ModuleEnv,
-    other_modules: []const *const ModuleEnv,
+    imported_modules: []const *const ModuleEnv,
+    module_envs: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
     regions: *Region.List,
     common_idents: CommonIdents,
 ) std.mem.Allocator.Error!Self {
@@ -127,7 +135,8 @@ pub fn init(
         .gpa = gpa,
         .types = types,
         .cir = @constCast(cir),
-        .other_modules = other_modules,
+        .imported_modules = imported_modules,
+        .module_envs = module_envs,
         .regions = regions,
         .common_idents = common_idents,
         .snapshots = try SnapshotStore.initCapacity(gpa, 512),
@@ -573,11 +582,11 @@ fn updateVar(self: *Self, target_var: Var, content: types_mod.Content, rank: typ
 /// other modules directly. The Bool and Result types are used in language constructs like
 /// `if` conditions and need to be available in every module's type store.
 fn copyBuiltinTypes(self: *Self) !void {
-    // Find the Bool and Result modules in other_modules
+    // Find the Bool and Result modules in imported_modules
     var bool_module: ?*const ModuleEnv = null;
     var result_module: ?*const ModuleEnv = null;
 
-    for (self.other_modules) |module_env| {
+    for (self.imported_modules) |module_env| {
         if (std.mem.eql(u8, module_env.module_name, "Bool")) {
             bool_module = module_env;
         } else if (std.mem.eql(u8, module_env.module_name, "Result")) {
@@ -3526,8 +3535,8 @@ fn resolveVarFromExternal(
     node_idx: u16,
 ) std.mem.Allocator.Error!?ExternalType {
     const module_idx_int = @intFromEnum(module_idx);
-    if (module_idx_int < self.other_modules.len) {
-        const other_module_cir = self.other_modules[module_idx_int];
+    if (module_idx_int < self.imported_modules.len) {
+        const other_module_cir = self.imported_modules[module_idx_int];
         const other_module_env = other_module_cir;
 
         // The idx of the expression in the other module
@@ -3648,14 +3657,14 @@ fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!v
                 if (is_this_module) {
                     break :blk self.cir;
                 } else {
-                    const original_module_bytes = self.cir.getIdentText(original_module_ident);
-                    _ = original_module_bytes;
+                    // Ensure that we have other module envs
+                    std.debug.assert(self.module_envs != null);
+                    const module_envs = self.module_envs.?;
 
-                    // TODO: Lookup the module env
-                    // std.debug.print("TODO: Handle static dispatch from other modules", .{});
+                    const mb_original_module_env = module_envs.get(original_module_ident);
 
-                    try self.updateVar(deferred_constraint.var_, .err, Rank.generalized);
-                    continue;
+                    std.debug.assert(mb_original_module_env != null);
+                    break :blk mb_original_module_env.?.env;
                 }
             };
 
