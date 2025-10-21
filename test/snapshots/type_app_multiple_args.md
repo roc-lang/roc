@@ -135,8 +135,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Error -> List(Str)"))
-		(patt (type "_arg -> List(Str)")))
+		(patt (type "_arg -> Error")))
 	(expressions
 		(expr (type "Error -> List(Str)"))
-		(expr (type "_arg -> List(Str)"))))
+		(expr (type "_arg -> Error"))))
 ~~~

@@ -145,7 +145,7 @@ foo = Json.parse(data)
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_a")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "_a"))))
+		(expr (type "Error"))))
 ~~~

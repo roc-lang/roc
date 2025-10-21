@@ -527,13 +527,10 @@ test "check type - bool qualified" {
 }
 
 test "check type - bool lambda" {
-    return error.SkipZigTest;
-    // const source =
-    //     \\module []
-    //     \\
-    //     \\x = (|x| !x)(Bool.True)
-    // ;
-    // try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+    const source =
+        \\x = (|y| !y)(Bool.True)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
 }
 
 // if-else

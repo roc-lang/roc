@@ -288,17 +288,17 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Error"))
-		(patt (type "Error -> Str"))
 		(patt (type "Error -> Error"))
-		(patt (type "_a"))
+		(patt (type "Error -> Error"))
+		(patt (type "Error"))
 		(patt (type "_a"))
 		(patt (type "Error"))
 		(patt (type "Error")))
 	(expressions
 		(expr (type "Error"))
-		(expr (type "Error -> Str"))
 		(expr (type "Error -> Error"))
-		(expr (type "_a"))
+		(expr (type "Error -> Error"))
+		(expr (type "Error"))
 		(expr (type "_a"))
 		(expr (type "Error"))
 		(expr (type "Error"))))

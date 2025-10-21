@@ -197,9 +197,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(elem) -> elem"))
+		(patt (type "List(Error) -> Error"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "List(elem) -> elem"))
+		(expr (type "List(Error) -> Error"))
 		(expr (type "_arg -> {}"))))
 ~~~

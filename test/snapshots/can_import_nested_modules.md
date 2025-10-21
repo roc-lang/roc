@@ -585,15 +585,15 @@ validateAuth = |creds| HttpAuth.validate(creds)
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Str"))
+		(patt (type "Error -> Error"))
 		(patt (type "Str, Str -> Error"))
-		(patt (type "Error, Str -> Result(Str, Error)"))
-		(patt (type "Str -> Str"))
-		(patt (type "Error -> Result(Error, Error)")))
+		(patt (type "Error, Str -> Error"))
+		(patt (type "Str -> Error"))
+		(patt (type "Error -> Error")))
 	(expressions
-		(expr (type "Error -> Str"))
+		(expr (type "Error -> Error"))
 		(expr (type "Str, Str -> Error"))
-		(expr (type "Error, Str -> Result(Str, Error)"))
-		(expr (type "Str -> Str"))
-		(expr (type "Error -> Result(Error, Error)"))))
+		(expr (type "Error, Str -> Error"))
+		(expr (type "Str -> Error"))
+		(expr (type "Error -> Error"))))
 ~~~

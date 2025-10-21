@@ -943,7 +943,7 @@ This expression is used in an unexpected way:
 ```
 
 It has the type:
-    _[Stdoline!(Str)][Err(_d), Ok({  })]_
+    _[Stdoline!(Error)][Err(_d), Ok({  })]_
 
 But the type annotation says it should have the type:
     _Result({  }, _d)_

@@ -2499,7 +2499,7 @@ expect {
 		(patt (type "Bool -> Num(_size)"))
 		(patt (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(patt (type "[Red][Blue, Green]_others, _arg -> Error"))
-		(patt (type "List(Error) -> Result({  }, _d)"))
+		(patt (type "List(Error) -> Error"))
 		(patt (type "{}")))
 	(type_decls
 		(alias (type "Map(a, b)")
@@ -2544,6 +2544,6 @@ expect {
 		(expr (type "Bool -> Num(_size)"))
 		(expr (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(expr (type "[Red][Blue, Green]_others, _arg -> Error"))
-		(expr (type "List(Error) -> Result({  }, _d)"))
+		(expr (type "List(Error) -> Error"))
 		(expr (type "{}"))))
 ~~~

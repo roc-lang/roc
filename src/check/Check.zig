@@ -2756,140 +2756,176 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                     does_fx = try self.checkExpr(call.func, rank, .no_expectation) or does_fx;
                     const func_var = ModuleEnv.varFrom(call.func);
 
+                    // Resolve the func var
+                    const resolved_func = self.types.resolveVar(func_var).desc.content;
+                    var did_err = resolved_func == .err;
+
                     // Second, check the arguments being called
                     // It could be effectful, e.g. `fn(mk_arg!())`
                     const call_arg_expr_idxs = self.cir.store.sliceExpr(call.args);
                     for (call_arg_expr_idxs) |call_arg_idx| {
                         does_fx = try self.checkExpr(call_arg_idx, rank, .no_expectation) or does_fx;
+
+                        // Check if this arg errored
+                        did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(call_arg_idx)).desc.content == .err);
                     }
 
-                    // From the base function type, extract the actual function  info
-                    const mb_func: ?types_mod.Func = inner_blk: {
-                        // Here, we unwrap the function, following aliases, to get
-                        // the actual function we want to check against
-                        var var_ = func_var;
-                        while (true) {
-                            switch (self.types.resolveVar(var_).desc.content) {
-                                .structure => |flat_type| {
-                                    switch (flat_type) {
-                                        .fn_pure => |func| break :inner_blk func,
-                                        .fn_unbound => |func| break :inner_blk func,
-                                        .fn_effectful => |func| break :inner_blk func,
+                    if (did_err) {
+                        // If the fn or any args had error, propgate the error
+                        // without doing any additional work
+                        try self.updateVar(expr_var, .err, rank);
+                    } else {
+                        // From the base function type, extract the actual function  info
+                        const mb_func: ?types_mod.Func = inner_blk: {
+                            // Here, we unwrap the function, following aliases, to get
+                            // the actual function we want to check against
+                            var var_ = func_var;
+                            while (true) {
+                                switch (self.types.resolveVar(var_).desc.content) {
+                                    .structure => |flat_type| {
+                                        switch (flat_type) {
+                                            .fn_pure => |func| break :inner_blk func,
+                                            .fn_unbound => |func| break :inner_blk func,
+                                            .fn_effectful => |func| break :inner_blk func,
+                                            else => break :inner_blk null,
+                                        }
+                                    },
+                                    .alias => |alias| {
+                                        var_ = self.types.getAliasBackingVar(alias);
+                                    },
+                                    else => break :inner_blk null,
+                                }
+                            }
+                        };
+
+                        // Get the name of the function (for error messages)
+                        const func_name: ?Ident.Idx = inner_blk: {
+                            const func_expr = self.cir.store.getExpr(call.func);
+                            switch (func_expr) {
+                                .e_lookup_local => |lookup| {
+                                    // Get the pattern that defines this identifier
+                                    const pattern = self.cir.store.getPattern(lookup.pattern_idx);
+                                    switch (pattern) {
+                                        .assign => |assign| break :inner_blk assign.ident,
                                         else => break :inner_blk null,
                                     }
                                 },
-                                .alias => |alias| {
-                                    var_ = self.types.getAliasBackingVar(alias);
-                                },
                                 else => break :inner_blk null,
                             }
-                        }
-                    };
+                        };
 
-                    // Get the name of the function (for error messages)
-                    const func_name: ?Ident.Idx = inner_blk: {
-                        const func_expr = self.cir.store.getExpr(call.func);
-                        switch (func_expr) {
-                            .e_lookup_local => |lookup| {
-                                // Get the pattern that defines this identifier
-                                const pattern = self.cir.store.getPattern(lookup.pattern_idx);
-                                switch (pattern) {
-                                    .assign => |assign| break :inner_blk assign.ident,
-                                    else => break :inner_blk null,
-                                }
-                            },
-                            else => break :inner_blk null,
-                        }
-                    };
+                        // Now, check the call args against the type of function
+                        if (mb_func) |func| {
+                            const func_args = self.types.sliceVars(func.args);
 
-                    // Now, check the call args against the type of function
-                    if (mb_func) |func| {
-                        const func_args = self.types.sliceVars(func.args);
+                            if (func_args.len == call_arg_expr_idxs.len) {
+                                // First, find all the "rigid" variables in a the function's type
+                                // and unify the matching corresponding call arguments together.
+                                //
+                                // Here, "rigid" is in quotes because at this point, the expected function
+                                // has been instantiated such that the rigid variables should all resolve
+                                // to the same exact flex variable. So we are actually checking for flex
+                                // variables here.
+                                for (func_args, 0..) |expected_arg_1, i| {
+                                    const expected_resolved_1 = self.types.resolveVar(expected_arg_1);
 
-                        if (func_args.len == call_arg_expr_idxs.len) {
-                            // First, find all the "rigid" variables in a the function's type
-                            // and unify the matching corresponding call arguments together.
-                            //
-                            // Here, "rigid" is in quotes because at this point, the expected function
-                            // has been instantiated such that the rigid variables should all resolve
-                            // to the same exact flex variable. So we are actually checking for flex
-                            // variables here.
-                            for (func_args, 0..) |expected_arg_1, i| {
-                                const expected_resolved_1 = self.types.resolveVar(expected_arg_1);
+                                    // Ensure the above comment is true. That is, that all
+                                    // rigid vars for this function have been instantiated to
+                                    // flex vars by the time we get here.
+                                    std.debug.assert(expected_resolved_1.desc.content != .rigid);
 
-                                // Ensure the above comment is true. That is, that all
-                                // rigid vars for this function have been instantiated to
-                                // flex vars by the time we get here.
-                                std.debug.assert(expected_resolved_1.desc.content != .rigid);
+                                    // Skip any concrete arguments
+                                    if (expected_resolved_1.desc.content != .flex) {
+                                        continue;
+                                    }
 
-                                // Skip any concrete arguments
-                                if (expected_resolved_1.desc.content != .flex) {
-                                    continue;
-                                }
+                                    // Look for other arguments with the same type variable
+                                    for (func_args[i + 1 ..], i + 1..) |expected_arg_2, j| {
+                                        const expected_resolved_2 = self.types.resolveVar(expected_arg_2);
+                                        if (expected_resolved_1.var_ == expected_resolved_2.var_) {
+                                            // These two argument indexes in the called *function's*
+                                            // type have the same rigid variable! So, we unify
+                                            // the corresponding *call args*
 
-                                // Look for other arguments with the same type variable
-                                for (func_args[i + 1 ..], i + 1..) |expected_arg_2, j| {
-                                    const expected_resolved_2 = self.types.resolveVar(expected_arg_2);
-                                    if (expected_resolved_1.var_ == expected_resolved_2.var_) {
-                                        // These two argument indexes in the called *function's*
-                                        // type have the same rigid variable! So, we unify
-                                        // the corresponding *call args*
+                                            const arg_1 = @as(Var, ModuleEnv.varFrom(call_arg_expr_idxs[i]));
+                                            const arg_2 = @as(Var, ModuleEnv.varFrom(call_arg_expr_idxs[j]));
 
-                                        const arg_1 = @as(Var, ModuleEnv.varFrom(call_arg_expr_idxs[i]));
-                                        const arg_2 = @as(Var, ModuleEnv.varFrom(call_arg_expr_idxs[j]));
+                                            const unify_result = try self.unify(arg_1, arg_2, rank);
+                                            if (unify_result.isProblem()) {
+                                                // Use the new error detail for bound type variable incompatibility
+                                                self.setProblemTypeMismatchDetail(unify_result.problem, .{
+                                                    .incompatible_fn_args_bound_var = .{
+                                                        .fn_name = func_name,
+                                                        .first_arg_var = arg_1,
+                                                        .second_arg_var = arg_2,
+                                                        .first_arg_index = @intCast(i),
+                                                        .second_arg_index = @intCast(j),
+                                                        .num_args = @intCast(call_arg_expr_idxs.len),
+                                                    },
+                                                });
 
-                                        const unify_result = try self.unify(arg_1, arg_2, rank);
-                                        if (unify_result.isProblem()) {
-                                            // Use the new error detail for bound type variable incompatibility
-                                            self.setProblemTypeMismatchDetail(unify_result.problem, .{
-                                                .incompatible_fn_args_bound_var = .{
-                                                    .fn_name = func_name,
-                                                    .first_arg_var = arg_1,
-                                                    .second_arg_var = arg_2,
-                                                    .first_arg_index = @intCast(i),
-                                                    .second_arg_index = @intCast(j),
-                                                    .num_args = @intCast(call_arg_expr_idxs.len),
-                                                },
-                                            });
-
-                                            // Stop execution
-                                            _ = try self.updateVar(expr_var, .err, rank);
-                                            break :blk;
+                                                // Stop execution
+                                                _ = try self.updateVar(expr_var, .err, rank);
+                                                break :blk;
+                                            }
                                         }
                                     }
                                 }
-                            }
 
-                            // Check the function's arguments against the actual
-                            // called arguments, unifying each one
-                            for (func_args, call_arg_expr_idxs, 0..) |expected_arg_var, call_expr_idx, arg_index| {
-                                const unify_result = try self.unify(expected_arg_var, ModuleEnv.varFrom(call_expr_idx), rank);
-                                if (unify_result.isProblem()) {
-                                    // Use the new error detail for bound type variable incompatibility
-                                    self.setProblemTypeMismatchDetail(unify_result.problem, .{
-                                        .incompatible_fn_call_arg = .{
-                                            .fn_name = func_name,
-                                            .arg_var = ModuleEnv.varFrom(call_expr_idx),
-                                            .incompatible_arg_index = @intCast(arg_index),
-                                            .num_args = @intCast(call_arg_expr_idxs.len),
-                                        },
-                                    });
+                                // Check the function's arguments against the actual
+                                // called arguments, unifying each one
+                                for (func_args, call_arg_expr_idxs, 0..) |expected_arg_var, call_expr_idx, arg_index| {
+                                    const unify_result = try self.unify(expected_arg_var, ModuleEnv.varFrom(call_expr_idx), rank);
+                                    if (unify_result.isProblem()) {
+                                        // Use the new error detail for bound type variable incompatibility
+                                        self.setProblemTypeMismatchDetail(unify_result.problem, .{
+                                            .incompatible_fn_call_arg = .{
+                                                .fn_name = func_name,
+                                                .arg_var = ModuleEnv.varFrom(call_expr_idx),
+                                                .incompatible_arg_index = @intCast(arg_index),
+                                                .num_args = @intCast(call_arg_expr_idxs.len),
+                                            },
+                                        });
 
-                                    // Stop execution
-                                    _ = try self.updateVar(expr_var, .err, rank);
-                                    break :blk;
+                                        // Stop execution
+                                        _ = try self.updateVar(expr_var, .err, rank);
+                                        break :blk;
+                                    }
                                 }
+
+                                // Redirect the expr to the function's return type
+                                _ = try self.types.setVarRedirect(expr_var, func.ret);
+                            } else {
+                                // TODO(jared): Better arity difference error message
+
+                                // If the expected function's arity doesn't match
+                                // the actual arguments provoided, unify the
+                                // inferred function type with the expected function
+                                // type to get  the regulare error message
+                                const call_arg_vars: []Var = @ptrCast(call_arg_expr_idxs);
+                                const call_func_ret = try self.fresh(rank, expr_region);
+                                const call_func_content = try self.types.mkFuncUnbound(call_arg_vars, call_func_ret);
+                                const call_func_var = try self.freshFromContent(call_func_content, rank, expr_region);
+
+                                try self.var_pool.addVarToRank(call_func_ret, rank);
+                                try self.var_pool.addVarToRank(call_func_var, rank);
+
+                                _ = try self.unify(func_var, call_func_var, rank);
+                                _ = try self.types.setVarRedirect(expr_var, call_func_ret);
                             }
-
-                            // Redirect the expr to the function's return type
-                            _ = try self.types.setVarRedirect(expr_var, func.ret);
                         } else {
-                            // TODO(jared): Better arity difference error message
+                            // We get here if the type of expr being called
+                            // (`mk_fn` in `(mk_fn())(arg)`) is NOT already
+                            // inferred to be a function type.
 
-                            // If the expected function's arity doesn't match
-                            // the actual arguments provoided, unify the
-                            // inferred function type with the expected function
-                            // type to get  the regulare error message
+                            // This can mean a regular type mismatch, but it can also
+                            // mean that the thing being called yet has not yet been
+                            // inferred (like if this is an anonymous function param)
+
+                            // Either way, we know what the type  *should* be, based
+                            // on how it's being used here. So we create that func
+                            // type and unify the function being called against it
+
                             const call_arg_vars: []Var = @ptrCast(call_arg_expr_idxs);
                             const call_func_ret = try self.fresh(rank, expr_region);
                             const call_func_content = try self.types.mkFuncUnbound(call_arg_vars, call_func_ret);
@@ -2899,35 +2935,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                             try self.var_pool.addVarToRank(call_func_var, rank);
 
                             _ = try self.unify(func_var, call_func_var, rank);
+
+                            // Then, we set the root expr to redirect to the return
+                            // type of that function, since a call expr ultimate
+                            // resolve to the  returned type
                             _ = try self.types.setVarRedirect(expr_var, call_func_ret);
                         }
-                    } else {
-                        // We get here if the type of expr being called
-                        // (`mk_fn` in `(mk_fn())(arg)`) is NOT already
-                        // inferred to be a function type.
-
-                        // This can mean a regular type mismatch, but it can also
-                        // mean that the thing being called yet has not yet been
-                        // inferred (like if this is an anonymous function param)
-
-                        // Either way, we know what the type  *should* be, based
-                        // on how it's being used here. So we create that func
-                        // type and unify the function being called against it
-
-                        const call_arg_vars: []Var = @ptrCast(call_arg_expr_idxs);
-                        const call_func_ret = try self.fresh(rank, expr_region);
-                        const call_func_content = try self.types.mkFuncUnbound(call_arg_vars, call_func_ret);
-                        const call_func_var = try self.freshFromContent(call_func_content, rank, expr_region);
-
-                        try self.var_pool.addVarToRank(call_func_ret, rank);
-                        try self.var_pool.addVarToRank(call_func_var, rank);
-
-                        _ = try self.unify(func_var, call_func_var, rank);
-
-                        // Then, we set the root expr to redirect to the return
-                        // type of that function, since a call expr ultimate
-                        // resolve to the  returned type
-                        _ = try self.types.setVarRedirect(expr_var, call_func_ret);
                     }
                 },
                 else => {
@@ -3645,7 +3658,18 @@ fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!v
 
         if (dispatcher_content == .err) {
             // If the root type is an error, then skip constraint checking
-            continue;
+            // Iterate over the constraints
+            const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
+            for (constraints) |constraint| {
+                // Extract the function and return type from the constraint
+                const resolved_constraint = self.types.resolveVar(constraint.fn_var);
+                const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
+                std.debug.assert(mb_resolved_func != null);
+                const resolved_func = mb_resolved_func.?;
+
+                // Set it to be an error
+                try self.updateVar(resolved_func.ret, .err, Rank.generalized);
+            }
         } else if (dispatcher_content == .rigid or dispatcher_content == .flex) {
             // If the root type is an flex or rigid, then we there's nothing to check
             // since the type is not concrete
@@ -3687,6 +3711,12 @@ fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!v
             // Iterate over the constraints
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
             for (constraints) |constraint| {
+                // Extract the function and return type from the constraint
+                const resolved_constraint = self.types.resolveVar(constraint.fn_var);
+                const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
+                std.debug.assert(mb_resolved_func != null);
+                const resolved_func = mb_resolved_func.?;
+
                 // Get the name fully qualified name of the function
                 // Czer creates this as `TypeName.method_name`
                 const constraint_fn_name_bytes = self.cir.getIdent(constraint.fn_name);
@@ -3709,7 +3739,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!v
                             .method_name = constraint.fn_name,
                         },
                     } });
-                    try self.updateVar(deferred_constraint.var_, .err, Rank.generalized);
+                    try self.updateVar(resolved_func.ret, .err, Rank.generalized);
                     continue;
                 };
 
@@ -3729,7 +3759,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!v
                             .method_name = constraint.fn_name,
                         },
                     } });
-                    try self.updateVar(deferred_constraint.var_, .err, Rank.generalized);
+                    try self.updateVar(resolved_func.ret, .err, Rank.generalized);
                     continue;
                 };
                 const def_idx: Var = @enumFromInt(@as(u32, @intCast(node_idx_in_original_env)));
@@ -3745,22 +3775,37 @@ fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!v
                 // TODO: For better error messages, we should check if these
                 // types are functions, unify each arg, etc. This should look
                 // similar to e_call
-                _ = try self.unify(real_method_var, constraint.fn_var, Rank.generalized);
+                const result = try self.unify(real_method_var, constraint.fn_var, Rank.generalized);
+                if (result.isProblem()) {
+                    try self.updateVar(resolved_func.ret, .err, Rank.generalized);
+                }
             }
         } else {
             // If the root type is anything but a nominal type, push an error
 
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
             if (constraints.len > 0) {
+                const constraint = constraints[0];
+
+                // Snapshot the constraint and add a problem
                 const snapshot = try self.snapshots.deepCopyVar(self.types, deferred_constraint.var_);
                 _ = try self.problems.appendProblem(self.cir.gpa, .{ .static_dispach = .{
                     .dispatcher_not_nominal = .{
                         .dispatcher_var = deferred_constraint.var_,
                         .dispatcher_snapshot = snapshot,
-                        .fn_var = constraints[0].fn_var,
-                        .method_name = constraints[0].fn_name,
+                        .fn_var = constraint.fn_var,
+                        .method_name = constraint.fn_name,
                     },
                 } });
+
+                // Extract the function and return type from the constraint
+                const resolved_constraint = self.types.resolveVar(constraint.fn_var);
+                const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
+                std.debug.assert(mb_resolved_func != null);
+                const resolved_func = mb_resolved_func.?;
+
+                // Set it to be an error
+                try self.updateVar(resolved_func.ret, .err, Rank.generalized);
             } else {
                 // It should be impossible to have a deferred constraint check
                 // that has no constraints.

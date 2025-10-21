@@ -1861,7 +1861,7 @@ expect {
 		(patt (type "Bool -> Num(_size)"))
 		(patt (type "Bool -> Error"))
 		(patt (type "[Blue]_others, [Tb]_others2 -> Error"))
-		(patt (type "_arg -> [Stdo!(Str)]_others"))
+		(patt (type "_arg -> [Stdo!(Error)]_others"))
 		(patt (type "{}")))
 	(type_decls
 		(alias (type "Map(a, b)")
@@ -1893,6 +1893,6 @@ expect {
 		(expr (type "Bool -> Num(_size)"))
 		(expr (type "Bool -> Error"))
 		(expr (type "[Blue]_others, [Tb]_others2 -> Error"))
-		(expr (type "_arg -> [Stdo!(Str)]_others"))
+		(expr (type "_arg -> [Stdo!(Error)]_others"))
 		(expr (type "{}"))))
 ~~~

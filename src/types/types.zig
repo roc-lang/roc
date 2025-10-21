@@ -206,6 +206,21 @@ pub const Content = union(enum) {
             else => return null,
         }
     }
+
+    /// Unwrap a function (pure, eff, or unbound) and return it
+    pub fn unwrapFunc(content: Self) ?Func {
+        switch (content) {
+            .structure => |flat_type| {
+                switch (flat_type) {
+                    .fn_pure => |func| return func,
+                    .fn_effectful => |func| return func,
+                    .fn_unbound => |func| return func,
+                    else => return null,
+                }
+            },
+            else => return null,
+        }
+    }
 };
 
 // flex //

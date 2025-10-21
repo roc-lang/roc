@@ -1225,7 +1225,7 @@ is_named_color = |str| {
 		(patt (type "Str -> Error"))
 		(patt (type "Error -> Error"))
 		(patt (type "Str -> Result(Color, [UnknownColor(Str)])"))
-		(patt (type "_arg -> _ret")))
+		(patt (type "_arg -> Error")))
 	(type_decls
 		(nominal (type "Color")
 			(ty-header (name "Color"))))
@@ -1235,5 +1235,5 @@ is_named_color = |str| {
 		(expr (type "Str -> Error"))
 		(expr (type "Error -> Error"))
 		(expr (type "Str -> Result(Color, [UnknownColor(Str)])"))
-		(expr (type "_arg -> _ret"))))
+		(expr (type "_arg -> Error"))))
 ~~~
