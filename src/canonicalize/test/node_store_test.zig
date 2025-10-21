@@ -790,6 +790,14 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
+    try diagnostics.append(CIR.Diagnostic{
+        .type_from_missing_module = .{
+            .module_name = rand_ident_idx(),
+            .type_name = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
     // Test the round-trip for all diagnostics
     for (diagnostics.items) |diagnostic| {
         const idx = try store.addDiagnostic(diagnostic);

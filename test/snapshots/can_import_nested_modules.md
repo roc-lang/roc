@@ -31,197 +31,65 @@ validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 validateAuth = |creds| HttpAuth.validate(creds)
 ~~~
 # EXPECTED
-PARSE ERROR - can_import_nested_modules.md:1:19:1:26
-PARSE ERROR - can_import_nested_modules.md:2:19:2:24
-PARSE ERROR - can_import_nested_modules.md:2:25:2:27
-PARSE ERROR - can_import_nested_modules.md:3:1:3:7
-PARSE ERROR - can_import_nested_modules.md:3:8:3:13
-PARSE ERROR - can_import_nested_modules.md:3:13:3:20
-PARSE ERROR - can_import_nested_modules.md:3:20:3:27
-PARSE ERROR - can_import_nested_modules.md:3:28:3:36
-PARSE ERROR - can_import_nested_modules.md:3:37:3:38
-PARSE ERROR - can_import_nested_modules.md:3:38:3:45
-PARSE ERROR - can_import_nested_modules.md:3:45:3:46
-MODULE NOT FOUND - can_import_nested_modules.md:1:1:1:19
-MODULE NOT FOUND - can_import_nested_modules.md:2:1:2:19
-MODULE NOT IMPORTED - can_import_nested_modules.md:6:15:6:30
+MODULE NOT FOUND - can_import_nested_modules.md:1:1:1:26
+MODULE NOT FOUND - can_import_nested_modules.md:2:1:2:36
+MODULE NOT FOUND - can_import_nested_modules.md:3:1:3:46
+UNDECLARED TYPE - can_import_nested_modules.md:6:21:6:30
 UNDEFINED VARIABLE - can_import_nested_modules.md:7:26:7:41
-MODULE NOT IMPORTED - can_import_nested_modules.md:10:28:10:42
+TYPE NOT EXPOSED - can_import_nested_modules.md:10:36:10:42
 UNDEFINED VARIABLE - can_import_nested_modules.md:11:29:11:43
-MODULE NOT IMPORTED - can_import_nested_modules.md:14:15:14:37
-MODULE NOT IMPORTED - can_import_nested_modules.md:14:58:14:77
+UNDECLARED TYPE - can_import_nested_modules.md:14:28:14:37
+UNDECLARED TYPE - can_import_nested_modules.md:14:71:14:77
 UNDEFINED VARIABLE - can_import_nested_modules.md:16:5:16:37
 UNDEFINED VARIABLE - can_import_nested_modules.md:20:23:20:30
 UNDEFINED VARIABLE - can_import_nested_modules.md:20:37:20:58
-MODULE NOT IMPORTED - can_import_nested_modules.md:23:16:23:36
-MODULE NOT IMPORTED - can_import_nested_modules.md:23:47:23:61
-MODULE NOT IMPORTED - can_import_nested_modules.md:23:63:23:77
+TYPE NOT EXPOSED - can_import_nested_modules.md:23:24:23:36
+TYPE NOT EXPOSED - can_import_nested_modules.md:23:55:23:61
+TYPE NOT EXPOSED - can_import_nested_modules.md:23:71:23:77
 UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**can_import_nested_modules.md:1:19:1:26:**
-```roc
-import json.Parser.Config
-```
-                  ^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**can_import_nested_modules.md:2:19:2:24:**
-```roc
-import http.Client.Auth as HttpAuth
-```
-                  ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**can_import_nested_modules.md:2:25:2:27:**
-```roc
-import http.Client.Auth as HttpAuth
-```
-                        ^^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Result(a, Str)`
-    `Maybe(List(U64))`
-
-**can_import_nested_modules.md:3:1:3:7:**
-```roc
-import utils.String.Format exposing [padLeft]
-```
-^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**can_import_nested_modules.md:3:8:3:13:**
-```roc
-import utils.String.Format exposing [padLeft]
-```
-       ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**can_import_nested_modules.md:3:13:3:20:**
-```roc
-import utils.String.Format exposing [padLeft]
-```
-            ^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**can_import_nested_modules.md:3:20:3:27:**
-```roc
-import utils.String.Format exposing [padLeft]
-```
-                   ^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**can_import_nested_modules.md:3:28:3:36:**
-```roc
-import utils.String.Format exposing [padLeft]
-```
-                           ^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**can_import_nested_modules.md:3:37:3:38:**
-```roc
-import utils.String.Format exposing [padLeft]
-```
-                                    ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**can_import_nested_modules.md:3:38:3:45:**
-```roc
-import utils.String.Format exposing [padLeft]
-```
-                                     ^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**can_import_nested_modules.md:3:45:3:46:**
-```roc
-import utils.String.Format exposing [padLeft]
-```
-                                            ^
-
-
 **MODULE NOT FOUND**
 The module `json.Parser` was not found in this Roc project.
 
 You're attempting to use this module here:
-**can_import_nested_modules.md:1:1:1:19:**
+**can_import_nested_modules.md:1:1:1:26:**
 ```roc
 import json.Parser.Config
 ```
-^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **MODULE NOT FOUND**
-The module `http.Client` was not found in this Roc project.
+The module `http.Client.Auth` was not found in this Roc project.
 
 You're attempting to use this module here:
-**can_import_nested_modules.md:2:1:2:19:**
+**can_import_nested_modules.md:2:1:2:36:**
 ```roc
 import http.Client.Auth as HttpAuth
 ```
-^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `Config` imported into this Roc file.
+**MODULE NOT FOUND**
+The module `utils.String.Format` was not found in this Roc project.
 
 You're attempting to use this module here:
-**can_import_nested_modules.md:6:15:6:30:**
+**can_import_nested_modules.md:3:1:3:46:**
+```roc
+import utils.String.Format exposing [padLeft]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Config.Settings_ is not declared in this scope.
+
+This type is referenced here:
+**can_import_nested_modules.md:6:21:6:30:**
 ```roc
 parseConfig : Config.Settings -> Str
 ```
-              ^^^^^^^^^^^^^^^
+                    ^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -235,15 +103,15 @@ parseConfig = |settings| Config.toString(settings)
                          ^^^^^^^^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `HttpAuth` imported into this Roc file.
+**TYPE NOT EXPOSED**
+The type `Token` is not an exposed by the module `http.Client.Auth`.
 
-You're attempting to use this module here:
-**can_import_nested_modules.md:10:28:10:42:**
+You're attempting to use this type here:
+**can_import_nested_modules.md:10:36:10:42:**
 ```roc
 authenticate : Str, Str -> HttpAuth.Token
 ```
-                           ^^^^^^^^^^^^^^
+                                   ^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -257,26 +125,26 @@ authenticate = |user, pass| HttpAuth.login(user, pass)
                             ^^^^^^^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `Config.Parser` imported into this Roc file.
+**UNDECLARED TYPE**
+The type _Config.Parser.Advanced_ is not declared in this scope.
 
-You're attempting to use this module here:
-**can_import_nested_modules.md:14:15:14:37:**
+This type is referenced here:
+**can_import_nested_modules.md:14:28:14:37:**
 ```roc
 processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
 ```
-              ^^^^^^^^^^^^^^^^^^^^^^
+                           ^^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `Config.Parser` imported into this Roc file.
+**UNDECLARED TYPE**
+The type _Config.Parser.Error_ is not declared in this scope.
 
-You're attempting to use this module here:
-**can_import_nested_modules.md:14:58:14:77:**
+This type is referenced here:
+**can_import_nested_modules.md:14:71:14:77:**
 ```roc
 processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
 ```
-                                                         ^^^^^^^^^^^^^^^^^^^
+                                                                      ^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -312,37 +180,37 @@ formatOutput = |text| padLeft(text, Config.defaultPadding)
                                     ^^^^^^^^^^^^^^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `HttpAuth` imported into this Roc file.
+**TYPE NOT EXPOSED**
+The type `Credentials` is not an exposed by the module `http.Client.Auth`.
 
-You're attempting to use this module here:
-**can_import_nested_modules.md:23:16:23:36:**
+You're attempting to use this type here:
+**can_import_nested_modules.md:23:24:23:36:**
 ```roc
 validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 ```
-               ^^^^^^^^^^^^^^^^^^^^
+                       ^^^^^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `HttpAuth` imported into this Roc file.
+**TYPE NOT EXPOSED**
+The type `Token` is not an exposed by the module `http.Client.Auth`.
 
-You're attempting to use this module here:
-**can_import_nested_modules.md:23:47:23:61:**
+You're attempting to use this type here:
+**can_import_nested_modules.md:23:55:23:61:**
 ```roc
 validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 ```
-                                              ^^^^^^^^^^^^^^
+                                                      ^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `HttpAuth` imported into this Roc file.
+**TYPE NOT EXPOSED**
+The type `Error` is not an exposed by the module `http.Client.Auth`.
 
-You're attempting to use this module here:
-**can_import_nested_modules.md:23:63:23:77:**
+You're attempting to use this type here:
+**can_import_nested_modules.md:23:71:23:77:**
 ```roc
 validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 ```
-                                                              ^^^^^^^^^^^^^^
+                                                                      ^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -379,19 +247,14 @@ EndOfFile,
 (file
 	(type-module)
 	(statements
-		(s-import (raw "json.Parser"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-import (raw "http.Client"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "expected_colon_after_type_annotation"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-import (raw "json.Parser")
+			(exposing
+				(exposed-upper-ident (text "Config"))))
+		(s-import (raw "http.Auth") (alias "HttpAuth"))
+		(s-import (raw "utils.Format")
+			(exposing
+				(exposed-lower-ident
+					(text "padLeft"))))
 		(s-type-anno (name "parseConfig")
 			(ty-fn
 				(ty (name "Config.Settings"))
@@ -468,11 +331,9 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-import json.Parser
-
-import http.Client
-
-
+import json.Parser exposing [Config]
+import http.Auth as HttpAuth
+import utils.Format exposing [padLeft]
 
 # Test multi-level type qualification
 parseConfig : Config.Settings -> Str
@@ -508,9 +369,10 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(e-lookup-local
 					(p-assign (ident "settings")))))
 		(annotation
-			(ty-fn (effectful false)
-				(ty-malformed)
-				(ty-lookup (name "Str") (builtin)))))
+			(declared-type
+				(ty-fn (effectful false)
+					(ty-malformed)
+					(ty-lookup (name "Str") (builtin))))))
 	(d-let
 		(p-assign (ident "authenticate"))
 		(e-lambda
@@ -524,10 +386,11 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(e-lookup-local
 					(p-assign (ident "pass")))))
 		(annotation
-			(ty-fn (effectful false)
-				(ty-lookup (name "Str") (builtin))
-				(ty-lookup (name "Str") (builtin))
-				(ty-malformed))))
+			(declared-type
+				(ty-fn (effectful false)
+					(ty-lookup (name "Str") (builtin))
+					(ty-lookup (name "Str") (builtin))
+					(ty-malformed)))))
 	(d-let
 		(p-assign (ident "processData"))
 		(e-lambda
@@ -541,12 +404,13 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(e-lookup-local
 					(p-assign (ident "input")))))
 		(annotation
-			(ty-fn (effectful false)
-				(ty-malformed)
-				(ty-lookup (name "Str") (builtin))
-				(ty-apply (name "Result") (external-module "Result")
+			(declared-type
+				(ty-fn (effectful false)
+					(ty-malformed)
 					(ty-lookup (name "Str") (builtin))
-					(ty-malformed)))))
+					(ty-apply (name "Result") (external-module "Result")
+						(ty-lookup (name "Str") (builtin))
+						(ty-malformed))))))
 	(d-let
 		(p-assign (ident "formatOutput"))
 		(e-lambda
@@ -558,9 +422,10 @@ validateAuth = |creds| HttpAuth.validate(creds)
 					(p-assign (ident "text")))
 				(e-runtime-error (tag "ident_not_in_scope"))))
 		(annotation
-			(ty-fn (effectful false)
-				(ty-lookup (name "Str") (builtin))
-				(ty-lookup (name "Str") (builtin)))))
+			(declared-type
+				(ty-fn (effectful false)
+					(ty-lookup (name "Str") (builtin))
+					(ty-lookup (name "Str") (builtin))))))
 	(d-let
 		(p-assign (ident "validateAuth"))
 		(e-lambda
@@ -571,29 +436,34 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(e-lookup-local
 					(p-assign (ident "creds")))))
 		(annotation
-			(ty-fn (effectful false)
-				(ty-malformed)
-				(ty-apply (name "Result") (external-module "Result")
+			(declared-type
+				(ty-fn (effectful false)
 					(ty-malformed)
-					(ty-malformed)))))
+					(ty-apply (name "Result") (external-module "Result")
+						(ty-malformed)
+						(ty-malformed))))))
 	(s-import (module "json.Parser")
+		(exposes
+			(exposed (name "Config") (wildcard false))))
+	(s-import (module "http.Client.Auth")
 		(exposes))
-	(s-import (module "http.Client")
-		(exposes)))
+	(s-import (module "utils.String.Format")
+		(exposes
+			(exposed (name "padLeft") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Error"))
+		(patt (type "Error -> Str"))
 		(patt (type "Str, Str -> Error"))
-		(patt (type "Error, Str -> Error"))
-		(patt (type "Str -> Error"))
-		(patt (type "Error -> Error")))
+		(patt (type "Error, Str -> Result(Str, Error)"))
+		(patt (type "Str -> Str"))
+		(patt (type "Error -> Result(Error, Error)")))
 	(expressions
-		(expr (type "Error -> Error"))
+		(expr (type "Error -> Str"))
 		(expr (type "Str, Str -> Error"))
-		(expr (type "Error, Str -> Error"))
-		(expr (type "Str -> Error"))
-		(expr (type "Error -> Error"))))
+		(expr (type "Error, Str -> Result(Str, Error)"))
+		(expr (type "Str -> Str"))
+		(expr (type "Error -> Result(Error, Error)"))))
 ~~~

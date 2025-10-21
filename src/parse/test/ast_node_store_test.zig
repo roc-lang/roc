@@ -189,6 +189,7 @@ test "NodeStore round trip - Statement" {
             .qualifier_tok = null,
             .region = rand_region(),
             .exposes = AST.ExposedItem.Span{ .span = rand_span() },
+            .suppress_alias = false,
         },
     });
     // Import with alias
@@ -199,6 +200,7 @@ test "NodeStore round trip - Statement" {
             .qualifier_tok = null,
             .region = rand_region(),
             .exposes = AST.ExposedItem.Span{ .span = rand_span() },
+            .suppress_alias = false,
         },
     });
     // Import with qualifier but no alias
@@ -209,6 +211,7 @@ test "NodeStore round trip - Statement" {
             .qualifier_tok = rand_token_idx(),
             .region = rand_region(),
             .exposes = AST.ExposedItem.Span{ .span = rand_span() },
+            .suppress_alias = false,
         },
     });
     // Import with both qualifier and alias
@@ -219,6 +222,7 @@ test "NodeStore round trip - Statement" {
             .qualifier_tok = rand_token_idx(),
             .region = rand_region(),
             .exposes = AST.ExposedItem.Span{ .span = rand_span() },
+            .suppress_alias = false,
         },
     });
     try statements.append(AST.Statement{

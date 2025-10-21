@@ -1596,7 +1596,7 @@ fn bringIngestedFileIntoScope(
 fn processModuleImport(
     self: *Self,
     module_name: Ident.Idx,
-    alias: Ident.Idx,
+    alias: ?Ident.Idx,
     exposed_items_span: CIR.ExposedItem.Span,
     import_region: Region,
 ) std.mem.Allocator.Error!Statement.Idx {
@@ -1609,14 +1609,16 @@ fn processModuleImport(
         module_name_text,
     );
 
-    // 2. Add to scope: alias -> module_name mapping
-    try self.scopeIntroduceModuleAlias(alias, module_name);
+    // 2. Add to scope: alias -> module_name mapping (skip if no alias)
+    if (alias) |alias_ident| {
+        try self.scopeIntroduceModuleAlias(alias_ident, module_name);
 
-    // 3. Process type imports from this module
-    try self.processTypeImports(module_name, alias);
+        // 3. Process type imports from this module
+        try self.processTypeImports(module_name, alias_ident);
+    }
 
     // 4. Introduce exposed items into scope (includes auto-expose for type modules)
-    try self.introduceExposedItemsIntoScope(exposed_items_span, module_name, alias, import_region);
+    try self.introduceExposedItemsIntoScope(exposed_items_span, module_name, alias, import_region, module_import_idx);
 
     // 5. Store the mapping from module name to Import.Idx
     try self.import_indices.put(self.env.gpa, module_name_text, module_import_idx);
@@ -1722,7 +1724,11 @@ fn canonicalizeImportStatement(
     };
 
     // 2. Determine the alias (either explicit or default to last part)
-    const alias = try self.resolveModuleAlias(import_stmt.alias_tok, module_name) orelse return null;
+    // When suppress_alias is true, skip creating an alias
+    const alias = if (import_stmt.suppress_alias)
+        null
+    else
+        try self.resolveModuleAlias(import_stmt.alias_tok, module_name) orelse return null;
 
     // 3. Convert exposed items to CIR
     const scratch_start = self.env.store.scratchExposedItemTop();
@@ -1850,35 +1856,44 @@ fn introduceExposedItemsIntoScope(
     self: *Self,
     exposed_items_span: CIR.ExposedItem.Span,
     module_name: Ident.Idx,
-    module_alias: Ident.Idx,
+    module_alias: ?Ident.Idx,
     import_region: Region,
+    module_import_idx: CIR.Import.Idx,
 ) std.mem.Allocator.Error!void {
     const exposed_items_slice = self.env.store.sliceExposedItems(exposed_items_span);
+    const current_scope = self.currentScope();
 
-    // If we have module_envs, validate the imports
     if (self.module_envs) |envs_map| {
-        // Check if the module exists
-        if (!envs_map.contains(module_name)) {
-            // Module not found - Module existence check is already done in canonicalizeImportStatement,
-            // so there is no need to create another diagnostic here for module_not_found
-            return;
-        }
+        const module_entry = envs_map.get(module_name) orelse return;
+        const module_env = module_entry.env;
 
-        // Get the module's exposed_items
-        const module_env = envs_map.get(module_name).?.env;
+        // Only auto-expose the module's main type if we have a module alias
+        // For suppress_alias imports like `import json.Parser.Config`, skip this
+        if (module_alias) |alias_ident| {
+            switch (module_env.module_kind) {
+                .type_module => |main_type_ident| {
+                    if (module_env.containsExposedById(main_type_ident)) {
+                        const item_info = Scope.ExposedItemInfo{
+                            .module_name = module_name,
+                            .original_name = main_type_ident,
+                        };
+                        try self.scopeIntroduceExposedItem(alias_ident, item_info);
 
-        // For type modules, auto-introduce the main type with the alias name
-        switch (module_env.module_kind) {
-            .type_module => |main_type_ident| {
-                if (module_env.containsExposedById(main_type_ident)) {
-                    const item_info = Scope.ExposedItemInfo{
-                        .module_name = module_name,
-                        .original_name = main_type_ident,
-                    };
-                    try self.scopeIntroduceExposedItem(module_alias, item_info);
-                }
-            },
-            else => {},
+                        const target_node_idx = module_env.getExposedNodeIndexById(main_type_ident);
+                        try self.setExternalTypeBinding(
+                            current_scope,
+                            alias_ident,
+                            module_name,
+                            main_type_ident,
+                            target_node_idx,
+                            module_import_idx,
+                            import_region,
+                            .module_was_found,
+                        );
+                    }
+                },
+                else => {},
+            }
         }
 
         // Validate each exposed item

@@ -19,10 +19,6 @@ data : json.Core.Utf8.EncodedData
 data = json.Core.Utf8.encode("hello")
 ~~~
 # EXPECTED
-PARSE ERROR - multi_qualified_import.md:1:17:1:22
-PARSE ERROR - multi_qualified_import.md:1:23:1:31
-PARSE ERROR - multi_qualified_import.md:1:32:1:33
-PARSE ERROR - multi_qualified_import.md:1:40:1:41
 PARSE ERROR - multi_qualified_import.md:12:12:12:17
 PARSE ERROR - multi_qualified_import.md:12:17:12:22
 PARSE ERROR - multi_qualified_import.md:12:22:12:29
@@ -31,70 +27,14 @@ PARSE ERROR - multi_qualified_import.md:12:30:12:31
 PARSE ERROR - multi_qualified_import.md:12:31:12:36
 PARSE ERROR - multi_qualified_import.md:12:36:12:37
 PARSE ERROR - multi_qualified_import.md:12:37:12:38
-MODULE NOT FOUND - multi_qualified_import.md:1:1:1:17
+MODULE NOT FOUND - multi_qualified_import.md:1:1:1:41
 UNDECLARED TYPE - multi_qualified_import.md:3:16:3:23
 UNDEFINED VARIABLE - multi_qualified_import.md:4:16:4:45
-MODULE NOT IMPORTED - multi_qualified_import.md:7:11:7:33
+UNDECLARED TYPE - multi_qualified_import.md:7:25:7:33
 UNUSED VARIABLE - multi_qualified_import.md:8:12:8:19
-MODULE NOT IMPORTED - multi_qualified_import.md:11:8:11:34
+UNDECLARED TYPE - multi_qualified_import.md:11:22:11:34
 UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**multi_qualified_import.md:1:17:1:22:**
-```roc
-import json.Core.Utf8 exposing [Encoder]
-```
-                ^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**multi_qualified_import.md:1:23:1:31:**
-```roc
-import json.Core.Utf8 exposing [Encoder]
-```
-                      ^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**multi_qualified_import.md:1:32:1:33:**
-```roc
-import json.Core.Utf8 exposing [Encoder]
-```
-                               ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Result(a, Str)`
-    `Maybe(List(U64))`
-
-**multi_qualified_import.md:1:40:1:41:**
-```roc
-import json.Core.Utf8 exposing [Encoder]
-```
-                                       ^
-
-
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
@@ -184,14 +124,14 @@ data = json.Core.Utf8.encode("hello")
 
 
 **MODULE NOT FOUND**
-The module `json.Core` was not found in this Roc project.
+The module `json.Core.Utf8` was not found in this Roc project.
 
 You're attempting to use this module here:
-**multi_qualified_import.md:1:1:1:17:**
+**multi_qualified_import.md:1:1:1:41:**
 ```roc
 import json.Core.Utf8 exposing [Encoder]
 ```
-^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -216,15 +156,15 @@ json_encoder = Json.Core.Utf8.defaultEncoder
                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `json.Core.Utf8` imported into this Roc file.
+**UNDECLARED TYPE**
+The type _json.Core.Utf8.Encoder_ is not declared in this scope.
 
-You're attempting to use this module here:
-**multi_qualified_import.md:7:11:7:33:**
+This type is referenced here:
+**multi_qualified_import.md:7:25:7:33:**
 ```roc
 process : json.Core.Utf8.Encoder -> Str
 ```
-          ^^^^^^^^^^^^^^^^^^^^^^
+                        ^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -239,15 +179,15 @@ process = |encoder| "processing"
            ^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `json.Core.Utf8` imported into this Roc file.
+**UNDECLARED TYPE**
+The type _json.Core.Utf8.EncodedData_ is not declared in this scope.
 
-You're attempting to use this module here:
-**multi_qualified_import.md:11:8:11:34:**
+This type is referenced here:
+**multi_qualified_import.md:11:22:11:34:**
 ```roc
 data : json.Core.Utf8.EncodedData
 ```
-       ^^^^^^^^^^^^^^^^^^^^^^^^^^
+                     ^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -277,11 +217,9 @@ EndOfFile,
 (file
 	(type-module)
 	(statements
-		(s-import (raw "json.Core"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "expected_colon_after_type_annotation"))
+		(s-import (raw "json.Utf8")
+			(exposing
+				(exposed-upper-ident (text "Encoder"))))
 		(s-type-anno (name "json_encoder")
 			(ty (name "Encoder")))
 		(s-decl
@@ -314,8 +252,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-import json.Core
-
+import json.Utf8 exposing [Encoder]
 
 json_encoder : Encoder
 json_encoder = Json.Core.Utf8.defaultEncoder
@@ -335,7 +272,8 @@ data = json
 		(p-assign (ident "json_encoder"))
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation
-			(ty-malformed)))
+			(declared-type
+				(ty-malformed))))
 	(d-let
 		(p-assign (ident "process"))
 		(e-lambda
@@ -344,16 +282,19 @@ data = json
 			(e-string
 				(e-literal (string "processing"))))
 		(annotation
-			(ty-fn (effectful false)
-				(ty-malformed)
-				(ty-lookup (name "Str") (builtin)))))
+			(declared-type
+				(ty-fn (effectful false)
+					(ty-malformed)
+					(ty-lookup (name "Str") (builtin))))))
 	(d-let
 		(p-assign (ident "data"))
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation
-			(ty-malformed)))
-	(s-import (module "json.Core")
-		(exposes)))
+			(declared-type
+				(ty-malformed))))
+	(s-import (module "json.Core.Utf8")
+		(exposes
+			(exposed (name "Encoder") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure

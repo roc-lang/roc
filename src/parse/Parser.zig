@@ -977,48 +977,83 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
             }
             if ((qualifier == null and self.peek() == .UpperIdent) or (qualifier != null and (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent))) {
                 var exposes = AST.ExposedItem.Span{ .span = base.DataSpan.empty() };
-                const module_name_tok = self.pos;
-                // Handle 'as' clause if present
-                if (self.peekNext() == .KwAs) {
-                    self.advance(); // Advance past UpperIdent
-                    self.advance(); // Advance past KwAs
-                    alias_tok = self.pos;
-                    self.expect(.UpperIdent) catch {
-                        const malformed = try self.pushMalformed(AST.Statement.Idx, .expected_upper_name_after_import_as, start);
-                        return malformed;
-                    };
-                } else {
-                    self.advance(); // Advance past identifier
+                var suppress_alias = false;
+
+                // Parse all uppercase segments: first.Second.Third...
+                var prev_upper_tok: ?TokenIdx = null;
+                var module_name_tok = self.pos;
+                self.advance(); // Advance past first UpperIdent
+
+                // Keep consuming additional .UpperIdent segments
+                while (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent) {
+                    prev_upper_tok = module_name_tok;
+                    module_name_tok = self.pos;
+                    self.advance();
                 }
 
-                // Handle 'exposing' clause if present (can occur with or without 'as')
-                if (self.peek() == .KwExposing) {
-                    self.advance(); // Advance past KwExposing
-                    self.expect(.OpenSquare) catch {
-                        return try self.pushMalformed(AST.Statement.Idx, .import_exposing_no_open, start);
-                    };
+                // If we have multiple uppercase segments and no explicit 'as' or 'exposing',
+                // auto-expose the final segment
+                const has_explicit_clause = self.peek() == .KwAs or self.peek() == .KwExposing;
+                if (prev_upper_tok != null and !has_explicit_clause) {
+                    // Auto-expose pattern: import json.Parser.Config
+                    // Module is everything before the last segment, last segment is auto-exposed
+                    const final_segment_tok = module_name_tok;
+                    module_name_tok = prev_upper_tok.?;
+                    suppress_alias = true;
+
+                    // Create exposed item for the final segment
                     const scratch_top = self.store.scratchExposedItemTop();
-                    self.parseCollectionSpan(AST.ExposedItem.Idx, .CloseSquare, NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch |err| {
-                        switch (err) {
-                            error.ExpectedNotFound => {
-                                while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
-                                    self.advance();
-                                }
-                                self.expect(.CloseSquare) catch {};
-                                self.store.clearScratchExposedItemsFrom(scratch_top);
-                                return try self.pushMalformed(AST.Statement.Idx, .import_exposing_no_close, start);
-                            },
-                            error.OutOfMemory => return error.OutOfMemory,
-                            error.TooNested => return error.TooNested,
-                        }
-                    };
+                    const exposed_item = try self.store.addExposedItem(.{ .upper_ident = .{
+                        .region = .{ .start = final_segment_tok, .end = final_segment_tok },
+                        .ident = final_segment_tok,
+                        .as = null,
+                    } });
+                    try self.store.addScratchExposedItem(exposed_item);
                     exposes = try self.store.exposedItemSpanFrom(scratch_top);
+                } else {
+                    // Normal import: handle 'as' and 'exposing' clauses
+
+                    // Handle 'as' clause if present
+                    if (self.peek() == .KwAs) {
+                        self.advance(); // Advance past KwAs
+                        alias_tok = self.pos;
+                        self.expect(.UpperIdent) catch {
+                            const malformed = try self.pushMalformed(AST.Statement.Idx, .expected_upper_name_after_import_as, start);
+                            return malformed;
+                        };
+                    }
+
+                    // Handle 'exposing' clause if present (can occur with or without 'as')
+                    if (self.peek() == .KwExposing) {
+                        self.advance(); // Advance past KwExposing
+                        self.expect(.OpenSquare) catch {
+                            return try self.pushMalformed(AST.Statement.Idx, .import_exposing_no_open, start);
+                        };
+                        const scratch_top = self.store.scratchExposedItemTop();
+                        self.parseCollectionSpan(AST.ExposedItem.Idx, .CloseSquare, NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch |err| {
+                            switch (err) {
+                                error.ExpectedNotFound => {
+                                    while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+                                        self.advance();
+                                    }
+                                    self.expect(.CloseSquare) catch {};
+                                    self.store.clearScratchExposedItemsFrom(scratch_top);
+                                    return try self.pushMalformed(AST.Statement.Idx, .import_exposing_no_close, start);
+                                },
+                                error.OutOfMemory => return error.OutOfMemory,
+                                error.TooNested => return error.TooNested,
+                            }
+                        };
+                        exposes = try self.store.exposedItemSpanFrom(scratch_top);
+                    }
                 }
+
                 const statement_idx = try self.store.addStatement(.{ .import = .{
                     .module_name_tok = module_name_tok,
                     .qualifier_tok = qualifier,
                     .alias_tok = alias_tok,
                     .exposes = exposes,
+                    .suppress_alias = suppress_alias,
                     .region = .{ .start = start, .end = self.pos },
                 } });
                 return statement_idx;

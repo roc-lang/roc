@@ -822,6 +822,9 @@ pub const Statement = union(enum) {
         qualifier_tok: ?Token.Idx,
         alias_tok: ?Token.Idx,
         exposes: ExposedItem.Span,
+        /// True when importing like `import json.Parser.Config` where Config is auto-exposed
+        /// but Parser should not become an alias (unlike `import json.Parser exposing [Config]`)
+        suppress_alias: bool,
         region: TokenizedRegion,
     },
     type_decl: struct {

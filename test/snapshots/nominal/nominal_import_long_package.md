@@ -11,102 +11,18 @@ red : CE
 red = ... # not implemented
 ~~~
 # EXPECTED
-PARSE ERROR - nominal_import_long_package.md:1:21:1:27
-PARSE ERROR - nominal_import_long_package.md:1:28:1:36
-PARSE ERROR - nominal_import_long_package.md:1:37:1:38
-PARSE ERROR - nominal_import_long_package.md:1:46:1:48
-PARSE ERROR - nominal_import_long_package.md:1:51:1:52
-MODULE NOT FOUND - nominal_import_long_package.md:1:1:1:21
+MODULE NOT FOUND - nominal_import_long_package.md:1:1:1:52
 UNDECLARED TYPE - nominal_import_long_package.md:3:7:3:9
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**nominal_import_long_package.md:1:21:1:27:**
-```roc
-import design.Styles.Color exposing [Encoder as CE]
-```
-                    ^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**nominal_import_long_package.md:1:28:1:36:**
-```roc
-import design.Styles.Color exposing [Encoder as CE]
-```
-                           ^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**nominal_import_long_package.md:1:37:1:38:**
-```roc
-import design.Styles.Color exposing [Encoder as CE]
-```
-                                    ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Result(a, Str)`
-    `Maybe(List(U64))`
-
-**nominal_import_long_package.md:1:46:1:48:**
-```roc
-import design.Styles.Color exposing [Encoder as CE]
-```
-                                             ^^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Result(a, Str)`
-    `Maybe(List(U64))`
-
-**nominal_import_long_package.md:1:51:1:52:**
-```roc
-import design.Styles.Color exposing [Encoder as CE]
-```
-                                                  ^
-
-
 **MODULE NOT FOUND**
-The module `design.Styles` was not found in this Roc project.
+The module `design.Styles.Color` was not found in this Roc project.
 
 You're attempting to use this module here:
-**nominal_import_long_package.md:1:1:1:21:**
+**nominal_import_long_package.md:1:1:1:52:**
 ```roc
 import design.Styles.Color exposing [Encoder as CE]
 ```
-^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -132,12 +48,9 @@ EndOfFile,
 (file
 	(type-module)
 	(statements
-		(s-import (raw "design.Styles"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "expected_colon_after_type_annotation"))
-		(s-malformed (tag "expected_colon_after_type_annotation"))
+		(s-import (raw "design.Color")
+			(exposing
+				(exposed-upper-ident (text "Encoder") (as "CE"))))
 		(s-type-anno (name "red")
 			(ty (name "CE")))
 		(s-decl
@@ -146,8 +59,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-import design.Styles
-
+import design.Color exposing [Encoder as CE]
 
 red : CE
 red = ... # not implemented
@@ -159,9 +71,11 @@ red = ... # not implemented
 		(p-assign (ident "red"))
 		(e-not-implemented)
 		(annotation
-			(ty-malformed)))
-	(s-import (module "design.Styles")
-		(exposes)))
+			(declared-type
+				(ty-malformed))))
+	(s-import (module "design.Styles.Color")
+		(exposes
+			(exposed (name "Encoder") (alias "CE") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure
