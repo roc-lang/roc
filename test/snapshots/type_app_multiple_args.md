@@ -106,7 +106,7 @@ NO CHANGE
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-apply (name "Dict") (module "Dict")
+					(ty-apply (name "Dict") (external-module "Dict")
 						(ty-lookup (name "Str") (builtin))
 						(ty-lookup (name "U64") (builtin)))
 					(ty-apply (name "List") (builtin)

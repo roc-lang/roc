@@ -331,7 +331,7 @@ transform = |_, b| b
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-apply (name "Result") (module "Result")
+					(ty-apply (name "Result") (external-module "Result")
 						(ty-underscore)
 						(ty-lookup (name "Str") (builtin)))
 					(ty-lookup (name "Str") (builtin))))))

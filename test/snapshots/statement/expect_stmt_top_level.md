@@ -42,14 +42,14 @@ NO CHANGE
 	(d-let
 		(p-assign (ident "foo"))
 		(e-nominal-external
-			(module "Bool")
+			(external-module "Bool")
 			(e-tag (name "True"))))
 	(s-expect
 		(e-binop (op "ne")
 			(e-lookup-local
 				(p-assign (ident "foo")))
 			(e-nominal-external
-				(module "Bool")
+				(external-module "Bool")
 				(e-tag (name "False"))))))
 ~~~
 # TYPES

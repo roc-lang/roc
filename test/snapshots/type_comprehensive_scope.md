@@ -297,7 +297,7 @@ Complex : {
 		(ty-lookup (name "Str") (builtin)))
 	(s-alias-decl
 		(ty-header (name "MyBool"))
-		(ty-lookup (name "Bool") (module "Bool")))
+		(ty-lookup (name "Bool") (external-module "Bool")))
 	(s-alias-decl
 		(ty-header (name "Person"))
 		(ty-record
@@ -337,7 +337,7 @@ Complex : {
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(s-alias-decl
 		(ty-header (name "MyResult"))
-		(ty-apply (name "Result") (module "Result")
+		(ty-apply (name "Result") (external-module "Result")
 			(ty-lookup (name "Str") (builtin))
 			(ty-lookup (name "U64") (builtin))))
 	(s-alias-decl
@@ -352,7 +352,7 @@ Complex : {
 			(ty-lookup (name "Str") (builtin))))
 	(s-alias-decl
 		(ty-header (name "MyDict"))
-		(ty-apply (name "Dict") (module "Dict")
+		(ty-apply (name "Dict") (external-module "Dict")
 			(ty-lookup (name "Str") (builtin))
 			(ty-lookup (name "U64") (builtin))))
 	(s-alias-decl
@@ -361,8 +361,8 @@ Complex : {
 			(field (field "person")
 				(ty-lookup (name "Person") (local)))
 			(field (field "result")
-				(ty-apply (name "Result") (module "Result")
-					(ty-lookup (name "Bool") (module "Bool"))
+				(ty-apply (name "Result") (external-module "Result")
+					(ty-lookup (name "Bool") (external-module "Bool"))
 					(ty-lookup (name "Str") (builtin))))
 			(field (field "tree")
 				(ty-apply (name "Tree") (local)

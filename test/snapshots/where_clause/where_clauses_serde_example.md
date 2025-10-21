@@ -73,7 +73,7 @@ NO CHANGE
 				(ty-fn (effectful false)
 					(ty-apply (name "List") (builtin)
 						(ty-lookup (name "U8") (builtin)))
-					(ty-apply (name "Result") (module "Result")
+					(ty-apply (name "Result") (external-module "Result")
 						(ty-rigid-var (name "a"))
 						(ty-tag-union
 							(ty-tag-name (name "DecodeErr"))))))))
@@ -81,7 +81,7 @@ NO CHANGE
 		(ty-fn (effectful false)
 			(ty-apply (name "List") (builtin)
 				(ty-lookup (name "U8") (builtin)))
-			(ty-apply (name "Result") (module "Result")
+			(ty-apply (name "Result") (external-module "Result")
 				(ty-rigid-var (name "a"))
 				(ty-tag-union
 					(ty-tag-name (name "DecodeErr")))))
@@ -90,7 +90,7 @@ NO CHANGE
 				(args
 					(ty-apply (name "List") (builtin)
 						(ty-lookup (name "U8") (builtin))))
-				(ty-apply (name "Result") (module "Result")
+				(ty-apply (name "Result") (external-module "Result")
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 					(ty-tag-union
 						(ty-tag-name (name "DecodeErr")))))))

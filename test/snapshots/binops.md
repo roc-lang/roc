@@ -159,17 +159,17 @@ EndOfFile,
 			(e-num (value "2")))
 		(e-binop (op "and")
 			(e-nominal-external
-				(module "Bool")
+				(external-module "Bool")
 				(e-tag (name "True")))
 			(e-nominal-external
-				(module "Bool")
+				(external-module "Bool")
 				(e-tag (name "False"))))
 		(e-binop (op "or")
 			(e-nominal-external
-				(module "Bool")
+				(external-module "Bool")
 				(e-tag (name "False")))
 			(e-nominal-external
-				(module "Bool")
+				(external-module "Bool")
 				(e-tag (name "True"))))
 		(e-binop (op "null_coalesce")
 			(e-tag (name "None"))

@@ -891,7 +891,7 @@ is_named_color = |str| {
 			(declared-type
 				(ty-fn (effectful false)
 					(ty-lookup (name "Str") (builtin))
-					(ty-apply (name "Result") (module "Result")
+					(ty-apply (name "Result") (external-module "Result")
 						(ty-lookup (name "Color") (local))
 						(ty-tag-union
 							(ty-tag-name (name "InvalidHex")
@@ -1032,7 +1032,7 @@ is_named_color = |str| {
 			(declared-type
 				(ty-fn (effectful false)
 					(ty-lookup (name "Str") (builtin))
-					(ty-apply (name "Result") (module "Result")
+					(ty-apply (name "Result") (external-module "Result")
 						(ty-lookup (name "Color") (local))
 						(ty-tag-union
 							(ty-tag-name (name "UnknownColor")
