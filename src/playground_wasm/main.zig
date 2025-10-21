@@ -30,6 +30,8 @@ const unbundle = @import("unbundle");
 const fmt = @import("fmt");
 const WasmFilesystem = @import("WasmFilesystem.zig");
 const layout = @import("layout");
+const collections = @import("collections");
+const compiled_builtins = @import("compiled_builtins");
 
 const CrashContext = eval.CrashContext;
 
@@ -129,6 +131,8 @@ const CompilerStageData = struct {
     module_env: *ModuleEnv,
     parse_ast: ?parse.AST = null,
     solver: ?Check = null,
+    bool_stmt: ?can.CIR.Statement.Idx = null,
+    builtin_types: ?eval.BuiltinTypes = null,
 
     // Pre-canonicalization HTML representations
     tokens_html: ?[]const u8 = null,
@@ -807,60 +811,77 @@ fn compileSource(source: []const u8) !CompilerStageData {
     // Set up the source in WASM filesystem
     WasmFilesystem.setSource(allocator, source);
 
+    logDebug("compileSource: Starting compilation (source len={})\n", .{source.len});
+
     // Initialize the ModuleEnv
     var module_env = try allocator.create(ModuleEnv);
 
     module_env.* = try ModuleEnv.init(allocator, source);
     try module_env.common.calcLineStarts(module_env.gpa);
+    logDebug("compileSource: ModuleEnv initialized\n", .{});
 
     var result = CompilerStageData.init(allocator, module_env);
 
     // Stage 1: Parse (includes tokenization)
+    logDebug("compileSource: Starting parse stage\n", .{});
     var parse_ast = try parse.parse(&module_env.common, module_env.gpa);
     result.parse_ast = parse_ast;
+    logDebug("compileSource: Parse complete\n", .{});
 
     // Generate and store HTML before canonicalization corrupts the AST/tokens
+    logDebug("compileSource: Starting HTML generation\n", .{});
     var local_arena = std.heap.ArenaAllocator.init(allocator);
     defer local_arena.deinit();
     const temp_alloc = local_arena.allocator();
 
     // Generate Tokens HTML
+    logDebug("compileSource: Generating tokens HTML\n", .{});
     var tokens_writer: std.Io.Writer.Allocating = .init(temp_alloc);
     AST.tokensToHtml(&parse_ast, &module_env.common, &tokens_writer.writer) catch |err| {
         logDebug("compileSource: tokensToHtml failed: {}\n", .{err});
     };
+    logDebug("compileSource: Tokens HTML generated, duping to main allocator\n", .{});
     result.tokens_html = allocator.dupe(u8, tokens_writer.written()) catch |err| {
         logDebug("compileSource: failed to dupe tokens_html: {}\n", .{err});
         return err;
     };
+    logDebug("compileSource: Tokens HTML complete\n", .{});
 
     // Generate AST HTML
+    logDebug("compileSource: Generating AST HTML\n", .{});
     var ast_writer: std.Io.Writer.Allocating = .init(temp_alloc);
     const file = parse_ast.store.getFile();
 
     var tree = SExprTree.init(temp_alloc);
 
+    logDebug("compileSource: Call pushToSExprTree\n", .{});
     try file.pushToSExprTree(module_env.gpa, &module_env.common, &parse_ast, &tree);
 
+    logDebug("compileSource: Call toHtml\n", .{});
     try tree.toHtml(&ast_writer.writer, .include_linecol);
+    logDebug("compileSource: AST HTML generated\n", .{});
 
     result.ast_html = allocator.dupe(u8, ast_writer.written()) catch |err| {
         logDebug("compileSource: failed to dupe ast_html: {}\n", .{err});
         return err;
     };
+    logDebug("compileSource: AST HTML complete\n", .{});
 
     // Generate formatted code
+    logDebug("compileSource: Generating formatted code\n", .{});
     var formatted_code_buffer: std.Io.Writer.Allocating = .init(temp_alloc);
     defer formatted_code_buffer.deinit();
     fmt.formatAst(parse_ast, &formatted_code_buffer.writer) catch |err| {
         logDebug("compileSource: formatAst failed: {}\n", .{err});
         return err;
     };
+    logDebug("compileSource: Formatted code generated\n", .{});
 
     result.formatted_code = allocator.dupe(u8, formatted_code_buffer.written()) catch |err| {
         logDebug("compileSource: failed to dupe formatted_code: {}\n", .{err});
         return err;
     };
+    logDebug("compileSource: Formatted code complete\n", .{});
 
     // Collect tokenize diagnostics with additional error handling
     for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
@@ -887,13 +908,105 @@ fn compileSource(source: []const u8) !CompilerStageData {
     const env = result.module_env;
     try env.initCIRFields(allocator, "main");
 
+    // Load builtin modules and inject Bool and Result type declarations
+    // (following the pattern from eval.zig and TestEnv.zig)
+    const LoadedModule = struct {
+        env: *ModuleEnv,
+        buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
+        gpa: Allocator,
+
+        fn deinit(self: *@This()) void {
+            self.env.imports.map.deinit(self.gpa);
+            self.gpa.free(self.buffer);
+            self.gpa.destroy(self.env);
+        }
+
+        fn loadCompiledModule(gpa: Allocator, bin_data: []const u8, module_name_param: []const u8, module_source: []const u8) !@This() {
+            const CompactWriter = collections.CompactWriter;
+            const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
+            @memcpy(buffer, bin_data);
+
+            logDebug("loadCompiledModule: bin_data.len={}, @sizeOf(ModuleEnv.Serialized)={}\n", .{ bin_data.len, @sizeOf(ModuleEnv.Serialized) });
+
+            const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
+
+            // Log the raw all_statements value to see what we're reading
+            logDebug("loadCompiledModule: raw all_statements.span.start={}, .len={}\n", .{
+                serialized_ptr.all_statements.span.start,
+                serialized_ptr.all_statements.span.len,
+            });
+
+            const module_env_ptr = try gpa.create(ModuleEnv);
+            errdefer gpa.destroy(module_env_ptr);
+
+            const base_ptr = @intFromPtr(buffer.ptr);
+
+            logDebug("loadCompiledModule: About to deserialize common\n", .{});
+            // Use the built-in deserialize method instead of manually deserializing each field
+            // This ensures proper offset calculations when the struct layout changes
+            logDebug("loadCompiledModule: About to deserialize ModuleEnv\n", .{});
+            module_env_ptr.* = serialized_ptr.deserialize(@as(i64, @intCast(base_ptr)), gpa, module_source, module_name_param).*;
+            logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});
+
+            logDebug("loadCompiledModule: Returning LoadedModule\n", .{});
+            return .{ .env = module_env_ptr, .buffer = buffer, .gpa = gpa };
+        }
+    };
+
+    logDebug("compileSource: Loading builtin indices\n", .{});
+    const builtin_indices = blk: {
+        const aligned_buffer = try allocator.alignedAlloc(u8, @enumFromInt(@alignOf(can.CIR.BuiltinIndices)), compiled_builtins.builtin_indices_bin.len);
+        defer allocator.free(aligned_buffer);
+        @memcpy(aligned_buffer, compiled_builtins.builtin_indices_bin);
+        const indices_ptr = @as(*const can.CIR.BuiltinIndices, @ptrCast(aligned_buffer.ptr));
+        break :blk indices_ptr.*;
+    };
+    logDebug("compileSource: Builtin indices loaded, bool_type={}\n", .{@intFromEnum(builtin_indices.bool_type)});
+
+    logDebug("compileSource: Loading Bool module\n", .{});
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try LoadedModule.loadCompiledModule(allocator, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    logDebug("compileSource: Bool module loaded\n", .{});
+
+    logDebug("compileSource: Loading Result module\n", .{});
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try LoadedModule.loadCompiledModule(allocator, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+    logDebug("compileSource: Result module loaded\n", .{});
+
+    // Get Bool and Result statement indices from the IMPORTED modules (not copied!)
+    // Use builtin_indices directly - these are the correct statement indices
+    logDebug("compileSource: Getting Bool and Result statement indices from builtin_indices\n", .{});
+    const bool_stmt_in_bool_module = builtin_indices.bool_type;
+    const result_stmt_in_result_module = builtin_indices.result_type;
+
+    logDebug("compileSource: Using Bool statement from Bool module, idx={}\n", .{@intFromEnum(bool_stmt_in_bool_module)});
+    logDebug("compileSource: Using Result statement from Result module, idx={}\n", .{@intFromEnum(result_stmt_in_result_module)});
+    logDebug("compileSource: Builtin injection complete\n", .{});
+
+    // Store bool_stmt and builtin_types in result for later use (e.g., in test runner)
+    result.bool_stmt = bool_stmt_in_bool_module;
+    result.builtin_types = eval.BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+
     const module_common_idents: Check.CommonIdents = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("main")),
         .list = try module_env.insertIdent(base.Ident.for_text("List")),
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+        .bool_stmt = bool_stmt_in_bool_module,
+        .result_stmt = result_stmt_in_result_module,
     };
 
-    var czer = try Can.init(env, &result.parse_ast.?, null, .{});
+    // Create module_envs map for canonicalization (enables qualified calls)
+    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+    defer module_envs_map.deinit();
+    const bool_ident = try module_env.insertIdent(base.Ident.for_text("Bool"));
+    const result_ident = try module_env.insertIdent(base.Ident.for_text("Result"));
+    try module_envs_map.put(bool_ident, .{ .env = bool_module.env });
+    try module_envs_map.put(result_ident, .{ .env = result_module.env });
+
+    logDebug("compileSource: Starting canonicalization\n", .{});
+    var czer = try Can.init(env, &result.parse_ast.?, &module_envs_map);
     defer czer.deinit();
 
     czer.canonicalizeFile() catch |err| {
@@ -911,6 +1024,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
             return err;
         }
     };
+    logDebug("compileSource: Canonicalization complete\n", .{});
 
     // Copy the modified AST back into the main result to ensure state consistency
     result.parse_ast = parse_ast;
@@ -930,6 +1044,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     // Stage 3: Type checking (always run if we have CIR, even with canonicalization errors)
     // The type checker works with malformed canonical nodes to provide partial type information
+    logDebug("compileSource: Starting type checking\n", .{});
     {
         const type_can_ir = result.module_env;
         const empty_modules: []const *ModuleEnv = &.{};
@@ -947,6 +1062,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
                 return check_err;
             }
         };
+        logDebug("compileSource: Type checking complete\n", .{});
 
         // Collect type checking problems and convert them to reports using ReportBuilder
         var report_builder = problem.ReportBuilder.init(
@@ -972,6 +1088,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
         }
     }
 
+    logDebug("compileSource: Compilation complete\n", .{});
     return result;
 }
 
@@ -1412,8 +1529,14 @@ fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) Re
     var local_arena = std.heap.ArenaAllocator.init(allocator);
     defer local_arena.deinit();
 
+    // Check if builtin_types is available
+    const builtin_types_for_tests = data.builtin_types orelse {
+        try writeErrorResponse(response_buffer, .ERROR, "Builtin types not available for test evaluation.");
+        return;
+    };
+
     // Create interpreter infrastructure for test evaluation
-    var test_runner = TestRunner.init(local_arena.allocator(), env) catch {
+    var test_runner = TestRunner.init(local_arena.allocator(), env, builtin_types_for_tests) catch {
         try writeErrorResponse(response_buffer, .ERROR, "Failed to initialize test runner.");
         return;
     };

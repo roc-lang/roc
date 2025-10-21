@@ -67,6 +67,8 @@ imports: CIR.Import.Store,
 /// The module's name as a string
 /// This is needed for import resolution to match import names to modules
 module_name: []const u8,
+/// The module's name as an interned identifier (for fast comparisons)
+module_name_idx: Ident.Idx,
 /// Diagnostics collected during canonicalization (optional)
 diagnostics: CIR.Diagnostic.Span,
 /// Stores the raw nodes which represent the intermediate representation
@@ -106,6 +108,7 @@ pub fn initCIRFields(self: *Self, gpa: std.mem.Allocator, module_name: []const u
     // Note: external_decls already exists from ModuleEnv.init(), so we don't create a new one
     self.imports = CIR.Import.Store.init();
     self.module_name = module_name;
+    self.module_name_idx = try self.insertIdent(Ident.for_text(module_name));
     self.diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
     // Note: self.store already exists from ModuleEnv.init(), so we don't create a new one
     self.evaluation_order = null; // Will be set after canonicalization completes
@@ -131,7 +134,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .builtin_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = try CIR.ExternalDecl.SafeList.initCapacity(gpa, 16),
         .imports = CIR.Import.Store.init(),
-        .module_name = "", // Will be set later during canonicalization
+        .module_name = undefined, // Will be set later during canonicalization
+        .module_name_idx = undefined, // Will be set later during canonicalization
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
         .store = try NodeStore.initCapacity(gpa, 10_000), // Default node store capacity
         .evaluation_order = null, // Will be set after canonicalization completes
@@ -151,15 +155,6 @@ pub fn deinit(self: *Self) void {
         eval_order.deinit();
         self.gpa.destroy(eval_order);
     }
-}
-
-/// Freeze all interners in this module environment, preventing any new entries from being added.
-/// This should be called after canonicalization is complete, so that
-/// we know it's safe to serialize/deserialize the part of the interner
-/// that goes from ident to string, because we don't go from string to ident
-/// (or add new entries) in any of the later stages of compilation.
-pub fn freezeInterners(self: *Self) void {
-    self.common.freezeInterners();
 }
 
 // ===== Module compilation functionality =====
@@ -265,6 +260,27 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" or ");
             try report.document.addKeyword("exposing");
             try report.document.addReflowingText(" missing up-top?");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .qualified_ident_does_not_exist => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const ident_name = self.getIdent(data.ident);
+
+            var report = Report.init(allocator, "DOES NOT EXIST", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" does not exist.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
@@ -1376,7 +1392,8 @@ pub fn getSourceLine(self: *const Self, region: Region) ![]const u8 {
     return self.common.getSourceLine(region);
 }
 
-/// Serialized representation of ModuleEnv
+/// Serialized representation of ModuleEnv.
+/// NOTE: Field order matters for cross-platform compatibility! Keep `module_kind` at the end.
 pub const Serialized = struct {
     gpa: [2]u64, // Reserve space for allocator (vtable ptr + context ptr), provided during deserialization
     common: CommonEnv.Serialized,
@@ -1388,10 +1405,11 @@ pub const Serialized = struct {
     external_decls: CIR.ExternalDecl.SafeList.Serialized,
     imports: CIR.Import.Store.Serialized,
     module_name: [2]u64, // Reserve space for slice (ptr + len), provided during deserialization
+    module_name_idx_reserved: u32, // Reserved space for module_name_idx field (interned during deserialization)
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
     module_kind: ModuleKind,
-    evaluation_order_padding: u64, // Padding for evaluation_order field (not serialized, recomputed on load)
+    evaluation_order_reserved: u64, // Reserved space for evaluation_order field (required for in-place deserialization cast)
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -1404,6 +1422,7 @@ pub const Serialized = struct {
         try self.types.serialize(&env.types, allocator, writer);
 
         // Copy simple values directly
+        self.module_kind = env.module_kind;
         self.all_defs = env.all_defs;
         self.all_statements = env.all_statements;
         self.exports = env.exports;
@@ -1418,11 +1437,12 @@ pub const Serialized = struct {
         // Serialize NodeStore
         try self.store.serialize(&env.store, allocator, writer);
 
-        // Set gpa, module_name, and evaluation_order_padding to all zeros; the space needs to be here,
-        // but the values will be set separately during deserialization.
+        // Set gpa, module_name, module_name_idx_reserved, and evaluation_order_reserved to all zeros; the space needs to be here,
+        // but the values will be set separately during deserialization (module_name_idx and evaluation_order are runtime-only).
         self.gpa = .{ 0, 0 };
         self.module_name = .{ 0, 0 };
-        self.evaluation_order_padding = 0;
+        self.module_name_idx_reserved = 0;
+        self.evaluation_order_reserved = 0;
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
@@ -1433,8 +1453,10 @@ pub const Serialized = struct {
         source: []const u8,
         module_name: []const u8,
     ) *Self {
-        // ModuleEnv.Serialized should be at least as big as ModuleEnv
-        std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Self));
+        // Verify that Serialized is at least as large as the runtime struct.
+        // This is required because we're reusing the same memory location.
+        // On 32-bit platforms, Serialized may be larger due to using fixed-size types for platform-independent serialization.
+        comptime std.debug.assert(@sizeOf(@This()) >= @sizeOf(Self));
 
         // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
         const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
@@ -1451,6 +1473,7 @@ pub const Serialized = struct {
             .external_decls = self.external_decls.deserialize(offset).*,
             .imports = self.imports.deserialize(offset, gpa).*,
             .module_name = module_name,
+            .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
             .diagnostics = self.diagnostics,
             .store = self.store.deserialize(offset, gpa).*,
             .evaluation_order = null, // Not serialized, will be recomputed if needed

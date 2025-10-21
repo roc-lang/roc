@@ -30,6 +30,25 @@ pub const RenderCtx = struct {
 pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.Var) ![]u8 {
     const gpa = ctx.allocator;
     var resolved = ctx.runtime_types.resolveVar(rt_var);
+
+    // Check if this is Bool before unwrapping (special case for bool display)
+    if (resolved.desc.content == .structure) {
+        if (resolved.desc.content.structure == .nominal_type) {
+            const nominal = resolved.desc.content.structure.nominal_type;
+            const type_name = ctx.env.getIdent(nominal.ident.ident_idx);
+            if (std.mem.eql(u8, type_name, "Bool")) {
+                // Bool is represented as a scalar bool (0 or 1) - render as True/False
+                if (value.layout.tag == .scalar and value.layout.data.scalar.tag == .bool) {
+                    const b: *const u8 = @ptrCast(@alignCast(value.ptr.?));
+                    return if (b.* != 0)
+                        try gpa.dupe(u8, "True")
+                    else
+                        try gpa.dupe(u8, "False");
+                }
+            }
+        }
+    }
+
     // unwrap aliases/nominals
     unwrap: while (true) {
         switch (resolved.desc.content) {
@@ -62,12 +81,31 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     tag_index = @intCast(value.asI128());
                     have_tag = true;
                 }
-                if (have_tag and tag_index < tags.len) {
-                    const tag_name = ctx.env.getIdent(tags.items(.name)[tag_index]);
-                    var out = std.array_list.AlignedManaged(u8, null).init(gpa);
-                    errdefer out.deinit();
-                    try out.appendSlice(tag_name);
-                    return out.toOwnedSlice();
+                if (have_tag) {
+                    // Special case: Bool values are always stored with canonical indices (False=0, True=1)
+                    // but anonymous tag unions like [True]_others may have different tag orders.
+                    // Check if this is a Bool value by looking for True/False tag names.
+                    if ((tag_index == 0 or tag_index == 1) and tags.len <= 2) {
+                        var has_true = false;
+                        var has_false = false;
+                        for (tags.items(.name)) |tag_name_idx| {
+                            const tag_name = ctx.env.getIdent(tag_name_idx);
+                            if (std.mem.eql(u8, tag_name, "True")) has_true = true;
+                            if (std.mem.eql(u8, tag_name, "False")) has_false = true;
+                        }
+                        // If we have True and/or False tags, this is a Bool value
+                        if (has_true or has_false) {
+                            return try gpa.dupe(u8, if (tag_index != 0) "True" else "False");
+                        }
+                    }
+                    // Generic tag union: use tag_index to look up the tag name
+                    if (tag_index < tags.len) {
+                        const tag_name = ctx.env.getIdent(tags.items(.name)[tag_index]);
+                        var out = std.array_list.AlignedManaged(u8, null).init(gpa);
+                        errdefer out.deinit();
+                        try out.appendSlice(tag_name);
+                        return out.toOwnedSlice();
+                    }
                 }
             } else if (value.layout.tag == .record) {
                 var acc = try value.asRecord(ctx.layout_store);

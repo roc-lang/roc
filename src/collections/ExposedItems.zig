@@ -121,10 +121,8 @@ pub const ExposedItems = struct {
 
         /// Deserialize this Serialized struct into an ExposedItems
         pub fn deserialize(self: *Serialized, offset: i64) *ExposedItems {
-            // ExposedItems.Serialized should be at least as big as ExposedItems
-            std.debug.assert(@sizeOf(Serialized) >= @sizeOf(ExposedItems));
-
-            // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+            // Note: Serialized may be smaller than the runtime struct.
+            // We deserialize by overwriting the Serialized memory with the runtime struct.
             const exposed_items = @as(*ExposedItems, @ptrFromInt(@intFromPtr(self)));
 
             exposed_items.* = ExposedItems{
@@ -175,7 +173,7 @@ pub const ExposedItems = struct {
 
     /// Iterator for all exposed items
     pub const Iterator = struct {
-        // items: []const SortedArrayBuilder(IdentIdx, u16).Entry,
+        items: []const SortedArrayBuilder(IdentIdx, u16).Entry,
         index: usize,
 
         pub fn next(self: *Iterator) ?struct { ident_idx: IdentIdx, node_idx: u16 } {

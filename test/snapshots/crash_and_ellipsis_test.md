@@ -238,8 +238,8 @@ main! = |_| {
 		(p-assign (ident "main!"))
 		(e-closure
 			(captures
-				(capture (ident "testEllipsis"))
 				(capture (ident "testCrash"))
+				(capture (ident "testEllipsis"))
 				(capture (ident "testCrashSimple")))
 			(e-lambda
 				(args

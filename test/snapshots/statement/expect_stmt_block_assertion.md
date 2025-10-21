@@ -67,15 +67,17 @@ foo = |a| {
 					(e-binop (op "eq")
 						(e-lookup-local
 							(p-assign (ident "a")))
-						(e-nominal (nominal "Bool")
+						(e-nominal-external
+							(module-idx "2")
+							(target-node-idx "1")
 							(e-tag (name "True")))))
 				(e-lookup-local
 					(p-assign (ident "a")))))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-lookup (name "Bool") (local))
-					(ty-lookup (name "Bool") (local)))))))
+					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "1")))
+					(ty-lookup (name "Bool") (external (module-idx "2") (target-node-idx "1"))))))))
 ~~~
 # TYPES
 ~~~clojure

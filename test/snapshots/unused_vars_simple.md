@@ -206,10 +206,10 @@ main! = |_| {
 		(p-assign (ident "main!"))
 		(e-closure
 			(captures
-				(capture (ident "unused_underscore"))
-				(capture (ident "used_regular"))
+				(capture (ident "used_underscore"))
 				(capture (ident "unused_regular"))
-				(capture (ident "used_underscore")))
+				(capture (ident "unused_underscore"))
+				(capture (ident "used_regular")))
 			(e-lambda
 				(args
 					(p-underscore))

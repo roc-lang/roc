@@ -158,14 +158,22 @@ EndOfFile,
 			(e-num (value "4"))
 			(e-num (value "2")))
 		(e-binop (op "and")
-			(e-nominal (nominal "Bool")
+			(e-nominal-external
+				(module-idx "2")
+				(target-node-idx "1")
 				(e-tag (name "True")))
-			(e-nominal (nominal "Bool")
+			(e-nominal-external
+				(module-idx "2")
+				(target-node-idx "1")
 				(e-tag (name "False"))))
 		(e-binop (op "or")
-			(e-nominal (nominal "Bool")
+			(e-nominal-external
+				(module-idx "2")
+				(target-node-idx "1")
 				(e-tag (name "False")))
-			(e-nominal (nominal "Bool")
+			(e-nominal-external
+				(module-idx "2")
+				(target-node-idx "1")
 				(e-tag (name "True"))))
 		(e-binop (op "null_coalesce")
 			(e-tag (name "None"))

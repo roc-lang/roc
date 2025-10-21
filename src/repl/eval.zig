@@ -12,11 +12,94 @@ const Check = check.Check;
 const builtins = @import("builtins");
 const eval_mod = @import("eval");
 const CrashContext = eval_mod.CrashContext;
+const BuiltinTypes = eval_mod.BuiltinTypes;
+const collections = @import("collections");
 
 const AST = parse.AST;
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const RocOps = builtins.host_abi.RocOps;
+
+/// Wrapper for a loaded compiled builtin module that tracks the buffer
+const LoadedModule = struct {
+    env: *ModuleEnv,
+    buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
+    gpa: std.mem.Allocator,
+
+    fn deinit(self: *LoadedModule) void {
+        // IMPORTANT: When a module is deserialized from a buffer, all its internal structures
+        // (common, types, external_decls, imports, store) contain pointers INTO the buffer,
+        // not separately allocated memory. Therefore we should NOT call deinit() on any of them.
+        // The only memory we need to free is:
+        // 1. The buffer itself (which contains all the deserialized data)
+        // 2. The env struct itself (which was allocated with create())
+
+        // Free the buffer (all data structures point into this buffer)
+        self.gpa.free(self.buffer);
+
+        // Free the env struct itself
+        self.gpa.destroy(self.env);
+    }
+};
+
+/// Deserialize BuiltinIndices from the binary data generated at build time
+fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !can.CIR.BuiltinIndices {
+    // Copy embedded data to properly aligned memory
+    const alignment = @alignOf(can.CIR.BuiltinIndices);
+    const buffer = try gpa.alignedAlloc(u8, @enumFromInt(alignment), bin_data.len);
+    defer gpa.free(buffer);
+
+    @memcpy(buffer, bin_data);
+
+    // Cast to the structure
+    const indices_ptr = @as(*const can.CIR.BuiltinIndices, @ptrCast(buffer.ptr));
+    return indices_ptr.*;
+}
+
+/// Load a compiled ModuleEnv from embedded binary data
+fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) !LoadedModule {
+    // Copy the embedded data to properly aligned memory
+    // CompactWriter requires specific alignment for serialization
+    const CompactWriter = collections.CompactWriter;
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
+    @memcpy(buffer, bin_data);
+
+    // Cast to the serialized structure
+    const serialized_ptr = @as(
+        *ModuleEnv.Serialized,
+        @ptrCast(@alignCast(buffer.ptr)),
+    );
+
+    const env = try gpa.create(ModuleEnv);
+    errdefer gpa.destroy(env);
+
+    // Deserialize
+    const base_ptr = @intFromPtr(buffer.ptr);
+
+    env.* = ModuleEnv{
+        .gpa = gpa,
+        .common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), source).*,
+        .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*, // Pass gpa to types deserialize
+        .module_kind = serialized_ptr.module_kind,
+        .all_defs = serialized_ptr.all_defs,
+        .all_statements = serialized_ptr.all_statements,
+        .exports = serialized_ptr.exports,
+        .builtin_statements = serialized_ptr.builtin_statements,
+        .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
+        .imports = serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+        .module_name = module_name,
+        .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
+        .diagnostics = serialized_ptr.diagnostics,
+        .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+        .evaluation_order = null,
+    };
+
+    return LoadedModule{
+        .env = env,
+        .buffer = buffer,
+        .gpa = gpa,
+    };
+}
 
 /// REPL state that tracks past definitions and evaluates expressions
 pub const Repl = struct {
@@ -37,8 +120,29 @@ pub const Repl = struct {
     debug_can_html: std.array_list.Managed([]const u8),
     /// Storage for rendered TYPES HTML at each step (only when debug_store_snapshots is true)
     debug_types_html: std.array_list.Managed([]const u8),
+    /// Builtin type declaration indices (loaded once at startup from builtin_indices.bin)
+    builtin_indices: can.CIR.BuiltinIndices,
+    /// Loaded Bool module (loaded once at startup)
+    bool_module: LoadedModule,
+    /// Loaded Result module (loaded once at startup)
+    result_module: LoadedModule,
 
     pub fn init(allocator: Allocator, roc_ops: *RocOps, crash_ctx: ?*CrashContext) !Repl {
+        const compiled_builtins = @import("compiled_builtins");
+
+        // Load builtin indices once at startup (generated at build time)
+        const builtin_indices = try deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
+
+        // Load Bool module once at startup
+        const bool_source = "Bool := [True, False].{}\n";
+        var bool_module = try loadCompiledModule(allocator, compiled_builtins.bool_bin, "Bool", bool_source);
+        errdefer bool_module.deinit();
+
+        // Load Result module once at startup
+        const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+        var result_module = try loadCompiledModule(allocator, compiled_builtins.result_bin, "Result", result_source);
+        errdefer result_module.deinit();
+
         return Repl{
             .allocator = allocator,
             .definitions = std.StringHashMap([]const u8).init(allocator),
@@ -49,6 +153,9 @@ pub const Repl = struct {
             .debug_store_snapshots = false,
             .debug_can_html = std.array_list.Managed([]const u8).init(allocator),
             .debug_types_html = std.array_list.Managed([]const u8).init(allocator),
+            .builtin_indices = builtin_indices,
+            .bool_module = bool_module,
+            .result_module = result_module,
         };
     }
 
@@ -167,6 +274,10 @@ pub const Repl = struct {
             module_env.deinit();
             self.allocator.destroy(module_env);
         }
+
+        // Clean up loaded builtin modules
+        self.bool_module.deinit();
+        self.result_module.deinit();
     }
 
     /// Process a line of input and return the result
@@ -368,17 +479,39 @@ pub const Repl = struct {
         // Create CIR
         const cir = module_env; // CIR is now just ModuleEnv
         try cir.initCIRFields(self.allocator, "repl");
+
+        // Get Bool and Result statement indices from the IMPORTED modules (not copied!)
+        // These refer to the actual statements in the Bool/Result modules
+        const bool_stmt_in_bool_module = self.builtin_indices.bool_type;
+        const result_stmt_in_result_module = self.builtin_indices.result_type;
+
         const module_common_idents: Check.CommonIdents = .{
             .module_name = try module_env.insertIdent(base.Ident.for_text("repl")),
             .list = try module_env.insertIdent(base.Ident.for_text("List")),
             .box = try module_env.insertIdent(base.Ident.for_text("Box")),
+            .bool_stmt = bool_stmt_in_bool_module,
+            .result_stmt = result_stmt_in_result_module,
         };
 
-        // Create canonicalizer
-        var czer = Can.init(cir, &parse_ast, null, .{}) catch |err| {
+        // Create canonicalizer with Bool and Result modules available for qualified name resolution
+        var module_envs_map = std.AutoHashMap(base.Ident.Idx, can.Can.AutoImportedType).init(self.allocator);
+        defer module_envs_map.deinit();
+        const bool_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Bool"));
+        const result_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Result"));
+        try module_envs_map.put(bool_ident, .{
+            .env = self.bool_module.env,
+        });
+        try module_envs_map.put(result_ident, .{
+            .env = self.result_module.env,
+        });
+
+        var czer = Can.init(cir, &parse_ast, &module_envs_map) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err});
         };
         defer czer.deinit();
+
+        // NOTE: True/False/Ok/Err are now just anonymous tags that unify with Bool/Result automatically!
+        // No need to register unqualified_nominal_tags - the type system handles it.
 
         // Since we're always parsing as expressions now, handle them the same way
         const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
@@ -388,8 +521,9 @@ pub const Repl = struct {
         };
         const final_expr_idx = canonical_expr.get_idx();
 
-        // Type check
-        var checker = Check.init(self.allocator, &module_env.types, cir, &.{}, &cir.store.regions, module_common_idents) catch |err| {
+        // Type check - Pass Bool and Result as imported modules
+        const other_modules = [_]*const ModuleEnv{ self.bool_module.env, self.result_module.env };
+        var checker = Check.init(self.allocator, &module_env.types, cir, &other_modules, &cir.store.regions, module_common_idents) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Type check init error: {}", .{err});
         };
         defer checker.deinit();
@@ -399,11 +533,12 @@ pub const Repl = struct {
             return try std.fmt.allocPrint(self.allocator, "Type check expr error: {}", .{err});
         };
 
-        // Create interpreter instance
-        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env) catch |err| {
+        // Create interpreter instance with BuiltinTypes containing real Bool and Result modules
+        const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.bool_module.env, self.result_module.env);
+        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, &module_envs_map) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
         };
-        defer interpreter.deinit();
+        defer interpreter.deinitAndFreeOtherEnvs();
 
         if (self.crash_ctx) |ctx| {
             ctx.reset();

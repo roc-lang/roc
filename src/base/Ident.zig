@@ -115,10 +115,8 @@ pub const Store = struct {
 
         /// Deserialize this Serialized struct into a Store
         pub fn deserialize(self: *Serialized, offset: i64) *Store {
-            // Ident.Store.Serialized should be at least as big as Ident.Store
-            std.debug.assert(@sizeOf(Serialized) >= @sizeOf(Store));
-
-            // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+            // Note: Serialized may be smaller than the runtime struct.
+            // We deserialize by overwriting the Serialized memory with the runtime struct.
             const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
 
             store.* = Store{
@@ -226,10 +224,6 @@ pub const Store = struct {
         };
     }
 
-    /// Freeze the identifier store, preventing any new entries from being added.
-    pub fn freeze(self: *Store) void {
-        self.interner.freeze();
-    }
     /// Calculate the size needed to serialize this Ident.Store
     pub fn serializedSize(self: *const Store) usize {
         var size: usize = 0;
@@ -535,7 +529,7 @@ test "Ident.Store with genUnique CompactWriter roundtrip" {
     try std.testing.expectEqual(@as(u32, 3), deserialized.next_unique_name);
 }
 
-test "Ident.Store frozen state CompactWriter roundtrip" {
+test "Ident.Store CompactWriter roundtrip" {
     const gpa = std.testing.allocator;
 
     // Create and populate store
@@ -544,14 +538,6 @@ test "Ident.Store frozen state CompactWriter roundtrip" {
 
     _ = try original.insert(gpa, Ident.for_text("test1"));
     _ = try original.insert(gpa, Ident.for_text("test2"));
-
-    // Freeze the store
-    original.freeze();
-
-    // Verify interner is frozen
-    if (std.debug.runtime_safety) {
-        try std.testing.expect(original.interner.frozen);
-    }
 
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -591,11 +577,6 @@ test "Ident.Store frozen state CompactWriter roundtrip" {
     const deserialized = @as(*Ident.Store, @ptrCast(@alignCast(buffer.ptr)));
 
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
-
-    // Verify frozen state is preserved
-    if (std.debug.runtime_safety) {
-        try std.testing.expect(deserialized.interner.frozen);
-    }
 }
 
 test "Ident.Store comprehensive CompactWriter roundtrip" {

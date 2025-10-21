@@ -92,10 +92,9 @@ match l {
 						(p-list
 							(patterns))))
 				(value
-					(e-nominal (nominal "Result")
-						(e-tag (name "Err")
-							(args
-								(e-tag (name "EmptyList")))))))
+					(e-tag (name "Err")
+						(args
+							(e-tag (name "EmptyList"))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -104,13 +103,12 @@ match l {
 								(p-assign (ident "e")))
 							(rest-at (index 0)))))
 				(value
-					(e-nominal (nominal "Result")
-						(e-tag (name "Ok")
-							(args
-								(e-lookup-local
-									(p-assign (ident "e")))))))))))
+					(e-tag (name "Ok")
+						(args
+							(e-lookup-local
+								(p-assign (ident "e"))))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Result(ok, [EmptyList]_others)"))
+(expr (type "[Err([EmptyList]_others), Ok(_a)]_others2"))
 ~~~

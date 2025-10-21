@@ -20,6 +20,38 @@ fn configureBackend(step: *Step.Compile, target: ResolvedTarget) void {
     }
 }
 
+const TestsSummaryStep = struct {
+    step: Step,
+
+    fn create(b: *std.Build) *TestsSummaryStep {
+        const self = b.allocator.create(TestsSummaryStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = "tests_summary",
+                .owner = b,
+                .makeFn = make,
+            }),
+        };
+        return self;
+    }
+
+    fn addRun(self: *TestsSummaryStep, run_step: *Step) void {
+        self.step.dependOn(run_step);
+    }
+
+    fn make(step: *Step, options: Step.MakeOptions) !void {
+        _ = options;
+
+        var passed: u64 = 0;
+        for (step.dependencies.items) |dependency| {
+            passed += @intCast(dependency.test_results.passCount());
+        }
+
+        std.debug.print("✅ All {d} tests passed.\n", .{passed});
+    }
+};
+
 pub fn build(b: *std.Build) void {
     // build steps
     const run_step = b.step("run", "Build and run the roc cli");
@@ -205,6 +237,12 @@ pub fn build(b: *std.Build) void {
         }
     }
 
+    // Also copy builtin_indices.bin
+    _ = write_compiled_builtins.addCopyFile(
+        .{ .cwd_relative = "zig-out/builtins/builtin_indices.bin" },
+        "builtin_indices.bin",
+    );
+
     // Generate compiled_builtins.zig dynamically based on discovered .roc files
     const builtins_source_str = generateCompiledBuiltinsSource(b, roc_files) catch |err| {
         std.debug.print("Failed to generate compiled_builtins.zig: {}\n", .{err});
@@ -219,6 +257,9 @@ pub fn build(b: *std.Build) void {
     const compiled_builtins_module = b.createModule(.{
         .root_source_file = compiled_builtins_source,
     });
+
+    roc_modules.repl.addImport("compiled_builtins", compiled_builtins_module);
+    roc_modules.compile.addImport("compiled_builtins", compiled_builtins_module);
 
     // Manual rebuild command: zig build rebuild-builtins
     // Use this after making compiler changes to ensure those changes are reflected in builtins
@@ -302,7 +343,11 @@ pub fn build(b: *std.Build) void {
     }));
     playground_exe.entry = .disabled;
     playground_exe.rdynamic = true;
+    playground_exe.link_function_sections = true;
+    playground_exe.import_memory = false;
     roc_modules.addAll(playground_exe);
+    playground_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    playground_exe.step.dependOn(&write_compiled_builtins.step);
 
     add_tracy(b, roc_modules.build_options, playground_exe, b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
@@ -394,10 +439,11 @@ pub fn build(b: *std.Build) void {
     }
 
     // Create and add module tests
+    const tests_summary = TestsSummaryStep.create(b);
     const module_tests = roc_modules.createModuleTests(b, target, optimize, zstd, test_filters);
     for (module_tests) |module_test| {
-        // Add compiled builtins to check module tests
-        if (std.mem.eql(u8, module_test.test_step.name, "check")) {
+        // Add compiled builtins to check, repl, and eval module tests
+        if (std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "repl") or std.mem.eql(u8, module_test.test_step.name, "eval")) {
             module_test.test_step.root_module.addImport("compiled_builtins", compiled_builtins_module);
             module_test.test_step.step.dependOn(&write_compiled_builtins.step);
         }
@@ -419,7 +465,7 @@ pub fn build(b: *std.Build) void {
         individual_test_step.dependOn(&individual_run.step);
 
         b.default_step.dependOn(&module_test.test_step.step);
-        test_step.dependOn(&module_test.run_step.step);
+        tests_summary.addRun(&module_test.run_step.step);
     }
 
     // Add snapshot tool test
@@ -444,7 +490,7 @@ pub fn build(b: *std.Build) void {
         if (run_args.len != 0) {
             run_snapshot_test.addArgs(run_args);
         }
-        test_step.dependOn(&run_snapshot_test.step);
+        tests_summary.addRun(&run_snapshot_test.step);
     }
 
     // Add CLI test
@@ -463,12 +509,14 @@ pub fn build(b: *std.Build) void {
         roc_modules.addAll(cli_test);
         cli_test.linkLibrary(zstd.artifact("zstd"));
         add_tracy(b, roc_modules.build_options, cli_test, target, false, flag_enable_tracy);
+        cli_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
+        cli_test.step.dependOn(&write_compiled_builtins.step);
 
         const run_cli_test = b.addRunArtifact(cli_test);
         if (run_args.len != 0) {
             run_cli_test.addArgs(run_args);
         }
-        test_step.dependOn(&run_cli_test.step);
+        tests_summary.addRun(&run_cli_test.step);
     }
 
     // Add watch tests
@@ -499,8 +547,10 @@ pub fn build(b: *std.Build) void {
         if (run_args.len != 0) {
             run_watch_test.addArgs(run_args);
         }
-        test_step.dependOn(&run_watch_test.step);
+        tests_summary.addRun(&run_watch_test.step);
     }
+
+    test_step.dependOn(&tests_summary.step);
 
     b.default_step.dependOn(playground_step);
     {
@@ -597,6 +647,9 @@ fn generateCompiledBuiltinsSource(b: *std.Build, roc_files: []const []const u8) 
             name_without_ext,
         });
     }
+
+    // Also embed builtin_indices.bin
+    try writer.writeAll("pub const builtin_indices_bin = @embedFile(\"builtin_indices.bin\");\n");
 
     return builtins_source.toOwnedSlice();
 }

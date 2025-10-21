@@ -396,8 +396,8 @@ main = |_| {
 		(p-assign (ident "main"))
 		(e-closure
 			(captures
-				(capture (ident "str_container"))
-				(capture (ident "int_container")))
+				(capture (ident "int_container"))
+				(capture (ident "str_container")))
 			(e-lambda
 				(args
 					(p-underscore))

@@ -419,12 +419,10 @@ main! = |_| {
 		(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14")))
 	(d-let
 		(p-assign (ident "d"))
-		(e-nominal (nominal "Bool")
-			(e-tag (name "True"))))
+		(e-tag (name "True")))
 	(d-let
 		(p-assign (ident "e"))
-		(e-nominal (nominal "Bool")
-			(e-tag (name "False"))))
+		(e-tag (name "False")))
 	(d-let
 		(p-assign (ident "anotherIdentity"))
 		(e-lambda
@@ -531,13 +529,13 @@ main! = |_| {
 		(p-assign (ident "main!"))
 		(e-closure
 			(captures
-				(capture (ident "yetAnotherIdentity"))
-				(capture (ident "f"))
-				(capture (ident "a"))
-				(capture (ident "finalIdentity"))
 				(capture (ident "identity"))
+				(capture (ident "a"))
+				(capture (ident "f"))
 				(capture (ident "anotherIdentity"))
-				(capture (ident "combine")))
+				(capture (ident "combine"))
+				(capture (ident "yetAnotherIdentity"))
+				(capture (ident "finalIdentity")))
 			(e-lambda
 				(args
 					(p-underscore))
@@ -569,8 +567,7 @@ main! = |_| {
 						(e-call
 							(e-lookup-local
 								(p-assign (ident "yetAnotherIdentity")))
-							(e-nominal (nominal "Bool")
-								(e-tag (name "True")))))
+							(e-tag (name "True"))))
 					(s-let
 						(p-assign (ident "result5"))
 						(e-call
@@ -591,8 +588,8 @@ main! = |_| {
 		(patt (type "ac -> ac"))
 		(patt (type "Str"))
 		(patt (type "Num(Frac(_size))"))
-		(patt (type "Bool"))
-		(patt (type "Bool"))
+		(patt (type "[True]_others"))
+		(patt (type "[False]_others"))
 		(patt (type "ac -> ac"))
 		(patt (type "ac, ad -> (ac, ad)"))
 		(patt (type "Num(_size)"))
@@ -626,8 +623,8 @@ main! = |_| {
 		(expr (type "ac -> ac"))
 		(expr (type "Str"))
 		(expr (type "Num(Frac(_size))"))
-		(expr (type "Bool"))
-		(expr (type "Bool"))
+		(expr (type "[True]_others"))
+		(expr (type "[False]_others"))
 		(expr (type "ac -> ac"))
 		(expr (type "ac, ad -> (ac, ad)"))
 		(expr (type "Num(_size)"))

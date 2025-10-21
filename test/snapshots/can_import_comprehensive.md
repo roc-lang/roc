@@ -43,8 +43,14 @@ main = {
 MODULE NOT FOUND - can_import_comprehensive.md:1:1:1:17
 MODULE NOT FOUND - can_import_comprehensive.md:2:1:2:48
 MODULE NOT FOUND - can_import_comprehensive.md:3:1:3:27
+UNDEFINED VARIABLE - can_import_comprehensive.md:6:14:6:22
+UNDEFINED VARIABLE - can_import_comprehensive.md:7:14:7:23
+UNDEFINED VARIABLE - can_import_comprehensive.md:8:14:8:22
+UNDEFINED VARIABLE - can_import_comprehensive.md:11:15:11:25
+UNDEFINED VARIABLE - can_import_comprehensive.md:14:15:14:24
 UNDEFINED VARIABLE - can_import_comprehensive.md:17:15:17:18
 UNDEFINED VARIABLE - can_import_comprehensive.md:18:15:18:19
+UNDEFINED VARIABLE - can_import_comprehensive.md:21:16:21:26
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `json.Json` was not found in this Roc project.
@@ -83,6 +89,61 @@ import utils.String as Str
 Nothing is named `get` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**can_import_comprehensive.md:6:14:6:22:**
+```roc
+    client = Http.get
+```
+             ^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `utf8` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_comprehensive.md:7:14:7:23:**
+```roc
+    parser = Json.utf8
+```
+             ^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `trim` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_comprehensive.md:8:14:8:22:**
+```roc
+    helper = Str.trim
+```
+             ^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `parse` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_comprehensive.md:11:15:11:25:**
+```roc
+    result1 = Json.parse
+```
+              ^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `post` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_comprehensive.md:14:15:14:24:**
+```roc
+    result2 = Http.post
+```
+              ^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `get` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 **can_import_comprehensive.md:17:15:17:18:**
 ```roc
     result3 = get
@@ -99,6 +160,17 @@ Is there an `import` or `exposing` missing up-top?
     result4 = post
 ```
               ^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `concat` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_comprehensive.md:21:16:21:26:**
+```roc
+    combined = Str.concat
+```
+               ^^^^^^^^^^
 
 
 # TOKENS
@@ -223,29 +295,19 @@ main = {
 		(e-block
 			(s-let
 				(p-assign (ident "client"))
-				(e-lookup-external
-					(module-idx "3")
-					(target-node-idx "0")))
+				(e-runtime-error (tag "ident_not_in_scope")))
 			(s-let
 				(p-assign (ident "parser"))
-				(e-lookup-external
-					(module-idx "2")
-					(target-node-idx "0")))
+				(e-runtime-error (tag "ident_not_in_scope")))
 			(s-let
 				(p-assign (ident "helper"))
-				(e-lookup-external
-					(module-idx "4")
-					(target-node-idx "0")))
+				(e-runtime-error (tag "ident_not_in_scope")))
 			(s-let
 				(p-assign (ident "result1"))
-				(e-lookup-external
-					(module-idx "2")
-					(target-node-idx "0")))
+				(e-runtime-error (tag "ident_not_in_scope")))
 			(s-let
 				(p-assign (ident "result2"))
-				(e-lookup-external
-					(module-idx "3")
-					(target-node-idx "0")))
+				(e-runtime-error (tag "ident_not_in_scope")))
 			(s-let
 				(p-assign (ident "result3"))
 				(e-runtime-error (tag "ident_not_in_scope")))
@@ -254,9 +316,7 @@ main = {
 				(e-runtime-error (tag "ident_not_in_scope")))
 			(s-let
 				(p-assign (ident "combined"))
-				(e-lookup-external
-					(module-idx "4")
-					(target-node-idx "0")))
+				(e-runtime-error (tag "ident_not_in_scope")))
 			(e-tuple
 				(elems
 					(e-lookup-local
@@ -275,13 +335,13 @@ main = {
 						(p-assign (ident "result4")))
 					(e-lookup-local
 						(p-assign (ident "combined")))))))
-	(s-import (module "json.Json") (qualifier "json")
+	(s-import (module "json.Json")
 		(exposes))
-	(s-import (module "http.Client") (qualifier "http") (alias "Http")
+	(s-import (module "http.Client")
 		(exposes
 			(exposed (name "get") (wildcard false))
 			(exposed (name "post") (wildcard false))))
-	(s-import (module "utils.String") (qualifier "utils") (alias "Str")
+	(s-import (module "utils.String")
 		(exposes)))
 ~~~
 # TYPES

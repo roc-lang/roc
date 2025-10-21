@@ -70,7 +70,7 @@ g : r -> R.a.E
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import (module "u.R") (qualifier "u")
+	(s-import (module "u.R")
 		(exposes)))
 ~~~
 # TYPES

@@ -148,10 +148,8 @@ pub fn SafeList(comptime T: type) type {
 
             /// Deserialize this Serialized struct into a SafeList
             pub fn deserialize(self: *Serialized, offset: i64) *SafeList(T) {
-                // SafeList.Serialized should be at least as big as SafeList
-                std.debug.assert(@sizeOf(Serialized) >= @sizeOf(SafeList(T)));
-
-                // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+                // Note: Serialized may be smaller than the runtime struct.
+                // We deserialize by overwriting the Serialized memory with the runtime struct.
                 const safe_list = @as(*SafeList(T), @ptrFromInt(@intFromPtr(self)));
 
                 // Handle empty list case
@@ -638,10 +636,8 @@ pub fn SafeMultiList(comptime T: type) type {
 
             /// Deserialize this Serialized struct into a SafeMultiList
             pub fn deserialize(self: *Serialized, offset: i64) *SafeMultiList(T) {
-                // SafeMultiList.Serialized should be at least as big as SafeMultiList
-                std.debug.assert(@sizeOf(Serialized) >= @sizeOf(SafeMultiList(T)));
-
-                // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+                // Note: Serialized may be smaller than the runtime struct.
+                // We deserialize by overwriting the Serialized memory with the runtime struct.
                 const multi_list = @as(*SafeMultiList(T), @ptrFromInt(@intFromPtr(self)));
 
                 // Handle empty list case

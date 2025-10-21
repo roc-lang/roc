@@ -17,6 +17,16 @@ const ModuleEnv = can.ModuleEnv;
 const Can = can.Can;
 const Check = check.Check;
 const Allocator = std.mem.Allocator;
+const CIR = can.CIR;
+
+/// Indices of builtin type declarations within their respective modules.
+/// These are determined at build time via string lookup and serialized to builtin_indices.bin.
+const BuiltinIndices = struct {
+    /// Statement index of Bool type declaration within Bool module
+    bool_type: CIR.Statement.Idx,
+    /// Statement index of Result type declaration within Result module
+    result_type: CIR.Statement.Idx,
+};
 
 /// Build-time compiler that compiles builtin .roc sources into serialized ModuleEnvs.
 /// This runs during `zig build` on the host machine to generate .bin files
@@ -37,7 +47,7 @@ pub fn main() !void {
     // Ignore command-line arguments - they're only used by Zig's build system for cache tracking
 
     // Read the .roc source files at runtime
-    // NOTE: ModuleEnv takes ownership of these sources and will free them in deinit()
+    // NOTE: We must free these sources manually; CommonEnv.deinit() does not free the source.
     const bool_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Bool.roc", 1024 * 1024);
 
     const result_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Result.roc", 1024 * 1024);
@@ -46,58 +56,58 @@ pub fn main() !void {
 
     const set_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Set.roc", 1024 * 1024);
 
-    // Compile Bool.roc without injecting anything (it's completely self-contained)
+    // Compile Bool.roc (it's completely self-contained, doesn't use Bool or Result types)
     const bool_env = try compileModule(
         gpa,
         "Bool",
         bool_roc_source,
         &.{}, // No module dependencies
-        .{ .inject_bool = false, .inject_result = false },
+        null, // bool_stmt not available yet
+        null, // result_stmt not available yet
     );
     defer {
         bool_env.deinit();
         gpa.destroy(bool_env);
+        gpa.free(bool_roc_source);
     }
 
-    // Verify that Bool's type declaration is at the expected index (2)
-    // This is critical for the compiler's hardcoded BUILTIN_BOOL constant
-    const bool_type_idx = bool_env.all_statements.span.start;
-    if (bool_type_idx != 2) {
-        var stderr_buffer: [256]u8 = undefined;
-        var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
-        const stderr = &stderr_writer.interface;
-        try stderr.print("WARNING: Expected Bool at index 2, but got {}!\n", .{bool_type_idx});
-        try stderr.flush();
-        return error.UnexpectedBoolIndex;
-    }
+    // Find Bool type declaration via string lookup
+    const bool_type_idx = try findTypeDeclaration(bool_env, "Bool");
 
-    // Compile Result.roc (injects Bool since Result might use if expressions)
+    // Compile Result.roc (doesn't use Bool or Result types in its definition)
     const result_env = try compileModule(
         gpa,
         "Result",
         result_roc_source,
         &.{}, // No module dependencies
-        .{ .inject_bool = true, .inject_result = false },
+        null, // bool_stmt not needed for Result
+        null, // result_stmt not available yet
     );
     defer {
         result_env.deinit();
         gpa.destroy(result_env);
+        gpa.free(result_roc_source);
     }
 
-    // Compile Dict.roc (needs Bool injected for if expressions, and Result for error handling)
+    // Find Result type declaration via string lookup
+    const result_type_idx = try findTypeDeclaration(result_env, "Result");
+
+    // Compile Dict.roc (may use Result type, so we provide the indices)
     const dict_env = try compileModule(
         gpa,
         "Dict",
         dict_roc_source,
         &.{}, // No module dependencies
-        .{}, // Inject Bool and Result (defaults)
+        bool_type_idx, // Provide Bool type index
+        result_type_idx, // Provide Result type index
     );
     defer {
         dict_env.deinit();
         gpa.destroy(dict_env);
+        gpa.free(dict_roc_source);
     }
 
-    // Compile Set.roc (imports Dict, needs Bool and Result injected)
+    // Compile Set.roc (imports Dict, may use Result)
     const set_env = try compileModule(
         gpa,
         "Set",
@@ -105,11 +115,13 @@ pub fn main() !void {
         &[_]ModuleDep{
             .{ .name = "Dict", .env = dict_env },
         },
-        .{}, // Inject Bool and Result (defaults)
+        bool_type_idx, // Provide Bool type index
+        result_type_idx, // Provide Result type index
     );
     defer {
         set_env.deinit();
         gpa.destroy(set_env);
+        gpa.free(set_roc_source);
     }
 
     // Create output directory
@@ -120,6 +132,13 @@ pub fn main() !void {
     try serializeModuleEnv(gpa, result_env, "zig-out/builtins/Result.bin");
     try serializeModuleEnv(gpa, dict_env, "zig-out/builtins/Dict.bin");
     try serializeModuleEnv(gpa, set_env, "zig-out/builtins/Set.bin");
+
+    // Create and serialize builtin indices
+    const builtin_indices = BuiltinIndices{
+        .bool_type = bool_type_idx,
+        .result_type = result_type_idx,
+    };
+    try serializeBuiltinIndices(builtin_indices, "zig-out/builtins/builtin_indices.bin");
 }
 
 const ModuleDep = struct {
@@ -132,7 +151,8 @@ fn compileModule(
     module_name: []const u8,
     source: []const u8,
     deps: []const ModuleDep,
-    can_options: Can.InitOptions,
+    bool_stmt_opt: ?CIR.Statement.Idx,
+    result_stmt_opt: ?CIR.Statement.Idx,
 ) !*ModuleEnv {
     // This follows the pattern from TestEnv.init() in src/check/test/TestEnv.zig
 
@@ -155,10 +175,13 @@ fn compileModule(
     const list_ident = try module_env.insertIdent(base.Ident.for_text("List"));
     const box_ident = try module_env.insertIdent(base.Ident.for_text("Box"));
 
+    // Use provided bool_stmt and result_stmt if available, otherwise use undefined
     const common_idents: Check.CommonIdents = .{
         .module_name = module_ident,
         .list = list_ident,
         .box = box_ident,
+        .bool_stmt = bool_stmt_opt orelse undefined,
+        .result_stmt = result_stmt_opt orelse undefined,
     };
 
     // 3. Parse
@@ -184,12 +207,17 @@ fn compileModule(
     }
 
     // 4. Create module imports map (for cross-module references)
-    var module_envs = std.StringHashMap(*const ModuleEnv).init(gpa);
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
     defer module_envs.deinit();
+
+    // Create temporary ident store for module name lookup
+    var temp_idents = try base.Ident.Store.initCapacity(gpa, 16);
+    defer temp_idents.deinit(gpa);
 
     // Add dependencies (e.g., Dict for Set)
     for (deps) |dep| {
-        try module_envs.put(dep.name, dep.env);
+        const dep_ident = try temp_idents.insert(gpa, base.Ident.for_text(dep.name));
+        try module_envs.put(dep_ident, .{ .env = dep.env });
     }
 
     // 5. Canonicalize
@@ -201,7 +229,7 @@ fn compileModule(
         gpa.destroy(can_result);
     }
 
-    can_result.* = try Can.init(module_env, parse_ast, &module_envs, can_options);
+    can_result.* = try Can.init(module_env, parse_ast, &module_envs);
 
     try can_result.canonicalizeFile();
     try can_result.validateForChecking();
@@ -264,4 +292,43 @@ fn serializeModuleEnv(
 
     // Write to file
     try writer.writeGather(arena_alloc, file);
+}
+
+/// Find a type declaration by name in a compiled module
+/// Returns the statement index of the type declaration
+fn findTypeDeclaration(env: *const ModuleEnv, type_name: []const u8) !CIR.Statement.Idx {
+    const all_stmts = env.store.sliceStatements(env.all_statements);
+
+    // Search through all statements to find the one with matching name
+    for (all_stmts) |stmt_idx| {
+        const stmt = env.store.getStatement(stmt_idx);
+        switch (stmt) {
+            .s_nominal_decl => |decl| {
+                const header = env.store.getTypeHeader(decl.header);
+                const ident_idx = header.name;
+                const ident_text = env.getIdentText(ident_idx);
+                if (std.mem.eql(u8, ident_text, type_name)) {
+                    return stmt_idx;
+                }
+            },
+            else => continue,
+        }
+    }
+
+    std.debug.print("ERROR: Could not find type declaration '{s}' in module\n", .{type_name});
+    return error.TypeDeclarationNotFound;
+}
+
+/// Serialize BuiltinIndices to a binary file
+fn serializeBuiltinIndices(
+    indices: BuiltinIndices,
+    output_path: []const u8,
+) !void {
+    // Create output file
+    const file = try std.fs.cwd().createFile(output_path, .{});
+    defer file.close();
+
+    // Write the struct directly as binary data
+    // This is a simple struct with two u32 fields, so we can write it directly
+    try file.writeAll(std.mem.asBytes(&indices));
 }

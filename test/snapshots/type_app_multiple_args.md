@@ -13,29 +13,27 @@ processDict = |_dict| []
 main! = |_| processDict(Dict.empty().insert("one", 1))
 ~~~
 # EXPECTED
-UNDECLARED TYPE - type_app_multiple_args.md:3:15:3:19
-UNDEFINED VARIABLE - type_app_multiple_args.md:6:25:6:35
+DOES NOT EXIST - type_app_multiple_args.md:6:25:6:35
+TOO MANY ARGS - type_app_multiple_args.md:3:15:3:29
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Dict_ is not declared in this scope.
-
-This type is referenced here:
-**type_app_multiple_args.md:3:15:3:19:**
-```roc
-processDict : Dict(Str, U64) -> List(Str)
-```
-              ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `empty` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Dict.empty` does not exist.
 
 **type_app_multiple_args.md:6:25:6:35:**
 ```roc
 main! = |_| processDict(Dict.empty().insert("one", 1))
 ```
                         ^^^^^^^^^^
+
+
+**TOO MANY ARGS**
+The type _Dict_ expects  argument, but got  instead.
+**type_app_multiple_args.md:3:15:3:29:**
+```roc
+processDict : Dict(Str, U64) -> List(Str)
+```
+              ^^^^^^^^^^^^^^
+
 
 
 # TOKENS
@@ -108,7 +106,9 @@ NO CHANGE
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-malformed)
+					(ty-apply (name "Dict") (external (module-idx "0") (target-node-idx "1"))
+						(ty-lookup (name "Str") (builtin))
+						(ty-lookup (name "U64") (builtin)))
 					(ty-apply (name "List") (builtin)
 						(ty-lookup (name "Str") (builtin)))))))
 	(d-let
@@ -125,7 +125,7 @@ NO CHANGE
 					(e-dot-access (field "insert")
 						(receiver
 							(e-call
-								(e-runtime-error (tag "ident_not_in_scope"))))
+								(e-runtime-error (tag "qualified_ident_does_not_exist"))))
 						(args
 							(e-string
 								(e-literal (string "one")))

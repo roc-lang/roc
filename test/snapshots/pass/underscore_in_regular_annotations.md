@@ -317,23 +317,21 @@ transform = |_, b| b
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal
-											(p-applied-tag))))
+										(p-applied-tag)))
 								(value
 									(e-string
 										(e-literal (string "success")))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-nominal
-											(p-applied-tag))))
+										(p-applied-tag)))
 								(value
 									(e-lookup-local
 										(p-assign (ident "msg"))))))))))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-apply (name "Result") (local)
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-underscore)
 						(ty-lookup (name "Str") (builtin)))
 					(ty-lookup (name "Str") (builtin))))))

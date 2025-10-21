@@ -22,6 +22,7 @@ main! = process!(42)
 ~~~
 # EXPECTED
 MODULE NOT FOUND - function_no_annotation.md:3:1:3:17
+UNDEFINED VARIABLE - function_no_annotation.md:9:21:9:33
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `pf.Stdout` was not found in this Roc project.
@@ -32,6 +33,17 @@ You're attempting to use this module here:
 import pf.Stdout
 ```
 ^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `line!` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**function_no_annotation.md:9:21:9:33:**
+```roc
+print_number! = |n| Stdout.line!(n)
+```
+                    ^^^^^^^^^^^^
 
 
 # TOKENS
@@ -118,9 +130,7 @@ NO CHANGE
 			(args
 				(p-assign (ident "n")))
 			(e-call
-				(e-lookup-external
-					(module-idx "2")
-					(target-node-idx "0"))
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local
 					(p-assign (ident "n"))))))
 	(d-let
@@ -147,7 +157,7 @@ NO CHANGE
 			(e-lookup-local
 				(p-assign (ident "process!")))
 			(e-num (value "42"))))
-	(s-import (module "pf.Stdout") (qualifier "pf")
+	(s-import (module "pf.Stdout")
 		(exposes)))
 ~~~
 # TYPES

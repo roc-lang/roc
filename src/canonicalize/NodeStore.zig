@@ -128,7 +128,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 55;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 56;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 33;
 /// Count of the statement nodes in the ModuleEnv
@@ -2646,6 +2646,11 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             region = r.region;
             node.data_1 = @bitCast(r.ident);
         },
+        .qualified_ident_does_not_exist => |r| {
+            node.tag = .diag_qualified_ident_does_not_exist;
+            region = r.region;
+            node.data_1 = @bitCast(r.ident);
+        },
         .invalid_top_level_statement => |r| {
             node.tag = .diag_invalid_top_level_statement;
             node.data_1 = @intFromEnum(r.stmt);
@@ -2979,6 +2984,10 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .ident = @bitCast(node.data_1),
             .region = store.getRegionAt(node_idx),
         } },
+        .diag_qualified_ident_does_not_exist => return CIR.Diagnostic{ .qualified_ident_does_not_exist = .{
+            .ident = @bitCast(node.data_1),
+            .region = store.getRegionAt(node_idx),
+        } },
         .diag_invalid_top_level_statement => return CIR.Diagnostic{ .invalid_top_level_statement = .{
             .stmt = @enumFromInt(node.data_1),
             .region = store.getRegionAt(node_idx),
@@ -3305,17 +3314,24 @@ pub const Serialized = struct {
 
     /// Deserialize this Serialized struct into a NodeStore
     pub fn deserialize(self: *Serialized, offset: i64, gpa: Allocator) *NodeStore {
-        // NodeStore.Serialized should be at least as big as NodeStore
-        std.debug.assert(@sizeOf(Serialized) >= @sizeOf(NodeStore));
+        // Note: Serialized may be smaller than the runtime struct.
+        // CRITICAL: On 32-bit platforms, deserializing nodes in-place corrupts the adjacent
+        // regions and extra_data fields. We must deserialize in REVERSE order (last to first)
+        // so that each deserialization doesn't corrupt fields that haven't been deserialized yet.
 
-        // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
+        // Deserialize in reverse order: extra_data, regions, then nodes
+        const deserialized_extra_data = self.extra_data.deserialize(offset).*;
+        const deserialized_regions = self.regions.deserialize(offset).*;
+        const deserialized_nodes = self.nodes.deserialize(offset).*;
+
+        // Overwrite ourself with the deserialized version, and return our pointer after casting it to NodeStore
         const store = @as(*NodeStore, @ptrFromInt(@intFromPtr(self)));
 
         store.* = NodeStore{
             .gpa = gpa,
-            .nodes = self.nodes.deserialize(offset).*,
-            .regions = self.regions.deserialize(offset).*,
-            .extra_data = self.extra_data.deserialize(offset).*,
+            .nodes = deserialized_nodes,
+            .regions = deserialized_regions,
+            .extra_data = deserialized_extra_data,
             .scratch = null, // A deserialized NodeStore is read-only, so it has no need for scratch memory!
         };
 

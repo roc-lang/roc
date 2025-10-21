@@ -23,6 +23,10 @@ const RocDec = builtins.dec.RocDec;
 const RocList = builtins.list.RocList;
 const utils = builtins.utils;
 const Layout = layout.Layout;
+const helpers = @import("test/helpers.zig");
+const builtin_loading = @import("builtin_loading.zig");
+const compiled_builtins = @import("compiled_builtins");
+const BuiltinTypes = @import("builtins.zig").BuiltinTypes;
 
 /// Interpreter that evaluates canonical Roc expressions against runtime types/layouts.
 pub const Interpreter = struct {
@@ -119,12 +123,40 @@ pub const Interpreter = struct {
     canonical_bool_rt_var: ?types.Var,
     // Used to unwrap extensible tags
     scratch_tags: std.array_list.Managed(types.Tag),
+    /// Builtin types required by the interpreter (Bool, Result, etc.)
+    builtins: BuiltinTypes,
+    /// Map from module name to ModuleEnv for resolving e_lookup_external expressions
+    imported_modules: std.StringHashMap(*const can.ModuleEnv),
 
-    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv) !Interpreter {
-        return initWithOtherEnvs(allocator, env, &.{});
+    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, imported_modules_map: ?*const std.AutoHashMap(base_pkg.Ident.Idx, can.Can.AutoImportedType)) !Interpreter {
+        // Convert imported modules map to other_envs slice
+        var other_envs_list = std.array_list.Managed(*const can.ModuleEnv).init(allocator);
+        errdefer other_envs_list.deinit();
+
+        if (imported_modules_map) |modules_map| {
+            var iter = modules_map.iterator();
+            while (iter.next()) |entry| {
+                try other_envs_list.append(entry.value_ptr.env);
+            }
+        }
+
+        // Transfer ownership of the slice to the Interpreter
+        // Note: The caller is responsible for freeing this via deinitAndFreeOtherEnvs()
+        const other_envs = try other_envs_list.toOwnedSlice();
+        return initWithOtherEnvs(allocator, env, other_envs, builtin_types);
     }
 
-    pub fn initWithOtherEnvs(allocator: std.mem.Allocator, env: *can.ModuleEnv, other_envs: []const *const can.ModuleEnv) !Interpreter {
+    /// Deinit the interpreter and also free the other_envs slice if it was allocated by init()
+    pub fn deinitAndFreeOtherEnvs(self: *Interpreter) void {
+        const other_envs = self.other_envs;
+        const allocator = self.allocator;
+        self.deinit();
+        if (other_envs.len > 0) {
+            allocator.free(other_envs);
+        }
+    }
+
+    pub fn initWithOtherEnvs(allocator: std.mem.Allocator, env: *can.ModuleEnv, other_envs: []const *const can.ModuleEnv, builtin_types: BuiltinTypes) !Interpreter {
         const rt_types_ptr = try allocator.create(types.store.Store);
         rt_types_ptr.* = try types.store.Store.initCapacity(allocator, 1024, 512);
         var slots = try std.array_list.Managed(u32).initCapacity(allocator, 1024);
@@ -150,8 +182,11 @@ pub const Interpreter = struct {
             .bool_true_index = 1,
             .canonical_bool_rt_var = null,
             .scratch_tags = try std.array_list.Managed(types.Tag).initCapacity(allocator, 8),
+            .builtins = builtin_types,
+            .imported_modules = std.StringHashMap(*const can.ModuleEnv).init(allocator),
         };
         result.runtime_layout_store = try layout.Store.init(env, result.runtime_types);
+
         return result;
     }
 
@@ -310,6 +345,7 @@ pub const Interpreter = struct {
                                     .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
                                     .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
                                     .lambda_expr_idx = rhs_expr,
+                                    .source_env = self_interp.env,
                                 };
                             }
                             try self_interp.bindings.append(.{ .pattern_idx = patt_idx, .value = ph });
@@ -403,8 +439,15 @@ pub const Interpreter = struct {
                         },
                         .s_expect => |expect_stmt| {
                             const bool_rt_var = try self.getCanonicalBoolRuntimeVar();
+                            // Get the actual type of the expression
+                            const expr_ct_var = can.ModuleEnv.varFrom(expect_stmt.body);
+                            const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
                             const cond_val = try self.evalExprMinimal(expect_stmt.body, roc_ops, bool_rt_var);
-                            if (!(try self.boolValueIsTrue(cond_val, bool_rt_var))) {
+                            // Try using the expression's actual type first, then fall back to canonical Bool type
+                            const is_true = self.boolValueIsTrue(cond_val, expr_rt_var) catch blk: {
+                                break :blk try self.boolValueIsTrue(cond_val, bool_rt_var);
+                            };
+                            if (!is_true) {
                                 try self.handleExpectFailure(expect_stmt.body, roc_ops);
                                 return error.Crash;
                             }
@@ -464,84 +507,24 @@ pub const Interpreter = struct {
 
                     return try self.evalArithmeticBinop(binop.op, expr_idx, lhs, rhs, lhs_rt_var, rhs_rt_var);
                 } else if (binop.op == .eq or binop.op == .ne or binop.op == .lt or binop.op == .le or binop.op == .gt or binop.op == .ge) {
-                    const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
-                    const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
-                    const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
-                    const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
-                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var);
-                    const rhs = try self.evalExprMinimal(binop.rhs, roc_ops, rhs_rt_var);
-                    defer lhs.decref(&self.runtime_layout_store, roc_ops);
-                    defer rhs.decref(&self.runtime_layout_store, roc_ops);
+                    // Comparison operators - evaluate both sides and compare
                     const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
                     var result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
                     result_rt_var = try self.ensureBoolRuntimeVar(self.env, result_ct_var, result_rt_var);
 
-                    const compare_op: std.math.CompareOperator = switch (binop.op) {
-                        .eq => .eq,
-                        .ne => .neq,
-                        .lt => .lt,
-                        .le => .lte,
-                        .gt => .gt,
-                        .ge => .gte,
-                        else => unreachable,
-                    };
+                    const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
+                    const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
+                    const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
+                    const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
 
-                    const lhs_bool_opt = self.boolValueIsTrue(lhs, lhs_rt_var) catch |err| switch (err) {
-                        error.TypeMismatch => null,
-                        else => return err,
-                    };
-                    const rhs_bool_opt = self.boolValueIsTrue(rhs, rhs_rt_var) catch |err| switch (err) {
-                        error.TypeMismatch => null,
-                        else => return err,
-                    };
+                    var lhs = try self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var);
+                    defer lhs.decref(&self.runtime_layout_store, roc_ops);
+                    var rhs = try self.evalExprMinimal(binop.rhs, roc_ops, rhs_rt_var);
+                    defer rhs.decref(&self.runtime_layout_store, roc_ops);
 
-                    if (lhs_bool_opt != null or rhs_bool_opt != null) {
-                        if (lhs_bool_opt == null or rhs_bool_opt == null) return error.TypeMismatch;
-                        const lhs_bool = lhs_bool_opt.?;
-                        const rhs_bool = rhs_bool_opt.?;
-                        switch (compare_op) {
-                            .eq => {
-                                return try self.makeBoolValue(result_rt_var, lhs_bool == rhs_bool);
-                            },
-                            .neq => {
-                                return try self.makeBoolValue(result_rt_var, lhs_bool != rhs_bool);
-                            },
-                            else => return error.TypeMismatch,
-                        }
-                    }
-
-                    const lhs_numeric = self.isNumericScalar(lhs.layout);
-                    const rhs_numeric = self.isNumericScalar(rhs.layout);
-                    if (lhs_numeric or rhs_numeric) {
-                        if (!(lhs_numeric and rhs_numeric)) return error.TypeMismatch;
-                        const numeric_order = try self.compareNumericScalars(lhs, rhs);
-                        return try self.makeBoolValue(result_rt_var, numeric_order.compare(compare_op));
-                    }
-
-                    if (lhs.layout.tag == .scalar and lhs.layout.data.scalar.tag == .str) {
-                        if (rhs.layout.tag != .scalar or rhs.layout.data.scalar.tag != .str) return error.TypeMismatch;
-                        switch (compare_op) {
-                            .eq, .neq => {
-                                const lhs_str: *const RocStr = @ptrCast(@alignCast(lhs.ptr.?));
-                                const rhs_str: *const RocStr = @ptrCast(@alignCast(rhs.ptr.?));
-                                const are_equal = std.mem.eql(u8, lhs_str.asSlice(), rhs_str.asSlice());
-                                const result = switch (compare_op) {
-                                    .eq => are_equal,
-                                    .neq => !are_equal,
-                                    else => unreachable,
-                                };
-                                return try self.makeBoolValue(result_rt_var, result);
-                            },
-                            else => return error.StringOrderingNotSupported,
-                        }
-                    }
-
-                    if (compare_op == .eq or compare_op == .neq) {
-                        const structural_equal = try self.valuesStructurallyEqual(lhs, lhs_rt_var, rhs, rhs_rt_var);
-                        return try self.makeBoolValue(result_rt_var, if (compare_op == .eq) structural_equal else !structural_equal);
-                    }
-
-                    return error.NotImplemented;
+                    // Compare the values
+                    const comparison_result = try self.compareValues(lhs, rhs, binop.op);
+                    return try self.makeBoolValue(result_rt_var, comparison_result);
                 } else if (binop.op == .@"or") {
                     const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
                     var result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
@@ -945,17 +928,8 @@ pub const Interpreter = struct {
                 const ct_var = can.ModuleEnv.varFrom(expr_idx);
                 const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
                 const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
-                // Check if this is Bool by comparing against the first builtin statement
-                const builtin_stmts_slice = self.env.store.sliceStatements(self.env.builtin_statements);
-                const bool_decl_idx = if (builtin_stmts_slice.len > 0) blk: {
-                    // Debug assertion: when we have builtins, first must be Bool (a nominal type)
-                    if (std.debug.runtime_safety) {
-                        const stmt = self.env.store.getStatement(builtin_stmts_slice[0]);
-                        std.debug.assert(stmt == .s_nominal_decl);
-                    }
-                    break :blk builtin_stmts_slice[0];
-                } else can.Can.BUILTIN_BOOL;
-                const backing_rt_var = if (nom.nominal_type_decl == bool_decl_idx)
+                // Check if this is Bool by comparing against the dynamic bool_stmt
+                const backing_rt_var = if (nom.nominal_type_decl == self.builtins.bool_stmt)
                     try self.getCanonicalBoolRuntimeVar()
                 else switch (nominal_resolved.desc.content) {
                     .structure => |st| switch (st) {
@@ -1054,7 +1028,8 @@ pub const Interpreter = struct {
                     const ct_var = can.ModuleEnv.varFrom(expr_idx);
                     break :blk try self.translateTypeVar(self.env, ct_var);
                 };
-                const resolved = self.runtime_types.resolveVar(rt_var);
+                // Unwrap nominal types and aliases to get the base tag union
+                const resolved = self.resolveBaseVar(rt_var);
                 if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) return error.NotImplemented;
                 const name_text = self.env.getIdent(tag.name);
                 var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
@@ -1270,6 +1245,7 @@ pub const Interpreter = struct {
                         .captures_pattern_idx = @enumFromInt(@as(u32, 0)), // no captures in minimal path
                         .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
                         .lambda_expr_idx = expr_idx,
+                        .source_env = self.env,
                     };
                 }
                 return value;
@@ -1351,6 +1327,7 @@ pub const Interpreter = struct {
                         .captures_pattern_idx = @enumFromInt(@as(u32, 0)), // not used in minimal path
                         .captures_layout_idx = captures_layout_idx,
                         .lambda_expr_idx = cls.lambda_idx,
+                        .source_env = self.env,
                     };
                     // Copy captures into record area following header (aligned)
                     const header_size = @sizeOf(layout.Closure);
@@ -1412,6 +1389,16 @@ pub const Interpreter = struct {
                 // Support calling closures produced by evaluating expressions (including nested calls)
                 if (func_val.layout.tag == .closure) {
                     const header: *const layout.Closure = @ptrCast(@alignCast(func_val.ptr.?));
+
+                    // Switch to the closure's source module for correct expression evaluation
+                    const saved_env = self.env;
+                    const saved_bindings_len = self.bindings.items.len;
+                    self.env = @constCast(header.source_env);
+                    defer {
+                        self.env = saved_env;
+                        self.bindings.shrinkRetainingCapacity(saved_bindings_len);
+                    }
+
                     const params = self.env.store.slicePatterns(header.params);
                     if (params.len != arg_indices.len) return error.TypeMismatch;
                     // Provide closure context for capture lookup during body eval
@@ -1731,6 +1718,7 @@ pub const Interpreter = struct {
             .e_unary_not => |unary| {
                 const operand_ct_var = can.ModuleEnv.varFrom(unary.expr);
                 const operand_rt_var = try self.translateTypeVar(self.env, operand_ct_var);
+
                 const operand = try self.evalExprMinimal(unary.expr, roc_ops, operand_rt_var);
                 defer operand.decref(&self.runtime_layout_store, roc_ops);
 
@@ -1739,7 +1727,8 @@ pub const Interpreter = struct {
                 const truthy = try self.boolValueIsTrue(operand, operand_rt_var);
                 return try self.makeBoolValue(result_rt_var, !truthy);
             },
-            .e_runtime_error => |_| {
+            .e_runtime_error => |rt_err| {
+                _ = rt_err;
                 self.triggerCrash("runtime error", false, roc_ops);
                 return error.Crash;
             },
@@ -1876,9 +1865,14 @@ pub const Interpreter = struct {
     }
 
     fn boolValueIsTrue(self: *Interpreter, value: StackValue, rt_var: types.Var) !bool {
+        // Check that the layout is compatible with Bool
         if (!self.isBoolLayout(value.layout)) return error.TypeMismatch;
+
+        // Try to verify this is actually a Bool type
         try self.prepareBoolIndices(rt_var);
         if (!try self.runtimeVarIsBool(rt_var)) return error.TypeMismatch;
+
+        // Bool values are ALWAYS stored with canonical indices: 0=False, 1=True
         const idx = try self.extractBoolTagIndex(value, rt_var);
         return idx == self.bool_true_index;
     }
@@ -2530,15 +2524,23 @@ pub const Interpreter = struct {
                         const backing = self.runtime_types.getNominalBackingVar(nom);
                         resolved = self.runtime_types.resolveVar(backing);
                     },
-                    else => break :unwrap,
+                    else => {
+                        break :unwrap;
+                    },
                 },
-                else => break :unwrap,
+                else => {
+                    break :unwrap;
+                },
             }
         }
 
-        if (resolved.desc.content != .structure) return false;
+        if (resolved.desc.content != .structure) {
+            return false;
+        }
         const structure = resolved.desc.content.structure;
-        if (structure != .tag_union) return false;
+        if (structure != .tag_union) {
+            return false;
+        }
         const tu = structure.tag_union;
 
         const scratch_tags_top = self.scratch_tags.items.len;
@@ -2576,11 +2578,14 @@ pub const Interpreter = struct {
         }
 
         const tags = self.scratch_tags.items[scratch_tags_top..];
-        if (tags.len == 0 or tags.len > 2) return false;
+        if (tags.len == 0 or tags.len > 2) {
+            return false;
+        }
 
         var false_idx: ?usize = null;
         var true_idx: ?usize = null;
         for (tags, 0..) |tag, i| {
+            // Use env to look up tag names - works for both Bool module and copied Bool types
             const name_text = self.env.getIdent(tag.name);
             if (std.mem.eql(u8, name_text, "False")) {
                 false_idx = i;
@@ -2591,29 +2596,54 @@ pub const Interpreter = struct {
             }
         }
 
-        if (false_idx == null or true_idx == null) return false;
-        self.bool_false_index = @intCast(false_idx.?);
-        self.bool_true_index = @intCast(true_idx.?);
+        // Accept types that have True OR False (for anonymous tags like [True]_others)
+        // Not just full Bool types with both tags
+        if (false_idx == null and true_idx == null) {
+            return false;
+        }
+        // IMPORTANT: Bool values are ALWAYS stored with canonical indices: False=0, True=1
+        // This is true regardless of the tag order in the type.
+        // The tag list indices (false_idx, true_idx) tell us which tag is which,
+        // but the actual runtime values always use canonical indices.
+        self.bool_false_index = 0; // False is always 0
+        self.bool_true_index = 1; // True is always 1
         return true;
     }
 
     fn getCanonicalBoolRuntimeVar(self: *Interpreter) !types.Var {
         if (self.canonical_bool_rt_var) |cached| return cached;
-        // Look up Bool's actual index from builtin_statements (should be first)
-        const builtin_stmts_slice = self.env.store.sliceStatements(self.env.builtin_statements);
-        std.debug.assert(builtin_stmts_slice.len >= 1); // Must have at least Bool
-        const bool_decl_idx = builtin_stmts_slice[0]; // Bool is always the first builtin
-        // Debug assertion: verify this is a nominal type declaration
-        if (std.debug.runtime_safety) {
-            const stmt = self.env.store.getStatement(bool_decl_idx);
-            std.debug.assert(stmt == .s_nominal_decl);
-        }
-        const ct_var = can.ModuleEnv.varFrom(bool_decl_idx);
-        const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
+        // Use the dynamic bool_stmt index (from the Bool module)
+        const bool_decl_idx = self.builtins.bool_stmt;
+
+        // Get the statement from the Bool module
+        const bool_stmt = self.builtins.bool_env.store.getStatement(bool_decl_idx);
+
+        // For nominal type declarations, we need to get the backing type, not the nominal wrapper
+        const ct_var = switch (bool_stmt) {
+            .s_nominal_decl => blk: {
+                // The type of the declaration is the nominal type, but we want its backing
+                const nom_var = can.ModuleEnv.varFrom(bool_decl_idx);
+                const nom_resolved = self.builtins.bool_env.types.resolveVar(nom_var);
+                if (nom_resolved.desc.content == .structure) {
+                    if (nom_resolved.desc.content.structure == .nominal_type) {
+                        const nt = nom_resolved.desc.content.structure.nominal_type;
+                        const backing_var = self.builtins.bool_env.types.getNominalBackingVar(nt);
+                        break :blk backing_var;
+                    }
+                }
+                break :blk nom_var;
+            },
+            else => can.ModuleEnv.varFrom(bool_decl_idx),
+        };
+
+        // Use bool_env to translate since bool_stmt is from the Bool module
+        // Cast away const - translateTypeVar doesn't actually mutate the module
+        const nominal_rt_var = try self.translateTypeVar(@constCast(self.builtins.bool_env), ct_var);
         const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
         const backing_rt_var = switch (nominal_resolved.desc.content) {
             .structure => |st| switch (st) {
                 .nominal_type => |nt| self.runtime_types.getNominalBackingVar(nt),
+                .tag_union => nominal_rt_var,
                 else => nominal_rt_var,
             },
             else => nominal_rt_var,
@@ -2832,6 +2862,44 @@ pub const Interpreter = struct {
             },
             else => return error.NotImplemented,
         }
+    }
+
+    fn compareValues(self: *Interpreter, lhs: StackValue, rhs: StackValue, op: can.CIR.Expr.Binop.Op) !bool {
+        // Handle numeric comparisons
+        if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar and
+            lhs.layout.data.scalar.tag == .int and rhs.layout.data.scalar.tag == .int)
+        {
+            const lhs_val = lhs.asI128();
+            const rhs_val = rhs.asI128();
+
+            return switch (op) {
+                .eq => lhs_val == rhs_val,
+                .ne => lhs_val != rhs_val,
+                .lt => lhs_val < rhs_val,
+                .le => lhs_val <= rhs_val,
+                .gt => lhs_val > rhs_val,
+                .ge => lhs_val >= rhs_val,
+                else => error.NotImplemented,
+            };
+        }
+
+        // Handle bool comparisons (like True == False)
+        if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar and
+            lhs.layout.data.scalar.tag == .bool and rhs.layout.data.scalar.tag == .bool)
+        {
+            const lhs_val = lhs.asBool();
+            const rhs_val = rhs.asBool();
+
+            return switch (op) {
+                .eq => lhs_val == rhs_val,
+                .ne => lhs_val != rhs_val,
+                else => error.NotImplemented,
+            };
+        }
+
+        // For now, only numeric and bool comparisons are supported
+        _ = self;
+        return error.NotImplemented;
     }
 
     fn makeBoxValueFromLayout(self: *Interpreter, result_layout: Layout, payload: StackValue, roc_ops: *RocOps) !StackValue {
@@ -3254,6 +3322,7 @@ pub const Interpreter = struct {
         self.bindings.deinit();
         self.active_closures.deinit();
         self.scratch_tags.deinit();
+        self.imported_modules.deinit();
     }
 
     /// Ensure the slot array can index at least `min_len` entries; zero-fill new entries.
@@ -3775,7 +3844,16 @@ test "interpreter: Var->Layout slot caches computed layout" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     // Create a concrete runtime type: Str
@@ -3800,7 +3878,16 @@ test "interpreter: translateTypeVar for str" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     const ct_str = try env.types.freshFromContent(.{ .structure = .str });
@@ -3818,7 +3905,16 @@ test "interpreter: translateTypeVar for int64" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     const ct_int = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
@@ -3844,7 +3940,16 @@ test "interpreter: translateTypeVar for f64" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     const ct_frac = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } });
@@ -3870,7 +3975,16 @@ test "interpreter: translateTypeVar for tuple(Str, I64)" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     const ct_str = try env.types.freshFromContent(.{ .structure = .str });
@@ -3914,7 +4028,16 @@ test "interpreter: translateTypeVar for record {first: Str, second: I64}" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     // Build compile-time record content
@@ -3972,7 +4095,16 @@ test "interpreter: translateTypeVar for alias of Str" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     const alias_name = try env.common.idents.insert(gpa, @import("base").Ident.for_text("MyAlias"));
@@ -3999,7 +4131,16 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     const name_nominal = try env.common.idents.insert(gpa, @import("base").Ident.for_text("Point"));
@@ -4031,7 +4172,16 @@ test "interpreter: translateTypeVar for flex var" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     const ct_flex = try env.types.freshFromContent(.{ .flex = types.Flex.init() });
@@ -4047,7 +4197,16 @@ test "interpreter: translateTypeVar for rigid var" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     const name_a = try env.common.idents.insert(gpa, @import("base").Ident.for_text("A"));
@@ -4065,7 +4224,16 @@ test "interpreter: poly cache insert and lookup" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     const f_id: u32 = 12345;
@@ -4101,7 +4269,16 @@ test "interpreter: prepareCall miss then hit" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     const func_id: u32 = 7777;
@@ -4131,7 +4308,16 @@ test "interpreter: prepareCallWithFuncVar populates cache" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     const func_id: u32 = 9999;
@@ -4161,7 +4347,16 @@ test "interpreter: unification constrains (a->a) with Str" {
     var env = try can.ModuleEnv.init(gpa, "");
     defer env.deinit();
 
-    var interp = try Interpreter.init(gpa, &env);
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
     const func_id: u32 = 42;

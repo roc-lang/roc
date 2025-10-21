@@ -25,9 +25,6 @@ bytes: collections.SafeList(u8) = .{},
 hash_table: collections.SafeList(Idx) = .{},
 /// The current number of entries in the hash table.
 entry_count: u32 = 0,
-/// When true, no new entries can be added to the interner.
-/// This is set after parsing is complete.
-frozen: if (std.debug.runtime_safety) bool else void = if (std.debug.runtime_safety) false else {},
 
 /// A unique index for a deduped string in this interner.
 pub const Idx = enum(u32) {
@@ -134,10 +131,6 @@ fn resizeHashTable(self: *SmallStringInterner, gpa: std.mem.Allocator) std.mem.A
 
 /// Add a string to this interner, returning a unique, serial index.
 pub fn insert(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Idx {
-    if (std.debug.runtime_safety) {
-        std.debug.assert(!self.frozen); // Should not insert into a frozen interner
-    }
-
     // Check if we need to resize the hash table (when 80% full = entry_count * 5 >= hash_table.len() * 4)
     if (self.entry_count * 5 >= self.hash_table.len() * 4) {
         try self.resizeHashTable(gpa);
@@ -178,13 +171,6 @@ pub fn getText(self: *const SmallStringInterner, idx: Idx) []u8 {
     return std.mem.sliceTo(bytes_slice[start..], 0);
 }
 
-/// Freeze the interner, preventing any new entries from being added.
-pub fn freeze(self: *SmallStringInterner) void {
-    if (std.debug.runtime_safety) {
-        self.frozen = true;
-    }
-}
-
 /// Serialize this interner to the given CompactWriter. The resulting interner
 /// in the writer's buffer will have offsets instead of pointers. Calling any
 /// methods on it or dereferencing its internal "pointers" (which are now
@@ -205,7 +191,6 @@ pub fn serialize(
         .bytes = serialized_bytes.*,
         .hash_table = serialized_hash_table.*,
         .entry_count = self.entry_count,
-        .frozen = self.frozen,
     };
 
     // Return the version of Self that's in the writer's buffer
@@ -223,7 +208,6 @@ pub const Serialized = struct {
     bytes: collections.SafeList(u8).Serialized,
     hash_table: collections.SafeList(Idx).Serialized,
     entry_count: u32,
-    frozen: if (std.debug.runtime_safety) bool else void,
 
     /// Serialize a SmallStringInterner into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -238,14 +222,10 @@ pub const Serialized = struct {
         try self.hash_table.serialize(&interner.hash_table, allocator, writer);
         // Copy simple values directly
         self.entry_count = interner.entry_count;
-        self.frozen = interner.frozen;
     }
 
     /// Deserialize this Serialized struct into a SmallStringInterner
     pub fn deserialize(self: *Serialized, offset: i64) *SmallStringInterner {
-        // Self.Serialized should be at least as big as Self
-        std.debug.assert(@sizeOf(Serialized) >= @sizeOf(SmallStringInterner));
-
         // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
         const interner = @as(*SmallStringInterner, @ptrCast(self));
 
@@ -253,7 +233,6 @@ pub const Serialized = struct {
             .bytes = self.bytes.deserialize(offset).*,
             .hash_table = self.hash_table.deserialize(offset).*,
             .entry_count = self.entry_count,
-            .frozen = self.frozen,
         };
 
         return interner;
@@ -460,7 +439,7 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
     try std.testing.expect(original_entry_count > 0);
 }
 
-test "SmallStringInterner frozen state CompactWriter roundtrip" {
+test "SmallStringInterner CompactWriter roundtrip" {
     const gpa = std.testing.allocator;
 
     // Create and populate interner
@@ -469,14 +448,6 @@ test "SmallStringInterner frozen state CompactWriter roundtrip" {
 
     _ = try original.insert(gpa, "test1");
     _ = try original.insert(gpa, "test2");
-
-    // Freeze the interner
-    original.freeze();
-
-    // Verify it's frozen
-    if (std.debug.runtime_safety) {
-        try std.testing.expect(original.frozen);
-    }
 
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -509,11 +480,6 @@ test "SmallStringInterner frozen state CompactWriter roundtrip" {
     // Cast and relocate
     const deserialized = @as(*SmallStringInterner, @ptrCast(@alignCast(buffer.ptr)));
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
-
-    // Verify frozen state is preserved
-    if (std.debug.runtime_safety) {
-        try std.testing.expect(deserialized.frozen);
-    }
 
     // Verify strings are still accessible
     // Note: Index 0 is reserved for the unused marker, so strings start at index 1
@@ -682,14 +648,11 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
 //     try std.testing.expectEqualStrings("interner1_string2", deserialized1.getText(idx1_2));
 //     try std.testing.expectEqual(@as(u32, 2), deserialized1.entry_count);
 
-//     // Verify interner 2 (frozen)
+//     // Verify interner 2
 //     try std.testing.expectEqualStrings("interner2_string1", deserialized2.getText(idx2_1));
 //     try std.testing.expectEqualStrings("interner2_string2", deserialized2.getText(idx2_2));
 //     try std.testing.expectEqualStrings("interner2_string3", deserialized2.getText(idx2_3));
 //     try std.testing.expectEqual(@as(u32, 3), deserialized2.entry_count);
-//     if (std.debug.runtime_safety) {
-//         try std.testing.expect(deserialized2.frozen);
-//     }
 
 //     // Verify interner 3
 //     try std.testing.expectEqualStrings("interner3_string1", deserialized3.getText(idx3_1));

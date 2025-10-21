@@ -34,7 +34,7 @@ The `else` branch has the type:
     _Str_
 
 But the `then` branch has the type:
-    _Result(ok, [TooBig]_others)_
+    _[Err([TooBig]_others)]_others2_
 
 All branches in an `if` must have compatible types.
 
@@ -127,24 +127,22 @@ foo = |num| {
 										(p-assign (ident "num")))
 									(e-num (value "10")))
 								(e-block
-									(e-nominal (nominal "Result")
-										(e-tag (name "Err")
-											(args
-												(e-tag (name "TooBig"))))))))
+									(e-tag (name "Err")
+										(args
+											(e-tag (name "TooBig")))))))
 						(if-else
 							(e-block
 								(e-string
 									(e-literal (string "SMALL")))))))
-				(e-nominal (nominal "Result")
-					(e-tag (name "Ok")
-						(args
-							(e-lookup-local
-								(p-assign (ident "str"))))))))
+				(e-tag (name "Ok")
+					(args
+						(e-lookup-local
+							(p-assign (ident "str")))))))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
 					(ty-lookup (name "U64") (builtin))
-					(ty-apply (name "Result") (local)
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-lookup (name "Str") (builtin))
 						(ty-tag-union
 							(ty-tag-name (name "TooBig")))))))))

@@ -80,7 +80,8 @@ is_named_color = |str|{
 # EXPECTED
 MODULE HEADER DEPRECATED - Color.md:1:1:8:2
 UNUSED VARIABLE - Color.md:30:5:30:25
-UNDEFINED VARIABLE - Color.md:68:14:68:27
+DOES NOT EXIST - Color.md:68:14:68:27
+TYPE MISMATCH - Color.md:32:5:45:6
 TYPE MISMATCH - Color.md:51:104:51:105
 # PROBLEMS
 **MODULE HEADER DEPRECATED**
@@ -114,9 +115,8 @@ The unused variable is declared here:
     ^^^^^^^^^^^^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `from_list` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Set.from_list` does not exist.
 
 **Color.md:68:14:68:27:**
 ```roc
@@ -124,6 +124,32 @@ Is there an `import` or `exposing` missing up-top?
 ```
              ^^^^^^^^^^^^^
 
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**Color.md:32:5:45:6:**
+```roc
+    match bytes {
+        ['#', a, b, c, d, e, f] => {
+            is_valid =
+                a.is_char_in_hex_range()
+                and b.is_char_in_hex_range()
+                and c.is_char_in_hex_range()
+                and d.is_char_in_hex_range()
+                and e.is_char_in_hex_range()
+                and f.is_char_in_hex_range()
+
+            if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
+        }
+        _ => Err(InvalidHex("Expected Hex must start with # and be 7 characters long, got ${str}"))
+    }
+```
+
+It has the type:
+    _[InvalidHex(Str), Err([InvalidHex(Str)]_others)][Ok(Color)]_others2_
+
+But the type annotation says it should have the type:
+    _Result(Color, [InvalidHex(Str)])_
 
 **TYPE MISMATCH**
 The first argument being passed to this function has the wrong type:
@@ -716,12 +742,12 @@ is_named_color = |str| {
 		(p-assign (ident "hex"))
 		(e-closure
 			(captures
-				(capture (ident "a"))
-				(capture (ident "d"))
-				(capture (ident "e"))
-				(capture (ident "c"))
 				(capture (ident "f"))
+				(capture (ident "d"))
 				(capture (ident "b"))
+				(capture (ident "e"))
+				(capture (ident "a"))
+				(capture (ident "c"))
 				(capture (ident "is_valid")))
 			(e-lambda
 				(args
@@ -830,45 +856,42 @@ is_named_color = |str| {
 													(if-branch
 														(e-lookup-local
 															(p-assign (ident "is_valid")))
-														(e-nominal (nominal "Result")
-															(e-tag (name "Ok")
-																(args
-																	(e-nominal (nominal "Color")
-																		(e-tag (name "Hex")
-																			(args
-																				(e-lookup-local
-																					(p-assign (ident "str")))))))))))
-												(if-else
-													(e-nominal (nominal "Result")
-														(e-tag (name "Err")
+														(e-tag (name "Ok")
 															(args
-																(e-tag (name "InvalidHex")
-																	(args
-																		(e-string
-																			(e-literal (string "Expected Hex to be in the range 0-9, a-f, A-F, got "))
+																(e-nominal (nominal "Color")
+																	(e-tag (name "Hex")
+																		(args
 																			(e-lookup-local
-																				(p-assign (ident "str")))
-																			(e-literal (string "")))))))))))))
+																				(p-assign (ident "str"))))))))))
+												(if-else
+													(e-tag (name "Err")
+														(args
+															(e-tag (name "InvalidHex")
+																(args
+																	(e-string
+																		(e-literal (string "Expected Hex to be in the range 0-9, a-f, A-F, got "))
+																		(e-lookup-local
+																			(p-assign (ident "str")))
+																		(e-literal (string ""))))))))))))
 								(branch
 									(patterns
 										(pattern (degenerate false)
 											(p-underscore)))
 									(value
-										(e-nominal (nominal "Result")
-											(e-tag (name "Err")
-												(args
-													(e-tag (name "InvalidHex")
-														(args
-															(e-string
-																(e-literal (string "Expected Hex must start with # and be 7 characters long, got "))
-																(e-lookup-local
-																	(p-assign (ident "str")))
-																(e-literal (string ""))))))))))))))))
+										(e-tag (name "Err")
+											(args
+												(e-tag (name "InvalidHex")
+													(args
+														(e-string
+															(e-literal (string "Expected Hex must start with # and be 7 characters long, got "))
+															(e-lookup-local
+																(p-assign (ident "str")))
+															(e-literal (string "")))))))))))))))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
 					(ty-lookup (name "Str") (builtin))
-					(ty-apply (name "Result") (local)
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-lookup (name "Color") (local))
 						(ty-tag-union
 							(ty-tag-name (name "InvalidHex")
@@ -878,15 +901,15 @@ is_named_color = |str| {
 		(e-closure
 			(captures
 				(capture (ident "b"))
-				(capture (ident "a"))
-				(capture (ident "r"))
-				(capture (ident "inner"))
-				(capture (ident "to_str"))
-				(capture (ident "r"))
-				(capture (ident "inner"))
 				(capture (ident "g"))
+				(capture (ident "r"))
+				(capture (ident "to_str"))
 				(capture (ident "b"))
-				(capture (ident "g")))
+				(capture (ident "inner"))
+				(capture (ident "r"))
+				(capture (ident "g"))
+				(capture (ident "a"))
+				(capture (ident "inner")))
 			(e-lambda
 				(args
 					(p-assign (ident "color")))
@@ -988,30 +1011,28 @@ is_named_color = |str| {
 								(e-lookup-local
 									(p-assign (ident "str"))))
 							(args))
-						(e-nominal (nominal "Result")
-							(e-tag (name "Ok")
-								(args
-									(e-nominal (nominal "Color")
-										(e-tag (name "Named")
-											(args
-												(e-lookup-local
-													(p-assign (ident "str")))))))))))
-				(if-else
-					(e-nominal (nominal "Result")
-						(e-tag (name "Err")
+						(e-tag (name "Ok")
 							(args
-								(e-tag (name "UnknownColor")
-									(args
-										(e-string
-											(e-literal (string "Unknown color "))
+								(e-nominal (nominal "Color")
+									(e-tag (name "Named")
+										(args
 											(e-lookup-local
-												(p-assign (ident "str")))
-											(e-literal (string "")))))))))))
+												(p-assign (ident "str"))))))))))
+				(if-else
+					(e-tag (name "Err")
+						(args
+							(e-tag (name "UnknownColor")
+								(args
+									(e-string
+										(e-literal (string "Unknown color "))
+										(e-lookup-local
+											(p-assign (ident "str")))
+										(e-literal (string ""))))))))))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
 					(ty-lookup (name "Str") (builtin))
-					(ty-apply (name "Result") (local)
+					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
 						(ty-lookup (name "Color") (local))
 						(ty-tag-union
 							(ty-tag-name (name "UnknownColor")
@@ -1025,7 +1046,7 @@ is_named_color = |str| {
 				(s-let
 					(p-assign (ident "colors"))
 					(e-call
-						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-runtime-error (tag "qualified_ident_does_not_exist"))
 						(e-list
 							(elems
 								(e-string
@@ -1096,11 +1117,10 @@ is_named_color = |str| {
 				(args
 					(e-lookup-local
 						(p-assign (ident "to_str")))))
-			(e-nominal (nominal "Result")
-				(e-tag (name "Ok")
-					(args
-						(e-string
-							(e-literal (string "#ff00ff")))))))))
+			(e-tag (name "Ok")
+				(args
+					(e-string
+						(e-literal (string "#ff00ff"))))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -1108,7 +1128,7 @@ is_named_color = |str| {
 	(defs
 		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
 		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
-		(patt (type "Str -> Result(Color, [InvalidHex(Str)])"))
+		(patt (type "Str -> Error"))
 		(patt (type "Error -> Error"))
 		(patt (type "Str -> Result(Color, [UnknownColor(Str)])"))
 		(patt (type "_arg -> Error")))
@@ -1118,7 +1138,7 @@ is_named_color = |str| {
 	(expressions
 		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
 		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
-		(expr (type "Str -> Result(Color, [InvalidHex(Str)])"))
+		(expr (type "Str -> Error"))
 		(expr (type "Error -> Error"))
 		(expr (type "Str -> Result(Color, [UnknownColor(Str)])"))
 		(expr (type "_arg -> Error"))))

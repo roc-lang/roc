@@ -44,11 +44,11 @@ UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:5:11:5:12
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:5:26:5:27
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:6:5:6:8
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:6:8:6:9
-UNDEFINED VARIABLE - record_different_fields_reserved_error.md:6:10:6:19
+DOES NOT EXIST - record_different_fields_reserved_error.md:6:10:6:19
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:6:19:6:20
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:5:7:7
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:7:7:8
-UNDEFINED VARIABLE - record_different_fields_reserved_error.md:7:9:7:19
+DOES NOT EXIST - record_different_fields_reserved_error.md:7:9:7:19
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:19:7:20
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -364,9 +364,8 @@ I don't recognize this syntax.
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
-**UNDEFINED VARIABLE**
-Nothing is named `true` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Bool.true` does not exist.
 
 **record_different_fields_reserved_error.md:6:10:6:19:**
 ```roc
@@ -408,9 +407,8 @@ I don't recognize this syntax.
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
-**UNDEFINED VARIABLE**
-Nothing is named `false` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Bool.false` does not exist.
 
 **record_different_fields_reserved_error.md:7:9:7:19:**
 ```roc
@@ -519,7 +517,7 @@ EndOfFile,
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
-		(e-runtime-error (tag "ident_not_in_scope")))
+		(e-runtime-error (tag "qualified_ident_does_not_exist")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
@@ -527,7 +525,7 @@ EndOfFile,
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
-		(e-runtime-error (tag "ident_not_in_scope")))
+		(e-runtime-error (tag "qualified_ident_does_not_exist")))
 	(e-runtime-error (tag "expr_not_canonicalized")))
 ~~~
 # TYPES

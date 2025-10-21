@@ -11,6 +11,7 @@ world = "World"
 ~~~
 # EXPECTED
 MODULE NOT FOUND - simple_module_no_blanks.md:1:1:1:17
+UNDEFINED VARIABLE - simple_module_no_blanks.md:2:10:2:22
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `pf.Stdout` was not found in this Roc project.
@@ -21,6 +22,17 @@ You're attempting to use this module here:
 import pf.Stdout
 ```
 ^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `line!` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**simple_module_no_blanks.md:2:10:2:22:**
+```roc
+hello! = Stdout.line!("Hello")
+```
+         ^^^^^^^^^^^^
 
 
 # TOKENS
@@ -57,16 +69,14 @@ NO CHANGE
 	(d-let
 		(p-assign (ident "hello!"))
 		(e-call
-			(e-lookup-external
-				(module-idx "2")
-				(target-node-idx "0"))
+			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-string
 				(e-literal (string "Hello")))))
 	(d-let
 		(p-assign (ident "world"))
 		(e-string
 			(e-literal (string "World"))))
-	(s-import (module "pf.Stdout") (qualifier "pf")
+	(s-import (module "pf.Stdout")
 		(exposes)))
 ~~~
 # TYPES

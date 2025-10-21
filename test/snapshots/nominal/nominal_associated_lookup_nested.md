@@ -18,22 +18,9 @@ myNum : U64
 myNum = Foo.Bar.baz
 ~~~
 # EXPECTED
-TYPE MISMATCH - nominal_associated_lookup_nested.md:8:10:8:19
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nominal_associated_lookup_nested.md:8:10:8:19:**
-```roc
-myType = Something
-```
-         ^^^^^^^^^
-
-It has the type:
-    _[Something]_others_
-
-But the type annotation says it should have the type:
-    _Foo.Bar_
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -126,7 +113,7 @@ myNum = Foo.Bar.baz
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
+		(patt (type "Foo.Bar"))
 		(patt (type "Num(Int(Unsigned64))"))
 		(patt (type "Num(Int(Unsigned64))")))
 	(type_decls
@@ -135,7 +122,7 @@ myNum = Foo.Bar.baz
 		(nominal (type "Foo.Bar")
 			(ty-header (name "Foo.Bar"))))
 	(expressions
-		(expr (type "Error"))
+		(expr (type "Foo.Bar"))
 		(expr (type "Num(Int(Unsigned64))"))
 		(expr (type "Num(Int(Unsigned64))"))))
 ~~~

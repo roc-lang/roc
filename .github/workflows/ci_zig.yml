@@ -64,6 +64,10 @@ jobs:
         run: |
           zig build test-playground -Doptimize=ReleaseSmall -- --verbose
 
+      - name: Verify Serialized Type Sizes
+        run: |
+          zig build test-serialization-sizes
+
   zig-tests:
     needs: check-once
     runs-on: ${{ matrix.os }}
