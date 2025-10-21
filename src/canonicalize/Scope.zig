@@ -241,24 +241,13 @@ pub fn introduceTypeDecl(
     }
 
     // Add type binding (single source of truth)
-    try scope.setTypeBinding(gpa, name, TypeBinding{ .local_nominal = type_decl });
+    try scope.type_bindings.put(gpa, name, TypeBinding{ .local_nominal = type_decl });
 
     if (shadowed_stmt) |stmt| {
         return TypeIntroduceResult{ .shadowing_warning = stmt };
     }
 
     return TypeIntroduceResult{ .success = {} };
-}
-
-/// Look up an unqualified type alias (for associated types)
-pub fn lookupTypeAlias(scope: *const Scope, name: Ident.Idx) ?CIR.Statement.Idx {
-    if (scope.type_bindings.get(name)) |binding| {
-        return switch (binding) {
-            .associated_nominal => |stmt| stmt,
-            else => null,
-        };
-    }
-    return null;
 }
 
 /// Introduce an unqualified type alias (for associated types)
@@ -269,7 +258,7 @@ pub fn introduceTypeAlias(
     unqualified_name: Ident.Idx,
     qualified_type_decl: CIR.Statement.Idx,
 ) !void {
-    try scope.setTypeBinding(gpa, unqualified_name, TypeBinding{
+    try scope.type_bindings.put(gpa, unqualified_name, TypeBinding{
         .associated_nominal = qualified_type_decl,
     });
 }
@@ -292,7 +281,7 @@ pub fn updateTypeDecl(
             .external_nominal => current,
         };
     } else {
-        try scope.setTypeBinding(gpa, name, TypeBinding{ .local_nominal = new_type_decl });
+        try scope.type_bindings.put(gpa, name, TypeBinding{ .local_nominal = new_type_decl });
     }
 }
 
@@ -426,26 +415,6 @@ pub fn introduceExposedItem(
     }
 
     return ExposedItemIntroduceResult{ .success = {} };
-}
-
-/// Insert or update a type binding in this scope
-pub fn setTypeBinding(
-    scope: *Scope,
-    gpa: std.mem.Allocator,
-    name: Ident.Idx,
-    binding: TypeBinding,
-) std.mem.Allocator.Error!void {
-    try scope.type_bindings.put(gpa, name, binding);
-}
-
-/// Retrieve a mutable pointer to a type binding if present
-pub fn getTypeBindingPtr(scope: *Scope, name: Ident.Idx) ?*TypeBinding {
-    return scope.type_bindings.getPtr(name);
-}
-
-/// Retrieve an immutable pointer to a type binding if present
-pub fn getTypeBindingConstPtr(scope: *const Scope, name: Ident.Idx) ?*const TypeBinding {
-    return scope.type_bindings.getPtr(name);
 }
 
 /// Look up an imported module in this scope

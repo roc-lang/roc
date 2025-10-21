@@ -338,7 +338,7 @@ fn processTypeDeclFirstPass(
     // Introduce the type name into scope early to support recursive references
     try self.scopeIntroduceTypeDecl(qualified_name_idx, type_decl_stmt_idx, region);
 
-    if (self.currentScope().getTypeBindingPtr(qualified_name_idx)) |binding_ptr| {
+    if (self.currentScope().type_bindings.getPtr(qualified_name_idx)) |binding_ptr| {
         binding_ptr.* = switch (type_decl.kind) {
             .alias => Scope.TypeBinding{ .local_alias = type_decl_stmt_idx },
             .nominal => Scope.TypeBinding{ .local_nominal = type_decl_stmt_idx },
@@ -6745,7 +6745,7 @@ fn scopeLookupTypeBinding(self: *Self, ident_idx: Ident.Idx) ?TypeBindingLocatio
     while (i > 0) {
         i -= 1;
         const scope = &self.scopes.items[i];
-        if (scope.getTypeBindingPtr(ident_idx)) |binding_ptr| {
+        if (scope.type_bindings.getPtr(ident_idx)) |binding_ptr| {
             return TypeBindingLocation{ .scope_index = i, .binding = binding_ptr };
         }
     }
@@ -6758,7 +6758,7 @@ fn scopeLookupTypeBindingConst(self: *const Self, ident_idx: Ident.Idx) ?TypeBin
     while (i > 0) {
         i -= 1;
         const scope = &self.scopes.items[i];
-        if (scope.getTypeBindingConstPtr(ident_idx)) |binding_ptr| {
+        if (scope.type_bindings.getPtr(ident_idx)) |binding_ptr| {
             return TypeBindingLocationConst{ .scope_index = i, .binding = binding_ptr };
         }
     }
@@ -7010,7 +7010,7 @@ fn setExternalTypeBinding(
     module_import_idx: CIR.Import.Idx,
     origin_region: Region,
 ) !void {
-    try scope.setTypeBinding(self.env.gpa, local_ident, Scope.TypeBinding{
+    try scope.type_bindings.put(self.env.gpa, local_ident, Scope.TypeBinding{
         .external_nominal = .{
             .module_ident = module_ident,
             .original_ident = original_ident,
