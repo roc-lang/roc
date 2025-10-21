@@ -14,6 +14,8 @@ blue = CC.Color.RGB(0,0,255)
 ~~~
 # EXPECTED
 MODULE NOT FOUND - nominal_tag_package_import.md:2:1:2:26
+TYPE NOT EXPOSED - nominal_tag_package_import.md:5:10:5:16
+UNDECLARED TYPE - nominal_tag_package_import.md:6:10:6:16
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `styles.Color` was not found in this Roc project.
@@ -24,6 +26,28 @@ You're attempting to use this module here:
 import styles.Color as CC
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**TYPE NOT EXPOSED**
+The type `Color` is not an exposed by the module `styles.Color`.
+
+You're attempting to use this type here:
+**nominal_tag_package_import.md:5:10:5:16:**
+```roc
+blue : CC.Color
+```
+         ^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _CC.Color_ is not declared in this scope.
+
+This type is referenced here:
+**nominal_tag_package_import.md:6:10:6:16:**
+```roc
+blue = CC.Color.RGB(0,0,255)
+```
+         ^^^^^^
 
 
 # TOKENS
@@ -63,16 +87,10 @@ blue = CC.Color.RGB(0, 0, 255)
 (can-ir
 	(d-let
 		(p-assign (ident "blue"))
-		(e-nominal-external
-			(external-module "styles.Color")
-			(e-tag (name "RGB")
-				(args
-					(e-num (value "0"))
-					(e-num (value "0"))
-					(e-num (value "255")))))
+		(e-runtime-error (tag "undeclared_type"))
 		(annotation
 			(declared-type
-				(ty-lookup (name "Color") (external-module "styles.Color")))))
+				(ty-malformed))))
 	(s-import (module "styles.Color")
 		(exposes)))
 ~~~

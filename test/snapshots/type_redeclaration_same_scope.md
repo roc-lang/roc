@@ -9,25 +9,13 @@ Maybe(a) : [Some(a), None]
 Maybe(a) : [Ok(a), Err]
 ~~~
 # EXPECTED
-TYPE REDECLARED - type_redeclaration_same_scope.md:2:1:2:24
+COMPILER DIAGNOSTIC - /Users/rtfeldman/code/roc2/test/snapshots/type_redeclaration_same_scope.md:0:0:0:0
 # PROBLEMS
-**TYPE REDECLARED**
-The type _Maybe_ is being redeclared.
+**COMPILER DIAGNOSTIC**
 
-The redeclaration is here:
-**type_redeclaration_same_scope.md:2:1:2:24:**
-```roc
-Maybe(a) : [Ok(a), Err]
-```
-^^^^^^^^^^^^^^^^^^^^^^^
-
-But _Maybe_ was already declared here:
-**type_redeclaration_same_scope.md:1:1:1:27:**
-```roc
-Maybe(a) : [Some(a), None]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-
+**Compiler Diagnostic**
+Diagnostic type 'type_alias_redeclared' is not yet handled in report generation.
+**/Users/rtfeldman/code/roc2/test/snapshots/type_redeclaration_same_scope.md:0:0:0:0**
 
 # TOKENS
 ~~~zig

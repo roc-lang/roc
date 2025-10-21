@@ -28,13 +28,14 @@ main! = |_| processComplex(Ok([Some(42), None]))
 ~~~
 # EXPECTED
 UNDECLARED TYPE - type_app_complex_nested.md:18:33:18:38
+UNDECLARED TYPE - type_app_complex_nested.md:18:44:18:48
 UNDECLARED TYPE - type_app_complex_nested.md:18:54:18:59
 UNDECLARED TYPE - type_app_complex_nested.md:4:30:4:35
+UNDECLARED TYPE - type_app_complex_nested.md:4:41:4:45
 UNDECLARED TYPE - type_app_complex_nested.md:4:51:4:56
 UNUSED VARIABLE - type_app_complex_nested.md:7:12:7:21
 UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
-TOO MANY ARGS - type_app_complex_nested.md:18:44:18:63
-TOO MANY ARGS - type_app_complex_nested.md:4:41:4:61
+UNDECLARED TYPE - type_app_complex_nested.md:12:32:12:36
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Maybe_ is not declared in this scope.
@@ -45,6 +46,17 @@ This type is referenced here:
 ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
 ```
                                 ^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Dict_ is not declared in this scope.
+
+This type is referenced here:
+**type_app_complex_nested.md:18:44:18:48:**
+```roc
+ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
+```
+                                           ^^^^
 
 
 **UNDECLARED TYPE**
@@ -67,6 +79,17 @@ This type is referenced here:
 processComplex : Result(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
 ```
                              ^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Dict_ is not declared in this scope.
+
+This type is referenced here:
+**type_app_complex_nested.md:4:41:4:45:**
+```roc
+processComplex : Result(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
+```
+                                        ^^^^
 
 
 **UNDECLARED TYPE**
@@ -103,24 +126,15 @@ deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
              ^^^^^
 
 
-**TOO MANY ARGS**
-The type _Dict_ expects  argument, but got  instead.
-**type_app_complex_nested.md:18:44:18:63:**
+**UNDECLARED TYPE**
+The type _Dict_ is not declared in this scope.
+
+This type is referenced here:
+**type_app_complex_nested.md:12:32:12:36:**
 ```roc
-ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
+deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
 ```
-                                           ^^^^^^^^^^^^^^^^^^^
-
-
-
-**TOO MANY ARGS**
-The type _Dict_ expects  argument, but got  instead.
-**type_app_complex_nested.md:4:41:4:61:**
-```roc
-processComplex : Result(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
-```
-                                        ^^^^^^^^^^^^^^^^^^^^
-
+                               ^^^^
 
 
 # TOKENS
@@ -301,9 +315,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 					(ty-apply (name "Result") (external-module "Result")
 						(ty-apply (name "List") (builtin)
 							(ty-malformed))
-						(ty-apply (name "Dict") (external-module "Dict")
-							(ty-lookup (name "Str") (builtin))
-							(ty-malformed)))
+						(ty-malformed))
 					(ty-apply (name "List") (builtin)
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(d-let
@@ -345,9 +357,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 		(ty-apply (name "Result") (external-module "Result")
 			(ty-apply (name "List") (builtin)
 				(ty-malformed))
-			(ty-apply (name "Dict") (external-module "Dict")
-				(ty-lookup (name "Str") (builtin))
-				(ty-malformed)))))
+			(ty-malformed))))
 ~~~
 # TYPES
 ~~~clojure

@@ -81,6 +81,7 @@ UNDECLARED TYPE - can_import_exposing_types.md:20:58:20:63
 UNDEFINED VARIABLE - can_import_exposing_types.md:22:5:22:16
 UNDEFINED VARIABLE - can_import_exposing_types.md:24:13:24:30
 UNDECLARED TYPE - can_import_exposing_types.md:35:16:35:22
+TYPE NOT EXPOSED - can_import_exposing_types.md:35:30:35:37
 UNDEFINED VARIABLE - can_import_exposing_types.md:36:25:36:40
 UNDECLARED TYPE - can_import_exposing_types.md:39:18:39:26
 UNDEFINED VARIABLE - can_import_exposing_types.md:42:23:42:42
@@ -339,6 +340,17 @@ This type is referenced here:
 createClient : Config -> Http.Client
 ```
                ^^^^^^
+
+
+**TYPE NOT EXPOSED**
+The type `Client` is not an exposed by the module `http.Client`.
+
+You're attempting to use this type here:
+**can_import_exposing_types.md:35:30:35:37:**
+```roc
+createClient : Config -> Http.Client
+```
+                             ^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -840,13 +852,13 @@ combineResults = |jsonResult, httpStatus|
 			(declared-type
 				(ty-fn (effectful false)
 					(ty-malformed)
-					(ty-lookup (name "Client") (external-module "http.Client"))))))
+					(ty-malformed)))))
 	(d-let
 		(p-assign (ident "handleResponse"))
 		(e-closure
 			(captures
-				(capture (ident "status"))
-				(capture (ident "error")))
+				(capture (ident "error"))
+				(capture (ident "status")))
 			(e-lambda
 				(args
 					(p-assign (ident "response")))

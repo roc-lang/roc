@@ -45,9 +45,9 @@ Complex : {
 # EXPECTED
 TYPE REDECLARED - type_comprehensive_scope.md:10:1:10:37
 UNDECLARED TYPE - type_comprehensive_scope.md:13:19:13:23
-TYPE REDECLARED - type_comprehensive_scope.md:22:1:22:13
+COMPILER DIAGNOSTIC - /Users/rtfeldman/code/roc2/test/snapshots/type_comprehensive_scope.md:0:0:0:0
 UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
-TOO MANY ARGS - type_comprehensive_scope.md:29:10:29:24
+UNDECLARED TYPE - type_comprehensive_scope.md:29:10:29:14
 # PROBLEMS
 **TYPE REDECLARED**
 The type _Result_ is being redeclared.
@@ -78,23 +78,11 @@ Tree(a) : [Branch(Node(a)), Leaf(a)]
                   ^^^^
 
 
-**TYPE REDECLARED**
-The type _Person_ is being redeclared.
+**COMPILER DIAGNOSTIC**
 
-The redeclaration is here:
-**type_comprehensive_scope.md:22:1:22:13:**
-```roc
-Person : U64
-```
-^^^^^^^^^^^^
-
-But _Person_ was already declared here:
-**type_comprehensive_scope.md:7:1:7:33:**
-```roc
-Person : { name: Str, age: U64 }
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
+**Compiler Diagnostic**
+Diagnostic type 'type_alias_redeclared' is not yet handled in report generation.
+**/Users/rtfeldman/code/roc2/test/snapshots/type_comprehensive_scope.md:0:0:0:0**
 
 **UNDECLARED TYPE**
 The type _SomeUndeclaredType_ is not declared in this scope.
@@ -107,14 +95,15 @@ BadType : SomeUndeclaredType
           ^^^^^^^^^^^^^^^^^^
 
 
-**TOO MANY ARGS**
-The type _Dict_ expects  argument, but got  instead.
-**type_comprehensive_scope.md:29:10:29:24:**
+**UNDECLARED TYPE**
+The type _Dict_ is not declared in this scope.
+
+This type is referenced here:
+**type_comprehensive_scope.md:29:10:29:14:**
 ```roc
 MyDict : Dict(Str, U64)
 ```
-         ^^^^^^^^^^^^^^
-
+         ^^^^
 
 
 # TOKENS
@@ -337,7 +326,7 @@ Complex : {
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(s-alias-decl
 		(ty-header (name "MyResult"))
-		(ty-apply (name "Result") (external-module "Result")
+		(ty-apply (name "Result") (local)
 			(ty-lookup (name "Str") (builtin))
 			(ty-lookup (name "U64") (builtin))))
 	(s-alias-decl
@@ -352,16 +341,14 @@ Complex : {
 			(ty-lookup (name "Str") (builtin))))
 	(s-alias-decl
 		(ty-header (name "MyDict"))
-		(ty-apply (name "Dict") (external-module "Dict")
-			(ty-lookup (name "Str") (builtin))
-			(ty-lookup (name "U64") (builtin))))
+		(ty-malformed))
 	(s-alias-decl
 		(ty-header (name "Complex"))
 		(ty-record
 			(field (field "person")
 				(ty-lookup (name "Person") (local)))
 			(field (field "result")
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-apply (name "Result") (local)
 					(ty-lookup (name "Bool") (external-module "Bool"))
 					(ty-lookup (name "Str") (builtin))))
 			(field (field "tree")

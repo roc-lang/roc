@@ -44,18 +44,18 @@ PARSE ERROR - can_import_nested_modules.md:3:38:3:45
 PARSE ERROR - can_import_nested_modules.md:3:45:3:46
 MODULE NOT FOUND - can_import_nested_modules.md:1:1:1:19
 MODULE NOT FOUND - can_import_nested_modules.md:2:1:2:19
-MODULE NOT IMPORTED - can_import_nested_modules.md:6:15:6:30
+UNDECLARED TYPE - can_import_nested_modules.md:6:21:6:30
 UNDEFINED VARIABLE - can_import_nested_modules.md:7:26:7:41
-MODULE NOT IMPORTED - can_import_nested_modules.md:10:28:10:42
+UNDECLARED TYPE - can_import_nested_modules.md:10:36:10:42
 UNDEFINED VARIABLE - can_import_nested_modules.md:11:29:11:43
-MODULE NOT IMPORTED - can_import_nested_modules.md:14:15:14:37
-MODULE NOT IMPORTED - can_import_nested_modules.md:14:58:14:77
+UNDECLARED TYPE - can_import_nested_modules.md:14:28:14:37
+UNDECLARED TYPE - can_import_nested_modules.md:14:71:14:77
 UNDEFINED VARIABLE - can_import_nested_modules.md:16:5:16:37
 UNDEFINED VARIABLE - can_import_nested_modules.md:20:23:20:30
 UNDEFINED VARIABLE - can_import_nested_modules.md:20:37:20:58
-MODULE NOT IMPORTED - can_import_nested_modules.md:23:16:23:36
-MODULE NOT IMPORTED - can_import_nested_modules.md:23:47:23:61
-MODULE NOT IMPORTED - can_import_nested_modules.md:23:63:23:77
+UNDECLARED TYPE - can_import_nested_modules.md:23:24:23:36
+UNDECLARED TYPE - can_import_nested_modules.md:23:55:23:61
+UNDECLARED TYPE - can_import_nested_modules.md:23:71:23:77
 UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 # PROBLEMS
 **PARSE ERROR**
@@ -213,15 +213,15 @@ import http.Client.Auth as HttpAuth
 ^^^^^^^^^^^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `Config` imported into this Roc file.
+**UNDECLARED TYPE**
+The type _Config.Settings_ is not declared in this scope.
 
-You're attempting to use this module here:
-**can_import_nested_modules.md:6:15:6:30:**
+This type is referenced here:
+**can_import_nested_modules.md:6:21:6:30:**
 ```roc
 parseConfig : Config.Settings -> Str
 ```
-              ^^^^^^^^^^^^^^^
+                    ^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -235,15 +235,15 @@ parseConfig = |settings| Config.toString(settings)
                          ^^^^^^^^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `HttpAuth` imported into this Roc file.
+**UNDECLARED TYPE**
+The type _HttpAuth.Token_ is not declared in this scope.
 
-You're attempting to use this module here:
-**can_import_nested_modules.md:10:28:10:42:**
+This type is referenced here:
+**can_import_nested_modules.md:10:36:10:42:**
 ```roc
 authenticate : Str, Str -> HttpAuth.Token
 ```
-                           ^^^^^^^^^^^^^^
+                                   ^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -257,26 +257,26 @@ authenticate = |user, pass| HttpAuth.login(user, pass)
                             ^^^^^^^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `Config.Parser` imported into this Roc file.
+**UNDECLARED TYPE**
+The type _Config.Parser.Advanced_ is not declared in this scope.
 
-You're attempting to use this module here:
-**can_import_nested_modules.md:14:15:14:37:**
+This type is referenced here:
+**can_import_nested_modules.md:14:28:14:37:**
 ```roc
 processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
 ```
-              ^^^^^^^^^^^^^^^^^^^^^^
+                           ^^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `Config.Parser` imported into this Roc file.
+**UNDECLARED TYPE**
+The type _Config.Parser.Error_ is not declared in this scope.
 
-You're attempting to use this module here:
-**can_import_nested_modules.md:14:58:14:77:**
+This type is referenced here:
+**can_import_nested_modules.md:14:71:14:77:**
 ```roc
 processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
 ```
-                                                         ^^^^^^^^^^^^^^^^^^^
+                                                                      ^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -312,37 +312,37 @@ formatOutput = |text| padLeft(text, Config.defaultPadding)
                                     ^^^^^^^^^^^^^^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `HttpAuth` imported into this Roc file.
+**UNDECLARED TYPE**
+The type _HttpAuth.Credentials_ is not declared in this scope.
 
-You're attempting to use this module here:
-**can_import_nested_modules.md:23:16:23:36:**
+This type is referenced here:
+**can_import_nested_modules.md:23:24:23:36:**
 ```roc
 validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 ```
-               ^^^^^^^^^^^^^^^^^^^^
+                       ^^^^^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `HttpAuth` imported into this Roc file.
+**UNDECLARED TYPE**
+The type _HttpAuth.Token_ is not declared in this scope.
 
-You're attempting to use this module here:
-**can_import_nested_modules.md:23:47:23:61:**
+This type is referenced here:
+**can_import_nested_modules.md:23:55:23:61:**
 ```roc
 validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 ```
-                                              ^^^^^^^^^^^^^^
+                                                      ^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `HttpAuth` imported into this Roc file.
+**UNDECLARED TYPE**
+The type _HttpAuth.Error_ is not declared in this scope.
 
-You're attempting to use this module here:
-**can_import_nested_modules.md:23:63:23:77:**
+This type is referenced here:
+**can_import_nested_modules.md:23:71:23:77:**
 ```roc
 validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 ```
-                                                              ^^^^^^^^^^^^^^
+                                                                      ^^^^^^
 
 
 **UNDEFINED VARIABLE**

@@ -18,26 +18,14 @@ Bar : SomeUndeclaredType
 Baz : Foo
 ~~~
 # EXPECTED
-TYPE REDECLARED - type_scope_integration.md:5:1:5:10
+COMPILER DIAGNOSTIC - /Users/rtfeldman/code/roc2/test/snapshots/type_scope_integration.md:0:0:0:0
 UNDECLARED TYPE - type_scope_integration.md:8:7:8:25
 # PROBLEMS
-**TYPE REDECLARED**
-The type _Foo_ is being redeclared.
+**COMPILER DIAGNOSTIC**
 
-The redeclaration is here:
-**type_scope_integration.md:5:1:5:10:**
-```roc
-Foo : Str
-```
-^^^^^^^^^
-
-But _Foo_ was already declared here:
-**type_scope_integration.md:2:1:2:10:**
-```roc
-Foo : U64
-```
-^^^^^^^^^
-
+**Compiler Diagnostic**
+Diagnostic type 'type_alias_redeclared' is not yet handled in report generation.
+**/Users/rtfeldman/code/roc2/test/snapshots/type_scope_integration.md:0:0:0:0**
 
 **UNDECLARED TYPE**
 The type _SomeUndeclaredType_ is not declared in this scope.

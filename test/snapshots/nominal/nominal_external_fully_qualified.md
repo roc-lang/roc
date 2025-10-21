@@ -17,6 +17,9 @@ handleResult = |result| {
 ~~~
 # EXPECTED
 MODULE NOT FOUND - nominal_external_fully_qualified.md:1:1:1:22
+TYPE NOT EXPOSED - nominal_external_fully_qualified.md:3:30:3:43
+UNDECLARED TYPE - nominal_external_fully_qualified.md:6:23:6:36
+UNDECLARED TYPE - nominal_external_fully_qualified.md:7:23:7:36
 UNUSED VARIABLE - nominal_external_fully_qualified.md:7:41:7:45
 # PROBLEMS
 **MODULE NOT FOUND**
@@ -28,6 +31,39 @@ You're attempting to use this module here:
 import MyResultModule
 ```
 ^^^^^^^^^^^^^^^^^^^^^
+
+
+**TYPE NOT EXPOSED**
+The type `MyResultType` is not an exposed by the module `MyResultModule`.
+
+You're attempting to use this type here:
+**nominal_external_fully_qualified.md:3:30:3:43:**
+```roc
+handleResult : MyResultModule.MyResultType(Str, I32) -> Str
+```
+                             ^^^^^^^^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _MyResultModule.MyResultType_ is not declared in this scope.
+
+This type is referenced here:
+**nominal_external_fully_qualified.md:6:23:6:36:**
+```roc
+        MyResultModule.MyResultType.Ok(value) => value
+```
+                      ^^^^^^^^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _MyResultModule.MyResultType_ is not declared in this scope.
+
+This type is referenced here:
+**nominal_external_fully_qualified.md:7:23:7:36:**
+```roc
+        MyResultModule.MyResultType.Err(code) => "Error: $(code.toStr())"
+```
+                      ^^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -120,25 +156,21 @@ handleResult = |result| {
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-nominal-external (external-module "MyResultModule")
-												(p-applied-tag))))
+											(p-runtime-error (tag "undeclared_type"))))
 									(value
 										(e-lookup-local
 											(p-assign (ident "value")))))
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-nominal-external (external-module "MyResultModule")
-												(p-applied-tag))))
+											(p-runtime-error (tag "undeclared_type"))))
 									(value
 										(e-string
 											(e-literal (string "Error: $(code.toStr())")))))))))))
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-apply (name "MyResultType") (external-module "MyResultModule")
-						(ty-lookup (name "Str") (builtin))
-						(ty-lookup (name "I32") (builtin)))
+					(ty-malformed)
 					(ty-lookup (name "Str") (builtin))))))
 	(s-import (module "MyResultModule")
 		(exposes)))
@@ -147,7 +179,7 @@ handleResult = |result| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Str")))
+		(patt (type "Error -> Error")))
 	(expressions
-		(expr (type "Error -> Str"))))
+		(expr (type "Error -> Error"))))
 ~~~

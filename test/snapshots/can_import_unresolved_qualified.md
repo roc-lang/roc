@@ -35,9 +35,10 @@ parser = Json.Parser.Advanced.NonExistent.create
 MODULE NOT FOUND - can_import_unresolved_qualified.md:1:1:1:17
 MODULE NOT FOUND - can_import_unresolved_qualified.md:2:1:2:27
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:5:8:5:31
+TYPE NOT EXPOSED - can_import_unresolved_qualified.md:8:17:8:29
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:9:20:9:34
-MODULE NOT IMPORTED - can_import_unresolved_qualified.md:12:18:12:37
-MODULE NOT IMPORTED - can_import_unresolved_qualified.md:12:41:12:61
+TYPE NOT EXPOSED - can_import_unresolved_qualified.md:12:29:12:37
+TYPE NOT EXPOSED - can_import_unresolved_qualified.md:12:52:12:61
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:13:24:13:51
 UNUSED VARIABLE - can_import_unresolved_qualified.md:13:19:13:22
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:16:10:16:20
@@ -77,6 +78,17 @@ main = Json.NonExistent.method
        ^^^^^^^^^^^^^^^^^^^^^^^
 
 
+**TYPE NOT EXPOSED**
+The type `InvalidType` is not an exposed by the module `json.Json`.
+
+You're attempting to use this type here:
+**can_import_unresolved_qualified.md:8:17:8:29:**
+```roc
+parseData : Json.InvalidType -> Str
+```
+                ^^^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `stringify` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -88,26 +100,26 @@ parseData = |data| Json.stringify(data)
                    ^^^^^^^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `Http.Server` imported into this Roc file.
+**TYPE NOT EXPOSED**
+The type `Request` is not an exposed by the module `http.Client`.
 
-You're attempting to use this module here:
-**can_import_unresolved_qualified.md:12:18:12:37:**
+You're attempting to use this type here:
+**can_import_unresolved_qualified.md:12:29:12:37:**
 ```roc
 processRequest : Http.Server.Request -> Http.Server.Response
 ```
-                 ^^^^^^^^^^^^^^^^^^^
+                            ^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `Http.Server` imported into this Roc file.
+**TYPE NOT EXPOSED**
+The type `Response` is not an exposed by the module `http.Client`.
 
-You're attempting to use this module here:
-**can_import_unresolved_qualified.md:12:41:12:61:**
+You're attempting to use this type here:
+**can_import_unresolved_qualified.md:12:52:12:61:**
 ```roc
 processRequest : Http.Server.Request -> Http.Server.Response
 ```
-                                        ^^^^^^^^^^^^^^^^^^^^
+                                                   ^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -251,7 +263,7 @@ NO CHANGE
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-lookup (name "InvalidType") (external-module "json.Json"))
+					(ty-malformed)
 					(ty-lookup (name "Str") (builtin))))))
 	(d-let
 		(p-assign (ident "processRequest"))

@@ -7,17 +7,34 @@ const collections = @import("collections");
 const CIR = @import("CIR.zig");
 
 const Ident = base.Ident;
+const Region = base.Region;
 
 const Scope = @This();
+
+/// Represents a type binding for a type imported from an external module.
+/// Contains all necessary information to resolve the type from the imported module.
+pub const ExternalTypeBinding = struct {
+    module_ident: Ident.Idx,
+    original_ident: Ident.Idx,
+    target_node_idx: ?u16,
+    import_idx: ?CIR.Import.Idx,
+    origin_region: Region,
+};
+
+/// A unified type binding that can represent either a locally declared type or an externally imported type.
+/// This is the single source of truth for all type resolution in a scope.
+pub const TypeBinding = union(enum) {
+    local_nominal: CIR.Statement.Idx,
+    local_alias: CIR.Statement.Idx,
+    associated_nominal: CIR.Statement.Idx,
+    external_nominal: ExternalTypeBinding,
+};
 
 /// Maps an Ident to a Pattern in the Can IR
 idents: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx),
 aliases: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx),
-/// Maps type names to their type declaration statements
-type_decls: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Statement.Idx),
-/// Maps unqualified type names to their fully qualified Statement.Idx (for associated types)
-/// Example: within Foo's associated block, "Bar" -> statement for "Foo.Bar"
-type_aliases: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Statement.Idx),
+/// Canonical bindings for type names (local, auto-imported, and imported types)
+type_bindings: std.AutoHashMapUnmanaged(Ident.Idx, TypeBinding),
 /// Maps type variables to their type annotation indices
 type_vars: std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx),
 /// Maps module alias names to their full module names
@@ -33,8 +50,7 @@ pub fn init(is_function_boundary: bool) Scope {
     return Scope{
         .idents = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx){},
         .aliases = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx){},
-        .type_decls = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Statement.Idx){},
-        .type_aliases = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Statement.Idx){},
+        .type_bindings = std.AutoHashMapUnmanaged(Ident.Idx, TypeBinding){},
         .type_vars = std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx){},
         .module_aliases = std.AutoHashMapUnmanaged(Ident.Idx, Ident.Idx){},
         .exposed_items = std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo){},
@@ -47,8 +63,7 @@ pub fn init(is_function_boundary: bool) Scope {
 pub fn deinit(self: *Scope, gpa: std.mem.Allocator) void {
     self.idents.deinit(gpa);
     self.aliases.deinit(gpa);
-    self.type_decls.deinit(gpa);
-    self.type_aliases.deinit(gpa);
+    self.type_bindings.deinit(gpa);
     self.type_vars.deinit(gpa);
     self.module_aliases.deinit(gpa);
     self.exposed_items.deinit(gpa);
@@ -157,12 +172,11 @@ pub const ImportedModuleIntroduceResult = union(enum) {
 };
 
 /// Item kinds in a scope
-pub const ItemKind = enum { ident, alias, type_decl, type_var, module_alias, exposed_item };
+pub const ItemKind = enum { ident, alias, type_var, module_alias, exposed_item };
 
 /// Get the appropriate map for the given item kind
 pub fn items(scope: *Scope, comptime item_kind: ItemKind) switch (item_kind) {
     .ident, .alias => *std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx),
-    .type_decl => *std.AutoHashMapUnmanaged(Ident.Idx, CIR.Statement.Idx),
     .type_var => *std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx),
     .module_alias => *std.AutoHashMapUnmanaged(Ident.Idx, Ident.Idx),
     .exposed_item => *std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo),
@@ -170,7 +184,6 @@ pub fn items(scope: *Scope, comptime item_kind: ItemKind) switch (item_kind) {
     return switch (item_kind) {
         .ident => &scope.idents,
         .alias => &scope.aliases,
-        .type_decl => &scope.type_decls,
         .type_var => &scope.type_vars,
         .module_alias => &scope.module_aliases,
         .exposed_item => &scope.exposed_items,
@@ -180,7 +193,6 @@ pub fn items(scope: *Scope, comptime item_kind: ItemKind) switch (item_kind) {
 /// Get the appropriate map for the given item kind (const version)
 pub fn itemsConst(scope: *const Scope, comptime item_kind: ItemKind) switch (item_kind) {
     .ident, .alias => *const std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx),
-    .type_decl => *const std.AutoHashMapUnmanaged(Ident.Idx, CIR.Statement.Idx),
     .type_var => *const std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx),
     .module_alias => *const std.AutoHashMapUnmanaged(Ident.Idx, Ident.Idx),
     .exposed_item => *const std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo),
@@ -188,7 +200,6 @@ pub fn itemsConst(scope: *const Scope, comptime item_kind: ItemKind) switch (ite
     return switch (item_kind) {
         .ident => &scope.idents,
         .alias => &scope.aliases,
-        .type_decl => &scope.type_decls,
         .type_var => &scope.type_vars,
         .module_alias => &scope.module_aliases,
         .exposed_item => &scope.exposed_items,
@@ -198,7 +209,6 @@ pub fn itemsConst(scope: *const Scope, comptime item_kind: ItemKind) switch (ite
 /// Put an item in the scope, panics on OOM
 pub fn put(scope: *Scope, gpa: std.mem.Allocator, comptime item_kind: ItemKind, name: Ident.Idx, value: switch (item_kind) {
     .ident, .alias => CIR.Pattern.Idx,
-    .type_decl => CIR.Statement.Idx,
     .type_var => CIR.TypeAnno.Idx,
     .module_alias => Ident.Idx,
     .exposed_item => ExposedItemInfo,
@@ -214,13 +224,14 @@ pub fn introduceTypeDecl(
     type_decl: CIR.Statement.Idx,
     parent_lookup_fn: ?fn (Ident.Idx) ?CIR.Statement.Idx,
 ) std.mem.Allocator.Error!TypeIntroduceResult {
-    // Check if already exists in current scope by comparing text content
-    var iter = scope.type_decls.iterator();
-    while (iter.next()) |entry| {
-        if (name.idx == entry.key_ptr.idx) {
-            // Type redeclaration is an error, not just a warning
-            return TypeIntroduceResult{ .redeclared_error = entry.value_ptr.* };
-        }
+    // Check if type already exists in this scope
+    if (scope.type_bindings.getPtr(name)) |existing| {
+        return switch (existing.*) {
+            .local_nominal => |stmt| TypeIntroduceResult{ .redeclared_error = stmt },
+            .local_alias => |stmt| TypeIntroduceResult{ .type_alias_redeclared = stmt },
+            .associated_nominal => |stmt| TypeIntroduceResult{ .nominal_type_redeclared = stmt },
+            .external_nominal => TypeIntroduceResult{ .nominal_type_redeclared = type_decl },
+        };
     }
 
     // Check for shadowing in parent scopes and issue warnings
@@ -229,7 +240,8 @@ pub fn introduceTypeDecl(
         shadowed_stmt = lookup_fn(name);
     }
 
-    try scope.put(gpa, .type_decl, name, type_decl);
+    // Add type binding (single source of truth)
+    try scope.setTypeBinding(gpa, name, TypeBinding{ .local_nominal = type_decl });
 
     if (shadowed_stmt) |stmt| {
         return TypeIntroduceResult{ .shadowing_warning = stmt };
@@ -238,24 +250,15 @@ pub fn introduceTypeDecl(
     return TypeIntroduceResult{ .success = {} };
 }
 
-/// Lookup a type declaration in the scope hierarchy
-/// TODO: Optimize lookup performance - currently O(n) due to text comparison
-/// TODO: Consider caching or using a more efficient data structure for type lookup
-/// TODO: Support for nominal vs structural type distinction (future := operator)
-pub fn lookupTypeDecl(scope: *const Scope, name: Ident.Idx) TypeLookupResult {
-    // Search by comparing text content, not identifier index
-    var iter = scope.type_decls.iterator();
-    while (iter.next()) |entry| {
-        if (name.idx == entry.key_ptr.idx) {
-            return TypeLookupResult{ .found = entry.value_ptr.* };
-        }
-    }
-    return TypeLookupResult{ .not_found = {} };
-}
-
 /// Look up an unqualified type alias (for associated types)
 pub fn lookupTypeAlias(scope: *const Scope, name: Ident.Idx) ?CIR.Statement.Idx {
-    return scope.type_aliases.get(name);
+    if (scope.type_bindings.get(name)) |binding| {
+        return switch (binding) {
+            .associated_nominal => |stmt| stmt,
+            else => null,
+        };
+    }
+    return null;
 }
 
 /// Introduce an unqualified type alias (for associated types)
@@ -266,7 +269,9 @@ pub fn introduceTypeAlias(
     unqualified_name: Ident.Idx,
     qualified_type_decl: CIR.Statement.Idx,
 ) !void {
-    try scope.type_aliases.put(gpa, unqualified_name, qualified_type_decl);
+    try scope.setTypeBinding(gpa, unqualified_name, TypeBinding{
+        .associated_nominal = qualified_type_decl,
+    });
 }
 
 /// Update an existing type declaration in the scope
@@ -278,17 +283,17 @@ pub fn updateTypeDecl(
     name: Ident.Idx,
     new_type_decl: CIR.Statement.Idx,
 ) std.mem.Allocator.Error!void {
-    // Find the existing entry by comparing text content
-    var iter = scope.type_decls.iterator();
-    while (iter.next()) |entry| {
-        if (name.idx == entry.key_ptr.idx) {
-            // Update the existing entry with the new statement index
-            entry.value_ptr.* = new_type_decl;
-            return;
-        }
+    if (scope.type_bindings.getPtr(name)) |binding_ptr| {
+        const current = binding_ptr.*;
+        binding_ptr.* = switch (current) {
+            .local_nominal => TypeBinding{ .local_nominal = new_type_decl },
+            .local_alias => TypeBinding{ .local_alias = new_type_decl },
+            .associated_nominal => TypeBinding{ .associated_nominal = new_type_decl },
+            .external_nominal => current,
+        };
+    } else {
+        try scope.setTypeBinding(gpa, name, TypeBinding{ .local_nominal = new_type_decl });
     }
-    // If not found, add it as a new entry
-    try scope.put(gpa, .type_decl, name, new_type_decl);
 }
 
 /// Introduce a type variable into the scope
@@ -421,6 +426,26 @@ pub fn introduceExposedItem(
     }
 
     return ExposedItemIntroduceResult{ .success = {} };
+}
+
+/// Insert or update a type binding in this scope
+pub fn setTypeBinding(
+    scope: *Scope,
+    gpa: std.mem.Allocator,
+    name: Ident.Idx,
+    binding: TypeBinding,
+) std.mem.Allocator.Error!void {
+    try scope.type_bindings.put(gpa, name, binding);
+}
+
+/// Retrieve a mutable pointer to a type binding if present
+pub fn getTypeBindingPtr(scope: *Scope, name: Ident.Idx) ?*TypeBinding {
+    return scope.type_bindings.getPtr(name);
+}
+
+/// Retrieve an immutable pointer to a type binding if present
+pub fn getTypeBindingConstPtr(scope: *const Scope, name: Ident.Idx) ?*const TypeBinding {
+    return scope.type_bindings.getPtr(name);
 }
 
 /// Look up an imported module in this scope

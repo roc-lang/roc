@@ -52,12 +52,18 @@ UNDECLARED TYPE - can_import_type_annotations.md:5:18:5:25
 UNDECLARED TYPE - can_import_type_annotations.md:5:29:5:37
 UNDEFINED VARIABLE - can_import_type_annotations.md:6:24:6:44
 UNUSED VARIABLE - can_import_type_annotations.md:6:19:6:22
+TYPE NOT EXPOSED - can_import_type_annotations.md:8:24:8:30
 UNDEFINED VARIABLE - can_import_type_annotations.md:9:21:9:31
+TYPE NOT EXPOSED - can_import_type_annotations.md:11:17:11:25
+TYPE NOT EXPOSED - can_import_type_annotations.md:11:40:11:49
+TYPE NOT EXPOSED - can_import_type_annotations.md:11:55:11:61
 UNDEFINED VARIABLE - can_import_type_annotations.md:13:14:13:25
 UNDEFINED VARIABLE - can_import_type_annotations.md:15:24:15:36
+TYPE NOT EXPOSED - can_import_type_annotations.md:20:14:20:21
 UNDEFINED VARIABLE - can_import_type_annotations.md:21:10:21:28
-MODULE NOT IMPORTED - can_import_type_annotations.md:24:18:24:36
-MODULE NOT IMPORTED - can_import_type_annotations.md:24:64:24:81
+TYPE NOT EXPOSED - can_import_type_annotations.md:24:29:24:36
+TYPE NOT EXPOSED - can_import_type_annotations.md:24:56:24:62
+TYPE NOT EXPOSED - can_import_type_annotations.md:24:75:24:81
 UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 # PROBLEMS
 **MODULE NOT FOUND**
@@ -156,6 +162,17 @@ processRequest = |req| Http.defaultResponse
                   ^^^
 
 
+**TYPE NOT EXPOSED**
+The type `Value` is not an exposed by the module `json.Json`.
+
+You're attempting to use this type here:
+**can_import_type_annotations.md:8:24:8:30:**
+```roc
+parseJson : Str -> Json.Value
+```
+                       ^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `parse` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -165,6 +182,39 @@ Is there an `import` or `exposing` missing up-top?
 parseJson = |input| Json.parse(input)
 ```
                     ^^^^^^^^^^
+
+
+**TYPE NOT EXPOSED**
+The type `Request` is not an exposed by the module `http.Client`.
+
+You're attempting to use this type here:
+**can_import_type_annotations.md:11:17:11:25:**
+```roc
+handleApi : Http.Request -> Result(Http.Response, Json.Error)
+```
+                ^^^^^^^^
+
+
+**TYPE NOT EXPOSED**
+The type `Response` is not an exposed by the module `http.Client`.
+
+You're attempting to use this type here:
+**can_import_type_annotations.md:11:40:11:49:**
+```roc
+handleApi : Http.Request -> Result(Http.Response, Json.Error)
+```
+                                       ^^^^^^^^^
+
+
+**TYPE NOT EXPOSED**
+The type `Error` is not an exposed by the module `json.Json`.
+
+You're attempting to use this type here:
+**can_import_type_annotations.md:11:55:11:61:**
+```roc
+handleApi : Http.Request -> Result(Http.Response, Json.Error)
+```
+                                                      ^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -189,6 +239,17 @@ Is there an `import` or `exposing` missing up-top?
                        ^^^^^^^^^^^^
 
 
+**TYPE NOT EXPOSED**
+The type `Config` is not an exposed by the module `json.Json`.
+
+You're attempting to use this type here:
+**can_import_type_annotations.md:20:14:20:21:**
+```roc
+config : Json.Config
+```
+             ^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `defaultConfig` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -200,26 +261,37 @@ config = Json.defaultConfig
          ^^^^^^^^^^^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `Json.Parser` imported into this Roc file.
+**TYPE NOT EXPOSED**
+The type `Config` is not an exposed by the module `json.Json`.
 
-You're attempting to use this module here:
-**can_import_type_annotations.md:24:18:24:36:**
+You're attempting to use this type here:
+**can_import_type_annotations.md:24:29:24:36:**
 ```roc
 advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
 ```
-                 ^^^^^^^^^^^^^^^^^^
+                            ^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `Json.Parser` imported into this Roc file.
+**TYPE NOT EXPOSED**
+The type `Value` is not an exposed by the module `json.Json`.
 
-You're attempting to use this module here:
-**can_import_type_annotations.md:24:64:24:81:**
+You're attempting to use this type here:
+**can_import_type_annotations.md:24:56:24:62:**
 ```roc
 advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
 ```
-                                                               ^^^^^^^^^^^^^^^^^
+                                                       ^^^^^^
+
+
+**TYPE NOT EXPOSED**
+The type `Error` is not an exposed by the module `json.Json`.
+
+You're attempting to use this type here:
+**can_import_type_annotations.md:24:75:24:81:**
+```roc
+advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
+```
+                                                                          ^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -482,13 +554,13 @@ combineResults = |result1, result2|
 			(declared-type
 				(ty-fn (effectful false)
 					(ty-lookup (name "Str") (builtin))
-					(ty-lookup (name "Value") (external-module "json.Json"))))))
+					(ty-malformed)))))
 	(d-let
 		(p-assign (ident "handleApi"))
 		(e-closure
 			(captures
-				(capture (ident "err"))
-				(capture (ident "data")))
+				(capture (ident "data"))
+				(capture (ident "err")))
 			(e-lambda
 				(args
 					(p-assign (ident "request")))
@@ -530,16 +602,16 @@ combineResults = |result1, result2|
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-lookup (name "Request") (external-module "http.Client"))
+					(ty-malformed)
 					(ty-apply (name "Result") (external-module "Result")
-						(ty-lookup (name "Response") (external-module "http.Client"))
-						(ty-lookup (name "Error") (external-module "json.Json")))))))
+						(ty-malformed)
+						(ty-malformed))))))
 	(d-let
 		(p-assign (ident "config"))
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation
 			(declared-type
-				(ty-lookup (name "Config") (external-module "json.Json")))))
+				(ty-malformed))))
 	(d-let
 		(p-assign (ident "advancedParser"))
 		(e-lambda
@@ -558,16 +630,16 @@ combineResults = |result1, result2|
 					(ty-malformed)
 					(ty-lookup (name "Str") (builtin))
 					(ty-apply (name "Result") (external-module "Result")
-						(ty-lookup (name "Value") (external-module "json.Json"))
+						(ty-malformed)
 						(ty-malformed))))))
 	(d-let
 		(p-assign (ident "combineResults"))
 		(e-closure
 			(captures
-				(capture (ident "err"))
-				(capture (ident "err"))
 				(capture (ident "value1"))
-				(capture (ident "value2")))
+				(capture (ident "value2"))
+				(capture (ident "err"))
+				(capture (ident "err")))
 			(e-lambda
 				(args
 					(p-assign (ident "result1"))

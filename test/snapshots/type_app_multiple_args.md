@@ -13,9 +13,20 @@ processDict = |_dict| []
 main! = |_| processDict(Dict.empty().insert("one", 1))
 ~~~
 # EXPECTED
+UNDECLARED TYPE - type_app_multiple_args.md:3:15:3:19
 DOES NOT EXIST - type_app_multiple_args.md:6:25:6:35
-TOO MANY ARGS - type_app_multiple_args.md:3:15:3:29
 # PROBLEMS
+**UNDECLARED TYPE**
+The type _Dict_ is not declared in this scope.
+
+This type is referenced here:
+**type_app_multiple_args.md:3:15:3:19:**
+```roc
+processDict : Dict(Str, U64) -> List(Str)
+```
+              ^^^^
+
+
 **DOES NOT EXIST**
 `Dict.empty` does not exist.
 
@@ -24,16 +35,6 @@ TOO MANY ARGS - type_app_multiple_args.md:3:15:3:29
 main! = |_| processDict(Dict.empty().insert("one", 1))
 ```
                         ^^^^^^^^^^
-
-
-**TOO MANY ARGS**
-The type _Dict_ expects  argument, but got  instead.
-**type_app_multiple_args.md:3:15:3:29:**
-```roc
-processDict : Dict(Str, U64) -> List(Str)
-```
-              ^^^^^^^^^^^^^^
-
 
 
 # TOKENS
@@ -106,9 +107,7 @@ NO CHANGE
 		(annotation
 			(declared-type
 				(ty-fn (effectful false)
-					(ty-apply (name "Dict") (external-module "Dict")
-						(ty-lookup (name "Str") (builtin))
-						(ty-lookup (name "U64") (builtin)))
+					(ty-malformed)
 					(ty-apply (name "List") (builtin)
 						(ty-lookup (name "Str") (builtin)))))))
 	(d-let
