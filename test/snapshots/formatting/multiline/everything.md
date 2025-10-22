@@ -566,33 +566,29 @@ import I2 exposing [
 
 # Where constraint
 A(a) : a
-	where
-		[
-
+	where [
 			a.a1 : (
 			a,
 			a,
-		) -> Str
-,
+		) -> Str,
 		
 			a.a2 : (
 			a,
 			a,
-		) -> Str]
+		) -> Str
+	]
 B(b) : b
-	where
-		[
-
+	where [
 			b.b1 : (
 			b,
 			b,
-		) -> Str
-,
+		) -> Str,
 		
 			b.b2 : (
 			b,
 			b,
-		) -> Str]
+		) -> Str
+	]
 
 C(
 	a,
@@ -618,11 +614,10 @@ F : [
 ]
 
 g : e -> e
-	where
-		[
-e.A
-,
-		e.B]
+	where [
+		e.A,
+		e.B
+	]
 
 h = |x, y| {
 	h1 = {

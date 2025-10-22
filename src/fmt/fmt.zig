@@ -661,7 +661,10 @@ const Formatter = struct {
         defer fmt.curr_indent = start_indent;
         const clause_coll = fmt.ast.store.getCollection(w);
         const clause_slice = fmt.ast.store.whereClauseSlice(.{ .span = clause_coll.span });
-        const clauses_are_multiline = fmt.collectionWillBeMultiline(AST.WhereClause.Idx, w);
+
+        // Note: regionIsMultiline checks BOTH newlines in source AND trailing comma
+        // So where clauses with trailing commas will be formatted as multiline
+        const clauses_are_multiline = fmt.ast.regionIsMultiline(clause_coll.region);
 
         if (!multiline) {
             try fmt.push(' ');
@@ -669,33 +672,58 @@ const Formatter = struct {
 
         try fmt.pushAll("where");
 
-        // Add opening bracket
+        // Always format as "where [" with single space to discourage comments between them
+        // Comments between 'where' and '[' are silently ignored (see where_clauses_comment_before_bracket.md)
+        try fmt.pushAll(" [");
+
         if (clauses_are_multiline) {
-            try fmt.ensureNewline();
             fmt.curr_indent += 1;
-            try fmt.pushIndent();
-            try fmt.push('[');
-        } else {
-            try fmt.pushAll(" [");
         }
 
         for (clause_slice, 0..) |clause, i| {
             if (clauses_are_multiline) {
-                const clause_region = fmt.nodeRegion(@intFromEnum(clause));
-                _ = try fmt.flushCommentsBefore(clause_region.start);
-            }
-            if (i > 0) {
-                if (clauses_are_multiline) {
-                    try fmt.push(',');
+                const clause_is_multiline = fmt.nodeWillBeMultiline(AST.WhereClause.Idx, clause);
+
+                if (i > 0) {
+                    // For non-first clauses, flush comments between previous comma and this clause
+                    // BUT only if the clause itself is single-line (multiline clauses flush themselves)
+                    if (!clause_is_multiline) {
+                        const clause_region = fmt.nodeRegion(@intFromEnum(clause));
+                        _ = try fmt.flushCommentsBefore(clause_region.start);
+                    }
+                    // ensureNewline is idempotent with flush - only adds newline if flush didn't
                     try fmt.ensureNewline();
                     try fmt.pushIndent();
                 } else {
+                    // First clause in multiline collection
+                    // Only add newline+indent if clause is single-line (multiline clauses handle it themselves)
+                    if (!clause_is_multiline) {
+                        try fmt.ensureNewline();
+                        try fmt.pushIndent();
+                    }
+                }
+
+                try fmt.formatWhereClause(clause);
+
+                // Add comma after clause if not the last one
+                if (i < clause_slice.len - 1) {
+                    try fmt.push(',');
+                }
+            } else {
+                // Single-line formatting
+                if (i > 0) {
                     try fmt.pushAll(", ");
                 }
+                try fmt.formatWhereClause(clause);
             }
-            try fmt.formatWhereClause(clause);
         }
 
+        // Close bracket
+        if (clauses_are_multiline) {
+            fmt.curr_indent = start_indent;
+            try fmt.ensureNewline();
+            try fmt.pushIndent();
+        }
         try fmt.push(']');
     }
 
