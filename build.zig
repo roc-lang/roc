@@ -614,7 +614,8 @@ pub fn build(b: *std.Build) void {
 const ModuleTest = modules.ModuleTest;
 
 fn discoverBuiltinRocFiles(b: *std.Build) ![]const []const u8 {
-    var builtin_roc_dir = try std.fs.cwd().openDir("src/build/roc", .{ .iterate = true });
+    const builtin_roc_path = try b.build_root.join(b.allocator, &.{ "src", "build", "roc" });
+    var builtin_roc_dir = try std.fs.openDirAbsolute(builtin_roc_path, .{ .iterate = true });
     defer builtin_roc_dir.close();
 
     var roc_files = std.array_list.Managed([]const u8).init(b.allocator);
