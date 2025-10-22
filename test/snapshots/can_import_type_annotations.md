@@ -480,7 +480,7 @@ combineResults = |result1, result2|
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
-				(ty-lookup (name "Value") (external (module-idx "5") (target-node-idx "0"))))))
+				(ty-lookup (name "Value") (external-module "json.Json")))))
 	(d-let
 		(p-assign (ident "handleApi"))
 		(e-closure
@@ -527,15 +527,15 @@ combineResults = |result1, result2|
 													(p-assign (ident "err")))))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Request") (external (module-idx "4") (target-node-idx "0")))
-				(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
-					(ty-lookup (name "Response") (external (module-idx "4") (target-node-idx "0")))
-					(ty-lookup (name "Error") (external (module-idx "5") (target-node-idx "0")))))))
+				(ty-lookup (name "Request") (external-module "http.Client"))
+				(ty-apply (name "Result") (external-module "Result")
+					(ty-lookup (name "Response") (external-module "http.Client"))
+					(ty-lookup (name "Error") (external-module "json.Json"))))))
 	(d-let
 		(p-assign (ident "config"))
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation
-			(ty-lookup (name "Config") (external (module-idx "5") (target-node-idx "0")))))
+			(ty-lookup (name "Config") (external-module "json.Json"))))
 	(d-let
 		(p-assign (ident "advancedParser"))
 		(e-lambda
@@ -552,8 +552,8 @@ combineResults = |result1, result2|
 			(ty-fn (effectful false)
 				(ty-malformed)
 				(ty-lookup (name "Str") (builtin))
-				(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
-					(ty-lookup (name "Value") (external (module-idx "5") (target-node-idx "0")))
+				(ty-apply (name "Result") (external-module "Result")
+					(ty-lookup (name "Value") (external-module "json.Json"))
 					(ty-malformed)))))
 	(d-let
 		(p-assign (ident "combineResults"))
@@ -617,13 +617,13 @@ combineResults = |result1, result2|
 												(p-assign (ident "err"))))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
+				(ty-apply (name "Result") (external-module "Result")
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "err")))
-				(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
+				(ty-apply (name "Result") (external-module "Result")
 					(ty-rigid-var (name "b"))
 					(ty-rigid-var-lookup (ty-rigid-var (name "err"))))
-				(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
+				(ty-apply (name "Result") (external-module "Result")
 					(ty-tuple
 						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))

@@ -352,15 +352,11 @@ pub const Pattern = union(enum) {
                 try tree.pushStaticAtom("p-nominal-external");
                 try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
 
-                // Add module index
-                var buf: [32]u8 = undefined;
-                const module_idx_str = std.fmt.bufPrint(&buf, "{}", .{@intFromEnum(n.module_idx)}) catch unreachable;
-                try tree.pushStringPair("module-idx", module_idx_str);
-
-                // Add target node index
-                var buf2: [32]u8 = undefined;
-                const target_idx_str = std.fmt.bufPrint(&buf2, "{}", .{n.target_node_idx}) catch unreachable;
-                try tree.pushStringPair("target-node-idx", target_idx_str);
+                const module_idx_int = @intFromEnum(n.module_idx);
+                std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
+                const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
+                const module_name = ir.common.strings.get(string_lit_idx);
+                try tree.pushStringPair("external-module", module_name);
 
                 const attrs = tree.beginNode();
                 try ir.store.getPattern(n.backing_pattern).pushToSExprTree(ir, tree, n.backing_pattern);

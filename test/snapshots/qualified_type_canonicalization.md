@@ -500,15 +500,14 @@ transform = |result|
 		(p-assign (ident "simpleQualified"))
 		(e-runtime-error (tag "undeclared_type"))
 		(annotation
-			(ty-lookup (name "RGB") (external (module-idx "4") (target-node-idx "0")))))
+			(ty-lookup (name "RGB") (external-module "Color"))))
 	(d-let
 		(p-assign (ident "aliasedQualified"))
 		(e-nominal-external
-			(module-idx "6")
-			(target-node-idx "0")
+			(external-module "ExternalModule")
 			(e-tag (name "Default")))
 		(annotation
-			(ty-lookup (name "DataType") (external (module-idx "6") (target-node-idx "0")))))
+			(ty-lookup (name "DataType") (external-module "ExternalModule"))))
 	(d-let
 		(p-assign (ident "multiLevelQualified"))
 		(e-runtime-error (tag "ident_not_in_scope"))
@@ -517,13 +516,12 @@ transform = |result|
 	(d-let
 		(p-assign (ident "resultType"))
 		(e-nominal-external
-			(module-idx "3")
-			(target-node-idx "3")
+			(external-module "Result")
 			(e-tag (name "Ok")
 				(args
 					(e-num (value "42")))))
 		(annotation
-			(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
+			(ty-apply (name "Result") (external-module "Result")
 				(ty-lookup (name "I32") (builtin))
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
@@ -535,7 +533,7 @@ transform = |result|
 		(annotation
 			(ty-fn (effectful false)
 				(ty-record)
-				(ty-lookup (name "RGB") (external (module-idx "4") (target-node-idx "0"))))))
+				(ty-lookup (name "RGB") (external-module "Color")))))
 	(d-let
 		(p-assign (ident "processColor"))
 		(e-lambda
@@ -545,7 +543,7 @@ transform = |result|
 				(e-literal (string "Color processed"))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "RGB") (external (module-idx "4") (target-node-idx "0")))
+				(ty-lookup (name "RGB") (external-module "Color"))
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "transform"))
@@ -578,9 +576,9 @@ transform = |result|
 									(e-runtime-error (tag "ident_not_in_scope")))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
-					(ty-lookup (name "RGB") (external (module-idx "4") (target-node-idx "0")))
-					(ty-lookup (name "Error") (external (module-idx "6") (target-node-idx "0"))))
+				(ty-apply (name "Result") (external-module "Result")
+					(ty-lookup (name "RGB") (external-module "Color"))
+					(ty-lookup (name "Error") (external-module "ExternalModule")))
 				(ty-malformed))))
 	(s-import (module "Color")
 		(exposes))

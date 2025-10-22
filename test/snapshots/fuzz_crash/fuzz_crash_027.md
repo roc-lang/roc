@@ -2089,7 +2089,7 @@ expect {
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
 					(ty-malformed))
-				(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
+				(ty-apply (name "Result") (external-module "Result")
 					(ty-record)
 					(ty-underscore)))))
 	(d-let

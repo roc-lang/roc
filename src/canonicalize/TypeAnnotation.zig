@@ -122,21 +122,11 @@ pub const TypeAnno = union(enum) {
                         try tree.endNode(field_begin, field_attrs);
                     },
                     .external => |external| {
-                        const ext_begin = tree.beginNode();
-                        try tree.pushStaticAtom("external");
-
-                        // Add module index
-                        var buf: [32]u8 = undefined;
-                        const module_idx_str = std.fmt.bufPrint(&buf, "{}", .{@intFromEnum(external.module_idx)}) catch unreachable;
-                        try tree.pushStringPair("module-idx", module_idx_str);
-
-                        // Add target node index
-                        var buf2: [32]u8 = undefined;
-                        const target_idx_str = std.fmt.bufPrint(&buf2, "{}", .{external.target_node_idx}) catch unreachable;
-                        try tree.pushStringPair("target-node-idx", target_idx_str);
-
-                        const field_attrs = tree.beginNode();
-                        try tree.endNode(ext_begin, field_attrs);
+                        const module_idx_int = @intFromEnum(external.module_idx);
+                        std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
+                        const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
+                        const module_name = ir.common.strings.get(string_lit_idx);
+                        try tree.pushStringPair("external-module", module_name);
                     },
                 }
 
@@ -193,21 +183,11 @@ pub const TypeAnno = union(enum) {
                         try tree.endNode(field_begin, field_attrs);
                     },
                     .external => |external| {
-                        const ext_begin = tree.beginNode();
-                        try tree.pushStaticAtom("external");
-
-                        // Add module index
-                        var buf: [32]u8 = undefined;
-                        const module_idx_str = std.fmt.bufPrint(&buf, "{}", .{@intFromEnum(external.module_idx)}) catch unreachable;
-                        try tree.pushStringPair("module-idx", module_idx_str);
-
-                        // Add target node index
-                        var buf2: [32]u8 = undefined;
-                        const target_idx_str = std.fmt.bufPrint(&buf2, "{}", .{external.target_node_idx}) catch unreachable;
-                        try tree.pushStringPair("target-node-idx", target_idx_str);
-
-                        const field_attrs = tree.beginNode();
-                        try tree.endNode(ext_begin, field_attrs);
+                        const module_idx_int = @intFromEnum(external.module_idx);
+                        std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
+                        const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
+                        const module_name = ir.common.strings.get(string_lit_idx);
+                        try tree.pushStringPair("external-module", module_name);
                     },
                 }
 
