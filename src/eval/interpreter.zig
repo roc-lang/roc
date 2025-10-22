@@ -1616,7 +1616,87 @@ pub const Interpreter = struct {
                     }
                 }
 
-                return error.NotImplemented;
+                // Try static dispatch for nominal types with method constraints
+                const method_ident = self.env.common.findIdent(field_name) orelse {
+                    return error.MethodNotFound;
+                };
+
+                const constraint = self.getStaticDispatchConstraint(receiver_rt_var, method_ident) catch |err| {
+                    // If not a flex/rigid var with constraints, fall back to NotImplemented
+                    if (err == error.MethodNotFound) return error.NotImplemented;
+                    return err;
+                };
+
+                // Find the nominal type's origin module from the receiver type
+                const receiver_resolved = self.runtime_types.resolveVar(receiver_rt_var);
+                const nominal_info = blk: {
+                    switch (receiver_resolved.desc.content) {
+                        .structure => |s| switch (s) {
+                            .nominal_type => |nom| break :blk .{
+                                .origin = nom.origin_module,
+                                .ident = nom.ident.ident_idx,
+                            },
+                            else => return error.InvalidMethodReceiver,
+                        },
+                        // Flex/rigid vars can have constraints without being nominal yet
+                        .flex, .rigid => {
+                            // For now, we need a concrete nominal type to know the origin module
+                            // TODO: Handle method calls on polymorphic receivers
+                            return error.NotImplemented;
+                        },
+                        else => return error.InvalidMethodReceiver,
+                    }
+                };
+
+                // Resolve and evaluate the method function
+                const method_func = try self.resolveMethodFunction(
+                    nominal_info.origin,
+                    nominal_info.ident,
+                    method_ident,
+                    constraint,
+                    roc_ops,
+                );
+                defer method_func.decref(&self.runtime_layout_store, roc_ops);
+
+                // Prepare arguments: receiver + explicit args
+                const total_args = 1 + arg_values.len;
+                var all_args = try self.allocator.alloc(StackValue, total_args);
+                defer self.allocator.free(all_args);
+
+                // First argument is the receiver (need to copy since we'll decref it)
+                all_args[0] = try self.pushCopy(receiver_value, roc_ops);
+                errdefer all_args[0].decref(&self.runtime_layout_store, roc_ops);
+
+                // Copy remaining arguments
+                var i: usize = 0;
+                while (i < arg_values.len) : (i += 1) {
+                    all_args[i + 1] = try self.pushCopy(arg_values[i], roc_ops);
+                }
+                errdefer {
+                    i = 1;
+                    while (i < total_args) : (i += 1) {
+                        all_args[i].decref(&self.runtime_layout_store, roc_ops);
+                    }
+                }
+
+                // Call the method function
+                if (method_func.layout.tag != .closure) {
+                    // Decref all args before returning error
+                    for (all_args) |arg| {
+                        arg.decref(&self.runtime_layout_store, roc_ops);
+                    }
+                    return error.TypeMismatch;
+                }
+
+                const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+                const result = try self.callClosure(closure_header, all_args, roc_ops);
+
+                // Decref arguments after call
+                for (all_args) |arg| {
+                    arg.decref(&self.runtime_layout_store, roc_ops);
+                }
+
+                return result;
             },
             .e_lookup_local => |lookup| {
                 // Search bindings in reverse
@@ -3399,6 +3479,95 @@ pub const Interpreter = struct {
         const type_name = ident_store.getSlice(nominal_ident);
         const method_name_str = ident_store.getSlice(method_name);
         return std.fmt.bufPrint(buf, "{s}.{s}", .{ type_name, method_name_str });
+    }
+
+    /// Extract the static dispatch constraint for a given method name from a resolved receiver type variable.
+    /// Returns the constraint if found, or MethodNotFound if the receiver doesn't expose the method.
+    fn getStaticDispatchConstraint(
+        self: *const Interpreter,
+        receiver_var: types.Var,
+        method_name: base_pkg.Ident.Idx,
+    ) Error!types.StaticDispatchConstraint {
+        const resolved = self.runtime_types.resolveVar(receiver_var);
+
+        // Get constraints from flex or rigid vars
+        const constraints: []const types.StaticDispatchConstraint = switch (resolved.desc.content) {
+            .flex => |flex| self.runtime_types.sliceStaticDispatchConstraints(flex.constraints),
+            .rigid => |rigid| self.runtime_types.sliceStaticDispatchConstraints(rigid.constraints),
+            else => return error.MethodNotFound,
+        };
+
+        // Linear search for the matching method name (constraints are typically few)
+        for (constraints) |constraint| {
+            if (constraint.fn_name == method_name) {
+                return constraint;
+            }
+        }
+
+        return error.MethodNotFound;
+    }
+
+    /// Resolve and evaluate a method function from its origin module.
+    /// Returns a StackValue representing the method function.
+    /// The caller is responsible for decref'ing the returned value.
+    fn resolveMethodFunction(
+        self: *Interpreter,
+        origin_module: base_pkg.Ident.Idx,
+        nominal_ident: base_pkg.Ident.Idx,
+        method_name: base_pkg.Ident.Idx,
+        constraint: types.StaticDispatchConstraint,
+        roc_ops: *RocOps,
+    ) Error!StackValue {
+        _ = constraint; // Will be used for polymorphic instantiation in the future
+
+        // Get the module environment for this type's origin
+        const origin_env = self.getModuleEnvForOrigin(origin_module) orelse {
+            return error.MethodLookupFailed;
+        };
+
+        // Build the qualified method name: "TypeName.method"
+        var qualified_name_buf: [256]u8 = undefined;
+        const qualified_name = try self.getMethodQualifiedIdent(nominal_ident, method_name, &qualified_name_buf);
+
+        // Try to find the method in the origin module's exposed items
+        const method_ident = blk: {
+            if (origin_env.common.findIdent(qualified_name)) |ident| {
+                break :blk ident;
+            }
+            // Try unqualified name as fallback
+            const method_name_str = self.env.common.getIdentStore().getSlice(method_name);
+            if (origin_env.common.findIdent(method_name_str)) |ident| {
+                break :blk ident;
+            }
+            return error.MethodLookupFailed;
+        };
+
+        const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse {
+            return error.MethodLookupFailed;
+        };
+
+        // The node should be a Def
+        const target_def_idx: can.CIR.Def.Idx = @enumFromInt(node_idx);
+        const target_def = origin_env.store.getDef(target_def_idx);
+
+        // Save current environment and bindings
+        const saved_env = self.env;
+        const saved_bindings_len = self.bindings.items.len;
+        self.env = @constCast(origin_env);
+        defer {
+            self.env = saved_env;
+            // Restore bindings
+            self.bindings.items.len = saved_bindings_len;
+        }
+
+        // Translate the def's type var to runtime
+        const def_var = can.ModuleEnv.varFrom(target_def_idx);
+        const rt_def_var = try self.translateTypeVar(origin_env, def_var);
+
+        // Evaluate the method's expression
+        const method_value = try self.evalExprMinimal(target_def.body, roc_ops, rt_def_var);
+
+        return method_value;
     }
 
     /// Ensure the slot array can index at least `min_len` entries; zero-fill new entries.
