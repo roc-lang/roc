@@ -142,25 +142,23 @@ pub const WhereClause = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    mod_method: struct {
-        var_name: base.Ident.Idx,
+    w_method: struct {
+        var_: TypeAnno.Idx,
         method_name: base.Ident.Idx,
         args: TypeAnno.Span,
-        ret_anno: TypeAnno.Idx,
-        external_decl: ExternalDecl.Idx,
+        ret: TypeAnno.Idx,
     },
-    mod_alias: struct {
-        var_name: base.Ident.Idx,
+    w_alias: struct {
+        var_: TypeAnno.Idx,
         alias_name: base.Ident.Idx,
-        external_decl: ExternalDecl.Idx,
     },
-    malformed: struct {
+    w_malformed: struct {
         diagnostic: Diagnostic.Idx,
     },
 
     pub fn pushToSExprTree(self: *const WhereClause, cir: anytype, tree: anytype, idx: WhereClause.Idx) !void {
         switch (self.*) {
-            .mod_method => |method| {
+            .w_method => |method| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("method");
 
@@ -170,11 +168,10 @@ pub const WhereClause = union(enum) {
                 try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
                 // Add module-of and ident information
-                const var_name_str = cir.getIdent(method.var_name);
-                try tree.pushStringPair("module-of", var_name_str);
+                try cir.store.getTypeAnno(method.var_).pushToSExprTree(cir, tree, method.var_);
 
                 const method_name_str = cir.getIdent(method.method_name);
-                try tree.pushStringPair("ident", method_name_str);
+                try tree.pushStringPair("name", method_name_str);
 
                 const attrs = tree.beginNode();
 
@@ -188,10 +185,10 @@ pub const WhereClause = union(enum) {
                 try tree.endNode(args_begin, args_attrs);
 
                 // Add actual return type
-                try cir.store.getTypeAnno(method.ret_anno).pushToSExprTree(cir, tree, method.ret_anno);
+                try cir.store.getTypeAnno(method.ret).pushToSExprTree(cir, tree, method.ret);
                 try tree.endNode(begin, attrs);
             },
-            .mod_alias => |alias| {
+            .w_alias => |alias| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("alias");
 
@@ -200,16 +197,15 @@ pub const WhereClause = union(enum) {
                 const region = cir.store.getRegionAt(node_idx);
                 try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                const var_name_str = cir.getIdent(alias.var_name);
-                try tree.pushStringPair("module-of", var_name_str);
+                try cir.store.getTypeAnno(alias.var_).pushToSExprTree(cir, tree, alias.var_);
 
                 const alias_name_str = cir.getIdent(alias.alias_name);
-                try tree.pushStringPair("ident", alias_name_str);
+                try tree.pushStringPair("name", alias_name_str);
 
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
-            .malformed => |malformed| {
+            .w_malformed => |malformed| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("malformed");
 
@@ -230,25 +226,35 @@ pub const WhereClause = union(enum) {
 pub const Annotation = struct {
     pub const Idx = enum(u32) { _ };
 
-    type_anno: TypeAnno.Idx,
-    signature: TypeVar,
+    anno: TypeAnno.Idx,
+    where: ?WhereClause.Span,
 
-    pub fn pushToSExprTree(self: *const Annotation, cir: anytype, tree: anytype, idx: Annotation.Idx) !void {
+    pub fn pushToSExprTree(self: *const @This(), env: anytype, tree: *SExprTree, idx: Annotation.Idx) !void {
+        const annotation = self.*;
+
         const begin = tree.beginNode();
         try tree.pushStaticAtom("annotation");
-
-        // Get the region for this Annotation
-        const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
-        const region = cir.store.getRegionAt(node_idx);
-        try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-
         const attrs = tree.beginNode();
 
-        const type_anno_begin = tree.beginNode();
-        try tree.pushStaticAtom("declared-type");
-        const type_anno_attrs = tree.beginNode();
-        try cir.store.getTypeAnno(self.type_anno).pushToSExprTree(cir, tree, self.type_anno);
-        try tree.endNode(type_anno_begin, type_anno_attrs);
+        // Get the region for this Annotation
+        const region = env.store.getAnnotationRegion(idx);
+        try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
+
+        // Append annotation
+        try env.store.getTypeAnno(annotation.anno).pushToSExprTree(env, tree, self.anno);
+
+        // Append where clause
+        if (annotation.where) |where_span| {
+            const where_begin = tree.beginNode();
+            try tree.pushStaticAtom("where");
+            const where_attrs = tree.beginNode();
+            const where_clauses = env.store.sliceWhereClauses(where_span);
+            for (where_clauses) |clause_idx| {
+                const clause = env.store.getWhereClause(clause_idx);
+                try clause.pushToSExprTree(env, tree, clause_idx);
+            }
+            try tree.endNode(where_begin, where_attrs);
+        }
 
         try tree.endNode(begin, attrs);
     }
@@ -626,7 +632,7 @@ pub const Import = struct {
             }
 
             /// Deserialize this Serialized struct into a Store
-            pub fn deserialize(self: *Serialized, offset: i64, allocator: std.mem.Allocator) *Store {
+            pub fn deserialize(self: *Serialized, offset: i64, allocator: std.mem.Allocator) std.mem.Allocator.Error!*Store {
                 // Overwrite ourself with the deserialized version, and return our pointer after casting it to Store.
                 const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
 
@@ -637,7 +643,7 @@ pub const Import = struct {
 
                 // Pre-allocate the exact capacity needed for the map
                 const import_count = store.imports.items.items.len;
-                store.map.ensureTotalCapacity(allocator, @intCast(import_count)) catch unreachable;
+                try store.map.ensureTotalCapacity(allocator, @intCast(import_count));
 
                 // Repopulate the map - we know there's enough capacity since we
                 // are deserializing from a Serialized struct

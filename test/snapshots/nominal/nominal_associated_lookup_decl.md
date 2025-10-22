@@ -63,8 +63,7 @@ useBar = Foo.bar
 		(e-lookup-local
 			(p-assign (ident "Foo.bar")))
 		(annotation
-			(declared-type
-				(ty-lookup (name "U64") (builtin)))))
+			(ty-lookup (name "U64") (builtin))))
 	(d-let
 		(p-assign (ident "Foo.bar"))
 		(e-num (value "42")))

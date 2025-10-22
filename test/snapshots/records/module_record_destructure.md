@@ -104,12 +104,11 @@ extract_age = |person| {
 									(field (name "a")
 										(e-num (value "0"))))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-record
-						(field (field "age")
-							(ty-lookup (name "U64") (builtin))))
-					(ty-lookup (name "U64") (builtin)))))))
+			(ty-fn (effectful false)
+				(ty-record
+					(field (field "age")
+						(ty-lookup (name "U64") (builtin))))
+				(ty-lookup (name "U64") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure

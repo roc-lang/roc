@@ -546,13 +546,20 @@ const Unifier = struct {
                     .constraints = merged_constraints,
                 } });
             },
-            .alias => |_| self.merge(vars, b_content),
+            .alias => |b_alias| {
+                if (a_flex.constraints.len() == 0) {
+                    self.merge(vars, b_content);
+                } else {
+                    // Merge against backing var, so we don't loose static dispatch constraints
+                    const backing_var = self.types_store.getAliasBackingVar(b_alias);
+                    try self.unifyGuarded(vars.a.var_, backing_var);
+                }
+            },
             .structure => {
                 if (a_flex.constraints.len() > 0) {
                     // Record that we need to check constraints later
                     _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
-                        .constrained_var = vars.a.var_,
-                        .concrete_var = vars.b.var_,
+                        .var_ = vars.b.var_, // Since the vars are merge, we arbitrary choose b
                         .constraints = a_flex.constraints,
                     }) catch return Error.AllocatorError;
                 }
@@ -595,23 +602,19 @@ const Unifier = struct {
         const backing_var = self.types_store.getAliasBackingVar(a_alias);
 
         switch (b_content) {
-            .flex => |_| {
-                // TODO: Unwrap alias?
-                // TODO: Merge static dispatch constraints
-                self.merge(vars, Content{ .alias = a_alias });
+            .flex => |b_flex| {
+                if (b_flex.constraints.len() == 0) {
+                    self.merge(vars, Content{ .alias = a_alias });
+                } else {
+                    // Merge against backing var, so we don't loose static dispatch constraints
+                    try self.unifyGuarded(backing_var, vars.b.var_);
+                }
             },
             .rigid => |_| {
                 try self.unifyGuarded(backing_var, vars.b.var_);
             },
             .alias => |b_alias| {
                 const b_backing_var = self.types_store.getAliasBackingVar(b_alias);
-                // TODO: Do we need this?
-                // const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
-                // if (b_backing_resolved.desc.content == .err) {
-                //     // Invalid alias - treat as transparent
-                //     self.merge(vars, vars.a.desc.content);
-                //     return;
-                // }
                 if (TypeIdent.eql(self.module_env.getIdentStore(), a_alias.ident, b_alias.ident)) {
                     try self.unifyTwoAliases(vars, a_alias, b_alias);
                 } else {
@@ -691,8 +694,7 @@ const Unifier = struct {
                 if (b_flex.constraints.len() > 0) {
                     // Record that we need to check constraints later
                     _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
-                        .constrained_var = vars.b.var_,
-                        .concrete_var = vars.a.var_,
+                        .var_ = vars.b.var_, // Since the vars are merge, we arbitrary choose b
                         .constraints = b_flex.constraints,
                     }) catch return Error.AllocatorError;
                 }
@@ -2951,17 +2953,7 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        if (a_constraint.fn_args.nonempty.len() != b_constraint.fn_args.nonempty.len()) {
-            return error.TypeMismatch;
-        }
-
-        const a_args = self.types_store.sliceVars(a_constraint.fn_args.nonempty);
-        const b_args = self.types_store.sliceVars(b_constraint.fn_args.nonempty);
-        for (a_args, b_args) |a_arg, b_arg| {
-            try self.unifyGuarded(a_arg, b_arg);
-        }
-
-        try self.unifyGuarded(a_constraint.fn_ret, b_constraint.fn_ret);
+        try self.unifyGuarded(a_constraint.fn_var, b_constraint.fn_var);
     }
 
     const PartitionedStaticDispatchConstraints = struct {
@@ -3069,8 +3061,7 @@ pub const UnifyErrCtx = union(enum) {
 
 /// A list of constraint that should apply to concrete type
 pub const DeferredConstraintCheck = struct {
-    constrained_var: Var,
-    concrete_var: Var,
+    var_: Var,
     constraints: StaticDispatchConstraint.SafeList.Range,
 
     pub const SafeList = MkSafeList(@This());

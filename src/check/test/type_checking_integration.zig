@@ -22,21 +22,21 @@ test "check type - num - unbound" {
     const source =
         \\50
     ;
-    try assertExprTypeCheckPass(source, "Num(_size)");
+    try checkTypesExpr(source, .pass, "Num(_size)");
 }
 
 test "check type - num - int suffix 1" {
     const source =
         \\10u8
     ;
-    try assertExprTypeCheckPass(source, "Num(Int(Unsigned8))");
+    try checkTypesExpr(source, .pass, "Num(Int(Unsigned8))");
 }
 
 test "check type - num - int suffix 2" {
     const source =
         \\10i128
     ;
-    try assertExprTypeCheckPass(source, "Num(Int(Signed128))");
+    try checkTypesExpr(source, .pass, "Num(Int(Signed128))");
 }
 
 test "check type - num - int big" {
@@ -48,35 +48,35 @@ test "check type - num - int big" {
         \\  e
         \\}
     ;
-    try assertExprTypeCheckPass(source, "Num(Int(Unsigned128))");
+    try checkTypesExpr(source, .pass, "Num(Int(Unsigned128))");
 }
 
 test "check type - num - float" {
     const source =
         \\10.1
     ;
-    try assertExprTypeCheckPass(source, "Num(Frac(_size))");
+    try checkTypesExpr(source, .pass, "Num(Frac(_size))");
 }
 
 test "check type - num - float suffix 1" {
     const source =
         \\10.1f32
     ;
-    try assertExprTypeCheckPass(source, "Num(Frac(Float32))");
+    try checkTypesExpr(source, .pass, "Num(Frac(Float32))");
 }
 
 test "check type - num - float suffix 2" {
     const source =
         \\10.1f64
     ;
-    try assertExprTypeCheckPass(source, "Num(Frac(Float64))");
+    try checkTypesExpr(source, .pass, "Num(Frac(Float64))");
 }
 
 test "check type - num - float suffix 3" {
     const source =
         \\10.1dec
     ;
-    try assertExprTypeCheckPass(source, "Num(Frac(Decimal))");
+    try checkTypesExpr(source, .pass, "Num(Frac(Decimal))");
 }
 
 // primitives - strs //
@@ -85,7 +85,7 @@ test "check type - str" {
     const source =
         \\"hello"
     ;
-    try assertExprTypeCheckPass(source, "Str");
+    try checkTypesExpr(source, .pass, "Str");
 }
 
 // primitives - lists //
@@ -94,42 +94,42 @@ test "check type - list empty" {
     const source =
         \\[]
     ;
-    try assertExprTypeCheckPass(source, "List(_elem)");
+    try checkTypesExpr(source, .pass, "List(_elem)");
 }
 
 test "check type - list - same elems 1" {
     const source =
         \\["hello", "world"]
     ;
-    try assertExprTypeCheckPass(source, "List(Str)");
+    try checkTypesExpr(source, .pass, "List(Str)");
 }
 
 test "check type - list - same elems 2" {
     const source =
         \\[100, 200]
     ;
-    try assertExprTypeCheckPass(source, "List(Num(_size))");
+    try checkTypesExpr(source, .pass, "List(Num(_size))");
 }
 
 test "check type - list - 1st elem more specific coreces 2nd elem" {
     const source =
         \\[100u64, 200]
     ;
-    try assertExprTypeCheckPass(source, "List(Num(Int(Unsigned64)))");
+    try checkTypesExpr(source, .pass, "List(Num(Int(Unsigned64)))");
 }
 
 test "check type - list - 2nd elem more specific coreces 1st elem" {
     const source =
         \\[100, 200u32]
     ;
-    try assertExprTypeCheckPass(source, "List(Num(Int(Unsigned32)))");
+    try checkTypesExpr(source, .pass, "List(Num(Int(Unsigned32)))");
 }
 
 test "check type - list  - diff elems 1" {
     const source =
         \\["hello", 10]
     ;
-    try assertExprTypeCheckFail(source, "INCOMPATIBLE LIST ELEMENTS");
+    try checkTypesExpr(source, .fail, "INCOMPATIBLE LIST ELEMENTS");
 }
 
 // number requirements //
@@ -138,7 +138,7 @@ test "check type - num - cannot coerce 500 to u8" {
     const source =
         \\[500, 200u8]
     ;
-    try assertExprTypeCheckFail(source, "NUMBER DOES NOT FIT IN TYPE");
+    try checkTypesExpr(source, .fail, "NUMBER DOES NOT FIT IN TYPE");
 }
 
 // records //
@@ -150,7 +150,7 @@ test "check type - record" {
         \\  world: 10,
         \\}
     ;
-    try assertExprTypeCheckPass(source, "{ hello: Str, world: Num(_size) }");
+    try checkTypesExpr(source, .pass, "{ hello: Str, world: Num(_size) }");
 }
 
 // tags //
@@ -159,14 +159,14 @@ test "check type - tag" {
     const source =
         \\MyTag
     ;
-    try assertExprTypeCheckPass(source, "[MyTag]_others");
+    try checkTypesExpr(source, .pass, "[MyTag]_others");
 }
 
 test "check type - tag - args" {
     const source =
         \\MyTag("hello", 1)
     ;
-    try assertExprTypeCheckPass(source, "[MyTag(Str, Num(_size))]_others");
+    try checkTypesExpr(source, .pass, "[MyTag(Str, Num(_size))]_others");
 }
 
 // blocks //
@@ -177,7 +177,7 @@ test "check type - block - return expr" {
         \\    "Hello"
         \\}
     ;
-    try assertExprTypeCheckPass(source, "Str");
+    try checkTypesExpr(source, .pass, "Str");
 }
 
 test "check type - block - implicit empty record" {
@@ -186,7 +186,7 @@ test "check type - block - implicit empty record" {
         \\    _test = "hello"
         \\}
     ;
-    try assertExprTypeCheckPass(source, "{}");
+    try checkTypesExpr(source, .pass, "{}");
 }
 
 test "check type - block - local value decl" {
@@ -197,7 +197,7 @@ test "check type - block - local value decl" {
         \\    test
         \\}
     ;
-    try assertExprTypeCheckPass(source, "Str");
+    try checkTypesExpr(source, .pass, "Str");
 }
 
 // function //
@@ -206,21 +206,21 @@ test "check type - def - value" {
     const source =
         \\pairU64 = "hello"
     ;
-    try assertFileTypeCheckPass(source, "Str");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
 }
 
 test "check type - def - func" {
     const source =
         \\id = |_| 20
     ;
-    try assertFileTypeCheckPass(source, "_arg -> Num(_size)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Num(_size)");
 }
 
 test "check type - def - id without annotation" {
     const source =
         \\id = |x| x
     ;
-    try assertFileTypeCheckPass(source, "a -> a");
+    try checkTypesModule(source, .{ .pass = .last_def }, "a -> a");
 }
 
 test "check type - def - id with annotation" {
@@ -228,7 +228,7 @@ test "check type - def - id with annotation" {
         \\id : a -> a
         \\id = |x| x
     ;
-    try assertFileTypeCheckPass(source, "a -> a");
+    try checkTypesModule(source, .{ .pass = .last_def }, "a -> a");
 }
 
 test "check type - def - func with annotation 1" {
@@ -236,7 +236,7 @@ test "check type - def - func with annotation 1" {
         \\id : x -> Str
         \\id = |_| "test"
     ;
-    try assertFileTypeCheckPass(source, "x -> Str");
+    try checkTypesModule(source, .{ .pass = .last_def }, "x -> Str");
 }
 
 test "check type - def - func with annotation 2" {
@@ -244,14 +244,14 @@ test "check type - def - func with annotation 2" {
         \\id : x -> Num(_size)
         \\id = |_| 15
     ;
-    try assertFileTypeCheckPass(source, "x -> Num(_size)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "x -> Num(_size)");
 }
 
 test "check type - def - nested lambda" {
     const source =
         \\id = (((|a| |b| |c| a + b + c)(100))(20))(3)
     ;
-    try assertFileTypeCheckPass(source, "Num(_size)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
 }
 
 // calling functions
@@ -263,7 +263,7 @@ test "check type - def - monomorphic id" {
         \\
         \\test = idStr("hello")
     ;
-    try assertFileTypeCheckPass(source, "Str");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
 }
 
 test "check type - def - polymorphic id 1" {
@@ -273,7 +273,7 @@ test "check type - def - polymorphic id 1" {
         \\
         \\test = id(5)
     ;
-    try assertFileTypeCheckPass(source, "Num(_size)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
 }
 
 test "check type - def - polymorphic id 2" {
@@ -283,14 +283,14 @@ test "check type - def - polymorphic id 2" {
         \\
         \\test = (id(5), id("hello"))
     ;
-    try assertFileTypeCheckPass(source, "(Num(_size), Str)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "(Num(_size), Str)");
 }
 
 test "check type - def - polymorphic higher order 1" {
     const source =
         \\f = |g, v| g(v)
     ;
-    try assertFileTypeCheckPass(source, "a -> b, a -> b");
+    try checkTypesModule(source, .{ .pass = .last_def }, "a -> b, a -> b");
 }
 
 test "check type - top level polymorphic function is generalized" {
@@ -303,7 +303,7 @@ test "check type - top level polymorphic function is generalized" {
         \\    a
         \\}
     ;
-    try assertFileTypeCheckPass(source, "Num(_size)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
 }
 
 test "check type - let-def polymorphic function is generalized" {
@@ -315,7 +315,7 @@ test "check type - let-def polymorphic function is generalized" {
         \\    a
         \\}
     ;
-    try assertFileTypeCheckPass(source, "Num(_size)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
 }
 
 test "check type - polymorphic function function param should be constrained" {
@@ -329,7 +329,7 @@ test "check type - polymorphic function function param should be constrained" {
         \\}
         \\result = use_twice(id)
     ;
-    try assertFileTypeCheckFail(source, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // type aliases //
@@ -343,7 +343,7 @@ test "check type - basic alias" {
         \\x : MyAlias
         \\x = "hello"
     ;
-    try assertFileTypeCheckPass(source, "MyAlias");
+    try checkTypesModule(source, .{ .pass = .last_def }, "MyAlias");
 }
 
 test "check type - alias with arg" {
@@ -355,7 +355,7 @@ test "check type - alias with arg" {
         \\x : MyListAlias(Num(size))
         \\x = [15]
     ;
-    try assertFileTypeCheckPass(source, "MyListAlias(Num(size))");
+    try checkTypesModule(source, .{ .pass = .last_def }, "MyListAlias(Num(size))");
 }
 
 test "check type - alias with mismatch arg" {
@@ -365,7 +365,7 @@ test "check type - alias with mismatch arg" {
         \\x : MyListAlias(Str)
         \\x = [15]
     ;
-    try assertFileTypeCheckFail(source, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // nominal types //
@@ -379,7 +379,7 @@ test "check type - basic nominal" {
         \\x : MyNominal
         \\x = MyNominal.MyNominal
     ;
-    try assertFileTypeCheckPass(source, "MyNominal");
+    try checkTypesModule(source, .{ .pass = .last_def }, "MyNominal");
 }
 
 test "check type - nominal with tag arg" {
@@ -391,7 +391,7 @@ test "check type - nominal with tag arg" {
         \\x : MyNominal
         \\x = MyNominal.MyNominal("hello")
     ;
-    try assertFileTypeCheckPass(source, "MyNominal");
+    try checkTypesModule(source, .{ .pass = .last_def }, "MyNominal");
 }
 
 test "check type - nominal with type and tag arg" {
@@ -403,7 +403,7 @@ test "check type - nominal with type and tag arg" {
         \\x : MyNominal(U8)
         \\x = MyNominal.MyNominal(10)
     ;
-    try assertFileTypeCheckPass(source, "MyNominal(Num(Int(Unsigned8)))");
+    try checkTypesModule(source, .{ .pass = .last_def }, "MyNominal(Num(Int(Unsigned8)))");
 }
 
 test "check type - nominal with with rigid vars" {
@@ -415,7 +415,7 @@ test "check type - nominal with with rigid vars" {
         \\pairU64 : Pair(U64)
         \\pairU64 = Pair.Pair(1, 2)
     ;
-    try assertFileTypeCheckPass(source, "Pair(Num(Int(Unsigned64)))");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Pair(Num(Int(Unsigned64)))");
 }
 
 test "check type - nominal with with rigid vars mismatch" {
@@ -425,7 +425,7 @@ test "check type - nominal with with rigid vars mismatch" {
         \\pairU64 : Pair(U64)
         \\pairU64 = Pair.Pair(1, "Str")
     ;
-    try assertFileTypeCheckFail(source, "INVALID NOMINAL TAG");
+    try checkTypesModule(source, .fail, "INVALID NOMINAL TAG");
 }
 
 test "check type - nominal recursive type" {
@@ -437,7 +437,7 @@ test "check type - nominal recursive type" {
         \\x : ConsList(Str)
         \\x = ConsList.Cons("hello", ConsList.Nil)
     ;
-    try assertFileTypeCheckPass(source, "ConsList(Str)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "ConsList(Str)");
 }
 
 test "check type - nominal recursive type anno mismatch" {
@@ -447,7 +447,7 @@ test "check type - nominal recursive type anno mismatch" {
         \\x : ConsList(Num(size))
         \\x = ConsList.Cons("hello", ConsList.Nil)
     ;
-    try assertFileTypeCheckFail(source, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - two nominal types" {
@@ -460,7 +460,7 @@ test "check type - two nominal types" {
         \\
         \\x = ConsList.Cons(Elem.Elem("hello"), ConsList.Nil)
     ;
-    try assertFileTypeCheckPass(source, "ConsList(Elem(Str))");
+    try checkTypesModule(source, .{ .pass = .last_def }, "ConsList(Elem(Str))");
 }
 
 test "check type - nominal recursive type no args" {
@@ -472,7 +472,7 @@ test "check type - nominal recursive type no args" {
         \\x : StrConsList
         \\x = StrConsList.Cons("hello", StrConsList.Nil)
     ;
-    try assertFileTypeCheckPass(source, "StrConsList");
+    try checkTypesModule(source, .{ .pass = .last_def }, "StrConsList");
 }
 
 test "check type - nominal recursive type wrong type" {
@@ -482,7 +482,7 @@ test "check type - nominal recursive type wrong type" {
         \\x : StrConsList
         \\x = StrConsList.Cons(10, StrConsList.Nil)
     ;
-    try assertFileTypeCheckFail(source, "INVALID NOMINAL TAG");
+    try checkTypesModule(source, .fail, "INVALID NOMINAL TAG");
 }
 
 test "check type - nominal w/ polymorphic function with bad args" {
@@ -492,7 +492,7 @@ test "check type - nominal w/ polymorphic function with bad args" {
         \\mkPairInvalid : a, b -> Pair(a)
         \\mkPairInvalid = |x, y| Pair.Pair(x, y)
     ;
-    try assertFileTypeCheckFail(source, "INVALID NOMINAL TAG");
+    try checkTypesModule(source, .fail, "INVALID NOMINAL TAG");
 }
 
 test "check type - nominal w/ polymorphic function" {
@@ -506,7 +506,7 @@ test "check type - nominal w/ polymorphic function" {
         \\
         \\test = |_| swapPair((1, "test"))
     ;
-    try assertFileTypeCheckPass(source, "_arg -> Pair(Str, Num(_size))");
+    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Pair(Str, Num(_size))");
 }
 
 // bool
@@ -516,22 +516,21 @@ test "check type - bool unqualified" {
         \\x : Bool
         \\x = True
     ;
-    try assertFileTypeCheckPass(source, "Bool");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
 }
 
 test "check type - bool qualified" {
     const source =
         \\x = Bool.True
     ;
-    try assertFileTypeCheckPass(source, "Bool");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
 }
 
 test "check type - bool lambda" {
-    return error.SkipZigTest;
-    // const source =
-    //     \\x = (|x| !x)(Bool.True)
-    // ;
-    // try assertFileTypeCheckPass(source, "Bool");
+    const source =
+        \\x = (|y| !y)(Bool.True)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
 }
 
 // if-else
@@ -541,7 +540,7 @@ test "check type - if else" {
         \\x : Str
         \\x = if True "true" else "false"
     ;
-    try assertFileTypeCheckPass(source, "Str");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
 }
 
 test "check type - if else - qualified bool" {
@@ -550,7 +549,7 @@ test "check type - if else - qualified bool" {
     //     \\x : Str
     //     \\x = if Bool.True "true" else "false"
     // ;
-    // try assertFileTypeCheckPass(source, "Str");
+    // try checkTypesModule(source, .{ .pass = .last_def }, "Str");
 }
 
 test "check type - if else - invalid condition 1" {
@@ -558,7 +557,7 @@ test "check type - if else - invalid condition 1" {
         \\x : Str
         \\x = if 5 "true" else "false"
     ;
-    try assertFileTypeCheckFail(source, "INVALID IF CONDITION");
+    try checkTypesModule(source, .fail, "INVALID IF CONDITION");
 }
 
 test "check type - if else - invalid condition 2" {
@@ -566,7 +565,7 @@ test "check type - if else - invalid condition 2" {
         \\x : Str
         \\x = if 10 "true" else "false"
     ;
-    try assertFileTypeCheckFail(source, "INVALID IF CONDITION");
+    try checkTypesModule(source, .fail, "INVALID IF CONDITION");
 }
 
 test "check type - if else - invalid condition 3" {
@@ -574,28 +573,28 @@ test "check type - if else - invalid condition 3" {
         \\x : Str
         \\x = if "True" "true" else "false"
     ;
-    try assertFileTypeCheckFail(source, "INVALID IF CONDITION");
+    try checkTypesModule(source, .fail, "INVALID IF CONDITION");
 }
 
 test "check type - if else - different branch types 1" {
     const source =
         \\x = if True "true" else 10
     ;
-    try assertFileTypeCheckFail(source, "INCOMPATIBLE IF BRANCHES");
+    try checkTypesModule(source, .fail, "INCOMPATIBLE IF BRANCHES");
 }
 
 test "check type - if else - different branch types 2" {
     const source =
         \\x = if True "true" else if False "false" else 10
     ;
-    try assertFileTypeCheckFail(source, "INCOMPATIBLE IF BRANCHES");
+    try checkTypesModule(source, .fail, "INCOMPATIBLE IF BRANCHES");
 }
 
 test "check type - if else - different branch types 3" {
     const source =
         \\x = if True "true" else if False 10 else "last"
     ;
-    try assertFileTypeCheckFail(source, "INCOMPATIBLE IF BRANCHES");
+    try checkTypesModule(source, .fail, "INCOMPATIBLE IF BRANCHES");
 }
 
 // match
@@ -608,7 +607,7 @@ test "check type - match" {
         \\    False => "false"
         \\  }
     ;
-    try assertFileTypeCheckPass(source, "Str");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
 }
 
 test "check type - match - diff cond types 1" {
@@ -619,7 +618,7 @@ test "check type - match - diff cond types 1" {
         \\    False => "false"
         \\  }
     ;
-    try assertFileTypeCheckFail(source, "INCOMPATIBLE MATCH PATTERNS");
+    try checkTypesModule(source, .fail, "INCOMPATIBLE MATCH PATTERNS");
 }
 
 test "check type - match - diff branch types" {
@@ -630,7 +629,7 @@ test "check type - match - diff branch types" {
         \\    False => 100
         \\  }
     ;
-    try assertFileTypeCheckFail(source, "INCOMPATIBLE MATCH BRANCHES");
+    try checkTypesModule(source, .fail, "INCOMPATIBLE MATCH BRANCHES");
 }
 
 // unary not
@@ -639,14 +638,14 @@ test "check type - unary not" {
     const source =
         \\x = !True
     ;
-    try assertFileTypeCheckPass(source, "Bool");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
 }
 
 test "check type - unary not mismatch" {
     const source =
         \\x = !"Hello"
     ;
-    try assertFileTypeCheckFail(source, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // unary not
@@ -655,7 +654,7 @@ test "check type - unary minus" {
     const source =
         \\x = -10
     ;
-    try assertFileTypeCheckPass(source, "Num(_size)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
 }
 
 test "check type - unary minus mismatch" {
@@ -664,7 +663,7 @@ test "check type - unary minus mismatch" {
         \\
         \\y = -x
     ;
-    try assertFileTypeCheckFail(source, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // binops
@@ -673,49 +672,49 @@ test "check type - binops math plus" {
     const source =
         \\x = 10 + 10u32
     ;
-    try assertFileTypeCheckPass(source, "Num(Int(Unsigned32))");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Num(Int(Unsigned32))");
 }
 
 test "check type - binops math sub" {
     const source =
         \\x = 1 - 0.2
     ;
-    try assertFileTypeCheckPass(source, "Num(Frac(_size))");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Num(Frac(_size))");
 }
 
 test "check type - binops ord" {
     const source =
         \\x = 10.0f32 > 15
     ;
-    try assertFileTypeCheckPass(source, "Bool");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
 }
 
 test "check type - binops and" {
     const source =
         \\x = True and False
     ;
-    try assertFileTypeCheckPass(source, "Bool");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
 }
 
 test "check type - binops and mismatch" {
     const source =
         \\x = "Hello" and False
     ;
-    try assertFileTypeCheckFail(source, "INVALID BOOL OPERATION");
+    try checkTypesModule(source, .fail, "INVALID BOOL OPERATION");
 }
 
 test "check type - binops or" {
     const source =
         \\x = True or False
     ;
-    try assertFileTypeCheckPass(source, "Bool");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
 }
 
 test "check type - binops or mismatch" {
     const source =
         \\x = "Hello" or False
     ;
-    try assertFileTypeCheckFail(source, "INVALID BOOL OPERATION");
+    try checkTypesModule(source, .fail, "INVALID BOOL OPERATION");
 }
 
 // record access
@@ -730,14 +729,14 @@ test "check type - record access" {
         \\
         \\x = r.hello
     ;
-    try assertFileTypeCheckPass(source, "Str");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
 }
 
 test "check type - record access func polymorphic" {
     const source =
         \\x = |r| r.my_field
     ;
-    try assertFileTypeCheckPass(source, "{ my_field: a } -> a");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ my_field: a } -> a");
 }
 
 test "check type - record access - not a record" {
@@ -746,7 +745,7 @@ test "check type - record access - not a record" {
         \\
         \\x = r.my_field
     ;
-    try assertFileTypeCheckFail(source, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // tags //
@@ -761,7 +760,7 @@ test "check type - patterns - wrong type" {
         \\  }
         \\}
     ;
-    try assertExprTypeCheckFail(source, "INCOMPATIBLE MATCH PATTERNS");
+    try checkTypesExpr(source, .fail, "INCOMPATIBLE MATCH PATTERNS");
 }
 
 test "check type - patterns tag without payload" {
@@ -775,7 +774,7 @@ test "check type - patterns tag without payload" {
         \\  }
         \\}
     ;
-    try assertExprTypeCheckPass(source, "Str");
+    try checkTypesExpr(source, .pass, "Str");
 }
 
 test "check type - patterns tag with payload" {
@@ -789,7 +788,7 @@ test "check type - patterns tag with payload" {
         \\  }
         \\}
     ;
-    try assertExprTypeCheckPass(source, "Str");
+    try checkTypesExpr(source, .pass, "Str");
 }
 
 test "check type - patterns tag with payload mismatch" {
@@ -803,7 +802,7 @@ test "check type - patterns tag with payload mismatch" {
         \\  }
         \\}
     ;
-    try assertExprTypeCheckFail(source, "INCOMPATIBLE MATCH PATTERNS");
+    try checkTypesExpr(source, .fail, "INCOMPATIBLE MATCH PATTERNS");
 }
 
 test "check type - patterns str" {
@@ -817,7 +816,7 @@ test "check type - patterns str" {
         \\  }
         \\}
     ;
-    try assertExprTypeCheckPass(source, "Str");
+    try checkTypesExpr(source, .pass, "Str");
 }
 
 test "check type - patterns num" {
@@ -831,7 +830,7 @@ test "check type - patterns num" {
         \\  }
         \\}
     ;
-    try assertExprTypeCheckPass(source, "Str");
+    try checkTypesExpr(source, .pass, "Str");
 }
 
 test "check type - patterns int mismatch" {
@@ -845,7 +844,7 @@ test "check type - patterns int mismatch" {
         \\  }
         \\}
     ;
-    try assertExprTypeCheckFail(source, "INCOMPATIBLE MATCH PATTERNS");
+    try checkTypesExpr(source, .fail, "INCOMPATIBLE MATCH PATTERNS");
 }
 
 test "check type - patterns frac 1" {
@@ -859,7 +858,7 @@ test "check type - patterns frac 1" {
         \\  }
         \\}
     ;
-    try assertExprTypeCheckPass(source, "Num(Frac(Decimal))");
+    try checkTypesExpr(source, .pass, "Num(Frac(Decimal))");
 }
 
 test "check type - patterns frac 2" {
@@ -873,7 +872,7 @@ test "check type - patterns frac 2" {
         \\  }
         \\}
     ;
-    try assertExprTypeCheckPass(source, "Num(Frac(Float32))");
+    try checkTypesExpr(source, .pass, "Num(Frac(Float32))");
 }
 
 test "check type - patterns frac 3" {
@@ -888,7 +887,7 @@ test "check type - patterns frac 3" {
         \\  }
         \\}
     ;
-    try assertExprTypeCheckPass(source, "Num(Frac(Float64))");
+    try checkTypesExpr(source, .pass, "Num(Frac(Float64))");
 }
 
 test "check type - patterns list" {
@@ -903,7 +902,7 @@ test "check type - patterns list" {
         \\  }
         \\}
     ;
-    try assertExprTypeCheckPass(source, "List(Str)");
+    try checkTypesExpr(source, .pass, "List(Str)");
 }
 
 test "check type - patterns record" {
@@ -917,7 +916,7 @@ test "check type - patterns record" {
         \\  }
         \\}
     ;
-    try assertExprTypeCheckPass(source, "Str");
+    try checkTypesExpr(source, .pass, "Str");
 }
 
 test "check type - patterns record 2" {
@@ -931,7 +930,7 @@ test "check type - patterns record 2" {
         \\  }
         \\}
     ;
-    try assertExprTypeCheckPass(source, "Num(_size)");
+    try checkTypesExpr(source, .pass, "Num(_size)");
 }
 
 test "check type - patterns record field mismatch" {
@@ -945,7 +944,7 @@ test "check type - patterns record field mismatch" {
         \\  }
         \\}
     ;
-    try assertExprTypeCheckFail(source, "INCOMPATIBLE MATCH PATTERNS");
+    try checkTypesExpr(source, .fail, "INCOMPATIBLE MATCH PATTERNS");
 }
 
 // vars
@@ -958,7 +957,7 @@ test "check type - var ressignment" {
         \\  x
         \\}
     ;
-    try assertFileTypeCheckPass(source, "Num(_size)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
 }
 
 // expect
@@ -971,7 +970,7 @@ test "check type - expect" {
         \\  x
         \\}
     ;
-    try assertFileTypeCheckPass(source, "Num(_size)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
 }
 
 test "check type - expect not bool" {
@@ -982,39 +981,229 @@ test "check type - expect not bool" {
         \\  x
         \\}
     ;
-    try assertFileTypeCheckFail(source, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
-// helpers  //
+// static dispatch //
 
-/// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
-/// Asserts that type checking the expr passes
-fn assertExprTypeCheckPass(comptime source_expr: []const u8, expected_type: []const u8) !void {
-    var test_env = try TestEnv.initExpr(source_expr);
-    defer test_env.deinit();
-    return test_env.assertLastDefType(expected_type);
+test "check type - static dispatch - polymorphic - annotation" {
+    const source =
+        \\module []
+        \\
+        \\main : a -> Str where [a.to_str : a -> Str]
+        \\main = |a| a.to_str()
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "main" } },
+        "a -> Str where [a.to_str : a -> Str]",
+    );
 }
 
-/// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
-/// Asserts that type checking the expr fails with exactly one problem, and the title of the problem matches the provided one.
-fn assertExprTypeCheckFail(comptime source_expr: []const u8, expected_problem_title: []const u8) !void {
-    var test_env = try TestEnv.initExpr(source_expr);
-    defer test_env.deinit();
-    return test_env.assertOneTypeError(expected_problem_title);
+test "check type - static dispatch - polymorphic - no annotation" {
+    const source =
+        \\module []
+        \\
+        \\main = |x| x.to_str()
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "main" } },
+        "a -> b where [a.to_str : a -> b]",
+    );
 }
 
-/// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
-/// Asserts that the type of the final definition in the source matches the one provided
-fn assertFileTypeCheckPass(source: []const u8, expected_type: []const u8) !void {
-    var test_env = try TestEnv.init(source);
-    defer test_env.deinit();
-    return test_env.assertLastDefType(expected_type);
+test "check type - static dispatch - concrete - annotation" {
+    const source =
+        \\module []
+        \\
+        \\Test := [Val(Str)].{
+        \\  to_str : Test -> Str
+        \\  to_str = |Test.Val(s)| s
+        \\}
+        \\
+        \\main : Str
+        \\main = Test.Val("hello").to_str()
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "main" } },
+        "Str",
+    );
 }
 
+test "check type - static dispatch - concrete - no annotation" {
+    const source =
+        \\Test := [Val(Str)].{
+        \\  to_str = |Test.Val(s)| s
+        \\}
+        \\
+        \\main = Test.Val("hello").to_str()
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "main" } },
+        "Str",
+    );
+}
+
+test "check type - static dispatch - concrete - wrong method name" {
+    const source =
+        \\module []
+        \\
+        \\Test := [Val(Str)].{
+        \\  to_str = |Test.Val(s)| s
+        \\}
+        \\
+        \\main = Test.Val("hello").to_num()
+    ;
+    try checkTypesModule(
+        source,
+        .fail,
+        "MISSING METHOD",
+    );
+}
+
+test "check type - static dispatch - concrete - args" {
+    const source =
+        \\module []
+        \\
+        \\Test := [Val(U8)].{
+        \\  add = |Test.Val(a), b| Test.Val(a + b)
+        \\}
+        \\
+        \\main = Test.Val(1).add(1)
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "main" } },
+        "Test",
+    );
+}
+
+test "check type - static dispatch - concrete - wrong args" {
+    const source =
+        \\module []
+        \\
+        \\Test := [Val(U8)].{
+        \\  add = |Test.Val(a), b| Test.Val(a + b)
+        \\}
+        \\
+        \\main = Test.Val(1).add("hello")
+    ;
+    try checkTypesModule(
+        source,
+        .fail,
+        "TYPE MISMATCH",
+    );
+}
+
+test "check type - static dispatch - concrete - indirection 1" {
+    const source =
+        \\module []
+        \\
+        \\Test := [Val(Str)].{
+        \\  to_str = |Test.Val(s)| s
+        \\  to_str2 = |test| test.to_str()
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "Test.to_str2" } },
+        "a -> b where [a.to_str : a -> b]",
+    );
+}
+
+test "check type - static dispatch - concrete - indirection 2" {
+    const source =
+        \\module []
+        \\
+        \\Test := [Val(Str)].{
+        \\  to_str = |Test.Val(s)| s
+        \\  to_str2 = |test| test.to_str()
+        \\}
+        \\
+        \\main = Test.Val("hello").to_str2()
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "main" } },
+        "Str",
+    );
+}
+
+// helpers - module //
+
+const ModuleExpectation = union(enum) {
+    pass: DefExpectation,
+    fail,
+};
+
+const DefExpectation = union(enum) {
+    last_def,
+    def: []const u8,
+};
+
 /// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
-/// Asserts that the type of the final definition in the source matches the one provided
-fn assertFileTypeCheckFail(source: []const u8, expected_problem_title: []const u8) !void {
-    var test_env = try TestEnv.init(source);
+///
+/// Behavior depends on the expectation:
+/// Pass: Asserts whole module type checks, and assert the specified def matches the expected type string
+/// Fail: Asserts that there is exactly 1 type error in the module and it's title matches the expected string
+fn checkTypesModule(
+    comptime source_expr: []const u8,
+    comptime expectation: ModuleExpectation,
+    comptime expected: []const u8,
+) !void {
+    var test_env = try TestEnv.init("Test", source_expr);
     defer test_env.deinit();
-    return test_env.assertOneTypeError(expected_problem_title);
+
+    switch (expectation) {
+        .pass => |def_expectation| {
+            switch (def_expectation) {
+                .last_def => {
+                    return test_env.assertLastDefType(expected);
+                },
+                .def => |def_name| {
+                    return test_env.assertDefType(def_name, expected);
+                },
+            }
+        },
+        .fail => {
+            return test_env.assertOneTypeError(expected);
+        },
+    }
+
+    return test_env.assertLastDefType(expected);
+}
+
+// helpers - expr //
+
+const ExprExpectation = union(enum) {
+    pass,
+    fail,
+};
+
+/// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
+///
+/// Behavior depends on the expectation:
+/// Pass: Asserts expr type checks, and asserts that the expr's type match the expected type string
+/// Fail: Asserts that there is exactly 1 type error and it's title matches the expected string
+fn checkTypesExpr(
+    comptime source_expr: []const u8,
+    comptime expectation: ExprExpectation,
+    comptime expected: []const u8,
+) !void {
+    var test_env = try TestEnv.initExpr("Test", source_expr);
+    defer test_env.deinit();
+
+    switch (expectation) {
+        .pass => {
+            return test_env.assertLastDefType(expected);
+        },
+        .fail => {
+            return test_env.assertOneTypeError(expected);
+        },
+    }
+
+    return test_env.assertLastDefType(expected);
 }

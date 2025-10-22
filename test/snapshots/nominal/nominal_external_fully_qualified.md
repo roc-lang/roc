@@ -120,7 +120,7 @@ handleResult = |result| {
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-nominal-external (module-idx "4") (target-node-idx "0")
+											(p-nominal-external (external-module "MyResultModule")
 												(p-applied-tag))))
 									(value
 										(e-lookup-local
@@ -128,18 +128,17 @@ handleResult = |result| {
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-nominal-external (module-idx "4") (target-node-idx "0")
+											(p-nominal-external (external-module "MyResultModule")
 												(p-applied-tag))))
 									(value
 										(e-string
 											(e-literal (string "Error: $(code.toStr())")))))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "MyResultType") (external (module-idx "4") (target-node-idx "0"))
-						(ty-lookup (name "Str") (builtin))
-						(ty-lookup (name "I32") (builtin)))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-apply (name "MyResultType") (external-module "MyResultModule")
+					(ty-lookup (name "Str") (builtin))
+					(ty-lookup (name "I32") (builtin)))
+				(ty-lookup (name "Str") (builtin)))))
 	(s-import (module "MyResultModule")
 		(exposes)))
 ~~~

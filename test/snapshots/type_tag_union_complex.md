@@ -180,10 +180,9 @@ NO CHANGE
 			(e-string
 				(e-literal (string "processed"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "Result") (external (module-idx "3") (target-node-idx "3")))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "Result") (external-module "Result"))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "handleResponse"))
 		(e-lambda
@@ -192,10 +191,9 @@ NO CHANGE
 			(e-string
 				(e-literal (string "handled"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "Response") (local))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "Response") (local))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda
@@ -222,7 +220,7 @@ NO CHANGE
 		(ty-header (name "Response"))
 		(ty-tag-union
 			(ty-tag-name (name "Ok")
-				(ty-lookup (name "Result") (external (module-idx "3") (target-node-idx "3"))))
+				(ty-lookup (name "Result") (external-module "Result")))
 			(ty-tag-name (name "NetworkError"))
 			(ty-tag-name (name "ParseError"))))
 	(s-alias-decl

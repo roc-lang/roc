@@ -945,7 +945,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
             // Use the built-in deserialize method instead of manually deserializing each field
             // This ensures proper offset calculations when the struct layout changes
             logDebug("loadCompiledModule: About to deserialize ModuleEnv\n", .{});
-            module_env_ptr.* = serialized_ptr.deserialize(@as(i64, @intCast(base_ptr)), gpa, module_source, module_name_param).*;
+            module_env_ptr.* = (try serialized_ptr.deserialize(@as(i64, @intCast(base_ptr)), gpa, module_source, module_name_param)).*;
             logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});
 
             logDebug("loadCompiledModule: Returning LoadedModule\n", .{});
@@ -1047,9 +1047,9 @@ fn compileSource(source: []const u8) !CompilerStageData {
     logDebug("compileSource: Starting type checking\n", .{});
     {
         const type_can_ir = result.module_env;
-        const empty_modules: []const *ModuleEnv = &.{};
+        const imported_envs: []const *ModuleEnv = &.{};
         // Use pointer to the stored CIR to ensure solver references valid memory
-        var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, empty_modules, &type_can_ir.store.regions, module_common_idents);
+        var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, null, &type_can_ir.store.regions, module_common_idents);
         result.solver = solver;
 
         solver.checkFile() catch |check_err| {

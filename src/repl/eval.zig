@@ -86,7 +86,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .exports = serialized_ptr.exports,
         .builtin_statements = serialized_ptr.builtin_statements,
         .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
-        .imports = serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+        .imports = (try serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa)).*,
         .module_name = module_name,
         .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
         .diagnostics = serialized_ptr.diagnostics,
@@ -522,8 +522,16 @@ pub const Repl = struct {
         const final_expr_idx = canonical_expr.get_idx();
 
         // Type check - Pass Bool and Result as imported modules
-        const other_modules = [_]*const ModuleEnv{ self.bool_module.env, self.result_module.env };
-        var checker = Check.init(self.allocator, &module_env.types, cir, &other_modules, &cir.store.regions, module_common_idents) catch |err| {
+        const imported_modules = [_]*const ModuleEnv{ self.bool_module.env, self.result_module.env };
+        var checker = Check.init(
+            self.allocator,
+            &module_env.types,
+            cir,
+            &imported_modules,
+            &module_envs_map,
+            &cir.store.regions,
+            module_common_idents,
+        ) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Type check init error: {}", .{err});
         };
         defer checker.deinit();

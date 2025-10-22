@@ -191,10 +191,9 @@ main! = |_| {
 			(e-lookup-local
 				(p-assign (ident "x"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-rigid-var (name "a"))
-					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "a"))
+				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(d-let
 		(p-assign (ident "combine"))
 		(e-lambda
@@ -208,13 +207,12 @@ main! = |_| {
 					(e-lookup-local
 						(p-assign (ident "second"))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-rigid-var (name "a"))
-					(ty-rigid-var (name "b"))
-					(ty-tuple
-						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
-						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))))
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "a"))
+				(ty-rigid-var (name "b"))
+				(ty-tuple
+					(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+					(ty-rigid-var-lookup (ty-rigid-var (name "b")))))))
 	(d-let
 		(p-assign (ident "addOne"))
 		(e-lambda
@@ -225,10 +223,9 @@ main! = |_| {
 					(p-assign (ident "n")))
 				(e-num (value "1"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "U64") (builtin))
-					(ty-lookup (name "U64") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "U64") (builtin))
+				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-closure

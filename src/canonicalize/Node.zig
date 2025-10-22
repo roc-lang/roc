@@ -81,7 +81,6 @@ pub const Tag = enum {
     expr_record_builder,
     match_branch,
     match_branch_pattern,
-    where_clause,
     type_header,
     annotation,
     // Type Annotation
@@ -100,6 +99,10 @@ pub const Tag = enum {
     ty_parens,
     ty_lookup_external,
     ty_malformed,
+    // Where clause
+    where_method,
+    where_alias,
+    where_malformed,
     // Patterns
     pattern_identifier,
     pattern_as,

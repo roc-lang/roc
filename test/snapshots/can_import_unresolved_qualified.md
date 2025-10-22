@@ -249,10 +249,9 @@ NO CHANGE
 				(e-lookup-local
 					(p-assign (ident "data")))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "InvalidType") (external (module-idx "4") (target-node-idx "0")))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "InvalidType") (external-module "json.Json"))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "processRequest"))
 		(e-lambda
@@ -260,10 +259,9 @@ NO CHANGE
 				(p-assign (ident "req")))
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-malformed)
-					(ty-malformed)))))
+			(ty-fn (effectful false)
+				(ty-malformed)
+				(ty-malformed))))
 	(d-let
 		(p-assign (ident "result"))
 		(e-call
@@ -290,17 +288,17 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Error"))
-		(patt (type "Error -> Str"))
 		(patt (type "Error -> Error"))
-		(patt (type "_a"))
+		(patt (type "Error -> Error"))
+		(patt (type "Error"))
 		(patt (type "_a"))
 		(patt (type "Error"))
 		(patt (type "Error")))
 	(expressions
 		(expr (type "Error"))
-		(expr (type "Error -> Str"))
 		(expr (type "Error -> Error"))
-		(expr (type "_a"))
+		(expr (type "Error -> Error"))
+		(expr (type "Error"))
 		(expr (type "_a"))
 		(expr (type "Error"))
 		(expr (type "Error"))))

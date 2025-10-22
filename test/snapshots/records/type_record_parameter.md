@@ -38,7 +38,21 @@ process_things : { name : Str, age : U32, thing : a }, (a -> Str) -> Str
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(s-type-anno (name "process_things")
+		(ty-fn (effectful false)
+			(ty-record
+				(field (field "name")
+					(ty-lookup (name "Str") (builtin)))
+				(field (field "age")
+					(ty-lookup (name "U32") (builtin)))
+				(field (field "thing")
+					(ty-rigid-var (name "a"))))
+			(ty-parens
+				(ty-fn (effectful false)
+					(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+					(ty-lookup (name "Str") (builtin))))
+			(ty-lookup (name "Str") (builtin)))))
 ~~~
 # TYPES
 ~~~clojure

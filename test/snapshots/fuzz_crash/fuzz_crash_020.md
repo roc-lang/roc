@@ -1830,8 +1830,12 @@ expect {
 		(exposes))
 	(s-import (module "Ba")
 		(exposes))
+	(s-type-anno (name "line")
+		(ty-tuple))
 	(s-expect
 		(e-runtime-error (tag "ident_not_in_scope")))
+	(s-type-anno (name "t")
+		(ty-malformed))
 	(s-expect
 		(e-block
 			(s-expr
@@ -1849,7 +1853,7 @@ expect {
 		(patt (type "Bool -> Num(_size)"))
 		(patt (type "[Rum]_others -> Error"))
 		(patt (type "[Blue]_others -> Error"))
-		(patt (type "_arg -> [Stdo!(Str)]_others"))
+		(patt (type "_arg -> [Stdo!(Error)]_others"))
 		(patt (type "{}")))
 	(type_decls
 		(alias (type "Map(a, b)")
@@ -1881,6 +1885,6 @@ expect {
 		(expr (type "Bool -> Num(_size)"))
 		(expr (type "[Rum]_others -> Error"))
 		(expr (type "[Blue]_others -> Error"))
-		(expr (type "_arg -> [Stdo!(Str)]_others"))
+		(expr (type "_arg -> [Stdo!(Error)]_others"))
 		(expr (type "{}"))))
 ~~~

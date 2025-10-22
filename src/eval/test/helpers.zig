@@ -379,8 +379,8 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
         } });
         const checker = try allocator.create(Check);
         // Pass Bool and Result as imported modules
-        const other_modules = [_]*const ModuleEnv{ bool_module.env, result_module.env };
-        checker.* = try Check.init(allocator, &module_env.types, module_env, &other_modules, &module_env.store.regions, common_idents);
+        const imported_envs = [_]*const ModuleEnv{ bool_module.env, result_module.env };
+        checker.* = try Check.init(allocator, &module_env.types, module_env, &imported_envs, &module_envs_map, &module_env.store.regions, common_idents);
         const builtin_types = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
         return .{
             .module_env = module_env,
@@ -400,9 +400,9 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     const canonical_expr_idx = canonical_expr.get_idx();
 
     // Create type checker - pass Bool and Result as imported modules
-    const other_modules = [_]*const ModuleEnv{ bool_module.env, result_module.env };
+    const imported_envs = [_]*const ModuleEnv{ bool_module.env, result_module.env };
     const checker = try allocator.create(Check);
-    checker.* = try Check.init(allocator, &module_env.types, module_env, &other_modules, &module_env.store.regions, common_idents);
+    checker.* = try Check.init(allocator, &module_env.types, module_env, &imported_envs, &module_envs_map, &module_env.store.regions, common_idents);
 
     // Type check the expression
     _ = try checker.checkExprRepl(canonical_expr_idx);

@@ -36,6 +36,7 @@ const Content = types_mod.Content;
 pub const Problem = union(enum) {
     type_mismatch: TypeMismatch,
     type_apply_mismatch_arities: TypeApplyArityMismatch,
+    static_dispach: StaticDispatch,
     number_does_not_fit: NumberDoesNotFit,
     negative_unsigned_int: NegativeUnsignedInt,
     infinite_recursion: struct { var_: Var },
@@ -194,6 +195,30 @@ pub const InvalidBoolBinop = struct {
     binop: enum { @"and", @"or" },
 };
 
+// static dispatch //
+
+/// Error related to static dispatch
+pub const StaticDispatch = union(enum) {
+    dispatcher_not_nominal: DispatcherNotNominal,
+    dispatcher_does_not_impl_method: DispatcherDoesNotImplMethod,
+};
+
+/// Error when you try to static dispatch on something that's not a nominal type
+pub const DispatcherNotNominal = struct {
+    dispatcher_var: Var,
+    dispatcher_snapshot: SnapshotContentIdx,
+    fn_var: Var,
+    method_name: Ident.Idx,
+};
+
+/// Error when you try to static dispatch but the dispatcher does not have that method
+pub const DispatcherDoesNotImplMethod = struct {
+    dispatcher_var: Var,
+    dispatcher_snapshot: SnapshotContentIdx,
+    fn_var: Var,
+    method_name: Ident.Idx,
+};
+
 // bug //
 
 /// Error when you try to apply the wrong number of arguments to a type in
@@ -313,6 +338,12 @@ pub const ReportBuilder = struct {
             },
             .type_apply_mismatch_arities => |data| {
                 return self.buildTypeApplyArityMismatchReport(data);
+            },
+            .static_dispach => |detail| {
+                switch (detail) {
+                    .dispatcher_not_nominal => |data| return self.buildStaticDispatchDispatcherNotNominal(data),
+                    .dispatcher_does_not_impl_method => |data| return self.buildStaticDispatchDispatcherDoesNotImplMethod(data),
+                }
             },
             .number_does_not_fit => |data| {
                 return self.buildNumberDoesNotFitReport(data);
@@ -1564,6 +1595,99 @@ pub const ReportBuilder = struct {
             self.module_env.getLineStarts(),
         );
         try report.document.addLineBreak();
+
+        return report;
+    }
+
+    // static dispatch //
+
+    /// Build a report for when a type is not nominal, but you're tryint to
+    /// static  dispatch on it
+    fn buildStaticDispatchDispatcherNotNominal(
+        self: *Self,
+        data: DispatcherNotNominal,
+    ) !Report {
+        var report = Report.init(self.gpa, "TYPE DOES NOT HAVE METHODS", .runtime_error);
+        errdefer report.deinit();
+
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(data.dispatcher_snapshot);
+        const snapshot_str = try report.addOwnedString(self.snapshot_writer.get());
+
+        const method_name_str = try report.addOwnedString(self.can_ir.getIdentText(data.method_name));
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.fn_var)));
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(region.*);
+
+        try report.document.addReflowingText("You're trying to call the ");
+        try report.document.addAnnotated(method_name_str, .inline_code);
+        try report.document.addReflowingText(" method on a ");
+        try report.document.addAnnotated(snapshot_str, .inline_code);
+        try report.document.addReflowingText(":");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addReflowingText("But ");
+        try report.document.addAnnotated(snapshot_str, .inline_code);
+        try report.document.addReflowingText(" doesn't support methods.");
+
+        return report;
+    }
+
+    /// Build a report for when a type doesn't have the expected static dispatch
+    /// method
+    fn buildStaticDispatchDispatcherDoesNotImplMethod(
+        self: *Self,
+        data: DispatcherDoesNotImplMethod,
+    ) !Report {
+        var report = Report.init(self.gpa, "MISSING METHOD", .runtime_error);
+        errdefer report.deinit();
+
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(data.dispatcher_snapshot);
+        const snapshot_str = try report.addOwnedString(self.snapshot_writer.get());
+
+        const method_name_str = try report.addOwnedString(self.can_ir.getIdentText(data.method_name));
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.fn_var)));
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(region.*);
+
+        try report.document.addReflowingText("The ");
+        try report.document.addAnnotated(snapshot_str, .emphasized);
+        try report.document.addReflowingText(" type does not have a ");
+        try report.document.addAnnotated(method_name_str, .emphasized);
+        try report.document.addReflowingText(" method:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+
+        // TODO: Find similar method names and show a more helpful error message
+        // here
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addAnnotated("Hint:", .emphasized);
+        try report.document.addReflowingText(" Did you forget to define ");
+        try report.document.addAnnotated(method_name_str, .emphasized);
+        try report.document.addReflowingText(" in the type's method block?");
 
         return report;
     }

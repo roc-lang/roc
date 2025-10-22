@@ -141,8 +141,8 @@ main! = |_| {}
 						(p-assign (ident "x")))
 					(e-closure
 						(captures
-							(capture (ident "x"))
-							(capture (ident "fn")))
+							(capture (ident "fn"))
+							(capture (ident "x")))
 						(e-lambda
 							(args
 								(p-assign (ident "y")))
@@ -158,7 +158,15 @@ main! = |_| {}
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-empty_record))))
+			(e-empty_record)))
+	(s-type-anno (name "curry")
+		(ty-fn (effectful false)
+			(ty-parens
+				(ty-fn (effectful false)
+					(ty-rigid-var (name "_a"))
+					(ty-rigid-var (name "_b"))
+					(ty-rigid-var (name "_c"))))
+			(ty-malformed))))
 ~~~
 # TYPES
 ~~~clojure
