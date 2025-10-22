@@ -61,10 +61,9 @@ NO CHANGE
 						(p-assign (ident "selfCapturing")))
 					(e-empty_record))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-record)
-					(ty-lookup (name "U64") (builtin)))))))
+			(ty-fn (effectful false)
+				(ty-record)
+				(ty-lookup (name "U64") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure
