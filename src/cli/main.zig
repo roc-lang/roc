@@ -629,7 +629,14 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) void {
     // Resolve platform paths from the platform spec (relative to app file directory)
     const app_dir = std.fs.path.dirname(args.path) orelse ".";
     const platform_paths = resolvePlatformSpecToPaths(allocs, platform_spec, app_dir) catch |err| {
-        std.log.err("Failed to resolve platform spec '{s}': {}", .{ platform_spec, err });
+        switch (err) {
+            error.HostLibMissing => {
+                std.log.err("Failed to find platform host lib. Is the platform compiled?", .{});
+            },
+            else => {
+                std.log.err("Failed to resolve platform spec '{s}': {}", .{ platform_spec, err });
+            },
+        }
         std.process.exit(1);
     };
 
@@ -1601,7 +1608,7 @@ fn extractPlatformSpecFromApp(allocs: *Allocators, app_file_path: []const u8) ![
 }
 
 /// Resolve a platform specification to both host library and platform source paths
-fn resolvePlatformSpecToPaths(allocs: *Allocators, platform_spec: []const u8, base_dir: []const u8) (std.mem.Allocator.Error || error{PlatformNotSupported})!PlatformPaths {
+fn resolvePlatformSpecToPaths(allocs: *Allocators, platform_spec: []const u8, base_dir: []const u8) (std.mem.Allocator.Error || error{ PlatformNotSupported, HostLibMissing })!PlatformPaths {
 
     // Check for common platform names and map them to host libraries
     if (std.mem.eql(u8, platform_spec, "cli")) {
@@ -1701,7 +1708,7 @@ fn resolvePlatformSpecToPaths(allocs: *Allocators, platform_spec: []const u8, ba
         const host_path = try std.fs.path.join(allocs.arena, &.{ platform_dir, host_filename });
 
         std.fs.cwd().access(host_path, .{}) catch {
-            return error.PlatformNotSupported;
+            return error.HostLibMissing;
         };
 
         return PlatformPaths{
