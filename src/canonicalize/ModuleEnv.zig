@@ -1392,7 +1392,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
 
             // Add location info even without specific region
-            const location_msg = try std.fmt.allocPrint(allocator, "**{s}:0:0:0:0**", .{filename});
+            // Use only the base filename, not the full path, for consistency with other snapshot files
+            const base_filename = std.fs.path.basename(filename);
+            const location_msg = try std.fmt.allocPrint(allocator, "**{s}:0:0:0:0**", .{base_filename});
             defer allocator.free(location_msg);
             const owned_location = try report.addOwnedString(location_msg);
             try report.document.addText(owned_location);

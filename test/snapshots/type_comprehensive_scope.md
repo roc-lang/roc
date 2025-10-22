@@ -45,7 +45,7 @@ Complex : {
 # EXPECTED
 TYPE REDECLARED - type_comprehensive_scope.md:10:1:10:37
 UNDECLARED TYPE - type_comprehensive_scope.md:13:19:13:23
-COMPILER DIAGNOSTIC - /Users/rtfeldman/code/roc/test/snapshots/type_comprehensive_scope.md:0:0:0:0
+COMPILER DIAGNOSTIC - type_comprehensive_scope.md:0:0:0:0
 UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 UNDECLARED TYPE - type_comprehensive_scope.md:29:10:29:14
 # PROBLEMS
@@ -82,7 +82,7 @@ Tree(a) : [Branch(Node(a)), Leaf(a)]
 
 **Compiler Diagnostic**
 Diagnostic type 'type_alias_redeclared' is not yet handled in report generation.
-**/Users/rtfeldman/code/roc/test/snapshots/type_comprehensive_scope.md:0:0:0:0**
+**type_comprehensive_scope.md:0:0:0:0**
 
 **UNDECLARED TYPE**
 The type _SomeUndeclaredType_ is not declared in this scope.
