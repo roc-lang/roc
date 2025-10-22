@@ -33,13 +33,16 @@ pub const Interpreter = struct {
     pub const Error = error{
         Crash,
         DivisionByZero,
+        InvalidMethodReceiver,
+        InvalidNumExt,
+        InvalidTagExt,
         ListIndexOutOfBounds,
+        MethodLookupFailed,
+        MethodNotFound,
         NotImplemented,
         NotNumeric,
         NullStackPointer,
         RecordIndexOutOfBounds,
-        InvalidNumExt,
-        InvalidTagExt,
         StringOrderingNotSupported,
         StackOverflow,
         TupleIndexOutOfBounds,
@@ -47,6 +50,7 @@ pub const Interpreter = struct {
         ZeroSizedType,
     } || std.mem.Allocator.Error || layout.LayoutError;
     const PolyKey = struct {
+        module_id: u32,
         func_id: u32,
         args_len: u32,
         args_ptr: [*]const types.Var,
@@ -56,8 +60,9 @@ pub const Interpreter = struct {
             return self.args_ptr[0..self.args_len];
         }
 
-        fn init(func_id: u32, args: []const types.Var) PolyKey {
+        fn init(module_id: u32, func_id: u32, args: []const types.Var) PolyKey {
             return .{
+                .module_id = module_id,
                 .func_id = func_id,
                 .args_len = @intCast(args.len),
                 .args_ptr = if (args.len == 0) undefined else args.ptr,
@@ -74,6 +79,7 @@ pub const Interpreter = struct {
     const PolyKeyCtx = struct {
         pub fn hash(_: PolyKeyCtx, k: PolyKey) u64 {
             var h = std.hash.Wyhash.init(0);
+            h.update(std.mem.asBytes(&k.module_id));
             h.update(std.mem.asBytes(&k.func_id));
             h.update(std.mem.asBytes(&k.args_len));
             if (k.args_len > 0) {
@@ -86,7 +92,7 @@ pub const Interpreter = struct {
             return h.final();
         }
         pub fn eql(_: PolyKeyCtx, a: PolyKey, b: PolyKey) bool {
-            if (a.func_id != b.func_id or a.args_len != b.args_len) return false;
+            if (a.module_id != b.module_id or a.func_id != b.func_id or a.args_len != b.args_len) return false;
             if (a.args_len == 0) return true;
             return std.mem.eql(types.Var, a.args_ptr[0..a.args_len], b.args_ptr[0..b.args_len]);
         }
@@ -108,6 +114,11 @@ pub const Interpreter = struct {
 
     // Runtime unification context
     env: *can.ModuleEnv,
+    module_envs: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv),
+    module_ids: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, u32),
+    current_module_id: u32,
+    next_module_id: u32,
+    // For backward compatibility with e_lookup_external (uses Import.Idx indexing)
     other_envs: []const *const can.ModuleEnv,
     problems: problem_mod.Store,
     snapshots: snapshot_mod.Store,
@@ -129,24 +140,38 @@ pub const Interpreter = struct {
     imported_modules: std.StringHashMap(*const can.ModuleEnv),
 
     pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, imported_modules_map: ?*const std.AutoHashMap(base_pkg.Ident.Idx, can.Can.AutoImportedType)) !Interpreter {
-        // Convert imported modules map to other_envs slice
+        // Build maps from Ident.Idx to ModuleEnv and module ID
+        var module_envs = std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv){};
+        errdefer module_envs.deinit(allocator);
+        var module_ids = std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, u32){};
+        errdefer module_ids.deinit(allocator);
+
+        // Also build other_envs slice for backward compatibility with e_lookup_external
         var other_envs_list = std.array_list.Managed(*const can.ModuleEnv).init(allocator);
         errdefer other_envs_list.deinit();
 
+        var next_id: u32 = 1; // Start at 1, reserve 0 for current module
+
         if (imported_modules_map) |modules_map| {
+            try module_envs.ensureTotalCapacity(allocator, modules_map.count());
+            try module_ids.ensureTotalCapacity(allocator, modules_map.count());
+
             var iter = modules_map.iterator();
             while (iter.next()) |entry| {
-                try other_envs_list.append(entry.value_ptr.env);
+                const ident_idx = entry.key_ptr.*;
+                const module_env = entry.value_ptr.env;
+                module_envs.putAssumeCapacity(ident_idx, module_env);
+                module_ids.putAssumeCapacity(ident_idx, next_id);
+                try other_envs_list.append(module_env);
+                next_id += 1;
             }
         }
 
-        // Transfer ownership of the slice to the Interpreter
-        // Note: The caller is responsible for freeing this via deinitAndFreeOtherEnvs()
         const other_envs = try other_envs_list.toOwnedSlice();
-        return initWithOtherEnvs(allocator, env, other_envs, builtin_types);
+        return initWithModuleEnvs(allocator, env, module_envs, module_ids, other_envs, next_id, builtin_types);
     }
 
-    /// Deinit the interpreter and also free the other_envs slice if it was allocated by init()
+    /// Deinit the interpreter and also free the module maps if they were allocated by init()
     pub fn deinitAndFreeOtherEnvs(self: *Interpreter) void {
         const other_envs = self.other_envs;
         const allocator = self.allocator;
@@ -156,7 +181,15 @@ pub const Interpreter = struct {
         }
     }
 
-    pub fn initWithOtherEnvs(allocator: std.mem.Allocator, env: *can.ModuleEnv, other_envs: []const *const can.ModuleEnv, builtin_types: BuiltinTypes) !Interpreter {
+    pub fn initWithModuleEnvs(
+        allocator: std.mem.Allocator,
+        env: *can.ModuleEnv,
+        module_envs: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv),
+        module_ids: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, u32),
+        other_envs: []const *const can.ModuleEnv,
+        next_module_id: u32,
+        builtin_types: BuiltinTypes,
+    ) !Interpreter {
         const rt_types_ptr = try allocator.create(types.store.Store);
         rt_types_ptr.* = try types.store.Store.initCapacity(allocator, 1024, 512);
         var slots = try std.array_list.Managed(u32).initCapacity(allocator, 1024);
@@ -171,6 +204,10 @@ pub const Interpreter = struct {
             .translate_cache = std.AutoHashMap(u64, types.Var).init(allocator),
             .poly_cache = HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80).init(allocator),
             .env = env,
+            .module_envs = module_envs,
+            .module_ids = module_ids,
+            .current_module_id = 0, // Current module always gets ID 0
+            .next_module_id = next_module_id,
             .other_envs = other_envs,
             .problems = try problem_mod.Store.initCapacity(allocator, 64),
             .snapshots = try snapshot_mod.Store.initCapacity(allocator, 256),
@@ -1362,7 +1399,7 @@ pub const Interpreter = struct {
                     const arg_ct_var = can.ModuleEnv.varFrom(arg_indices[i]);
                     arg_rt_buf[i] = try self.translateTypeVar(self.env, arg_ct_var);
                 }
-                const poly_entry = try self.prepareCallWithFuncVar(@intCast(@intFromEnum(func_idx)), func_rt_var, arg_rt_buf);
+                const poly_entry = try self.prepareCallWithFuncVar(0, @intCast(@intFromEnum(func_idx)), func_rt_var, arg_rt_buf);
                 // Unify this call expression's return var with the function's constrained return var
                 const call_ret_ct_var = can.ModuleEnv.varFrom(expr_idx);
                 const call_ret_rt_var = try self.translateTypeVar(self.env, call_ret_ct_var);
@@ -3311,6 +3348,8 @@ pub const Interpreter = struct {
             }
         }
         self.poly_cache.deinit();
+        self.module_envs.deinit(self.allocator);
+        self.module_ids.deinit(self.allocator);
         self.var_to_layout_slot.deinit();
         self.runtime_layout_store.deinit();
         self.runtime_types.deinit();
@@ -3323,6 +3362,40 @@ pub const Interpreter = struct {
         self.active_closures.deinit();
         self.scratch_tags.deinit();
         self.imported_modules.deinit();
+    }
+
+    /// Get the module environment for a given origin module identifier.
+    /// Returns the current module's env if the identifier matches, otherwise looks it up in the module map.
+    fn getModuleEnvForOrigin(self: *const Interpreter, origin_module: base_pkg.Ident.Idx) ?*const can.ModuleEnv {
+        // Check if it's the current module
+        if (self.env.module_name_idx) |current_name| {
+            if (current_name == origin_module) {
+                return self.env;
+            }
+        }
+        // Look up in imported modules
+        return self.module_envs.get(origin_module);
+    }
+
+    /// Get the numeric module ID for a given origin module identifier.
+    /// Returns 0 for the current module, otherwise looks it up in the module ID map.
+    fn getModuleIdForOrigin(self: *const Interpreter, origin_module: base_pkg.Ident.Idx) u32 {
+        // Check if it's the current module
+        if (self.env.module_name_idx) |current_name| {
+            if (current_name == origin_module) {
+                return self.current_module_id;
+            }
+        }
+        // Look up in imported modules (should always exist if getModuleEnvForOrigin succeeded)
+        return self.module_ids.get(origin_module) orelse self.current_module_id;
+    }
+
+    /// Build a fully-qualified method identifier in the form "TypeName.method".
+    fn getMethodQualifiedIdent(self: *const Interpreter, nominal_ident: base_pkg.Ident.Idx, method_name: base_pkg.Ident.Idx, buf: []u8) ![]const u8 {
+        const ident_store = self.env.common.getIdentStore();
+        const type_name = ident_store.getSlice(nominal_ident);
+        const method_name_str = ident_store.getSlice(method_name);
+        return std.fmt.bufPrint(buf, "{s}.{s}", .{ type_name, method_name_str });
     }
 
     /// Ensure the slot array can index at least `min_len` entries; zero-fill new entries.
@@ -3658,11 +3731,49 @@ pub const Interpreter = struct {
                     break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                 },
                 .flex => |flex| {
-                    const content: types.Content = .{ .flex = flex };
+                    // Translate static dispatch constraints if present
+                    const rt_flex = if (flex.constraints.len() > 0) blk_flex: {
+                        const ct_constraints = module.types.sliceStaticDispatchConstraints(flex.constraints);
+                        var rt_constraints = try std.ArrayList(types.StaticDispatchConstraint).initCapacity(self.allocator, ct_constraints.len);
+                        defer rt_constraints.deinit();
+
+                        for (ct_constraints) |ct_constraint| {
+                            // Translate the constraint's fn_var recursively
+                            const rt_fn_var = try self.translateTypeVar(module, ct_constraint.fn_var);
+                            try rt_constraints.append(.{
+                                .fn_name = ct_constraint.fn_name,
+                                .fn_var = rt_fn_var,
+                            });
+                        }
+
+                        const rt_constraints_range = try self.runtime_types.appendStaticDispatchConstraints(rt_constraints.items);
+                        break :blk_flex flex.withConstraints(rt_constraints_range);
+                    } else flex;
+
+                    const content: types.Content = .{ .flex = rt_flex };
                     break :blk try self.runtime_types.freshFromContent(content);
                 },
                 .rigid => |rigid| {
-                    const content: types.Content = .{ .rigid = rigid };
+                    // Translate static dispatch constraints if present
+                    const rt_rigid = if (rigid.constraints.len() > 0) blk_rigid: {
+                        const ct_constraints = module.types.sliceStaticDispatchConstraints(rigid.constraints);
+                        var rt_constraints = try std.ArrayList(types.StaticDispatchConstraint).initCapacity(self.allocator, ct_constraints.len);
+                        defer rt_constraints.deinit();
+
+                        for (ct_constraints) |ct_constraint| {
+                            // Translate the constraint's fn_var recursively
+                            const rt_fn_var = try self.translateTypeVar(module, ct_constraint.fn_var);
+                            try rt_constraints.append(.{
+                                .fn_name = ct_constraint.fn_name,
+                                .fn_var = rt_fn_var,
+                            });
+                        }
+
+                        const rt_constraints_range = try self.runtime_types.appendStaticDispatchConstraints(rt_constraints.items);
+                        break :blk_rigid rigid.withConstraints(rt_constraints_range);
+                    } else rigid;
+
+                    const content: types.Content = .{ .rigid = rt_rigid };
                     break :blk try self.runtime_types.freshFromContent(content);
                 },
                 .err => {
@@ -3729,24 +3840,24 @@ pub const Interpreter = struct {
         return scratch_tags;
     }
 
-    pub fn makePolyKey(self: *Interpreter, func_id: u32, args: []const types.Var) PolyKey {
+    pub fn makePolyKey(self: *Interpreter, module_id: u32, func_id: u32, args: []const types.Var) PolyKey {
         _ = self;
-        return PolyKey.init(func_id, args);
+        return PolyKey.init(module_id, func_id, args);
     }
 
-    fn polyLookup(self: *Interpreter, func_id: u32, args: []const types.Var) ?PolyEntry {
-        const key = self.makePolyKey(func_id, args);
+    fn polyLookup(self: *Interpreter, module_id: u32, func_id: u32, args: []const types.Var) ?PolyEntry {
+        const key = self.makePolyKey(module_id, func_id, args);
         return self.poly_cache.get(key);
     }
 
-    fn polyInsert(self: *Interpreter, func_id: u32, entry: PolyEntry) !void {
-        const key = PolyKey.init(func_id, entry.args);
+    fn polyInsert(self: *Interpreter, module_id: u32, func_id: u32, entry: PolyEntry) !void {
+        const key = PolyKey.init(module_id, func_id, entry.args);
         try self.poly_cache.put(key, entry);
     }
 
     /// Prepare a call: return cached instantiation entry if present; on miss, insert using return_var_hint if provided.
-    pub fn prepareCall(self: *Interpreter, func_id: u32, args: []const types.Var, return_var_hint: ?types.Var) !?PolyEntry {
-        if (self.polyLookup(func_id, args)) |found| return found;
+    pub fn prepareCall(self: *Interpreter, module_id: u32, func_id: u32, args: []const types.Var, return_var_hint: ?types.Var) !?PolyEntry {
+        if (self.polyLookup(module_id, func_id, args)) |found| return found;
 
         if (return_var_hint) |ret| {
             _ = try self.getRuntimeLayout(ret);
@@ -3757,7 +3868,7 @@ pub const Interpreter = struct {
             errdefer self.allocator.free(args_copy_mut);
             std.mem.copyForwards(types.Var, args_copy_mut, args);
             const entry = PolyEntry{ .return_var = ret, .return_layout_slot = slot, .args = args_copy_mut };
-            try self.polyInsert(func_id, entry);
+            try self.polyInsert(module_id, func_id, entry);
             return entry;
         }
 
@@ -3766,8 +3877,8 @@ pub const Interpreter = struct {
 
     /// Prepare a call using a known runtime function type var.
     /// Builds and inserts a cache entry on miss using the function's declared return var.
-    pub fn prepareCallWithFuncVar(self: *Interpreter, func_id: u32, func_type_var: types.Var, args: []const types.Var) !PolyEntry {
-        if (self.polyLookup(func_id, args)) |found| return found;
+    pub fn prepareCallWithFuncVar(self: *Interpreter, module_id: u32, func_id: u32, func_type_var: types.Var, args: []const types.Var) !PolyEntry {
+        if (self.polyLookup(module_id, func_id, args)) |found| return found;
 
         const func_resolved = self.runtime_types.resolveVar(func_type_var);
         const ret_var: types.Var = switch (func_resolved.desc.content) {
@@ -3818,7 +3929,7 @@ pub const Interpreter = struct {
         std.mem.copyForwards(types.Var, args_copy_mut, args);
 
         const entry = PolyEntry{ .return_var = ret_var, .return_layout_slot = slot, .args = args_copy_mut };
-        try self.polyInsert(func_id, entry);
+        try self.polyInsert(module_id, func_id, entry);
         return entry;
     }
 
@@ -4217,6 +4328,78 @@ test "interpreter: translateTypeVar for rigid var" {
     try std.testing.expectEqual(name_a, resolved.desc.content.rigid.name);
 }
 
+// RED: translating a flex var with static dispatch constraints should preserve constraints
+test "interpreter: translateTypeVar for flex var with static dispatch constraint" {
+    const gpa = std.testing.allocator;
+
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    defer interp.deinit();
+
+    // Create a method function type: Str -> I64
+    const ct_str = try env.types.freshFromContent(.{ .structure = .str });
+    const ct_i64 = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
+    const ct_fn_args = [_]types.Var{ct_str};
+    const ct_fn_content = try env.types.mkFuncPure(&ct_fn_args, ct_i64);
+    const ct_fn_var = try env.types.register(.{ .content = ct_fn_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+
+    // Create a static dispatch constraint
+    const method_name = try env.common.idents.insert(gpa, @import("base").Ident.for_text("len"));
+    const ct_constraint = types.StaticDispatchConstraint{
+        .fn_name = method_name,
+        .fn_var = ct_fn_var,
+    };
+    const ct_constraints = [_]types.StaticDispatchConstraint{ct_constraint};
+    const ct_constraints_range = try env.types.appendStaticDispatchConstraints(&ct_constraints);
+
+    // Create a flex var with the constraint
+    const ct_flex = try env.types.freshFromContent(.{ .flex = types.Flex.init().withConstraints(ct_constraints_range) });
+
+    // Translate to runtime
+    const rt_var = try interp.translateTypeVar(&env, ct_flex);
+    const resolved = interp.runtime_types.resolveVar(rt_var);
+
+    // Verify it's still a flex var
+    try std.testing.expect(resolved.desc.content == .flex);
+    const rt_flex = resolved.desc.content.flex;
+
+    // Verify constraints were translated
+    const rt_constraints = interp.runtime_types.sliceStaticDispatchConstraints(rt_flex.constraints);
+    try std.testing.expectEqual(@as(usize, 1), rt_constraints.len);
+
+    // Verify the method name is preserved
+    try std.testing.expectEqual(method_name, rt_constraints[0].fn_name);
+
+    // Verify the fn_var was translated (should resolve in runtime store)
+    const rt_fn_resolved = interp.runtime_types.resolveVar(rt_constraints[0].fn_var);
+    try std.testing.expect(rt_fn_resolved.desc.content == .structure);
+    switch (rt_fn_resolved.desc.content.structure) {
+        .fn_pure => |f| {
+            const rt_fn_args = interp.runtime_types.sliceVars(f.args);
+            try std.testing.expectEqual(@as(usize, 1), rt_fn_args.len);
+            // Arg should be Str
+            const rt_arg_resolved = interp.runtime_types.resolveVar(rt_fn_args[0]);
+            try std.testing.expect(rt_arg_resolved.desc.content == .structure);
+            try std.testing.expect(rt_arg_resolved.desc.content.structure == .str);
+            // Return should be I64
+            const rt_ret_resolved = interp.runtime_types.resolveVar(f.ret);
+            try std.testing.expect(rt_ret_resolved.desc.content == .structure);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
 // RED: poly cache miss then hit
 test "interpreter: poly cache insert and lookup" {
     const gpa = std.testing.allocator;
@@ -4242,7 +4425,7 @@ test "interpreter: poly cache insert and lookup" {
     const rt_i64 = try interp.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
     const args = [_]types.Var{ rt_str, rt_i64 };
 
-    try std.testing.expect(interp.polyLookup(f_id, &args) == null);
+    try std.testing.expect(interp.polyLookup(0, f_id, &args) == null);
 
     // For testing, say return type is Str
     const ret_var = rt_str;
@@ -4255,8 +4438,8 @@ test "interpreter: poly cache insert and lookup" {
 
     const args_copy = try interp.allocator.alloc(types.Var, args.len);
     std.mem.copyForwards(types.Var, args_copy, &args);
-    try interp.polyInsert(f_id, .{ .return_var = ret_var, .return_layout_slot = slot, .args = args_copy });
-    const found = interp.polyLookup(f_id, &args) orelse return error.TestUnexpectedResult;
+    try interp.polyInsert(0, f_id, .{ .return_var = ret_var, .return_layout_slot = slot, .args = args_copy });
+    const found = interp.polyLookup(0, f_id, &args) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(ret_var, found.return_var);
     try std.testing.expectEqual(slot, found.return_layout_slot);
     try std.testing.expect(std.mem.eql(types.Var, found.args, &args));
@@ -4287,16 +4470,16 @@ test "interpreter: prepareCall miss then hit" {
     const args = [_]types.Var{ rt_str, rt_i64 };
 
     // miss without hint
-    const miss = try interp.prepareCall(func_id, &args, null);
+    const miss = try interp.prepareCall(0, func_id, &args, null);
     try std.testing.expect(miss == null);
 
     // insert with hint
-    const entry = (try interp.prepareCall(func_id, &args, rt_str)) orelse return error.TestUnexpectedResult;
+    const entry = (try interp.prepareCall(0, func_id, &args, rt_str)) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(rt_str, entry.return_var);
     try std.testing.expect(entry.return_layout_slot != 0);
 
     // subsequent call should hit without hint
-    const hit = (try interp.prepareCall(func_id, &args, null)) orelse return error.TestUnexpectedResult;
+    const hit = (try interp.prepareCall(0, func_id, &args, null)) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(rt_str, hit.return_var);
     try std.testing.expectEqual(entry.return_layout_slot, hit.return_layout_slot);
 }
@@ -4330,12 +4513,12 @@ test "interpreter: prepareCallWithFuncVar populates cache" {
     const func_var = try interp.runtime_types.register(.{ .content = func_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
 
     // Should populate cache
-    const entry = try interp.prepareCallWithFuncVar(func_id, func_var, &args);
+    const entry = try interp.prepareCallWithFuncVar(0, func_id, func_var, &args);
     try std.testing.expectEqual(rt_str, entry.return_var);
     try std.testing.expect(entry.return_layout_slot != 0);
 
     // Now a plain prepareCall without hint should hit
-    const hit = (try interp.prepareCall(func_id, &args, null)) orelse return error.TestUnexpectedResult;
+    const hit = (try interp.prepareCall(0, func_id, &args, null)) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(rt_str, hit.return_var);
     try std.testing.expectEqual(entry.return_layout_slot, hit.return_layout_slot);
 }
@@ -4367,7 +4550,7 @@ test "interpreter: unification constrains (a->a) with Str" {
 
     // Call with Str
     const rt_str = try interp.runtime_types.freshFromContent(.{ .structure = .str });
-    const entry = try interp.prepareCallWithFuncVar(func_id, func_var, &.{rt_str});
+    const entry = try interp.prepareCallWithFuncVar(0, func_id, func_var, &.{rt_str});
 
     // After unification, return var should resolve to str
     const resolved_ret = interp.runtime_types.resolveVar(entry.return_var);
