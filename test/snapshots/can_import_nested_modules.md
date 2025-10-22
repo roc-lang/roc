@@ -82,7 +82,7 @@ import utils.String.Format exposing [padLeft]
 
 
 **UNDECLARED TYPE**
-The type _Config.Settings_ is not declared in this scope.
+Cannot resolve qualified type _Config.Settings_.
 
 This type is referenced here:
 **can_import_nested_modules.md:6:21:6:30:**
@@ -126,7 +126,7 @@ authenticate = |user, pass| HttpAuth.login(user, pass)
 
 
 **UNDECLARED TYPE**
-The type _Config.Parser.Advanced_ is not declared in this scope.
+Cannot resolve qualified type _Config.Parser.Advanced_.
 
 This type is referenced here:
 **can_import_nested_modules.md:14:28:14:37:**
@@ -137,7 +137,7 @@ processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
 
 
 **UNDECLARED TYPE**
-The type _Config.Parser.Error_ is not declared in this scope.
+Cannot resolve qualified type _Config.Parser.Error_.
 
 This type is referenced here:
 **can_import_nested_modules.md:14:71:14:77:**

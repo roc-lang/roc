@@ -889,9 +889,19 @@ pub const Diagnostic = union(enum) {
     ) !Report {
         var report = Report.init(allocator, "UNDECLARED TYPE", .runtime_error);
         const owned_type_name = try report.addOwnedString(type_name);
-        try report.document.addReflowingText("The type ");
-        try report.document.addType(owned_type_name);
-        try report.document.addReflowingText(" is not declared in this scope.");
+
+        // Check if this looks like a qualified type (contains dots)
+        const has_dots = std.mem.indexOfScalar(u8, type_name, '.') != null;
+
+        if (has_dots) {
+            try report.document.addReflowingText("Cannot resolve qualified type ");
+            try report.document.addType(owned_type_name);
+            try report.document.addReflowingText(".");
+        } else {
+            try report.document.addReflowingText("The type ");
+            try report.document.addType(owned_type_name);
+            try report.document.addReflowingText(" is not declared in this scope.");
+        }
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 

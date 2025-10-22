@@ -176,7 +176,7 @@ aliasedQualified : ExtMod.DataType
 
 
 **UNDECLARED TYPE**
-The type _ExtMod.DataType_ is not declared in this scope.
+Cannot resolve qualified type _ExtMod.DataType_.
 
 This type is referenced here:
 **qualified_type_canonicalization.md:19:26:19:35:**
@@ -187,7 +187,7 @@ aliasedQualified = ExtMod.DataType.Default
 
 
 **UNDECLARED TYPE**
-The type _ModuleA.ModuleB.TypeC_ is not declared in this scope.
+Cannot resolve qualified type _ModuleA.ModuleB.TypeC_.
 
 This type is referenced here:
 **qualified_type_canonicalization.md:22:38:22:44:**
@@ -298,7 +298,7 @@ transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
 
 
 **UNDECLARED TYPE**
-The type _ModuleA.ModuleB.TypeC_ is not declared in this scope.
+Cannot resolve qualified type _ModuleA.ModuleB.TypeC_.
 
 This type is referenced here:
 **qualified_type_canonicalization.md:39:70:39:76:**

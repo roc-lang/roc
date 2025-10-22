@@ -157,7 +157,7 @@ json_encoder = Json.Core.Utf8.defaultEncoder
 
 
 **UNDECLARED TYPE**
-The type _json.Core.Utf8.Encoder_ is not declared in this scope.
+Cannot resolve qualified type _json.Core.Utf8.Encoder_.
 
 This type is referenced here:
 **multi_qualified_import.md:7:25:7:33:**
@@ -180,7 +180,7 @@ process = |encoder| "processing"
 
 
 **UNDECLARED TYPE**
-The type _json.Core.Utf8.EncodedData_ is not declared in this scope.
+Cannot resolve qualified type _json.Core.Utf8.EncodedData_.
 
 This type is referenced here:
 **multi_qualified_import.md:11:22:11:34:**
