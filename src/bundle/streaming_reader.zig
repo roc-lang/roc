@@ -83,25 +83,17 @@ pub const DecompressingHashReader = struct {
     }
 
     fn stream(r: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
-        // This implementation just adds the decompressed data to the buffer and returns 0.
-        // This simplifies the logic a bit which is encouraged by the Zig reader API.
-        _ = w;
-        _ = limit;
-        if (r.end == r.seek) {
-            r.end = 0;
-            r.seek = 0;
-        }
         const self: *Self = @alignCast(@fieldParentPtr("interface", r));
 
-        var in_writer = std.Io.Writer.fixed(self.in_buffer[self.in_end..]);
+        // fill the input buffer as much as possible
+        var vec: [1][]u8 = .{self.in_buffer[self.in_end..]};
         var reached_end = false;
-        const bytes_read = self.input_reader.stream(&in_writer, std.Io.Limit.limited(self.in_buffer.len)) catch |err| switch (err) {
+        const bytes_read = self.input_reader.readVec(&vec) catch |err| switch (err) {
             error.EndOfStream => blk: {
                 reached_end = true;
                 break :blk 0;
             },
             error.ReadFailed => return error.ReadFailed,
-            error.WriteFailed => unreachable, // fixed buffer writer doesn't fail
         };
 
         if (reached_end) {
@@ -114,24 +106,34 @@ pub const DecompressingHashReader = struct {
                 }
                 self.hash_verified = true;
             }
-            return error.EndOfStream;
+            // actual end is only reached when the input buffer is also empty
+            if (self.in_end == 0) {
+                @branchHint(.likely);
+                return error.EndOfStream;
+            }
         }
 
         // Update hash with compressed data
         self.hasher.update(self.in_buffer[self.in_end..][0..bytes_read]);
         self.in_end += bytes_read;
 
-        // Decompress just to fill the buffer
+        // Decompress data directly into the output writer
         var in_buf = c.ZSTD_inBuffer{ .src = self.in_buffer.ptr, .size = self.in_end, .pos = self.in_pos };
 
-        var out_buf = c.ZSTD_outBuffer{ .dst = r.buffer.ptr, .size = r.buffer.len, .pos = r.end };
-
-        const result = c.ZSTD_decompressStream(self.dctx, &out_buf, &in_buf);
-        if (c.ZSTD_isError(result) != 0) {
-            // this is still a read failed, as we are not writing to the writer but the internal buffer
-            return error.ReadFailed;
+        const out_data = limit.slice(try w.writableSliceGreedy(1));
+        var out_buf = c.ZSTD_outBuffer{ .dst = out_data.ptr, .size = out_data.len, .pos = 0 };
+        while (in_buf.pos != in_buf.size) {
+            const result = c.ZSTD_decompressStream(self.dctx, &out_buf, &in_buf);
+            if (c.ZSTD_isError(result) != 0) {
+                // this is still a read failed, as we are not writing to the writer but the internal buffer
+                return error.ReadFailed;
+            }
+            if (out_buf.pos == out_buf.size) {
+                break;
+            }
         }
         if (in_buf.pos < in_buf.size) {
+            // TODO we could fill the internal reader buffer here
             self.in_pos = in_buf.pos;
             self.in_end = in_buf.size;
         } else {
@@ -139,20 +141,16 @@ pub const DecompressingHashReader = struct {
             self.in_end = 0;
         }
 
-        r.end = out_buf.pos;
-
-        return 0;
+        w.advance(out_buf.pos);
+        return out_buf.pos;
     }
 
     /// Verify that the hash matches. This should be called after reading is complete.
     /// If there is remaining data, it will be discarded.
     pub fn verifyComplete(self: *Self) !void {
-        // There seems to be a bug in `discardRemaining` that causes an error. Therefore we do the loop ourselves for now.
-        while (true) {
-            _ = self.interface.discard(std.Io.Limit.unlimited) catch {
-                break;
-            };
-        }
+        _ = self.interface.discardRemaining() catch {
+            // When the hash does not match, discardRemaining will return a ReadFailed, so we have to ignore it
+        };
 
         // The hash should have been verified during stream
         if (!self.hash_verified) {
