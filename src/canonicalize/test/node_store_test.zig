@@ -777,6 +777,14 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(CIR.Diagnostic{
+        .type_from_missing_module = .{
+            .module_name = rand_ident_idx(),
+            .type_name = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
         .module_not_imported = .{
             .module_name = rand_ident_idx(),
             .region = rand_region(),

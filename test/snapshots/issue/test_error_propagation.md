@@ -81,8 +81,7 @@ NO CHANGE
 		(e-string
 			(e-literal (string "test")))
 		(annotation
-			(declared-type
-				(ty-lookup (name "GoodAlias") (local)))))
+			(ty-lookup (name "GoodAlias") (local))))
 	(s-nominal-decl
 		(ty-header (name "BadBase"))
 		(ty-underscore))

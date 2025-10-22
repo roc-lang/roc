@@ -491,6 +491,8 @@ EndOfFile,
 (e-block
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
+	(s-type-anno (name "when")
+		(ty-malformed))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr

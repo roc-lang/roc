@@ -102,10 +102,9 @@ NO CHANGE
 				(e-lookup-local
 					(p-assign (ident "msg")))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful true)
-					(ty-lookup (name "Str") (builtin))
-					(ty-record)))))
+			(ty-fn (effectful true)
+				(ty-lookup (name "Str") (builtin))
+				(ty-record))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-call
@@ -120,9 +119,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str => {  }"))
-		(patt (type "{  }")))
+		(patt (type "Str => Error"))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "Str => {  }"))
-		(expr (type "{  }"))))
+		(expr (type "Str => Error"))
+		(expr (type "Error"))))
 ~~~

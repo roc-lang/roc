@@ -78,8 +78,7 @@ NO CHANGE
 		(p-assign (ident "red"))
 		(e-runtime-error (tag "undeclared_type"))
 		(annotation
-			(declared-type
-				(ty-malformed))))
+			(ty-malformed)))
 	(s-import (module "Color")
 		(exposes)))
 ~~~

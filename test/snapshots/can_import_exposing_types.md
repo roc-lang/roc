@@ -754,18 +754,17 @@ combineResults = |jsonResult, httpStatus|
 				(e-lookup-local
 					(p-assign (ident "input")))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "Str") (builtin))
-					(ty-apply (name "Result") (external-module "Result")
-						(ty-malformed)
-						(ty-malformed))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "Str") (builtin))
+				(ty-apply (name "Result") (external-module "Result")
+					(ty-malformed)
+					(ty-malformed)))))
 	(d-let
 		(p-assign (ident "handleRequest"))
 		(e-closure
 			(captures
-				(capture (ident "error"))
-				(capture (ident "value")))
+				(capture (ident "value"))
+				(capture (ident "error")))
 			(e-lambda
 				(args
 					(p-assign (ident "req")))
@@ -803,10 +802,9 @@ combineResults = |jsonResult, httpStatus|
 											(e-lookup-local
 												(p-assign (ident "error"))))))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-malformed)
-					(ty-malformed)))))
+			(ty-fn (effectful false)
+				(ty-malformed)
+				(ty-malformed))))
 	(d-let
 		(p-assign (ident "processData"))
 		(e-lambda
@@ -830,15 +828,14 @@ combineResults = |jsonResult, httpStatus|
 							(e-lookup-local
 								(p-assign (ident "v"))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-malformed)
+			(ty-fn (effectful false)
+				(ty-malformed)
+				(ty-apply (name "List") (builtin)
+					(ty-malformed))
+				(ty-apply (name "Result") (external-module "Result")
 					(ty-apply (name "List") (builtin)
 						(ty-malformed))
-					(ty-apply (name "Result") (external-module "Result")
-						(ty-apply (name "List") (builtin)
-							(ty-malformed))
-						(ty-malformed))))))
+					(ty-malformed)))))
 	(d-let
 		(p-assign (ident "createClient"))
 		(e-lambda
@@ -849,10 +846,9 @@ combineResults = |jsonResult, httpStatus|
 				(e-lookup-local
 					(p-assign (ident "config")))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-malformed)
-					(ty-malformed)))))
+			(ty-fn (effectful false)
+				(ty-malformed)
+				(ty-malformed))))
 	(d-let
 		(p-assign (ident "handleResponse"))
 		(e-closure
@@ -889,16 +885,15 @@ combineResults = |jsonResult, httpStatus|
 										(e-lookup-local
 											(p-assign (ident "error")))))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-malformed)
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-malformed)
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "combineResults"))
 		(e-closure
 			(captures
-				(capture (ident "value"))
-				(capture (ident "error")))
+				(capture (ident "error"))
+				(capture (ident "value")))
 			(e-lambda
 				(args
 					(p-assign (ident "jsonResult"))
@@ -936,15 +931,14 @@ combineResults = |jsonResult, httpStatus|
 											(e-lookup-local
 												(p-assign (ident "error"))))))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "Result") (external-module "Result")
-						(ty-malformed)
-						(ty-malformed))
+			(ty-fn (effectful false)
+				(ty-apply (name "Result") (external-module "Result")
 					(ty-malformed)
-					(ty-apply (name "Result") (external-module "Result")
-						(ty-malformed)
-						(ty-malformed))))))
+					(ty-malformed))
+				(ty-malformed)
+				(ty-apply (name "Result") (external-module "Result")
+					(ty-malformed)
+					(ty-malformed)))))
 	(s-alias-decl
 		(ty-header (name "ServerConfig"))
 		(ty-record
@@ -972,20 +966,20 @@ combineResults = |jsonResult, httpStatus|
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str -> Result(Error, Error)"))
+		(patt (type "Str -> Error"))
 		(patt (type "Error -> Error"))
-		(patt (type "Error, List(Error) -> Result(List(Error), Error)"))
+		(patt (type "Error, List(Error) -> Error"))
 		(patt (type "Error -> Error"))
-		(patt (type "Error -> Str"))
+		(patt (type "Error -> Error"))
 		(patt (type "Result(Error, Error), Error -> Result(Error, Error)")))
 	(type_decls
 		(alias (type "ServerConfig")
 			(ty-header (name "ServerConfig"))))
 	(expressions
-		(expr (type "Str -> Result(Error, Error)"))
+		(expr (type "Str -> Error"))
 		(expr (type "Error -> Error"))
-		(expr (type "Error, List(Error) -> Result(List(Error), Error)"))
+		(expr (type "Error, List(Error) -> Error"))
 		(expr (type "Error -> Error"))
-		(expr (type "Error -> Str"))
+		(expr (type "Error -> Error"))
 		(expr (type "Result(Error, Error), Error -> Result(Error, Error)"))))
 ~~~

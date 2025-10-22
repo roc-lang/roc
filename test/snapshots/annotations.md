@@ -215,9 +215,8 @@ NO CHANGE
 					(e-num (value "1"))
 					(e-num (value "2")))))
 		(annotation
-			(declared-type
-				(ty-apply (name "Pair") (local)
-					(ty-lookup (name "U64") (builtin))))))
+			(ty-apply (name "Pair") (local)
+				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "pairStr"))
 		(e-nominal (nominal "Pair")
@@ -228,9 +227,8 @@ NO CHANGE
 					(e-string
 						(e-literal (string "world"))))))
 		(annotation
-			(declared-type
-				(ty-apply (name "Pair") (local)
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-apply (name "Pair") (local)
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "mkPair"))
 		(e-lambda
@@ -245,12 +243,11 @@ NO CHANGE
 						(e-lookup-local
 							(p-assign (ident "y")))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-rigid-var (name "a"))
-					(ty-rigid-var-lookup (ty-rigid-var (name "a")))
-					(ty-apply (name "Pair") (local)
-						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "a"))
+				(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+				(ty-apply (name "Pair") (local)
+					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
 		(p-assign (ident "succeedPairSameType"))
 		(e-call
@@ -259,9 +256,8 @@ NO CHANGE
 			(e-num (value "1"))
 			(e-num (value "2")))
 		(annotation
-			(declared-type
-				(ty-apply (name "Pair") (local)
-					(ty-lookup (name "U8") (builtin))))))
+			(ty-apply (name "Pair") (local)
+				(ty-lookup (name "U8") (builtin)))))
 	(d-let
 		(p-assign (ident "failPairDiffTypes"))
 		(e-call
@@ -271,9 +267,8 @@ NO CHANGE
 				(e-literal (string "1")))
 			(e-num (value "2")))
 		(annotation
-			(declared-type
-				(ty-apply (name "Pair") (local)
-					(ty-lookup (name "U8") (builtin))))))
+			(ty-apply (name "Pair") (local)
+				(ty-lookup (name "U8") (builtin)))))
 	(d-let
 		(p-assign (ident "failPairDiffTypes2"))
 		(e-nominal (nominal "Pair")
@@ -283,9 +278,8 @@ NO CHANGE
 					(e-string
 						(e-literal (string "str"))))))
 		(annotation
-			(declared-type
-				(ty-apply (name "Pair") (local)
-					(ty-lookup (name "U64") (builtin))))))
+			(ty-apply (name "Pair") (local)
+				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "mkPairInvalid"))
 		(e-lambda
@@ -300,12 +294,11 @@ NO CHANGE
 						(e-lookup-local
 							(p-assign (ident "y")))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-rigid-var (name "a"))
-					(ty-rigid-var (name "b"))
-					(ty-apply (name "Pair") (local)
-						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "a"))
+				(ty-rigid-var (name "b"))
+				(ty-apply (name "Pair") (local)
+					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(s-nominal-decl
 		(ty-header (name "Pair")
 			(ty-args

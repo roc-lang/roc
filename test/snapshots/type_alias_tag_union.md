@@ -143,12 +143,11 @@ NO CHANGE
 			(e-string
 				(e-literal (string "processed"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "MyResult") (local)
-						(ty-lookup (name "Str") (builtin))
-						(ty-lookup (name "I32") (builtin)))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-apply (name "MyResult") (local)
+					(ty-lookup (name "Str") (builtin))
+					(ty-lookup (name "I32") (builtin)))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "getString"))
 		(e-lambda
@@ -157,11 +156,10 @@ NO CHANGE
 			(e-string
 				(e-literal (string "default"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "Option") (local)
-						(ty-lookup (name "Str") (builtin)))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-apply (name "Option") (local)
+					(ty-lookup (name "Str") (builtin)))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "getNumber"))
 		(e-lambda
@@ -169,11 +167,10 @@ NO CHANGE
 				(p-assign (ident "_opt")))
 			(e-num (value "0")))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "Option") (local)
-						(ty-lookup (name "I32") (builtin)))
-					(ty-lookup (name "I32") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-apply (name "Option") (local)
+					(ty-lookup (name "I32") (builtin)))
+				(ty-lookup (name "I32") (builtin)))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda

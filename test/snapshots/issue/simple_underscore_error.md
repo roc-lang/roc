@@ -72,8 +72,7 @@ NO CHANGE
 		(p-assign (ident "foo"))
 		(e-num (value "42"))
 		(annotation
-			(declared-type
-				(ty-lookup (name "BadType") (local)))))
+			(ty-lookup (name "BadType") (local))))
 	(s-nominal-decl
 		(ty-header (name "BadType"))
 		(ty-underscore)))

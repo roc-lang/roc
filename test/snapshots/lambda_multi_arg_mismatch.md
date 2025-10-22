@@ -206,22 +206,21 @@ result = multi_arg_fn(
 					(e-lookup-local
 						(p-assign (ident "x8"))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-rigid-var (name "a"))
-					(ty-rigid-var (name "b"))
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "a"))
+				(ty-rigid-var (name "b"))
+				(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+				(ty-rigid-var (name "c"))
+				(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+				(ty-rigid-var (name "d"))
+				(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+				(ty-rigid-var (name "e"))
+				(ty-tuple
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))
-					(ty-rigid-var (name "c"))
-					(ty-rigid-var-lookup (ty-rigid-var (name "a")))
-					(ty-rigid-var (name "d"))
-					(ty-rigid-var-lookup (ty-rigid-var (name "a")))
-					(ty-rigid-var (name "e"))
-					(ty-tuple
-						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
-						(ty-rigid-var-lookup (ty-rigid-var (name "b")))
-						(ty-rigid-var-lookup (ty-rigid-var (name "c")))
-						(ty-rigid-var-lookup (ty-rigid-var (name "d")))
-						(ty-rigid-var-lookup (ty-rigid-var (name "e"))))))))
+					(ty-rigid-var-lookup (ty-rigid-var (name "b")))
+					(ty-rigid-var-lookup (ty-rigid-var (name "c")))
+					(ty-rigid-var-lookup (ty-rigid-var (name "d")))
+					(ty-rigid-var-lookup (ty-rigid-var (name "e")))))))
 	(d-let
 		(p-assign (ident "result"))
 		(e-call

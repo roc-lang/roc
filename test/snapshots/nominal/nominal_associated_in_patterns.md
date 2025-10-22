@@ -91,10 +91,9 @@ handleSuccess = |res| "success"
 			(e-string
 				(e-literal (string "success"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "Foo.Result") (local))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "Foo.Result") (local))
+				(ty-lookup (name "Str") (builtin)))))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
 		(ty-tag-union

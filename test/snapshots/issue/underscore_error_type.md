@@ -319,8 +319,7 @@ quux = ("hello", 42)
 		(p-assign (ident "foo"))
 		(e-num (value "42"))
 		(annotation
-			(declared-type
-				(ty-lookup (name "BadType") (local)))))
+			(ty-lookup (name "BadType") (local))))
 	(d-let
 		(p-assign (ident "bar"))
 		(e-list
@@ -329,8 +328,7 @@ quux = ("hello", 42)
 				(e-num (value "2"))
 				(e-num (value "3"))))
 		(annotation
-			(declared-type
-				(ty-lookup (name "BadList") (local)))))
+			(ty-lookup (name "BadList") (local))))
 	(d-let
 		(p-assign (ident "baz"))
 		(e-record
@@ -341,8 +339,7 @@ quux = ("hello", 42)
 				(field (name "other")
 					(e-num (value "5")))))
 		(annotation
-			(declared-type
-				(ty-lookup (name "BadRecord") (local)))))
+			(ty-lookup (name "BadRecord") (local))))
 	(d-let
 		(p-assign (ident "qux"))
 		(e-lambda
@@ -351,8 +348,7 @@ quux = ("hello", 42)
 			(e-lookup-local
 				(p-assign (ident "x"))))
 		(annotation
-			(declared-type
-				(ty-lookup (name "BadFunction") (local)))))
+			(ty-lookup (name "BadFunction") (local))))
 	(d-let
 		(p-assign (ident "quux"))
 		(e-tuple
@@ -361,8 +357,7 @@ quux = ("hello", 42)
 					(e-literal (string "hello")))
 				(e-num (value "42"))))
 		(annotation
-			(declared-type
-				(ty-lookup (name "BadTuple") (local)))))
+			(ty-lookup (name "BadTuple") (local))))
 	(s-nominal-decl
 		(ty-header (name "BadType"))
 		(ty-underscore))

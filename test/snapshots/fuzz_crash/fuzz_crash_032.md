@@ -330,10 +330,9 @@ olor = |color| {
 								(value
 									(e-runtime-error (tag "type_alias_but_needed_nominal")))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-underscore)
-					(ty-rigid-var (name "tus"))))))
+			(ty-fn (effectful false)
+				(ty-underscore)
+				(ty-rigid-var (name "tus")))))
 	(s-alias-decl
 		(ty-header (name "LocalStatus"))
 		(ty-fn (effectful true)

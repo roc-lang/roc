@@ -165,12 +165,12 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Num(_size), Num(_size2) -> Num(_size3)"))
-		(patt (type "_arg -> _ret"))
-		(patt (type "Num(_size) -> _ret"))
-		(patt (type "_a")))
+		(patt (type "_arg -> Error"))
+		(patt (type "Num(_size) -> Error"))
+		(patt (type "Error")))
 	(expressions
 		(expr (type "Num(_size), Num(_size2) -> Num(_size3)"))
-		(expr (type "_arg -> _ret"))
-		(expr (type "Num(_size) -> _ret"))
-		(expr (type "_a"))))
+		(expr (type "_arg -> Error"))
+		(expr (type "Num(_size) -> Error"))
+		(expr (type "Error"))))
 ~~~

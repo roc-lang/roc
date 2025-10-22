@@ -105,11 +105,10 @@ NO CHANGE
 				(p-assign (ident "_dict")))
 			(e-empty_list))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-malformed)
-					(ty-apply (name "List") (builtin)
-						(ty-lookup (name "Str") (builtin)))))))
+			(ty-fn (effectful false)
+				(ty-malformed)
+				(ty-apply (name "List") (builtin)
+					(ty-lookup (name "Str") (builtin))))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-closure
@@ -135,8 +134,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Error -> List(Str)"))
-		(patt (type "_arg -> List(Str)")))
+		(patt (type "_arg -> Error")))
 	(expressions
 		(expr (type "Error -> List(Str)"))
-		(expr (type "_arg -> List(Str)"))))
+		(expr (type "_arg -> Error"))))
 ~~~

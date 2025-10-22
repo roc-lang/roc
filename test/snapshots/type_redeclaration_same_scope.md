@@ -9,13 +9,13 @@ Maybe(a) : [Some(a), None]
 Maybe(a) : [Ok(a), Err]
 ~~~
 # EXPECTED
-COMPILER DIAGNOSTIC - /Users/rtfeldman/code/roc2/test/snapshots/type_redeclaration_same_scope.md:0:0:0:0
+COMPILER DIAGNOSTIC - /Users/rtfeldman/code/roc/test/snapshots/type_redeclaration_same_scope.md:0:0:0:0
 # PROBLEMS
 **COMPILER DIAGNOSTIC**
 
 **Compiler Diagnostic**
 Diagnostic type 'type_alias_redeclared' is not yet handled in report generation.
-**/Users/rtfeldman/code/roc2/test/snapshots/type_redeclaration_same_scope.md:0:0:0:0**
+**/Users/rtfeldman/code/roc/test/snapshots/type_redeclaration_same_scope.md:0:0:0:0**
 
 # TOKENS
 ~~~zig

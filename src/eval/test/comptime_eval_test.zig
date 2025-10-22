@@ -72,8 +72,8 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     try czer.canonicalizeFile();
 
     // Type check the module with builtins
-    const other_modules = [_]*const ModuleEnv{ bool_module.env, result_module.env };
-    var checker = try Check.init(gpa, &module_env.types, module_env, &other_modules, &module_env.store.regions, common_idents);
+    const imported_envs = [_]*const ModuleEnv{ bool_module.env, result_module.env };
+    var checker = try Check.init(gpa, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, common_idents);
     defer checker.deinit();
 
     try checker.checkFile();
@@ -161,14 +161,14 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     try czer.canonicalizeFile();
 
     // Set up other_envs for type checking (include Bool and Result modules)
-    var other_envs_list = std.array_list.Managed(*const ModuleEnv).init(gpa);
-    defer other_envs_list.deinit();
-    try other_envs_list.append(imported_module);
-    try other_envs_list.append(bool_module.env);
-    try other_envs_list.append(result_module.env);
+    var imported_envs = std.array_list.Managed(*const ModuleEnv).init(gpa);
+    defer imported_envs.deinit();
+    try imported_envs.append(imported_module);
+    try imported_envs.append(bool_module.env);
+    try imported_envs.append(result_module.env);
 
     // Type check the module
-    var checker = try Check.init(gpa, &module_env.types, module_env, other_envs_list.items, &module_env.store.regions, common_idents);
+    var checker = try Check.init(gpa, &module_env.types, module_env, imported_envs.items, &module_envs, &module_env.store.regions, common_idents);
     defer checker.deinit();
 
     try checker.checkFile();
@@ -178,7 +178,7 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     problems.* = .{};
 
     // Keep other_envs alive
-    const other_envs_slice = try gpa.dupe(*const ModuleEnv, other_envs_list.items);
+    const other_envs_slice = try gpa.dupe(*const ModuleEnv, imported_envs.items);
 
     // Create and run comptime evaluator with real builtins
     const builtin_types = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);

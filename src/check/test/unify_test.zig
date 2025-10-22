@@ -3654,11 +3654,10 @@ test "unify - flex with no constraints unifies with flex with constraints" {
 
     // Create constraint: a.sort : List(a) -> List(a)
     const list_a = try env.module_env.types.fresh();
-    const sort_args = try env.module_env.types.appendVars(&[_]Var{list_a});
+    const sort_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{list_a}, list_a));
     const sort_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("sort")),
-        .fn_args = .{ .nonempty = sort_args },
-        .fn_ret = list_a,
+        .fn_var = sort_fn,
     };
 
     const constraints_range = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{sort_constraint});
@@ -3684,12 +3683,11 @@ test "unify - flex with constraints unifies with flex with same constraints" {
 
     const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
 
-    // Create constraint: a.sort : Str -> Str
-    const sort_args = try env.module_env.types.appendVars(&[_]Var{str});
+    // Create constraint: a.to_str : Str -> Str
+    const to_str_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
     const sort_constraint = types_mod.StaticDispatchConstraint{
-        .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("sort")),
-        .fn_args = .{ .nonempty = sort_args },
-        .fn_ret = str,
+        .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
+        .fn_var = to_str_fn,
     };
 
     const a_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{sort_constraint});
@@ -3716,20 +3714,18 @@ test "unify - flex with constraints unifies with flex with compatible constraint
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
 
     // a has constraint: a.add : Int -> Int
-    const add_args_a = try env.module_env.types.appendVars(&[_]Var{int});
+    const add_fn_a = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{int}, int));
     const add_constraint_a = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("add")),
-        .fn_args = .{ .nonempty = add_args_a },
-        .fn_ret = int,
+        .fn_var = add_fn_a,
     };
     const a_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{add_constraint_a});
 
     // b has constraint: b.add : Int -> Int (same type, different var)
-    const add_args_b = try env.module_env.types.appendVars(&[_]Var{int});
+    const add_fn_b = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{int}, int));
     const add_constraint_b = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("add")),
-        .fn_args = .{ .nonempty = add_args_b },
-        .fn_ret = int,
+        .fn_var = add_fn_b,
     };
     const b_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{add_constraint_b});
 
@@ -3754,20 +3750,18 @@ test "unify - flex with multiple constraints" {
     const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
 
-    // Create constraint 1: a.to_str : a -> Str
-    const to_str_args = try env.module_env.types.appendVars(&[_]Var{int});
+    // Create constraint 1: a.to_str : Int -> Str
+    const to_str_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{int}, str));
     const to_str_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
-        .fn_args = .{ .nonempty = to_str_args },
-        .fn_ret = str,
+        .fn_var = to_str_fn,
     };
 
-    // Create constraint 2: a.hash : a -> Int
-    const hash_args = try env.module_env.types.appendVars(&[_]Var{int});
+    // Create constraint 2: a.hash : Int -> Int
+    const hash_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{int}, int));
     const hash_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("hash")),
-        .fn_args = .{ .nonempty = hash_args },
-        .fn_ret = int,
+        .fn_var = hash_fn,
     };
 
     const a_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{ to_str_constraint, hash_constraint });
@@ -3795,20 +3789,18 @@ test "unify - flex with constraints fails on incompatible arg types" {
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
 
     // a has constraint: a.foo : Str -> Str
-    const foo_args_a = try env.module_env.types.appendVars(&[_]Var{str});
+    const foo_fn_a = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
     const foo_constraint_a = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("foo")),
-        .fn_args = .{ .nonempty = foo_args_a },
-        .fn_ret = str,
+        .fn_var = foo_fn_a,
     };
     const a_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{foo_constraint_a});
 
     // b has constraint: b.foo : Int -> Str (different arg type!)
-    const foo_args_b = try env.module_env.types.appendVars(&[_]Var{int});
+    const foo_fn_b = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{int}, str));
     const foo_constraint_b = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("foo")),
-        .fn_args = .{ .nonempty = foo_args_b },
-        .fn_ret = str,
+        .fn_var = foo_fn_b,
     };
     const b_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{foo_constraint_b});
 
@@ -3834,20 +3826,18 @@ test "unify - flex with constraints fails on incompatible return types" {
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
 
     // a has constraint: a.foo : Str -> Str
-    const foo_args_a = try env.module_env.types.appendVars(&[_]Var{str});
+    const foo_fn_a = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
     const foo_constraint_a = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("foo")),
-        .fn_args = .{ .nonempty = foo_args_a },
-        .fn_ret = str,
+        .fn_var = foo_fn_a,
     };
     const a_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{foo_constraint_a});
 
     // b has constraint: b.foo : Str -> Int (different return type!)
-    const foo_args_b = try env.module_env.types.appendVars(&[_]Var{str});
+    const foo_fn_b = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, int));
     const foo_constraint_b = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("foo")),
-        .fn_args = .{ .nonempty = foo_args_b },
-        .fn_ret = int,
+        .fn_var = foo_fn_b,
     };
     const b_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{foo_constraint_b});
 
@@ -3873,20 +3863,18 @@ test "unify - flex with constraints fails on different arity" {
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
 
     // a has constraint: a.foo : Str -> Str (1 arg)
-    const foo_args_a = try env.module_env.types.appendVars(&[_]Var{str});
+    const foo_fn_a = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
     const foo_constraint_a = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("foo")),
-        .fn_args = .{ .nonempty = foo_args_a },
-        .fn_ret = str,
+        .fn_var = foo_fn_a,
     };
     const a_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{foo_constraint_a});
 
-    // b has constraint: b.foo : Str, Int -> Str (2 args!)
-    const foo_args_b = try env.module_env.types.appendVars(&[_]Var{ str, int });
+    // b has constraint: b.foo : (Str, Int) -> Str (2 args!)
+    const foo_fn_b = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{ str, int }, str));
     const foo_constraint_b = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("foo")),
-        .fn_args = .{ .nonempty = foo_args_b },
-        .fn_ret = str,
+        .fn_var = foo_fn_b,
     };
     const b_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{foo_constraint_b});
 
@@ -3912,20 +3900,18 @@ test "unify - flex with subset of constraints (a subset b)" {
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
 
     // a has 1 constraint: a.foo : Str -> Str
-    const foo_args = try env.module_env.types.appendVars(&[_]Var{str});
+    const foo_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
     const foo_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("foo")),
-        .fn_args = .{ .nonempty = foo_args },
-        .fn_ret = str,
+        .fn_var = foo_fn,
     };
     const a_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{foo_constraint});
 
     // b has 2 constraints: b.foo : Str -> Str, b.bar : Int -> Int
-    const bar_args = try env.module_env.types.appendVars(&[_]Var{int});
+    const bar_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{int}, int));
     const bar_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("bar")),
-        .fn_args = .{ .nonempty = bar_args },
-        .fn_ret = int,
+        .fn_var = bar_fn,
     };
     const b_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{ foo_constraint, bar_constraint });
 
@@ -3957,17 +3943,15 @@ test "unify - flex with constraints vs rigid with subset constraints" {
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
 
     // flex has 2 constraints
-    const foo_args = try env.module_env.types.appendVars(&[_]Var{str});
+    const foo_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
     const foo_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("foo")),
-        .fn_args = .{ .nonempty = foo_args },
-        .fn_ret = str,
+        .fn_var = foo_fn,
     };
-    const bar_args = try env.module_env.types.appendVars(&[_]Var{int});
+    const bar_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{int}, int));
     const bar_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("bar")),
-        .fn_args = .{ .nonempty = bar_args },
-        .fn_ret = int,
+        .fn_var = bar_fn,
     };
     const flex_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{ foo_constraint, bar_constraint });
 
@@ -3997,20 +3981,18 @@ test "unify - flex with constraints vs rigid with superset constraints" {
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
 
     // flex has 1 constraint
-    const foo_args = try env.module_env.types.appendVars(&[_]Var{str});
+    const foo_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
     const foo_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("foo")),
-        .fn_args = .{ .nonempty = foo_args },
-        .fn_ret = str,
+        .fn_var = foo_fn,
     };
     const flex_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{foo_constraint});
 
     // rigid has 2 constraints (flex constraints are subset - should succeed)
-    const bar_args = try env.module_env.types.appendVars(&[_]Var{int});
+    const bar_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{int}, int));
     const bar_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("bar")),
-        .fn_args = .{ .nonempty = bar_args },
-        .fn_ret = int,
+        .fn_var = bar_fn,
     };
     const rigid_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{ foo_constraint, bar_constraint });
 
@@ -4035,11 +4017,10 @@ test "unify - empty constraints unify with any" {
 
     const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
 
-    const foo_args = try env.module_env.types.appendVars(&[_]Var{str});
+    const foo_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
     const foo_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("foo")),
-        .fn_args = .{ .nonempty = foo_args },
-        .fn_ret = str,
+        .fn_var = foo_fn,
     };
     const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{foo_constraint});
 
@@ -4067,12 +4048,11 @@ test "unify - flex with constraints vs structure captures deferred check" {
 
     const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
 
-    // Create constraint: a.to_str : a -> Str
-    const to_str_args = try env.module_env.types.appendVars(&[_]Var{str});
+    // Create constraint: a.to_str : Str -> Str
+    const to_str_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
     const to_str_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
-        .fn_args = .{ .nonempty = to_str_args },
-        .fn_ret = str,
+        .fn_var = to_str_fn,
     };
     const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{to_str_constraint});
 
@@ -4088,8 +4068,10 @@ test "unify - flex with constraints vs structure captures deferred check" {
     // Check that constraint was captured
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
     const deferred = env.scratch.deferred_constraints.get(@enumFromInt(0)).*;
-    try std.testing.expectEqual(flex_var, deferred.constrained_var);
-    try std.testing.expectEqual(structure_var, deferred.concrete_var);
+    try std.testing.expectEqual(
+        env.module_env.types.resolveVar(structure_var).var_,
+        env.module_env.types.resolveVar(deferred.var_).var_,
+    );
     try std.testing.expectEqual(constraints, deferred.constraints);
 }
 
@@ -4100,12 +4082,11 @@ test "unify - structure vs flex with constraints captures deferred check (revers
 
     const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
 
-    // Create constraint: a.to_str : a -> Str
-    const to_str_args = try env.module_env.types.appendVars(&[_]Var{str});
+    // Create constraint: a.to_str : Str -> Str
+    const to_str_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
     const to_str_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
-        .fn_args = .{ .nonempty = to_str_args },
-        .fn_ret = str,
+        .fn_var = to_str_fn,
     };
     const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{to_str_constraint});
 
@@ -4121,8 +4102,10 @@ test "unify - structure vs flex with constraints captures deferred check (revers
     // Check that constraint was captured (note: vars might be swapped due to merge order)
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
     const deferred = env.scratch.deferred_constraints.get(@enumFromInt(0)).*;
-    try std.testing.expectEqual(flex_var, deferred.constrained_var);
-    try std.testing.expectEqual(structure_var, deferred.concrete_var);
+    try std.testing.expectEqual(
+        env.module_env.types.resolveVar(flex_var).var_,
+        env.module_env.types.resolveVar(deferred.var_).var_,
+    );
     try std.testing.expectEqual(constraints, deferred.constraints);
 }
 
@@ -4150,18 +4133,16 @@ test "unify - flex with multiple constraints vs structure captures all" {
     const int = try env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
 
     // Create multiple constraints
-    const to_str_args = try env.module_env.types.appendVars(&[_]Var{str});
+    const to_str_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{int}, str));
     const to_str_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
-        .fn_args = .{ .nonempty = to_str_args },
-        .fn_ret = str,
+        .fn_var = to_str_fn,
     };
 
-    const hash_args = try env.module_env.types.appendVars(&[_]Var{int});
+    const hash_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{int}, int));
     const hash_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("hash")),
-        .fn_args = .{ .nonempty = hash_args },
-        .fn_ret = int,
+        .fn_var = hash_fn,
     };
 
     const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{ to_str_constraint, hash_constraint });
@@ -4178,8 +4159,10 @@ test "unify - flex with multiple constraints vs structure captures all" {
     // Check that constraint was captured with BOTH constraints
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
     const deferred = env.scratch.deferred_constraints.get(@enumFromInt(0)).*;
-    try std.testing.expectEqual(flex_var, deferred.constrained_var);
-    try std.testing.expectEqual(structure_var, deferred.concrete_var);
+    try std.testing.expectEqual(
+        env.module_env.types.resolveVar(structure_var).var_,
+        env.module_env.types.resolveVar(deferred.var_).var_,
+    );
     try std.testing.expectEqual(constraints, deferred.constraints);
     try std.testing.expectEqual(@as(u32, 2), deferred.constraints.len());
 }
@@ -4192,11 +4175,10 @@ test "unify - flex vs nominal type captures constraint" {
     const str = try env.module_env.types.freshFromContent(Content{ .structure = .str });
 
     // Create constraint
-    const ord_args = try env.module_env.types.appendVars(&[_]Var{str});
+    const ord_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
     const ord_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("ord")),
-        .fn_args = .{ .nonempty = ord_args },
-        .fn_ret = str,
+        .fn_var = ord_fn,
     };
     const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{ord_constraint});
 
@@ -4215,7 +4197,9 @@ test "unify - flex vs nominal type captures constraint" {
     // Check that constraint was captured
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
     const deferred = env.scratch.deferred_constraints.get(@enumFromInt(0)).*;
-    try std.testing.expectEqual(flex_var, deferred.constrained_var);
-    try std.testing.expectEqual(nominal_var, deferred.concrete_var);
+    try std.testing.expectEqual(
+        env.module_env.types.resolveVar(nominal_var).var_,
+        env.module_env.types.resolveVar(deferred.var_).var_,
+    );
     try std.testing.expectEqual(constraints, deferred.constraints);
 }

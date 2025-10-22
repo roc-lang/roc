@@ -229,11 +229,10 @@ NO CHANGE
 			(e-string
 				(e-literal (string "hello"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "List") (builtin)
-						(ty-rigid-var (name "elem")))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-apply (name "List") (builtin)
+					(ty-rigid-var (name "elem")))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "ending_underscore"))
 		(e-lambda
@@ -242,11 +241,10 @@ NO CHANGE
 			(e-string
 				(e-literal (string "default"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "List") (builtin)
-						(ty-rigid-var (name "elem_")))
-					(ty-rigid-var-lookup (ty-rigid-var (name "elem_")))))))
+			(ty-fn (effectful false)
+				(ty-apply (name "List") (builtin)
+					(ty-rigid-var (name "elem_")))
+				(ty-rigid-var-lookup (ty-rigid-var (name "elem_"))))))
 	(d-let
 		(p-assign (ident "combo_single"))
 		(e-lambda
@@ -255,11 +253,10 @@ NO CHANGE
 			(e-string
 				(e-literal (string "combo"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "List") (builtin)
-						(ty-rigid-var (name "bad_")))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-apply (name "List") (builtin)
+					(ty-rigid-var (name "bad_")))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "valid_single"))
 		(e-lambda
@@ -268,11 +265,10 @@ NO CHANGE
 			(e-string
 				(e-literal (string "valid"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "List") (builtin)
-						(ty-rigid-var (name "_elem")))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-apply (name "List") (builtin)
+					(ty-rigid-var (name "_elem")))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "valid_multi"))
 		(e-lambda
@@ -283,11 +279,10 @@ NO CHANGE
 					(e-lookup-local
 						(p-assign (ident "x"))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-rigid-var (name "elem"))
-					(ty-apply (name "List") (builtin)
-						(ty-rigid-var-lookup (ty-rigid-var (name "elem"))))))))
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "elem"))
+				(ty-apply (name "List") (builtin)
+					(ty-rigid-var-lookup (ty-rigid-var (name "elem")))))))
 	(d-let
 		(p-assign (ident "main"))
 		(e-lambda

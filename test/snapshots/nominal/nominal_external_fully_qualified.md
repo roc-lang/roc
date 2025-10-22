@@ -168,10 +168,9 @@ handleResult = |result| {
 										(e-string
 											(e-literal (string "Error: $(code.toStr())")))))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-malformed)
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-malformed)
+				(ty-lookup (name "Str") (builtin)))))
 	(s-import (module "MyResultModule")
 		(exposes)))
 ~~~

@@ -18,14 +18,14 @@ Bar : SomeUndeclaredType
 Baz : Foo
 ~~~
 # EXPECTED
-COMPILER DIAGNOSTIC - /Users/rtfeldman/code/roc2/test/snapshots/type_scope_integration.md:0:0:0:0
+COMPILER DIAGNOSTIC - /Users/rtfeldman/code/roc/test/snapshots/type_scope_integration.md:0:0:0:0
 UNDECLARED TYPE - type_scope_integration.md:8:7:8:25
 # PROBLEMS
 **COMPILER DIAGNOSTIC**
 
 **Compiler Diagnostic**
 Diagnostic type 'type_alias_redeclared' is not yet handled in report generation.
-**/Users/rtfeldman/code/roc2/test/snapshots/type_scope_integration.md:0:0:0:0**
+**/Users/rtfeldman/code/roc/test/snapshots/type_scope_integration.md:0:0:0:0**
 
 **UNDECLARED TYPE**
 The type _SomeUndeclaredType_ is not declared in this scope.

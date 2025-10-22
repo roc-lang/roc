@@ -198,6 +198,12 @@ pub fn getTypeAnnoRegion(store: *const NodeStore, type_anno_idx: CIR.TypeAnno.Id
     return store.getRegionAt(node_idx);
 }
 
+/// Helper function to get a region by  annotation index
+pub fn getAnnotationRegion(store: *const NodeStore, anno_idx: CIR.Annotation.Idx) Region {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(anno_idx));
+    return store.getRegionAt(node_idx);
+}
+
 /// Retrieves a region from node from the store.
 pub fn getNodeRegion(store: *const NodeStore, node_idx: Node.Idx) Region {
     return store.getRegionAt(node_idx);
@@ -760,56 +766,44 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx)
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(whereClause));
     const node = store.nodes.get(node_idx);
 
-    std.debug.assert(node.tag == .where_clause);
+    switch (node.tag) {
+        .where_method => {
+            const var_ = @as(CIR.TypeAnno.Idx, @enumFromInt(node.data_1));
+            const method_name = @as(Ident.Idx, @bitCast(node.data_2));
 
-    // Retrieve where clause data from extra_data
-    const extra_start = node.data_1;
-    const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_start = node.data_3;
+            const extra_data = store.extra_data.items.items[extra_start..];
 
-    const discriminant = extra_data[0];
+            const args_start = extra_data[0];
+            const args_len = extra_data[1];
+            const ret = @as(CIR.TypeAnno.Idx, @enumFromInt(extra_data[2]));
 
-    switch (discriminant) {
-        0 => { // mod_method
-            const var_name = @as(Ident.Idx, @bitCast(extra_data[1]));
-            const method_name = @as(Ident.Idx, @bitCast(extra_data[2]));
-            const args_start = extra_data[3];
-            const args_len = extra_data[4];
-            const ret_anno = @as(CIR.TypeAnno.Idx, @enumFromInt(extra_data[5]));
-            const external_decl = @as(CIR.ExternalDecl.Idx, @enumFromInt(extra_data[6]));
-
-            return CIR.WhereClause{
-                .mod_method = .{
-                    .var_name = var_name,
-                    .method_name = method_name,
-                    .args = .{ .span = .{ .start = args_start, .len = args_len } },
-                    .ret_anno = ret_anno,
-                    .external_decl = external_decl,
-                },
-            };
+            return CIR.WhereClause{ .w_method = .{
+                .var_ = var_,
+                .method_name = method_name,
+                .args = .{ .span = .{ .start = args_start, .len = args_len } },
+                .ret = ret,
+            } };
         },
-        1 => { // mod_alias
-            const var_name = @as(Ident.Idx, @bitCast(extra_data[1]));
-            const alias_name = @as(Ident.Idx, @bitCast(extra_data[2]));
-            const external_decl = @as(CIR.ExternalDecl.Idx, @enumFromInt(extra_data[3]));
+        .where_alias => {
+            const var_ = @as(CIR.TypeAnno.Idx, @enumFromInt(node.data_1));
+            const alias_name = @as(Ident.Idx, @bitCast(node.data_2));
 
-            return CIR.WhereClause{
-                .mod_alias = .{
-                    .var_name = var_name,
-                    .alias_name = alias_name,
-                    .external_decl = external_decl,
-                },
-            };
+            return CIR.WhereClause{ .w_alias = .{
+                .var_ = var_,
+                .alias_name = alias_name,
+            } };
         },
-        2 => { // malformed
-            const diagnostic = @as(CIR.Diagnostic.Idx, @enumFromInt(extra_data[1]));
+        .where_malformed => {
+            const diagnostic = @as(CIR.Diagnostic.Idx, @enumFromInt(node.data_1));
 
-            return CIR.WhereClause{
-                .malformed = .{
-                    .diagnostic = diagnostic,
-                },
-            };
+            return CIR.WhereClause{ .w_malformed = .{
+                .diagnostic = diagnostic,
+            } };
         },
-        else => @panic("Invalid where clause discriminant"),
+        else => {
+            std.debug.panic("unreachable, node is not a where tag {}", .{node.tag});
+        },
     }
 }
 
@@ -987,7 +981,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             } };
         },
         else => {
-            std.debug.panic("unreachable, node is not an pattern tag {}", .{node.tag});
+            std.debug.panic("unreachable, node is not a pattern tag {}", .{node.tag});
         },
     }
 }
@@ -1139,9 +1133,21 @@ pub fn getAnnotation(store: *const NodeStore, annotation: CIR.Annotation.Idx) CI
 
     std.debug.assert(node.tag == .annotation);
 
+    const anno: CIR.TypeAnno.Idx = @enumFromInt(node.data_1);
+
+    const where_flag = node.data_2;
+    const where_clause = if (where_flag == 1) blk: {
+        const extra_start = node.data_3;
+        const extra_data = store.extra_data.items.items[extra_start..];
+
+        const where_start = extra_data[0];
+        const where_len = extra_data[1];
+        break :blk CIR.WhereClause.Span{ .span = DataSpan.init(where_start, where_len) };
+    } else null;
+
     return CIR.Annotation{
-        .type_anno = @enumFromInt(node.data_2),
-        .signature = @enumFromInt(node.data_1),
+        .anno = anno,
+        .where = where_clause,
     };
 }
 
@@ -1728,38 +1734,36 @@ pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause, region: b
         .data_1 = 0,
         .data_2 = 0,
         .data_3 = 0,
-        .tag = .where_clause,
+        .tag = undefined,
     };
 
     // Store where clause data in extra_data
     const extra_data_start = store.extra_data.len();
 
     switch (whereClause) {
-        .mod_method => |mod_method| {
-            // Store discriminant (0 for mod_method)
-            _ = try store.extra_data.append(store.gpa, 0);
-            _ = try store.extra_data.append(store.gpa, @bitCast(mod_method.var_name));
-            _ = try store.extra_data.append(store.gpa, @bitCast(mod_method.method_name));
-            _ = try store.extra_data.append(store.gpa, mod_method.args.span.start);
-            _ = try store.extra_data.append(store.gpa, mod_method.args.span.len);
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(mod_method.ret_anno));
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(mod_method.external_decl));
+        .w_method => |where_method| {
+            node.tag = .where_method;
+
+            node.data_1 = @intFromEnum(where_method.var_);
+            node.data_2 = @bitCast(where_method.method_name);
+            node.data_3 = @intCast(extra_data_start);
+
+            _ = try store.extra_data.append(store.gpa, where_method.args.span.start);
+            _ = try store.extra_data.append(store.gpa, where_method.args.span.len);
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(where_method.ret));
         },
-        .mod_alias => |mod_alias| {
-            // Store discriminant (1 for mod_alias)
-            _ = try store.extra_data.append(store.gpa, 1);
-            _ = try store.extra_data.append(store.gpa, @bitCast(mod_alias.var_name));
-            _ = try store.extra_data.append(store.gpa, @bitCast(mod_alias.alias_name));
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(mod_alias.external_decl));
+        .w_alias => |mod_alias| {
+            node.tag = .where_alias;
+
+            node.data_1 = @intFromEnum(mod_alias.var_);
+            node.data_2 = @bitCast(mod_alias.alias_name);
         },
-        .malformed => |malformed| {
-            // Store discriminant (2 for malformed)
-            _ = try store.extra_data.append(store.gpa, 2);
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(malformed.diagnostic));
+        .w_malformed => |malformed| {
+            node.tag = .where_malformed;
+
+            node.data_1 = @intFromEnum(malformed.diagnostic);
         },
     }
-
-    node.data_1 = @intCast(extra_data_start);
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
@@ -1775,7 +1779,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
         .data_1 = 0,
         .data_2 = 0,
         .data_3 = 0,
-        .tag = @enumFromInt(0),
+        .tag = undefined,
     };
 
     switch (pattern) {
@@ -2067,12 +2071,28 @@ pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.Recor
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base.Region) Allocator.Error!CIR.Annotation.Idx {
-    const node = Node{
-        .data_1 = @intFromEnum(annotation.signature),
-        .data_2 = @intFromEnum(annotation.type_anno),
+    var node = Node{
+        .data_1 = 0,
+        .data_2 = 0,
         .data_3 = 0,
         .tag = .annotation,
     };
+
+    node.data_1 = @intFromEnum(annotation.anno);
+
+    // Store where clause information
+    if (annotation.where) |where_clause| {
+        // Store flag indicating where clause is present
+        node.data_2 = 1;
+        // Store where clause span start and len
+        const extra_start = store.extra_data.len();
+        _ = try store.extra_data.append(store.gpa, where_clause.span.start);
+        _ = try store.extra_data.append(store.gpa, where_clause.span.len);
+        node.data_3 = @intCast(extra_start);
+    } else {
+        // Store flag indicating where clause is not present
+        node.data_2 = 0;
+    }
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);

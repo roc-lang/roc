@@ -73,10 +73,9 @@ foo = |a| {
 				(e-lookup-local
 					(p-assign (ident "a")))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "Bool") (external-module "Bool"))
-					(ty-lookup (name "Bool") (external-module "Bool")))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "Bool") (external-module "Bool"))
+				(ty-lookup (name "Bool") (external-module "Bool"))))))
 ~~~
 # TYPES
 ~~~clojure

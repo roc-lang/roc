@@ -117,10 +117,9 @@ kind = |color| match color {
 								(e-string
 									(e-literal (string "secondary")))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "Color") (local))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "Color") (local))
+				(ty-lookup (name "Str") (builtin)))))
 	(s-alias-decl
 		(ty-header (name "Color"))
 		(ty-tag-union

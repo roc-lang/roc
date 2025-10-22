@@ -84,14 +84,13 @@ main! = |_| {}
 					(e-lookup-local
 						(p-assign (ident "record"))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-record
-						(field (field "field")
-							(ty-rigid-var (name "a")))
-						(field (field "other")
-							(ty-rigid-var (name "_b"))))
-					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
+			(ty-fn (effectful false)
+				(ty-record
+					(field (field "field")
+						(ty-rigid-var (name "a")))
+					(field (field "other")
+						(ty-rigid-var (name "_b"))))
+				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda

@@ -20,6 +20,38 @@ fn configureBackend(step: *Step.Compile, target: ResolvedTarget) void {
     }
 }
 
+const TestsSummaryStep = struct {
+    step: Step,
+
+    fn create(b: *std.Build) *TestsSummaryStep {
+        const self = b.allocator.create(TestsSummaryStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = "tests_summary",
+                .owner = b,
+                .makeFn = make,
+            }),
+        };
+        return self;
+    }
+
+    fn addRun(self: *TestsSummaryStep, run_step: *Step) void {
+        self.step.dependOn(run_step);
+    }
+
+    fn make(step: *Step, options: Step.MakeOptions) !void {
+        _ = options;
+
+        var passed: u64 = 0;
+        for (step.dependencies.items) |dependency| {
+            passed += @intCast(dependency.test_results.passCount());
+        }
+
+        std.debug.print("✅ All {d} tests passed.\n", .{passed});
+    }
+};
+
 pub fn build(b: *std.Build) void {
     // build steps
     const run_step = b.step("run", "Build and run the roc cli");
@@ -407,6 +439,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // Create and add module tests
+    const tests_summary = TestsSummaryStep.create(b);
     const module_tests = roc_modules.createModuleTests(b, target, optimize, zstd, test_filters);
     for (module_tests) |module_test| {
         // Add compiled builtins to check, repl, and eval module tests
@@ -432,7 +465,7 @@ pub fn build(b: *std.Build) void {
         individual_test_step.dependOn(&individual_run.step);
 
         b.default_step.dependOn(&module_test.test_step.step);
-        test_step.dependOn(&module_test.run_step.step);
+        tests_summary.addRun(&module_test.run_step.step);
     }
 
     // Add snapshot tool test
@@ -457,7 +490,7 @@ pub fn build(b: *std.Build) void {
         if (run_args.len != 0) {
             run_snapshot_test.addArgs(run_args);
         }
-        test_step.dependOn(&run_snapshot_test.step);
+        tests_summary.addRun(&run_snapshot_test.step);
     }
 
     // Add CLI test
@@ -483,7 +516,7 @@ pub fn build(b: *std.Build) void {
         if (run_args.len != 0) {
             run_cli_test.addArgs(run_args);
         }
-        test_step.dependOn(&run_cli_test.step);
+        tests_summary.addRun(&run_cli_test.step);
     }
 
     // Add watch tests
@@ -514,8 +547,10 @@ pub fn build(b: *std.Build) void {
         if (run_args.len != 0) {
             run_watch_test.addArgs(run_args);
         }
-        test_step.dependOn(&run_watch_test.step);
+        tests_summary.addRun(&run_watch_test.step);
     }
+
+    test_step.dependOn(&tests_summary.step);
 
     b.default_step.dependOn(playground_step);
     {

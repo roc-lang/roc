@@ -139,13 +139,12 @@ foo = |num| {
 						(e-lookup-local
 							(p-assign (ident "str")))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "U64") (builtin))
-					(ty-apply (name "Result") (external-module "Result")
-						(ty-lookup (name "Str") (builtin))
-						(ty-tag-union
-							(ty-tag-name (name "TooBig")))))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "U64") (builtin))
+				(ty-apply (name "Result") (external-module "Result")
+					(ty-lookup (name "Str") (builtin))
+					(ty-tag-union
+						(ty-tag-name (name "TooBig"))))))))
 ~~~
 # TYPES
 ~~~clojure

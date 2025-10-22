@@ -310,14 +310,13 @@ main! = |_| processComplex(Ok([Some(42), None]))
 							(value
 								(e-empty_list)))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "Result") (external-module "Result")
-						(ty-apply (name "List") (builtin)
-							(ty-malformed))
-						(ty-malformed))
+			(ty-fn (effectful false)
+				(ty-apply (name "Result") (external-module "Result")
 					(ty-apply (name "List") (builtin)
-						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
+						(ty-malformed))
+					(ty-malformed))
+				(ty-apply (name "List") (builtin)
+					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
 		(p-assign (ident "deepNested"))
 		(e-lambda
@@ -326,10 +325,9 @@ main! = |_| processComplex(Ok([Some(42), None]))
 			(e-block
 				(e-crash (msg "not implemented"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-malformed)
-					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
+			(ty-fn (effectful false)
+				(ty-malformed)
+				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-closure

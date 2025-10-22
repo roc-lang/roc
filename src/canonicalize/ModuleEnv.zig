@@ -1484,7 +1484,7 @@ pub const Serialized = struct {
         gpa: std.mem.Allocator,
         source: []const u8,
         module_name: []const u8,
-    ) *Self {
+    ) std.mem.Allocator.Error!*Self {
         // Verify that Serialized is at least as large as the runtime struct.
         // This is required because we're reusing the same memory location.
         // On 32-bit platforms, Serialized may be larger due to using fixed-size types for platform-independent serialization.
@@ -1503,7 +1503,7 @@ pub const Serialized = struct {
             .exports = self.exports,
             .builtin_statements = self.builtin_statements,
             .external_decls = self.external_decls.deserialize(offset).*,
-            .imports = self.imports.deserialize(offset, gpa).*,
+            .imports = (try self.imports.deserialize(offset, gpa)).*,
             .module_name = module_name,
             .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
             .diagnostics = self.diagnostics,

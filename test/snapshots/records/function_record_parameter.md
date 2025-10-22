@@ -63,5 +63,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ age: _field, name: _field2 } -> Error"))
+(expr (type "{ age: a, name: _field } -> Str where [a.to_str : a -> _ret]"))
 ~~~

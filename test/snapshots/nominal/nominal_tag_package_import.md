@@ -89,8 +89,7 @@ blue = CC.Color.RGB(0, 0, 255)
 		(p-assign (ident "blue"))
 		(e-runtime-error (tag "undeclared_type"))
 		(annotation
-			(declared-type
-				(ty-malformed))))
+			(ty-malformed)))
 	(s-import (module "styles.Color")
 		(exposes)))
 ~~~

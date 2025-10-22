@@ -537,10 +537,9 @@ combineResults = |result1, result2|
 				(p-assign (ident "req")))
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-malformed)
-					(ty-malformed)))))
+			(ty-fn (effectful false)
+				(ty-malformed)
+				(ty-malformed))))
 	(d-let
 		(p-assign (ident "parseJson"))
 		(e-lambda
@@ -551,16 +550,15 @@ combineResults = |result1, result2|
 				(e-lookup-local
 					(p-assign (ident "input")))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "Str") (builtin))
-					(ty-malformed)))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "Str") (builtin))
+				(ty-malformed))))
 	(d-let
 		(p-assign (ident "handleApi"))
 		(e-closure
 			(captures
-				(capture (ident "data"))
-				(capture (ident "err")))
+				(capture (ident "err"))
+				(capture (ident "data")))
 			(e-lambda
 				(args
 					(p-assign (ident "request")))
@@ -600,18 +598,16 @@ combineResults = |result1, result2|
 												(e-lookup-local
 													(p-assign (ident "err")))))))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
+			(ty-fn (effectful false)
+				(ty-malformed)
+				(ty-apply (name "Result") (external-module "Result")
 					(ty-malformed)
-					(ty-apply (name "Result") (external-module "Result")
-						(ty-malformed)
-						(ty-malformed))))))
+					(ty-malformed)))))
 	(d-let
 		(p-assign (ident "config"))
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation
-			(declared-type
-				(ty-malformed))))
+			(ty-malformed)))
 	(d-let
 		(p-assign (ident "advancedParser"))
 		(e-lambda
@@ -625,21 +621,20 @@ combineResults = |result1, result2|
 				(e-lookup-local
 					(p-assign (ident "input")))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
+			(ty-fn (effectful false)
+				(ty-malformed)
+				(ty-lookup (name "Str") (builtin))
+				(ty-apply (name "Result") (external-module "Result")
 					(ty-malformed)
-					(ty-lookup (name "Str") (builtin))
-					(ty-apply (name "Result") (external-module "Result")
-						(ty-malformed)
-						(ty-malformed))))))
+					(ty-malformed)))))
 	(d-let
 		(p-assign (ident "combineResults"))
 		(e-closure
 			(captures
-				(capture (ident "value1"))
-				(capture (ident "value2"))
 				(capture (ident "err"))
-				(capture (ident "err")))
+				(capture (ident "err"))
+				(capture (ident "value1"))
+				(capture (ident "value2")))
 			(e-lambda
 				(args
 					(p-assign (ident "result1"))
@@ -693,19 +688,18 @@ combineResults = |result1, result2|
 											(e-lookup-local
 												(p-assign (ident "err"))))))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "Result") (external-module "Result")
-						(ty-rigid-var (name "a"))
-						(ty-rigid-var (name "err")))
-					(ty-apply (name "Result") (external-module "Result")
-						(ty-rigid-var (name "b"))
-						(ty-rigid-var-lookup (ty-rigid-var (name "err"))))
-					(ty-apply (name "Result") (external-module "Result")
-						(ty-tuple
-							(ty-rigid-var-lookup (ty-rigid-var (name "a")))
-							(ty-rigid-var-lookup (ty-rigid-var (name "b"))))
-						(ty-rigid-var-lookup (ty-rigid-var (name "err"))))))))
+			(ty-fn (effectful false)
+				(ty-apply (name "Result") (external-module "Result")
+					(ty-rigid-var (name "a"))
+					(ty-rigid-var (name "err")))
+				(ty-apply (name "Result") (external-module "Result")
+					(ty-rigid-var (name "b"))
+					(ty-rigid-var-lookup (ty-rigid-var (name "err"))))
+				(ty-apply (name "Result") (external-module "Result")
+					(ty-tuple
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))
+					(ty-rigid-var-lookup (ty-rigid-var (name "err")))))))
 	(s-import (module "http.Client")
 		(exposes
 			(exposed (name "Request") (wildcard false))
@@ -724,13 +718,13 @@ combineResults = |result1, result2|
 		(patt (type "Str -> Error"))
 		(patt (type "Error -> Result(Error, Error)"))
 		(patt (type "Error"))
-		(patt (type "Error, Str -> Result(Error, Error)"))
+		(patt (type "Error, Str -> Error"))
 		(patt (type "Result(a, err), Result(b, err) -> Result((a, b), err)")))
 	(expressions
 		(expr (type "Error -> Error"))
 		(expr (type "Str -> Error"))
 		(expr (type "Error -> Result(Error, Error)"))
 		(expr (type "Error"))
-		(expr (type "Error, Str -> Result(Error, Error)"))
+		(expr (type "Error, Str -> Error"))
 		(expr (type "Result(a, err), Result(b, err) -> Result((a, b), err)"))))
 ~~~
