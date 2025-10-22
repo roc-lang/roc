@@ -233,17 +233,8 @@ pub fn init(
                 // Use the same alias as the module name for auto-imports
                 const alias = module_name_ident;
 
-                // Process the import using the shared helper function
-                // This will:
-                // - Get or create Import.Idx
-                // - Introduce module alias to scope
-                // - Process type imports
-                // - Introduce exposed items (including auto-expose for type modules)
-                // - Store import_indices mapping
-                // - Create CIR import statement
-                // - Add imported module to scope
-                // - Check module exists
-                _ = try result.processModuleImport(module_name_ident, alias, empty_exposed_span, auto_import_region);
+                // Process the import using the aliased import path (auto-imports always have an alias)
+                _ = try result.importWithAlias(module_name_ident, alias, empty_exposed_span, auto_import_region);
             }
         }
     }
@@ -1593,10 +1584,78 @@ fn bringIngestedFileIntoScope(
 
 /// Process a module import with common logic shared by explicit imports and auto-imports.
 /// This handles everything after module name and alias resolution.
-fn processModuleImport(
+/// Process import with an alias (normal import like `import json.Json` or `import json.Json as J`)
+fn importAliased(
     self: *Self,
     module_name: Ident.Idx,
-    alias: ?Ident.Idx,
+    alias_tok: ?Token.Idx,
+    exposed_items_span: CIR.ExposedItem.Span,
+    import_region: Region,
+) std.mem.Allocator.Error!?Statement.Idx {
+    const module_name_text = self.env.getIdent(module_name);
+
+    // 1. Get or create Import.Idx for this module
+    const module_import_idx = try self.env.imports.getOrPut(
+        self.env.gpa,
+        self.env.common.getStringStore(),
+        module_name_text,
+    );
+
+    // 2. Resolve the alias
+    const alias = try self.resolveModuleAlias(alias_tok, module_name) orelse return null;
+
+    // 3. Add to scope: alias -> module_name mapping
+    try self.scopeIntroduceModuleAlias(alias, module_name);
+
+    // 4. Process type imports from this module
+    try self.processTypeImports(module_name, alias);
+
+    // 5. Introduce exposed items into scope (includes auto-expose for type modules)
+    try self.introduceItemsAliased(exposed_items_span, module_name, alias, import_region, module_import_idx);
+
+    // 6. Store the mapping from module name to Import.Idx
+    try self.import_indices.put(self.env.gpa, module_name_text, module_import_idx);
+
+    // 7. Create CIR import statement
+    const cir_import = Statement{
+        .s_import = .{
+            .module_name_tok = module_name,
+            .qualifier_tok = null,
+            .alias_tok = null,
+            .exposes = exposed_items_span,
+        },
+    };
+
+    const import_idx = try self.env.addStatement(cir_import, import_region);
+    try self.env.store.addScratchStatement(import_idx);
+
+    // 8. Add the module to the current scope so it can be used in qualified lookups
+    const current_scope = self.currentScope();
+    _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
+
+    // 9. Check that this module actually exists, and if not report an error
+    if (self.module_envs) |envs_map| {
+        if (!envs_map.contains(module_name)) {
+            try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
+                .module_name = module_name,
+                .region = import_region,
+            } });
+        }
+    } else {
+        try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
+            .module_name = module_name,
+            .region = import_region,
+        } });
+    }
+
+    return import_idx;
+}
+
+/// Process import with an alias provided directly as an Ident.Idx (used for auto-imports)
+fn importWithAlias(
+    self: *Self,
+    module_name: Ident.Idx,
+    alias: Ident.Idx,
     exposed_items_span: CIR.ExposedItem.Span,
     import_region: Region,
 ) std.mem.Allocator.Error!Statement.Idx {
@@ -1609,16 +1668,14 @@ fn processModuleImport(
         module_name_text,
     );
 
-    // 2. Add to scope: alias -> module_name mapping (skip if no alias)
-    if (alias) |alias_ident| {
-        try self.scopeIntroduceModuleAlias(alias_ident, module_name);
+    // 2. Add to scope: alias -> module_name mapping
+    try self.scopeIntroduceModuleAlias(alias, module_name);
 
-        // 3. Process type imports from this module
-        try self.processTypeImports(module_name, alias_ident);
-    }
+    // 3. Process type imports from this module
+    try self.processTypeImports(module_name, alias);
 
     // 4. Introduce exposed items into scope (includes auto-expose for type modules)
-    try self.introduceExposedItemsIntoScope(exposed_items_span, module_name, alias, import_region, module_import_idx);
+    try self.introduceItemsAliased(exposed_items_span, module_name, alias, import_region, module_import_idx);
 
     // 5. Store the mapping from module name to Import.Idx
     try self.import_indices.put(self.env.gpa, module_name_text, module_import_idx);
@@ -1642,9 +1699,64 @@ fn processModuleImport(
 
     // 8. Check that this module actually exists, and if not report an error
     if (self.module_envs) |envs_map| {
-        // Check if the module exists
         if (!envs_map.contains(module_name)) {
-            // Module not found - create diagnostic
+            try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
+                .module_name = module_name,
+                .region = import_region,
+            } });
+        }
+    } else {
+        try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
+            .module_name = module_name,
+            .region = import_region,
+        } });
+    }
+
+    return import_idx;
+}
+
+/// Process auto-expose import without alias (like `import json.Parser.Config`)
+fn importUnaliased(
+    self: *Self,
+    module_name: Ident.Idx,
+    exposed_items_span: CIR.ExposedItem.Span,
+    import_region: Region,
+) std.mem.Allocator.Error!Statement.Idx {
+    const module_name_text = self.env.getIdent(module_name);
+
+    // 1. Get or create Import.Idx for this module
+    const module_import_idx = try self.env.imports.getOrPut(
+        self.env.gpa,
+        self.env.common.getStringStore(),
+        module_name_text,
+    );
+
+    // 2. Introduce exposed items into scope (no alias, no auto-expose of main type)
+    try self.introduceItemsUnaliased(exposed_items_span, module_name, import_region, module_import_idx);
+
+    // 3. Store the mapping from module name to Import.Idx
+    try self.import_indices.put(self.env.gpa, module_name_text, module_import_idx);
+
+    // 4. Create CIR import statement
+    const cir_import = Statement{
+        .s_import = .{
+            .module_name_tok = module_name,
+            .qualifier_tok = null,
+            .alias_tok = null,
+            .exposes = exposed_items_span,
+        },
+    };
+
+    const import_idx = try self.env.addStatement(cir_import, import_region);
+    try self.env.store.addScratchStatement(import_idx);
+
+    // 5. Add the module to the current scope so it can be used in qualified lookups
+    const current_scope = self.currentScope();
+    _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
+
+    // 6. Check that this module actually exists, and if not report an error
+    if (self.module_envs) |envs_map| {
+        if (!envs_map.contains(module_name)) {
             try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
                 .module_name = module_name,
                 .region = import_region,
@@ -1723,21 +1835,17 @@ fn canonicalizeImportStatement(
         }
     };
 
-    // 2. Determine the alias (either explicit or default to last part)
-    // When suppress_alias is true, skip creating an alias
-    const alias = if (import_stmt.suppress_alias)
-        null
-    else
-        try self.resolveModuleAlias(import_stmt.alias_tok, module_name) orelse return null;
-
-    // 3. Convert exposed items to CIR
+    // 2. Convert exposed items to CIR
     const scratch_start = self.env.store.scratchExposedItemTop();
     try self.convertASTExposesToCIR(import_stmt.exposes);
     const cir_exposes = try self.env.store.exposedItemSpanFrom(scratch_start);
     const import_region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
 
-    // 4. Process the import using shared logic
-    return try self.processModuleImport(module_name, alias, cir_exposes, import_region);
+    // 3. Dispatch to the appropriate handler based on whether we need an alias
+    return if (import_stmt.suppress_alias)
+        try self.importUnaliased(module_name, cir_exposes, import_region)
+    else
+        try self.importAliased(module_name, import_stmt.alias_tok, cir_exposes, import_region);
 }
 
 /// Resolve the module alias name from either explicit alias or module name
@@ -1851,12 +1959,15 @@ fn convertASTExposesToCIR(
     }
 }
 
-/// Introduce converted exposed items into scope for identifier resolution
-fn introduceExposedItemsIntoScope(
+/// Introduce converted exposed items into scope for aliased imports
+/// For imports like `import json.Parser exposing [Config]`, this will:
+/// 1. Auto-expose the module's main type if it's a type module
+/// 2. Process explicitly exposed items
+fn introduceItemsAliased(
     self: *Self,
     exposed_items_span: CIR.ExposedItem.Span,
     module_name: Ident.Idx,
-    module_alias: ?Ident.Idx,
+    module_alias: Ident.Idx,
     import_region: Region,
     module_import_idx: CIR.Import.Idx,
 ) std.mem.Allocator.Error!void {
@@ -1867,33 +1978,30 @@ fn introduceExposedItemsIntoScope(
         const module_entry = envs_map.get(module_name) orelse return;
         const module_env = module_entry.env;
 
-        // Only auto-expose the module's main type if we have a module alias
-        // For suppress_alias imports like `import json.Parser.Config`, skip this
-        if (module_alias) |alias_ident| {
-            switch (module_env.module_kind) {
-                .type_module => |main_type_ident| {
-                    if (module_env.containsExposedById(main_type_ident)) {
-                        const item_info = Scope.ExposedItemInfo{
-                            .module_name = module_name,
-                            .original_name = main_type_ident,
-                        };
-                        try self.scopeIntroduceExposedItem(alias_ident, item_info);
+        // Auto-expose the module's main type for type modules
+        switch (module_env.module_kind) {
+            .type_module => |main_type_ident| {
+                if (module_env.containsExposedById(main_type_ident)) {
+                    const item_info = Scope.ExposedItemInfo{
+                        .module_name = module_name,
+                        .original_name = main_type_ident,
+                    };
+                    try self.scopeIntroduceExposedItem(module_alias, item_info);
 
-                        const target_node_idx = module_env.getExposedNodeIndexById(main_type_ident);
-                        try self.setExternalTypeBinding(
-                            current_scope,
-                            alias_ident,
-                            module_name,
-                            main_type_ident,
-                            target_node_idx,
-                            module_import_idx,
-                            import_region,
-                            .module_was_found,
-                        );
-                    }
-                },
-                else => {},
-            }
+                    const target_node_idx = module_env.getExposedNodeIndexById(main_type_ident);
+                    try self.setExternalTypeBinding(
+                        current_scope,
+                        module_alias,
+                        module_name,
+                        main_type_ident,
+                        target_node_idx,
+                        module_import_idx,
+                        import_region,
+                        .module_was_found,
+                    );
+                }
+            },
+            else => {},
         }
 
         // Validate each exposed item
@@ -1949,6 +2057,129 @@ fn introduceExposedItemsIntoScope(
                 .original_name = exposed_item.name,
             };
             try self.scopeIntroduceExposedItem(item_name, item_info);
+        }
+    }
+}
+
+/// Introduce converted exposed items into scope for auto-expose imports
+/// For imports like `import json.Parser.Config`, this will:
+/// 1. Skip auto-exposing the module's main type (no alias exists)
+/// 2. Process only explicitly exposed items
+fn introduceItemsUnaliased(
+    self: *Self,
+    exposed_items_span: CIR.ExposedItem.Span,
+    module_name: Ident.Idx,
+    import_region: Region,
+    module_import_idx: CIR.Import.Idx,
+) std.mem.Allocator.Error!void {
+    const exposed_items_slice = self.env.store.sliceExposedItems(exposed_items_span);
+    const current_scope = self.currentScope();
+
+    if (self.module_envs) |envs_map| {
+        const module_entry = envs_map.get(module_name) orelse return;
+        const module_env = module_entry.env;
+
+        // No auto-expose of main type - only process explicitly exposed items
+        for (exposed_items_slice) |exposed_item_idx| {
+            const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
+            const local_ident = exposed_item.alias orelse exposed_item.name;
+            const local_name_text = self.env.getIdent(local_ident);
+
+            const target_ident = module_env.common.findIdent(self.env.getIdent(exposed_item.name));
+            const is_type_name = local_name_text.len > 0 and local_name_text[0] >= 'A' and local_name_text[0] <= 'Z';
+
+            if (target_ident) |ident_in_module| {
+                if (!module_env.containsExposedById(ident_in_module)) {
+                    if (is_type_name) {
+                        try self.env.pushDiagnostic(Diagnostic{ .type_not_exposed = .{
+                            .module_name = module_name,
+                            .type_name = exposed_item.name,
+                            .region = import_region,
+                        } });
+                    } else {
+                        try self.env.pushDiagnostic(Diagnostic{ .value_not_exposed = .{
+                            .module_name = module_name,
+                            .value_name = exposed_item.name,
+                            .region = import_region,
+                        } });
+                    }
+                    continue;
+                }
+
+                const target_node_idx = module_env.getExposedNodeIndexById(ident_in_module) orelse {
+                    if (is_type_name) {
+                        try self.env.pushDiagnostic(Diagnostic{ .type_not_exposed = .{
+                            .module_name = module_name,
+                            .type_name = exposed_item.name,
+                            .region = import_region,
+                        } });
+                    } else {
+                        try self.env.pushDiagnostic(Diagnostic{ .value_not_exposed = .{
+                            .module_name = module_name,
+                            .value_name = exposed_item.name,
+                            .region = import_region,
+                        } });
+                    }
+                    continue;
+                };
+
+                const item_info = Scope.ExposedItemInfo{
+                    .module_name = module_name,
+                    .original_name = exposed_item.name,
+                };
+                try self.scopeIntroduceExposedItem(local_ident, item_info);
+
+                if (is_type_name) {
+                    try self.setExternalTypeBinding(
+                        current_scope,
+                        local_ident,
+                        module_name,
+                        exposed_item.name,
+                        target_node_idx,
+                        module_import_idx,
+                        import_region,
+                        .module_was_found,
+                    );
+                }
+            } else {
+                if (local_name_text.len > 0 and local_name_text[0] >= 'A' and local_name_text[0] <= 'Z') {
+                    try self.env.pushDiagnostic(Diagnostic{ .type_not_exposed = .{
+                        .module_name = module_name,
+                        .type_name = exposed_item.name,
+                        .region = import_region,
+                    } });
+                } else {
+                    try self.env.pushDiagnostic(Diagnostic{ .value_not_exposed = .{
+                        .module_name = module_name,
+                        .value_name = exposed_item.name,
+                        .region = import_region,
+                    } });
+                }
+            }
+        }
+    } else {
+        for (exposed_items_slice) |exposed_item_idx| {
+            const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
+            const local_ident = exposed_item.alias orelse exposed_item.name;
+            const local_name_text = self.env.getIdent(local_ident);
+            const item_info = Scope.ExposedItemInfo{
+                .module_name = module_name,
+                .original_name = exposed_item.name,
+            };
+            try self.scopeIntroduceExposedItem(local_ident, item_info);
+
+            if (local_name_text.len > 0 and local_name_text[0] >= 'A' and local_name_text[0] <= 'Z') {
+                try self.setExternalTypeBinding(
+                    current_scope,
+                    local_ident,
+                    module_name,
+                    exposed_item.name,
+                    null,
+                    module_import_idx,
+                    import_region,
+                    .module_not_found,
+                );
+            }
         }
     }
 }
