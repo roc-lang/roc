@@ -269,6 +269,7 @@ test "large data roundtrip" {
     defer decompressed_writer.deinit();
 
     const size_written = try reader.interface.streamRemaining(&decompressed_writer.writer);
+    try reader.verifyComplete();
     try std.testing.expectEqual(large_size, size_written);
     try decompressed_writer.writer.flush();
 
