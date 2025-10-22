@@ -116,10 +116,9 @@ pub const Interpreter = struct {
     env: *can.ModuleEnv,
     module_envs: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv),
     module_ids: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, u32),
+    import_envs: std.AutoHashMapUnmanaged(can.CIR.Import.Idx, *const can.ModuleEnv),
     current_module_id: u32,
     next_module_id: u32,
-    // For backward compatibility with e_lookup_external (uses Import.Idx indexing)
-    other_envs: []const *const can.ModuleEnv,
     problems: problem_mod.Store,
     snapshots: snapshot_mod.Store,
     unify_scratch: unify.Scratch,
@@ -145,16 +144,15 @@ pub const Interpreter = struct {
         errdefer module_envs.deinit(allocator);
         var module_ids = std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, u32){};
         errdefer module_ids.deinit(allocator);
-
-        // Also build other_envs slice for backward compatibility with e_lookup_external
-        var other_envs_list = std.array_list.Managed(*const can.ModuleEnv).init(allocator);
-        errdefer other_envs_list.deinit();
+        var import_envs = std.AutoHashMapUnmanaged(can.CIR.Import.Idx, *const can.ModuleEnv){};
+        errdefer import_envs.deinit(allocator);
 
         var next_id: u32 = 1; // Start at 1, reserve 0 for current module
 
         if (imported_modules_map) |modules_map| {
             try module_envs.ensureTotalCapacity(allocator, modules_map.count());
             try module_ids.ensureTotalCapacity(allocator, modules_map.count());
+            try import_envs.ensureTotalCapacity(allocator, modules_map.count());
 
             var iter = modules_map.iterator();
             while (iter.next()) |entry| {
@@ -162,23 +160,29 @@ pub const Interpreter = struct {
                 const module_env = entry.value_ptr.env;
                 module_envs.putAssumeCapacity(ident_idx, module_env);
                 module_ids.putAssumeCapacity(ident_idx, next_id);
-                try other_envs_list.append(module_env);
                 next_id += 1;
+
+                // Also build Import.Idx -> ModuleEnv mapping
+                // Get the module name string from the ident
+                const module_name = env.common.getIdentStore().getSlice(ident_idx);
+                // Look up the Import.Idx for this module name in the current module's import store
+                for (env.imports.imports.items.items, 0..) |string_lit_idx, i| {
+                    const import_name = env.common.string_literals.get(string_lit_idx);
+                    if (std.mem.eql(u8, import_name, module_name)) {
+                        const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
+                        import_envs.putAssumeCapacity(import_idx, module_env);
+                        break;
+                    }
+                }
             }
         }
 
-        const other_envs = try other_envs_list.toOwnedSlice();
-        return initWithModuleEnvs(allocator, env, module_envs, module_ids, other_envs, next_id, builtin_types);
+        return initWithModuleEnvs(allocator, env, module_envs, module_ids, import_envs, next_id, builtin_types);
     }
 
     /// Deinit the interpreter and also free the module maps if they were allocated by init()
     pub fn deinitAndFreeOtherEnvs(self: *Interpreter) void {
-        const other_envs = self.other_envs;
-        const allocator = self.allocator;
         self.deinit();
-        if (other_envs.len > 0) {
-            allocator.free(other_envs);
-        }
     }
 
     pub fn initWithModuleEnvs(
@@ -186,7 +190,7 @@ pub const Interpreter = struct {
         env: *can.ModuleEnv,
         module_envs: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv),
         module_ids: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, u32),
-        other_envs: []const *const can.ModuleEnv,
+        import_envs: std.AutoHashMapUnmanaged(can.CIR.Import.Idx, *const can.ModuleEnv),
         next_module_id: u32,
         builtin_types: BuiltinTypes,
     ) !Interpreter {
@@ -206,9 +210,9 @@ pub const Interpreter = struct {
             .env = env,
             .module_envs = module_envs,
             .module_ids = module_ids,
+            .import_envs = import_envs,
             .current_module_id = 0, // Current module always gets ID 0
             .next_module_id = next_module_id,
-            .other_envs = other_envs,
             .problems = try problem_mod.Store.initCapacity(allocator, 64),
             .snapshots = try snapshot_mod.Store.initCapacity(allocator, 256),
             .unify_scratch = try unify.Scratch.init(allocator),
@@ -1671,11 +1675,9 @@ pub const Interpreter = struct {
             },
             .e_lookup_external => |lookup| {
                 // Cross-module reference - look up in imported module
-                const import_idx: usize = @intFromEnum(lookup.module_idx);
-                if (import_idx >= self.other_envs.len) {
+                const other_env = self.import_envs.get(lookup.module_idx) orelse {
                     return error.NotImplemented;
-                }
-                const other_env = self.other_envs[import_idx];
+                };
 
                 // The target_node_idx is a Def.Idx in the other module
                 const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
@@ -3350,6 +3352,7 @@ pub const Interpreter = struct {
         self.poly_cache.deinit();
         self.module_envs.deinit(self.allocator);
         self.module_ids.deinit(self.allocator);
+        self.import_envs.deinit(self.allocator);
         self.var_to_layout_slot.deinit();
         self.runtime_layout_store.deinit();
         self.runtime_types.deinit();
