@@ -12,29 +12,9 @@ type=expr
 ]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - can_list_multiline_mismatch.md:2:5:2:5
+NIL
 # PROBLEMS
-**INCOMPATIBLE LIST ELEMENTS**
-The first two elements in this list have incompatible types:
-**can_list_multiline_mismatch.md:2:5:**
-```roc
-    42,
-    "hello world",
-```
-    ^^
-    ^^^^^^^^^^^^^
-
-The first element has this type:
-    _Num(_size)_
-
-However, the second element has this type:
-    _Str_
-
-All elements in a list must have compatible types.
-
-Note: You can wrap each element in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
-
+NIL
 # TOKENS
 ~~~zig
 OpenSquare,

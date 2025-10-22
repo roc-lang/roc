@@ -346,7 +346,7 @@ data = json
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "data"))
 		(e-runtime-error (tag "ident_not_in_scope"))
@@ -360,10 +360,10 @@ data = json
 (inferred-types
 	(defs
 		(patt (type "Error"))
-		(patt (type "Error -> Str"))
+		(patt (type "Error -> Error"))
 		(patt (type "Error")))
 	(expressions
 		(expr (type "Error"))
-		(expr (type "Error -> Str"))
+		(expr (type "Error -> Error"))
 		(expr (type "Error"))))
 ~~~

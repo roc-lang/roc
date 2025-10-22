@@ -167,8 +167,8 @@ main = (helper1(val), helper2(val))
 						(p-assign (ident "val"))))))
 		(annotation
 			(ty-tuple
-				(ty-lookup (name "Str") (builtin))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str"))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "BasicNoAnno.to_str"))
 		(e-closure
@@ -194,7 +194,7 @@ main = (helper1(val), helper2(val))
 		(ty-header (name "BasicNoAnno"))
 		(ty-tag-union
 			(ty-tag-name (name "Val")
-				(ty-lookup (name "Str") (builtin))))))
+				(ty-lookup (name "Str") (external-module "Str"))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -203,8 +203,8 @@ main = (helper1(val), helper2(val))
 		(patt (type "a -> b where [a.to_str : a -> b]"))
 		(patt (type "a -> b where [a.to_str2 : a -> b]"))
 		(patt (type "BasicNoAnno"))
-		(patt (type "(Str, Str)"))
-		(patt (type "BasicNoAnno -> Str"))
+		(patt (type "(Error, Error)"))
+		(patt (type "BasicNoAnno -> Error"))
 		(patt (type "a -> b where [a.to_str : a -> b]")))
 	(type_decls
 		(nominal (type "BasicNoAnno")
@@ -213,7 +213,7 @@ main = (helper1(val), helper2(val))
 		(expr (type "a -> b where [a.to_str : a -> b]"))
 		(expr (type "a -> b where [a.to_str2 : a -> b]"))
 		(expr (type "BasicNoAnno"))
-		(expr (type "(Str, Str)"))
-		(expr (type "BasicNoAnno -> Str"))
+		(expr (type "(Error, Error)"))
+		(expr (type "BasicNoAnno -> Error"))
 		(expr (type "a -> b where [a.to_str : a -> b]"))))
 ~~~

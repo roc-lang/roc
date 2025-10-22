@@ -14,7 +14,6 @@ value = "test"
 ~~~
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - test_error_propagation.md:1:1:1:1
-TYPE MISMATCH - test_error_propagation.md:6:9:6:15
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
@@ -26,20 +25,6 @@ BadBase := _
 ^
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**test_error_propagation.md:6:9:6:15:**
-```roc
-value = "test"
-```
-        ^^^^^^
-
-It has the type:
-    _Str_
-
-But the type annotation says it should have the type:
-    _GoodAlias_
 
 # TOKENS
 ~~~zig

@@ -21,8 +21,6 @@ goodValue = "test"
 ~~~
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - underscore_error_propagation.md:1:1:1:1
-TYPE MISMATCH - underscore_error_propagation.md:6:9:6:15
-TYPE MISMATCH - underscore_error_propagation.md:13:13:13:19
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
@@ -34,34 +32,6 @@ BadBase := _
 ^
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**underscore_error_propagation.md:6:9:6:15:**
-```roc
-value = "test"
-```
-        ^^^^^^
-
-It has the type:
-    _Str_
-
-But the type annotation says it should have the type:
-    _BadDerived_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**underscore_error_propagation.md:13:13:13:19:**
-```roc
-goodValue = "test"
-```
-            ^^^^^^
-
-It has the type:
-    _Str_
-
-But the type annotation says it should have the type:
-    _GoodDerived_
 
 # TOKENS
 ~~~zig
@@ -136,7 +106,7 @@ NO CHANGE
 		(ty-lookup (name "BadBase") (local)))
 	(s-nominal-decl
 		(ty-header (name "GoodBase"))
-		(ty-lookup (name "Str") (builtin)))
+		(ty-lookup (name "Str") (external-module "Str")))
 	(s-nominal-decl
 		(ty-header (name "GoodDerived"))
 		(ty-lookup (name "GoodBase") (local))))

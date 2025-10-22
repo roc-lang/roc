@@ -743,7 +743,7 @@ combineResults = |jsonResult, httpStatus|
 					(p-assign (ident "input")))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (external-module "Str"))
 				(ty-apply (name "Result") (external-module "Result")
 					(ty-malformed)
 					(ty-malformed)))))
@@ -875,7 +875,7 @@ combineResults = |jsonResult, httpStatus|
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "combineResults"))
 		(e-closure
@@ -954,7 +954,7 @@ combineResults = |jsonResult, httpStatus|
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str -> Error"))
+		(patt (type "Error -> Error"))
 		(patt (type "Error -> Error"))
 		(patt (type "Error, List(Error) -> Error"))
 		(patt (type "Error -> Error"))
@@ -964,7 +964,7 @@ combineResults = |jsonResult, httpStatus|
 		(alias (type "ServerConfig")
 			(ty-header (name "ServerConfig"))))
 	(expressions
-		(expr (type "Str -> Error"))
+		(expr (type "Error -> Error"))
 		(expr (type "Error -> Error"))
 		(expr (type "Error, List(Error) -> Error"))
 		(expr (type "Error -> Error"))

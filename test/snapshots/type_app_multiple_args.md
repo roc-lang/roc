@@ -106,10 +106,10 @@ NO CHANGE
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "Dict") (external-module "Dict")
-					(ty-lookup (name "Str") (builtin))
+					(ty-lookup (name "Str") (external-module "Str"))
 					(ty-lookup (name "U64") (builtin)))
 				(ty-apply (name "List") (builtin)
-					(ty-lookup (name "Str") (builtin))))))
+					(ty-lookup (name "Str") (external-module "Str"))))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-closure
@@ -134,9 +134,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> List(Str)"))
+		(patt (type "Error -> List(Error)"))
 		(patt (type "_arg -> Error")))
 	(expressions
-		(expr (type "Error -> List(Str)"))
+		(expr (type "Error -> List(Error)"))
 		(expr (type "_arg -> Error"))))
 ~~~

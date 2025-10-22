@@ -146,7 +146,7 @@ pub const Repl = struct {
         errdefer result_module.deinit();
 
         // Load Str module once at startup
-        const str_source = "Str := [].{}\n";
+        const str_source = "Str := [Internal].{\n}\n";
         var str_module = try loadCompiledModule(allocator, compiled_builtins.str_bin, "Str", str_source);
         errdefer str_module.deinit();
 

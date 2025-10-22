@@ -106,10 +106,10 @@ main! = |_| processNested([])
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
 					(ty-apply (name "Result") (external-module "Result")
-						(ty-lookup (name "Str") (builtin))
+						(ty-lookup (name "Str") (external-module "Str"))
 						(ty-malformed)))
 				(ty-apply (name "List") (builtin)
-					(ty-lookup (name "Str") (builtin))))))
+					(ty-lookup (name "Str") (external-module "Str"))))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-closure
@@ -127,9 +127,9 @@ main! = |_| processNested([])
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(Result(Str, Error)) -> List(Str)"))
-		(patt (type "_arg -> List(Str)")))
+		(patt (type "List(Result(Error, Error)) -> List(Error)"))
+		(patt (type "_arg -> List(Error)")))
 	(expressions
-		(expr (type "List(Result(Str, Error)) -> List(Str)"))
-		(expr (type "_arg -> List(Str)"))))
+		(expr (type "List(Result(Error, Error)) -> List(Error)"))
+		(expr (type "_arg -> List(Error)"))))
 ~~~

@@ -34,7 +34,6 @@ UNUSED VARIABLE - type_var_underscore_conventions.md:9:22:9:26
 UNUSED VARIABLE - type_var_underscore_conventions.md:13:17:13:18
 UNUSED VARIABLE - type_var_underscore_conventions.md:17:17:17:18
 UNUSED VARIABLE - type_var_underscore_conventions.md:22:9:22:10
-TYPE MISMATCH - type_var_underscore_conventions.md:9:28:9:37
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `x` is not used anywhere in your code.
@@ -95,20 +94,6 @@ main = |x| "done"
 ```
         ^
 
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_var_underscore_conventions.md:9:28:9:37:**
-```roc
-ending_underscore = |list| "default"
-```
-                           ^^^^^^^^^
-
-It has the type:
-    _Str_
-
-But the type annotation says it should have the type:
-    _elem__
 
 # TOKENS
 ~~~zig
@@ -232,7 +217,7 @@ NO CHANGE
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
 					(ty-rigid-var (name "elem")))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "ending_underscore"))
 		(e-lambda
@@ -256,7 +241,7 @@ NO CHANGE
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
 					(ty-rigid-var (name "bad_")))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "valid_single"))
 		(e-lambda
@@ -268,7 +253,7 @@ NO CHANGE
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
 					(ty-rigid-var (name "_elem")))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "valid_multi"))
 		(e-lambda
@@ -295,17 +280,17 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(elem) -> Str"))
-		(patt (type "List(elem_) -> Error"))
-		(patt (type "List(bad_) -> Str"))
-		(patt (type "List(_elem) -> Str"))
+		(patt (type "List(elem) -> Error"))
+		(patt (type "List(Error) -> Error"))
+		(patt (type "List(bad_) -> Error"))
+		(patt (type "List(_elem) -> Error"))
 		(patt (type "elem -> List(elem)"))
-		(patt (type "_arg -> Str")))
+		(patt (type "_arg -> Error")))
 	(expressions
-		(expr (type "List(elem) -> Str"))
-		(expr (type "List(elem_) -> Error"))
-		(expr (type "List(bad_) -> Str"))
-		(expr (type "List(_elem) -> Str"))
+		(expr (type "List(elem) -> Error"))
+		(expr (type "List(Error) -> Error"))
+		(expr (type "List(bad_) -> Error"))
+		(expr (type "List(_elem) -> Error"))
 		(expr (type "elem -> List(elem)"))
-		(expr (type "_arg -> Str"))))
+		(expr (type "_arg -> Error"))))
 ~~~

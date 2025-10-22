@@ -278,7 +278,7 @@ transform = |_, b| b
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
 					(ty-underscore))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "get_data"))
 		(e-lambda
@@ -328,8 +328,8 @@ transform = |_, b| b
 			(ty-fn (effectful false)
 				(ty-apply (name "Result") (external-module "Result")
 					(ty-underscore)
-					(ty-lookup (name "Str") (builtin)))
-				(ty-lookup (name "Str") (builtin)))))
+					(ty-lookup (name "Str") (external-module "Str")))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "map"))
 		(e-lambda
@@ -366,17 +366,17 @@ transform = |_, b| b
 	(defs
 		(patt (type "_arg -> _ret"))
 		(patt (type "a -> a"))
-		(patt (type "List(_elem) -> Str"))
+		(patt (type "List(_elem) -> Error"))
 		(patt (type "{ field: _field2, other: Num(Int(Unsigned32)) } -> Num(Int(Unsigned32))"))
-		(patt (type "Result(_c, Str) -> Str"))
+		(patt (type "Result(_c, Error) -> Error"))
 		(patt (type "a -> b, List(a) -> List(b)"))
 		(patt (type "_arg, c -> c")))
 	(expressions
 		(expr (type "_arg -> _ret"))
 		(expr (type "a -> a"))
-		(expr (type "List(_elem) -> Str"))
+		(expr (type "List(_elem) -> Error"))
 		(expr (type "{ field: _field2, other: Num(Int(Unsigned32)) } -> Num(Int(Unsigned32))"))
-		(expr (type "Result(_c, Str) -> Str"))
+		(expr (type "Result(_c, Error) -> Error"))
 		(expr (type "a -> b, List(a) -> List(b)"))
 		(expr (type "_arg, c -> c"))))
 ~~~

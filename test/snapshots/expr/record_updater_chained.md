@@ -119,13 +119,13 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{ age: Num(_size), city: Str, name: Str }"))
-		(patt (type "{ age: Num(_size), { age: Num(_size2), city: Str, name: Str } }"))
-		(patt (type "{ city: Str, age: Num(_size), { age: Num(_size2), city: Str, name: Str } }"))
-		(patt (type "{ age: Num(_size), name: Str, city: Str, age: Num(_size2), { age: Num(_size3), city: Str, name: Str } }")))
+		(patt (type "{ age: Num(_size), city: Error, name: Error }"))
+		(patt (type "{ age: Num(_size), { age: Num(_size2), city: Error, name: Error } }"))
+		(patt (type "{ city: Error, age: Num(_size), { age: Num(_size2), city: Error, name: Error } }"))
+		(patt (type "{ age: Num(_size), name: Error, city: Error, age: Num(_size2), { age: Num(_size3), city: Error, name: Error } }")))
 	(expressions
-		(expr (type "{ age: Num(_size), city: Str, name: Str }"))
-		(expr (type "{ age: Num(_size), { age: Num(_size2), city: Str, name: Str } }"))
-		(expr (type "{ city: Str, age: Num(_size), { age: Num(_size2), city: Str, name: Str } }"))
-		(expr (type "{ age: Num(_size), name: Str, city: Str, age: Num(_size2), { age: Num(_size3), city: Str, name: Str } }"))))
+		(expr (type "{ age: Num(_size), city: Error, name: Error }"))
+		(expr (type "{ age: Num(_size), { age: Num(_size2), city: Error, name: Error } }"))
+		(expr (type "{ city: Error, age: Num(_size), { age: Num(_size2), city: Error, name: Error } }"))
+		(expr (type "{ age: Num(_size), name: Error, city: Error, age: Num(_size2), { age: Num(_size3), city: Error, name: Error } }"))))
 ~~~

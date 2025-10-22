@@ -81,8 +81,8 @@ b! : Str => Str
 (can-ir
 	(s-type-anno (name "a!")
 		(ty-fn (effectful true)
-			(ty-lookup (name "Str") (builtin))
-			(ty-lookup (name "Str") (builtin)))))
+			(ty-lookup (name "Str") (external-module "Str"))
+			(ty-lookup (name "Str") (external-module "Str")))))
 ~~~
 # TYPES
 ~~~clojure

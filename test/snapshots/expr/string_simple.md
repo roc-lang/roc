@@ -32,5 +32,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Str"))
+(expr (type "Error"))
 ~~~

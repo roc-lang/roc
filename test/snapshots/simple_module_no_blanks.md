@@ -84,8 +84,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Error"))
-		(patt (type "Str")))
+		(patt (type "Error")))
 	(expressions
 		(expr (type "Error"))
-		(expr (type "Str"))))
+		(expr (type "Error"))))
 ~~~

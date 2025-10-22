@@ -76,8 +76,8 @@ NO CHANGE
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Str") (builtin))
-				(ty-lookup (name "Str") (builtin))))))
+				(ty-lookup (name "Str") (external-module "Str"))
+				(ty-lookup (name "Str") (external-module "Str"))))))
 ~~~
 # TYPES
 ~~~clojure

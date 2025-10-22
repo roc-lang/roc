@@ -61,5 +61,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ camelCase: Str, field123: Str, field_with_underscores: Str }"))
+(expr (type "{ camelCase: Error, field123: Error, field_with_underscores: Error }"))
 ~~~

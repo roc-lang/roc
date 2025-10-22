@@ -141,7 +141,6 @@ pub const Store = struct {
 
     fn deepCopyFlatType(self: *Self, store: *const TypesStore, flat_type: types.FlatType) std.mem.Allocator.Error!SnapshotFlatType {
         return switch (flat_type) {
-            .str => SnapshotFlatType.str,
             .box => |box_var| {
                 const deep_content = try self.deepCopyVar(store, box_var);
                 return SnapshotFlatType{ .box = deep_content };
@@ -484,7 +483,6 @@ pub const SnapshotAlias = struct {
 
 /// TODO
 pub const SnapshotFlatType = union(enum) {
-    str,
     box: SnapshotContentIdx, // Index into SnapshotStore.contents
     list: SnapshotContentIdx,
     list_unbound,
@@ -868,9 +866,6 @@ pub const SnapshotWriter = struct {
     /// Convert a flat type to a type string
     fn writeFlatType(self: *Self, flat_type: SnapshotFlatType, root_idx: SnapshotContentIdx) Allocator.Error!void {
         switch (flat_type) {
-            .str => {
-                _ = try self.buf.writer().write("Str");
-            },
             .box => |sub_var| {
                 _ = try self.buf.writer().write("Box(");
                 try self.writeWithContext(sub_var, .General, root_idx);
@@ -1313,7 +1308,7 @@ pub const SnapshotWriter = struct {
 
     fn countInFlatType(self: *Self, search_flex_var: Var, flat_type: SnapshotFlatType, count: *usize) std.mem.Allocator.Error!void {
         switch (flat_type) {
-            .str, .empty_record, .empty_tag_union => {},
+            .empty_record, .empty_tag_union => {},
             .box => |sub_idx| try self.countContent(search_flex_var, sub_idx, count),
             .list => |sub_idx| try self.countContent(search_flex_var, sub_idx, count),
             .list_unbound, .num => {},

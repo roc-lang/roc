@@ -196,7 +196,6 @@ fn copyFlatType(
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!FlatType {
     return switch (flat_type) {
-        .str => FlatType.str,
         .box => |box_var| FlatType{ .box = try copyVar(source_store, dest_store, box_var, var_mapping, source_idents, dest_idents, allocator) },
         .list => |list_var| FlatType{ .list = try copyVar(source_store, dest_store, list_var, var_mapping, source_idents, dest_idents, allocator) },
         .list_unbound => FlatType.list_unbound,

@@ -14,23 +14,8 @@ wrong_type_function : I64 -> I64
 wrong_type_function = |x| x * 3.14
 ~~~
 # EXPECTED
-TYPE MISMATCH - lambda_annotation_mismatch_error.md:3:27:3:29
 TYPE MISMATCH - lambda_annotation_mismatch_error.md:7:31:7:35
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**lambda_annotation_mismatch_error.md:3:27:3:29:**
-```roc
-string_function = |x| x + 42
-```
-                          ^^
-
-It has the type:
-    _Num(_size)_
-
-But the type annotation says it should have the type:
-    _Str_
-
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **lambda_annotation_mismatch_error.md:7:31:7:35:**
@@ -103,8 +88,8 @@ NO CHANGE
 				(e-num (value "42"))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Str") (builtin))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str"))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "wrong_type_function"))
 		(e-lambda
@@ -123,9 +108,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str -> Error"))
+		(patt (type "Error -> Error"))
 		(patt (type "Num(Int(Signed64)) -> Error")))
 	(expressions
-		(expr (type "Str -> Error"))
+		(expr (type "Error -> Error"))
 		(expr (type "Num(Int(Signed64)) -> Error"))))
 ~~~

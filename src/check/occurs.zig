@@ -160,7 +160,6 @@ const CheckOccurs = struct {
             switch (root.desc.content) {
                 .structure => |flat_type| {
                     switch (flat_type) {
-                        .str => {},
                         .box => |sub_var| {
                             try self.occursSubVar(root, sub_var, ctx.allowRecursion());
                         },
@@ -375,9 +374,9 @@ test "occurs: no recurcion (v = Str)" {
     var scratch = try Scratch.init(gpa);
     defer scratch.deinit();
 
-    const str_var = try types_store.freshFromContent(Content{ .structure = .str });
+    const simple_var = try types_store.freshFromContent(Content{ .structure = .empty_tag_union });
 
-    const result = occurs(&types_store, &scratch, str_var);
+    const result = occurs(&types_store, &scratch, simple_var);
     try std.testing.expectEqual(.not_recursive, result);
 }
 
@@ -438,7 +437,7 @@ test "occurs: no recursion through two levels (v1 = Box v2, v2 = Str)" {
     const v2 = try types_store.fresh();
 
     try types_store.setRootVarContent(v1, Content{ .structure = .{ .box = v2 } });
-    try types_store.setRootVarContent(v2, Content{ .structure = .str });
+    try types_store.setRootVarContent(v2, Content{ .structure = .empty_record });
 
     const result = occurs(&types_store, &scratch, v1);
     try std.testing.expectEqual(.not_recursive, result);
@@ -453,9 +452,9 @@ test "occurs: tuple recursion (v = Tuple(v, Str))" {
     defer scratch.deinit();
 
     const v = try types_store.fresh();
-    const str_var = try types_store.freshFromContent(Content{ .structure = .str });
+    const simple_var = try types_store.freshFromContent(Content{ .structure = .empty_tag_union });
 
-    const elems_range = try types_store.appendVars(&[_]Var{ v, str_var });
+    const elems_range = try types_store.appendVars(&[_]Var{ v, simple_var });
     const tuple = types.Tuple{ .elems = elems_range };
 
     try types_store.setRootVarContent(v, Content{ .structure = .{ .tuple = tuple } });
@@ -476,9 +475,9 @@ test "occurs: tuple not recursive (v = Tuple(Str, Str))" {
     var scratch = try Scratch.init(gpa);
     defer scratch.deinit();
 
-    const str_var = try types_store.freshFromContent(Content{ .structure = .str });
+    const simple_var = try types_store.freshFromContent(Content{ .structure = .empty_tag_union });
 
-    const elems_range = try types_store.appendVars(&[_]Var{ str_var, str_var });
+    const elems_range = try types_store.appendVars(&[_]Var{ simple_var, simple_var });
     const tuple = types.Tuple{ .elems = elems_range };
 
     const v = try types_store.freshFromContent(Content{ .structure = .{ .tuple = tuple } });
@@ -524,8 +523,8 @@ test "occurs: alias with no recursion (v = Alias Str)" {
     defer scratch.deinit();
 
     const alias_var = try types_store.fresh();
-    const backing_var = try types_store.freshFromContent(Content{ .structure = .str });
-    const arg_var = try types_store.freshFromContent(Content{ .structure = .str });
+    const backing_var = try types_store.freshFromContent(Content{ .structure = .empty_record });
+    const arg_var = try types_store.freshFromContent(Content{ .structure = .empty_record });
 
     try types_store.setRootVarContent(alias_var, try types_store.mkAlias(
         types.TypeIdent{ .ident_idx = undefined },

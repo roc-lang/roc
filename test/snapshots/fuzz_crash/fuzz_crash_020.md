@@ -188,7 +188,6 @@ UNDEFINED VARIABLE - fuzz_crash_020.md:120:1:120:2
 UNDEFINED VARIABLE - fuzz_crash_020.md:120:6:120:9
 EXPOSED BUT NOT DEFINED - fuzz_crash_020.md:2:6:2:11
 TOO FEW ARGS - fuzz_crash_020.md:17:3:18:4
-INCOMPATIBLE MATCH PATTERNS - fuzz_crash_020.md:52:2:52:2
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `match_branch_missing_arrow`
@@ -854,41 +853,6 @@ The type _List_ expects  argument, but got  instead.
 		List( #rg
 		),
 ```
-
-
-
-**INCOMPATIBLE MATCH PATTERNS**
-The pattern in the fourth branch of this `match` differs from previous ones:
-**fuzz_crash_020.md:52:2:**
-```roc
-	match a {lue  {
-	x
-		}
-		Blue=> {x
-			}
-	er #ent
-			1	"for" => 20[1, ] # t
-		ment
-		[1, 2, 3,est]123
-		[
-		] 23
-		3.1 314
-		3.14 | 6.28 => 314
-		(1, ) => 123
-		(1, 2, 3)123
-		{ 	} => 12
-		Ok(123) => 12
-	}
-```
-     ^^^^^
-
-The fourth pattern has this type:
-    _Str_
-
-But all the previous patterns have this type: 
-    _[Blue]_others_
-
-All patterns in an `match` must have compatible types.
 
 
 
@@ -1852,7 +1816,7 @@ expect {
 	(defs
 		(patt (type "Bool -> Num(_size)"))
 		(patt (type "[Rum]_others -> Error"))
-		(patt (type "[Blue]_others -> Error"))
+		(patt (type "Error -> Error"))
 		(patt (type "_arg -> [Stdo!(Error)]_others"))
 		(patt (type "{}")))
 	(type_decls
@@ -1884,7 +1848,7 @@ expect {
 	(expressions
 		(expr (type "Bool -> Num(_size)"))
 		(expr (type "[Rum]_others -> Error"))
-		(expr (type "[Blue]_others -> Error"))
+		(expr (type "Error -> Error"))
 		(expr (type "_arg -> [Stdo!(Error)]_others"))
 		(expr (type "{}"))))
 ~~~

@@ -24,10 +24,10 @@ main! = |_| getName({namee: "luke", age:21})
                     ^^^^^^^^^^^^^^^^^^^^^^^
 
 This argument has the type:
-    _{ age: Num(_size), namee: Str }_
+    _{ age: Num(_size), namee: Error }_
 
 But `getName` needs the first argument to be:
-    _{ age: Num(Int(Unsigned64)), name: Str }_
+    _{ age: Num(Int(Unsigned64)), name: Error }_
 
 # TOKENS
 ~~~zig
@@ -104,10 +104,10 @@ main! = |_| getName({ namee: "luke", age: 21 })
 			(ty-fn (effectful false)
 				(ty-record
 					(field (field "name")
-						(ty-lookup (name "Str") (builtin)))
+						(ty-lookup (name "Str") (external-module "Str")))
 					(field (field "age")
 						(ty-lookup (name "U64") (builtin))))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-closure
@@ -131,9 +131,9 @@ main! = |_| getName({ namee: "luke", age: 21 })
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{ age: Num(Int(Unsigned64)), name: Str } -> Str"))
+		(patt (type "{ age: Num(Int(Unsigned64)), name: Error } -> Error"))
 		(patt (type "_arg -> Error")))
 	(expressions
-		(expr (type "{ age: Num(Int(Unsigned64)), name: Str } -> Str"))
+		(expr (type "{ age: Num(Int(Unsigned64)), name: Error } -> Error"))
 		(expr (type "_arg -> Error"))))
 ~~~

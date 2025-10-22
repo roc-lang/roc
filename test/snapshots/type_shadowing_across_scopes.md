@@ -180,8 +180,8 @@ InnerModule :
 				(e-literal (string "processed"))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Str") (builtin))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str"))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(s-alias-decl
 		(ty-header (name "Result")
 			(ty-args
@@ -200,7 +200,7 @@ InnerModule :
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str -> Str")))
+		(patt (type "Error -> Error")))
 	(type_decls
 		(alias (type "Result(a, b)")
 			(ty-header (name "Result")
@@ -210,5 +210,5 @@ InnerModule :
 		(alias (type "InnerModule")
 			(ty-header (name "InnerModule"))))
 	(expressions
-		(expr (type "Str -> Str"))))
+		(expr (type "Error -> Error"))))
 ~~~

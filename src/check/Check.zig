@@ -592,15 +592,18 @@ fn updateVar(self: *Self, target_var: Var, content: types_mod.Content, rank: typ
 /// other modules directly. The Bool and Result types are used in language constructs like
 /// `if` conditions and need to be available in every module's type store.
 fn copyBuiltinTypes(self: *Self) !void {
-    // Find the Bool and Result modules in imported_modules
+    // Find the Bool, Result, and Str modules in imported_modules
     var bool_module: ?*const ModuleEnv = null;
     var result_module: ?*const ModuleEnv = null;
+    var str_module: ?*const ModuleEnv = null;
 
     for (self.imported_modules) |module_env| {
         if (std.mem.eql(u8, module_env.module_name, "Bool")) {
             bool_module = module_env;
         } else if (std.mem.eql(u8, module_env.module_name, "Result")) {
             result_module = module_env;
+        } else if (std.mem.eql(u8, module_env.module_name, "Str")) {
+            str_module = module_env;
         }
     }
 
@@ -616,10 +619,21 @@ fn copyBuiltinTypes(self: *Self) !void {
         self.bool_var = ModuleEnv.varFrom(bool_stmt_idx);
     }
 
-    // Copy Str type from current module's builtin statement
-    // Str is always loaded as a builtin statement (injected from Str.bin)
-    const str_stmt_idx = self.common_idents.str_stmt;
-    self.str_var = ModuleEnv.varFrom(str_stmt_idx);
+    // Copy Str type from Str module
+    if (str_module) |str_env| {
+        const str_stmt_idx = self.common_idents.str_stmt;
+        const str_type_var = ModuleEnv.varFrom(str_stmt_idx);
+        self.str_var = try self.copyVar(str_type_var, str_env, Region.zero());
+        std.debug.print("DEBUG: Copied Str from module, self.str_var={}\n", .{self.str_var});
+        const str_desc = self.types.resolveVar(self.str_var);
+        std.debug.print("DEBUG: str_desc.content after copy={}\n", .{str_desc.desc.content});
+    } else {
+        // If Str module not found, use the statement from the current module
+        // This happens when Str is loaded as a builtin statement
+        const str_stmt_idx = self.common_idents.str_stmt;
+        self.str_var = ModuleEnv.varFrom(str_stmt_idx);
+        std.debug.print("DEBUG: Str module NOT found, using stmt directly\n", .{});
+    }
 
     // Result type is accessed via external references, no need to copy it here
 }
@@ -631,9 +645,6 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 
     try ensureTypeStoreIsFilled(self);
 
-    // Copy builtin types (Bool, Result) into this module's type store
-    try self.copyBuiltinTypes();
-
     // First, iterate over the builtin statements, generating types for each type declaration
     const builtin_stmts_slice = self.cir.store.sliceStatements(self.cir.builtin_statements);
     for (builtin_stmts_slice) |builtin_stmt_idx| {
@@ -641,6 +652,11 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
         // The resulting generalized type is saved at the type var slot at `stmt_idx`
         try self.generateStmtTypeDeclType(builtin_stmt_idx);
     }
+
+    // Copy builtin types (Bool, Result, Str) into this module's type store
+    // This must happen AFTER builtin statements are processed so that if we're type-checking
+    // a builtin module itself (like Str.roc), its type declaration has already been processed
+    try self.copyBuiltinTypes();
 
     const stmts_slice = self.cir.store.sliceStatements(self.cir.all_statements);
 
@@ -702,9 +718,6 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
     try ensureTypeStoreIsFilled(self);
 
-    // Copy builtin types (Bool, Result) into this module's type store
-    try self.copyBuiltinTypes();
-
     // First, iterate over the statements, generating types for each type declaration
     const stms_slice = self.cir.store.sliceStatements(self.cir.builtin_statements);
     for (stms_slice) |stmt_idx| {
@@ -712,6 +725,10 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
         // The resulting generalized type is saved at the type var slot at `stmt_idx`
         try self.generateStmtTypeDeclType(stmt_idx);
     }
+
+    // Copy builtin types (Bool, Result, Str) into this module's type store
+    // This must happen AFTER builtin statements are processed
+    try self.copyBuiltinTypes();
 
     // Push the rank for this definition
     try self.var_pool.pushRank();
@@ -2091,7 +2108,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                 // If any segment errored, propgate that error to the root string
                 try self.updateVar(expr_var, .err, rank);
             } else {
-                // Otherwise, set the type of this expr to be string (using builtin Str type)
+                // Otherwise, set the type of this expr to be string (using builtin Str nominal type)
                 const str_type = try self.freshStr(rank, expr_region);
                 _ = try self.unify(expr_var, str_type, rank);
             }

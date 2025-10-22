@@ -187,7 +187,6 @@ UNDEFINED VARIABLE - fuzz_crash_019.md:120:1:120:2
 UNDEFINED VARIABLE - fuzz_crash_019.md:120:6:120:9
 EXPOSED BUT NOT DEFINED - fuzz_crash_019.md:2:6:2:11
 TOO FEW ARGS - fuzz_crash_019.md:17:3:18:4
-INCOMPATIBLE MATCH PATTERNS - fuzz_crash_019.md:52:2:52:2
 TYPE MISMATCH - fuzz_crash_019.md:84:2:86:3
 # PROBLEMS
 **PARSE ERROR**
@@ -846,41 +845,6 @@ The type _List_ expects  argument, but got  instead.
 
 
 
-**INCOMPATIBLE MATCH PATTERNS**
-The pattern in the fourth branch of this `match` differs from previous ones:
-**fuzz_crash_019.md:52:2:**
-```roc
-	match a {lue  {
-	x
-		}
-		Blue=> {x
-			}
-	er #ent
-			1	"for" => 20[1, ] # t
-		ment
-		[1, 2, 3,est]123
-		[
-		] 23
-		3.1 314
-		3.14 | 6.28 => 314
-		(1, ) => 123
-		(1, 2, 3)123
-		{ 	} => 12
-		Ok(123) => 12
-	}
-```
-     ^^^^^
-
-The fourth pattern has this type:
-    _Str_
-
-But all the previous patterns have this type: 
-    _[Blue]_others_
-
-All patterns in an `match` must have compatible types.
-
-
-
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **fuzz_crash_019.md:84:2:86:3:**
@@ -894,7 +858,7 @@ It has the type:
     __arg -> _ret_
 
 But I expected it to be:
-    _[Blue]_others, [Tb]_others2 -> Error_
+    _Error, [Tb]_others -> Error_
 
 # TOKENS
 ~~~zig
@@ -1860,7 +1824,7 @@ expect {
 	(defs
 		(patt (type "Bool -> Num(_size)"))
 		(patt (type "Bool -> Error"))
-		(patt (type "[Blue]_others, [Tb]_others2 -> Error"))
+		(patt (type "Error, [Tb]_others -> Error"))
 		(patt (type "_arg -> [Stdo!(Error)]_others"))
 		(patt (type "{}")))
 	(type_decls
@@ -1892,7 +1856,7 @@ expect {
 	(expressions
 		(expr (type "Bool -> Num(_size)"))
 		(expr (type "Bool -> Error"))
-		(expr (type "[Blue]_others, [Tb]_others2 -> Error"))
+		(expr (type "Error, [Tb]_others -> Error"))
 		(expr (type "_arg -> [Stdo!(Error)]_others"))
 		(expr (type "{}"))))
 ~~~

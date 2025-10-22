@@ -103,7 +103,7 @@ NO CHANGE
 					(p-assign (ident "msg")))))
 		(annotation
 			(ty-fn (effectful true)
-				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (external-module "Str"))
 				(ty-record))))
 	(d-let
 		(p-assign (ident "main!"))
@@ -119,9 +119,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str => Error"))
+		(patt (type "Error => Error"))
 		(patt (type "Error")))
 	(expressions
-		(expr (type "Str => Error"))
+		(expr (type "Error => Error"))
 		(expr (type "Error"))))
 ~~~

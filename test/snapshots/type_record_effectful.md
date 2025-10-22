@@ -137,10 +137,10 @@ main! = |_| {}
 			(ty-fn (effectful true)
 				(ty-record
 					(field (field "name")
-						(ty-lookup (name "Str") (builtin)))
+						(ty-lookup (name "Str") (external-module "Str")))
 					(field (field "age")
 						(ty-lookup (name "U64") (builtin))))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda
@@ -154,9 +154,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{ age: Num(Int(Unsigned64)), name: Str } => Str"))
+		(patt (type "{ age: Num(Int(Unsigned64)), name: Error } => Error"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "{ age: Num(Int(Unsigned64)), name: Str } => Str"))
+		(expr (type "{ age: Num(Int(Unsigned64)), name: Error } => Error"))
 		(expr (type "_arg -> {}"))))
 ~~~

@@ -149,7 +149,7 @@ foo =
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "Str"))))
+		(expr (type "Error"))))
 ~~~

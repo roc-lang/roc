@@ -145,9 +145,9 @@ NO CHANGE
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "MyResult") (local)
-					(ty-lookup (name "Str") (builtin))
+					(ty-lookup (name "Str") (external-module "Str"))
 					(ty-lookup (name "I32") (builtin)))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "getString"))
 		(e-lambda
@@ -158,8 +158,8 @@ NO CHANGE
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "Option") (local)
-					(ty-lookup (name "Str") (builtin)))
-				(ty-lookup (name "Str") (builtin)))))
+					(ty-lookup (name "Str") (external-module "Str")))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "getNumber"))
 		(e-lambda
@@ -200,8 +200,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "MyResult(Str, Num(Int(Signed32))) -> Str"))
-		(patt (type "Option(Str) -> Str"))
+		(patt (type "MyResult(Error, Num(Int(Signed32))) -> Error"))
+		(patt (type "Option(Error) -> Error"))
 		(patt (type "Option(Num(Int(Signed32))) -> Num(Int(Signed32))"))
 		(patt (type "_arg -> {}")))
 	(type_decls
@@ -215,8 +215,8 @@ NO CHANGE
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "MyResult(Str, Num(Int(Signed32))) -> Str"))
-		(expr (type "Option(Str) -> Str"))
+		(expr (type "MyResult(Error, Num(Int(Signed32))) -> Error"))
+		(expr (type "Option(Error) -> Error"))
 		(expr (type "Option(Num(Int(Signed32))) -> Num(Int(Signed32))"))
 		(expr (type "_arg -> {}"))))
 ~~~

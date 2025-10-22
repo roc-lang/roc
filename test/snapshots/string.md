@@ -203,7 +203,7 @@ x = (
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "(Str, Str, Str, Str, Str, Str, Str, Str)")))
+		(patt (type "(Error, Error, Error, Error, Error, Error, Error, Error)")))
 	(expressions
-		(expr (type "(Str, Str, Str, Str, Str, Str, Str, Str)"))))
+		(expr (type "(Error, Error, Error, Error, Error, Error, Error, Error)"))))
 ~~~

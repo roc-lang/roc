@@ -112,7 +112,7 @@ main =
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "main"))
 		(e-call
@@ -128,9 +128,9 @@ main =
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Str"))
-		(patt (type "Str")))
+		(patt (type "Error -> Error"))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "Error -> Str"))
-		(expr (type "Str"))))
+		(expr (type "Error -> Error"))
+		(expr (type "Error"))))
 ~~~

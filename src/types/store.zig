@@ -400,7 +400,6 @@ pub const Store = struct {
 
     pub fn needsInstantiationFlatType(self: *const Self, flat_type: FlatType) bool {
         return switch (flat_type) {
-            .str => false,
             .box => |box_var| self.needsInstantiation(box_var),
             .list => |list_var| self.needsInstantiation(list_var),
             .list_unbound => true,
@@ -1305,7 +1304,7 @@ test "Store comprehensive CompactWriter roundtrip" {
 
     // Create various types
     const flex = try original.fresh();
-    const str_var = try original.freshFromContent(Content{ .structure = .{ .str = {} } });
+    const simple_var = try original.freshFromContent(Content{ .structure = .empty_tag_union });
     const list_elem = try original.fresh();
     const list_var = try original.freshFromContent(Content{ .structure = .{ .list = list_elem } });
 
@@ -1367,8 +1366,8 @@ test "Store comprehensive CompactWriter roundtrip" {
     deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
 
     // Verify all types
-    const deser_str = deserialized.resolveVar(str_var);
-    try std.testing.expectEqual(Content{ .structure = .{ .str = {} } }, deser_str.desc.content);
+    const deser_str = deserialized.resolveVar(simple_var);
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, deser_str.desc.content);
 
     const deser_list = deserialized.resolveVar(list_var);
     try std.testing.expectEqual(FlatType{ .list = list_elem }, deser_list.desc.content.structure);
@@ -1486,7 +1485,7 @@ test "DescStore.Serialized roundtrip" {
         .mark = Mark.none,
     };
     const desc2 = Descriptor{
-        .content = Content{ .structure = .{ .str = {} } },
+        .content = Content{ .structure = .empty_record },
         .rank = Rank.top_level,
         .mark = Mark.visited,
     };
@@ -1545,7 +1544,7 @@ test "Store.Serialized roundtrip" {
 
     // Create some type variables
     const flex = try store.fresh();
-    const str_var = try store.freshFromContent(Content{ .structure = .{ .str = {} } });
+    const simple_var = try store.freshFromContent(Content{ .structure = .empty_tag_union });
     const redirect_var = try store.freshRedirect(flex);
 
     // Create temp file
@@ -1585,8 +1584,8 @@ test "Store.Serialized roundtrip" {
     const flex_resolved = deserialized.resolveVar(flex);
     try std.testing.expectEqual(Content{ .flex = Flex.init() }, flex_resolved.desc.content);
 
-    const str_resolved = deserialized.resolveVar(str_var);
-    try std.testing.expectEqual(Content{ .structure = .{ .str = {} } }, str_resolved.desc.content);
+    const str_resolved = deserialized.resolveVar(simple_var);
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, str_resolved.desc.content);
 
     const redirect_resolved = deserialized.resolveVar(redirect_var);
     try std.testing.expectEqual(flex_resolved.desc_idx, redirect_resolved.desc_idx);
@@ -1608,7 +1607,7 @@ test "Store multiple instances CompactWriter roundtrip" {
 
     // Populate differently
     const var1_1 = try store1.fresh();
-    const var1_2 = try store1.freshFromContent(Content{ .structure = .{ .str = {} } });
+    const var1_2 = try store1.freshFromContent(Content{ .structure = .empty_tag_union });
     _ = try store1.freshRedirect(var1_1);
 
     const var2_1 = try store2.fresh();
@@ -1666,7 +1665,7 @@ test "Store multiple instances CompactWriter roundtrip" {
     // Verify store 1
     try std.testing.expectEqual(@as(usize, 3), deserialized1.len());
     const deser1_var2 = deserialized1.resolveVar(var1_2);
-    try std.testing.expectEqual(Content{ .structure = .{ .str = {} } }, deser1_var2.desc.content);
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, deser1_var2.desc.content);
 
     // Verify store 2
     try std.testing.expectEqual(@as(usize, 3), deserialized2.len());
@@ -1684,7 +1683,7 @@ test "SlotStore and DescStore serialization and deserialization" {
 
     // Create several variables to populate SlotStore with roots
     const var1 = try original.freshFromContent(Content{ .flex = Flex.init() });
-    const var2 = try original.freshFromContent(Content{ .structure = .{ .str = {} } });
+    const var2 = try original.freshFromContent(Content{ .structure = .empty_tag_union });
     const var3 = try original.freshFromContent(Content{ .rigid = Rigid.init(@bitCast(@as(u32, 123))) });
 
     // Create redirects to populate SlotStore with redirects
@@ -1741,7 +1740,7 @@ test "SlotStore and DescStore serialization and deserialization" {
     try std.testing.expectEqual(Content{ .flex = Flex.init() }, resolved1.desc.content);
 
     const resolved2 = deserialized.resolveVar(var2);
-    try std.testing.expectEqual(Content{ .structure = .{ .str = {} } }, resolved2.desc.content);
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, resolved2.desc.content);
 
     const resolved3 = deserialized.resolveVar(var3);
     try std.testing.expectEqual(Content{ .rigid = Rigid.init(@bitCast(@as(u32, 123))) }, resolved3.desc.content);

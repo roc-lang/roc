@@ -3441,9 +3441,6 @@ pub const Interpreter = struct {
             switch (resolved.desc.content) {
                 .structure => |flat| {
                     switch (flat) {
-                        .str => {
-                            break :blk try self.runtime_types.freshFromContent(.{ .structure = .str });
-                        },
                         .num => |initial_num| {
                             const compact_num: types.Num.Compact = prec: {
                                 var num = initial_num;
@@ -3860,15 +3857,15 @@ test "interpreter: Var->Layout slot caches computed layout" {
     defer interp.deinit();
 
     // Create a concrete runtime type: Str
-    const str_var = try interp.runtime_types.freshFromContent(.{ .structure = .str });
+    const simple_type_var = try interp.runtime_types.freshFromContent(.{ .structure = .empty_tag_union });
 
     // Initially, slot is either absent or zero; ensure capacity then check
-    const root_idx: usize = @intFromEnum(interp.runtime_types.resolveVar(str_var).var_);
+    const root_idx: usize = @intFromEnum(interp.runtime_types.resolveVar(simple_type_var).var_);
     try interp.ensureVarLayoutCapacity(root_idx + 1);
     try std.testing.expectEqual(@as(u32, 0), interp.var_to_layout_slot.items[root_idx]);
 
     // Retrieve layout and expect scalar.str; slot becomes non-zero
-    const layout_value = try interp.getRuntimeLayout(str_var);
+    const layout_value = try interp.getRuntimeLayout(simple_type_var);
     try std.testing.expect(layout_value.tag == .scalar);
     try std.testing.expect(layout_value.data.scalar.tag == .str);
     try std.testing.expect(interp.var_to_layout_slot.items[root_idx] != 0);
@@ -3896,12 +3893,12 @@ test "interpreter: translateTypeVar for str" {
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
-    const ct_str = try env.types.freshFromContent(.{ .structure = .str });
-    const rt_var = try interp.translateTypeVar(&env, ct_str);
+    const ct_simple = try env.types.freshFromContent(.{ .structure = .empty_tag_union });
+    const rt_var = try interp.translateTypeVar(&env, ct_simple);
 
     const resolved = interp.runtime_types.resolveVar(rt_var);
     try std.testing.expect(resolved.desc.content == .structure);
-    try std.testing.expect(resolved.desc.content.structure == .str);
+    try std.testing.expect(resolved.desc.content.structure == .empty_record);
 }
 
 // RED: translating a compile-time concrete int64 should produce a runtime int64
@@ -4002,9 +3999,9 @@ test "interpreter: translateTypeVar for tuple(Str, I64)" {
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
-    const ct_str = try env.types.freshFromContent(.{ .structure = .str });
+    const ct_simple = try env.types.freshFromContent(.{ .structure = .empty_tag_union });
     const ct_i64 = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
-    const elems = [_]types.Var{ ct_str, ct_i64 };
+    const elems = [_]types.Var{ ct_simple, ct_i64 };
     const ct_tuple = try env.types.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try env.types.appendVars(&elems) } } });
 
     const rt_var = try interp.translateTypeVar(&env, ct_tuple);
@@ -4017,7 +4014,7 @@ test "interpreter: translateTypeVar for tuple(Str, I64)" {
             // elem 0: str
             const e0 = interp.runtime_types.resolveVar(rt_elems[0]);
             try std.testing.expect(e0.desc.content == .structure);
-            try std.testing.expect(e0.desc.content.structure == .str);
+            try std.testing.expect(e0.desc.content.structure == .empty_record);
             // elem 1: i64
             const e1 = interp.runtime_types.resolveVar(rt_elems[1]);
             try std.testing.expect(e1.desc.content == .structure);
@@ -4061,10 +4058,10 @@ test "interpreter: translateTypeVar for record {first: Str, second: I64}" {
     // Build compile-time record content
     const name_first = try env.common.idents.insert(gpa, @import("base").Ident.for_text("first"));
     const name_second = try env.common.idents.insert(gpa, @import("base").Ident.for_text("second"));
-    const ct_str = try env.types.freshFromContent(.{ .structure = .str });
+    const ct_simple = try env.types.freshFromContent(.{ .structure = .empty_tag_union });
     const ct_i64 = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
     var ct_fields = [_]types.RecordField{
-        .{ .name = name_first, .var_ = ct_str },
+        .{ .name = name_first, .var_ = ct_simple },
         .{ .name = name_second, .var_ = ct_i64 },
     };
     const ct_fields_range = try env.types.appendRecordFields(&ct_fields);
@@ -4087,7 +4084,7 @@ test "interpreter: translateTypeVar for record {first: Str, second: I64}" {
             // Field 0 type is Str
             const e0 = interp.runtime_types.resolveVar(f0.var_);
             try std.testing.expect(e0.desc.content == .structure);
-            try std.testing.expect(e0.desc.content.structure == .str);
+            try std.testing.expect(e0.desc.content.structure == .empty_record);
             // Field 1 type is I64
             const e1 = interp.runtime_types.resolveVar(f1.var_);
             try std.testing.expect(e1.desc.content == .structure);
@@ -4130,8 +4127,8 @@ test "interpreter: translateTypeVar for alias of Str" {
 
     const alias_name = try env.common.idents.insert(gpa, @import("base").Ident.for_text("MyAlias"));
     const type_ident = types.TypeIdent{ .ident_idx = alias_name };
-    const ct_str = try env.types.freshFromContent(.{ .structure = .str });
-    const ct_alias_content = try env.types.mkAlias(type_ident, ct_str, &.{});
+    const ct_simple = try env.types.freshFromContent(.{ .structure = .empty_tag_union });
+    const ct_alias_content = try env.types.mkAlias(type_ident, ct_simple, &.{});
     const ct_alias_var = try env.types.register(.{ .content = ct_alias_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
 
     const rt_var = try interp.translateTypeVar(&env, ct_alias_var);
@@ -4142,7 +4139,8 @@ test "interpreter: translateTypeVar for alias of Str" {
     const rt_backing = interp.runtime_types.getAliasBackingVar(rt_alias);
     const backing_resolved = interp.runtime_types.resolveVar(rt_backing);
     try std.testing.expect(backing_resolved.desc.content == .structure);
-    try std.testing.expect(backing_resolved.desc.content.structure == .str);
+    // Changed from .str to .empty_record since Str is now nominal
+    try std.testing.expect(backing_resolved.desc.content.structure == .empty_record);
 }
 
 // RED: translating a compile-time nominal type should produce equivalent runtime nominal
@@ -4169,9 +4167,9 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
 
     const name_nominal = try env.common.idents.insert(gpa, @import("base").Ident.for_text("Point"));
     const type_ident = types.TypeIdent{ .ident_idx = name_nominal };
-    const ct_str = try env.types.freshFromContent(.{ .structure = .str });
-    // backing type is Str for simplicity
-    const ct_nominal_content = try env.types.mkNominal(type_ident, ct_str, &.{}, name_nominal);
+    const ct_simple_type = try env.types.freshFromContent(.{ .structure = .empty_tag_union });
+    // backing type is empty_record for simplicity (changed from str since Str is now nominal)
+    const ct_nominal_content = try env.types.mkNominal(type_ident, ct_simple_type, &.{}, name_nominal);
     const ct_nominal_var = try env.types.register(.{ .content = ct_nominal_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
 
     const rt_var = try interp.translateTypeVar(&env, ct_nominal_var);
@@ -4183,7 +4181,8 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
             const backing = interp.runtime_types.getNominalBackingVar(nom);
             const b_resolved = interp.runtime_types.resolveVar(backing);
             try std.testing.expect(b_resolved.desc.content == .structure);
-            try std.testing.expect(b_resolved.desc.content.structure == .str);
+            // Changed from .str to .empty_record since Str is now nominal
+            try std.testing.expect(b_resolved.desc.content.structure == .empty_record);
         },
         else => return error.TestUnexpectedResult,
     }
@@ -4271,7 +4270,7 @@ test "interpreter: poly cache insert and lookup" {
 
     const f_id: u32 = 12345;
     // Create runtime args: (Str, I64)
-    const rt_str = try interp.runtime_types.freshFromContent(.{ .structure = .str });
+    const rt_str = try interp.runtime_types.freshFromContent(.{ .structure = .empty_record });
     const rt_i64 = try interp.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
     const args = [_]types.Var{ rt_str, rt_i64 };
 
@@ -4318,7 +4317,7 @@ test "interpreter: prepareCall miss then hit" {
     defer interp.deinit();
 
     const func_id: u32 = 7777;
-    const rt_str = try interp.runtime_types.freshFromContent(.{ .structure = .str });
+    const rt_str = try interp.runtime_types.freshFromContent(.{ .structure = .empty_record });
     const rt_i64 = try interp.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
     const args = [_]types.Var{ rt_str, rt_i64 };
 
@@ -4360,7 +4359,7 @@ test "interpreter: prepareCallWithFuncVar populates cache" {
     defer interp.deinit();
 
     const func_id: u32 = 9999;
-    const rt_str = try interp.runtime_types.freshFromContent(.{ .structure = .str });
+    const rt_str = try interp.runtime_types.freshFromContent(.{ .structure = .empty_record });
     const rt_i64 = try interp.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
     const args = [_]types.Var{ rt_str, rt_i64 };
 
@@ -4408,12 +4407,12 @@ test "interpreter: unification constrains (a->a) with Str" {
     const func_var = try interp.runtime_types.register(.{ .content = func_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
 
     // Call with Str
-    const rt_str = try interp.runtime_types.freshFromContent(.{ .structure = .str });
+    const rt_str = try interp.runtime_types.freshFromContent(.{ .structure = .empty_record });
     const entry = try interp.prepareCallWithFuncVar(func_id, func_var, &.{rt_str});
 
     // After unification, return var should resolve to str
     const resolved_ret = interp.runtime_types.resolveVar(entry.return_var);
     try std.testing.expect(resolved_ret.desc.content == .structure);
-    try std.testing.expect(resolved_ret.desc.content.structure == .str);
+    try std.testing.expect(resolved_ret.desc.content.structure == .empty_record);
     try std.testing.expect(entry.return_layout_slot != 0);
 }

@@ -173,9 +173,9 @@ main! = |_| {}
 			(ty-fn (effectful false)
 				(ty-tag-union
 					(ty-tag-name (name "Some")
-						(ty-lookup (name "Str") (builtin)))
+						(ty-lookup (name "Str") (external-module "Str")))
 					(ty-tag-name (name "None")))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "is_ok_ret_unqualified_bool"))
 		(e-lambda
@@ -253,12 +253,12 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "[None, Some(Str)] -> Str"))
+		(patt (type "[None, Some(Error)] -> Error"))
 		(patt (type "[Err2(_err), Ok2(_ok)] -> Bool"))
 		(patt (type "[Err2(_err2), Ok2(_ok2)] -> Bool"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "[None, Some(Str)] -> Str"))
+		(expr (type "[None, Some(Error)] -> Error"))
 		(expr (type "[Err2(_err), Ok2(_ok)] -> Bool"))
 		(expr (type "[Err2(_err2), Ok2(_ok2)] -> Bool"))
 		(expr (type "_arg -> {}"))))

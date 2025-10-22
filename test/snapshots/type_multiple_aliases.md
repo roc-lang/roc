@@ -202,7 +202,7 @@ NO CHANGE
 		(ty-lookup (name "U64") (builtin)))
 	(s-alias-decl
 		(ty-header (name "UserName"))
-		(ty-lookup (name "Str") (builtin)))
+		(ty-lookup (name "Str") (external-module "Str")))
 	(s-alias-decl
 		(ty-header (name "UserAge"))
 		(ty-lookup (name "U8") (builtin)))
@@ -222,7 +222,7 @@ NO CHANGE
 	(defs
 		(patt (type "UserId, UserName, UserAge -> User"))
 		(patt (type "User -> UserName"))
-		(patt (type "_arg -> UserName")))
+		(patt (type "_arg -> Error")))
 	(type_decls
 		(alias (type "UserId")
 			(ty-header (name "UserId")))
@@ -235,5 +235,5 @@ NO CHANGE
 	(expressions
 		(expr (type "UserId, UserName, UserAge -> User"))
 		(expr (type "User -> UserName"))
-		(expr (type "_arg -> UserName"))))
+		(expr (type "_arg -> Error"))))
 ~~~

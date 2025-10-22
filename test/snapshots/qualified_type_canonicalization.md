@@ -523,7 +523,7 @@ transform = |result|
 		(annotation
 			(ty-apply (name "Result") (external-module "Result")
 				(ty-lookup (name "I32") (builtin))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "getColor"))
 		(e-lambda
@@ -544,7 +544,7 @@ transform = |result|
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "RGB") (external-module "Color"))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "transform"))
 		(e-closure
@@ -594,16 +594,16 @@ transform = |result|
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "Error"))
-		(patt (type "Result(Num(Int(Signed32)), Str)"))
+		(patt (type "Result(Num(Int(Signed32)), Error)"))
 		(patt (type "{  } -> Error"))
-		(patt (type "Error -> Str"))
+		(patt (type "Error -> Error"))
 		(patt (type "Result(Error, Error) -> Error")))
 	(expressions
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))
-		(expr (type "Result(Num(Int(Signed32)), Str)"))
+		(expr (type "Result(Num(Int(Signed32)), Error)"))
 		(expr (type "{  } -> Error"))
-		(expr (type "Error -> Str"))
+		(expr (type "Error -> Error"))
 		(expr (type "Result(Error, Error) -> Error"))))
 ~~~

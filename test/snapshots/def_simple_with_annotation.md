@@ -42,13 +42,13 @@ NO CHANGE
 		(e-string
 			(e-literal (string "one")))
 		(annotation
-			(ty-lookup (name "Str") (builtin)))))
+			(ty-lookup (name "Str") (external-module "Str")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "Str"))))
+		(expr (type "Error"))))
 ~~~

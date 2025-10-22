@@ -158,7 +158,7 @@ baz = { field: "hi", other: 5 }
       ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _{ field: Str, other: Num(_size) }_
+    _{ field: Error, other: Num(_size) }_
 
 But the type annotation says it should have the type:
     _BadRecord_
@@ -186,7 +186,7 @@ quux = ("hello", 42)
        ^^^^^^^^^^^^^
 
 It has the type:
-    _(Str, Num(_size))_
+    _(Error, Num(_size))_
 
 But the type annotation says it should have the type:
     _BadTuple_

@@ -75,9 +75,9 @@ updated = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{ age: Num(_size), name: Str }"))
-		(patt (type "{ age: Num(_size), { age: Num(_size2), name: Str } }")))
+		(patt (type "{ age: Num(_size), name: Error }"))
+		(patt (type "{ age: Num(_size), { age: Num(_size2), name: Error } }")))
 	(expressions
-		(expr (type "{ age: Num(_size), name: Str }"))
-		(expr (type "{ age: Num(_size), { age: Num(_size2), name: Str } }"))))
+		(expr (type "{ age: Num(_size), name: Error }"))
+		(expr (type "{ age: Num(_size), { age: Num(_size2), name: Error } }"))))
 ~~~

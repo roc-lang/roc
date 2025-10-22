@@ -37,5 +37,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ name: Str }"))
+(expr (type "{ name: Error }"))
 ~~~

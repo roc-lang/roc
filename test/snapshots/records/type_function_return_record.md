@@ -41,11 +41,11 @@ NO CHANGE
 (can-ir
 	(s-type-anno (name "create_user!")
 		(ty-fn (effectful true)
-			(ty-lookup (name "Str") (builtin))
+			(ty-lookup (name "Str") (external-module "Str"))
 			(ty-lookup (name "U32") (builtin))
 			(ty-record
 				(field (field "name")
-					(ty-lookup (name "Str") (builtin)))
+					(ty-lookup (name "Str") (external-module "Str")))
 				(field (field "age")
 					(ty-lookup (name "U32") (builtin)))
 				(field (field "id")

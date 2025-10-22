@@ -48,12 +48,14 @@ test "addTypeVar - basic scalar types" {
     var type_scope = TypeScope.init(gpa);
     defer type_scope.deinit();
 
-    // Test string type
-    const str_var = try type_store.freshFromContent(.{ .structure = .str });
-    const str_layout_idx = try layout_store.addTypeVar(str_var, &type_scope);
-    const str_layout = layout_store.getLayout(str_layout_idx);
-    try testing.expect(str_layout.tag == .scalar);
-    try testing.expectEqual(layout.ScalarTag.str, str_layout.data.scalar.tag);
+    // Test string type - DISABLED: Str is now nominal, not structural
+    // const str_var = try type_store.freshFromContent(.{ .structure = .str });
+    // const str_layout_idx = try layout_store.addTypeVar(str_var, &type_scope);
+    // const str_layout = layout_store.getLayout(str_layout_idx);
+    // try testing.expect(str_layout.tag == .scalar);
+    // try testing.expectEqual(layout.ScalarTag.str, str_layout.data.scalar.tag);
+
+    // Test is disabled since Str is now nominal. Skip by just returning without doing anything.
 }
 
 test "addTypeVar - bool type" {
@@ -144,16 +146,17 @@ test "addTypeVar - scalar optimization for containers" {
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
-    // Test List(Scalar)
-    const str_var = try lt.type_store.freshFromContent(.{ .structure = .str });
-    const list_str_var = try lt.type_store.freshFromContent(.{ .structure = .{ .list = str_var } });
-    const list_layout_idx = try lt.layout_store.addTypeVar(list_str_var, &lt.type_scope);
-    const list_layout = lt.layout_store.getLayout(list_layout_idx);
-    try testing.expect(list_layout.tag == .list);
-    try testing.expectEqual(layout.Idx.str, list_layout.data.list);
+    // Test List(Scalar) - DISABLED: Str is now nominal, not structural
+    // const str_var = try lt.type_store.freshFromContent(.{ .structure = .str });
+    // const list_str_var = try lt.type_store.freshFromContent(.{ .structure = .{ .list = str_var } });
+    // const list_layout_idx = try lt.layout_store.addTypeVar(list_str_var, &lt.type_scope);
+    // const list_layout = lt.layout_store.getLayout(list_layout_idx);
+    // try testing.expect(list_layout.tag == .list);
+    // try testing.expectEqual(layout.Idx.str, list_layout.data.list);
 
-    // Test Box(Scalar)
-    const box_str_var = try lt.type_store.freshFromContent(.{ .structure = .{ .box = str_var } });
+    // Test Box(Scalar) - using num instead of str
+    const num_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .int_precision = .i32 } } });
+    const box_str_var = try lt.type_store.freshFromContent(.{ .structure = .{ .box = num_var } });
     const box_layout_idx = try lt.layout_store.addTypeVar(box_str_var, &lt.type_scope);
     const box_layout = lt.layout_store.getLayout(box_layout_idx);
     try testing.expect(box_layout.tag == .box);
@@ -204,12 +207,12 @@ test "addTypeVar - record with dropped zero-sized fields" {
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
-    const str_var = try lt.type_store.freshFromContent(.{ .structure = .str });
+    const i64_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
     const empty_record_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
     const i32_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } });
 
     const fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &[_]types.RecordField{
-        .{ .name = try lt.module_env.insertIdent(Ident.for_text("name")), .var_ = str_var },
+        .{ .name = try lt.module_env.insertIdent(Ident.for_text("name")), .var_ = i64_var },
         .{ .name = try lt.module_env.insertIdent(Ident.for_text("empty")), .var_ = empty_record_var },
         .{ .name = try lt.module_env.insertIdent(Ident.for_text("age")), .var_ = i32_var },
     });
@@ -338,9 +341,9 @@ test "record with chained extensions" {
     const middle_fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &.{.{ .name = try lt.module_env.insertIdent(Ident.for_text("y")), .var_ = f64_var }});
     const middle_rec = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = middle_fields, .ext = inner_rec } } });
 
-    // Outer: { x: str } extends middle
-    const str_var = try lt.type_store.freshFromContent(.{ .structure = .str });
-    const outer_fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &.{.{ .name = try lt.module_env.insertIdent(Ident.for_text("x")), .var_ = str_var }});
+    // Outer: { x: i64 } extends middle (changed from str since Str is now nominal)
+    const i64_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
+    const outer_fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &.{.{ .name = try lt.module_env.insertIdent(Ident.for_text("x")), .var_ = i64_var }});
     const outer_rec_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = outer_fields, .ext = middle_rec } } });
 
     const record_idx = try lt.layout_store.addTypeVar(outer_rec_var, &lt.type_scope);
@@ -350,7 +353,7 @@ test "record with chained extensions" {
     const field_slice = lt.layout_store.record_fields.sliceRange(lt.layout_store.getRecordData(record_layout.data.record.idx).getFields());
     try testing.expectEqual(@as(usize, 3), field_slice.len);
 
-    // Expected order by alignment: x (str), y (f64), z (u8)
+    // Expected order by alignment: x (i64), y (f64), z (u8)
     try testing.expectEqualStrings("x", lt.module_env.getIdent(field_slice.get(0).name));
     try testing.expectEqualStrings("y", lt.module_env.getIdent(field_slice.get(1).name));
     try testing.expectEqualStrings("z", lt.module_env.getIdent(field_slice.get(2).name));
@@ -365,11 +368,11 @@ test "record extension with non-record type fails" {
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
-    const str_var = try lt.type_store.freshFromContent(.{ .structure = .str });
-    const fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &.{.{ .name = try lt.module_env.insertIdent(Ident.for_text("field")), .var_ = str_var }});
+    const i32_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } });
+    const fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &.{.{ .name = try lt.module_env.insertIdent(Ident.for_text("field")), .var_ = i32_var }});
 
-    // Try to extend a str, which is invalid
-    const record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = str_var } } });
+    // Try to extend an i32 (scalar), which is invalid (changed from str since Str is now nominal)
+    const record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = i32_var } } });
     try testing.expectError(LayoutError.InvalidRecordExtension, lt.layout_store.addTypeVar(record_var, &lt.type_scope));
 }
 

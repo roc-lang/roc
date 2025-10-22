@@ -127,7 +127,7 @@ AnotherType : SomeModule.MissingType
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(s-alias-decl
 		(ty-header (name "MyType"))
 		(ty-malformed))
@@ -139,12 +139,12 @@ AnotherType : SomeModule.MissingType
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Str")))
+		(patt (type "Error -> Error")))
 	(type_decls
 		(alias (type "MyType")
 			(ty-header (name "MyType")))
 		(alias (type "AnotherType")
 			(ty-header (name "AnotherType"))))
 	(expressions
-		(expr (type "Error -> Str"))))
+		(expr (type "Error -> Error"))))
 ~~~

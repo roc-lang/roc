@@ -84,5 +84,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ age: Num(_size), balance: Error, email: Error, name: Error, status: Str }"))
+(expr (type "{ age: Num(_size), balance: Error, email: Error, name: Error, status: Error }"))
 ~~~

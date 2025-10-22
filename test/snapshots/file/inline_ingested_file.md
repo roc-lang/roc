@@ -137,7 +137,7 @@ foo = Json.parse(data)
 			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-runtime-error (tag "ident_not_in_scope"))))
 	(s-type-anno (name "data")
-		(ty-lookup (name "Str") (builtin)))
+		(ty-lookup (name "Str") (external-module "Str")))
 	(s-import (module "Json")
 		(exposes)))
 ~~~

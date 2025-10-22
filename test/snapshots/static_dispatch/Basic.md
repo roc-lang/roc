@@ -230,8 +230,8 @@ main = (helper1(val), helper2(val))
 						(p-assign (ident "val"))))))
 		(annotation
 			(ty-tuple
-				(ty-lookup (name "Str") (builtin))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str"))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "Basic.to_str"))
 		(e-closure
@@ -246,7 +246,7 @@ main = (helper1(val), helper2(val))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Basic") (local))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "Basic.to_str2"))
 		(e-lambda
@@ -260,12 +260,12 @@ main = (helper1(val), helper2(val))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Basic") (local))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(s-nominal-decl
 		(ty-header (name "Basic"))
 		(ty-tag-union
 			(ty-tag-name (name "Val")
-				(ty-lookup (name "Str") (builtin))))))
+				(ty-lookup (name "Str") (external-module "Str"))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -274,9 +274,9 @@ main = (helper1(val), helper2(val))
 		(patt (type "a -> b where [a.to_str : a -> b]"))
 		(patt (type "a -> b where [a.to_str2 : a -> b]"))
 		(patt (type "Basic"))
-		(patt (type "(Str, Str)"))
-		(patt (type "Basic -> Str"))
-		(patt (type "Basic -> Str")))
+		(patt (type "(Error, Error)"))
+		(patt (type "Basic -> Error"))
+		(patt (type "Basic -> Error")))
 	(type_decls
 		(nominal (type "Basic")
 			(ty-header (name "Basic"))))
@@ -284,7 +284,7 @@ main = (helper1(val), helper2(val))
 		(expr (type "a -> b where [a.to_str : a -> b]"))
 		(expr (type "a -> b where [a.to_str2 : a -> b]"))
 		(expr (type "Basic"))
-		(expr (type "(Str, Str)"))
-		(expr (type "Basic -> Str"))
-		(expr (type "Basic -> Str"))))
+		(expr (type "(Error, Error)"))
+		(expr (type "Basic -> Error"))
+		(expr (type "Basic -> Error"))))
 ~~~

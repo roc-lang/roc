@@ -739,22 +739,6 @@ const Unifier = struct {
         defer trace.end();
 
         switch (a_flat_type) {
-            .str => {
-                switch (b_flat_type) {
-                    .str => self.merge(vars, vars.b.desc.content),
-                    .nominal_type => |b_type| {
-                        const b_backing_var = self.types_store.getNominalBackingVar(b_type);
-                        const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
-                        if (b_backing_resolved.desc.content == .err) {
-                            // Invalid nominal type - treat as transparent
-                            self.merge(vars, vars.a.desc.content);
-                            return;
-                        }
-                        return error.TypeMismatch;
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
             .box => |a_var| {
                 switch (b_flat_type) {
                     .box => |b_var| {

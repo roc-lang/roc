@@ -152,5 +152,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ address: { city: Str, coordinates: { lat: Num(Frac(_size)), lng: Num(Frac(_size2)) }, street: Str }, contact: { email: Str, phone: { home: Str, work: Str } }, person: { age: Num(_size3), name: Str }, Error }"))
+(expr (type "{ address: { city: Error, coordinates: { lat: Num(Frac(_size)), lng: Num(Frac(_size2)) }, street: Error }, contact: { email: Error, phone: { home: Error, work: Error } }, person: { age: Num(_size3), name: Error }, Error }"))
 ~~~

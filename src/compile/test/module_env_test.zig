@@ -396,11 +396,11 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
 
     // Add a string segment expression
     const segment_idx = try env.addExpr(.{ .e_str_segment = .{ .literal = str_literal_idx } }, base.Region.from_raw_offsets(0, 5));
-    _ = try env.types.freshFromContent(.{ .structure = .str });
+    // Str is now nominal, not structural: _ = try env.types.freshFromContent(.{ .structure = .str });
 
     // Now create a string expression that references the segment
     const expr_idx = try env.addExpr(.{ .e_str = .{ .span = Expr.Span{ .span = base.DataSpan{ .start = @intFromEnum(segment_idx), .len = 1 } } } }, base.Region.from_raw_offsets(0, 5));
-    _ = try env.types.freshFromContent(.{ .structure = .str });
+    // Str is now nominal, not structural: _ = try env.types.freshFromContent(.{ .structure = .str });
 
     // Create an S-expression tree
     var tree = base.SExprTree.init(gpa);

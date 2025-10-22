@@ -13,24 +13,9 @@ type=expr
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - test_instantiated_arg_mismatch.md:5:10:5:10
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-The first and second arguments to `pair` must have compatible types, but they are incompatible in this call:
-**test_instantiated_arg_mismatch.md:5:10:**
-```roc
-    pair(42, "hello")
-```
-         ^^  ^^^^^^^
-
-The first argument has the type:
-    _Num(_size)_
-
-But the second argument has the type:
-    _Str_
-
-`pair` needs these arguments to have compatible types.
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly,

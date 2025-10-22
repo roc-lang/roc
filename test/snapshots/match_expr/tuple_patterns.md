@@ -135,5 +135,5 @@ match coord {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Str"))
+(expr (type "Error"))
 ~~~

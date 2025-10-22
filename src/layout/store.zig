@@ -853,7 +853,6 @@ pub const Store = struct {
 
             var layout = switch (current.desc.content) {
                 .structure => |flat_type| flat_type: switch (flat_type) {
-                    .str => Layout.str(),
                     .box => |elem_var| {
                         try self.work.pending_containers.append(self.env.gpa, .{
                             .var_ = current.var_,
