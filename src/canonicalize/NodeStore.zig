@@ -128,7 +128,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 56;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 57;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 33;
 /// Count of the statement nodes in the ModuleEnv
@@ -2831,6 +2831,12 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             node.data_1 = @as(u32, @bitCast(r.module_name));
             node.data_2 = @as(u32, @bitCast(r.type_name));
         },
+        .type_from_missing_module => |r| {
+            node.tag = .diag_type_from_missing_module;
+            region = r.region;
+            node.data_1 = @as(u32, @bitCast(r.module_name));
+            node.data_2 = @as(u32, @bitCast(r.type_name));
+        },
         .module_not_imported => |r| {
             node.tag = .diag_module_not_imported;
             region = r.region;
@@ -3079,6 +3085,11 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_type_not_exposed => return CIR.Diagnostic{ .type_not_exposed = .{
+            .module_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
+            .type_name = @as(base.Ident.Idx, @bitCast(node.data_2)),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_type_from_missing_module => return CIR.Diagnostic{ .type_from_missing_module = .{
             .module_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
             .type_name = @as(base.Ident.Idx, @bitCast(node.data_2)),
             .region = store.getRegionAt(node_idx),

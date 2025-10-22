@@ -15,7 +15,7 @@ x = Foo.Bar.Baz.X
 UNDECLARED TYPE - nominal_undefined_deeply_nested_tag.md:5:12:5:16
 # PROBLEMS
 **UNDECLARED TYPE**
-Cannot resolve qualified type _Foo.Bar.Baz_.
+The type _Foo.Bar.Baz_ is not declared in this scope.
 
 This type is referenced here:
 **nominal_undefined_deeply_nested_tag.md:5:12:5:16:**

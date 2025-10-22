@@ -34,18 +34,14 @@ validateAuth = |creds| HttpAuth.validate(creds)
 MODULE NOT FOUND - can_import_nested_modules.md:1:1:1:26
 MODULE NOT FOUND - can_import_nested_modules.md:2:1:2:36
 MODULE NOT FOUND - can_import_nested_modules.md:3:1:3:46
-UNDECLARED TYPE - can_import_nested_modules.md:6:21:6:30
+MODULE NOT IMPORTED - can_import_nested_modules.md:6:15:6:30
 UNDEFINED VARIABLE - can_import_nested_modules.md:7:26:7:41
-TYPE NOT EXPOSED - can_import_nested_modules.md:10:36:10:42
 UNDEFINED VARIABLE - can_import_nested_modules.md:11:29:11:43
-UNDECLARED TYPE - can_import_nested_modules.md:14:28:14:37
-UNDECLARED TYPE - can_import_nested_modules.md:14:71:14:77
+MODULE NOT IMPORTED - can_import_nested_modules.md:14:15:14:37
+MODULE NOT IMPORTED - can_import_nested_modules.md:14:58:14:77
 UNDEFINED VARIABLE - can_import_nested_modules.md:16:5:16:37
 UNDEFINED VARIABLE - can_import_nested_modules.md:20:23:20:30
 UNDEFINED VARIABLE - can_import_nested_modules.md:20:37:20:58
-TYPE NOT EXPOSED - can_import_nested_modules.md:23:24:23:36
-TYPE NOT EXPOSED - can_import_nested_modules.md:23:55:23:61
-TYPE NOT EXPOSED - can_import_nested_modules.md:23:71:23:77
 UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 # PROBLEMS
 **MODULE NOT FOUND**
@@ -81,15 +77,15 @@ import utils.String.Format exposing [padLeft]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**UNDECLARED TYPE**
-Cannot resolve qualified type _Config.Settings_.
+**MODULE NOT IMPORTED**
+There is no module with the name `Config` imported into this Roc file.
 
-This type is referenced here:
-**can_import_nested_modules.md:6:21:6:30:**
+You're attempting to use this module here:
+**can_import_nested_modules.md:6:15:6:30:**
 ```roc
 parseConfig : Config.Settings -> Str
 ```
-                    ^^^^^^^^^
+              ^^^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -103,19 +99,6 @@ parseConfig = |settings| Config.toString(settings)
                          ^^^^^^^^^^^^^^^
 
 
-**TYPE NOT EXPOSED**
-_http.Client.Auth.Token_ does not exist.
-
-You're attempting to use this type here:
-**can_import_nested_modules.md:10:36:10:42:**
-```roc
-authenticate : Str, Str -> HttpAuth.Token
-```
-                                   ^^^^^^
-
-_http.Client.Auth_ is a valid type, but it does not have an associated _Token_.
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `login` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -127,26 +110,26 @@ authenticate = |user, pass| HttpAuth.login(user, pass)
                             ^^^^^^^^^^^^^^
 
 
-**UNDECLARED TYPE**
-Cannot resolve qualified type _Config.Parser.Advanced_.
+**MODULE NOT IMPORTED**
+There is no module with the name `Config.Parser` imported into this Roc file.
 
-This type is referenced here:
-**can_import_nested_modules.md:14:28:14:37:**
+You're attempting to use this module here:
+**can_import_nested_modules.md:14:15:14:37:**
 ```roc
 processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
 ```
-                           ^^^^^^^^^
+              ^^^^^^^^^^^^^^^^^^^^^^
 
 
-**UNDECLARED TYPE**
-Cannot resolve qualified type _Config.Parser.Error_.
+**MODULE NOT IMPORTED**
+There is no module with the name `Config.Parser` imported into this Roc file.
 
-This type is referenced here:
-**can_import_nested_modules.md:14:71:14:77:**
+You're attempting to use this module here:
+**can_import_nested_modules.md:14:58:14:77:**
 ```roc
 processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
 ```
-                                                                      ^^^^^^
+                                                         ^^^^^^^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -180,45 +163,6 @@ Is there an `import` or `exposing` missing up-top?
 formatOutput = |text| padLeft(text, Config.defaultPadding)
 ```
                                     ^^^^^^^^^^^^^^^^^^^^^
-
-
-**TYPE NOT EXPOSED**
-_http.Client.Auth.Credentials_ does not exist.
-
-You're attempting to use this type here:
-**can_import_nested_modules.md:23:24:23:36:**
-```roc
-validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
-```
-                       ^^^^^^^^^^^^
-
-_http.Client.Auth_ is a valid type, but it does not have an associated _Credentials_.
-
-
-**TYPE NOT EXPOSED**
-_http.Client.Auth.Token_ does not exist.
-
-You're attempting to use this type here:
-**can_import_nested_modules.md:23:55:23:61:**
-```roc
-validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
-```
-                                                      ^^^^^^
-
-_http.Client.Auth_ is a valid type, but it does not have an associated _Token_.
-
-
-**TYPE NOT EXPOSED**
-_http.Client.Auth.Error_ does not exist.
-
-You're attempting to use this type here:
-**can_import_nested_modules.md:23:71:23:77:**
-```roc
-validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
-```
-                                                                      ^^^^^^
-
-_http.Client.Auth_ is a valid type, but it does not have an associated _Error_.
 
 
 **UNDEFINED VARIABLE**
@@ -377,10 +321,9 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(e-lookup-local
 					(p-assign (ident "settings")))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-malformed)
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-malformed)
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "authenticate"))
 		(e-lambda
@@ -394,11 +337,10 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(e-lookup-local
 					(p-assign (ident "pass")))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "Str") (builtin))
-					(ty-lookup (name "Str") (builtin))
-					(ty-malformed)))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Token") (external-module "http.Client.Auth")))))
 	(d-let
 		(p-assign (ident "processData"))
 		(e-lambda
@@ -412,13 +354,12 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(e-lookup-local
 					(p-assign (ident "input")))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-malformed)
+			(ty-fn (effectful false)
+				(ty-malformed)
+				(ty-lookup (name "Str") (builtin))
+				(ty-apply (name "Result") (external-module "Result")
 					(ty-lookup (name "Str") (builtin))
-					(ty-apply (name "Result") (external-module "Result")
-						(ty-lookup (name "Str") (builtin))
-						(ty-malformed))))))
+					(ty-malformed)))))
 	(d-let
 		(p-assign (ident "formatOutput"))
 		(e-lambda
@@ -430,10 +371,9 @@ validateAuth = |creds| HttpAuth.validate(creds)
 					(p-assign (ident "text")))
 				(e-runtime-error (tag "ident_not_in_scope"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "Str") (builtin))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "validateAuth"))
 		(e-lambda
@@ -444,12 +384,11 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(e-lookup-local
 					(p-assign (ident "creds")))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-malformed)
-					(ty-apply (name "Result") (external-module "Result")
-						(ty-malformed)
-						(ty-malformed))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "Credentials") (external-module "http.Client.Auth"))
+				(ty-apply (name "Result") (external-module "Result")
+					(ty-lookup (name "Token") (external-module "http.Client.Auth"))
+					(ty-lookup (name "Error") (external-module "http.Client.Auth"))))))
 	(s-import (module "json.Parser")
 		(exposes
 			(exposed (name "Config") (wildcard false))))
@@ -463,15 +402,15 @@ validateAuth = |creds| HttpAuth.validate(creds)
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Str"))
+		(patt (type "Error -> Error"))
 		(patt (type "Str, Str -> Error"))
-		(patt (type "Error, Str -> Result(Str, Error)"))
-		(patt (type "Str -> Str"))
-		(patt (type "Error -> Result(Error, Error)")))
+		(patt (type "Error, Str -> Error"))
+		(patt (type "Str -> Error"))
+		(patt (type "Error -> Error")))
 	(expressions
-		(expr (type "Error -> Str"))
+		(expr (type "Error -> Error"))
 		(expr (type "Str, Str -> Error"))
-		(expr (type "Error, Str -> Result(Str, Error)"))
-		(expr (type "Str -> Str"))
-		(expr (type "Error -> Result(Error, Error)"))))
+		(expr (type "Error, Str -> Error"))
+		(expr (type "Str -> Error"))
+		(expr (type "Error -> Error"))))
 ~~~

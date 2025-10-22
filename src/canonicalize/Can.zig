@@ -51,6 +51,21 @@ const TypeVarProblemKind = enum {
     type_var_ending_in_underscore,
 };
 
+const ModuleFoundStatus = enum {
+    module_was_found,
+    module_not_found,
+};
+
+const TypeBindingLocation = struct {
+    scope_index: usize,
+    binding: *Scope.TypeBinding,
+};
+
+const TypeBindingLocationConst = struct {
+    scope_index: usize,
+    binding: *const Scope.TypeBinding,
+};
+
 const TypeVarProblem = struct {
     ident: Ident.Idx,
     problem: TypeVarProblemKind,
@@ -1376,7 +1391,7 @@ fn createExposedScope(
 
                     // Use a dummy statement index - we just need to track that it's exposed
                     const dummy_idx = @as(Statement.Idx, @enumFromInt(0));
-                    try self.exposed_scope.put(gpa, .type_decl, ident_idx, dummy_idx);
+                    try self.exposed_scope.type_bindings.put(gpa, ident_idx, Scope.TypeBinding{ .local_nominal = dummy_idx });
                 }
 
                 // Store by text in a temporary hash map, since indices may change
@@ -1409,7 +1424,7 @@ fn createExposedScope(
 
                     // Use a dummy statement index - we just need to track that it's exposed
                     const dummy_idx = @as(Statement.Idx, @enumFromInt(0));
-                    try self.exposed_scope.put(gpa, .type_decl, ident_idx, dummy_idx);
+                    try self.exposed_scope.type_bindings.put(gpa, ident_idx, Scope.TypeBinding{ .local_nominal = dummy_idx });
                 }
 
                 // Store by text in a temporary hash map, since indices may change
@@ -5634,12 +5649,56 @@ fn canonicalizeTypeAnnoBasicType(
                 .base = .{ .builtin = builtin_type },
             } }, region);
         } else {
-            // If it's not a builtin, look up in scope
-            if (self.scopeLookupTypeDecl(type_name_ident)) |type_decl_idx| {
-                return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
-                    .name = type_name_ident,
-                    .base = .{ .local = .{ .decl_idx = type_decl_idx } },
-                } }, region);
+            // If it's not a builtin, look up in scope using unified type bindings
+            if (self.scopeLookupTypeBinding(type_name_ident)) |binding_location| {
+                const binding = binding_location.binding.*;
+                return switch (binding) {
+                    .local_nominal => |stmt| try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+                        .name = type_name_ident,
+                        .base = .{ .local = .{ .decl_idx = stmt } },
+                    } }, region),
+                    .local_alias => |stmt| try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+                        .name = type_name_ident,
+                        .base = .{ .local = .{ .decl_idx = stmt } },
+                    } }, region),
+                    .associated_nominal => |stmt| try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+                        .name = type_name_ident,
+                        .base = .{ .local = .{ .decl_idx = stmt } },
+                    } }, region),
+                    .external_nominal => |external| blk: {
+                        const import_idx = external.import_idx orelse {
+                            break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .module_not_imported = .{
+                                .module_name = external.module_ident,
+                                .region = type_name_region,
+                            } });
+                        };
+
+                        const target_node_idx = external.target_node_idx orelse {
+                            // Check if the module was not found
+                            if (external.module_not_found) {
+                                break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .type_from_missing_module = .{
+                                    .module_name = external.module_ident,
+                                    .type_name = type_name_ident,
+                                    .region = type_name_region,
+                                } });
+                            } else {
+                                break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .type_not_exposed = .{
+                                    .module_name = external.module_ident,
+                                    .type_name = type_name_ident,
+                                    .region = type_name_region,
+                                } });
+                            }
+                        };
+
+                        break :blk try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+                            .name = type_name_ident,
+                            .base = .{ .external = .{
+                                .module_idx = import_idx,
+                                .target_node_idx = target_node_idx,
+                            } },
+                        } }, region);
+                    },
+                };
             }
 
             // Check if this is an auto-imported type from module_envs
@@ -7316,12 +7375,14 @@ fn scopeIntroduceTypeDecl(
         while (i > 0) {
             i -= 1;
             const scope = &self.scopes.items[i];
-            switch (scope.lookupTypeDecl(name_ident)) {
-                .found => |type_decl_idx| {
-                    shadowed_in_parent = type_decl_idx;
-                    break;
-                },
-                .not_found => continue,
+            if (scope.type_bindings.get(name_ident)) |binding| {
+                shadowed_in_parent = switch (binding) {
+                    .local_nominal => |stmt| stmt,
+                    .local_alias => |stmt| stmt,
+                    .associated_nominal => |stmt| stmt,
+                    .external_nominal => null,
+                };
+                if (shadowed_in_parent) |_| break;
             }
         }
     }
@@ -7427,15 +7488,40 @@ fn scopeLookupTypeDecl(self: *Self, ident_idx: Ident.Idx) ?Statement.Idx {
         i -= 1;
         const scope = &self.scopes.items[i];
 
-        // Check for type aliases (unqualified names in associated blocks)
-        if (scope.lookupTypeAlias(ident_idx)) |aliased_decl| {
-            return aliased_decl;
+        // Check unified type bindings
+        if (scope.type_bindings.get(ident_idx)) |binding| {
+            return switch (binding) {
+                .local_nominal => |stmt| stmt,
+                .local_alias => |stmt| stmt,
+                .associated_nominal => |stmt| stmt,
+                .external_nominal => null, // External types don't have local Statement.Idx
+            };
         }
+    }
 
-        // Check regular type declarations
-        switch (scope.lookupTypeDecl(ident_idx)) {
-            .found => |type_decl_idx| return type_decl_idx,
-            .not_found => continue,
+    return null;
+}
+
+fn scopeLookupTypeBinding(self: *Self, ident_idx: Ident.Idx) ?TypeBindingLocation {
+    var i = self.scopes.items.len;
+    while (i > 0) {
+        i -= 1;
+        const scope = &self.scopes.items[i];
+        if (scope.type_bindings.getPtr(ident_idx)) |binding_ptr| {
+            return TypeBindingLocation{ .scope_index = i, .binding = binding_ptr };
+        }
+    }
+
+    return null;
+}
+
+fn scopeLookupTypeBindingConst(self: *const Self, ident_idx: Ident.Idx) ?TypeBindingLocationConst {
+    var i = self.scopes.items.len;
+    while (i > 0) {
+        i -= 1;
+        const scope = &self.scopes.items[i];
+        if (scope.type_bindings.getPtr(ident_idx)) |binding_ptr| {
+            return TypeBindingLocationConst{ .scope_index = i, .binding = binding_ptr };
         }
     }
 
@@ -7579,6 +7665,30 @@ pub fn scopeIntroduceExposedItem(self: *Self, item_name: Ident.Idx, item_info: S
             });
         },
     }
+}
+
+/// Set an external type binding for an imported nominal type
+fn setExternalTypeBinding(
+    self: *Self,
+    scope: *Scope,
+    local_ident: Ident.Idx,
+    module_ident: Ident.Idx,
+    original_ident: Ident.Idx,
+    target_node_idx: ?u16,
+    module_import_idx: CIR.Import.Idx,
+    origin_region: Region,
+    module_found_status: ModuleFoundStatus,
+) !void {
+    try scope.type_bindings.put(self.env.gpa, local_ident, Scope.TypeBinding{
+        .external_nominal = .{
+            .module_ident = module_ident,
+            .original_ident = original_ident,
+            .target_node_idx = target_node_idx,
+            .import_idx = module_import_idx,
+            .origin_region = origin_region,
+            .module_not_found = module_found_status == .module_not_found,
+        },
+    });
 }
 
 /// Look up an exposed item in parent scopes (for shadowing detection)

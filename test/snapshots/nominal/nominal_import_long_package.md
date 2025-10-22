@@ -71,8 +71,7 @@ red = ... # not implemented
 		(p-assign (ident "red"))
 		(e-not-implemented)
 		(annotation
-			(declared-type
-				(ty-malformed))))
+			(ty-malformed)))
 	(s-import (module "design.Styles.Color")
 		(exposes
 			(exposed (name "Encoder") (alias "CE") (wildcard false)))))

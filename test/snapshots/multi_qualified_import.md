@@ -30,9 +30,9 @@ PARSE ERROR - multi_qualified_import.md:12:37:12:38
 MODULE NOT FOUND - multi_qualified_import.md:1:1:1:41
 UNDECLARED TYPE - multi_qualified_import.md:3:16:3:23
 UNDEFINED VARIABLE - multi_qualified_import.md:4:16:4:45
-UNDECLARED TYPE - multi_qualified_import.md:7:25:7:33
+MODULE NOT IMPORTED - multi_qualified_import.md:7:11:7:33
 UNUSED VARIABLE - multi_qualified_import.md:8:12:8:19
-UNDECLARED TYPE - multi_qualified_import.md:11:22:11:34
+MODULE NOT IMPORTED - multi_qualified_import.md:11:8:11:34
 UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
 # PROBLEMS
 **PARSE ERROR**
@@ -156,15 +156,15 @@ json_encoder = Json.Core.Utf8.defaultEncoder
                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**UNDECLARED TYPE**
-Cannot resolve qualified type _json.Core.Utf8.Encoder_.
+**MODULE NOT IMPORTED**
+There is no module with the name `json.Core.Utf8` imported into this Roc file.
 
-This type is referenced here:
-**multi_qualified_import.md:7:25:7:33:**
+You're attempting to use this module here:
+**multi_qualified_import.md:7:11:7:33:**
 ```roc
 process : json.Core.Utf8.Encoder -> Str
 ```
-                        ^^^^^^^^
+          ^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -179,15 +179,15 @@ process = |encoder| "processing"
            ^^^^^^^
 
 
-**UNDECLARED TYPE**
-Cannot resolve qualified type _json.Core.Utf8.EncodedData_.
+**MODULE NOT IMPORTED**
+There is no module with the name `json.Core.Utf8` imported into this Roc file.
 
-This type is referenced here:
-**multi_qualified_import.md:11:22:11:34:**
+You're attempting to use this module here:
+**multi_qualified_import.md:11:8:11:34:**
 ```roc
 data : json.Core.Utf8.EncodedData
 ```
-                     ^^^^^^^^^^^^
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -272,8 +272,7 @@ data = json
 		(p-assign (ident "json_encoder"))
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation
-			(declared-type
-				(ty-malformed))))
+			(ty-malformed)))
 	(d-let
 		(p-assign (ident "process"))
 		(e-lambda
@@ -282,16 +281,14 @@ data = json
 			(e-string
 				(e-literal (string "processing"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-malformed)
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-malformed)
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "data"))
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation
-			(declared-type
-				(ty-malformed))))
+			(ty-malformed)))
 	(s-import (module "json.Core.Utf8")
 		(exposes
 			(exposed (name "Encoder") (wildcard false)))))
