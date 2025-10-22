@@ -104,7 +104,7 @@ parseConfig = |settings| Config.toString(settings)
 
 
 **TYPE NOT EXPOSED**
-The `http.Client.Auth` module does not expose anything named _Token_.
+_http.Client.Auth.Token_ does not exist.
 
 You're attempting to use this type here:
 **can_import_nested_modules.md:10:36:10:42:**
@@ -113,7 +113,7 @@ authenticate : Str, Str -> HttpAuth.Token
 ```
                                    ^^^^^^
 
-Make sure the module exports this type, or use a type that is exposed.
+_http.Client.Auth_ is a valid type, but it does not have an associated _Token_.
 
 
 **UNDEFINED VARIABLE**
@@ -183,7 +183,7 @@ formatOutput = |text| padLeft(text, Config.defaultPadding)
 
 
 **TYPE NOT EXPOSED**
-The `http.Client.Auth` module does not expose anything named _Credentials_.
+_http.Client.Auth.Credentials_ does not exist.
 
 You're attempting to use this type here:
 **can_import_nested_modules.md:23:24:23:36:**
@@ -192,11 +192,11 @@ validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 ```
                        ^^^^^^^^^^^^
 
-Make sure the module exports this type, or use a type that is exposed.
+_http.Client.Auth_ is a valid type, but it does not have an associated _Credentials_.
 
 
 **TYPE NOT EXPOSED**
-The `http.Client.Auth` module does not expose anything named _Token_.
+_http.Client.Auth.Token_ does not exist.
 
 You're attempting to use this type here:
 **can_import_nested_modules.md:23:55:23:61:**
@@ -205,11 +205,11 @@ validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 ```
                                                       ^^^^^^
 
-Make sure the module exports this type, or use a type that is exposed.
+_http.Client.Auth_ is a valid type, but it does not have an associated _Token_.
 
 
 **TYPE NOT EXPOSED**
-The `http.Client.Auth` module does not expose anything named _Error_.
+_http.Client.Auth.Error_ does not exist.
 
 You're attempting to use this type here:
 **can_import_nested_modules.md:23:71:23:77:**
@@ -218,7 +218,7 @@ validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 ```
                                                                       ^^^^^^
 
-Make sure the module exports this type, or use a type that is exposed.
+_http.Client.Auth_ is a valid type, but it does not have an associated _Error_.
 
 
 **UNDEFINED VARIABLE**

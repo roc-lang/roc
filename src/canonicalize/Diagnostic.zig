@@ -1437,12 +1437,13 @@ pub const Diagnostic = union(enum) {
             try report.document.addLineBreak();
             try report.document.addLineBreak();
         } else {
-            // Standard message for other cases
-            try report.document.addReflowingText("The ");
-            try report.document.addModuleName(owned_module);
-            try report.document.addReflowingText(" module does not expose anything named ");
-            try report.document.addType(owned_type);
-            try report.document.addReflowingText(".");
+            // Standard message for other cases (e.g., Color.RGB where Color is a nominal type)
+            const qualified_name = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ module_name, type_name });
+            defer allocator.free(qualified_name);
+            const owned_qualified = try report.addOwnedString(qualified_name);
+
+            try report.document.addType(owned_qualified);
+            try report.document.addReflowingText(" does not exist.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
         }
@@ -1456,17 +1457,19 @@ pub const Diagnostic = union(enum) {
             line_starts,
         );
 
-        // Add tip at the end for same-name case
+        // Add tip at the end
+        try report.document.addLineBreak();
         if (is_same_name) {
-            try report.document.addLineBreak();
             try report.document.addReflowingText("There is a ");
             try report.document.addModuleName(owned_module);
             try report.document.addReflowingText(" module, but it does not have a ");
             try report.document.addType(owned_type);
             try report.document.addReflowingText(" type nested inside it.");
         } else {
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("Make sure the module exports this type, or use a type that is exposed.");
+            try report.document.addType(owned_module);
+            try report.document.addReflowingText(" is a valid type, but it does not have an associated ");
+            try report.document.addType(owned_type);
+            try report.document.addReflowingText(".");
         }
 
         return report;

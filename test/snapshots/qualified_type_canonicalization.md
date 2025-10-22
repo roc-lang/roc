@@ -143,7 +143,7 @@ import ExternalModule as ExtMod
 
 
 **TYPE NOT EXPOSED**
-The `Color` module does not expose anything named _RGB_.
+_Color.RGB_ does not exist.
 
 You're attempting to use this type here:
 **qualified_type_canonicalization.md:14:24:14:28:**
@@ -152,7 +152,7 @@ simpleQualified : Color.RGB
 ```
                        ^^^^
 
-Make sure the module exports this type, or use a type that is exposed.
+_Color_ is a valid type, but it does not have an associated _RGB_.
 
 
 **UNDECLARED TYPE**
@@ -167,7 +167,7 @@ simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
 
 
 **TYPE NOT EXPOSED**
-The `ExternalModule` module does not expose anything named _DataType_.
+_ExternalModule.DataType_ does not exist.
 
 You're attempting to use this type here:
 **qualified_type_canonicalization.md:18:26:18:35:**
@@ -176,7 +176,7 @@ aliasedQualified : ExtMod.DataType
 ```
                          ^^^^^^^^^
 
-Make sure the module exports this type, or use a type that is exposed.
+_ExternalModule_ is a valid type, but it does not have an associated _DataType_.
 
 
 **UNDECLARED TYPE**
@@ -226,7 +226,7 @@ There is a `Result` module, but it does not have a `Result` type nested inside i
 
 
 **TYPE NOT EXPOSED**
-The `Color` module does not expose anything named _RGB_.
+_Color.RGB_ does not exist.
 
 You're attempting to use this type here:
 **qualified_type_canonicalization.md:30:23:30:27:**
@@ -235,7 +235,7 @@ getColor : {} -> Color.RGB
 ```
                       ^^^^
 
-Make sure the module exports this type, or use a type that is exposed.
+_Color_ is a valid type, but it does not have an associated _RGB_.
 
 
 **UNDECLARED TYPE**
@@ -250,7 +250,7 @@ getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
 
 
 **TYPE NOT EXPOSED**
-The `Color` module does not expose anything named _RGB_.
+_Color.RGB_ does not exist.
 
 You're attempting to use this type here:
 **qualified_type_canonicalization.md:34:21:34:25:**
@@ -259,7 +259,7 @@ processColor : Color.RGB -> Str
 ```
                     ^^^^
 
-Make sure the module exports this type, or use a type that is exposed.
+_Color_ is a valid type, but it does not have an associated _RGB_.
 
 
 **UNUSED VARIABLE**
@@ -288,7 +288,7 @@ There is a `Result` module, but it does not have a `Result` type nested inside i
 
 
 **TYPE NOT EXPOSED**
-The `Color` module does not expose anything named _RGB_.
+_Color.RGB_ does not exist.
 
 You're attempting to use this type here:
 **qualified_type_canonicalization.md:39:32:39:36:**
@@ -297,11 +297,11 @@ transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
 ```
                                ^^^^
 
-Make sure the module exports this type, or use a type that is exposed.
+_Color_ is a valid type, but it does not have an associated _RGB_.
 
 
 **TYPE NOT EXPOSED**
-The `ExternalModule` module does not expose anything named _Error_.
+_ExternalModule.Error_ does not exist.
 
 You're attempting to use this type here:
 **qualified_type_canonicalization.md:39:44:39:50:**
@@ -310,7 +310,7 @@ transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
 ```
                                            ^^^^^^
 
-Make sure the module exports this type, or use a type that is exposed.
+_ExternalModule_ is a valid type, but it does not have an associated _Error_.
 
 
 **UNDECLARED TYPE**
