@@ -508,10 +508,9 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(e-lookup-local
 					(p-assign (ident "settings")))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-malformed)
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-malformed)
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "authenticate"))
 		(e-lambda
@@ -525,11 +524,10 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(e-lookup-local
 					(p-assign (ident "pass")))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "Str") (builtin))
-					(ty-lookup (name "Str") (builtin))
-					(ty-malformed)))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (builtin))
+				(ty-malformed))))
 	(d-let
 		(p-assign (ident "processData"))
 		(e-lambda
@@ -543,13 +541,12 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(e-lookup-local
 					(p-assign (ident "input")))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-malformed)
+			(ty-fn (effectful false)
+				(ty-malformed)
+				(ty-lookup (name "Str") (builtin))
+				(ty-apply (name "Result") (external-module "Result")
 					(ty-lookup (name "Str") (builtin))
-					(ty-apply (name "Result") (external-module "Result")
-						(ty-lookup (name "Str") (builtin))
-						(ty-malformed))))))
+					(ty-malformed)))))
 	(d-let
 		(p-assign (ident "formatOutput"))
 		(e-lambda
@@ -561,10 +558,9 @@ validateAuth = |creds| HttpAuth.validate(creds)
 					(p-assign (ident "text")))
 				(e-runtime-error (tag "ident_not_in_scope"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "Str") (builtin))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "validateAuth"))
 		(e-lambda
@@ -575,12 +571,11 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(e-lookup-local
 					(p-assign (ident "creds")))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
+			(ty-fn (effectful false)
+				(ty-malformed)
+				(ty-apply (name "Result") (external-module "Result")
 					(ty-malformed)
-					(ty-apply (name "Result") (external-module "Result")
-						(ty-malformed)
-						(ty-malformed))))))
+					(ty-malformed)))))
 	(s-import (module "json.Parser")
 		(exposes))
 	(s-import (module "http.Client")
@@ -590,15 +585,15 @@ validateAuth = |creds| HttpAuth.validate(creds)
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Str"))
+		(patt (type "Error -> Error"))
 		(patt (type "Str, Str -> Error"))
-		(patt (type "Error, Str -> Result(Str, Error)"))
-		(patt (type "Str -> Str"))
-		(patt (type "Error -> Result(Error, Error)")))
+		(patt (type "Error, Str -> Error"))
+		(patt (type "Str -> Error"))
+		(patt (type "Error -> Error")))
 	(expressions
-		(expr (type "Error -> Str"))
+		(expr (type "Error -> Error"))
 		(expr (type "Str, Str -> Error"))
-		(expr (type "Error, Str -> Result(Str, Error)"))
-		(expr (type "Str -> Str"))
-		(expr (type "Error -> Result(Error, Error)"))))
+		(expr (type "Error, Str -> Error"))
+		(expr (type "Str -> Error"))
+		(expr (type "Error -> Error"))))
 ~~~

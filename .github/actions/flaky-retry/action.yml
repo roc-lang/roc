@@ -23,6 +23,7 @@ runs:
 
         while [ $attempt -le $max_attempts ]; do
           echo "Attempt $attempt of $max_attempts"
+          echo "Running command: ${{ inputs.command }}"
 
           # Run command and capture output and exit code
           output_file=$(mktemp)
@@ -68,6 +69,7 @@ runs:
 
         while ($attempt -le $maxAttempts) {
           Write-Host "Attempt $attempt of $maxAttempts"
+          Write-Host "Running command: ${{ inputs.command }}"
 
           # Run command and capture output
           $ErrorActionPreference = 'Continue'

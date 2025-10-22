@@ -60,26 +60,20 @@ NO CHANGE
 						(p-assign (ident "value"))))
 				(args)))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-rigid-var (name "a"))
-					(ty-lookup (name "Str") (builtin))))))
-	(s-type-anno (name "stringify")
-		(ty-fn (effectful false)
-			(ty-rigid-var (name "a"))
-			(ty-lookup (name "Str") (builtin)))
-		(where
-			(method (module-of "a") (ident "to_str")
-				(args
-					(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-				(ty-lookup (name "Str") (builtin)))))
-	(ext-decl (ident "a.to_str") (kind "value")))
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "a"))
+				(ty-lookup (name "Str") (builtin)))
+			(where
+				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "to_str")
+					(args
+						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
+					(ty-lookup (name "Str") (builtin)))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> Error")))
+		(patt (type "a -> Str where [a.to_str : a -> Str]")))
 	(expressions
-		(expr (type "a -> Error"))))
+		(expr (type "a -> Str where [a.to_str : a -> Str]"))))
 ~~~

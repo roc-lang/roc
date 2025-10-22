@@ -13,9 +13,18 @@ processList = |list| list.len()
 main! = |_| processList(["one","two"])
 ~~~
 # EXPECTED
-NIL
+TYPE DOES NOT HAVE METHODS - type_app_single_arg.md:4:22:4:32
 # PROBLEMS
-NIL
+**TYPE DOES NOT HAVE METHODS**
+You're trying to call the `len` method on a `List(Str)`:
+**type_app_single_arg.md:4:22:4:32:**
+```roc
+processList = |list| list.len()
+```
+                     ^^^^^^^^^^
+
+But `List(Str)` doesn't support methods.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -90,11 +99,10 @@ main! = |_| processList(["one", "two"])
 						(p-assign (ident "list"))))
 				(args)))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "List") (builtin)
-						(ty-lookup (name "Str") (builtin)))
-					(ty-lookup (name "U64") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-apply (name "List") (builtin)
+					(ty-lookup (name "Str") (builtin)))
+				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-closure
@@ -118,8 +126,8 @@ main! = |_| processList(["one", "two"])
 (inferred-types
 	(defs
 		(patt (type "List(Str) -> Error"))
-		(patt (type "_arg -> Error")))
+		(patt (type "_arg -> Num(Int(Unsigned64))")))
 	(expressions
 		(expr (type "List(Str) -> Error"))
-		(expr (type "_arg -> Error"))))
+		(expr (type "_arg -> Num(Int(Unsigned64))"))))
 ~~~

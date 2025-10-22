@@ -180,10 +180,9 @@ NO CHANGE
 			(e-string
 				(e-literal (string "processed"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "Result") (external-module "Result"))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "Result") (external-module "Result"))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "handleResponse"))
 		(e-lambda
@@ -192,10 +191,9 @@ NO CHANGE
 			(e-string
 				(e-literal (string "handled"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "Response") (local))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "Response") (local))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda

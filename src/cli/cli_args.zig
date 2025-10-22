@@ -647,6 +647,7 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
             if (getFlagValue(arg)) |value| {
                 target = value;
             } else {
+                app_args.deinit();
                 return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--target" } } };
             }
         } else if (mem.startsWith(u8, arg, "--opt")) {
@@ -654,9 +655,11 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
                 if (OptLevel.from_str(value)) |level| {
                     opt = level;
                 } else {
+                    app_args.deinit();
                     return CliArgs{ .problem = CliProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "speed,size,dev" } } };
                 }
             } else {
+                app_args.deinit();
                 return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
             }
         } else if (mem.eql(u8, arg, "--no-cache")) {
@@ -1121,6 +1124,7 @@ test "roc help" {
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
 }
+
 test "roc licenses" {
     const gpa = testing.allocator;
     {

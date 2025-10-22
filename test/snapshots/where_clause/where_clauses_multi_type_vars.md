@@ -60,33 +60,25 @@ NO CHANGE
 				(p-underscore))
 			(e-not-implemented))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-rigid-var (name "a"))
-					(ty-rigid-var (name "b"))
-					(ty-rigid-var (name "c"))))))
-	(s-type-anno (name "process")
-		(ty-fn (effectful false)
-			(ty-rigid-var (name "a"))
-			(ty-rigid-var (name "b"))
-			(ty-rigid-var (name "c")))
-		(where
-			(method (module-of "a") (ident "convert")
-				(args
-					(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-				(ty-rigid-var-lookup (ty-rigid-var (name "c"))))
-			(method (module-of "b") (ident "transform")
-				(args
-					(ty-rigid-var-lookup (ty-rigid-var (name "b"))))
-				(ty-rigid-var-lookup (ty-rigid-var (name "c"))))))
-	(ext-decl (ident "a.convert") (kind "value"))
-	(ext-decl (ident "b.transform") (kind "value")))
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "a"))
+				(ty-rigid-var (name "b"))
+				(ty-rigid-var (name "c")))
+			(where
+				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "convert")
+					(args
+						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
+					(ty-rigid-var-lookup (ty-rigid-var (name "c"))))
+				(method (ty-rigid-var-lookup (ty-rigid-var (name "b"))) (name "transform")
+					(args
+						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))
+					(ty-rigid-var-lookup (ty-rigid-var (name "c"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a, b -> c")))
+		(patt (type "a, b -> c where [a.convert : a -> cb.transform : b -> c]")))
 	(expressions
-		(expr (type "a, b -> c"))))
+		(expr (type "a, b -> c where [a.convert : a -> cb.transform : b -> c]"))))
 ~~~

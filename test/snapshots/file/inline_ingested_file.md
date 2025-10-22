@@ -136,6 +136,8 @@ foo = Json.parse(data)
 		(e-call
 			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-runtime-error (tag "ident_not_in_scope"))))
+	(s-type-anno (name "data")
+		(ty-lookup (name "Str") (builtin)))
 	(s-import (module "Json")
 		(exposes)))
 ~~~
@@ -143,7 +145,7 @@ foo = Json.parse(data)
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_a")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "_a"))))
+		(expr (type "Error"))))
 ~~~

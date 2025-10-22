@@ -220,8 +220,8 @@ main = |_| "done"
 		(p-assign (ident "map_result"))
 		(e-closure
 			(captures
-				(capture (ident "value"))
-				(capture (ident "error")))
+				(capture (ident "error"))
+				(capture (ident "value")))
 			(e-lambda
 				(args
 					(p-assign (ident "result"))
@@ -255,18 +255,17 @@ main = |_| "done"
 												(e-lookup-local
 													(p-assign (ident "error")))))))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "Result") (external-module "Result")
-						(ty-rigid-var (name "a"))
-						(ty-rigid-var (name "e")))
-					(ty-parens
-						(ty-fn (effectful false)
-							(ty-rigid-var-lookup (ty-rigid-var (name "a")))
-							(ty-rigid-var (name "b"))))
-					(ty-apply (name "Result") (external-module "Result")
-						(ty-rigid-var-lookup (ty-rigid-var (name "b")))
-						(ty-rigid-var-lookup (ty-rigid-var (name "e"))))))))
+			(ty-fn (effectful false)
+				(ty-apply (name "Result") (external-module "Result")
+					(ty-rigid-var (name "a"))
+					(ty-rigid-var (name "e")))
+				(ty-parens
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-rigid-var (name "b"))))
+				(ty-apply (name "Result") (external-module "Result")
+					(ty-rigid-var-lookup (ty-rigid-var (name "b")))
+					(ty-rigid-var-lookup (ty-rigid-var (name "e")))))))
 	(d-let
 		(p-assign (ident "identity"))
 		(e-lambda
@@ -275,10 +274,9 @@ main = |_| "done"
 			(e-lookup-local
 				(p-assign (ident "x"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-rigid-var (name "a"))
-					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "a"))
+				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(d-let
 		(p-assign (ident "make_pair"))
 		(e-lambda
@@ -294,15 +292,14 @@ main = |_| "done"
 						(e-lookup-local
 							(p-assign (ident "y")))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-rigid-var (name "a"))
-					(ty-rigid-var (name "b"))
-					(ty-record
-						(field (field "first")
-							(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-						(field (field "second")
-							(ty-rigid-var-lookup (ty-rigid-var (name "b")))))))))
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "a"))
+				(ty-rigid-var (name "b"))
+				(ty-record
+					(field (field "first")
+						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
+					(field (field "second")
+						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))))
 	(d-let
 		(p-assign (ident "list_length"))
 		(e-lambda
@@ -310,11 +307,10 @@ main = |_| "done"
 				(p-assign (ident "_lst")))
 			(e-num (value "42")))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "List") (builtin)
-						(ty-rigid-var (name "_a")))
-					(ty-lookup (name "U64") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-apply (name "List") (builtin)
+					(ty-rigid-var (name "_a")))
+				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "wrap_in_result"))
 		(e-lambda
@@ -327,14 +323,13 @@ main = |_| "done"
 							(e-lookup-local
 								(p-assign (ident "value"))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-rigid-var (name "a"))
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "a"))
+				(ty-apply (name "Result") (external-module "Result")
 					(ty-apply (name "Result") (external-module "Result")
-						(ty-apply (name "Result") (external-module "Result")
-							(ty-rigid-var-lookup (ty-rigid-var (name "a")))
-							(ty-lookup (name "Str") (builtin)))
-						(ty-lookup (name "Str") (builtin)))))))
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-lookup (name "Str") (builtin)))
+					(ty-lookup (name "Str") (builtin))))))
 	(d-let
 		(p-assign (ident "main"))
 		(e-lambda

@@ -71,8 +71,7 @@ blue = CC.Color.RGB(0, 0, 255)
 					(e-num (value "0"))
 					(e-num (value "255")))))
 		(annotation
-			(declared-type
-				(ty-lookup (name "Color") (external-module "styles.Color")))))
+			(ty-lookup (name "Color") (external-module "styles.Color"))))
 	(s-import (module "styles.Color")
 		(exposes)))
 ~~~

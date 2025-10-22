@@ -1875,10 +1875,9 @@ expect {
 							(e-lookup-local
 								(p-assign (ident "other"))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "U64") (builtin))
-					(ty-lookup (name "U64") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "U64") (builtin))
+				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "match_time"))
 		(e-closure
@@ -2097,8 +2096,8 @@ expect {
 		(p-assign (ident "main!"))
 		(e-closure
 			(captures
-				(capture (ident "match_time"))
-				(capture (ident "add_one")))
+				(capture (ident "add_one"))
+				(capture (ident "match_time")))
 			(e-lambda
 				(args
 					(p-underscore))
@@ -2273,19 +2272,17 @@ expect {
 									(p-assign (ident "number"))))
 							(e-literal (string " as a string?")))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "List") (builtin)
-						(ty-malformed))
-					(ty-apply (name "Result") (external-module "Result")
-						(ty-record)
-						(ty-underscore))))))
+			(ty-fn (effectful false)
+				(ty-apply (name "List") (builtin)
+					(ty-malformed))
+				(ty-apply (name "Result") (external-module "Result")
+					(ty-record)
+					(ty-underscore)))))
 	(d-let
 		(p-assign (ident "empty"))
 		(e-empty_record)
 		(annotation
-			(declared-type
-				(ty-record))))
+			(ty-record)))
 	(s-alias-decl
 		(ty-header (name "Map")
 			(ty-args
@@ -2398,6 +2395,8 @@ expect {
 		(e-binop (op "eq")
 			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-num (value "1"))))
+	(s-type-anno (name "tuple")
+		(ty-malformed))
 	(s-expect
 		(e-block
 			(s-let
@@ -2419,7 +2418,7 @@ expect {
 		(patt (type "Bool -> Num(_size)"))
 		(patt (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(patt (type "[Red][Blue, Green]_others, _arg -> Error"))
-		(patt (type "List(Error) -> Result({  }, _d)"))
+		(patt (type "List(Error) -> Error"))
 		(patt (type "{}")))
 	(type_decls
 		(alias (type "Map(a, b)")
@@ -2464,6 +2463,6 @@ expect {
 		(expr (type "Bool -> Num(_size)"))
 		(expr (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(expr (type "[Red][Blue, Green]_others, _arg -> Error"))
-		(expr (type "List(Error) -> Result({  }, _d)"))
+		(expr (type "List(Error) -> Error"))
 		(expr (type "{}"))))
 ~~~

@@ -761,30 +761,26 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             const alignment_u32: u32 = @intCast(elem_layout.alignment(layout_cache.targetUsize()).toByteUnits());
             const element_width: usize = @intCast(layout_cache.layoutSize(elem_layout));
             const elements_refcounted = elem_layout.isRefcounted();
-            if (elements_refcounted) {
-                if (list_value.isUnique()) {
-                    if (list_value.getAllocationDataPtr()) |source| {
-                        const count: usize = if (list_value.isSeamlessSlice()) blk: {
-                            const ptr = @as([*]usize, @ptrCast(@alignCast(source))) - 2;
-                            break :blk ptr[0];
-                        } else list_value.len();
+            if (elements_refcounted and list_value.isUnique()) {
+                if (list_value.getAllocationDataPtr()) |source| {
+                    const count: usize = if (list_value.isSeamlessSlice()) blk: {
+                        const ptr = @as([*]usize, @ptrCast(@alignCast(source))) - 2;
+                        break :blk ptr[0];
+                    } else list_value.len();
 
-                        var idx: usize = 0;
-                        while (idx < count) : (idx += 1) {
-                            const elem_ptr = source + idx * element_width;
-                            const elem_value = StackValue{
-                                .layout = elem_layout,
-                                .ptr = @ptrCast(elem_ptr),
-                                .is_initialized = true,
-                            };
-                            elem_value.decref(layout_cache, ops);
-                        }
+                    var idx: usize = 0;
+                    while (idx < count) : (idx += 1) {
+                        const elem_ptr = source + idx * element_width;
+                        const elem_value = StackValue{
+                            .layout = elem_layout,
+                            .ptr = @ptrCast(elem_ptr),
+                            .is_initialized = true,
+                        };
+                        elem_value.decref(layout_cache, ops);
                     }
                 }
-                list_value.decref(alignment_u32, element_width, false, noopDecref, ops);
-                return;
             }
-            list_value.decref(alignment_u32, element_width, false, noopDecref, ops);
+            list_value.decref(alignment_u32, element_width, elements_refcounted, noopDecref, ops);
             return;
         },
         .list_of_zst => {

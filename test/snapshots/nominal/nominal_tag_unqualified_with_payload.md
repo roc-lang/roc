@@ -108,10 +108,9 @@ isOk = |result| match result {
 				(e-string
 					(e-literal (string "success")))))
 		(annotation
-			(declared-type
-				(ty-apply (name "MyResult") (local)
-					(ty-lookup (name "Str") (builtin))
-					(ty-lookup (name "I32") (builtin))))))
+			(ty-apply (name "MyResult") (local)
+				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "I32") (builtin)))))
 	(d-let
 		(p-assign (ident "isOk"))
 		(e-lambda
@@ -140,12 +139,11 @@ isOk = |result| match result {
 									(external-module "Bool")
 									(e-tag (name "False")))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "MyResult") (local)
-						(ty-rigid-var (name "ok"))
-						(ty-rigid-var (name "err")))
-					(ty-lookup (name "Bool") (external-module "Bool"))))))
+			(ty-fn (effectful false)
+				(ty-apply (name "MyResult") (local)
+					(ty-rigid-var (name "ok"))
+					(ty-rigid-var (name "err")))
+				(ty-lookup (name "Bool") (external-module "Bool")))))
 	(s-nominal-decl
 		(ty-header (name "MyResult")
 			(ty-args

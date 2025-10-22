@@ -446,6 +446,7 @@ fn canonicalizeAssociatedDeclWithAnno(
     decl: AST.Statement.Decl,
     qualified_ident: Ident.Idx,
     type_anno_idx: CIR.TypeAnno.Idx,
+    mb_where_clauses: ?CIR.WhereClause.Span,
 ) std.mem.Allocator.Error!CIR.Def.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -466,8 +467,8 @@ fn canonicalizeAssociatedDeclWithAnno(
 
     // Create the annotation structure
     const annotation = CIR.Annotation{
-        .type_anno = type_anno_idx,
-        .signature = try self.env.addTypeSlot(@enumFromInt(0), pattern_region, TypeVar),
+        .anno = type_anno_idx,
+        .where = mb_where_clauses,
     };
     const annotation_idx = try self.env.addAnnotation(annotation, pattern_region);
 
@@ -517,7 +518,6 @@ fn processAssociatedItemsSecondPass(
                 }
             },
             .type_anno => |ta| {
-                const region = self.parse_ir.tokenizedRegionToRegion(ta.region);
                 const name_ident = self.parse_ir.tokens.resolveIdentifier(ta.name) orelse {
                     // Malformed identifier - skip this annotation
                     continue;
@@ -550,31 +550,6 @@ fn processAssociatedItemsSecondPass(
                     break :blk try self.env.store.whereClauseSpanFrom(where_start);
                 } else null;
 
-                // If we have where clauses, create a separate s_type_anno statement
-                if (where_clauses != null) {
-                    // Build qualified name for the annotation
-                    const parent_text = self.env.getIdent(parent_name);
-                    const name_text = self.env.getIdent(name_ident);
-                    const qualified_name_str = try std.fmt.allocPrint(
-                        self.env.gpa,
-                        "{s}.{s}",
-                        .{ parent_text, name_text },
-                    );
-                    defer self.env.gpa.free(qualified_name_str);
-                    const qualified_ident = base.Ident.for_text(qualified_name_str);
-                    const qualified_idx = try self.env.insertIdent(qualified_ident);
-
-                    const type_anno_stmt = Statement{
-                        .s_type_anno = .{
-                            .name = qualified_idx,
-                            .anno = type_anno_idx,
-                            .where = where_clauses,
-                        },
-                    };
-                    const type_anno_stmt_idx = try self.env.addStatement(type_anno_stmt, region);
-                    try self.env.store.addScratchStatement(type_anno_stmt_idx);
-                }
-
                 // Now, check the next stmt to see if it matches this anno
                 const next_i = i + 1;
                 if (next_i < stmt_idxs.len) {
@@ -606,7 +581,12 @@ fn processAssociatedItemsSecondPass(
                                         const qualified_idx = try self.env.insertIdent(qualified_ident);
 
                                         // Canonicalize with the qualified name and type annotation
-                                        const def_idx = try self.canonicalizeAssociatedDeclWithAnno(decl, qualified_idx, type_anno_idx);
+                                        const def_idx = try self.canonicalizeAssociatedDeclWithAnno(
+                                            decl,
+                                            qualified_idx,
+                                            type_anno_idx,
+                                            where_clauses,
+                                        );
                                         try self.env.store.addScratchDef(def_idx);
 
                                         // Set node index for exposed associated item
@@ -619,7 +599,33 @@ fn processAssociatedItemsSecondPass(
                             }
                         },
                         else => {
-                            // Type annotation doesn't match a declaration - continue normally
+                            // If the next stmt does not match this annotation,
+                            // then just add the annotation independently
+
+                            // TODO: Capture diagnostic that this anno doesn't
+                            // have a corresponding def
+
+                            const region = self.parse_ir.tokenizedRegionToRegion(ta.region);
+
+                            // Build qualified name for the annotation
+                            const parent_text = self.env.getIdent(parent_name);
+                            const name_text = self.env.getIdent(name_ident);
+                            const qualified_name_str = try std.fmt.allocPrint(
+                                self.env.gpa,
+                                "{s}.{s}",
+                                .{ parent_text, name_text },
+                            );
+                            defer self.env.gpa.free(qualified_name_str);
+                            const qualified_ident = base.Ident.for_text(qualified_name_str);
+                            const qualified_idx = try self.env.insertIdent(qualified_ident);
+
+                            const type_anno_stmt = Statement{ .s_type_anno = .{
+                                .name = qualified_idx,
+                                .anno = type_anno_idx,
+                                .where = where_clauses,
+                            } };
+                            const type_anno_stmt_idx = try self.env.addStatement(type_anno_stmt, region);
+                            try self.env.store.addScratchStatement(type_anno_stmt_idx);
                         },
                     }
                 }
@@ -1004,35 +1010,35 @@ pub fn canonicalizeFile(
                     break :blk try self.env.store.whereClauseSpanFrom(where_start);
                 } else null;
 
-                // If we have where clauses, create a separate s_type_anno statement
-                if (where_clauses != null) {
-                    const type_anno_stmt = Statement{
-                        .s_type_anno = .{
-                            .name = name_ident,
-                            .anno = type_anno_idx,
-                            .where = where_clauses,
-                        },
-                    };
-                    const type_anno_stmt_idx = try self.env.addStatement(type_anno_stmt, region);
-                    try self.env.store.addScratchStatement(type_anno_stmt_idx);
-                }
-
                 // Now, check the next stmt to see if it matches this anno
                 const next_i = i + 1;
                 if (next_i < ast_stmt_idxs.len) {
                     const next_stmt_id = ast_stmt_idxs[next_i];
                     const next_stmt = self.parse_ir.store.getStatement(next_stmt_id);
-
                     switch (next_stmt) {
                         .decl => |decl| {
+                            // If so process it and increment i again
                             i = next_i;
                             _ = try self.canonicalizeStmtDecl(decl, TypeAnnoIdent{
                                 .name = name_ident,
                                 .anno_idx = type_anno_idx,
+                                .where = where_clauses,
                             });
                         },
                         else => {
-                            // TODO: Issue diagnostic?
+                            // If the next stmt does not match this annotation,
+                            // then just add the annotation independently
+
+                            // TODO: Capture diagnostic that this anno doesn't
+                            // have a corresponding def
+
+                            const type_anno_stmt = Statement{ .s_type_anno = .{
+                                .name = name_ident,
+                                .anno = type_anno_idx,
+                                .where = where_clauses,
+                            } };
+                            const type_anno_stmt_idx = try self.env.addStatement(type_anno_stmt, region);
+                            try self.env.store.addScratchStatement(type_anno_stmt_idx);
                         },
                     }
                 }
@@ -1210,7 +1216,7 @@ fn canonicalizeStmtDecl(self: *Self, decl: AST.Statement.Decl, mb_last_anno: ?Ty
                 if (anno_info.name.idx == decl_ident.idx) {
                     // This declaration matches the type annotation
                     const pattern_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.to_tokenized_region());
-                    mb_validated_anno = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, pattern_region);
+                    mb_validated_anno = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, anno_info.where, pattern_region);
                 }
             } else {
                 // TODO: Diagnostic
@@ -1252,6 +1258,7 @@ const AnnotationAndScope = struct {
 const TypeAnnoIdent = struct {
     name: base.Ident.Idx,
     anno_idx: TypeAnno.Idx,
+    where: ?WhereClause.Span,
 };
 
 fn collectBoundVars(self: *Self, pattern_idx: Pattern.Idx, bound_vars: *std.AutoHashMapUnmanaged(Pattern.Idx, void)) !void {
@@ -6084,35 +6091,9 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
             // mb_canonicailzed_stmt for post-processing
 
             const stmt_result = try self.canonicalizeBlockStatement(ast_stmt, ast_stmt_idxs, i);
-            const mb_canonicailzed_stmt = stmt_result.canonicalized_stmt;
-
-            // If we have a second statement (e.g., type annotation), process it too
-            if (stmt_result.second_canonicalized_stmt) |other_stmt| {
-                try self.env.store.addScratchStatement(other_stmt.idx);
-
-                // Collect bound variables for the other statement
-                const cir_other_stmt = self.env.store.getStatement(other_stmt.idx);
-                switch (cir_other_stmt) {
-                    .s_decl => |decl| try self.collectBoundVars(decl.pattern, &bound_vars),
-                    .s_var => |var_stmt| try self.collectBoundVars(var_stmt.pattern_idx, &bound_vars),
-                    else => {},
-                }
-
-                // Collect free vars from the other statement
-                if (other_stmt.free_vars) |fvs| {
-                    for (fvs) |fv| {
-                        if (!bound_vars.contains(fv)) {
-                            try captures.put(self.env.gpa, fv, {});
-                        }
-                    }
-                }
-
-                // Skip the next statement since we processed it
-                i += 1;
-            }
 
             // Post processing for the stmt
-            if (mb_canonicailzed_stmt) |canonicailzed_stmt| {
+            if (stmt_result.canonicalized_stmt) |canonicailzed_stmt| {
                 try self.env.store.addScratchStatement(canonicailzed_stmt.idx);
 
                 // Collect bound variables for the
@@ -6131,6 +6112,16 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
                         }
                     }
                 }
+            }
+
+            // Check if we processed two stmts in one pass
+            // eg a type annotation & it's definition
+            switch (stmt_result.stmts_processed) {
+                .one => {},
+                .two => {
+                    // If so, then increment twice this pass
+                    i += 1;
+                },
             }
         }
     }
@@ -6178,8 +6169,10 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
 
 const StatementResult = struct {
     canonicalized_stmt: ?CanonicalizedStatement,
-    second_canonicalized_stmt: ?CanonicalizedStatement,
+    stmts_processed: StatementsProcessed,
 };
+
+const StatementsProcessed = enum { one, two };
 
 /// Canonicalize a single statement within a block
 ///
@@ -6194,7 +6187,7 @@ const StatementResult = struct {
 ///   simply attached to  decl node
 pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt_idxs: []const AST.Statement.Idx, current_index: u32) std.mem.Allocator.Error!StatementResult {
     var mb_canonicailzed_stmt: ?CanonicalizedStatement = null;
-    var mb_second_canonicalized_stmt: ?CanonicalizedStatement = null;
+    var stmts_processed: StatementsProcessed = .one;
 
     switch (ast_stmt) {
         .decl => |d| {
@@ -6385,26 +6378,6 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                 break :inner_blk try self.env.store.whereClauseSpanFrom(where_start);
             } else null;
 
-            // If we have where clauses, create a separate s_type_anno statement
-            const mb_type_anno_stmt_idx: ?Statement.Idx = inner_blk: {
-                if (where_clauses != null) {
-                    break :inner_blk try self.env.addStatement(Statement{
-                        .s_type_anno = .{
-                            .name = name_ident,
-                            .anno = type_anno_idx,
-                            .where = where_clauses,
-                        },
-                    }, region);
-                } else {
-                    break :inner_blk null;
-                }
-            };
-
-            // Set the type annotation stmt if it exists
-            if (mb_type_anno_stmt_idx) |type_anno_stmt_idx| {
-                mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = type_anno_stmt_idx, .free_vars = null };
-            }
-
             // Now, check the next stmt to see if it matches this anno
             const next_i = current_index + 1;
             if (next_i < ast_stmt_idxs.len) {
@@ -6414,13 +6387,45 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                 switch (next_stmt) {
                     .decl => |decl| {
                         // Immediately process the next decl, with the annotation
-                        mb_second_canonicalized_stmt = try self.canonicalizeBlockDecl(decl, TypeAnnoIdent{
+                        mb_canonicailzed_stmt = try self.canonicalizeBlockDecl(decl, TypeAnnoIdent{
                             .name = name_ident,
                             .anno_idx = type_anno_idx,
+                            .where = where_clauses,
                         });
+                        stmts_processed = .two;
                     },
-                    else => {},
+                    else => {
+                        // If the next stmt does not match this annotation,
+                        // then just add the annotation independently
+
+                        // TODO: Capture diagnostic that this anno doesn't
+                        // have a corresponding def
+
+                        const stmt_idx = try self.env.addStatement(Statement{
+                            .s_type_anno = .{
+                                .name = name_ident,
+                                .anno = type_anno_idx,
+                                .where = where_clauses,
+                            },
+                        }, region);
+                        mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = null };
+                    },
                 }
+            } else {
+                // If the next stmt does not match this annotation,
+                // then just add the annotation independently
+
+                // TODO: Capture diagnostic that this anno doesn't
+                // have a corresponding def
+
+                const stmt_idx = try self.env.addStatement(Statement{
+                    .s_type_anno = .{
+                        .name = name_ident,
+                        .anno = type_anno_idx,
+                        .where = where_clauses,
+                    },
+                }, region);
+                mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = null };
             }
         },
         .import => |import_stmt| {
@@ -6439,7 +6444,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
         },
     }
 
-    return StatementResult{ .canonicalized_stmt = mb_canonicailzed_stmt, .second_canonicalized_stmt = mb_second_canonicalized_stmt };
+    return StatementResult{ .canonicalized_stmt = mb_canonicailzed_stmt, .stmts_processed = stmts_processed };
 }
 
 /// Canonicalize a block declarataion
@@ -6507,7 +6512,7 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
                 if (anno_info.name.idx == decl_ident.idx) {
                     // This declaration matches the type annotation
                     const pattern_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.to_tokenized_region());
-                    mb_validated_anno = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, pattern_region);
+                    mb_validated_anno = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, anno_info.where, pattern_region);
                 }
             } else {
                 // TODO: Diagnostic
@@ -7415,21 +7420,66 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
         .mod_method => |mm| {
             const region = self.parse_ir.tokenizedRegionToRegion(mm.region);
 
-            // Resolve type variable name
-            const var_name = self.parse_ir.resolve(mm.var_tok);
+            // Get variable being referenced
+            // where [ a.method : ... ]
+            //         ^
+            const var_name_text = self.parse_ir.resolve(mm.var_tok);
+            const var_ident = try self.env.insertIdent(Ident.for_text(var_name_text));
 
-            // Resolve method name (remove leading dot)
-            const method_name_text = self.parse_ir.resolve(mm.name_tok);
+            // Find the variable in scope
+            const var_anno_idx =
+                switch (self.scopeLookupTypeVar(var_ident)) {
+                    .found => |found_anno_idx| blk: {
+                        // Track this type variable for underscore validation
+                        try self.scratch_type_var_validation.append(var_ident);
 
-            // Remove leading dot from method name
-            const method_name_clean = if (method_name_text.len > 0 and method_name_text[0] == '.')
-                method_name_text[1..]
-            else
-                method_name_text;
+                        break :blk try self.env.addTypeAnno(.{ .rigid_var_lookup = .{
+                            .ref = found_anno_idx,
+                        } }, region);
+                    },
+                    .not_found => blk: {
+                        switch (type_anno_ctx) {
+                            // If this is an inline anno, then we can introduce the variable
+                            // into the scope
+                            .inline_anno => {
+                                // Track this type variable for underscore validation
+                                try self.scratch_type_var_validation.append(var_ident);
 
-            // Intern the variable and method names
-            const var_ident = try self.env.insertIdent(Ident.for_text(var_name));
-            const method_ident = try self.env.insertIdent(Ident.for_text(method_name_clean));
+                                const new_anno_idx = try self.env.addTypeAnno(.{ .rigid_var = .{
+                                    .name = var_ident,
+                                } }, region);
+
+                                // Add to scope
+                                _ = try self.scopeIntroduceTypeVar(var_ident, new_anno_idx);
+
+                                break :blk new_anno_idx;
+                            },
+                            // Otherwise, this is malformed
+                            .type_decl_anno => {
+                                break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type_var = .{
+                                    .name = var_ident,
+                                    .region = region,
+                                } });
+                            },
+                        }
+                    },
+                };
+
+            // Get alias being referenced
+            // where [ a.method : ... ]
+            //           ^^^^^^
+            const method_ident = blk: {
+                // Resolve alias name (remove leading dot)
+                const method_name_text = self.parse_ir.resolve(mm.name_tok);
+
+                // Remove leading dot from method name
+                const method_name_clean = if (method_name_text.len > 0 and method_name_text[0] == '.')
+                    method_name_text[1..]
+                else
+                    method_name_text;
+
+                break :blk try self.env.insertIdent(Ident.for_text(method_name_clean));
+            };
 
             // Canonicalize argument types
             const args_slice = self.parse_ir.store.typeAnnoSlice(.{ .span = self.parse_ir.store.getCollection(mm.args).span });
@@ -7441,70 +7491,83 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
             const args_span = try self.env.store.typeAnnoSpanFrom(args_start);
 
             // Canonicalize return type
-            const ret_anno = try self.canonicalizeTypeAnno(mm.ret_anno, type_anno_ctx);
+            const ret = try self.canonicalizeTypeAnno(mm.ret_anno, type_anno_ctx);
 
-            // Create external declaration for where clause type constraint
-            // This represents the requirement that the type variable provides the specified method
-            const var_name_text = self.env.getIdent(var_ident);
-
-            // Create qualified name: "a.method"
-            const qualified_text = try std.fmt.allocPrint(self.env.gpa, "{s}.{s}", .{ var_name_text, method_name_clean });
-            defer self.env.gpa.free(qualified_text);
-            const qualified_name = try self.env.insertIdent(Ident.for_text(qualified_text));
-
-            // Use the type variable name as the module name - TODO this needs to be updated to use
-            // types instead of modules!
-            const module_name = var_ident;
-
-            const external_type_var = try self.env.addTypeSlot(@enumFromInt(0), region, TypeVar);
-            const external_decl = try self.createExternalDeclaration(qualified_name, module_name, method_ident, .value, external_type_var, region);
-
-            return try self.env.addWhereClause(WhereClause{ .mod_method = .{
-                .var_name = var_ident,
+            return try self.env.addWhereClause(WhereClause{ .w_method = .{
+                .var_ = var_anno_idx,
                 .method_name = method_ident,
                 .args = args_span,
-                .ret_anno = ret_anno,
-                .external_decl = external_decl,
+                .ret = ret,
             } }, region);
         },
         .mod_alias => |ma| {
             const region = self.parse_ir.tokenizedRegionToRegion(ma.region);
 
-            // Resolve type variable name
-            const var_name = self.parse_ir.resolve(ma.var_tok);
+            // Get variable being referenced
+            // where [ a.Alias ]
+            //         ^
+            const var_name_text = self.parse_ir.resolve(ma.var_tok);
+            const var_ident = try self.env.insertIdent(Ident.for_text(var_name_text));
 
-            // Resolve alias name (remove leading dot)
-            const alias_name_text = self.parse_ir.resolve(ma.name_tok);
+            // Find the variable in scope
+            const var_anno_idx =
+                switch (self.scopeLookupTypeVar(var_ident)) {
+                    .found => |found_anno_idx| blk: {
+                        // Track this type variable for underscore validation
+                        try self.scratch_type_var_validation.append(var_ident);
 
-            // Remove leading dot from alias name
-            const alias_name_clean = if (alias_name_text.len > 0 and alias_name_text[0] == '.')
-                alias_name_text[1..]
-            else
-                alias_name_text;
+                        break :blk try self.env.addTypeAnno(.{ .rigid_var_lookup = .{
+                            .ref = found_anno_idx,
+                        } }, region);
+                    },
+                    .not_found => blk: {
+                        switch (type_anno_ctx) {
+                            // If this is an inline anno, then we can introduce the variable
+                            // into the scope
+                            .inline_anno => {
+                                // Track this type variable for underscore validation
+                                try self.scratch_type_var_validation.append(var_ident);
 
-            // Intern the variable and alias names
-            const var_ident = try self.env.insertIdent(Ident.for_text(var_name));
-            const alias_ident = try self.env.insertIdent(Ident.for_text(alias_name_clean));
+                                const new_anno_idx = try self.env.addTypeAnno(.{ .rigid_var = .{
+                                    .name = var_ident,
+                                } }, region);
 
-            // Create external declaration for where clause type constraint
-            // This represents the requirement that the type variable provides the specified type alias
-            const var_name_text = self.env.getIdent(var_ident);
+                                // Add to scope
+                                _ = try self.scopeIntroduceTypeVar(var_ident, new_anno_idx);
 
-            // Create qualified name: "a.Alias"
-            const qualified_text = try std.fmt.allocPrint(self.env.gpa, "{s}.{s}", .{ var_name_text, alias_name_clean });
-            defer self.env.gpa.free(qualified_text);
-            const qualified_name = try self.env.insertIdent(Ident.for_text(qualified_text));
+                                break :blk new_anno_idx;
+                            },
+                            // Otherwise, this is malformed
+                            .type_decl_anno => {
+                                break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type_var = .{
+                                    .name = var_ident,
+                                    .region = region,
+                                } });
+                            },
+                        }
+                    },
+                };
 
-            // Use the type variable name as the module name
-            const module_name = var_ident;
+            // Get alias being referenced
+            // where [ a.Alias ]
+            //           ^^^^^
 
-            const external_type_var = try self.env.addTypeSlot(@enumFromInt(0), region, TypeVar);
-            const external_decl = try self.createExternalDeclaration(qualified_name, module_name, alias_ident, .type, external_type_var, region);
+            const alias_ident = blk: {
+                // Resolve alias name (remove leading dot)
+                const alias_name_text = self.parse_ir.resolve(ma.name_tok);
 
-            return try self.env.addWhereClause(WhereClause{ .mod_alias = .{
-                .var_name = var_ident,
+                // Remove leading dot from alias name
+                const alias_name_clean = if (alias_name_text.len > 0 and alias_name_text[0] == '.')
+                    alias_name_text[1..]
+                else
+                    alias_name_text;
+
+                break :blk try self.env.insertIdent(Ident.for_text(alias_name_clean));
+            };
+
+            return try self.env.addWhereClause(WhereClause{ .w_alias = .{
+                .var_ = var_anno_idx,
                 .alias_name = alias_ident,
-                .external_decl = external_decl,
             } }, region);
         },
         .malformed => |m| {
@@ -7512,7 +7575,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
             const diagnostic = try self.env.addDiagnostic(Diagnostic{ .malformed_where_clause = .{
                 .region = region,
             } });
-            return try self.env.addWhereClause(WhereClause{ .malformed = .{
+            return try self.env.addWhereClause(WhereClause{ .w_malformed = .{
                 .diagnostic = diagnostic,
             } }, region);
         },
@@ -7521,17 +7584,17 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
 
 /// Handle module-qualified types like Json.Decoder
 /// Create an annotation from a type annotation
-fn createAnnotationFromTypeAnno(self: *Self, type_anno_idx: TypeAnno.Idx, region: Region) std.mem.Allocator.Error!Annotation.Idx {
+fn createAnnotationFromTypeAnno(
+    self: *Self,
+    type_anno_idx: TypeAnno.Idx,
+    mb_where_clauses: ?CIR.WhereClause.Span,
+    region: Region,
+) std.mem.Allocator.Error!Annotation.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // Create the annotation structure
-    // TODO: Remove signature field from Annotation
-    // TODO: Capture where clauses
-    const annotation = CIR.Annotation{
-        .type_anno = type_anno_idx,
-        .signature = try self.env.addTypeSlot(@enumFromInt(0), region, TypeVar),
-    };
+    const annotation = CIR.Annotation{ .anno = type_anno_idx, .where = mb_where_clauses };
 
     // Add to NodeStore and return the index
     const annotation_idx = try self.env.addAnnotation(annotation, region);

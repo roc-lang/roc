@@ -114,10 +114,9 @@ isRed = |color| match color {
 									(external-module "Bool")
 									(e-tag (name "False")))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "Color") (local))
-					(ty-lookup (name "Bool") (external-module "Bool"))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "Color") (local))
+				(ty-lookup (name "Bool") (external-module "Bool")))))
 	(s-nominal-decl
 		(ty-header (name "Color"))
 		(ty-tag-union

@@ -56,8 +56,7 @@ NO CHANGE
 			(external-module "Color")
 			(e-tag (name "Red")))
 		(annotation
-			(declared-type
-				(ty-lookup (name "RGB") (external-module "Color")))))
+			(ty-lookup (name "RGB") (external-module "Color"))))
 	(s-import (module "Color")
 		(exposes)))
 ~~~

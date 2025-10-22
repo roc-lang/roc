@@ -253,10 +253,9 @@ transform = |_, b| b
 			(e-lookup-local
 				(p-assign (ident "x"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-underscore)
-					(ty-underscore)))))
+			(ty-fn (effectful false)
+				(ty-underscore)
+				(ty-underscore))))
 	(d-let
 		(p-assign (ident "identity"))
 		(e-lambda
@@ -265,10 +264,9 @@ transform = |_, b| b
 			(e-lookup-local
 				(p-assign (ident "x"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-rigid-var (name "a"))
-					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "a"))
+				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(d-let
 		(p-assign (ident "process"))
 		(e-lambda
@@ -277,11 +275,10 @@ transform = |_, b| b
 			(e-string
 				(e-literal (string "processed"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "List") (builtin)
-						(ty-underscore))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-apply (name "List") (builtin)
+					(ty-underscore))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "get_data"))
 		(e-lambda
@@ -292,14 +289,13 @@ transform = |_, b| b
 					(e-lookup-local
 						(p-assign (ident "record"))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-record
-						(field (field "field")
-							(ty-underscore))
-						(field (field "other")
-							(ty-lookup (name "U32") (builtin))))
-					(ty-lookup (name "U32") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-record
+					(field (field "field")
+						(ty-underscore))
+					(field (field "other")
+						(ty-lookup (name "U32") (builtin))))
+				(ty-lookup (name "U32") (builtin)))))
 	(d-let
 		(p-assign (ident "handle_result"))
 		(e-closure
@@ -329,12 +325,11 @@ transform = |_, b| b
 									(e-lookup-local
 										(p-assign (ident "msg"))))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "Result") (external-module "Result")
-						(ty-underscore)
-						(ty-lookup (name "Str") (builtin)))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-apply (name "Result") (external-module "Result")
+					(ty-underscore)
+					(ty-lookup (name "Str") (builtin)))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "map"))
 		(e-lambda
@@ -343,16 +338,15 @@ transform = |_, b| b
 				(p-underscore))
 			(e-empty_list))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-parens
-						(ty-fn (effectful false)
-							(ty-rigid-var (name "a"))
-							(ty-rigid-var (name "b"))))
-					(ty-apply (name "List") (builtin)
-						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-					(ty-apply (name "List") (builtin)
-						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))))
+			(ty-fn (effectful false)
+				(ty-parens
+					(ty-fn (effectful false)
+						(ty-rigid-var (name "a"))
+						(ty-rigid-var (name "b"))))
+				(ty-apply (name "List") (builtin)
+					(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
+				(ty-apply (name "List") (builtin)
+					(ty-rigid-var-lookup (ty-rigid-var (name "b")))))))
 	(d-let
 		(p-assign (ident "transform"))
 		(e-lambda
@@ -360,7 +354,11 @@ transform = |_, b| b
 				(p-underscore)
 				(p-assign (ident "b")))
 			(e-lookup-local
-				(p-assign (ident "b"))))))
+				(p-assign (ident "b")))))
+	(s-type-anno (name "transform")
+		(ty-fn (effectful false)
+			(ty-rigid-var (name "_a"))
+			(ty-rigid-var (name "_b")))))
 ~~~
 # TYPES
 ~~~clojure

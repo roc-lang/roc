@@ -104,10 +104,9 @@ NO CHANGE
 					(e-lookup-local
 						(p-assign (ident "a"))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-rigid-var (name "val"))
-					(ty-rigid-var-lookup (ty-rigid-var (name "val"))))))))
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "val"))
+				(ty-rigid-var-lookup (ty-rigid-var (name "val")))))))
 ~~~
 # TYPES
 ~~~clojure

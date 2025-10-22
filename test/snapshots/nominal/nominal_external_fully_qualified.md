@@ -134,12 +134,11 @@ handleResult = |result| {
 										(e-string
 											(e-literal (string "Error: $(code.toStr())")))))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "MyResultType") (external-module "MyResultModule")
-						(ty-lookup (name "Str") (builtin))
-						(ty-lookup (name "I32") (builtin)))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-apply (name "MyResultType") (external-module "MyResultModule")
+					(ty-lookup (name "Str") (builtin))
+					(ty-lookup (name "I32") (builtin)))
+				(ty-lookup (name "Str") (builtin)))))
 	(s-import (module "MyResultModule")
 		(exposes)))
 ~~~

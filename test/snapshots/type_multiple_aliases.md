@@ -155,12 +155,11 @@ NO CHANGE
 						(e-lookup-local
 							(p-assign (ident "age")))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "UserId") (local))
-					(ty-lookup (name "UserName") (local))
-					(ty-lookup (name "UserAge") (local))
-					(ty-lookup (name "User") (local))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "UserId") (local))
+				(ty-lookup (name "UserName") (local))
+				(ty-lookup (name "UserAge") (local))
+				(ty-lookup (name "User") (local)))))
 	(d-let
 		(p-assign (ident "get_user_name"))
 		(e-lambda
@@ -171,10 +170,9 @@ NO CHANGE
 					(e-lookup-local
 						(p-assign (ident "user"))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "User") (local))
-					(ty-lookup (name "UserName") (local))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "User") (local))
+				(ty-lookup (name "UserName") (local)))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-closure

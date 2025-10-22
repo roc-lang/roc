@@ -25,6 +25,12 @@ const builtin_loading = eval.builtin_loading;
 const BuiltinTypes = eval.BuiltinTypes;
 
 const cli_args = @import("cli_args.zig");
+
+comptime {
+    if (builtin.is_test) {
+        std.testing.refAllDecls(cli_args);
+    }
+}
 const bench = @import("bench.zig");
 const linker = @import("linker.zig");
 const platform_host_shim = @import("platform_host_shim.zig");
@@ -448,8 +454,14 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
         .repl => rocRepl(allocs),
         .version => stdout.print("Roc compiler version {s}", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(allocs, docs_args),
-        .help => |help_message| stdout.writeAll(help_message),
-        .licenses => stdout.writeAll(legalDetailsFileContent),
+        .help => |help_message| {
+            try stdout.writeAll(help_message);
+            try stdout.flush();
+        },
+        .licenses => {
+            try stdout.writeAll(legalDetailsFileContent);
+            try stdout.flush();
+        },
         .problem => |problem| {
             try switch (problem) {
                 .missing_flag_value => |details| stderr.print("Error: no value was supplied for {s}", .{details.flag}),
@@ -1387,7 +1399,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     }
 
     // Type check the module
-    var checker = try Check.init(shm_allocator, &env.types, &env, &.{}, &env.store.regions, common_idents);
+    var checker = try Check.init(shm_allocator, &env.types, &env, &.{}, null, &env.store.regions, common_idents);
     try checker.checkFile();
 
     // Copy the ModuleEnv to the allocated space
@@ -2412,7 +2424,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     };
 
     // Type check the module
-    var checker = Check.init(allocs.gpa, &env.types, &env, &.{}, &env.store.regions, module_common_idents) catch |err| {
+    var checker = Check.init(allocs.gpa, &env.types, &env, &.{}, null, &env.store.regions, module_common_idents) catch |err| {
         try stderr.print("Failed to initialize type checker: {}", .{err});
         std.process.exit(1);
     };

@@ -1,0 +1,96 @@
+on:
+#  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 9 * * *"
+
+name: Nightly release for new compiler
+
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
+jobs:
+  build-and-package:
+    name: build and package nightly release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            artifact_name: macos_x86_64
+          - os: macos-15
+            artifact_name: macos_apple_silicon
+          - os: ubuntu-22.04
+            artifact_name: linux_x86_64
+          - os: ubuntu-24.04-arm
+            artifact_name: linux_arm64
+          - os: windows-2022
+            artifact_name: windows_x86_64
+          - os: windows-11-arm
+            artifact_name: windows_arm64
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
+
+      - uses: mlugg/setup-zig@8d6198c65fb0feaa111df26e6b467fea8345e46f # ratchet:mlugg/setup-zig@v2.0.5
+        with:
+          version: 0.15.2
+          use-cache: true
+
+      # temp fix, see https://roc.zulipchat.com/#narrow/channel/395097-compiler-development/topic/CI/near/542085291
+      - name: delete llvm-config
+        if: startsWith(matrix.os, 'ubuntu') && endsWith(matrix.os, '-arm')
+        run: |
+          sudo rm /usr/lib/llvm-18/bin/llvm-config
+
+      - name: Setup MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # ratchet:ilammy/msvc-dev-cmd@v1.13.0
+        with:
+          arch: ${{ matrix.os == 'windows-11-arm' && 'arm64' || 'x64' }}
+
+      - name: create version.txt
+        run: ./ci/write_version.sh
+
+      - name: get commit SHA
+        run: echo "SHA=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_ENV
+
+      - name: get date
+        run: echo "DATE=$(date "+%Y-%m-%d")" >> $GITHUB_ENV
+
+      - name: build release
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: 'zig build roc -Doptimize=ReleaseFast'
+          error_string_contains: 'EndOfStream'
+          retry_count: 3
+
+      - name: build file name
+        env:
+          DATE: ${{ env.DATE }}
+          SHA: ${{ env.SHA }}
+        run: echo "RELEASE_FOLDER_NAME=new_roc_nightly-${{ matrix.artifact_name }}-$DATE-$SHA" >> $GITHUB_ENV
+
+      - name: Package release (Unix)
+        run: |
+          mkdir -p ${{ env.RELEASE_FOLDER_NAME }}
+          cp ./zig-out/bin/roc ${{ env.RELEASE_FOLDER_NAME }}/
+          cp LICENSE legal_details ${{ env.RELEASE_FOLDER_NAME }}/
+          tar -czvf "${{ env.RELEASE_FOLDER_NAME }}.tar.gz" ${{ env.RELEASE_FOLDER_NAME }}
+
+      - name: Calculate archive hash for security purposes
+        shell: bash
+        run: sha256sum ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
+
+      - name: Upload roc nightly tar
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
+          path: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
+          retention-days: 4

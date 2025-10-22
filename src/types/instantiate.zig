@@ -168,7 +168,7 @@ pub const Instantiator = struct {
 
     fn instantiateContent(self: *Self, content: Content) std.mem.Allocator.Error!Content {
         return switch (content) {
-            .flex => |maybe_ident| Content{ .flex = maybe_ident },
+            .flex => |flex| Content{ .flex = try self.instantiateFlex(flex) },
             .rigid => {
                 // Rigids should be handled by `instantiateVar`
                 // If we have run into one here, it is  abug
@@ -187,7 +187,7 @@ pub const Instantiator = struct {
         };
     }
 
-    fn instantiateFlex(self: *Self, flex: Flex) std.mem.Allocator.Error!Content {
+    fn instantiateFlex(self: *Self, flex: Flex) std.mem.Allocator.Error!Flex {
         const fresh_constraints = try self.instantiateStaticDispatchConstraints(flex.constraints);
 
         return Flex{ .name = flex.name, .constraints = fresh_constraints };
@@ -385,22 +385,9 @@ pub const Instantiator = struct {
     }
 
     fn instantiateStaticDispatchConstraint(self: *Self, constraint: StaticDispatchConstraint) std.mem.Allocator.Error!StaticDispatchConstraint {
-        var fresh_vars = std.array_list.Managed(Var).init(self.store.gpa);
-        defer fresh_vars.deinit();
-
-        // Copy the args
-        for (self.store.sliceVars(constraint.fn_args.nonempty)) |source_fn_arg| {
-            const fresh_fn_arg = try self.instantiateVar(source_fn_arg);
-            try fresh_vars.append(fresh_fn_arg);
-        }
-        const fresh_fn_args_range = try self.store.appendVars(fresh_vars.items);
-
-        const fresh_fn_ret = try self.instantiateVar(constraint.fn_ret);
-
         return StaticDispatchConstraint{
             .fn_name = constraint.fn_name,
-            .fn_args = .{ .nonempty = fresh_fn_args_range },
-            .fn_ret = fresh_fn_ret,
+            .fn_var = try self.instantiateVar(constraint.fn_var),
         };
     }
 };

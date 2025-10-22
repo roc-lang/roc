@@ -101,14 +101,13 @@ main! = |_| getName({ namee: "luke", age: 21 })
 			(e-string
 				(e-literal (string "hello"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-record
-						(field (field "name")
-							(ty-lookup (name "Str") (builtin)))
-						(field (field "age")
-							(ty-lookup (name "U64") (builtin))))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-record
+					(field (field "name")
+						(ty-lookup (name "Str") (builtin)))
+					(field (field "age")
+						(ty-lookup (name "U64") (builtin))))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-closure

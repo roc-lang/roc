@@ -226,7 +226,9 @@ ain! = |_| getUser(900)
 					(e-num (value "900"))))))
 	(s-alias-decl
 		(ty-header (name "UserId"))
-		(ty-lookup (name "U64") (builtin))))
+		(ty-lookup (name "U64") (builtin)))
+	(s-type-anno (name "f")
+		(ty-malformed)))
 ~~~
 # TYPES
 ~~~clojure

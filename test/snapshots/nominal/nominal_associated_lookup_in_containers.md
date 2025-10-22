@@ -125,19 +125,17 @@ nested = { bar: A, count: 1 }
 				(e-tag (name "B"))
 				(e-tag (name "C"))))
 		(annotation
-			(declared-type
-				(ty-apply (name "List") (builtin)
-					(ty-lookup (name "Foo.Bar") (local))))))
+			(ty-apply (name "List") (builtin)
+				(ty-lookup (name "Foo.Bar") (local)))))
 	(d-let
 		(p-assign (ident "result"))
 		(e-tag (name "Ok")
 			(args
 				(e-tag (name "A"))))
 		(annotation
-			(declared-type
-				(ty-apply (name "Result") (external-module "Result")
-					(ty-lookup (name "Foo.Bar") (local))
-					(ty-lookup (name "Foo.Error") (local))))))
+			(ty-apply (name "Result") (external-module "Result")
+				(ty-lookup (name "Foo.Bar") (local))
+				(ty-lookup (name "Foo.Error") (local)))))
 	(d-let
 		(p-assign (ident "nested"))
 		(e-record
@@ -147,12 +145,11 @@ nested = { bar: A, count: 1 }
 				(field (name "count")
 					(e-num (value "1")))))
 		(annotation
-			(declared-type
-				(ty-record
-					(field (field "bar")
-						(ty-lookup (name "Foo.Bar") (local)))
-					(field (field "count")
-						(ty-lookup (name "U64") (builtin)))))))
+			(ty-record
+				(field (field "bar")
+					(ty-lookup (name "Foo.Bar") (local)))
+				(field (field "count")
+					(ty-lookup (name "U64") (builtin))))))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
 		(ty-tag-union
