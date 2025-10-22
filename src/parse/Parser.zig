@@ -977,7 +977,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
             }
             if ((qualifier == null and self.peek() == .UpperIdent) or (qualifier != null and (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent))) {
                 var exposes = AST.ExposedItem.Span{ .span = base.DataSpan.empty() };
-                var suppress_alias = false;
+                var nested_import = false;
 
                 // Parse all uppercase segments: first.Second.Third...
                 var prev_upper_tok: ?TokenIdx = null;
@@ -999,7 +999,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     // Module is everything before the last segment, last segment is auto-exposed
                     const final_segment_tok = module_name_tok;
                     module_name_tok = prev_upper_tok.?;
-                    suppress_alias = true;
+                    nested_import = true;
 
                     // Create exposed item for the final segment
                     const scratch_top = self.store.scratchExposedItemTop();
@@ -1053,7 +1053,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     .qualifier_tok = qualifier,
                     .alias_tok = alias_tok,
                     .exposes = exposes,
-                    .suppress_alias = suppress_alias,
+                    .nested_import = nested_import,
                     .region = .{ .start = start, .end = self.pos },
                 } });
                 return statement_idx;

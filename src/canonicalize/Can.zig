@@ -1841,8 +1841,8 @@ fn canonicalizeImportStatement(
     const cir_exposes = try self.env.store.exposedItemSpanFrom(scratch_start);
     const import_region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
 
-    // 3. Dispatch to the appropriate handler based on whether we need an alias
-    return if (import_stmt.suppress_alias)
+    // 3. Dispatch to the appropriate handler based on whether this is a nested import
+    return if (import_stmt.nested_import)
         try self.importUnaliased(module_name, cir_exposes, import_region)
     else
         try self.importAliased(module_name, import_stmt.alias_tok, cir_exposes, import_region);

@@ -824,7 +824,7 @@ pub const Statement = union(enum) {
         exposes: ExposedItem.Span,
         /// True when importing like `import json.Parser.Config` where Config is auto-exposed
         /// but Parser should not become an alias (unlike `import json.Parser exposing [Config]`)
-        suppress_alias: bool,
+        nested_import: bool,
         region: TokenizedRegion,
     },
     type_decl: struct {
