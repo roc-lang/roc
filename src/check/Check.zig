@@ -94,6 +94,8 @@ import_cache: ImportCache,
 constraint_origins: std.AutoHashMap(Var, Var),
 /// Copied Bool type from Bool module (for use in if conditions, etc.)
 bool_var: Var,
+/// Copied Str type from Str module (for use in string literals, etc.)
+str_var: Var,
 /// Deferred static dispatch constraints - accumulated during type checking,
 /// then solved for at the end
 deferred_static_dispatch_constraints: DeferredConstraintCheck.SafeList,
@@ -118,6 +120,8 @@ pub const CommonIdents = struct {
     bool_stmt: can.CIR.Statement.Idx,
     /// Statement index of Result type in the current module (injected from Result.bin)
     result_stmt: can.CIR.Statement.Idx,
+    /// Statement index of Str type in the current module (injected from Str.bin)
+    str_stmt: can.CIR.Statement.Idx,
 };
 
 /// Init type solver
@@ -157,6 +161,7 @@ pub fn init(
         .import_cache = ImportCache{},
         .constraint_origins = std.AutoHashMap(Var, Var).init(gpa),
         .bool_var = undefined, // Will be initialized in copyBuiltinTypes()
+        .str_var = undefined, // Will be initialized in copyBuiltinTypes()
         .deferred_static_dispatch_constraints = try DeferredConstraintCheck.SafeList.initCapacity(gpa, 128),
         .static_dispatch_method_name_buf = try std.ArrayList(u8).initCapacity(gpa, 32),
     };
@@ -605,6 +610,11 @@ fn copyBuiltinTypes(self: *Self) !void {
         const bool_stmt_idx = self.common_idents.bool_stmt;
         self.bool_var = ModuleEnv.varFrom(bool_stmt_idx);
     }
+
+    // Copy Str type from current module's builtin statement
+    // Str is always loaded as a builtin statement (injected from Str.bin)
+    const str_stmt_idx = self.common_idents.str_stmt;
+    self.str_var = ModuleEnv.varFrom(str_stmt_idx);
 
     // Result type is accessed via external references, no need to copy it here
 }
@@ -1475,7 +1485,6 @@ fn generateBuiltinTypeInstance(
     anno_region: Region,
 ) std.mem.Allocator.Error!Var {
     switch (anno_builtin_type) {
-        .str => return try self.freshFromContent(.{ .structure = .str }, Rank.generalized, anno_region),
         .u8 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.int_u8 } }, Rank.generalized, anno_region),
         .u16 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.int_u16 } }, Rank.generalized, anno_region),
         .u32 => return try self.freshFromContent(.{ .structure = .{ .num = types_mod.Num.int_u32 } }, Rank.generalized, anno_region),

@@ -726,6 +726,7 @@ pub const PackageEnv = struct {
             .box = try env.insertIdent(base.Ident.for_text("Box")),
             .bool_stmt = builtin_indices.bool_type,
             .result_stmt = builtin_indices.result_type,
+            .str_stmt = builtin_indices.str_type,
         };
 
         // Build other_modules array according to env.imports order
@@ -778,12 +779,15 @@ pub const PackageEnv = struct {
         // Load builtin modules required by the interpreter (reuse builtin_indices from above)
         const bool_source = "Bool := [True, False].{}\n";
         const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+        const str_source = "Str := [].{}\n";
         var bool_module = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.bool_bin, "Bool", bool_source);
         defer bool_module.deinit();
         var result_module = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.result_bin, "Result", result_source);
         defer result_module.deinit();
+        var str_module = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.str_bin, "Str", str_source);
+        defer str_module.deinit();
 
-        const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+        const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
         var comptime_evaluator = try eval.ComptimeEvaluator.init(self.gpa, env, imported_envs.items, &checker.problems, builtin_types_for_eval);
         _ = try comptime_evaluator.evalAll();
 

@@ -1365,6 +1365,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         .box = try env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = @enumFromInt(0), // TODO: load from builtin modules
         .result_stmt = @enumFromInt(0), // TODO: load from builtin modules
+        .str_stmt = @enumFromInt(0), // TODO: load from builtin modules
     };
 
     // Create canonicalizer
@@ -2389,6 +2390,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
         .box = try env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = @enumFromInt(0), // TODO: load from builtin modules
         .result_stmt = @enumFromInt(0), // TODO: load from builtin modules
+        .str_stmt = @enumFromInt(0), // TODO: load from builtin modules
     };
 
     // Parse the source code as a full module
@@ -2443,6 +2445,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     };
     const bool_source = "Bool := [True, False].{}\n";
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const str_source = "Str := [].{}\n";
     var bool_module = builtin_loading.loadCompiledModule(allocs.gpa, compiled_builtins.bool_bin, "Bool", bool_source) catch |err| {
         try stderr.print("Failed to load Bool module: {}\n", .{err});
         std.process.exit(1);
@@ -2453,8 +2456,13 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
         std.process.exit(1);
     };
     defer result_module.deinit();
+    var str_module = builtin_loading.loadCompiledModule(allocs.gpa, compiled_builtins.str_bin, "Str", str_source) catch |err| {
+        try stderr.print("Failed to load Str module: {}\n", .{err});
+        std.process.exit(1);
+    };
+    defer str_module.deinit();
 
-    const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var comptime_evaluator = eval.ComptimeEvaluator.init(allocs.gpa, &env, &.{}, &checker.problems, builtin_types_for_eval) catch |err| {
         try stderr.print("Failed to create compile-time evaluator: {}\n", .{err});
         std.process.exit(1);

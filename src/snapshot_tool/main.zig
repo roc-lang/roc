@@ -1238,6 +1238,7 @@ fn processSnapshotContent(
         .box = try can_ir.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = config.builtin_indices.bool_type,
         .result_stmt = config.builtin_indices.result_type,
+        .str_stmt = config.builtin_indices.str_type,
     };
 
     // Auto-inject Set, Dict, Bool, and Result as available imports (if they're loaded)

@@ -281,10 +281,13 @@ test "Repl - minimal interpreter integration" {
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const str_source = "Str := [].{}\n";
     var bool_module = try loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
     var result_module = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    var str_module = try loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
     // Step 1: Create module environment
     const source = "42";
@@ -305,9 +308,10 @@ test "Repl - minimal interpreter integration" {
     const cir = &module_env; // CIR is now just ModuleEnv
     try cir.initCIRFields(gpa, "test");
 
-    // Get Bool and Result statement indices from the IMPORTED modules (not copied!)
+    // Get Bool, Result, and Str statement indices from the IMPORTED modules (not copied!)
     const bool_stmt_in_bool_module = builtin_indices.bool_type;
     const result_stmt_in_result_module = builtin_indices.result_type;
+    const str_stmt_in_str_module = builtin_indices.str_type;
 
     const common_idents: Check.CommonIdents = .{
         .module_name = try cir.insertIdent(base.Ident.for_text("test")),
@@ -315,6 +319,7 @@ test "Repl - minimal interpreter integration" {
         .box = try cir.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = bool_stmt_in_bool_module,
         .result_stmt = result_stmt_in_result_module,
+        .str_stmt = str_stmt_in_str_module,
     };
 
     // Step 4: Canonicalize
@@ -326,15 +331,15 @@ test "Repl - minimal interpreter integration" {
         return error.CanonicalizeError;
     };
 
-    // Step 5: Type check - Pass Bool and Result as imported modules
-    const imported_envs = [_]*const ModuleEnv{ bool_module.env, result_module.env };
+    // Step 5: Type check - Pass Bool, Result, and Str as imported modules
+    const imported_envs = [_]*const ModuleEnv{ bool_module.env, result_module.env, str_module.env };
     var checker = try Check.init(gpa, &module_env.types, cir, &imported_envs, null, &cir.store.regions, common_idents);
     defer checker.deinit();
 
     _ = try checker.checkExprRepl(canonical_expr_idx.get_idx());
 
     // Step 6: Create interpreter
-    const builtin_types = eval.BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types = eval.BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interpreter = try Interpreter.init(gpa, &module_env, builtin_types, null);
     defer interpreter.deinitAndFreeOtherEnvs();
 

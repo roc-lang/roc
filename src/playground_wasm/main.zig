@@ -975,6 +975,12 @@ fn compileSource(source: []const u8) !CompilerStageData {
     defer result_module.deinit();
     logDebug("compileSource: Result module loaded\n", .{});
 
+    logDebug("compileSource: Loading Str module\n", .{});
+    const str_source = "Str := [].{}\n";
+    var str_module = try LoadedModule.loadCompiledModule(allocator, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
+    logDebug("compileSource: Str module loaded\n", .{});
+
     // Get Bool and Result statement indices from the IMPORTED modules (not copied!)
     // Use builtin_indices directly - these are the correct statement indices
     logDebug("compileSource: Getting Bool and Result statement indices from builtin_indices\n", .{});
@@ -987,7 +993,8 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     // Store bool_stmt and builtin_types in result for later use (e.g., in test runner)
     result.bool_stmt = bool_stmt_in_bool_module;
-    result.builtin_types = eval.BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const str_stmt_in_str_module = builtin_indices.str_type;
+    result.builtin_types = eval.BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
 
     const module_common_idents: Check.CommonIdents = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("main")),
@@ -995,6 +1002,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = bool_stmt_in_bool_module,
         .result_stmt = result_stmt_in_result_module,
+        .str_stmt = str_stmt_in_str_module,
     };
 
     // Create module_envs map for canonicalization (enables qualified calls)

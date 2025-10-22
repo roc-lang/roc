@@ -34,6 +34,8 @@ pub const BuiltinIndices = struct {
     bool_type: Statement.Idx,
     /// Statement index of Result type declaration within Result module
     result_type: Statement.Idx,
+    /// Statement index of Str type declaration within Str module
+    str_type: Statement.Idx,
     /// Statement index of Dict type declaration within Dict module
     dict_type: Statement.Idx,
     /// Statement index of Set type declaration within Set module

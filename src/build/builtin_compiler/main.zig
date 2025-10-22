@@ -26,6 +26,8 @@ const BuiltinIndices = struct {
     bool_type: CIR.Statement.Idx,
     /// Statement index of Result type declaration within Result module
     result_type: CIR.Statement.Idx,
+    /// Statement index of Str type declaration within Str module
+    str_type: CIR.Statement.Idx,
 };
 
 /// Build-time compiler that compiles builtin .roc sources into serialized ModuleEnvs.
@@ -51,6 +53,8 @@ pub fn main() !void {
     const bool_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Bool.roc", 1024 * 1024);
 
     const result_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Result.roc", 1024 * 1024);
+
+    const str_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Str.roc", 1024 * 1024);
 
     const dict_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Dict.roc", 1024 * 1024);
 
@@ -92,6 +96,24 @@ pub fn main() !void {
     // Find Result type declaration via string lookup
     const result_type_idx = try findTypeDeclaration(result_env, "Result");
 
+    // Compile Str.roc (doesn't use Bool or Result types in its definition)
+    const str_env = try compileModule(
+        gpa,
+        "Str",
+        str_roc_source,
+        &.{}, // No module dependencies
+        bool_type_idx, // Provide Bool type index in case it's needed
+        result_type_idx, // Provide Result type index in case it's needed
+    );
+    defer {
+        str_env.deinit();
+        gpa.destroy(str_env);
+        gpa.free(str_roc_source);
+    }
+
+    // Find Str type declaration via string lookup
+    const str_type_idx = try findTypeDeclaration(str_env, "Str");
+
     // Compile Dict.roc (may use Result type, so we provide the indices)
     const dict_env = try compileModule(
         gpa,
@@ -130,6 +152,7 @@ pub fn main() !void {
     // Serialize modules
     try serializeModuleEnv(gpa, bool_env, "zig-out/builtins/Bool.bin");
     try serializeModuleEnv(gpa, result_env, "zig-out/builtins/Result.bin");
+    try serializeModuleEnv(gpa, str_env, "zig-out/builtins/Str.bin");
     try serializeModuleEnv(gpa, dict_env, "zig-out/builtins/Dict.bin");
     try serializeModuleEnv(gpa, set_env, "zig-out/builtins/Set.bin");
 
@@ -137,6 +160,7 @@ pub fn main() !void {
     const builtin_indices = BuiltinIndices{
         .bool_type = bool_type_idx,
         .result_type = result_type_idx,
+        .str_type = str_type_idx,
     };
     try serializeBuiltinIndices(builtin_indices, "zig-out/builtins/builtin_indices.bin");
 }
@@ -182,6 +206,7 @@ fn compileModule(
         .box = box_ident,
         .bool_stmt = bool_stmt_opt orelse undefined,
         .result_stmt = result_stmt_opt orelse undefined,
+        .str_stmt = undefined, // Not available yet when compiling builtins
     };
 
     // 3. Parse

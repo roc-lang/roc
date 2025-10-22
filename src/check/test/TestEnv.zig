@@ -212,6 +212,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = bool_stmt_in_bool_module,
         .result_stmt = result_stmt_in_result_module,
+        .str_stmt = builtin_indices.str_type,
     };
 
     // Build imported_envs array to match the import indices assigned by canonicalizer
@@ -366,6 +367,7 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = bool_stmt_in_bool_module,
         .result_stmt = result_stmt_in_result_module,
+        .str_stmt = builtin_indices.str_type,
     };
 
     // Build imported_envs array to match the import indices assigned by canonicalizer

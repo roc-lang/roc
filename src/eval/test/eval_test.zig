@@ -749,6 +749,9 @@ test "ModuleEnv serialization and interpreter evaluation" {
     defer bool_module.deinit();
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = "Str := [].{}\n";
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
     // Create original ModuleEnv
     var original_env = try ModuleEnv.init(gpa, source);
@@ -771,6 +774,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     // Get Bool and Result statement indices from IMPORTED modules (not copied!)
     const bool_stmt_in_bool_module = builtin_indices.bool_type;
     const result_stmt_in_result_module = builtin_indices.result_type;
+    const str_stmt_in_str_module = builtin_indices.str_type;
 
     const common_idents: Check.CommonIdents = .{
         .module_name = try original_env.insertIdent(base.Ident.for_text("test")),
@@ -778,6 +782,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         .box = try original_env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = bool_stmt_in_bool_module,
         .result_stmt = result_stmt_in_result_module,
+        .str_stmt = str_stmt_in_str_module,
     };
 
     // Create module_envs map for canonicalization (enables qualified calls)
@@ -807,7 +812,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
     // Test 1: Evaluate with the original ModuleEnv
     {
-        const builtin_types_local = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+        const builtin_types_local = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
         var interpreter = try Interpreter.init(gpa, &original_env, builtin_types_local, null);
         defer interpreter.deinit();
 
@@ -874,7 +879,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         // Test 4: Evaluate the same expression using the deserialized ModuleEnv
         // The original expression index should still be valid since the NodeStore structure is preserved
         {
-            const builtin_types_local = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+            const builtin_types_local = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
             var interpreter = try Interpreter.init(gpa, deserialized_env, builtin_types_local, null);
             defer interpreter.deinit();
 

@@ -119,10 +119,13 @@ test "compiled builtins - use Set and Dict together" {
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const str_source = "Str := [].{}\n";
     var bool_module = try loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
     var result_module = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    var str_module = try loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
     // Load Dict first
     const dict_source = "Dict := [EmptyDict].{}\n";
@@ -191,7 +194,7 @@ test "compiled builtins - use Set and Dict together" {
     // Canonicalize
     try module_env.initCIRFields(gpa, module_env.module_name);
 
-    // Inject builtin type declarations (Bool and Result) following TestEnv.zig pattern
+    // Inject builtin type declarations (Bool, Result, and Str) following TestEnv.zig pattern
     const bool_stmt = bool_module.env.store.getStatement(builtin_indices.bool_type);
     const actual_bool_idx = try module_env.store.addStatement(bool_stmt, base.Region.zero());
     _ = try module_env.types.freshFromContent(.err); // Add type variable for Bool
@@ -200,9 +203,13 @@ test "compiled builtins - use Set and Dict together" {
     const actual_result_idx = try module_env.store.addStatement(result_stmt, base.Region.zero());
     _ = try module_env.types.freshFromContent(.err); // Add type variable for Result
 
+    const str_stmt = str_module.env.store.getStatement(builtin_indices.str_type);
+    const actual_str_idx = try module_env.store.addStatement(str_stmt, base.Region.zero());
+    _ = try module_env.types.freshFromContent(.err); // Add type variable for Str
+
     // Update builtin_statements span
     const start_idx = @intFromEnum(actual_bool_idx);
-    const end_idx = @intFromEnum(actual_result_idx);
+    const end_idx = @intFromEnum(actual_str_idx);
     module_env.builtin_statements = .{ .span = .{
         .start = start_idx,
         .len = end_idx - start_idx + 1,
@@ -214,6 +221,7 @@ test "compiled builtins - use Set and Dict together" {
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = actual_bool_idx,
         .result_stmt = actual_result_idx,
+        .str_stmt = actual_str_idx,
     };
 
     var can_result = try gpa.create(can.Can);
