@@ -104,7 +104,7 @@ parseConfig = |settings| Config.toString(settings)
 
 
 **TYPE NOT EXPOSED**
-The type `Token` is not an exposed by the module `http.Client.Auth`.
+The `http.Client.Auth` module does not expose anything named _Token_.
 
 You're attempting to use this type here:
 **can_import_nested_modules.md:10:36:10:42:**
@@ -112,6 +112,8 @@ You're attempting to use this type here:
 authenticate : Str, Str -> HttpAuth.Token
 ```
                                    ^^^^^^
+
+Make sure the module exports this type, or use a type that is exposed.
 
 
 **UNDEFINED VARIABLE**
@@ -181,7 +183,7 @@ formatOutput = |text| padLeft(text, Config.defaultPadding)
 
 
 **TYPE NOT EXPOSED**
-The type `Credentials` is not an exposed by the module `http.Client.Auth`.
+The `http.Client.Auth` module does not expose anything named _Credentials_.
 
 You're attempting to use this type here:
 **can_import_nested_modules.md:23:24:23:36:**
@@ -190,9 +192,11 @@ validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 ```
                        ^^^^^^^^^^^^
 
+Make sure the module exports this type, or use a type that is exposed.
+
 
 **TYPE NOT EXPOSED**
-The type `Token` is not an exposed by the module `http.Client.Auth`.
+The `http.Client.Auth` module does not expose anything named _Token_.
 
 You're attempting to use this type here:
 **can_import_nested_modules.md:23:55:23:61:**
@@ -201,9 +205,11 @@ validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 ```
                                                       ^^^^^^
 
+Make sure the module exports this type, or use a type that is exposed.
+
 
 **TYPE NOT EXPOSED**
-The type `Error` is not an exposed by the module `http.Client.Auth`.
+The `http.Client.Auth` module does not expose anything named _Error_.
 
 You're attempting to use this type here:
 **can_import_nested_modules.md:23:71:23:77:**
@@ -211,6 +217,8 @@ You're attempting to use this type here:
 validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 ```
                                                                       ^^^^^^
+
+Make sure the module exports this type, or use a type that is exposed.
 
 
 **UNDEFINED VARIABLE**

@@ -143,7 +143,7 @@ import ExternalModule as ExtMod
 
 
 **TYPE NOT EXPOSED**
-The type `RGB` is not an exposed by the module `Color`.
+The `Color` module does not expose anything named _RGB_.
 
 You're attempting to use this type here:
 **qualified_type_canonicalization.md:14:24:14:28:**
@@ -151,6 +151,8 @@ You're attempting to use this type here:
 simpleQualified : Color.RGB
 ```
                        ^^^^
+
+Make sure the module exports this type, or use a type that is exposed.
 
 
 **UNDECLARED TYPE**
@@ -165,7 +167,7 @@ simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
 
 
 **TYPE NOT EXPOSED**
-The type `DataType` is not an exposed by the module `ExternalModule`.
+The `ExternalModule` module does not expose anything named _DataType_.
 
 You're attempting to use this type here:
 **qualified_type_canonicalization.md:18:26:18:35:**
@@ -173,6 +175,8 @@ You're attempting to use this type here:
 aliasedQualified : ExtMod.DataType
 ```
                          ^^^^^^^^^
+
+Make sure the module exports this type, or use a type that is exposed.
 
 
 **UNDECLARED TYPE**
@@ -209,7 +213,7 @@ multiLevelQualified = TypeC.new
 
 
 **TYPE NOT EXPOSED**
-The type `Result` is not an exposed by the module `Result`.
+There is no _Result.Result_ type.
 
 You're attempting to use this type here:
 **qualified_type_canonicalization.md:26:20:26:27:**
@@ -218,9 +222,11 @@ resultType : Result.Result(I32, Str)
 ```
                    ^^^^^^^
 
+There is a `Result` module, but it does not have a `Result` type nested inside it.
+
 
 **TYPE NOT EXPOSED**
-The type `RGB` is not an exposed by the module `Color`.
+The `Color` module does not expose anything named _RGB_.
 
 You're attempting to use this type here:
 **qualified_type_canonicalization.md:30:23:30:27:**
@@ -228,6 +234,8 @@ You're attempting to use this type here:
 getColor : {} -> Color.RGB
 ```
                       ^^^^
+
+Make sure the module exports this type, or use a type that is exposed.
 
 
 **UNDECLARED TYPE**
@@ -242,7 +250,7 @@ getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
 
 
 **TYPE NOT EXPOSED**
-The type `RGB` is not an exposed by the module `Color`.
+The `Color` module does not expose anything named _RGB_.
 
 You're attempting to use this type here:
 **qualified_type_canonicalization.md:34:21:34:25:**
@@ -250,6 +258,8 @@ You're attempting to use this type here:
 processColor : Color.RGB -> Str
 ```
                     ^^^^
+
+Make sure the module exports this type, or use a type that is exposed.
 
 
 **UNUSED VARIABLE**
@@ -265,7 +275,7 @@ processColor = |color|
 
 
 **TYPE NOT EXPOSED**
-The type `Result` is not an exposed by the module `Result`.
+There is no _Result.Result_ type.
 
 You're attempting to use this type here:
 **qualified_type_canonicalization.md:39:19:39:26:**
@@ -274,9 +284,11 @@ transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
 ```
                   ^^^^^^^
 
+There is a `Result` module, but it does not have a `Result` type nested inside it.
+
 
 **TYPE NOT EXPOSED**
-The type `RGB` is not an exposed by the module `Color`.
+The `Color` module does not expose anything named _RGB_.
 
 You're attempting to use this type here:
 **qualified_type_canonicalization.md:39:32:39:36:**
@@ -285,9 +297,11 @@ transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
 ```
                                ^^^^
 
+Make sure the module exports this type, or use a type that is exposed.
+
 
 **TYPE NOT EXPOSED**
-The type `Error` is not an exposed by the module `ExternalModule`.
+The `ExternalModule` module does not expose anything named _Error_.
 
 You're attempting to use this type here:
 **qualified_type_canonicalization.md:39:44:39:50:**
@@ -295,6 +309,8 @@ You're attempting to use this type here:
 transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
 ```
                                            ^^^^^^
+
+Make sure the module exports this type, or use a type that is exposed.
 
 
 **UNDECLARED TYPE**
