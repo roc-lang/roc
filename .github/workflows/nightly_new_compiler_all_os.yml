@@ -77,20 +77,58 @@ jobs:
           SHA: ${{ env.SHA }}
         run: echo "RELEASE_FOLDER_NAME=new_roc_nightly-${{ matrix.artifact_name }}-$DATE-$SHA" >> $GITHUB_ENV
 
-      - name: Package release (Unix)
+      - name: Package release
         run: |
           mkdir -p ${{ env.RELEASE_FOLDER_NAME }}
           cp ./zig-out/bin/roc ${{ env.RELEASE_FOLDER_NAME }}/
           cp LICENSE legal_details ${{ env.RELEASE_FOLDER_NAME }}/
-          tar -czvf "${{ env.RELEASE_FOLDER_NAME }}.tar.gz" ${{ env.RELEASE_FOLDER_NAME }}
 
-      - name: Calculate archive hash for security purposes
-        shell: bash
+      - name: Compress release (Unix)
+        if: runner.os != 'Windows'
+        run: tar -czvf "${{ env.RELEASE_FOLDER_NAME }}.tar.gz" ${{ env.RELEASE_FOLDER_NAME }}
+
+      - name: Compress release (Windows)
+        if: runner.os == 'Windows'
+        run: 7z a -tzip "${{ env.RELEASE_FOLDER_NAME }}.zip" ${{ env.RELEASE_FOLDER_NAME }}
+
+      - name: Calculate archive hash for security purposes (Unix)
+        if: runner.os != 'Windows'
         run: sha256sum ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
 
-      - name: Upload roc nightly tar
+      - name: Calculate archive hash for security purposes (Windows)
+        if: runner.os == 'Windows'
+        run: sha256sum ${{ env.RELEASE_FOLDER_NAME }}.zip
+
+      - name: Upload roc nightly archive (Unix)
+        if: runner.os != 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
           path: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
           retention-days: 4
+
+      - name: Upload roc nightly archive (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.RELEASE_FOLDER_NAME }}.zip
+          path: ${{ env.RELEASE_FOLDER_NAME }}.zip
+          retention-days: 4
+
+      - name: Clean workspace for test
+        run: |
+          find . -mindepth 1 -maxdepth 1 ! -name "${{ env.RELEASE_FOLDER_NAME }}.tar.gz" ! -name "${{ env.RELEASE_FOLDER_NAME }}.zip" ! -name "src" -exec rm -rf {} +
+          find src -mindepth 1 ! -path "src/PROFILING*" -exec rm -rf {} +
+          find src/PROFILING -mindepth 1 ! -name "bench_repeated_check.roc" -exec rm -rf {} +
+
+      - name: Test archive (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          tar -xzf "${{ env.RELEASE_FOLDER_NAME }}.tar.gz"
+          ./${{ env.RELEASE_FOLDER_NAME }}/roc check src/PROFILING/bench_repeated_check.roc
+
+      - name: Test archive (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          7z x "${{ env.RELEASE_FOLDER_NAME }}.zip"
+          ./${{ env.RELEASE_FOLDER_NAME }}/roc check src/PROFILING/bench_repeated_check.roc
