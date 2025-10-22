@@ -168,10 +168,36 @@ pub const ComptimeEvaluator = struct {
         problems: *ProblemStore,
         builtin_types: BuiltinTypes,
     ) !ComptimeEvaluator {
+        // Build imported_modules_map from other_envs for cross-module evaluation
+        // The other_envs slice is ordered the same way as cir.imports.imports
+        var imported_modules_map: ?std.AutoHashMap(base.Ident.Idx, can.Can.AutoImportedType) = null;
+        if (other_envs.len > 0) {
+            var map = std.AutoHashMap(base.Ident.Idx, can.Can.AutoImportedType).init(allocator);
+            errdefer map.deinit();
+
+            // Iterate through imports and match them with other_envs
+            const import_count = @min(cir.imports.imports.items.items.len, other_envs.len);
+            for (0..import_count) |i| {
+                const str_idx = cir.imports.imports.items.items[i];
+                const import_name = cir.common.getString(str_idx);
+                // Find or create Ident.Idx for this import name
+                const import_ident = cir.common.findIdent(import_name) orelse continue;
+                try map.put(import_ident, .{ .env = @constCast(other_envs[i]) });
+            }
+
+            imported_modules_map = map;
+        }
+        errdefer if (imported_modules_map) |*m| m.deinit();
+
+        const interp = try Interpreter.init(allocator, cir, builtin_types, if (imported_modules_map) |*m| m else null);
+
+        // Clean up the temporary map after Interpreter.init has copied the data it needs
+        if (imported_modules_map) |*m| m.deinit();
+
         return ComptimeEvaluator{
             .allocator = allocator,
             .env = cir,
-            .interpreter = try Interpreter.initWithOtherEnvs(allocator, cir, other_envs, builtin_types),
+            .interpreter = interp,
             .crash = CrashContext.init(allocator),
             .expect = CrashContext.init(allocator),
             .roc_ops = null,

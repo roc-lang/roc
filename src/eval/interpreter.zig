@@ -39,6 +39,7 @@ pub const Interpreter = struct {
         ListIndexOutOfBounds,
         MethodLookupFailed,
         MethodNotFound,
+        NoSpaceLeft,
         NotImplemented,
         NotNumeric,
         NullStackPointer,
@@ -164,10 +165,10 @@ pub const Interpreter = struct {
 
                 // Also build Import.Idx -> ModuleEnv mapping
                 // Get the module name string from the ident
-                const module_name = env.common.getIdentStore().getSlice(ident_idx);
+                const module_name = env.common.getIdentStore().getText(ident_idx);
                 // Look up the Import.Idx for this module name in the current module's import store
                 for (env.imports.imports.items.items, 0..) |string_lit_idx, i| {
-                    const import_name = env.common.string_literals.get(string_lit_idx);
+                    const import_name = env.common.getString(string_lit_idx);
                     if (std.mem.eql(u8, import_name, module_name)) {
                         const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
                         import_envs.putAssumeCapacity(import_idx, module_env);
@@ -1679,7 +1680,7 @@ pub const Interpreter = struct {
                     }
                 }
 
-                // Call the method function
+                // Call the method closure
                 if (method_func.layout.tag != .closure) {
                     // Decref all args before returning error
                     for (all_args) |arg| {
@@ -1689,14 +1690,44 @@ pub const Interpreter = struct {
                 }
 
                 const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
-                const result = try self.callClosure(closure_header, all_args, roc_ops);
 
-                // Decref arguments after call
-                for (all_args) |arg| {
-                    arg.decref(&self.runtime_layout_store, roc_ops);
+                // Switch to the closure's source module for correct expression evaluation
+                const saved_env = self.env;
+                const saved_bindings_len = self.bindings.items.len;
+                self.env = @constCast(closure_header.source_env);
+                defer {
+                    self.env = saved_env;
+                    self.bindings.shrinkRetainingCapacity(saved_bindings_len);
                 }
 
-                return result;
+                const params = self.env.store.slicePatterns(closure_header.params);
+                if (params.len != all_args.len) {
+                    // Decref all args before returning error
+                    for (all_args) |arg| {
+                        arg.decref(&self.runtime_layout_store, roc_ops);
+                    }
+                    return error.TypeMismatch;
+                }
+
+                // Provide closure context for capture lookup during body eval
+                try self.active_closures.append(method_func);
+                defer _ = self.active_closures.pop();
+
+                var bind_count: usize = 0;
+                while (bind_count < params.len) : (bind_count += 1) {
+                    try self.bindings.append(.{ .pattern_idx = params[bind_count], .value = all_args[bind_count] });
+                }
+                defer {
+                    var k = params.len;
+                    while (k > 0) {
+                        k -= 1;
+                        if (self.bindings.pop()) |binding| {
+                            binding.value.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                    }
+                }
+
+                return try self.evalExprMinimal(closure_header.body_idx, roc_ops, null);
             },
             .e_lookup_local => |lookup| {
                 // Search bindings in reverse
@@ -3451,10 +3482,8 @@ pub const Interpreter = struct {
     /// Returns the current module's env if the identifier matches, otherwise looks it up in the module map.
     fn getModuleEnvForOrigin(self: *const Interpreter, origin_module: base_pkg.Ident.Idx) ?*const can.ModuleEnv {
         // Check if it's the current module
-        if (self.env.module_name_idx) |current_name| {
-            if (current_name == origin_module) {
-                return self.env;
-            }
+        if (self.env.module_name_idx == origin_module) {
+            return self.env;
         }
         // Look up in imported modules
         return self.module_envs.get(origin_module);
@@ -3464,10 +3493,8 @@ pub const Interpreter = struct {
     /// Returns 0 for the current module, otherwise looks it up in the module ID map.
     fn getModuleIdForOrigin(self: *const Interpreter, origin_module: base_pkg.Ident.Idx) u32 {
         // Check if it's the current module
-        if (self.env.module_name_idx) |current_name| {
-            if (current_name == origin_module) {
-                return self.current_module_id;
-            }
+        if (self.env.module_name_idx == origin_module) {
+            return self.current_module_id;
         }
         // Look up in imported modules (should always exist if getModuleEnvForOrigin succeeded)
         return self.module_ids.get(origin_module) orelse self.current_module_id;
@@ -3476,8 +3503,8 @@ pub const Interpreter = struct {
     /// Build a fully-qualified method identifier in the form "TypeName.method".
     fn getMethodQualifiedIdent(self: *const Interpreter, nominal_ident: base_pkg.Ident.Idx, method_name: base_pkg.Ident.Idx, buf: []u8) ![]const u8 {
         const ident_store = self.env.common.getIdentStore();
-        const type_name = ident_store.getSlice(nominal_ident);
-        const method_name_str = ident_store.getSlice(method_name);
+        const type_name = ident_store.getText(nominal_ident);
+        const method_name_str = ident_store.getText(method_name);
         return std.fmt.bufPrint(buf, "{s}.{s}", .{ type_name, method_name_str });
     }
 
@@ -3535,7 +3562,7 @@ pub const Interpreter = struct {
                 break :blk ident;
             }
             // Try unqualified name as fallback
-            const method_name_str = self.env.common.getIdentStore().getSlice(method_name);
+            const method_name_str = self.env.common.getIdentStore().getText(method_name);
             if (origin_env.common.findIdent(method_name_str)) |ident| {
                 break :blk ident;
             }
@@ -3562,10 +3589,10 @@ pub const Interpreter = struct {
 
         // Translate the def's type var to runtime
         const def_var = can.ModuleEnv.varFrom(target_def_idx);
-        const rt_def_var = try self.translateTypeVar(origin_env, def_var);
+        const rt_def_var = try self.translateTypeVar(@constCast(origin_env), def_var);
 
         // Evaluate the method's expression
-        const method_value = try self.evalExprMinimal(target_def.body, roc_ops, rt_def_var);
+        const method_value = try self.evalExprMinimal(target_def.expr, roc_ops, rt_def_var);
 
         return method_value;
     }
@@ -3907,12 +3934,12 @@ pub const Interpreter = struct {
                     const rt_flex = if (flex.constraints.len() > 0) blk_flex: {
                         const ct_constraints = module.types.sliceStaticDispatchConstraints(flex.constraints);
                         var rt_constraints = try std.ArrayList(types.StaticDispatchConstraint).initCapacity(self.allocator, ct_constraints.len);
-                        defer rt_constraints.deinit();
+                        defer rt_constraints.deinit(self.allocator);
 
                         for (ct_constraints) |ct_constraint| {
                             // Translate the constraint's fn_var recursively
                             const rt_fn_var = try self.translateTypeVar(module, ct_constraint.fn_var);
-                            try rt_constraints.append(.{
+                            try rt_constraints.append(self.allocator, .{
                                 .fn_name = ct_constraint.fn_name,
                                 .fn_var = rt_fn_var,
                             });
@@ -3930,12 +3957,12 @@ pub const Interpreter = struct {
                     const rt_rigid = if (rigid.constraints.len() > 0) blk_rigid: {
                         const ct_constraints = module.types.sliceStaticDispatchConstraints(rigid.constraints);
                         var rt_constraints = try std.ArrayList(types.StaticDispatchConstraint).initCapacity(self.allocator, ct_constraints.len);
-                        defer rt_constraints.deinit();
+                        defer rt_constraints.deinit(self.allocator);
 
                         for (ct_constraints) |ct_constraint| {
                             // Translate the constraint's fn_var recursively
                             const rt_fn_var = try self.translateTypeVar(module, ct_constraint.fn_var);
-                            try rt_constraints.append(.{
+                            try rt_constraints.append(self.allocator, .{
                                 .fn_name = ct_constraint.fn_name,
                                 .fn_var = rt_fn_var,
                             });
@@ -4572,6 +4599,228 @@ test "interpreter: translateTypeVar for flex var with static dispatch constraint
     }
 }
 
+// Test multiple constraints on a single flex var
+test "interpreter: translateTypeVar for flex var with multiple static dispatch constraints" {
+    const gpa = std.testing.allocator;
+
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    defer interp.deinit();
+
+    // Create multiple method function types
+    const ct_str = try env.types.freshFromContent(.{ .structure = .str });
+    const ct_i64 = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
+    const ct_bool = try env.types.freshFromContent(.{ .structure = .{ .tag_union = .{ .tags = types.Tag.SafeMultiList.Range.empty(), .ext = try env.types.freshFromContent(.{ .structure = .empty_tag_union }) } } });
+
+    // First method: len: self -> I64
+    const ct_fn1_args = [_]types.Var{ct_str};
+    const ct_fn1_content = try env.types.mkFuncPure(&ct_fn1_args, ct_i64);
+    const ct_fn1_var = try env.types.register(.{ .content = ct_fn1_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+
+    // Second method: isEmpty: self -> Bool
+    const ct_fn2_args = [_]types.Var{ct_str};
+    const ct_fn2_content = try env.types.mkFuncPure(&ct_fn2_args, ct_bool);
+    const ct_fn2_var = try env.types.register(.{ .content = ct_fn2_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+
+    // Third method: toStr: self -> Str
+    const ct_fn3_args = [_]types.Var{ct_str};
+    const ct_fn3_content = try env.types.mkFuncPure(&ct_fn3_args, ct_str);
+    const ct_fn3_var = try env.types.register(.{ .content = ct_fn3_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+
+    // Create static dispatch constraints
+    const method_len = try env.common.idents.insert(gpa, @import("base").Ident.for_text("len"));
+    const method_isEmpty = try env.common.idents.insert(gpa, @import("base").Ident.for_text("isEmpty"));
+    const method_toStr = try env.common.idents.insert(gpa, @import("base").Ident.for_text("toStr"));
+
+    const ct_constraints = [_]types.StaticDispatchConstraint{
+        .{ .fn_name = method_len, .fn_var = ct_fn1_var },
+        .{ .fn_name = method_isEmpty, .fn_var = ct_fn2_var },
+        .{ .fn_name = method_toStr, .fn_var = ct_fn3_var },
+    };
+    const ct_constraints_range = try env.types.appendStaticDispatchConstraints(&ct_constraints);
+
+    // Create a flex var with all constraints
+    const ct_flex = try env.types.freshFromContent(.{ .flex = types.Flex.init().withConstraints(ct_constraints_range) });
+
+    // Translate to runtime
+    const rt_var = try interp.translateTypeVar(&env, ct_flex);
+    const resolved = interp.runtime_types.resolveVar(rt_var);
+
+    // Verify it's still a flex var
+    try std.testing.expect(resolved.desc.content == .flex);
+    const rt_flex = resolved.desc.content.flex;
+
+    // Verify all constraints were translated
+    const rt_constraints = interp.runtime_types.sliceStaticDispatchConstraints(rt_flex.constraints);
+    try std.testing.expectEqual(@as(usize, 3), rt_constraints.len);
+
+    // Verify the method names are preserved
+    try std.testing.expectEqual(method_len, rt_constraints[0].fn_name);
+    try std.testing.expectEqual(method_isEmpty, rt_constraints[1].fn_name);
+    try std.testing.expectEqual(method_toStr, rt_constraints[2].fn_name);
+
+    // Verify each constraint's fn_var was translated
+    for (rt_constraints) |constraint| {
+        const rt_fn_resolved = interp.runtime_types.resolveVar(constraint.fn_var);
+        try std.testing.expect(rt_fn_resolved.desc.content == .structure);
+        try std.testing.expect(rt_fn_resolved.desc.content.structure == .fn_pure);
+    }
+}
+
+// Test rigid var with static dispatch constraints
+test "interpreter: translateTypeVar for rigid var with static dispatch constraints" {
+    const gpa = std.testing.allocator;
+
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    defer interp.deinit();
+
+    // Create a method function type
+    const ct_str = try env.types.freshFromContent(.{ .structure = .str });
+    const ct_i64 = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
+    const ct_fn_args = [_]types.Var{ct_str};
+    const ct_fn_content = try env.types.mkFuncPure(&ct_fn_args, ct_i64);
+    const ct_fn_var = try env.types.register(.{ .content = ct_fn_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+
+    // Create a static dispatch constraint
+    const method_name = try env.common.idents.insert(gpa, @import("base").Ident.for_text("size"));
+    const ct_constraint = types.StaticDispatchConstraint{
+        .fn_name = method_name,
+        .fn_var = ct_fn_var,
+    };
+    const ct_constraints = [_]types.StaticDispatchConstraint{ct_constraint};
+    const ct_constraints_range = try env.types.appendStaticDispatchConstraints(&ct_constraints);
+
+    // Create a rigid var with the constraint
+    const rigid_name = try env.common.idents.insert(gpa, @import("base").Ident.for_text("T"));
+    const ct_rigid = try env.types.freshFromContent(.{ .rigid = types.Rigid.init(rigid_name).withConstraints(ct_constraints_range) });
+
+    // Translate to runtime
+    const rt_var = try interp.translateTypeVar(&env, ct_rigid);
+    const resolved = interp.runtime_types.resolveVar(rt_var);
+
+    // Verify it's still a rigid var
+    try std.testing.expect(resolved.desc.content == .rigid);
+    const rt_rigid = resolved.desc.content.rigid;
+
+    // Verify the rigid var name is preserved
+    try std.testing.expectEqual(rigid_name, rt_rigid.name);
+
+    // Verify constraints were translated
+    const rt_constraints = interp.runtime_types.sliceStaticDispatchConstraints(rt_rigid.constraints);
+    try std.testing.expectEqual(@as(usize, 1), rt_constraints.len);
+    try std.testing.expectEqual(method_name, rt_constraints[0].fn_name);
+}
+
+// Test getStaticDispatchConstraint helper with flex var
+test "interpreter: getStaticDispatchConstraint finds method on flex var" {
+    const gpa = std.testing.allocator;
+
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    defer interp.deinit();
+
+    // Create method types
+    const ct_str = try env.types.freshFromContent(.{ .structure = .str });
+    const ct_i64 = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
+
+    const ct_fn1_args = [_]types.Var{ct_str};
+    const ct_fn1_content = try env.types.mkFuncPure(&ct_fn1_args, ct_i64);
+    const ct_fn1_var = try env.types.register(.{ .content = ct_fn1_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+
+    const ct_fn2_args = [_]types.Var{ct_str};
+    const ct_fn2_content = try env.types.mkFuncPure(&ct_fn2_args, ct_str);
+    const ct_fn2_var = try env.types.register(.{ .content = ct_fn2_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+
+    // Create constraints
+    const method_count = try env.common.idents.insert(gpa, @import("base").Ident.for_text("count"));
+    const method_reverse = try env.common.idents.insert(gpa, @import("base").Ident.for_text("reverse"));
+
+    const ct_constraints = [_]types.StaticDispatchConstraint{
+        .{ .fn_name = method_count, .fn_var = ct_fn1_var },
+        .{ .fn_name = method_reverse, .fn_var = ct_fn2_var },
+    };
+    const ct_constraints_range = try env.types.appendStaticDispatchConstraints(&ct_constraints);
+
+    // Create flex var and translate
+    const ct_flex = try env.types.freshFromContent(.{ .flex = types.Flex.init().withConstraints(ct_constraints_range) });
+    const rt_var = try interp.translateTypeVar(&env, ct_flex);
+
+    // Test finding existing methods
+    const found_count = try interp.getStaticDispatchConstraint(rt_var, method_count);
+    try std.testing.expectEqual(method_count, found_count.fn_name);
+
+    const found_reverse = try interp.getStaticDispatchConstraint(rt_var, method_reverse);
+    try std.testing.expectEqual(method_reverse, found_reverse.fn_name);
+
+    // Test finding non-existent method
+    const method_missing = try env.common.idents.insert(gpa, @import("base").Ident.for_text("nonexistent"));
+    const result = interp.getStaticDispatchConstraint(rt_var, method_missing);
+    try std.testing.expectError(error.MethodNotFound, result);
+}
+
+// Test getStaticDispatchConstraint with non-constrained type
+test "interpreter: getStaticDispatchConstraint returns error for non-constrained types" {
+    const gpa = std.testing.allocator;
+
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    defer interp.deinit();
+
+    // Create a plain structure type (no constraints)
+    const ct_str = try env.types.freshFromContent(.{ .structure = .str });
+    const rt_var = try interp.translateTypeVar(&env, ct_str);
+
+    // Try to get a constraint from a non-flex/rigid type
+    const method_name = try env.common.idents.insert(gpa, @import("base").Ident.for_text("someMethod"));
+    const result = interp.getStaticDispatchConstraint(rt_var, method_name);
+    try std.testing.expectError(error.MethodNotFound, result);
+}
+
 // RED: poly cache miss then hit
 test "interpreter: poly cache insert and lookup" {
     const gpa = std.testing.allocator;
@@ -4729,4 +4978,102 @@ test "interpreter: unification constrains (a->a) with Str" {
     try std.testing.expect(resolved_ret.desc.content == .structure);
     try std.testing.expect(resolved_ret.desc.content.structure == .str);
     try std.testing.expect(entry.return_layout_slot != 0);
+}
+
+// GREEN: cross-module method resolution should find methods in origin module
+test "interpreter: cross-module method resolution" {
+    const gpa = std.testing.allocator;
+
+    // Set up Module A (the imported module where the type and method are defined)
+    var module_a = try can.ModuleEnv.init(gpa, "ModuleA");
+    defer module_a.deinit();
+
+    // Set up Module B (the current module that imports Module A)
+    var module_b = try can.ModuleEnv.init(gpa, "ModuleB");
+    defer module_b.deinit();
+
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    var interp = try Interpreter.init(gpa, &module_b, builtin_types_test, null);
+    defer interp.deinit();
+
+    // Register module A as an imported module
+    const module_a_ident = try module_b.common.idents.insert(gpa, @import("base").Ident.for_text("ModuleA"));
+    try interp.module_envs.put(interp.allocator, module_a_ident, &module_a);
+    const module_a_id: u32 = 1;
+    try interp.module_ids.put(interp.allocator, module_a_ident, module_a_id);
+
+    // Create an Import.Idx for module A
+    const import_idx: can.CIR.Import.Idx = @enumFromInt(0);
+    try interp.import_envs.put(interp.allocator, import_idx, &module_a);
+
+    // Verify we can retrieve module A's environment
+    const found_env = interp.getModuleEnvForOrigin(module_a_ident);
+    try std.testing.expect(found_env != null);
+    try std.testing.expectEqual(&module_a, found_env.?);
+
+    // Verify we can retrieve module A's ID
+    const found_id = interp.getModuleIdForOrigin(module_a_ident);
+    try std.testing.expectEqual(module_a_id, found_id);
+}
+
+// GREEN: transitive module resolution (A imports B imports C)
+test "interpreter: transitive module method resolution" {
+    const gpa = std.testing.allocator;
+
+    // Set up three modules: A (current) imports B, B imports C
+    var module_a = try can.ModuleEnv.init(gpa, "ModuleA");
+    defer module_a.deinit();
+
+    var module_b = try can.ModuleEnv.init(gpa, "ModuleB");
+    defer module_b.deinit();
+
+    var module_c = try can.ModuleEnv.init(gpa, "ModuleC");
+    defer module_c.deinit();
+
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    // Use module_a as the current module
+    var interp = try Interpreter.init(gpa, &module_a, builtin_types_test, null);
+    defer interp.deinit();
+
+    // Register module B
+    const module_b_ident = try module_a.common.idents.insert(gpa, @import("base").Ident.for_text("ModuleB"));
+    try interp.module_envs.put(interp.allocator, module_b_ident, &module_b);
+    const module_b_id: u32 = 1;
+    try interp.module_ids.put(interp.allocator, module_b_ident, module_b_id);
+
+    // Register module C
+    const module_c_ident = try module_a.common.idents.insert(gpa, @import("base").Ident.for_text("ModuleC"));
+    try interp.module_envs.put(interp.allocator, module_c_ident, &module_c);
+    const module_c_id: u32 = 2;
+    try interp.module_ids.put(interp.allocator, module_c_ident, module_c_id);
+
+    // Create Import.Idx entries for both modules
+    const import_b_idx: can.CIR.Import.Idx = @enumFromInt(0);
+    const import_c_idx: can.CIR.Import.Idx = @enumFromInt(1);
+    try interp.import_envs.put(interp.allocator, import_b_idx, &module_b);
+    try interp.import_envs.put(interp.allocator, import_c_idx, &module_c);
+
+    // Verify we can retrieve all module environments
+    try std.testing.expectEqual(&module_b, interp.getModuleEnvForOrigin(module_b_ident).?);
+    try std.testing.expectEqual(&module_c, interp.getModuleEnvForOrigin(module_c_ident).?);
+
+    // Verify we can retrieve all module IDs
+    try std.testing.expectEqual(module_b_id, interp.getModuleIdForOrigin(module_b_ident));
+    try std.testing.expectEqual(module_c_id, interp.getModuleIdForOrigin(module_c_ident));
 }
