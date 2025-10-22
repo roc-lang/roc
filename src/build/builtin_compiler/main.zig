@@ -102,8 +102,8 @@ pub fn main() !void {
         "Str",
         str_roc_source,
         &.{}, // No module dependencies
-        bool_type_idx, // Provide Bool type index in case it's needed
-        result_type_idx, // Provide Result type index in case it's needed
+        null, // bool_stmt not needed for Str
+        null, // result_stmt not needed for Str
     );
     defer {
         str_env.deinit();
@@ -120,8 +120,8 @@ pub fn main() !void {
         "Dict",
         dict_roc_source,
         &.{}, // No module dependencies
-        bool_type_idx, // Provide Bool type index
-        result_type_idx, // Provide Result type index
+        null, // bool_stmt not in Dict's module
+        null, // result_stmt not in Dict's module
     );
     defer {
         dict_env.deinit();
@@ -137,8 +137,8 @@ pub fn main() !void {
         &[_]ModuleDep{
             .{ .name = "Dict", .env = dict_env },
         },
-        bool_type_idx, // Provide Bool type index
-        result_type_idx, // Provide Result type index
+        null, // bool_stmt not in Set's module
+        null, // result_stmt not in Set's module
     );
     defer {
         set_env.deinit();

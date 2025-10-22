@@ -121,6 +121,7 @@ imported_envs: std.array_list.Managed(*const ModuleEnv),
 // Loaded builtin modules (loaded per test, cleaned up in deinit)
 bool_module: LoadedModule,
 result_module: LoadedModule,
+str_module: LoadedModule,
 
 /// Test environment for canonicalization testing, providing a convenient wrapper around ModuleEnv, AST, and Can.
 const TestEnv = @This();
@@ -153,10 +154,13 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{ not }\n";
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const str_source = "Str := [_Str].{}\n";
     var bool_module = try loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     errdefer bool_module.deinit();
     var result_module = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     errdefer result_module.deinit();
+    var str_module = try loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    errdefer str_module.deinit();
 
     // Initialize the module_env so we can use its ident store
     module_env.* = try ModuleEnv.init(gpa, source);
@@ -179,11 +183,17 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     const result_module_ident = result_module.env.common.findIdent("Result") orelse unreachable;
     try result_module.env.setExposedNodeIndexById(result_module_ident, @intCast(@intFromEnum(builtin_indices.result_type)));
 
-    // Add Bool and Result to module_envs for auto-importing
+    // The Str type is at its statement index
+    const str_module_ident = str_module.env.common.findIdent("Str") orelse unreachable;
+    try str_module.env.setExposedNodeIndexById(str_module_ident, @intCast(@intFromEnum(builtin_indices.str_type)));
+
+    // Add Bool, Result, and Str to module_envs for auto-importing
     const bool_ident = try module_env.insertIdent(base.Ident.for_text("Bool"));
     const result_ident = try module_env.insertIdent(base.Ident.for_text("Result"));
+    const str_ident = try module_env.insertIdent(base.Ident.for_text("Str"));
     try module_envs.put(bool_ident, .{ .env = bool_module.env });
     try module_envs.put(result_ident, .{ .env = result_module.env });
+    try module_envs.put(str_ident, .{ .env = str_module.env });
 
     // Parse the AST
     parse_ast.* = try parse.parse(&module_env.common, gpa);
@@ -241,6 +251,12 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         if (idx_int > max_import_idx) max_import_idx = idx_int;
     }
 
+    // Check Str
+    if (can.import_indices.get("Str")) |idx| {
+        const idx_int = @intFromEnum(idx);
+        if (idx_int > max_import_idx) max_import_idx = idx_int;
+    }
+
     // Allocate array of the right size, initialized to other_module_env as a safe default
     try imported_envs.resize(max_import_idx + 1);
     for (imported_envs.items) |*item| {
@@ -256,6 +272,9 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     }
     if (can.import_indices.get("Result")) |idx| {
         imported_envs.items[@intFromEnum(idx)] = result_module.env;
+    }
+    if (can.import_indices.get("Str")) |idx| {
+        imported_envs.items[@intFromEnum(idx)] = str_module.env;
     }
 
     // Type Check - Pass all imported modules (Bool, Result, and user module)
@@ -286,6 +305,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         .imported_envs = imported_envs,
         .bool_module = bool_module,
         .result_module = result_module,
+        .str_module = str_module,
     };
 }
 
@@ -312,10 +332,13 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{ not }\n";
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const str_source = "Str := [_Str].{}\n";
     var bool_module = try loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     errdefer bool_module.deinit();
     var result_module = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     errdefer result_module.deinit();
+    var str_module = try loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    errdefer str_module.deinit();
 
     // Set node indices for the exposed types so they can be properly referenced
     // The Bool type is at statement index 1, so we set node_idx to 1
@@ -326,6 +349,10 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     const result_module_ident = result_module.env.common.findIdent("Result") orelse unreachable;
     try result_module.env.setExposedNodeIndexById(result_module_ident, @intCast(@intFromEnum(builtin_indices.result_type)));
 
+    // The Str type is at its statement index
+    const str_module_ident = str_module.env.common.findIdent("Str") orelse unreachable;
+    try str_module.env.setExposedNodeIndexById(str_module_ident, @intCast(@intFromEnum(builtin_indices.str_type)));
+
     // Initialize the ModuleEnv with the CommonEnv
     module_env.* = try ModuleEnv.init(gpa, source);
     errdefer module_env.deinit();
@@ -334,11 +361,13 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     module_env.module_name = module_name;
     try module_env.common.calcLineStarts(gpa);
 
-    // Add Bool and Result to module_envs for auto-importing
+    // Add Bool, Result, and Str to module_envs for auto-importing
     const bool_ident = try module_env.insertIdent(base.Ident.for_text("Bool"));
     const result_ident = try module_env.insertIdent(base.Ident.for_text("Result"));
+    const str_ident = try module_env.insertIdent(base.Ident.for_text("Str"));
     try module_envs.put(bool_ident, .{ .env = bool_module.env });
     try module_envs.put(result_ident, .{ .env = result_module.env });
+    try module_envs.put(str_ident, .{ .env = str_module.env });
 
     // Parse the AST
     parse_ast.* = try parse.parse(&module_env.common, gpa);
@@ -385,6 +414,10 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
             const idx_int = @intFromEnum(idx);
             if (idx_int > max_import_idx) max_import_idx = idx_int;
         }
+        if (can.import_indices.get("Str")) |idx| {
+            const idx_int = @intFromEnum(idx);
+            if (idx_int > max_import_idx) max_import_idx = idx_int;
+        }
 
         // Allocate array of the right size, initialized to bool_module.env as a safe default
         try imported_envs.resize(max_import_idx + 1);
@@ -398,6 +431,9 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
         }
         if (can.import_indices.get("Result")) |idx| {
             imported_envs.items[@intFromEnum(idx)] = result_module.env;
+        }
+        if (can.import_indices.get("Str")) |idx| {
+            imported_envs.items[@intFromEnum(idx)] = str_module.env;
         }
     }
 
@@ -429,6 +465,7 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
         .imported_envs = imported_envs,
         .bool_module = bool_module,
         .result_module = result_module,
+        .str_module = str_module,
     };
 }
 
@@ -466,6 +503,7 @@ pub fn deinit(self: *TestEnv) void {
     // Clean up loaded builtin modules
     self.bool_module.deinit();
     self.result_module.deinit();
+    self.str_module.deinit();
 }
 
 /// Get the inferred type of the last declaration and compare it to the provided

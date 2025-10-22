@@ -875,6 +875,10 @@ pub fn main() !void {
     var result_loaded = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_loaded.deinit();
 
+    const str_source = "Str := [_Str].{}\n";
+    var str_loaded = try loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_loaded.deinit();
+
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
 
     const config = Config{
@@ -888,6 +892,7 @@ pub fn main() !void {
         .set_module = set_loaded.env,
         .bool_module = bool_loaded.env,
         .result_module = result_loaded.env,
+        .str_module = str_loaded.env,
         .builtin_indices = builtin_indices,
     };
 
@@ -943,6 +948,10 @@ fn checkSnapshotExpectations(gpa: Allocator) !bool {
     var result_loaded = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_loaded.deinit();
 
+    const str_source = "Str := [_Str].{}\n";
+    var str_loaded = try loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_loaded.deinit();
+
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
 
     const config = Config{
@@ -955,6 +964,7 @@ fn checkSnapshotExpectations(gpa: Allocator) !bool {
         .set_module = set_loaded.env,
         .bool_module = bool_loaded.env,
         .result_module = result_loaded.env,
+        .str_module = str_loaded.env,
         .builtin_indices = builtin_indices,
     };
     const snapshots_dir = "test/snapshots";
@@ -1241,7 +1251,7 @@ fn processSnapshotContent(
         .str_stmt = config.builtin_indices.str_type,
     };
 
-    // Auto-inject Set, Dict, Bool, and Result as available imports (if they're loaded)
+    // Auto-inject Set, Dict, Bool, Result, and Str as available imports (if they're loaded)
     // This makes them available without needing explicit `import` statements in tests
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
     defer module_envs.deinit();
@@ -1250,6 +1260,7 @@ fn processSnapshotContent(
     var set_import_idx: ?CIR.Import.Idx = null;
     var bool_import_idx: ?CIR.Import.Idx = null;
     var result_import_idx: ?CIR.Import.Idx = null;
+    var str_import_idx: ?CIR.Import.Idx = null;
 
     if (config.dict_module) |dict_env| {
         const dict_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Dict"));
@@ -1280,6 +1291,13 @@ fn processSnapshotContent(
             .env = result_env,
         });
     }
+    if (config.str_module) |str_env| {
+        const str_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Str"));
+        str_import_idx = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Str");
+        try module_envs.put(str_ident, .{
+            .env = str_env,
+        });
+    }
 
     var czer = try Can.init(can_ir, &parse_ast, &module_envs);
     defer czer.deinit();
@@ -1296,6 +1314,9 @@ fn processSnapshotContent(
     }
     if (result_import_idx) |idx| {
         try czer.import_indices.put(allocator, "Result", idx);
+    }
+    if (str_import_idx) |idx| {
+        try czer.import_indices.put(allocator, "Str", idx);
     }
 
     var maybe_expr_idx: ?Can.CanonicalizedExpr = null;
@@ -1548,6 +1569,7 @@ const Config = struct {
     set_module: ?*const ModuleEnv = null,
     bool_module: ?*const ModuleEnv = null,
     result_module: ?*const ModuleEnv = null,
+    str_module: ?*const ModuleEnv = null,
     builtin_indices: CIR.BuiltinIndices,
 };
 

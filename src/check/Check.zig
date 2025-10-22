@@ -573,6 +573,11 @@ fn freshBool(self: *Self, rank: Rank, new_region: Region) Allocator.Error!Var {
     return try self.instantiateVar(self.bool_var, rank, .{ .explicit = new_region });
 }
 
+fn freshStr(self: *Self, rank: Rank, new_region: Region) Allocator.Error!Var {
+    // Use the Str type from the builtin Str module (set by copyBuiltinTypes)
+    return try self.instantiateVar(self.str_var, rank, .{ .explicit = new_region });
+}
+
 // fresh vars //
 
 fn updateVar(self: *Self, target_var: Var, content: types_mod.Content, rank: types_mod.Rank) std.mem.Allocator.Error!void {
@@ -1640,7 +1645,8 @@ fn checkPatternHelp(
         },
         // str //
         .str_literal => {
-            try self.updateVar(pattern_var, .{ .structure = .str }, rank);
+            const str_type = try self.freshStr(rank, pattern_region);
+            _ = try self.unify(pattern_var, str_type, rank);
         },
         // as //
         .as => |p| {
@@ -2065,7 +2071,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
     switch (expr) {
         // str //
         .e_str_segment => |_| {
-            try self.updateVar(expr_var, .{ .structure = .str }, rank);
+            const str_type = try self.freshStr(rank, expr_region);
+            _ = try self.unify(expr_var, str_type, rank);
         },
         .e_str => |str| {
             // Iterate over the string segments, capturing if any error'd
@@ -2084,8 +2091,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                 // If any segment errored, propgate that error to the root string
                 try self.updateVar(expr_var, .err, rank);
             } else {
-                // Otherwise, set the type of this expr to be string
-                try self.updateVar(expr_var, .{ .structure = .str }, rank);
+                // Otherwise, set the type of this expr to be string (using builtin Str type)
+                const str_type = try self.freshStr(rank, expr_region);
+                _ = try self.unify(expr_var, str_type, rank);
             }
         },
         // nums //

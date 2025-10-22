@@ -976,7 +976,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     logDebug("compileSource: Result module loaded\n", .{});
 
     logDebug("compileSource: Loading Str module\n", .{});
-    const str_source = "Str := [].{}\n";
+    const str_source = "Str := [_Str].{}\n";
     var str_module = try LoadedModule.loadCompiledModule(allocator, compiled_builtins.str_bin, "Str", str_source);
     defer str_module.deinit();
     logDebug("compileSource: Str module loaded\n", .{});
@@ -1010,8 +1010,10 @@ fn compileSource(source: []const u8) !CompilerStageData {
     defer module_envs_map.deinit();
     const bool_ident = try module_env.insertIdent(base.Ident.for_text("Bool"));
     const result_ident = try module_env.insertIdent(base.Ident.for_text("Result"));
+    const str_ident = try module_env.insertIdent(base.Ident.for_text("Str"));
     try module_envs_map.put(bool_ident, .{ .env = bool_module.env });
     try module_envs_map.put(result_ident, .{ .env = result_module.env });
+    try module_envs_map.put(str_ident, .{ .env = str_module.env });
 
     logDebug("compileSource: Starting canonicalization\n", .{});
     var czer = try Can.init(env, &result.parse_ast.?, &module_envs_map);

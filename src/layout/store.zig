@@ -61,6 +61,9 @@ pub const Store = struct {
     // Reusable work stack for addTypeVar (so it can be stack-safe instead of recursing)
     work: work.Work,
 
+    // Builtin Str statement index (for special-casing Str layout)
+    builtin_str_stmt: ?can.CIR.Statement.Idx,
+
     // Number of primitive types that are pre-populated in the layout store
     // Must be kept in sync with the sentinel values in layout.zig Idx enum
     const num_scalars = 16;
@@ -105,6 +108,7 @@ pub const Store = struct {
     pub fn init(
         env: *ModuleEnv,
         type_store: *const types_store.Store,
+        builtin_str_stmt: ?can.CIR.Statement.Idx,
     ) std.mem.Allocator.Error!Self {
         // Get the number of variables from the type store's slots
         const capacity = type_store.slots.backing.len();
@@ -144,6 +148,7 @@ pub const Store = struct {
             .tuple_data = try collections.SafeList(TupleData).initCapacity(env.gpa, 256),
             .layouts_by_var = layouts_by_var,
             .work = try Work.initCapacity(env.gpa, 32),
+            .builtin_str_stmt = builtin_str_stmt,
         };
     }
 
@@ -1209,8 +1214,76 @@ pub const Store = struct {
                         current = self.types_store.resolveVar(field.var_);
                         continue;
                     },
-                    .empty_record, .empty_tag_union => blk: {
-                        // Empty records and tag unions are zero-sized, so we need to do something different
+                    .empty_tag_union => blk: {
+                        // Special case: Check if this is the builtin Str type
+                        // The builtin Str is represented as an empty tag union but needs 3 usizes for RocStr
+                        if (self.builtin_str_stmt) |str_stmt| {
+                            const str_var = ModuleEnv.varFrom(str_stmt);
+                            if (current.var_ == str_var) {
+                                // This is the builtin Str type - use the correct 3-usize layout
+                                break :flat_type Layout.str();
+                            }
+                        }
+
+                        // Empty tag unions are zero-sized, so we need to do something different
+                        // depending on the container we're working on (if any). For example, if we're
+                        // working on a record field, then we need to drop that field from the container.
+                        if (self.work.pending_containers.len > 0) {
+                            const pending_item = self.work.pending_containers.pop() orelse unreachable;
+                            switch (pending_item.container) {
+                                .list => {
+                                    // It turned out we were getting the layout for a List({})
+                                    break :blk Layout.listOfZst();
+                                },
+                                .box => {
+                                    // It turned out we were getting the layout for a Box({})
+                                    break :blk Layout.boxOfZst();
+                                },
+                                .record => |pending_record| {
+                                    // It turned out we were getting the layout for a record field
+                                    std.debug.assert(pending_record.pending_fields > 0);
+                                    var updated_record = pending_record;
+                                    updated_record.pending_fields -= 1;
+
+                                    // The current field we're working on turned out to be zero-sized, so drop it.
+                                    _ = self.work.pending_record_fields.pop() orelse unreachable;
+
+                                    if (updated_record.pending_fields == 0) {
+                                        if (self.work.resolved_record_fields.len == updated_record.resolved_fields_start) {
+                                            // All fields were zero-sized, so the parent container turned
+                                            // out to be an empty record as well.
+                                            self.work.resolved_record_fields.shrinkRetainingCapacity(updated_record.resolved_fields_start);
+
+                                            continue :flat_type .empty_record;
+                                        } else {
+                                            // We finished the record we were working on.
+                                            break :blk try self.finishRecord(updated_record);
+                                        }
+                                    } else {
+                                        // Still have pending fields to process
+                                        try self.work.pending_containers.append(self.env.gpa, .{
+                                            .var_ = pending_item.var_,
+                                            .container = .{ .record = updated_record },
+                                        });
+
+                                        // Get the next field to process
+                                        const next_field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
+                                        current = self.types_store.resolveVar(next_field.var_);
+                                        continue;
+                                    }
+                                },
+                                .tuple => {
+                                    // Tuple element turned out to be zero-sized - this shouldn't happen with tag unions
+                                    unreachable;
+                                },
+                            }
+                        } else {
+                            // Unboxed zero-sized types cannot have a layout
+                            return LayoutError.ZeroSizedType;
+                        }
+                    },
+                    .empty_record => blk: {
+                        // Empty records are zero-sized, so we need to do something different
                         // depending on the container we're working on (if any). For example, if we're
                         // working on a record field, then we need to drop that field from the container.
                         if (self.work.pending_containers.len > 0) {

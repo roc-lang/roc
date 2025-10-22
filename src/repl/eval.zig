@@ -509,11 +509,15 @@ pub const Repl = struct {
         defer module_envs_map.deinit();
         const bool_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Bool"));
         const result_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Result"));
+        const str_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Str"));
         try module_envs_map.put(bool_ident, .{
             .env = self.bool_module.env,
         });
         try module_envs_map.put(result_ident, .{
             .env = self.result_module.env,
+        });
+        try module_envs_map.put(str_ident, .{
+            .env = self.str_module.env,
         });
 
         var czer = Can.init(cir, &parse_ast, &module_envs_map) catch |err| {
@@ -532,8 +536,8 @@ pub const Repl = struct {
         };
         const final_expr_idx = canonical_expr.get_idx();
 
-        // Type check - Pass Bool and Result as imported modules
-        const imported_modules = [_]*const ModuleEnv{ self.bool_module.env, self.result_module.env };
+        // Type check - Pass Bool, Result, and Str as imported modules
+        const imported_modules = [_]*const ModuleEnv{ self.bool_module.env, self.result_module.env, self.str_module.env };
         var checker = Check.init(
             self.allocator,
             &module_env.types,

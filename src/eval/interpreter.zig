@@ -185,7 +185,7 @@ pub const Interpreter = struct {
             .builtins = builtin_types,
             .imported_modules = std.StringHashMap(*const can.ModuleEnv).init(allocator),
         };
-        result.runtime_layout_store = try layout.Store.init(env, result.runtime_types);
+        result.runtime_layout_store = try layout.Store.init(env, result.runtime_types, builtin_types.str_stmt);
 
         return result;
     }
