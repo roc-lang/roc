@@ -109,9 +109,10 @@ pub const DecompressingHashReader = struct {
             if (!self.hash_verified) {
                 var actual_hash: [32]u8 = undefined;
                 self.hasher.final(&actual_hash);
-                if (std.mem.eql(u8, &actual_hash, &self.expected_hash)) {
-                    self.hash_verified = true;
+                if (!std.mem.eql(u8, &actual_hash, &self.expected_hash)) {
+                    return error.ReadFailed;
                 }
+                self.hash_verified = true;
             }
             return error.EndOfStream;
         }
@@ -146,13 +147,10 @@ pub const DecompressingHashReader = struct {
     /// Verify that the hash matches. This should be called after reading is complete.
     /// If there is remaining data, it will be discarded.
     pub fn verifyComplete(self: *Self) !void {
-        // Read any remaining data to ensure we process the entire stream
+        // There seems to be a bug in `discardRemaining` that causes an error. Therefore we do the loop ourselves for now.
         while (true) {
-            _ = self.interface.discard(std.Io.Limit.unlimited) catch |err| {
-                switch (err) {
-                    error.EndOfStream => break,
-                    error.ReadFailed => return error.ReadFailed,
-                }
+            _ = self.interface.discard(std.Io.Limit.unlimited) catch {
+                break;
             };
         }
 
