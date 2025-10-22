@@ -222,6 +222,59 @@ test "different compression levels" {
     try std.testing.expect(sizes[0] >= sizes[3] or sizes[0] - sizes[3] < 10);
 }
 
+test "large data roundtrip" {
+    const allocator = std.testing.allocator;
+
+    // Generate test data larger than the buffer sizes
+    const large_size = 1024 * 1024;
+    const large_data = try allocator.alloc(u8, large_size);
+    defer allocator.free(large_data);
+    for (large_data, 0..) |*b, i| {
+        b.* = @intCast(i % 256);
+    }
+
+    // Compress
+    var compressed_writer: std.Io.Writer.Allocating = .init(allocator);
+    defer compressed_writer.deinit();
+
+    var allocator_copy = allocator;
+    var writer = try streaming_writer.CompressingHashWriter.init(
+        &allocator_copy,
+        TEST_COMPRESSION_LEVEL,
+        &compressed_writer.writer,
+        bundle.allocForZstd,
+        bundle.freeForZstd,
+    );
+    defer writer.deinit();
+
+    try writer.interface.writeAll(large_data);
+    try writer.finish();
+    try writer.interface.flush();
+
+    const hash = writer.getHash();
+    const compressed_list = compressed_writer.written();
+
+    // Decompress
+    var stream = std.Io.Reader.fixed(compressed_list);
+    var reader = try streaming_reader.DecompressingHashReader.init(
+        &allocator_copy,
+        &stream,
+        hash,
+        bundle.allocForZstd,
+        bundle.freeForZstd,
+    );
+    defer reader.deinit();
+
+    var decompressed_writer: std.Io.Writer.Allocating = .init(allocator);
+    defer decompressed_writer.deinit();
+
+    const size_written = try reader.interface.streamRemaining(&decompressed_writer.writer);
+    try std.testing.expectEqual(large_size, size_written);
+    try decompressed_writer.writer.flush();
+
+    try std.testing.expectEqualSlices(u8, large_data, decompressed_writer.written());
+}
+
 test "large file streaming extraction" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});

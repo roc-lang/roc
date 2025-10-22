@@ -123,7 +123,7 @@ pub const CompressingHashWriter = struct {
 
             if (end_stream and remaining == 0) break;
         }
-        return 0;
+        return in_buf.pos;
     }
 
     pub fn finish(self: *Self) WriterError!void {
