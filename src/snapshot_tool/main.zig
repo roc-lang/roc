@@ -572,7 +572,7 @@ fn renderReportsToExpectedContent(allocator: std.mem.Allocator, reports: *const 
     }
 
     // Render all reports to markdown and then parse the problems
-    var problems_buffer_unmanaged = std.ArrayListUnmanaged(u8).empty;
+    var problems_buffer_unmanaged = std.ArrayList(u8).empty;
     var problems_writer_allocating: std.Io.Writer.Allocating = .fromArrayList(allocator, &problems_buffer_unmanaged);
     defer problems_buffer_unmanaged.deinit(allocator);
 
@@ -1453,11 +1453,11 @@ fn processSnapshotContent(
     }
 
     // Buffer all output in memory before writing files
-    var md_buffer_unmanaged = std.ArrayListUnmanaged(u8).empty;
+    var md_buffer_unmanaged = std.ArrayList(u8).empty;
     var md_writer_allocating: std.Io.Writer.Allocating = .fromArrayList(allocator, &md_buffer_unmanaged);
     defer md_buffer_unmanaged.deinit(allocator);
 
-    var html_buffer_unmanaged: ?std.ArrayListUnmanaged(u8) = if (config.generate_html) std.ArrayListUnmanaged(u8).empty else null;
+    var html_buffer_unmanaged: ?std.ArrayList(u8) = if (config.generate_html) std.ArrayList(u8).empty else null;
     var html_writer_allocating: ?std.Io.Writer.Allocating = if (config.generate_html) .fromArrayList(allocator, &html_buffer_unmanaged.?) else null;
     defer {
         if (html_buffer_unmanaged) |*buf| buf.deinit(allocator);
@@ -2464,7 +2464,7 @@ fn generateTypesSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx:
 /// Generate TYPES section displaying types store for both markdown and HTML
 /// This is used for debugging.
 fn generateTypesStoreSection(gpa: std.mem.Allocator, output: *DualOutput, can_ir: *ModuleEnv) !void {
-    var solved_unmanaged = std.ArrayListUnmanaged(u8).empty;
+    var solved_unmanaged = std.ArrayList(u8).empty;
     var solved_writer: std.Io.Writer.Allocating = .fromArrayList(output.gpa, &solved_unmanaged);
     defer solved_unmanaged.deinit(output.gpa);
 
@@ -2581,7 +2581,7 @@ fn generateHtmlClosing(output: *DualOutput) !void {
 }
 
 /// Write HTML buffer to file
-fn writeHtmlFile(gpa: Allocator, snapshot_path: []const u8, html_buffer: *std.ArrayListUnmanaged(u8)) !void {
+fn writeHtmlFile(gpa: Allocator, snapshot_path: []const u8, html_buffer: *std.ArrayList(u8)) !void {
     // Convert .md path to .html path
     const html_path = blk: {
         if (std.mem.endsWith(u8, snapshot_path, ".md")) {
@@ -2779,11 +2779,11 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
     log("Processing REPL snapshot: {s}", .{output_path});
 
     // Buffer all output in memory before writing files
-    var md_buffer_unmanaged = std.ArrayListUnmanaged(u8).empty;
+    var md_buffer_unmanaged = std.ArrayList(u8).empty;
     var md_writer_allocating: std.Io.Writer.Allocating = .fromArrayList(allocator, &md_buffer_unmanaged);
     defer md_buffer_unmanaged.deinit(allocator);
 
-    var html_buffer_unmanaged: ?std.ArrayListUnmanaged(u8) = if (config.generate_html) std.ArrayListUnmanaged(u8).empty else null;
+    var html_buffer_unmanaged: ?std.ArrayList(u8) = if (config.generate_html) std.ArrayList(u8).empty else null;
     var html_writer_allocating: ?std.Io.Writer.Allocating = if (config.generate_html) .fromArrayList(allocator, &html_buffer_unmanaged.?) else null;
     defer {
         if (html_buffer_unmanaged) |*buf| buf.deinit(allocator);

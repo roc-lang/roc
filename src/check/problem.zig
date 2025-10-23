@@ -2054,11 +2054,11 @@ pub const Store = struct {
     const Self = @This();
     const ALIGNMENT = std.mem.Alignment.@"16";
 
-    problems: std.ArrayListAlignedUnmanaged(Problem, ALIGNMENT) = .{},
+    problems: std.ArrayListAligned(Problem, ALIGNMENT) = .{},
 
     pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
         return .{
-            .problems = try std.ArrayListAlignedUnmanaged(Problem, ALIGNMENT).initCapacity(gpa, capacity),
+            .problems = try std.ArrayListAligned(Problem, ALIGNMENT).initCapacity(gpa, capacity),
         };
     }
 

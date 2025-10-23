@@ -155,7 +155,7 @@ pub const Dir = struct {
     /// Find all filepaths in this directory recursively.
     ///
     /// The text of the relative paths are stored in the `string_arena`
-    /// and the slices over said paths are returned in an `ArrayListUnmanaged`
+    /// and the slices over said paths are returned in an `ArrayList`
     /// that must be `deinit`ed by the caller.
     pub fn findAllFilesRecursively(
         dir: *Dir,

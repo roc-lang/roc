@@ -3537,7 +3537,7 @@ pub const Interpreter = struct {
                             break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = compact_num } } });
                         },
                         .tag_union => |tu| {
-                            var rt_tag_args = try std.ArrayListUnmanaged(types.Var).initCapacity(self.allocator, 8);
+                            var rt_tag_args = try std.ArrayList(types.Var).initCapacity(self.allocator, 8);
                             defer rt_tag_args.deinit(self.allocator);
 
                             var rt_tags = try self.gatherTags(module, tu);
@@ -3717,8 +3717,8 @@ pub const Interpreter = struct {
         ctx: *const Interpreter,
         module: *can.ModuleEnv,
         tag_union: types.TagUnion,
-    ) std.mem.Allocator.Error!std.ArrayListUnmanaged(types.Tag) {
-        var scratch_tags = try std.ArrayListUnmanaged(types.Tag).initCapacity(ctx.allocator, 8);
+    ) std.mem.Allocator.Error!std.ArrayList(types.Tag) {
+        var scratch_tags = try std.ArrayList(types.Tag).initCapacity(ctx.allocator, 8);
 
         const tag_slice = module.types.getTagsSlice(tag_union.tags);
         for (tag_slice.items(.name), tag_slice.items(.args)) |name, args| {
