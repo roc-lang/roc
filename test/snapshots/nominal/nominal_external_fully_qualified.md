@@ -136,9 +136,9 @@ handleResult = |result| {
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "MyResultType") (external-module "MyResultModule")
-					(ty-lookup (name "Str") (builtin))
+					(ty-lookup (name "Str") (external-module "Str"))
 					(ty-lookup (name "I32") (builtin)))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(s-import (module "MyResultModule")
 		(exposes)))
 ~~~

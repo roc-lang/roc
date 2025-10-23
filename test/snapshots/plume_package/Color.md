@@ -986,12 +986,12 @@ is_named_color = |str| {
 															(e-literal (string "")))))))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (external-module "Str"))
 				(ty-apply (name "Result") (external-module "Result")
 					(ty-lookup (name "Color") (local))
 					(ty-tag-union
 						(ty-tag-name (name "InvalidHex")
-							(ty-lookup (name "Str") (builtin))))))))
+							(ty-lookup (name "Str") (external-module "Str"))))))))
 	(d-let
 		(p-assign (ident "to_str"))
 		(e-closure
@@ -1092,7 +1092,7 @@ is_named_color = |str| {
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Color") (local))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "named"))
 		(e-lambda
@@ -1125,12 +1125,12 @@ is_named_color = |str| {
 										(e-literal (string ""))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (external-module "Str"))
 				(ty-apply (name "Result") (external-module "Result")
 					(ty-lookup (name "Color") (local))
 					(ty-tag-union
 						(ty-tag-name (name "UnknownColor")
-							(ty-lookup (name "Str") (builtin))))))))
+							(ty-lookup (name "Str") (external-module "Str"))))))))
 	(d-let
 		(p-assign (ident "is_named_color"))
 		(e-lambda
@@ -1169,9 +1169,9 @@ is_named_color = |str| {
 				(ty-lookup (name "U8") (builtin))
 				(ty-lookup (name "Dec") (builtin)))
 			(ty-tag-name (name "Named")
-				(ty-lookup (name "Str") (builtin)))
+				(ty-lookup (name "Str") (external-module "Str")))
 			(ty-tag-name (name "Hex")
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(s-expect
 		(e-binop (op "eq")
 			(e-dot-access (field "to_str")

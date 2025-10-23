@@ -126,6 +126,8 @@ pub const Repl = struct {
     bool_module: LoadedModule,
     /// Loaded Result module (loaded once at startup)
     result_module: LoadedModule,
+    /// Loaded Str module (loaded once at startup)
+    str_module: LoadedModule,
 
     pub fn init(allocator: Allocator, roc_ops: *RocOps, crash_ctx: ?*CrashContext) !Repl {
         const compiled_builtins = @import("compiled_builtins");
@@ -143,6 +145,11 @@ pub const Repl = struct {
         var result_module = try loadCompiledModule(allocator, compiled_builtins.result_bin, "Result", result_source);
         errdefer result_module.deinit();
 
+        // Load Str module once at startup
+        const str_source = "Str := [ProvidedByCompiler].{}\n";
+        var str_module = try loadCompiledModule(allocator, compiled_builtins.str_bin, "Str", str_source);
+        errdefer str_module.deinit();
+
         return Repl{
             .allocator = allocator,
             .definitions = std.StringHashMap([]const u8).init(allocator),
@@ -156,6 +163,7 @@ pub const Repl = struct {
             .builtin_indices = builtin_indices,
             .bool_module = bool_module,
             .result_module = result_module,
+            .str_module = str_module,
         };
     }
 
@@ -278,6 +286,7 @@ pub const Repl = struct {
         // Clean up loaded builtin modules
         self.bool_module.deinit();
         self.result_module.deinit();
+        self.str_module.deinit();
     }
 
     /// Process a line of input and return the result
@@ -541,8 +550,8 @@ pub const Repl = struct {
             return try std.fmt.allocPrint(self.allocator, "Type check expr error: {}", .{err});
         };
 
-        // Create interpreter instance with BuiltinTypes containing real Bool and Result modules
-        const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.bool_module.env, self.result_module.env);
+        // Create interpreter instance with BuiltinTypes containing real Bool, Result, and Str modules
+        const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.bool_module.env, self.result_module.env, self.str_module.env);
         var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, &module_envs_map) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
         };

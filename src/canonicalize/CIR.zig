@@ -38,6 +38,8 @@ pub const BuiltinIndices = struct {
     dict_type: Statement.Idx,
     /// Statement index of Set type declaration within Set module
     set_type: Statement.Idx,
+    /// Statement index of Str type declaration within Str module
+    str_type: Statement.Idx,
 };
 
 // Type definitions for module compilation

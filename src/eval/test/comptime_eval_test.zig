@@ -26,6 +26,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     problems: *check.problem.Store,
     bool_module: builtin_loading.LoadedModule,
     result_module: builtin_loading.LoadedModule,
+    str_module: builtin_loading.LoadedModule,
 } {
     const gpa = test_allocator;
 
@@ -53,6 +54,9 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     errdefer result_module.deinit();
+    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    errdefer str_module.deinit();
 
     // Initialize CIR fields in ModuleEnv
     try module_env.initCIRFields(gpa, "test");
@@ -72,7 +76,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     try czer.canonicalizeFile();
 
     // Type check the module with builtins
-    const imported_envs = [_]*const ModuleEnv{ bool_module.env, result_module.env };
+    const imported_envs = [_]*const ModuleEnv{ bool_module.env, result_module.env, str_module.env };
     var checker = try Check.init(gpa, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, common_idents);
     defer checker.deinit();
 
@@ -83,7 +87,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     problems.* = .{};
 
     // Create and run comptime evaluator with real builtins
-    const builtin_types = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     const evaluator = try ComptimeEvaluator.init(gpa, module_env, &.{}, problems, builtin_types);
 
     return .{
@@ -92,6 +96,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
         .problems = problems,
         .bool_module = bool_module,
         .result_module = result_module,
+        .str_module = str_module,
     };
 }
 
@@ -103,6 +108,7 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     other_envs: []const *const ModuleEnv,
     bool_module: builtin_loading.LoadedModule,
     result_module: builtin_loading.LoadedModule,
+    str_module: builtin_loading.LoadedModule,
 } {
     const gpa = test_allocator;
 
@@ -130,6 +136,9 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     errdefer result_module.deinit();
+    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    errdefer str_module.deinit();
 
     // Initialize CIR fields in ModuleEnv
     try module_env.initCIRFields(gpa, "test");
@@ -160,12 +169,13 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     // Canonicalize the module
     try czer.canonicalizeFile();
 
-    // Set up other_envs for type checking (include Bool and Result modules)
+    // Set up other_envs for type checking (include Bool, Result, and Str modules)
     var imported_envs = std.array_list.Managed(*const ModuleEnv).init(gpa);
     defer imported_envs.deinit();
     try imported_envs.append(imported_module);
     try imported_envs.append(bool_module.env);
     try imported_envs.append(result_module.env);
+    try imported_envs.append(str_module.env);
 
     // Type check the module
     var checker = try Check.init(gpa, &module_env.types, module_env, imported_envs.items, &module_envs, &module_env.store.regions, common_idents);
@@ -181,7 +191,7 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     const other_envs_slice = try gpa.dupe(*const ModuleEnv, imported_envs.items);
 
     // Create and run comptime evaluator with real builtins
-    const builtin_types = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     const evaluator = try ComptimeEvaluator.init(gpa, module_env, other_envs_slice, problems, builtin_types);
 
     return .{
@@ -191,6 +201,7 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
         .other_envs = other_envs_slice,
         .bool_module = bool_module,
         .result_module = result_module,
+        .str_module = str_module,
     };
 }
 
@@ -210,6 +221,8 @@ fn cleanupEvalModule(result: anytype) void {
     bool_module_mut.deinit();
     var result_module_mut = result.result_module;
     result_module_mut.deinit();
+    var str_module_mut = result.str_module;
+    str_module_mut.deinit();
 }
 
 fn cleanupEvalModuleWithImport(result: anytype) void {
@@ -229,6 +242,8 @@ fn cleanupEvalModuleWithImport(result: anytype) void {
     bool_module_mut.deinit();
     var result_module_mut = result.result_module;
     result_module_mut.deinit();
+    var str_module_mut = result.str_module;
+    str_module_mut.deinit();
 }
 
 test "comptime eval - simple constant" {

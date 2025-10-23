@@ -202,7 +202,7 @@ NO CHANGE
 		(ty-lookup (name "U64") (builtin)))
 	(s-alias-decl
 		(ty-header (name "UserName"))
-		(ty-lookup (name "Str") (builtin)))
+		(ty-lookup (name "Str") (external-module "Str")))
 	(s-alias-decl
 		(ty-header (name "UserAge"))
 		(ty-lookup (name "U8") (builtin)))

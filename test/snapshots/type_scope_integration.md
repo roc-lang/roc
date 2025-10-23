@@ -92,7 +92,7 @@ NO CHANGE
 		(ty-lookup (name "U64") (builtin)))
 	(s-alias-decl
 		(ty-header (name "Foo"))
-		(ty-lookup (name "Str") (builtin)))
+		(ty-lookup (name "Str") (external-module "Str")))
 	(s-alias-decl
 		(ty-header (name "Bar"))
 		(ty-malformed))

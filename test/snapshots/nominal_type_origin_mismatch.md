@@ -112,7 +112,7 @@ main =
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "main"))
 		(e-call

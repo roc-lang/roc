@@ -3887,8 +3887,11 @@ test "interpreter: Var->Layout slot caches computed layout" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
@@ -3921,8 +3924,11 @@ test "interpreter: translateTypeVar for str" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
@@ -3948,8 +3954,11 @@ test "interpreter: translateTypeVar for int64" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
@@ -3983,8 +3992,11 @@ test "interpreter: translateTypeVar for f64" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
@@ -4018,8 +4030,11 @@ test "interpreter: translateTypeVar for tuple(Str, I64)" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
@@ -4071,8 +4086,11 @@ test "interpreter: translateTypeVar for record {first: Str, second: I64}" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
@@ -4138,8 +4156,11 @@ test "interpreter: translateTypeVar for alias of Str" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
@@ -4174,8 +4195,11 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
@@ -4215,8 +4239,11 @@ test "interpreter: translateTypeVar for flex var" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
@@ -4240,8 +4267,11 @@ test "interpreter: translateTypeVar for rigid var" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
@@ -4267,8 +4297,11 @@ test "interpreter: poly cache insert and lookup" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
@@ -4312,8 +4345,11 @@ test "interpreter: prepareCall miss then hit" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
@@ -4351,8 +4387,11 @@ test "interpreter: prepareCallWithFuncVar populates cache" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 
@@ -4390,8 +4429,11 @@ test "interpreter: unification constrains (a->a) with Str" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
     defer interp.deinit();
 

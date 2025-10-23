@@ -743,7 +743,7 @@ combineResults = |jsonResult, httpStatus|
 					(p-assign (ident "input")))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (external-module "Str"))
 				(ty-apply (name "Result") (external-module "Result")
 					(ty-malformed)
 					(ty-malformed)))))
@@ -875,7 +875,7 @@ combineResults = |jsonResult, httpStatus|
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "combineResults"))
 		(e-closure
