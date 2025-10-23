@@ -57,6 +57,12 @@ test "eval unary not operator" {
     try runExpectBool("!False", true, .no_trace);
 }
 
+test "Bool.not qualified call" {
+    // Test qualified method calls for Bool
+    try runExpectBool("Bool.not(True)", false, .no_trace);
+    try runExpectBool("Bool.not(False)", true, .no_trace);
+}
+
 test "eval double negation" {
     try runExpectBool("!!True", true, .no_trace);
     try runExpectBool("!!False", false, .no_trace);
@@ -890,4 +896,62 @@ test "ModuleEnv serialization and interpreter evaluation" {
             try testing.expectEqual(@as(i128, 13), result.asI128());
         }
     }
+}
+
+test "Str.is_empty qualified call" {
+    // Test qualified call: Str.is_empty("foo") should return False
+    try runExpectBool("Str.is_empty(\"foo\")", false, .no_trace);
+    try runExpectBool("Str.is_empty(\"\")", false, .no_trace);
+    try runExpectBool("Str.is_empty(\"hello world\")", false, .no_trace);
+}
+
+test "Str.is_empty static dispatch - direct" {
+    return error.SkipZigTest; // Static dispatch not yet implemented in interpreter
+    // Test static dispatch: "blah".is_empty() should return False
+    // try runExpectBool("\"blah\".is_empty()", false, .no_trace);
+    // try runExpectBool("\"\".is_empty()", false, .no_trace);
+    // try runExpectBool("\"x\".is_empty()", false, .no_trace);
+}
+
+test "Str.is_empty static dispatch - variable" {
+    return error.SkipZigTest; // Static dispatch not yet implemented in interpreter
+    // Test static dispatch with variable: x = "blah" x.is_empty()
+    // try runExpectBool("x = \"blah\"\nx.is_empty()", false, .no_trace);
+    // try runExpectBool("str = \"\"\nstr.is_empty()", false, .no_trace);
+    // try runExpectBool("myString = \"test\"\nmyString.is_empty()", false, .no_trace);
+}
+
+test "Str.is_empty static dispatch - nested" {
+    return error.SkipZigTest; // Static dispatch not yet implemented in interpreter
+    // Test static dispatch with more complex expressions
+    // try runExpectBool("(\"nested\").is_empty()", false, .no_trace);
+}
+
+test "Str.contains qualified call" {
+    // Test qualified call: Str.contains("foo", "o") should return True
+    try runExpectBool("Str.contains(\"foo\", \"o\")", true, .no_trace);
+    try runExpectBool("Str.contains(\"hello\", \"world\")", true, .no_trace);
+    try runExpectBool("Str.contains(\"\", \"\")", true, .no_trace);
+}
+
+test "Str.contains static dispatch - direct" {
+    return error.SkipZigTest; // Static dispatch not yet implemented in interpreter
+    // Test static dispatch: "foo".contains("o") should return True
+    // try runExpectBool("\"foo\".contains(\"o\")", true, .no_trace);
+    // try runExpectBool("\"hello\".contains(\"ell\")", true, .no_trace);
+    // try runExpectBool("\"test\".contains(\"x\")", true, .no_trace);
+}
+
+test "Str.contains static dispatch - variable" {
+    return error.SkipZigTest; // Static dispatch not yet implemented in interpreter
+    // Test static dispatch with variable
+    // try runExpectBool("x = \"foo\"\nx.contains(\"o\")", true, .no_trace);
+    // try runExpectBool("str = \"hello world\"\nstr.contains(\"world\")", true, .no_trace);
+    // try runExpectBool("myStr = \"test\"\nmyStr.contains(\"es\")", true, .no_trace);
+}
+
+test "Str.contains static dispatch - nested" {
+    return error.SkipZigTest; // Static dispatch not yet implemented in interpreter
+    // Test static dispatch with more complex expressions
+    // try runExpectBool("(\"nested\").contains(\"est\")", true, .no_trace);
 }

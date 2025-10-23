@@ -225,7 +225,7 @@ pub fn init(
         };
 
         // Only auto-import known builtin modules
-        const builtin_modules = [_][]const u8{ "Bool", "Result" };
+        const builtin_modules = [_][]const u8{ "Bool", "Result", "Str" };
         for (builtin_modules) |module_name_text| {
             const module_name_ident = try env.insertIdent(base.Ident.for_text(module_name_text));
             if (envs_map.get(module_name_ident)) |_| {

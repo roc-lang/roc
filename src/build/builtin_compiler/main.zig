@@ -197,12 +197,14 @@ pub fn main() !void {
     // Find Set type declaration via string lookup
     const set_type_idx = try findTypeDeclaration(set_env, "Set");
 
-    // Compile Str.roc (may use Bool type)
+    // Compile Str.roc (uses Bool type in method signatures)
     const str_env = try compileModule(
         gpa,
         "Str",
         str_roc_source,
-        &.{}, // No module dependencies
+        &[_]ModuleDep{
+            .{ .name = "Bool", .env = bool_env },
+        },
         bool_type_idx, // Provide Bool type index
         result_type_idx, // Provide Result type index
     );
@@ -310,13 +312,11 @@ fn compileModule(
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
     defer module_envs.deinit();
 
-    // Create temporary ident store for module name lookup
-    var temp_idents = try base.Ident.Store.initCapacity(gpa, 16);
-    defer temp_idents.deinit(gpa);
-
-    // Add dependencies (e.g., Dict for Set)
+    // Add dependencies (e.g., Dict for Set, Bool for Str)
+    // IMPORTANT: Use the module's own ident store, not a temporary one,
+    // because auto-import lookups will use the module's ident store
     for (deps) |dep| {
-        const dep_ident = try temp_idents.insert(gpa, base.Ident.for_text(dep.name));
+        const dep_ident = try module_env.insertIdent(base.Ident.for_text(dep.name));
         try module_envs.put(dep_ident, .{ .env = dep.env });
     }
 

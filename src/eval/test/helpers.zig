@@ -50,9 +50,19 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: e
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
+    // Create imported modules map for the interpreter to support qualified calls
+    var imported_modules_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(test_allocator);
+    defer imported_modules_map.deinit();
+    const bool_ident = try resources.module_env.insertIdent(base.Ident.for_text("Bool"));
+    const result_ident = try resources.module_env.insertIdent(base.Ident.for_text("Result"));
+    const str_ident = try resources.module_env.insertIdent(base.Ident.for_text("Str"));
+    try imported_modules_map.put(bool_ident, .{ .env = resources.bool_module.env });
+    try imported_modules_map.put(result_ident, .{ .env = resources.result_module.env });
+    try imported_modules_map.put(str_ident, .{ .env = resources.str_module.env });
+
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.bool_module.env, resources.result_module.env, resources.str_module.env);
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, null);
-    defer interpreter.deinit();
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &imported_modules_map);
+    defer interpreter.deinitAndFreeOtherEnvs();
 
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
@@ -78,9 +88,19 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
+    // Create imported modules map for the interpreter to support qualified calls
+    var imported_modules_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(test_allocator);
+    defer imported_modules_map.deinit();
+    const bool_ident = try resources.module_env.insertIdent(base.Ident.for_text("Bool"));
+    const result_ident = try resources.module_env.insertIdent(base.Ident.for_text("Result"));
+    const str_ident = try resources.module_env.insertIdent(base.Ident.for_text("Str"));
+    try imported_modules_map.put(bool_ident, .{ .env = resources.bool_module.env });
+    try imported_modules_map.put(result_ident, .{ .env = resources.result_module.env });
+    try imported_modules_map.put(str_ident, .{ .env = resources.str_module.env });
+
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.bool_module.env, resources.result_module.env, resources.str_module.env);
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, null);
-    defer interpreter.deinit();
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &imported_modules_map);
+    defer interpreter.deinitAndFreeOtherEnvs();
 
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
@@ -104,9 +124,19 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
+    // Create imported modules map for the interpreter to support qualified calls
+    var imported_modules_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(test_allocator);
+    defer imported_modules_map.deinit();
+    const bool_ident = try resources.module_env.insertIdent(base.Ident.for_text("Bool"));
+    const result_ident = try resources.module_env.insertIdent(base.Ident.for_text("Result"));
+    const str_ident = try resources.module_env.insertIdent(base.Ident.for_text("Str"));
+    try imported_modules_map.put(bool_ident, .{ .env = resources.bool_module.env });
+    try imported_modules_map.put(result_ident, .{ .env = resources.result_module.env });
+    try imported_modules_map.put(str_ident, .{ .env = resources.str_module.env });
+
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.bool_module.env, resources.result_module.env, resources.str_module.env);
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, null);
-    defer interpreter.deinit();
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &imported_modules_map);
+    defer interpreter.deinitAndFreeOtherEnvs();
 
     const enable_trace = should_trace == .trace;
     if (enable_trace) {
@@ -139,9 +169,19 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     var test_env_instance = TestEnv.init(test_allocator);
     defer test_env_instance.deinit();
 
+    // Create imported modules map for the interpreter to support qualified calls
+    var imported_modules_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(test_allocator);
+    defer imported_modules_map.deinit();
+    const bool_ident = try resources.module_env.insertIdent(base.Ident.for_text("Bool"));
+    const result_ident = try resources.module_env.insertIdent(base.Ident.for_text("Result"));
+    const str_ident = try resources.module_env.insertIdent(base.Ident.for_text("Str"));
+    try imported_modules_map.put(bool_ident, .{ .env = resources.bool_module.env });
+    try imported_modules_map.put(result_ident, .{ .env = resources.result_module.env });
+    try imported_modules_map.put(str_ident, .{ .env = resources.str_module.env });
+
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.bool_module.env, resources.result_module.env, resources.str_module.env);
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, null);
-    defer interpreter.deinit();
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &imported_modules_map);
+    defer interpreter.deinitAndFreeOtherEnvs();
 
     const enable_trace = should_trace == .trace;
     if (enable_trace) {

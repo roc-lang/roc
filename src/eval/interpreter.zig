@@ -136,13 +136,34 @@ pub const Interpreter = struct {
 
     pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, imported_modules_map: ?*const std.AutoHashMap(base_pkg.Ident.Idx, can.Can.AutoImportedType)) !Interpreter {
         // Convert imported modules map to other_envs slice
+        // IMPORTANT: The order must match Import.Idx order (not hash map iteration order!)
         var other_envs_list = std.array_list.Managed(*const can.ModuleEnv).init(allocator);
         errdefer other_envs_list.deinit();
 
         if (imported_modules_map) |modules_map| {
-            var iter = modules_map.iterator();
-            while (iter.next()) |entry| {
-                try other_envs_list.append(entry.value_ptr.env);
+            // Iterate through imports in Import.Idx order (0, 1, 2, ...)
+            // This ensures other_envs[i] corresponds to Import.Idx(i)
+            for (env.imports.imports.items.items) |string_idx| {
+                // Get the module name from the string literal
+                const module_name_str = env.common.strings.get(string_idx);
+
+                // Look up the ident for this module name in the current env
+                const module_ident = env.common.findIdent(module_name_str) orelse {
+                    // If we can't find the ident, this import isn't in our map - skip it
+                    // This can happen if the module has imports that aren't in imported_modules_map
+                    continue;
+                };
+
+                // Look up the module env in the map
+                if (modules_map.get(module_ident)) |auto_imported| {
+                    try other_envs_list.append(auto_imported.env);
+                } else {
+                    // Import exists in env.imports but not in the map we were given
+                    // We need to append something to maintain the index alignment
+                    // For now, we'll skip and accept the mismatch, but this shouldn't happen
+                    // in practice if the map is properly constructed
+                    return error.ImportNotInMap;
+                }
             }
         }
 
@@ -1675,7 +1696,17 @@ pub const Interpreter = struct {
                 }
                 const other_env = self.other_envs[import_idx];
 
-                // The target_node_idx is a Def.Idx in the other module
+                // The target_node_idx could be a Def or a Statement
+                // Check what type of node it is by trying to get it
+                const node_idx: can.CIR.Node.Idx = @enumFromInt(lookup.target_node_idx);
+                const node = other_env.store.nodes.get(node_idx);
+
+                // Check if this is a Def or something else
+                if (node.tag != .def) {
+                    // For now, methods and other non-def lookups are not fully implemented
+                    return error.NotImplemented;
+                }
+
                 const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
                 const target_def = other_env.store.getDef(target_def_idx);
 
