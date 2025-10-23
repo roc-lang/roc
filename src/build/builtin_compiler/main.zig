@@ -119,9 +119,25 @@ pub fn main() !void {
     {
         const str_var = can.ModuleEnv.varFrom(str_type_idx);
         const resolved = str_env.types.resolveVar(str_var);
-        var new_desc = resolved.desc;
-        new_desc.content = .{ .structure = .str_primitive };
-        try str_env.types.setVarDesc(resolved.var_, new_desc);
+
+        std.debug.print("DEBUG: Str type content tag: {s}\n", .{@tagName(resolved.desc.content)});
+
+        // First, update the backing variable of the nominal type to be str_primitive
+        if (resolved.desc.content == .structure) {
+            std.debug.print("DEBUG: Str is structure, checking for nominal_type\n", .{});
+            std.debug.print("DEBUG: Structure tag: {s}\n", .{@tagName(resolved.desc.content.structure)});
+            if (resolved.desc.content.structure == .nominal_type) {
+                std.debug.print("DEBUG: Found nominal_type, updating backing to str_primitive\n", .{});
+                const nom = resolved.desc.content.structure.nominal_type;
+                const backing_var = str_env.types.getNominalBackingVar(nom);
+                const backing_resolved = str_env.types.resolveVar(backing_var);
+                std.debug.print("DEBUG: Backing type before mutation: {s}\n", .{@tagName(backing_resolved.desc.content)});
+                var new_backing_desc = backing_resolved.desc;
+                new_backing_desc.content = .{ .structure = .str_primitive };
+                try str_env.types.setVarDesc(backing_resolved.var_, new_backing_desc);
+                std.debug.print("DEBUG: Backing type updated to str_primitive\n", .{});
+            }
+        }
     }
 
     // Compile Dict.roc (may use Result type, so we provide the indices)
@@ -336,7 +352,7 @@ fn findTypeDeclaration(env: *const ModuleEnv, type_name: []const u8) !CIR.Statem
     const all_stmts = env.store.sliceStatements(env.all_statements);
 
     // Search through all statements to find the one with matching name
-    for (all_stmts, 0..) |stmt_idx, _| {
+    for (all_stmts) |stmt_idx| {
         const stmt = env.store.getStatement(stmt_idx);
         switch (stmt) {
             .s_nominal_decl => |decl| {

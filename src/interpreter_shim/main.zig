@@ -75,8 +75,8 @@ const ShimError = error{
 /// Expected format in shared memory: [u64 parent_address][u32 entry_count][ModuleEnv data][u32[] def_indices]
 export fn roc_entrypoint(entry_idx: u32, ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void {
     evaluateFromSharedMemory(entry_idx, ops, ret_ptr, arg_ptr) catch |err| {
-        var buf: [256]u8 = undefined;
-        const msg2 = std.fmt.bufPrint(&buf, "Error evaluating from shared memory: {s}", .{@errorName(err)}) catch "Error evaluating from shared memory";
+        var buf: [512]u8 = undefined;
+        const msg2 = std.fmt.bufPrint(&buf, "Error evaluating from shared memory: {s} at entry_idx={}", .{@errorName(err), entry_idx}) catch "Error evaluating from shared memory";
         ops.crash(msg2);
     };
 }
@@ -161,7 +161,15 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     const expr_idx = def.expr;
 
     // Evaluate the expression (with optional arguments)
-    try interpreter.evaluateExpression(expr_idx, ret_ptr, roc_ops, arg_ptr);
+    interpreter.evaluateExpression(expr_idx, ret_ptr, roc_ops, arg_ptr) catch |err| {
+        if (err == error.TypeMismatch) {
+            var debug_buf: [512]u8 = undefined;
+            const expr = env_ptr.store.getExpr(expr_idx);
+            const msg = std.fmt.bufPrint(&debug_buf, "TypeMismatch at entry_idx={}, def_idx={}, expr_idx={}, expr_tag={s}", .{ entry_idx, @intFromEnum(def_idx), @intFromEnum(expr_idx), @tagName(expr) }) catch "TypeMismatch during evaluation";
+            roc_ops.crash(msg);
+        }
+        return err;
+    };
 }
 
 /// Set up ModuleEnv from shared memory with proper relocation

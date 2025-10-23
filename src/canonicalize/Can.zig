@@ -225,7 +225,7 @@ pub fn init(
         };
 
         // Only auto-import known builtin modules
-        const builtin_modules = [_][]const u8{ "Bool", "Result" };
+        const builtin_modules = [_][]const u8{ "Bool", "Result", "Str" };
         for (builtin_modules) |module_name_text| {
             const module_name_ident = try env.insertIdent(base.Ident.for_text(module_name_text));
             if (envs_map.get(module_name_ident)) |_| {
@@ -5404,9 +5404,13 @@ fn canonicalizeTypeAnnoBasicType(
             }
 
             // Check if this is an auto-imported type from module_envs
+            const type_name_text_for_debug = self.env.getIdent(type_name_ident);
+            std.debug.print("DEBUG Can: Looking up type: {s}, ident={}\n", .{ type_name_text_for_debug, type_name_ident });
             if (self.module_envs) |envs_map| {
+                std.debug.print("DEBUG Can: module_envs has {} entries\n", .{envs_map.count()});
                 if (envs_map.get(type_name_ident)) |auto_imported_type| {
-                    // This is an auto-imported type like Bool or Result
+                    // This is an auto-imported type like Bool or Result or Str
+                    std.debug.print("DEBUG Can: Found auto-imported type: {s}\n", .{type_name_text_for_debug});
                     // We need to create an import for it and return the type annotation
                     const module_name_text = auto_imported_type.env.module_name;
                     const import_idx = try self.getOrCreateAutoImport(module_name_text);
@@ -5422,7 +5426,11 @@ fn canonicalizeTypeAnnoBasicType(
                             .target_node_idx = target_node_idx,
                         } },
                     } }, region);
+                } else {
+                    std.debug.print("DEBUG Can: Type {s} not found in module_envs\n", .{type_name_text_for_debug});
                 }
+            } else {
+                std.debug.print("DEBUG Can: module_envs is null\n", .{});
             }
 
             // Not in type_decls, check if it's an exposed item from an imported module

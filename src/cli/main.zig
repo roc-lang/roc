@@ -1368,8 +1368,31 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         .str_stmt = @enumFromInt(0), // TODO: load from builtin modules
     };
 
+    // Load builtin modules for auto-import during canonicalization
+    const bool_source = "Bool := [True, False].{}\n";
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const str_source = "Str := [StrTag].{}\n";
+    var bool_module_for_can = try builtin_loading.loadCompiledModule(allocs.gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module_for_can.deinit();
+    var result_module_for_can = try builtin_loading.loadCompiledModule(allocs.gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module_for_can.deinit();
+    var str_module_for_can = try builtin_loading.loadCompiledModule(allocs.gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module_for_can.deinit();
+
+    // Create module_envs map for auto-importing builtin modules
+    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
+    defer module_envs_map.deinit();
+
+    // Add builtin modules to the map
+    const bool_ident = try env.insertIdent(base.Ident.for_text("Bool"));
+    try module_envs_map.put(bool_ident, .{ .env = bool_module_for_can.env });
+    const result_ident = try env.insertIdent(base.Ident.for_text("Result"));
+    try module_envs_map.put(result_ident, .{ .env = result_module_for_can.env });
+    const str_ident = try env.insertIdent(base.Ident.for_text("Str"));
+    try module_envs_map.put(str_ident, .{ .env = str_module_for_can.env });
+
     // Create canonicalizer
-    var canonicalizer = try Can.init(&env, &parse_ast, null);
+    var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map);
 
     // Canonicalize the entire module
     try canonicalizer.canonicalizeFile();
@@ -2406,8 +2429,31 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     // Initialize CIR fields in ModuleEnv
     try env.initCIRFields(allocs.gpa, module_name);
 
+    // Load builtin modules for auto-import during canonicalization
+    const bool_source2 = "Bool := [True, False].{}\n";
+    const result_source2 = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const str_source2 = "Str := [StrTag].{}\n";
+    var bool_module_for_can2 = try builtin_loading.loadCompiledModule(allocs.gpa, compiled_builtins.bool_bin, "Bool", bool_source2);
+    defer bool_module_for_can2.deinit();
+    var result_module_for_can2 = try builtin_loading.loadCompiledModule(allocs.gpa, compiled_builtins.result_bin, "Result", result_source2);
+    defer result_module_for_can2.deinit();
+    var str_module_for_can2 = try builtin_loading.loadCompiledModule(allocs.gpa, compiled_builtins.str_bin, "Str", str_source2);
+    defer str_module_for_can2.deinit();
+
+    // Create module_envs map for auto-importing builtin modules
+    var module_envs_map2 = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
+    defer module_envs_map2.deinit();
+
+    // Add builtin modules to the map
+    const bool_ident2 = try env.insertIdent(base.Ident.for_text("Bool"));
+    try module_envs_map2.put(bool_ident2, .{ .env = bool_module_for_can2.env });
+    const result_ident2 = try env.insertIdent(base.Ident.for_text("Result"));
+    try module_envs_map2.put(result_ident2, .{ .env = result_module_for_can2.env });
+    const str_ident2 = try env.insertIdent(base.Ident.for_text("Str"));
+    try module_envs_map2.put(str_ident2, .{ .env = str_module_for_can2.env });
+
     // Create canonicalizer
-    var canonicalizer = Can.init(&env, &parse_ast, null) catch |err| {
+    var canonicalizer = Can.init(&env, &parse_ast, &module_envs_map2) catch |err| {
         try stderr.print("Failed to initialize canonicalizer: {}", .{err});
         std.process.exit(1);
     };

@@ -546,9 +546,35 @@ pub const PackageEnv = struct {
             self.total_tokenize_parse_ns += @intCast(parse_end - parse_start);
         }
 
+        // Load builtin modules for auto-import during canonicalization
+        const bool_source = "Bool := [True, False].{}\n";
+        const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+        const str_source = "Str := [StrTag].{}\n";
+        var bool_module_for_can = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+        defer bool_module_for_can.deinit();
+        var result_module_for_can = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.result_bin, "Result", result_source);
+        defer result_module_for_can.deinit();
+        var str_module_for_can = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.str_bin, "Str", str_source);
+        defer str_module_for_can.deinit();
+
+        // Create module_envs map for auto-importing builtin modules
+        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(self.gpa);
+        defer module_envs_map.deinit();
+
+        // Add builtin modules to the map
+        const bool_ident = try env.insertIdent(base.Ident.for_text("Bool"));
+        try module_envs_map.put(bool_ident, .{ .env = bool_module_for_can.env });
+        std.debug.print("DEBUG: Added Bool to module_envs, ident={}\n", .{bool_ident});
+        const result_ident = try env.insertIdent(base.Ident.for_text("Result"));
+        try module_envs_map.put(result_ident, .{ .env = result_module_for_can.env });
+        std.debug.print("DEBUG: Added Result to module_envs, ident={}\n", .{result_ident});
+        const str_ident = try env.insertIdent(base.Ident.for_text("Str"));
+        try module_envs_map.put(str_ident, .{ .env = str_module_for_can.env });
+        std.debug.print("DEBUG: Added Str to module_envs, ident={}\n", .{str_ident});
+
         // canonicalize using the AST
         const canon_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        var czer = try Can.init(env, &parse_ast, null);
+        var czer = try Can.init(env, &parse_ast, &module_envs_map);
         try czer.canonicalizeFile();
         czer.deinit();
         const canon_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
@@ -779,7 +805,7 @@ pub const PackageEnv = struct {
         // Load builtin modules required by the interpreter (reuse builtin_indices from above)
         const bool_source = "Bool := [True, False].{}\n";
         const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-        const str_source = "Str := [].{}\n";
+        const str_source = "Str := [StrTag].{}\n";
         var bool_module = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.bool_bin, "Bool", bool_source);
         defer bool_module.deinit();
         var result_module = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.result_bin, "Result", result_source);
