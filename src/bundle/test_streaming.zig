@@ -218,14 +218,14 @@ test "different compression levels" {
         );
         defer reader.deinit();
 
-        var decompressed = std.array_list.Managed(u8).init(allocator);
-        defer decompressed.deinit();
+        var decompressed = std.ArrayList(u8).empty;
+        defer decompressed.deinit(allocator);
 
         var buffer: [1024]u8 = undefined;
         while (true) {
             const n = try reader.read(&buffer);
             if (n == 0) break;
-            try decompressed.appendSlice(buffer[0..n]);
+            try decompressed.appendSlice(allocator, buffer[0..n]);
         }
 
         try std.testing.expectEqualStrings(test_data, decompressed.items);

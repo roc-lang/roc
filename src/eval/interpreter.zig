@@ -136,19 +136,19 @@ pub const Interpreter = struct {
 
     pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, imported_modules_map: ?*const std.AutoHashMap(base_pkg.Ident.Idx, can.Can.AutoImportedType)) !Interpreter {
         // Convert imported modules map to other_envs slice
-        var other_envs_list = std.array_list.Managed(*const can.ModuleEnv).init(allocator);
-        errdefer other_envs_list.deinit();
+        var other_envs_list = std.ArrayList(*const can.ModuleEnv).empty;
+        errdefer other_envs_list.deinit(allocator);
 
         if (imported_modules_map) |modules_map| {
             var iter = modules_map.iterator();
             while (iter.next()) |entry| {
-                try other_envs_list.append(entry.value_ptr.env);
+                try other_envs_list.append(allocator, entry.value_ptr.env);
             }
         }
 
         // Transfer ownership of the slice to the Interpreter
         // Note: The caller is responsible for freeing this via deinitAndFreeOtherEnvs()
-        const other_envs = try other_envs_list.toOwnedSlice();
+        const other_envs = try other_envs_list.toOwnedSlice(allocator);
         return initWithOtherEnvs(allocator, env, other_envs, builtin_types);
     }
 

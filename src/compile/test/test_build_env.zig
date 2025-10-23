@@ -523,7 +523,7 @@
 //         var j: usize = 1;
 //         while (j <= 2) : (j += 1) {
 //             const import_idx = (i + j) % module_count;
-//             try imports.appendSlice("import Mod");
+//             try imports.appendSlice(gpa, "import Mod");
 //             try std.fmt.formatInt(import_idx, 10, .lower, .{}, imports.writer());
 //             try imports.append(gpa, '\n');
 //         }

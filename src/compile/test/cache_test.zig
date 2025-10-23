@@ -346,7 +346,7 @@
 
 //     var original_sexpr = std.ArrayList(u8).empty;
 //     defer original_sexpr.deinit(gpa);
-//     try original_tree.toStringPretty(original_sexpr.writer().any());
+//     try original_tree.toStringPretty(original_sexpr.writer(gpa).any());
 
 //     // Create arena for serialization
 //     var arena = std.heap.ArenaAllocator.init(gpa);
@@ -422,7 +422,7 @@
 
 // //     var original_sexpr = std.ArrayList(u8).empty;
 // //     defer original_sexpr.deinit(gpa);
-// //     try original_tree.toStringPretty(original_sexpr.writer().any());
+// //     try original_tree.toStringPretty(original_sexpr.writer(gpa).any());
 
 // //     // Create arena for serialization
 // //     var arena = std.heap.ArenaAllocator.init(gpa);
