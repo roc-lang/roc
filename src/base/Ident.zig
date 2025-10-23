@@ -602,13 +602,13 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
         .{ .text = "hello", .expected_idx = 1 }, // duplicate, should reuse
     };
 
-    var indices = std.array_list.Managed(Ident.Idx).init(gpa);
-    defer indices.deinit();
+    var indices = std.ArrayList(Ident.Idx).empty;
+    defer indices.deinit(gpa);
 
     for (test_idents) |test_ident| {
         const ident = Ident.for_text(test_ident.text);
         const idx = try original.insert(gpa, ident);
-        try indices.append(idx);
+        try indices.append(gpa, idx);
         // Verify the index matches expectation
         try std.testing.expectEqual(test_ident.expected_idx, idx.idx);
     }

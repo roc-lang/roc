@@ -1218,8 +1218,8 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     defer writer.deinit(gpa);
 
     // Track offsets as we go
-    var offsets = std.array_list.Managed(usize).init(gpa);
-    defer offsets.deinit();
+    var offsets = std.ArrayList(usize).empty;
+    defer offsets.deinit(gpa);
 
     // Create temp file
     var tmp_dir = testing.tmpDir(.{});
@@ -1238,7 +1238,7 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     _ = try list1.append(gpa, 3);
 
     const start1 = writer.total_bytes;
-    try offsets.append(start1); // Serialized struct is placed at current position
+    try offsets.append(gpa, start1); // Serialized struct is placed at current position
     const serialized1 = try writer.appendAlloc(gpa, SafeList(u8).Serialized);
     try serialized1.serialize(&list1, gpa, &writer);
 
@@ -1249,7 +1249,7 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     _ = try list2.append(gpa, 2_000_000);
 
     const start2 = writer.total_bytes;
-    try offsets.append(start2); // Serialized struct is placed at current position
+    try offsets.append(gpa, start2); // Serialized struct is placed at current position
     const serialized2 = try writer.appendAlloc(gpa, SafeList(u64).Serialized);
     try serialized2.serialize(&list2, gpa, &writer);
 
@@ -1266,7 +1266,7 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     _ = try list3.append(gpa, 400);
 
     const start3 = writer.total_bytes;
-    try offsets.append(start3); // Serialized struct is placed at current position
+    try offsets.append(gpa, start3); // Serialized struct is placed at current position
     const serialized3 = try writer.appendAlloc(gpa, SafeList(u16).Serialized);
     try serialized3.serialize(&list3, gpa, &writer);
 
@@ -1276,7 +1276,7 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     _ = try list4.append(gpa, 42);
 
     const start4 = writer.total_bytes;
-    try offsets.append(start4); // Serialized struct is placed at current position
+    try offsets.append(gpa, start4); // Serialized struct is placed at current position
     const serialized4 = try writer.appendAlloc(gpa, SafeList(u32).Serialized);
     try serialized4.serialize(&list4, gpa, &writer);
 
