@@ -964,19 +964,19 @@ fn compileSource(source: []const u8) !CompilerStageData {
     logDebug("compileSource: Builtin indices loaded, bool_type={}\n", .{@intFromEnum(builtin_indices.bool_type)});
 
     logDebug("compileSource: Loading Bool module\n", .{});
-    const bool_source = "Bool := [True, False].{}\n";
+    const bool_source = compiled_builtins.bool_source;
     var bool_module = try LoadedModule.loadCompiledModule(allocator, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
     logDebug("compileSource: Bool module loaded\n", .{});
 
     logDebug("compileSource: Loading Result module\n", .{});
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const result_source = compiled_builtins.result_source;
     var result_module = try LoadedModule.loadCompiledModule(allocator, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
     logDebug("compileSource: Result module loaded\n", .{});
 
     logDebug("compileSource: Loading Str module\n", .{});
-    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    const str_source = compiled_builtins.str_source;
     var str_module = try LoadedModule.loadCompiledModule(allocator, compiled_builtins.str_bin, "Str", str_source);
     defer str_module.deinit();
     logDebug("compileSource: Str module loaded\n", .{});

@@ -235,9 +235,9 @@ main! = |_| {
 		(p-assign (ident "main!"))
 		(e-closure
 			(captures
+				(capture (ident "testCrashSimple"))
 				(capture (ident "testEllipsis"))
-				(capture (ident "testCrash"))
-				(capture (ident "testCrashSimple")))
+				(capture (ident "testCrash")))
 			(e-lambda
 				(args
 					(p-underscore))

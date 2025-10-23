@@ -485,8 +485,8 @@ combineResults = |result1, result2|
 		(p-assign (ident "handleApi"))
 		(e-closure
 			(captures
-				(capture (ident "err"))
-				(capture (ident "data")))
+				(capture (ident "data"))
+				(capture (ident "err")))
 			(e-lambda
 				(args
 					(p-assign (ident "request")))
@@ -560,9 +560,9 @@ combineResults = |result1, result2|
 		(e-closure
 			(captures
 				(capture (ident "value2"))
-				(capture (ident "value1"))
 				(capture (ident "err"))
-				(capture (ident "err")))
+				(capture (ident "err"))
+				(capture (ident "value1")))
 			(e-lambda
 				(args
 					(p-assign (ident "result1"))

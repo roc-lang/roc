@@ -3910,13 +3910,13 @@ test "interpreter: Var->Layout slot caches computed layout" {
     defer env.deinit();
 
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
+    const bool_source = compiled_builtins.bool_source;
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const result_source = compiled_builtins.result_source;
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
-    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    const str_source = compiled_builtins.str_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
     defer str_module.deinit();
 
@@ -3947,13 +3947,13 @@ test "interpreter: translateTypeVar for str" {
     defer env.deinit();
 
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
+    const bool_source = compiled_builtins.bool_source;
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const result_source = compiled_builtins.result_source;
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
-    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    const str_source = compiled_builtins.str_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
     defer str_module.deinit();
 
@@ -3977,13 +3977,13 @@ test "interpreter: translateTypeVar for int64" {
     defer env.deinit();
 
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
+    const bool_source = compiled_builtins.bool_source;
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const result_source = compiled_builtins.result_source;
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
-    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    const str_source = compiled_builtins.str_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
     defer str_module.deinit();
 
@@ -4015,13 +4015,13 @@ test "interpreter: translateTypeVar for f64" {
     defer env.deinit();
 
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
+    const bool_source = compiled_builtins.bool_source;
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const result_source = compiled_builtins.result_source;
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
-    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    const str_source = compiled_builtins.str_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
     defer str_module.deinit();
 
@@ -4053,13 +4053,13 @@ test "interpreter: translateTypeVar for tuple(Str, I64)" {
     defer env.deinit();
 
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
+    const bool_source = compiled_builtins.bool_source;
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const result_source = compiled_builtins.result_source;
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
-    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    const str_source = compiled_builtins.str_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
     defer str_module.deinit();
 
@@ -4109,13 +4109,13 @@ test "interpreter: translateTypeVar for record {first: Str, second: I64}" {
     defer env.deinit();
 
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
+    const bool_source = compiled_builtins.bool_source;
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const result_source = compiled_builtins.result_source;
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
-    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    const str_source = compiled_builtins.str_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
     defer str_module.deinit();
 
@@ -4179,13 +4179,13 @@ test "interpreter: translateTypeVar for alias of Str" {
     defer env.deinit();
 
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
+    const bool_source = compiled_builtins.bool_source;
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const result_source = compiled_builtins.result_source;
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
-    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    const str_source = compiled_builtins.str_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
     defer str_module.deinit();
 
@@ -4218,13 +4218,13 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
     defer env.deinit();
 
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
+    const bool_source = compiled_builtins.bool_source;
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const result_source = compiled_builtins.result_source;
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
-    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    const str_source = compiled_builtins.str_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
     defer str_module.deinit();
 
@@ -4262,13 +4262,13 @@ test "interpreter: translateTypeVar for flex var" {
     defer env.deinit();
 
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
+    const bool_source = compiled_builtins.bool_source;
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const result_source = compiled_builtins.result_source;
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
-    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    const str_source = compiled_builtins.str_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
     defer str_module.deinit();
 
@@ -4290,13 +4290,13 @@ test "interpreter: translateTypeVar for rigid var" {
     defer env.deinit();
 
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
+    const bool_source = compiled_builtins.bool_source;
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const result_source = compiled_builtins.result_source;
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
-    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    const str_source = compiled_builtins.str_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
     defer str_module.deinit();
 
@@ -4320,13 +4320,13 @@ test "interpreter: poly cache insert and lookup" {
     defer env.deinit();
 
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
+    const bool_source = compiled_builtins.bool_source;
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const result_source = compiled_builtins.result_source;
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
-    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    const str_source = compiled_builtins.str_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
     defer str_module.deinit();
 
@@ -4368,13 +4368,13 @@ test "interpreter: prepareCall miss then hit" {
     defer env.deinit();
 
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
+    const bool_source = compiled_builtins.bool_source;
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const result_source = compiled_builtins.result_source;
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
-    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    const str_source = compiled_builtins.str_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
     defer str_module.deinit();
 
@@ -4410,13 +4410,13 @@ test "interpreter: prepareCallWithFuncVar populates cache" {
     defer env.deinit();
 
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
+    const bool_source = compiled_builtins.bool_source;
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const result_source = compiled_builtins.result_source;
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
-    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    const str_source = compiled_builtins.str_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
     defer str_module.deinit();
 
@@ -4452,13 +4452,13 @@ test "interpreter: unification constrains (a->a) with Str" {
     defer env.deinit();
 
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
+    const bool_source = compiled_builtins.bool_source;
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const result_source = compiled_builtins.result_source;
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
-    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    const str_source = compiled_builtins.str_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
     defer str_module.deinit();
 

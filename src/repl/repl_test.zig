@@ -279,9 +279,9 @@ test "Repl - minimal interpreter integration" {
 
     // Load builtin modules (following TestEnv.zig pattern)
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    const bool_source = compiled_builtins.bool_source;
+    const result_source = compiled_builtins.result_source;
+    const str_source = compiled_builtins.str_source;
     var bool_module = try loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
     var result_module = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);

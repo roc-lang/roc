@@ -336,17 +336,10 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     builtin_indices: CIR.BuiltinIndices,
     builtin_types: BuiltinTypes,
 } {
-    // Load builtin modules (following TestEnv.zig pattern)
-    const builtin_indices = try deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    const str_source = "Str := [ProvidedByCompiler].{}\n";
-    var bool_module = try loadCompiledModule(allocator, compiled_builtins.bool_bin, "Bool", bool_source);
-    errdefer bool_module.deinit();
-    var result_module = try loadCompiledModule(allocator, compiled_builtins.result_bin, "Result", result_source);
-    errdefer result_module.deinit();
-    var str_module = try loadCompiledModule(allocator, compiled_builtins.str_bin, "Str", str_source);
-    errdefer str_module.deinit();
+    // Load all builtin modules using the centralized system
+    const BuiltinModules = eval_mod.BuiltinModules;
+    var builtin_mods = try BuiltinModules.init(allocator);
+    errdefer builtin_mods.deinit();
 
     // Initialize the ModuleEnv
     const module_env = try allocator.create(ModuleEnv);
@@ -385,8 +378,8 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     _ = try module_env.imports.getOrPut(allocator, &module_env.common.strings, "Str");
 
     // Get Bool and Result statement indices from IMPORTED modules (not copied!)
-    const bool_stmt_in_bool_module = builtin_indices.bool_type;
-    const result_stmt_in_result_module = builtin_indices.result_type;
+    const bool_stmt_in_bool_module = builtin_mods.builtin_indices.bool_type;
+    const result_stmt_in_result_module = builtin_mods.builtin_indices.result_type;
 
     const common_idents: Check.CommonIdents = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
@@ -402,9 +395,9 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     const bool_ident = try module_env.insertIdent(base.Ident.for_text("Bool"));
     const result_ident = try module_env.insertIdent(base.Ident.for_text("Result"));
     const str_ident = try module_env.insertIdent(base.Ident.for_text("Str"));
-    try module_envs_map.put(bool_ident, .{ .env = bool_module.env });
-    try module_envs_map.put(result_ident, .{ .env = result_module.env });
-    try module_envs_map.put(str_ident, .{ .env = str_module.env });
+    try module_envs_map.put(bool_ident, .{ .env = builtin_mods.bool_module.env });
+    try module_envs_map.put(result_ident, .{ .env = builtin_mods.result_module.env });
+    try module_envs_map.put(str_ident, .{ .env = builtin_mods.str_module.env });
 
     // Create czer with module_envs_map for qualified name resolution (following REPL pattern)
     const czer = try allocator.create(Can);
@@ -426,9 +419,9 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
         } });
         const checker = try allocator.create(Check);
         // Pass Bool and Result as imported modules
-        const imported_envs = [_]*const ModuleEnv{ bool_module.env, result_module.env, str_module.env };
+        const imported_envs = [_]*const ModuleEnv{ builtin_mods.bool_module.env, builtin_mods.result_module.env, builtin_mods.str_module.env };
         checker.* = try Check.init(allocator, &module_env.types, module_env, &imported_envs, &module_envs_map, &module_env.store.regions, common_idents);
-        const builtin_types = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+        const builtin_types = BuiltinTypes.init(builtin_mods.builtin_indices, builtin_mods.bool_module.env, builtin_mods.result_module.env, builtin_mods.str_module.env);
         return .{
             .module_env = module_env,
             .parse_ast = parse_ast,
@@ -438,24 +431,24 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
                 .diagnostic = diagnostic_idx,
             } }, base.Region.zero()),
             .bool_stmt = bool_stmt_in_bool_module,
-            .bool_module = bool_module,
-            .result_module = result_module,
-            .str_module = str_module,
-            .builtin_indices = builtin_indices,
+            .bool_module = builtin_mods.bool_module,
+            .result_module = builtin_mods.result_module,
+            .str_module = builtin_mods.str_module,
+            .builtin_indices = builtin_mods.builtin_indices,
             .builtin_types = builtin_types,
         };
     };
     const canonical_expr_idx = canonical_expr.get_idx();
 
     // Create type checker - pass Bool, Result, and Str as imported modules
-    const imported_envs = [_]*const ModuleEnv{ bool_module.env, result_module.env, str_module.env };
+    const imported_envs = [_]*const ModuleEnv{ builtin_mods.bool_module.env, builtin_mods.result_module.env, builtin_mods.str_module.env };
     const checker = try allocator.create(Check);
     checker.* = try Check.init(allocator, &module_env.types, module_env, &imported_envs, &module_envs_map, &module_env.store.regions, common_idents);
 
     // Type check the expression
     _ = try checker.checkExprRepl(canonical_expr_idx);
 
-    const builtin_types = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+    const builtin_types = BuiltinTypes.init(builtin_mods.builtin_indices, builtin_mods.bool_module.env, builtin_mods.result_module.env, builtin_mods.str_module.env);
     return .{
         .module_env = module_env,
         .parse_ast = parse_ast,
@@ -463,10 +456,10 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
         .checker = checker,
         .expr_idx = canonical_expr_idx,
         .bool_stmt = bool_stmt_in_bool_module,
-        .bool_module = bool_module,
-        .result_module = result_module,
-        .str_module = str_module,
-        .builtin_indices = builtin_indices,
+        .bool_module = builtin_mods.bool_module,
+        .result_module = builtin_mods.result_module,
+        .str_module = builtin_mods.str_module,
+        .builtin_indices = builtin_mods.builtin_indices,
         .builtin_types = builtin_types,
     };
 }

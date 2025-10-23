@@ -751,8 +751,8 @@ combineResults = |jsonResult, httpStatus|
 		(p-assign (ident "handleRequest"))
 		(e-closure
 			(captures
-				(capture (ident "value"))
-				(capture (ident "error")))
+				(capture (ident "error"))
+				(capture (ident "value")))
 			(e-lambda
 				(args
 					(p-assign (ident "req")))
@@ -841,8 +841,8 @@ combineResults = |jsonResult, httpStatus|
 		(p-assign (ident "handleResponse"))
 		(e-closure
 			(captures
-				(capture (ident "status"))
-				(capture (ident "error")))
+				(capture (ident "error"))
+				(capture (ident "status")))
 			(e-lambda
 				(args
 					(p-assign (ident "response")))

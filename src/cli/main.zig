@@ -2441,9 +2441,9 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
         try stderr.print("Failed to deserialize builtin indices: {}\n", .{err});
         std.process.exit(1);
     };
-    const bool_source = "Bool := [True, False].{}\n";
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    const bool_source = compiled_builtins.bool_source;
+    const result_source = compiled_builtins.result_source;
+    const str_source = compiled_builtins.str_source;
     var bool_module = builtin_loading.loadCompiledModule(allocs.gpa, compiled_builtins.bool_bin, "Bool", bool_source) catch |err| {
         try stderr.print("Failed to load Bool module: {}\n", .{err});
         std.process.exit(1);

@@ -152,9 +152,9 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
 
     // Load builtin modules as proper imported modules
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{ not }\n";
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    const str_source = "Str := [ProvidedByCompiler].{ is_empty }\n";
+    const bool_source = compiled_builtins.bool_source;
+    const result_source = compiled_builtins.result_source;
+    const str_source = compiled_builtins.str_source;
     var bool_module = try loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     errdefer bool_module.deinit();
     var result_module = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
@@ -329,9 +329,9 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
 
     // Load builtin modules as proper imported modules
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{ not }\n";
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    const str_source = "Str := [ProvidedByCompiler].{ is_empty }\n";
+    const bool_source = compiled_builtins.bool_source;
+    const result_source = compiled_builtins.result_source;
+    const str_source = compiled_builtins.str_source;
     var bool_module = try loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     errdefer bool_module.deinit();
     var result_module = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);

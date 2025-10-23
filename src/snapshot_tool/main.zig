@@ -867,7 +867,7 @@ pub fn main() !void {
     var set_loaded = try loadCompiledModule(gpa, compiled_builtins.set_bin, "Set", set_source);
     defer set_loaded.deinit();
 
-    const bool_source = "Bool := [True, False].{}\n";
+    const bool_source = compiled_builtins.bool_source;
     var bool_loaded = try loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_loaded.deinit();
 
@@ -875,7 +875,7 @@ pub fn main() !void {
     var result_loaded = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_loaded.deinit();
 
-    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    const str_source = compiled_builtins.str_source;
     var str_loaded = try loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
     defer str_loaded.deinit();
 
@@ -940,7 +940,7 @@ fn checkSnapshotExpectations(gpa: Allocator) !bool {
     var set_loaded = try loadCompiledModule(gpa, compiled_builtins.set_bin, "Set", set_source);
     defer set_loaded.deinit();
 
-    const bool_source = "Bool := [True, False].{}\n";
+    const bool_source = compiled_builtins.bool_source;
     var bool_loaded = try loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_loaded.deinit();
 
@@ -948,7 +948,7 @@ fn checkSnapshotExpectations(gpa: Allocator) !bool {
     var result_loaded = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_loaded.deinit();
 
-    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    const str_source = compiled_builtins.str_source;
     var str_loaded = try loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
     defer str_loaded.deinit();
 

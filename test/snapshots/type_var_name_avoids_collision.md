@@ -529,13 +529,13 @@ main! = |_| {
 		(p-assign (ident "main!"))
 		(e-closure
 			(captures
-				(capture (ident "identity"))
+				(capture (ident "finalIdentity"))
 				(capture (ident "a"))
-				(capture (ident "f"))
 				(capture (ident "anotherIdentity"))
+				(capture (ident "f"))
+				(capture (ident "identity"))
 				(capture (ident "combine"))
-				(capture (ident "yetAnotherIdentity"))
-				(capture (ident "finalIdentity")))
+				(capture (ident "yetAnotherIdentity")))
 			(e-lambda
 				(args
 					(p-underscore))

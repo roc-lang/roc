@@ -136,18 +136,15 @@ pub const Repl = struct {
         const builtin_indices = try deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
 
         // Load Bool module once at startup
-        const bool_source = "Bool := [True, False].{}\n";
-        var bool_module = try loadCompiledModule(allocator, compiled_builtins.bool_bin, "Bool", bool_source);
+        var bool_module = try loadCompiledModule(allocator, compiled_builtins.bool_bin, "Bool", compiled_builtins.bool_source);
         errdefer bool_module.deinit();
 
         // Load Result module once at startup
-        const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-        var result_module = try loadCompiledModule(allocator, compiled_builtins.result_bin, "Result", result_source);
+        var result_module = try loadCompiledModule(allocator, compiled_builtins.result_bin, "Result", compiled_builtins.result_source);
         errdefer result_module.deinit();
 
         // Load Str module once at startup
-        const str_source = "Str := [ProvidedByCompiler].{}\n";
-        var str_module = try loadCompiledModule(allocator, compiled_builtins.str_bin, "Str", str_source);
+        var str_module = try loadCompiledModule(allocator, compiled_builtins.str_bin, "Str", compiled_builtins.str_source);
         errdefer str_module.deinit();
 
         return Repl{

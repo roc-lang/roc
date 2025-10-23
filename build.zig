@@ -222,6 +222,12 @@ pub fn build(b: *std.Build) void {
                 .{ .cwd_relative = b.fmt("zig-out/builtins/{s}", .{bin_filename}) },
                 bin_filename,
             );
+
+            // Also copy the source .roc file for embedding
+            _ = write_compiled_builtins.addCopyFile(
+                b.path(roc_path),
+                roc_basename,
+            );
         }
     } else {
         // Use existing .bin files from zig-out/builtins/
@@ -233,6 +239,12 @@ pub fn build(b: *std.Build) void {
             _ = write_compiled_builtins.addCopyFile(
                 .{ .cwd_relative = b.fmt("zig-out/builtins/{s}", .{bin_filename}) },
                 bin_filename,
+            );
+
+            // Also copy the source .roc file for embedding
+            _ = write_compiled_builtins.addCopyFile(
+                b.path(roc_path),
+                roc_basename,
             );
         }
     }
@@ -646,6 +658,12 @@ fn generateCompiledBuiltinsSource(b: *std.Build, roc_files: []const []const u8) 
         try writer.print("pub const {s}_bin = @embedFile(\"{s}.bin\");\n", .{
             lower_name,
             name_without_ext,
+        });
+
+        // Also embed the source .roc file
+        try writer.print("pub const {s}_source = @embedFile(\"{s}\");\n", .{
+            lower_name,
+            roc_basename,
         });
     }
 

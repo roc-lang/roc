@@ -48,13 +48,13 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
 
     // Load real builtins (these will be returned and cleaned up by the caller)
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
+    const bool_source = compiled_builtins.bool_source;
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     errdefer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const result_source = compiled_builtins.result_source;
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     errdefer result_module.deinit();
-    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    const str_source = compiled_builtins.str_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
     errdefer str_module.deinit();
 
@@ -130,13 +130,13 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
 
     // Load real builtins (these will be returned and cleaned up by the caller)
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
+    const bool_source = compiled_builtins.bool_source;
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     errdefer bool_module.deinit();
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const result_source = compiled_builtins.result_source;
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     errdefer result_module.deinit();
-    const str_source = "Str := [ProvidedByCompiler].{}\n";
+    const str_source = compiled_builtins.str_source;
     var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
     errdefer str_module.deinit();
 
