@@ -575,6 +575,10 @@ fn freshBool(self: *Self, rank: Rank, new_region: Region) Allocator.Error!Var {
 
 fn freshStr(self: *Self, rank: Rank, new_region: Region) Allocator.Error!Var {
     // Use the Str type from the builtin Str module (set by copyBuiltinTypes)
+    const resolved = self.types.resolveVar(self.str_var);
+    if (resolved.desc.content != .structure or resolved.desc.content.structure != .str_primitive) {
+        std.debug.print("[ERROR freshStr] str_var {} has unexpected content: {}\n", .{ self.str_var, resolved.desc.content });
+    }
     return try self.instantiateVar(self.str_var, rank, .{ .explicit = new_region });
 }
 
@@ -592,6 +596,7 @@ fn updateVar(self: *Self, target_var: Var, content: types_mod.Content, rank: typ
 /// other modules directly. The Bool and Result types are used in language constructs like
 /// `if` conditions and need to be available in every module's type store.
 fn copyBuiltinTypes(self: *Self) !void {
+    std.debug.print("[copyBuiltinTypes] CALLED\n", .{});
     // Find the Bool, Result, and Str modules in imported_modules
     var bool_module: ?*const ModuleEnv = null;
     var result_module: ?*const ModuleEnv = null;
@@ -624,15 +629,18 @@ fn copyBuiltinTypes(self: *Self) !void {
         const str_stmt_idx = self.common_idents.str_stmt;
         const str_type_var = ModuleEnv.varFrom(str_stmt_idx);
         self.str_var = try self.copyVar(str_type_var, str_env, Region.zero());
-        std.debug.print("DEBUG: Copied Str from module, self.str_var={}\n", .{self.str_var});
-        const str_desc = self.types.resolveVar(self.str_var);
-        std.debug.print("DEBUG: str_desc.content after copy={}\n", .{str_desc.desc.content});
+        std.debug.print("[copyBuiltinTypes] Copied str_primitive from Str module to var {}\n", .{self.str_var});
     } else {
-        // If Str module not found, use the statement from the current module
-        // This happens when Str is loaded as a builtin statement
-        const str_stmt_idx = self.common_idents.str_stmt;
-        self.str_var = ModuleEnv.varFrom(str_stmt_idx);
-        std.debug.print("DEBUG: Str module NOT found, using stmt directly\n", .{});
+        // If Str module not found in imports, create a fresh str_primitive type
+        // We can't use statement indices from other modules in the current module's type store
+        const str_prim_var = try self.types.fresh();
+        try self.types.setVarDesc(str_prim_var, .{
+            .content = .{ .structure = .str_primitive },
+            .rank = types_mod.Rank.generalized,
+            .mark = types_mod.Mark.none,
+        });
+        self.str_var = str_prim_var;
+        std.debug.print("[copyBuiltinTypes] Created fresh str_primitive var {}\n", .{self.str_var});
     }
 
     // Result type is accessed via external references, no need to copy it here
@@ -2088,29 +2096,33 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
     switch (expr) {
         // str //
         .e_str_segment => |_| {
-            const str_type = try self.freshStr(rank, expr_region);
-            _ = try self.unify(expr_var, str_type, rank);
+            // String segments are always of type Str
+            // We update the var directly instead of unifying because expr_var is initialized to .err
+            try self.updateVar(expr_var, .{ .structure = .str_primitive }, rank);
         },
         .e_str => |str| {
             // Iterate over the string segments, capturing if any error'd
             const segment_expr_idx_slice = self.cir.store.sliceExpr(str.span);
             var did_err = false;
+            std.debug.print("[e_str] Processing string with {} segments\n", .{segment_expr_idx_slice.len});
             for (segment_expr_idx_slice) |seg_expr_idx| {
                 // Check the segment
                 does_fx = try self.checkExpr(seg_expr_idx, rank, .no_expectation) or does_fx;
 
                 // Check if it errored
                 const seg_var = ModuleEnv.varFrom(seg_expr_idx);
-                did_err = did_err or self.types.resolveVar(seg_var).desc.content == .err;
+                const seg_resolved = self.types.resolveVar(seg_var);
+                std.debug.print("[e_str] Segment {} content: {s}\n", .{ seg_expr_idx, @tagName(seg_resolved.desc.content) });
+                did_err = did_err or seg_resolved.desc.content == .err;
             }
 
             if (did_err) {
                 // If any segment errored, propgate that error to the root string
                 try self.updateVar(expr_var, .err, rank);
             } else {
-                // Otherwise, set the type of this expr to be string (using builtin Str nominal type)
-                const str_type = try self.freshStr(rank, expr_region);
-                _ = try self.unify(expr_var, str_type, rank);
+                // Otherwise, set the type of this expr to be Str (using the str_primitive type)
+                // We update the var directly instead of unifying because expr_var is initialized to .err
+                try self.updateVar(expr_var, .{ .structure = .str_primitive }, rank);
             }
         },
         // nums //

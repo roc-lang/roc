@@ -133,7 +133,7 @@ pub const Generalizer = struct {
             },
             .structure => |flat_type| {
                 switch (flat_type) {
-                    .empty_record, .empty_tag_union, .list_unbound => return group_rank,
+                    .empty_record, .empty_tag_union, .list_unbound, .str_primitive => return group_rank,
                     .box => |inner_var| {
                         return group_rank.max(try self.adjustRank(inner_var, group_rank));
                     },

@@ -185,7 +185,7 @@ pub const Interpreter = struct {
             .builtins = builtin_types,
             .imported_modules = std.StringHashMap(*const can.ModuleEnv).init(allocator),
         };
-        result.runtime_layout_store = try layout.Store.init(env, result.runtime_types, builtin_types.str_stmt);
+        result.runtime_layout_store = try layout.Store.init(env, result.runtime_types);
 
         return result;
     }
@@ -389,6 +389,9 @@ pub const Interpreter = struct {
                             defer val.decref(&self.runtime_layout_store, roc_ops);
 
                             if (!try self.patternMatchesBind(d.pattern, val, expr_rt_var, roc_ops, &temp_binds)) {
+                                std.debug.print("[DEBUG] TypeMismatch in s_decl: pattern={}, val.layout={}, expr_rt_var={}\n", .{d.pattern, val.layout, expr_rt_var});
+                                const resolved = self.runtime_types.resolveVar(expr_rt_var);
+                                std.debug.print("[DEBUG] expr_rt_var content: {}\n", .{resolved.desc.content});
                                 return error.TypeMismatch;
                             }
 
@@ -410,6 +413,9 @@ pub const Interpreter = struct {
                             defer val.decref(&self.runtime_layout_store, roc_ops);
 
                             if (!try self.patternMatchesBind(v.pattern_idx, val, expr_rt_var, roc_ops, &temp_binds)) {
+                                std.debug.print("[DEBUG] TypeMismatch in s_var: pattern={}, val.layout={}, expr_rt_var={}\n", .{v.pattern_idx, val.layout, expr_rt_var});
+                                const resolved = self.runtime_types.resolveVar(expr_rt_var);
+                                std.debug.print("[DEBUG] expr_rt_var content: {}\n", .{resolved.desc.content});
                                 return error.TypeMismatch;
                             }
 
@@ -2669,20 +2675,29 @@ pub const Interpreter = struct {
 
     fn resolveBaseVar(self: *Interpreter, runtime_var: types.Var) types.store.ResolvedVarDesc {
         var current = self.runtime_types.resolveVar(runtime_var);
+        std.debug.print("[DEBUG resolveBaseVar] input var={}, initial content={}\n", .{runtime_var, current.desc.content});
         while (true) {
             switch (current.desc.content) {
                 .alias => |al| {
                     const backing = self.runtime_types.getAliasBackingVar(al);
                     current = self.runtime_types.resolveVar(backing);
+                    std.debug.print("[DEBUG resolveBaseVar] unwrapped alias → {}\n", .{current.desc.content});
                 },
                 .structure => |st| switch (st) {
                     .nominal_type => |nom| {
                         const backing = self.runtime_types.getNominalBackingVar(nom);
                         current = self.runtime_types.resolveVar(backing);
+                        std.debug.print("[DEBUG resolveBaseVar] unwrapped nominal → {}\n", .{current.desc.content});
                     },
-                    else => return current,
+                    else => {
+                        std.debug.print("[DEBUG resolveBaseVar] final: {}\n", .{current.desc.content});
+                        return current;
+                    },
                 },
-                else => return current,
+                else => {
+                    std.debug.print("[DEBUG resolveBaseVar] final (non-structure): {}\n", .{current.desc.content});
+                    return current;
+                },
             }
         }
     }
@@ -3091,10 +3106,12 @@ pub const Interpreter = struct {
             },
             .nominal => |n| {
                 const underlying = self.resolveBaseVar(value_rt_var);
+                std.debug.print("[DEBUG] nominal pattern: underlying type = {}\n", .{underlying.desc.content});
                 return try self.patternMatchesBind(n.backing_pattern, value, underlying.var_, roc_ops, out_binds);
             },
             .nominal_external => |n| {
                 const underlying = self.resolveBaseVar(value_rt_var);
+                std.debug.print("[DEBUG] nominal_external pattern: underlying type = {}\n", .{underlying.desc.content});
                 return try self.patternMatchesBind(n.backing_pattern, value, underlying.var_, roc_ops, out_binds);
             },
             .tuple => |tuple_pat| {
@@ -3520,6 +3537,11 @@ pub const Interpreter = struct {
                             const rt_ext = try self.runtime_types.register(.{ .content = .{ .structure = .empty_tag_union }, .rank = types.Rank.top_level, .mark = types.Mark.none });
                             const content = try self.runtime_types.mkTagUnion(rt_tags.items, rt_ext);
                             break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                        },
+                        .str_primitive => {
+                            const rt_var = try self.runtime_types.freshFromContent(.{ .structure = .str_primitive });
+                            std.debug.print("[DEBUG translateTypeVar] str_primitive -> rt_var {}\n", .{rt_var});
+                            break :blk rt_var;
                         },
                         .empty_tag_union => {
                             break :blk try self.runtime_types.freshFromContent(.{ .structure = .empty_tag_union });

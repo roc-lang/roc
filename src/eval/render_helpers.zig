@@ -30,6 +30,7 @@ pub const RenderCtx = struct {
 pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.Var) ![]u8 {
     const gpa = ctx.allocator;
     var resolved = ctx.runtime_types.resolveVar(rt_var);
+    std.debug.print("[DEBUG renderValueRocWithType] rt_var={}, resolved.desc.content={}, value.layout={}\n", .{rt_var, resolved.desc.content, value.layout});
 
     // Check if this is Bool before unwrapping (special case for bool display)
     if (resolved.desc.content == .structure) {

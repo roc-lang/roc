@@ -428,6 +428,7 @@ pub const Store = struct {
             .empty_record => false,
             .tag_union => |tag_union| self.needsInstantiationTagUnion(tag_union),
             .empty_tag_union => false,
+            .str_primitive => false, // Str primitive is a concrete type
         };
     }
 

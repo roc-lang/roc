@@ -983,6 +983,14 @@ const Unifier = struct {
                     else => return error.TypeMismatch,
                 }
             },
+            .str_primitive => {
+                switch (b_flat_type) {
+                    .str_primitive => {
+                        self.merge(vars, Content{ .structure = .str_primitive });
+                    },
+                    else => return error.TypeMismatch,
+                }
+            },
             .empty_tag_union => {
                 switch (b_flat_type) {
                     .empty_tag_union => {

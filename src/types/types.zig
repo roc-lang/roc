@@ -321,6 +321,9 @@ pub const FlatType = union(enum) {
     empty_record,
     tag_union: TagUnion,
     empty_tag_union,
+    /// Primitive string type - used for the builtin Str type after it's been
+    /// converted from its nominal representation
+    str_primitive,
 };
 
 // tuples //

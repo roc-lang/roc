@@ -435,6 +435,9 @@ fn writeFlatType(self: *TypeWriter, flat_type: FlatType, root_var: Var) std.mem.
         .empty_tag_union => {
             _ = try self.buf.writer().write("[]");
         },
+        .str_primitive => {
+            _ = try self.buf.writer().write("Str");
+        },
     }
 }
 
@@ -629,6 +632,7 @@ fn writeTagUnion(self: *TypeWriter, tag_union: TagUnion, root_var: Var) std.mem.
         },
         .structure => |flat_type| switch (flat_type) {
             .empty_tag_union => {}, // Don't show empty extension
+            .str_primitive => {}, // Str primitive shouldn't appear as extension
             else => {
                 try self.writeVarWithContext(tag_union.ext, .TagUnionExtension, root_var);
             },
@@ -882,7 +886,7 @@ fn countVar(self: *TypeWriter, search_var: Var, current_var: Var, count: *usize)
 
 fn countVarInFlatType(self: *TypeWriter, search_var: Var, flat_type: FlatType, count: *usize) std.mem.Allocator.Error!void {
     switch (flat_type) {
-        .empty_record, .empty_tag_union => {},
+        .empty_record, .empty_tag_union, .str_primitive => {},
         .box => |sub_var| try self.countVar(search_var, sub_var, count),
         .list => |sub_var| try self.countVar(search_var, sub_var, count),
         .list_unbound, .num => {},

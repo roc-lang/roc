@@ -61,9 +61,6 @@ pub const Store = struct {
     // Reusable work stack for addTypeVar (so it can be stack-safe instead of recursing)
     work: work.Work,
 
-    // Builtin Str statement index (for special-casing Str layout)
-    builtin_str_stmt: ?can.CIR.Statement.Idx,
-
     // Number of primitive types that are pre-populated in the layout store
     // Must be kept in sync with the sentinel values in layout.zig Idx enum
     const num_scalars = 16;
@@ -108,7 +105,6 @@ pub const Store = struct {
     pub fn init(
         env: *ModuleEnv,
         type_store: *const types_store.Store,
-        builtin_str_stmt: ?can.CIR.Statement.Idx,
     ) std.mem.Allocator.Error!Self {
         // Get the number of variables from the type store's slots
         const capacity = type_store.slots.backing.len();
@@ -148,7 +144,6 @@ pub const Store = struct {
             .tuple_data = try collections.SafeList(TupleData).initCapacity(env.gpa, 256),
             .layouts_by_var = layouts_by_var,
             .work = try Work.initCapacity(env.gpa, 32),
-            .builtin_str_stmt = builtin_str_stmt,
         };
     }
 
@@ -1213,17 +1208,11 @@ pub const Store = struct {
                         current = self.types_store.resolveVar(field.var_);
                         continue;
                     },
+                    .str_primitive => blk: {
+                        // Str primitive type - return the str layout directly
+                        break :blk Layout.str();
+                    },
                     .empty_tag_union => blk: {
-                        // Special case: Check if this is the builtin Str type
-                        // The builtin Str is represented as an empty tag union but needs 3 usizes for RocStr
-                        if (self.builtin_str_stmt) |str_stmt| {
-                            const str_var = ModuleEnv.varFrom(str_stmt);
-                            if (current.var_ == str_var) {
-                                // This is the builtin Str type - use the correct 3-usize layout
-                                break :flat_type Layout.str();
-                            }
-                        }
-
                         // Empty tag unions are zero-sized, so we need to do something different
                         // depending on the container we're working on (if any). For example, if we're
                         // working on a record field, then we need to drop that field from the container.

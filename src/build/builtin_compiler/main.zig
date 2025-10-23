@@ -111,8 +111,19 @@ pub fn main() !void {
         gpa.free(str_roc_source);
     }
 
-    // Find Str type declaration via string lookup
-    const str_type_idx = try findTypeDeclaration(str_env, "Str");
+    // Get the Str type declaration - it's the first (and only) statement in Str.roc
+    const str_stmts = str_env.store.sliceStatements(str_env.all_statements);
+    const str_type_idx = str_stmts[0]; // First statement should be the Str type declaration
+
+    // Mutate the Str type from nominal to str_primitive
+    // This allows Str to be treated as a true primitive type throughout the compiler
+    {
+        const str_var = can.ModuleEnv.varFrom(str_type_idx);
+        const resolved = str_env.types.resolveVar(str_var);
+        var new_desc = resolved.desc;
+        new_desc.content = .{ .structure = .str_primitive };
+        try str_env.types.setVarDesc(resolved.var_, new_desc);
+    }
 
     // Compile Dict.roc (may use Result type, so we provide the indices)
     const dict_env = try compileModule(
@@ -325,15 +336,21 @@ fn serializeModuleEnv(
 fn findTypeDeclaration(env: *const ModuleEnv, type_name: []const u8) !CIR.Statement.Idx {
     const all_stmts = env.store.sliceStatements(env.all_statements);
 
+    std.debug.print("[DEBUG findTypeDeclaration] Looking for type '{s}', have {} statements\n", .{ type_name, all_stmts.len });
+
     // Search through all statements to find the one with matching name
-    for (all_stmts) |stmt_idx| {
+    for (all_stmts, 0..) |stmt_idx, i| {
         const stmt = env.store.getStatement(stmt_idx);
+        std.debug.print("[DEBUG findTypeDeclaration] Statement {}: {s}\n", .{ i, @tagName(stmt) });
         switch (stmt) {
             .s_nominal_decl => |decl| {
+                std.debug.print("[DEBUG findTypeDeclaration] Found s_nominal_decl, header={}\n", .{decl.header});
                 const header = env.store.getTypeHeader(decl.header);
                 const ident_idx = header.name;
                 const ident_text = env.getIdentText(ident_idx);
+                std.debug.print("[DEBUG findTypeDeclaration] Type name: '{s}'\n", .{ident_text});
                 if (std.mem.eql(u8, ident_text, type_name)) {
+                    std.debug.print("[DEBUG findTypeDeclaration] FOUND! Returning stmt_idx={}\n", .{stmt_idx});
                     return stmt_idx;
                 }
             },

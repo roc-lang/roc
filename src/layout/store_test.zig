@@ -42,7 +42,7 @@ test "addTypeVar - basic scalar types" {
     var type_store = try types_store.Store.init(gpa);
     defer type_store.deinit();
 
-    var layout_store = try Store.init(&module_env, &type_store, null);
+    var layout_store = try Store.init(&module_env, &type_store);
     defer layout_store.deinit();
 
     var type_scope = TypeScope.init(gpa);
@@ -63,7 +63,7 @@ test "addTypeVar - bool type" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -81,7 +81,7 @@ test "addTypeVar - default layouts for polymorphic types" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -115,7 +115,7 @@ test "addTypeVar - host opaque types compile to opaque_ptr" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -142,7 +142,7 @@ test "addTypeVar - scalar optimization for containers" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -177,7 +177,7 @@ test "addTypeVar - zero-sized types (ZST)" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -203,7 +203,7 @@ test "addTypeVar - record with dropped zero-sized fields" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -230,7 +230,7 @@ test "addTypeVar - record with only zero-sized fields errors" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -255,7 +255,7 @@ test "record field sorting by alignment then name" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -290,7 +290,7 @@ test "record size and alignment calculation" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -326,7 +326,7 @@ test "record with chained extensions" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -364,7 +364,7 @@ test "record extension with non-record type fails" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -381,7 +381,7 @@ test "deeply nested containers with inner ZST" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 

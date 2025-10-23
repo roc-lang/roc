@@ -218,6 +218,7 @@ const CheckOccurs = struct {
                         },
                         .empty_record => {},
                         .empty_tag_union => {},
+                .str_primitive => {},
                     }
                 },
                 .alias => |alias| {

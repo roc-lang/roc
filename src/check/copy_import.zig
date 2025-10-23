@@ -210,6 +210,7 @@ fn copyFlatType(
         .record_unbound => |fields| FlatType{ .record_unbound = try copyRecordFields(source_store, dest_store, fields, var_mapping, source_idents, dest_idents, allocator) },
         .empty_record => FlatType.empty_record,
         .empty_tag_union => FlatType.empty_tag_union,
+        .str_primitive => FlatType.str_primitive,
     };
 }
 

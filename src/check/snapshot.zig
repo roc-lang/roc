@@ -163,6 +163,7 @@ pub const Store = struct {
             .empty_record => SnapshotFlatType.empty_record,
             .tag_union => |tag_union| SnapshotFlatType{ .tag_union = try self.deepCopyTagUnion(store, tag_union) },
             .empty_tag_union => SnapshotFlatType.empty_tag_union,
+            .str_primitive => SnapshotFlatType.str_primitive,
         };
     }
 
@@ -497,6 +498,7 @@ pub const SnapshotFlatType = union(enum) {
     empty_record,
     tag_union: SnapshotTagUnion,
     empty_tag_union,
+    str_primitive,
 };
 
 /// TODO
@@ -914,6 +916,7 @@ pub const SnapshotWriter = struct {
             .empty_tag_union => {
                 _ = try self.buf.writer().write("[]");
             },
+            .str_primitive => {},
         }
     }
 
@@ -1076,6 +1079,7 @@ pub const SnapshotWriter = struct {
             },
             .structure => |flat_type| switch (flat_type) {
                 .empty_tag_union => {}, // Don't show empty extension
+            .str_primitive => {},
                 else => {
                     try self.writeWithContext(tag_union.ext, .TagUnionExtension, root_idx);
                 },
@@ -1309,6 +1313,7 @@ pub const SnapshotWriter = struct {
     fn countInFlatType(self: *Self, search_flex_var: Var, flat_type: SnapshotFlatType, count: *usize) std.mem.Allocator.Error!void {
         switch (flat_type) {
             .empty_record, .empty_tag_union => {},
+            .str_primitive => {},
             .box => |sub_idx| try self.countContent(search_flex_var, sub_idx, count),
             .list => |sub_idx| try self.countContent(search_flex_var, sub_idx, count),
             .list_unbound, .num => {},

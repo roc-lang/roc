@@ -225,6 +225,7 @@ pub const Instantiator = struct {
             .empty_record => FlatType.empty_record,
             .tag_union => |tag_union| FlatType{ .tag_union = try self.instantiateTagUnion(tag_union) },
             .empty_tag_union => FlatType.empty_tag_union,
+            .str_primitive => FlatType.str_primitive,
         };
     }
 
