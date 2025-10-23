@@ -267,6 +267,7 @@ UNUSED VARIABLE - syntax_grab_bag.md:188:2:188:15
 UNUSED VARIABLE - syntax_grab_bag.md:189:2:189:23
 UNDECLARED TYPE - syntax_grab_bag.md:201:9:201:14
 INVALID IF CONDITION - syntax_grab_bag.md:70:5:70:5
+INCOMPATIBLE MATCH PATTERNS - syntax_grab_bag.md:84:2:84:2
 TYPE MISMATCH - syntax_grab_bag.md:155:2:157:3
 # PROBLEMS
 **UNDECLARED TYPE**
@@ -815,6 +816,78 @@ Right now, it has the type:
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
+**INCOMPATIBLE MATCH PATTERNS**
+The pattern in the fourth branch of this `match` differs from previous ones:
+**syntax_grab_bag.md:84:2:**
+```roc
+	match a {
+		Blue | Green | Red => {
+			x = 12
+			x
+		}
+		Blue # After pattern in alt
+		| # Before pattern in alt
+			Green
+		| Red # After alt pattern
+			=> {
+				x = 12
+				x
+			}
+		lower # After pattern comment
+			=> 1
+		"foo" => # After arrow comment
+			100
+		"foo" | "bar" => 200
+		[1, 2, 3, .. as rest] # After pattern comment
+			=> # After arrow comment
+				123 # After branch comment
+
+		# Just a random comment
+
+		[1, 2 | 5, 3, .. as rest] => 123
+		[
+			1,
+			2 | 5,
+			3,
+			.. # After DoubleDot
+				as # Before alias
+					rest, # After last pattern in list
+		] => 123
+		3.14 => 314
+		3.14 | 6.28 => 314
+		(1, 2, 3) => 123
+		(1, 2 | 5, 3) => 123
+		{ foo: 1, bar: 2, ..rest } => 12->add(34)
+		{ # After pattern record open
+			foo # After pattern record field name
+				: # Before pattern record field value
+					1, # After pattern record field
+			bar: 2,
+			.. # After spread operator
+				rest, # After last field
+		} => 12
+		{ foo: 1, bar: 2 | 7 } => 12
+		{
+			foo: 1,
+			bar: 2 | 7, # After last record field
+		} => 12
+		Ok(123) => 123
+		Ok(Some(dude)) => dude
+		TwoArgs("hello", Some("world")) => 1000
+	}
+```
+  ^^^^^
+
+The fourth pattern has this type:
+    _Str_
+
+But all the previous patterns have this type: 
+    _[Red][Blue, Green]_others_
+
+All patterns in an `match` must have compatible types.
+
+
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **syntax_grab_bag.md:155:2:157:3:**
@@ -828,7 +901,7 @@ It has the type:
     __arg -> _ret_
 
 But I expected it to be:
-    _Error, _arg -> Error_
+    _[Red][Blue, Green]_others, _arg -> Error_
 
 # TOKENS
 ~~~zig
@@ -2344,7 +2417,7 @@ expect {
 	(defs
 		(patt (type "Bool -> Num(_size)"))
 		(patt (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
-		(patt (type "Error, _arg -> Error"))
+		(patt (type "[Red][Blue, Green]_others, _arg -> Error"))
 		(patt (type "List(Error) -> Error"))
 		(patt (type "{}")))
 	(type_decls
@@ -2389,7 +2462,7 @@ expect {
 	(expressions
 		(expr (type "Bool -> Num(_size)"))
 		(expr (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
-		(expr (type "Error, _arg -> Error"))
+		(expr (type "[Red][Blue, Green]_others, _arg -> Error"))
 		(expr (type "List(Error) -> Error"))
 		(expr (type "{}"))))
 ~~~

@@ -80,7 +80,7 @@ The first argument has the type:
     _Num(_size)_
 
 But the third argument has the type:
-    
+    _Str_
 
 `multi_arg_fn` needs these arguments to have compatible types.
 

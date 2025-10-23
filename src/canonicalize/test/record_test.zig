@@ -210,13 +210,13 @@ test "record with extension variable" {
     try env.initCIRFields(gpa, "test");
 
     // Test that regular records have extension variables
-    // Create { x: 42 }* (open record) - removed y field since Str is now nominal
+    // Create { x: 42, y: "hello" }* (open record)
     const num_var = try env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_precision = .i32 } } });
-    // Str is now nominal, not structural: const str_var = try env.types.freshFromContent(Content{ .structure = .str });
+    const str_var = try env.types.freshFromContent(Content{ .structure = .str_primitive });
 
     const fields = [_]types.RecordField{
         .{ .name = try env.insertIdent(Ident.for_text("x")), .var_ = num_var },
-        // Removed y field since Str is now nominal: .{ .name = try env.insertIdent(Ident.for_text("y")), .var_ = str_var },
+        .{ .name = try env.insertIdent(Ident.for_text("y")), .var_ = str_var },
     };
     const fields_range = try env.types.appendRecordFields(&fields);
     const ext_var = try env.types.fresh(); // Open extension

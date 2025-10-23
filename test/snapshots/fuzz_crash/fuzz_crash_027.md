@@ -226,6 +226,7 @@ UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
 UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
 TOO FEW ARGS - fuzz_crash_027.md:21:3:22:4
 INVALID IF CONDITION - fuzz_crash_027.md:50:5:50:5
+INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
 TYPE MISMATCH - fuzz_crash_027.md:111:2:113:3
 TYPE MISMATCH - fuzz_crash_027.md:143:2:147:3
 # PROBLEMS
@@ -867,6 +868,54 @@ Right now, it has the type:
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
+**INCOMPATIBLE MATCH PATTERNS**
+The pattern in the third branch of this `match` differs from previous ones:
+**fuzz_crash_027.md:64:2:**
+```roc
+	match a {lue | Red => {
+			x x
+		}
+		Blue		=> 1
+		"foo" => # ent
+00
+		"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
+			=> ment
+
+
+		[1, 2 | 5, 3, .. as rest] => 123
+		[
+ist
+		] => 123
+		3.14 => 314
+		3.14 | 6.28 => 314
+		(1, 2, 3) => 123
+		(1, 2 | 5, 3) => 123
+		{ foo: 1, bar: 2, ..rest } => 12->add(34)
+		{ # Afrd open
+			foo #
+				: #ue
+					1, # Aftd field
+			bar: 2,
+			..} => 12
+		{ foo: 1, bar: 2 | 7 } => 12
+		{
+			foo: 1,
+			} => 12
+		Ok(123) => 121000
+	}
+```
+  ^^^^^
+
+The third pattern has this type:
+    _Str_
+
+But all the previous patterns have this type: 
+    _[Red, Blue]_others_
+
+All patterns in an `match` must have compatible types.
+
+
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **fuzz_crash_027.md:111:2:113:3:**
@@ -880,7 +929,7 @@ It has the type:
     __arg -> _ret_
 
 But I expected it to be:
-    _Error, _arg -> Error_
+    _[Red, Blue]_others, _arg -> Error_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -2155,7 +2204,7 @@ expect {
 	(defs
 		(patt (type "Bool -> Num(_size)"))
 		(patt (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
-		(patt (type "Error, _arg -> Error"))
+		(patt (type "[Red, Blue]_others, _arg -> Error"))
 		(patt (type "List(Error) -> Error"))
 		(patt (type "{}")))
 	(type_decls
@@ -2190,7 +2239,7 @@ expect {
 	(expressions
 		(expr (type "Bool -> Num(_size)"))
 		(expr (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
-		(expr (type "Error, _arg -> Error"))
+		(expr (type "[Red, Blue]_others, _arg -> Error"))
 		(expr (type "List(Error) -> Error"))
 		(expr (type "{}"))))
 ~~~

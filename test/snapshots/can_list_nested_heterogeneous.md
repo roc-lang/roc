@@ -22,7 +22,7 @@ The second element has this type:
     _List(Num(_size))_
 
 However, the third element has this type:
-    _List()_
+    _List(Str)_
 
 All elements in a list must have compatible types.
 

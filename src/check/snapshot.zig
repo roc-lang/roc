@@ -916,7 +916,9 @@ pub const SnapshotWriter = struct {
             .empty_tag_union => {
                 _ = try self.buf.writer().write("[]");
             },
-            .str_primitive => {},
+            .str_primitive => {
+                _ = try self.buf.writer().write("Str");
+            },
         }
     }
 

@@ -87,7 +87,7 @@ test "nominal type origin - displays origin in snapshot writer" {
         defer buf.deinit();
 
         // Create type arguments
-        const str_content = snapshot.SnapshotContent{ .structure = .empty_record };
+        const str_content = snapshot.SnapshotContent{ .structure = .str_primitive };
         const str_idx = try snapshots.contents.append(test_allocator, str_content);
         const args_range = try snapshots.content_indexes.appendSlice(test_allocator, &.{ nominal_type_backing_idx, str_idx });
 

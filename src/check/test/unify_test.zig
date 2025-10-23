@@ -541,11 +541,11 @@ test "unify - alias with concrete" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const a_backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
+    const a_backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .str_primitive });
     const a_alias = try env.mkAlias("Alias", a_backing_var, &[_]Var{});
 
     const a = try env.module_env.types.freshFromContent(a_alias);
-    const b = try env.mkStr();
+    const b = try env.module_env.types.freshFromContent(Content{ .structure = .str_primitive });
 
     const result = try env.unify(a, b);
 
@@ -559,7 +559,7 @@ test "unify - alias with concrete" {
     const resolved_backing = env.module_env.types.resolveVar(
         env.module_env.types.getAliasBackingVar(resolved.desc.content.alias),
     );
-    try std.testing.expectEqual(Content{ .structure = .empty_tag_union }, resolved_backing.desc.content);
+    try std.testing.expectEqual(Content{ .structure = .str_primitive }, resolved_backing.desc.content);
 
     // Assert that a & b redirect to the alias
     try std.testing.expectEqual(Slot{ .redirect = resolved.var_ }, env.module_env.types.getSlot(a));
@@ -571,10 +571,10 @@ test "unify - alias with concrete other way" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const b_backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
+    const b_backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .str_primitive });
     const b_alias = try env.mkAlias("Alias", b_backing_var, &[_]Var{});
 
-    const a = try env.mkStr();
+    const a = try env.module_env.types.freshFromContent(Content{ .structure = .str_primitive });
     const b = try env.module_env.types.freshFromContent(b_alias);
 
     const result = try env.unify(a, b);
@@ -589,7 +589,7 @@ test "unify - alias with concrete other way" {
     const resolved_backing = env.module_env.types.resolveVar(
         env.module_env.types.getAliasBackingVar(resolved.desc.content.alias),
     );
-    try std.testing.expectEqual(Content{ .structure = .empty_tag_union }, resolved_backing.desc.content);
+    try std.testing.expectEqual(Content{ .structure = .str_primitive }, resolved_backing.desc.content);
 
     // Assert that a & b redirect to the alias
     try std.testing.expectEqual(Slot{ .redirect = resolved.var_ }, env.module_env.types.getSlot(a));

@@ -41,7 +41,7 @@ foo = if 1 A
  ^^^^^^^
 
 The `else` branch has the type:
-    
+    _Str_
 
 But the `then` branch has the type:
     _[A]_others_

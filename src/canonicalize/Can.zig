@@ -289,6 +289,13 @@ fn processTypeDeclFirstPass(
     const header_idx = try self.canonicalizeTypeHeader(type_decl.header);
     const region = self.parse_ir.tokenizedRegionToRegion(type_decl.region);
 
+    // Check if the header is malformed before proceeding
+    const header_node = self.env.store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
+    if (header_node.tag == .malformed) {
+        // Header is malformed, cannot proceed with type declaration
+        return;
+    }
+
     // Extract the type name from the header
     const type_header = self.env.store.getTypeHeader(header_idx);
 

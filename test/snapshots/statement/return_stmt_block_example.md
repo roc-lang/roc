@@ -31,7 +31,7 @@ This `if` has an `else` branch with a different type from it's `then` branch:
         ^^^^^^^
 
 The `else` branch has the type:
-    
+    _Str_
 
 But the `then` branch has the type:
     _[Err([TooBig]_others)]_others2_

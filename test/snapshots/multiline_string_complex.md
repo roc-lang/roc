@@ -66,7 +66,7 @@ This expression is used in an unexpected way:
 		    ^^
 
 It has the type:
-    
+    _Str_
 
 But I expected it to be:
     _Num(_size)_
@@ -80,7 +80,7 @@ This expression is used in an unexpected way:
 	    ^^
 
 It has the type:
-    
+    _Str_
 
 But I expected it to be:
     _Bool_

@@ -27,7 +27,7 @@ match Answer {
             ^^^^^^^
 
 The second branch has this type;
-    
+    _Str_
 
 But the previous branch has this type:
     _Num(_size)_

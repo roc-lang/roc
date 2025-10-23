@@ -619,24 +619,18 @@ fn copyBuiltinTypes(self: *Self) !void {
         self.bool_var = ModuleEnv.varFrom(bool_stmt_idx);
     }
 
-    // Copy Str type from Str module
-    if (str_module) |str_env| {
-        const str_stmt_idx = self.common_idents.str_stmt;
-        const str_type_var = ModuleEnv.varFrom(str_stmt_idx);
-        self.str_var = try self.copyVar(str_type_var, str_env, Region.zero());
-    } else {
-        // If Str module not found in imports, create a fresh str_primitive type
-        // We can't use statement indices from other modules in the current module's type store
-        const str_prim_var = try self.types.fresh();
-        try self.types.setVarDesc(str_prim_var, .{
-            .content = .{ .structure = .str_primitive },
-            .rank = types_mod.Rank.generalized,
-            .mark = types_mod.Mark.none,
-        });
-        try self.fillInRegionsThrough(str_prim_var);
-        self.setRegionAt(str_prim_var, Region.zero());
-        self.str_var = str_prim_var;
-    }
+    // Always create str_var as str_primitive for string literals
+    // Even when Str module exists (which defines the nominal Str type),
+    // we use str_primitive for string literals
+    const str_prim_var = try self.types.fresh();
+    try self.types.setVarDesc(str_prim_var, .{
+        .content = .{ .structure = .str_primitive },
+        .rank = types_mod.Rank.generalized,
+        .mark = types_mod.Mark.none,
+    });
+    try self.fillInRegionsThrough(str_prim_var);
+    self.setRegionAt(str_prim_var, Region.zero());
+    self.str_var = str_prim_var;
 
     // Result type is accessed via external references, no need to copy it here
 }
@@ -1665,6 +1659,10 @@ fn checkPatternHelp(
         },
         // str //
         .str_literal => {
+            // Initialize the pattern variable if needed (when in_place mode)
+            if (comptime out_var == .in_place) {
+                try self.updateVar(pattern_var, .{ .flex = Flex.init() }, rank);
+            }
             const str_type = try self.freshStr(rank, pattern_region);
             _ = try self.unify(pattern_var, str_type, rank);
         },

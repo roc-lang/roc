@@ -24,7 +24,7 @@ main! = |_| getName({namee: "luke", age:21})
                     ^^^^^^^^^^^^^^^^^^^^^^^
 
 This argument has the type:
-    _{ age: Num(_size), namee:  }_
+    _{ age: Num(_size), namee: Str }_
 
 But `getName` needs the first argument to be:
     _{ age: Num(Int(Unsigned64)), name: Error }_

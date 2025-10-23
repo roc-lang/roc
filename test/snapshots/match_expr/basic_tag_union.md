@@ -38,7 +38,7 @@ match color {
           ^^^
 
 The third branch has this type;
-    
+    _Str_
 
 But all the previous branches have this type:
     _Num(_size)_

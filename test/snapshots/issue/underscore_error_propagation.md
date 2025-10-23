@@ -44,7 +44,7 @@ value = "test"
         ^^^^^^
 
 It has the type:
-    
+    _Str_
 
 But the type annotation says it should have the type:
     _BadDerived_
@@ -58,7 +58,7 @@ goodValue = "test"
             ^^^^^^
 
 It has the type:
-    
+    _Str_
 
 But the type annotation says it should have the type:
     _GoodDerived_

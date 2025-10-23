@@ -36,7 +36,7 @@ value = "test"
         ^^^^^^
 
 It has the type:
-    
+    _Str_
 
 But the type annotation says it should have the type:
     _GoodAlias_

@@ -27,7 +27,7 @@ The first argument has the type:
     _Num(_size)_
 
 But the second argument has the type:
-    
+    _Str_
 
 `pair` needs these arguments to have compatible types.
 

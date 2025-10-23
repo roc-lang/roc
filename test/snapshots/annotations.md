@@ -42,7 +42,7 @@ failPairDiffTypes = mkPair("1", 2)
                            ^^^  ^
 
 The first argument has the type:
-    
+    _Str_
 
 But the second argument has the type:
     _Num(_size)_
@@ -58,7 +58,7 @@ failPairDiffTypes2 = Pair.Pair(1, "str")
                      ^^^^^^^^^^^^^^^^^^^
 
 The tag is:
-    _Pair(Num(_size), )_
+    _Pair(Num(_size), Str)_
 
 But the nominal type needs it to be:
     _Pair(Num(_size), Num(_size2))_

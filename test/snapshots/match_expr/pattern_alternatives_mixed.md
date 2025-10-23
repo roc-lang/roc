@@ -15,9 +15,33 @@ match ... {
 }
 ~~~
 # EXPECTED
-NIL
+INCOMPATIBLE MATCH PATTERNS - pattern_alternatives_mixed.md:1:1:1:1
 # PROBLEMS
-NIL
+**INCOMPATIBLE MATCH PATTERNS**
+The pattern first pattern in this second`match` differs from previous ones:
+**pattern_alternatives_mixed.md:1:1:**
+```roc
+match ... {
+	1 | 2 | 3 => "small numbers"
+	"hello" | "world" => "greetings"
+	Ok(_) | Some(_) => "success value"
+	[] | [_] => "short list"
+	(0, _) | (_, 0) => "has zero"
+	_ => "other"
+}
+```
+ ^^^^^^^
+
+The second pattern has this type:
+    _Str_
+
+But all the previous patterns have this type: 
+    _Num(_size)_
+
+All patterns in an `match` must have compatible types.
+
+
+
 # TOKENS
 ~~~zig
 KwMatch,TripleDot,OpenCurly,
