@@ -26,6 +26,7 @@ Roc uses two different test strategies to Verify Correctness, and Validate Behav
 - Generate or update specific snapshot file: `zig build snapshot -- <file_path>`
 - Update EXPECTED from PROBLEMS in snapshot file: `zig build update-expected -- <file_path>`
 - To generate (or update) AND test the snapshots: `zig build snapshot && zig build test`.
+- Note that we always keep tests passing on origin/main in this project, so always assume any test failures you see are regressions that have been caused by changes on the current branch, and which you will need to fix.
 
 ### Snapshot File Structure
 
