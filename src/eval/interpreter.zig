@@ -928,12 +928,9 @@ pub const Interpreter = struct {
                 const ct_var = can.ModuleEnv.varFrom(expr_idx);
                 const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
                 const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
-                // Check if this is Bool or Str by comparing against the dynamic builtins
+                // Check if this is Bool by comparing against the dynamic bool_stmt
                 const backing_rt_var = if (nom.nominal_type_decl == self.builtins.bool_stmt)
                     try self.getCanonicalBoolRuntimeVar()
-                else if (nom.nominal_type_decl == self.builtins.str_stmt)
-                    // For Str, just use str_primitive directly
-                    try self.runtime_types.freshFromContent(.{ .structure = .str_primitive })
                 else switch (nominal_resolved.desc.content) {
                     .structure => |st| switch (st) {
                         .nominal_type => |nt| self.runtime_types.getNominalBackingVar(nt),
@@ -1234,14 +1231,8 @@ pub const Interpreter = struct {
             .e_lambda => |lam| {
                 // Build a closure value with empty captures using the runtime layout for the lambda's type
                 const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                const rt_var = self.translateTypeVar(self.env, ct_var) catch |err| {
-                    std.debug.print("ERROR: translateTypeVar failed for lambda: {}\n", .{err});
-                    return err;
-                };
-                const closure_layout = self.getRuntimeLayout(rt_var) catch |err| {
-                    std.debug.print("ERROR: getRuntimeLayout failed for lambda rt_var: {}\n", .{err});
-                    return err;
-                };
+                const rt_var = try self.translateTypeVar(self.env, ct_var);
+                const closure_layout = try self.getRuntimeLayout(rt_var);
                 // Expect a closure layout from type-to-layout translation
                 if (closure_layout.tag != .closure) return error.NotImplemented;
                 const value = try self.pushRaw(closure_layout, 0);
@@ -3447,16 +3438,8 @@ pub const Interpreter = struct {
     pub fn translateTypeVar(self: *Interpreter, module: *can.ModuleEnv, compile_var: types.Var) Error!types.Var {
         const resolved = module.types.resolveVar(compile_var);
 
-        std.debug.print("DEBUG translateTypeVar: compile_var={}, content={s}\n", .{ @intFromEnum(compile_var), @tagName(resolved.desc.content) });
-        if (resolved.desc.content == .structure) {
-            std.debug.print("DEBUG translateTypeVar: structure type={s}\n", .{@tagName(resolved.desc.content.structure)});
-        }
-
         const key: u64 = (@as(u64, @intFromPtr(module)) << 32) | @as(u64, @intFromEnum(resolved.var_));
-        if (self.translate_cache.get(key)) |found| {
-            std.debug.print("DEBUG translateTypeVar: found in cache, returning {}\n", .{@intFromEnum(found)});
-            return found;
-        }
+        if (self.translate_cache.get(key)) |found| return found;
 
         const out_var = blk: {
             switch (resolved.desc.content) {
