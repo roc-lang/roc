@@ -176,6 +176,7 @@ pub fn build(b: *std.Build) void {
 
     const write_compiled_builtins = b.addWriteFiles();
 
+    // Regenerate .bin files if necessary
     if (should_rebuild_builtins) {
         // Build and run the compiler
         const builtin_compiler_exe = b.addExecutable(.{
@@ -211,42 +212,25 @@ pub fn build(b: *std.Build) void {
         }
 
         write_compiled_builtins.step.dependOn(&run_builtin_compiler.step);
+    }
 
-        // Copy all generated .bin files from zig-out to build cache
-        for (roc_files) |roc_path| {
-            const roc_basename = std.fs.path.basename(roc_path);
-            const name_without_ext = roc_basename[0 .. roc_basename.len - 4];
-            const bin_filename = b.fmt("{s}.bin", .{name_without_ext});
+    // Use .bin files from zig-out/builtins/ (whether they were just regenerated or
+    // already there from a previous run).
+    for (roc_files) |roc_path| {
+        const roc_basename = std.fs.path.basename(roc_path);
+        const name_without_ext = roc_basename[0 .. roc_basename.len - 4];
+        const bin_filename = b.fmt("{s}.bin", .{name_without_ext});
 
-            _ = write_compiled_builtins.addCopyFile(
-                .{ .cwd_relative = b.fmt("zig-out/builtins/{s}", .{bin_filename}) },
-                bin_filename,
-            );
+        _ = write_compiled_builtins.addCopyFile(
+            .{ .cwd_relative = b.fmt("zig-out/builtins/{s}", .{bin_filename}) },
+            bin_filename,
+        );
 
-            // Also copy the source .roc file for embedding
-            _ = write_compiled_builtins.addCopyFile(
-                b.path(roc_path),
-                roc_basename,
-            );
-        }
-    } else {
-        // Use existing .bin files from zig-out/builtins/
-        for (roc_files) |roc_path| {
-            const roc_basename = std.fs.path.basename(roc_path);
-            const name_without_ext = roc_basename[0 .. roc_basename.len - 4];
-            const bin_filename = b.fmt("{s}.bin", .{name_without_ext});
-
-            _ = write_compiled_builtins.addCopyFile(
-                .{ .cwd_relative = b.fmt("zig-out/builtins/{s}", .{bin_filename}) },
-                bin_filename,
-            );
-
-            // Also copy the source .roc file for embedding
-            _ = write_compiled_builtins.addCopyFile(
-                b.path(roc_path),
-                roc_basename,
-            );
-        }
+        // Also copy the source .roc file for embedding
+        _ = write_compiled_builtins.addCopyFile(
+            b.path(roc_path),
+            roc_basename,
+        );
     }
 
     // Also copy builtin_indices.bin

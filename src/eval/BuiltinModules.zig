@@ -7,6 +7,7 @@
 const std = @import("std");
 const can = @import("can");
 const builtin_loading = @import("builtin_loading.zig");
+const builtins = @import("builtins.zig");
 
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
@@ -14,6 +15,13 @@ const Allocator = std.mem.Allocator;
 const compiled_builtins = @import("compiled_builtins");
 const LoadedModule = builtin_loading.LoadedModule;
 const BuiltinIndices = CIR.BuiltinIndices;
+const BuiltinTypes = builtins.BuiltinTypes;
+
+/// Information about a single builtin module
+pub const ModuleInfo = struct {
+    name: []const u8,
+    module: *const LoadedModule,
+};
 
 /// Centralized container for all builtin modules
 pub const BuiltinModules = struct {
@@ -22,6 +30,34 @@ pub const BuiltinModules = struct {
     result_module: LoadedModule,
     str_module: LoadedModule,
     builtin_indices: BuiltinIndices,
+
+    /// Get an array of all builtin modules for iteration
+    pub fn modules(self: *const BuiltinModules) [3]ModuleInfo {
+        return .{
+            .{ .name = "Bool", .module = &self.bool_module },
+            .{ .name = "Result", .module = &self.result_module },
+            .{ .name = "Str", .module = &self.str_module },
+        };
+    }
+
+    /// Get an array of all builtin module environments for type checking
+    pub fn envs(self: *const BuiltinModules) [3]*const ModuleEnv {
+        return .{
+            self.bool_module.env,
+            self.result_module.env,
+            self.str_module.env,
+        };
+    }
+
+    /// Create a BuiltinTypes instance from these builtin modules
+    pub fn asBuiltinTypes(self: *const BuiltinModules) BuiltinTypes {
+        return BuiltinTypes.init(
+            self.builtin_indices,
+            self.bool_module.env,
+            self.result_module.env,
+            self.str_module.env,
+        );
+    }
 
     /// Initialize all builtin modules by deserializing from the compiled .bin files
     pub fn init(allocator: Allocator) !BuiltinModules {
