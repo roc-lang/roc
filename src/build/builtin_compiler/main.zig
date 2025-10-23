@@ -111,9 +111,8 @@ pub fn main() !void {
         gpa.free(str_roc_source);
     }
 
-    // Get the Str type declaration - it's the first (and only) statement in Str.roc
-    const str_stmts = str_env.store.sliceStatements(str_env.all_statements);
-    const str_type_idx = str_stmts[0]; // First statement should be the Str type declaration
+    // Find Str type declaration via string lookup
+    const str_type_idx = try findTypeDeclaration(str_env, "Str");
 
     // Mutate the Str type from nominal to str_primitive
     // This allows Str to be treated as a true primitive type throughout the compiler

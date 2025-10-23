@@ -586,7 +586,7 @@ main! = |_| {
 	(defs
 		(patt (type "Num(_size)"))
 		(patt (type "ac -> ac"))
-		(patt (type "Error"))
+		(patt (type "Str"))
 		(patt (type "Num(Frac(_size))"))
 		(patt (type "[True]_others"))
 		(patt (type "[False]_others"))
@@ -621,7 +621,7 @@ main! = |_| {
 	(expressions
 		(expr (type "Num(_size)"))
 		(expr (type "ac -> ac"))
-		(expr (type "Error"))
+		(expr (type "Str"))
 		(expr (type "Num(Frac(_size))"))
 		(expr (type "[True]_others"))
 		(expr (type "[False]_others"))

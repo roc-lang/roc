@@ -1079,7 +1079,7 @@ pub const SnapshotWriter = struct {
             },
             .structure => |flat_type| switch (flat_type) {
                 .empty_tag_union => {}, // Don't show empty extension
-            .str_primitive => {},
+                .str_primitive => {},
                 else => {
                     try self.writeWithContext(tag_union.ext, .TagUnionExtension, root_idx);
                 },

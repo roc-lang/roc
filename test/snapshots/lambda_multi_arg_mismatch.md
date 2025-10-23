@@ -27,6 +27,7 @@ result = multi_arg_fn(
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:25:3:27
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:33:3:35
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:41:3:43
+TYPE MISMATCH - lambda_multi_arg_mismatch.md:9:5:9:5
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `x3` is not used anywhere in your code.
@@ -63,6 +64,25 @@ multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8|
 ```
                                         ^^
 
+
+**TYPE MISMATCH**
+The first and third arguments to `multi_arg_fn` must have compatible types, but they are incompatible in this call:
+**lambda_multi_arg_mismatch.md:9:5:**
+```roc
+    42,        # x1: U64 (type 'a')
+    "hello",   # x2: Str (type 'b') - correct
+    "world",   # x3: Str (should be 'a' = U64) - MISMATCH  
+```
+    ^^
+    ^^^^^^^
+
+The first argument has the type:
+    _Num(_size)_
+
+But the third argument has the type:
+    
+
+`multi_arg_fn` needs these arguments to have compatible types.
 
 # TOKENS
 ~~~zig

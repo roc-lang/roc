@@ -222,7 +222,7 @@ NO CHANGE
 	(defs
 		(patt (type "UserId, UserName, UserAge -> User"))
 		(patt (type "User -> UserName"))
-		(patt (type "_arg -> Error")))
+		(patt (type "_arg -> UserName")))
 	(type_decls
 		(alias (type "UserId")
 			(ty-header (name "UserId")))
@@ -235,5 +235,5 @@ NO CHANGE
 	(expressions
 		(expr (type "UserId, UserName, UserAge -> User"))
 		(expr (type "User -> UserName"))
-		(expr (type "_arg -> Error"))))
+		(expr (type "_arg -> UserName"))))
 ~~~

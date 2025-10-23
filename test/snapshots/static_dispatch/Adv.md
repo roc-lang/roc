@@ -45,6 +45,7 @@ main = {
 ~~~
 # EXPECTED
 MISSING METHOD - Adv.md:23:13:23:33
+TYPE DOES NOT HAVE METHODS - Adv.md:28:13:28:32
 # PROBLEMS
 **MISSING METHOD**
 The **Adv** type does not have a **update_strr** method:
@@ -56,6 +57,16 @@ The **Adv** type does not have a **update_strr** method:
 
 
 **Hint:** Did you forget to define **update_strr** in the type's method block?
+
+**TYPE DOES NOT HAVE METHODS**
+You're trying to call the `update` method on a :
+**Adv.md:28:13:28:32:**
+```roc
+	next_val = "Hello".update(100)
+```
+	           ^^^^^^^^^^^^^^^^^^^
+
+But  doesn't support methods.
 
 # TOKENS
 ~~~zig
@@ -472,7 +483,7 @@ main = {
 	(defs
 		(patt (type "_a"))
 		(patt (type "_a"))
-		(patt (type "Error"))
+		(patt (type "_a"))
 		(patt (type "(Error, Num(Int(Unsigned64)))"))
 		(patt (type "Adv -> Error"))
 		(patt (type "Adv -> Num(Int(Unsigned64))"))
@@ -484,7 +495,7 @@ main = {
 	(expressions
 		(expr (type "_a"))
 		(expr (type "_a"))
-		(expr (type "Error"))
+		(expr (type "_a"))
 		(expr (type "(Error, Num(Int(Unsigned64)))"))
 		(expr (type "Adv -> Error"))
 		(expr (type "Adv -> Num(Int(Unsigned64))"))

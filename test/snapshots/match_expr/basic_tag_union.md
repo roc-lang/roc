@@ -13,6 +13,7 @@ match color {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - basic_tag_union.md:1:7:1:12
+INCOMPATIBLE MATCH BRANCHES - basic_tag_union.md:1:1:1:1
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `color` in this scope.
@@ -24,6 +25,28 @@ match color {
 ```
       ^^^^^
 
+
+**INCOMPATIBLE MATCH BRANCHES**
+The third branch's type in this `match` is different from the previous ones:
+**basic_tag_union.md:1:1:**
+```roc
+match color {
+	Red => 1
+	Blue => 2
+	Green => "3"
+```
+          ^^^
+
+The third branch has this type;
+    
+
+But all the previous branches have this type:
+    _Num(_size)_
+
+All branches in an `match` must have compatible types.
+
+Note: You can wrap branches values in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig

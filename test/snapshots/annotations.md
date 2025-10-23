@@ -29,8 +29,40 @@ mkPairInvalid : a, b -> Pair(a)
 mkPairInvalid = |x, y| Pair.Pair(x, y)
 ~~~
 # EXPECTED
+TYPE MISMATCH - annotations.md:16:28:16:28
+INVALID NOMINAL TAG - annotations.md:19:22:19:41
 INVALID NOMINAL TAG - annotations.md:22:24:22:39
 # PROBLEMS
+**TYPE MISMATCH**
+The first and second arguments to `mkPair` must have compatible types, but they are incompatible in this call:
+**annotations.md:16:28:**
+```roc
+failPairDiffTypes = mkPair("1", 2)
+```
+                           ^^^  ^
+
+The first argument has the type:
+    
+
+But the second argument has the type:
+    _Num(_size)_
+
+`mkPair` needs these arguments to have compatible types.
+
+**INVALID NOMINAL TAG**
+I'm having trouble with this nominal tag:
+**annotations.md:19:22:19:41:**
+```roc
+failPairDiffTypes2 = Pair.Pair(1, "str")
+```
+                     ^^^^^^^^^^^^^^^^^^^
+
+The tag is:
+    _Pair(Num(_size), )_
+
+But the nominal type needs it to be:
+    _Pair(Num(_size), Num(_size2))_
+
 **INVALID NOMINAL TAG**
 I'm having trouble with this nominal tag:
 **annotations.md:22:24:22:39:**
@@ -285,7 +317,7 @@ NO CHANGE
 		(patt (type "a, a -> Pair(a)"))
 		(patt (type "Pair(Num(Int(Unsigned8)))"))
 		(patt (type "Error"))
-		(patt (type "Pair(Error)"))
+		(patt (type "Error"))
 		(patt (type "a, b -> Error")))
 	(type_decls
 		(nominal (type "Pair(a)")
@@ -298,6 +330,6 @@ NO CHANGE
 		(expr (type "a, a -> Pair(a)"))
 		(expr (type "Pair(Num(Int(Unsigned8)))"))
 		(expr (type "Error"))
-		(expr (type "Pair(Error)"))
+		(expr (type "Error"))
 		(expr (type "a, b -> Error"))))
 ~~~

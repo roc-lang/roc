@@ -1368,7 +1368,7 @@ test "Store comprehensive CompactWriter roundtrip" {
 
     // Verify all types
     const deser_str = deserialized.resolveVar(simple_var);
-    try std.testing.expectEqual(Content{ .structure = .empty_record }, deser_str.desc.content);
+    try std.testing.expectEqual(Content{ .structure = .empty_tag_union }, deser_str.desc.content);
 
     const deser_list = deserialized.resolveVar(list_var);
     try std.testing.expectEqual(FlatType{ .list = list_elem }, deser_list.desc.content.structure);
@@ -1586,7 +1586,7 @@ test "Store.Serialized roundtrip" {
     try std.testing.expectEqual(Content{ .flex = Flex.init() }, flex_resolved.desc.content);
 
     const str_resolved = deserialized.resolveVar(simple_var);
-    try std.testing.expectEqual(Content{ .structure = .empty_record }, str_resolved.desc.content);
+    try std.testing.expectEqual(Content{ .structure = .empty_tag_union }, str_resolved.desc.content);
 
     const redirect_resolved = deserialized.resolveVar(redirect_var);
     try std.testing.expectEqual(flex_resolved.desc_idx, redirect_resolved.desc_idx);
@@ -1666,7 +1666,7 @@ test "Store multiple instances CompactWriter roundtrip" {
     // Verify store 1
     try std.testing.expectEqual(@as(usize, 3), deserialized1.len());
     const deser1_var2 = deserialized1.resolveVar(var1_2);
-    try std.testing.expectEqual(Content{ .structure = .empty_record }, deser1_var2.desc.content);
+    try std.testing.expectEqual(Content{ .structure = .empty_tag_union }, deser1_var2.desc.content);
 
     // Verify store 2
     try std.testing.expectEqual(@as(usize, 3), deserialized2.len());
@@ -1741,7 +1741,7 @@ test "SlotStore and DescStore serialization and deserialization" {
     try std.testing.expectEqual(Content{ .flex = Flex.init() }, resolved1.desc.content);
 
     const resolved2 = deserialized.resolveVar(var2);
-    try std.testing.expectEqual(Content{ .structure = .empty_record }, resolved2.desc.content);
+    try std.testing.expectEqual(Content{ .structure = .empty_tag_union }, resolved2.desc.content);
 
     const resolved3 = deserialized.resolveVar(var3);
     try std.testing.expectEqual(Content{ .rigid = Rigid.init(@bitCast(@as(u32, 123))) }, resolved3.desc.content);

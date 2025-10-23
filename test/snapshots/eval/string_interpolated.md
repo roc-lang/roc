@@ -69,5 +69,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "Str"))
 ~~~

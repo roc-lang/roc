@@ -154,9 +154,9 @@ test "addTypeVar - scalar optimization for containers" {
     // try testing.expect(list_layout.tag == .list);
     // try testing.expectEqual(layout.Idx.str, list_layout.data.list);
 
-    // Test Box(Scalar) - using num instead of str
-    const num_var = try lt.type_store.freshFromContent(.{ .structure = .{ .num = .{ .int_precision = .i32 } } });
-    const box_str_var = try lt.type_store.freshFromContent(.{ .structure = .{ .box = num_var } });
+    // Test Box(Scalar) - using str_primitive
+    const str_var = try lt.type_store.freshFromContent(.{ .structure = .str_primitive });
+    const box_str_var = try lt.type_store.freshFromContent(.{ .structure = .{ .box = str_var } });
     const box_layout_idx = try lt.layout_store.addTypeVar(box_str_var, &lt.type_scope);
     const box_layout = lt.layout_store.getLayout(box_layout_idx);
     try testing.expect(box_layout.tag == .box);

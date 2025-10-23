@@ -8,9 +8,27 @@ type=expr
 [42, 4.2, "hello"]
 ~~~
 # EXPECTED
-NIL
+INCOMPATIBLE LIST ELEMENTS - let_polymorphism_error.md:1:6:1:6
 # PROBLEMS
-NIL
+**INCOMPATIBLE LIST ELEMENTS**
+The second and third elements in this list have incompatible types:
+**let_polymorphism_error.md:1:6:**
+```roc
+[42, 4.2, "hello"]
+```
+     ^^^  ^^^^^^^
+
+The second element has this type:
+    _Num(Frac(_size))_
+
+However, the third element has this type:
+    
+
+All elements in a list must have compatible types.
+
+Note: You can wrap each element in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+
 # TOKENS
 ~~~zig
 OpenSquare,Int,Comma,Float,Comma,StringStart,StringPart,StringEnd,CloseSquare,

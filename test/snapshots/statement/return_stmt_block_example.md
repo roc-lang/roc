@@ -16,9 +16,31 @@ foo = |num| {
 }
 ~~~
 # EXPECTED
-NIL
+INCOMPATIBLE IF BRANCHES - return_stmt_block_example.md:3:11:3:11
 # PROBLEMS
-NIL
+**INCOMPATIBLE IF BRANCHES**
+This `if` has an `else` branch with a different type from it's `then` branch:
+**return_stmt_block_example.md:3:11:**
+```roc
+    str = if (num > 10) {
+        return Err(TooBig)
+    } else {
+        "SMALL"
+    }
+```
+        ^^^^^^^
+
+The `else` branch has the type:
+    
+
+But the `then` branch has the type:
+    _[Err([TooBig]_others)]_others2_
+
+All branches in an `if` must have compatible types.
+
+Note: You can wrap branches in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,OpenSquare,UpperIdent,CloseSquare,CloseRound,

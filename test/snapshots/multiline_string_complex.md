@@ -54,9 +54,37 @@ x = {
 }
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - multiline_string_complex.md:37:7:37:9
+TYPE MISMATCH - multiline_string_complex.md:40:6:40:8
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**multiline_string_complex.md:37:7:37:9:**
+```roc
+		0 - \\
+```
+		    ^^
+
+It has the type:
+    
+
+But I expected it to be:
+    _Num(_size)_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**multiline_string_complex.md:40:6:40:8:**
+```roc
+	e: !\\
+```
+	    ^^
+
+It has the type:
+    
+
+But I expected it to be:
+    _Bool_
+
 # TOKENS
 ~~~zig
 KwPackage,
@@ -238,17 +266,17 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "{ a: Error, b: (Error, Error), c: List(Error), d: Error, e: Error }"))
-		(patt (type "Error")))
+		(patt (type "Str"))
+		(patt (type "Str"))
+		(patt (type "Str"))
+		(patt (type "Str"))
+		(patt (type "{ a: Str, b: (Str, Str), c: List(Str), d: Error, e: Error }"))
+		(patt (type "Str")))
 	(expressions
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "{ a: Error, b: (Error, Error), c: List(Error), d: Error, e: Error }"))
-		(expr (type "Error"))))
+		(expr (type "Str"))
+		(expr (type "Str"))
+		(expr (type "Str"))
+		(expr (type "Str"))
+		(expr (type "{ a: Str, b: (Str, Str), c: List(Str), d: Error, e: Error }"))
+		(expr (type "Str"))))
 ~~~

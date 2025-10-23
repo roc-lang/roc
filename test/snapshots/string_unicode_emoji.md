@@ -55,9 +55,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
-		(patt (type "Error")))
+		(patt (type "Str"))
+		(patt (type "Str")))
 	(expressions
-		(expr (type "Error"))
-		(expr (type "Error"))))
+		(expr (type "Str"))
+		(expr (type "Str"))))
 ~~~
