@@ -134,9 +134,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> List(Error)"))
+		(patt (type "Error -> List(Str)"))
 		(patt (type "_arg -> Error")))
 	(expressions
-		(expr (type "Error -> List(Error)"))
+		(expr (type "Error -> List(Str)"))
 		(expr (type "_arg -> Error"))))
 ~~~

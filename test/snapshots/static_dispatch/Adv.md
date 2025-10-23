@@ -47,6 +47,20 @@ main = {
 MISSING METHOD - Adv.md:23:13:23:33
 TYPE DOES NOT HAVE METHODS - Adv.md:28:13:28:32
 # PROBLEMS
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**Adv.md:17:13:17:32:**
+```roc
+	next_val = val.update_str(100)
+```
+	           ^^^^^^^^^^^^^^^^^^^
+
+It has the type:
+    _Adv, Num(_size) -> _ret_
+
+But I expected it to be:
+    _Adv, Str -> Adv_
+
 **MISSING METHOD**
 The **Adv** type does not have a **update_strr** method:
 **Adv.md:23:13:23:33:**
@@ -484,10 +498,10 @@ main = {
 		(patt (type "_a"))
 		(patt (type "_a"))
 		(patt (type "_a"))
-		(patt (type "(Error, Num(Int(Unsigned64)))"))
-		(patt (type "Adv -> Error"))
+		(patt (type "(Str, Num(Int(Unsigned64)))"))
+		(patt (type "Adv -> Str"))
 		(patt (type "Adv -> Num(Int(Unsigned64))"))
-		(patt (type "Adv, Error -> Adv"))
+		(patt (type "Adv, Str -> Adv"))
 		(patt (type "Adv, Num(Int(Unsigned64)) -> Adv")))
 	(type_decls
 		(nominal (type "Adv")
@@ -496,9 +510,9 @@ main = {
 		(expr (type "_a"))
 		(expr (type "_a"))
 		(expr (type "_a"))
-		(expr (type "(Error, Num(Int(Unsigned64)))"))
-		(expr (type "Adv -> Error"))
+		(expr (type "(Str, Num(Int(Unsigned64)))"))
+		(expr (type "Adv -> Str"))
 		(expr (type "Adv -> Num(Int(Unsigned64))"))
-		(expr (type "Adv, Error -> Adv"))
+		(expr (type "Adv, Str -> Adv"))
 		(expr (type "Adv, Num(Int(Unsigned64)) -> Adv"))))
 ~~~

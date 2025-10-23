@@ -159,7 +159,7 @@ isOk = |result| match result {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "MyResult(Error, Num(Int(Signed32)))"))
+		(patt (type "MyResult(Str, Num(Int(Signed32)))"))
 		(patt (type "MyResult(ok, err) -> Bool")))
 	(type_decls
 		(nominal (type "MyResult(ok, err)")
@@ -168,6 +168,6 @@ isOk = |result| match result {
 					(ty-rigid-var (name "ok"))
 					(ty-rigid-var (name "err"))))))
 	(expressions
-		(expr (type "MyResult(Error, Num(Int(Signed32)))"))
+		(expr (type "MyResult(Str, Num(Int(Signed32)))"))
 		(expr (type "MyResult(ok, err) -> Bool"))))
 ~~~

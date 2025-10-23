@@ -153,10 +153,10 @@ This expression is used in an unexpected way:
 ```
 
 It has the type:
-    _[InvalidHex(Error), Err([InvalidHex(Error)]_others)][Ok(Color)]_others2_
+    _[InvalidHex(Str), Err([InvalidHex(Str)]_others)][Ok(Color)]_others2_
 
 But the type annotation says it should have the type:
-    _Result(Color, [InvalidHex(Error)])_
+    _Result(Color, [InvalidHex(Str)])_
 
 **TYPE MISMATCH**
 The first argument being passed to this function has the wrong type:
@@ -181,6 +181,16 @@ You're trying to call the `to_frac` method on a `Num(Int(Unsigned8))`:
               ^^^^^^^^^^^
 
 But `Num(Int(Unsigned8))` doesn't support methods.
+
+**TYPE DOES NOT HAVE METHODS**
+You're trying to call the `to_utf8` method on a `Str`:
+**Color.md:29:13:29:26:**
+```roc
+    bytes = str.to_utf8()
+```
+            ^^^^^^^^^^^^^
+
+But `Str` doesn't support methods.
 
 **TYPE DOES NOT HAVE METHODS**
 You're trying to call the `is_char_in_hex_range` method on a `Num(Int(_size))`:
@@ -241,6 +251,16 @@ You're trying to call the `is_char_in_hex_range` method on a `Num(Int(_size))`:
                     ^^^^^^^^^^^^^^^^^^^^^^^^
 
 But `Num(Int(_size))` doesn't support methods.
+
+**TYPE DOES NOT HAVE METHODS**
+You're trying to call the `is_named_color` method on a `Str`:
+**Color.md:62:8:62:28:**
+```roc
+    if str.is_named_color()
+```
+       ^^^^^^^^^^^^^^^^^^^^
+
+But `Str` doesn't support methods.
 
 # TOKENS
 ~~~zig
@@ -1200,9 +1220,9 @@ is_named_color = |str| {
 	(defs
 		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
 		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
+		(patt (type "Str -> Error"))
 		(patt (type "Error -> Error"))
-		(patt (type "Error -> Error"))
-		(patt (type "Error -> Result(Color, [UnknownColor(Error)])"))
+		(patt (type "Str -> Result(Color, [UnknownColor(Str)])"))
 		(patt (type "_arg -> Error")))
 	(type_decls
 		(nominal (type "Color")
@@ -1210,8 +1230,8 @@ is_named_color = |str| {
 	(expressions
 		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
 		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
+		(expr (type "Str -> Error"))
 		(expr (type "Error -> Error"))
-		(expr (type "Error -> Error"))
-		(expr (type "Error -> Result(Color, [UnknownColor(Error)])"))
+		(expr (type "Str -> Result(Color, [UnknownColor(Str)])"))
 		(expr (type "_arg -> Error"))))
 ~~~

@@ -18,6 +18,20 @@ TYPE MISMATCH - lambda_annotation_mismatch_error.md:7:31:7:35
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
+**lambda_annotation_mismatch_error.md:3:27:3:29:**
+```roc
+string_function = |x| x + 42
+```
+                          ^^
+
+It has the type:
+    _Num(_size)_
+
+But the type annotation says it should have the type:
+    _Str_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
 **lambda_annotation_mismatch_error.md:7:31:7:35:**
 ```roc
 wrong_type_function = |x| x * 3.14
@@ -108,9 +122,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Error"))
+		(patt (type "Str -> Error"))
 		(patt (type "Num(Int(Signed64)) -> Error")))
 	(expressions
-		(expr (type "Error -> Error"))
+		(expr (type "Str -> Error"))
 		(expr (type "Num(Int(Signed64)) -> Error"))))
 ~~~

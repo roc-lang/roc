@@ -954,7 +954,7 @@ combineResults = |jsonResult, httpStatus|
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Error"))
+		(patt (type "Str -> Error"))
 		(patt (type "Error -> Error"))
 		(patt (type "Error, List(Error) -> Error"))
 		(patt (type "Error -> Error"))
@@ -964,7 +964,7 @@ combineResults = |jsonResult, httpStatus|
 		(alias (type "ServerConfig")
 			(ty-header (name "ServerConfig"))))
 	(expressions
-		(expr (type "Error -> Error"))
+		(expr (type "Str -> Error"))
 		(expr (type "Error -> Error"))
 		(expr (type "Error, List(Error) -> Error"))
 		(expr (type "Error -> Error"))

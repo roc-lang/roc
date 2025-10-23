@@ -1401,6 +1401,10 @@ fn processSnapshotContent(
             if (config.result_module) |result_env| {
                 try builtin_modules.append(result_env);
             }
+        } else if (std.mem.eql(u8, import_name, "Str")) {
+            if (config.str_module) |str_env| {
+                try builtin_modules.append(str_env);
+            }
         }
     }
 

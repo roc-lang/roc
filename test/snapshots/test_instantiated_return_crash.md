@@ -18,7 +18,20 @@ type=expr
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+The first argument being passed to this function has the wrong type:
+**test_instantiated_return_crash.md:6:26:6:35:**
+```roc
+    needs_string = |f| f(["hello"])
+```
+                         ^^^^^^^^^
+
+This argument has the type:
+    _List(Str)_
+
+But `f` needs the first argument to be:
+    _Str_
+
 # TOKENS
 ~~~zig
 OpenCurly,

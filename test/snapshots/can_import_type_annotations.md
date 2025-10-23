@@ -643,16 +643,16 @@ combineResults = |result1, result2|
 (inferred-types
 	(defs
 		(patt (type "Error -> Error"))
-		(patt (type "Error -> Error"))
+		(patt (type "Str -> Error"))
 		(patt (type "Error -> Result(Error, Error)"))
 		(patt (type "Error"))
-		(patt (type "Error, Error -> Error"))
+		(patt (type "Error, Str -> Error"))
 		(patt (type "Result(a, err), Result(b, err) -> Result((a, b), err)")))
 	(expressions
 		(expr (type "Error -> Error"))
-		(expr (type "Error -> Error"))
+		(expr (type "Str -> Error"))
 		(expr (type "Error -> Result(Error, Error)"))
 		(expr (type "Error"))
-		(expr (type "Error, Error -> Error"))
+		(expr (type "Error, Str -> Error"))
 		(expr (type "Result(a, err), Result(b, err) -> Result((a, b), err)"))))
 ~~~

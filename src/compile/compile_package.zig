@@ -741,39 +741,70 @@ pub const PackageEnv = struct {
         var str_module_for_check = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.str_bin, "Str", str_source);
         defer str_module_for_check.deinit();
 
-        // Build other_modules array according to env.imports order, PLUS the builtin modules
+        // Build other_modules array according to env.imports order
+        // This MUST match the exact order that imports were added during canonicalization
         const import_count = env.imports.imports.items.items.len;
-        var imported_envs = try std.array_list.Managed(*const ModuleEnv).initCapacity(self.gpa, import_count + 3); // +3 for Bool, Result, Str
+        var imported_envs = try std.array_list.Managed(*const ModuleEnv).initCapacity(self.gpa, import_count);
         // NOTE: Don't deinit 'imported_envs' yet - comptime_evaluator holds a reference to imported_envs.items
 
-        // First, add the builtin modules (Bool, Result, Str) so they're at known indices
-        try imported_envs.append(bool_module_for_check.env);
-        try imported_envs.append(result_module_for_check.env);
-        try imported_envs.append(str_module_for_check.env);
+        // Create hash maps for O(1) lookup
+        var builtin_modules = std.StringHashMap(*const ModuleEnv).init(self.gpa);
+        defer builtin_modules.deinit();
+        try builtin_modules.put("Bool", bool_module_for_check.env);
+        try builtin_modules.put("Result", result_module_for_check.env);
+        try builtin_modules.put("Str", str_module_for_check.env);
 
-        // Then add the explicitly imported modules
+        var builtin_in_imports = std.StringHashMap(bool).init(self.gpa);
+        defer builtin_in_imports.deinit();
+
+        // Iterate through imports in the exact order they were created during canonicalization
         for (env.imports.imports.items.items[0..import_count]) |str_idx| {
             const import_name = env.getString(str_idx);
-            // Determine external vs local from CIR s_import qualifier metadata directly
-            const is_ext = hadQualifiedImport(env, import_name);
 
-            if (is_ext) {
-                if (self.resolver) |r| {
-                    if (r.getEnv(r.ctx, self.package_name, import_name)) |ext_env_ptr| {
-                        // External env is already a pointer, use it directly
-                        try imported_envs.append(ext_env_ptr);
-                    } else {
-                        // External env not ready; skip (tryUnblock should have prevented this)
-                    }
-                }
+            // Check if this is a builtin module (O(1) lookup)
+            if (builtin_modules.get(import_name)) |builtin_env| {
+                try builtin_in_imports.put(import_name, true);
+                try imported_envs.append(builtin_env);
             } else {
-                const child_id = self.module_names.get(import_name).?;
-                const child = &self.modules.items[child_id];
-                // Get a pointer to the child's env (stored in the modules ArrayList)
-                // This is safe because we don't modify the modules ArrayList during type checking
-                const child_env_ptr = &child.env.?;
-                try imported_envs.append(child_env_ptr);
+                // Regular import - determine if external vs local
+                const is_ext = hadQualifiedImport(env, import_name);
+
+                if (is_ext) {
+                    if (self.resolver) |r| {
+                        if (r.getEnv(r.ctx, self.package_name, import_name)) |ext_env_ptr| {
+                            // External env is already a pointer, use it directly
+                            try imported_envs.append(ext_env_ptr);
+                        } else {
+                            // External env not ready; This shouldn't happen (tryUnblock should have prevented this)
+                            // But if it does, we MUST add a placeholder to keep indices aligned
+                            // Use the environment itself as a placeholder (it will fail type resolution, but maintain index alignment)
+                            try imported_envs.append(env);
+                        }
+                    } else {
+                        // No resolver available - use env as placeholder to maintain index alignment
+                        try imported_envs.append(env);
+                    }
+                } else {
+                    const child_id = self.module_names.get(import_name).?;
+                    const child = &self.modules.items[child_id];
+                    // Get a pointer to the child's env (stored in the modules ArrayList)
+                    // This is safe because we don't modify the modules ArrayList during type checking
+                    const child_env_ptr = &child.env.?;
+                    try imported_envs.append(child_env_ptr);
+                }
             }
+        }
+
+        // Append any builtin modules that weren't already in imports
+        // These are needed for copyBuiltinTypes() to find them by name
+        if (!builtin_in_imports.contains("Bool")) {
+            try imported_envs.append(bool_module_for_check.env);
+        }
+        if (!builtin_in_imports.contains("Result")) {
+            try imported_envs.append(result_module_for_check.env);
+        }
+        if (!builtin_in_imports.contains("Str")) {
+            try imported_envs.append(str_module_for_check.env);
         }
 
         var checker = try Check.init(

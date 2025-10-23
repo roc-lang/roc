@@ -586,14 +586,14 @@ validateAuth = |creds| HttpAuth.validate(creds)
 (inferred-types
 	(defs
 		(patt (type "Error -> Error"))
-		(patt (type "Error, Error -> Error"))
-		(patt (type "Error, Error -> Error"))
-		(patt (type "Error -> Error"))
+		(patt (type "Str, Str -> Error"))
+		(patt (type "Error, Str -> Error"))
+		(patt (type "Str -> Error"))
 		(patt (type "Error -> Error")))
 	(expressions
 		(expr (type "Error -> Error"))
-		(expr (type "Error, Error -> Error"))
-		(expr (type "Error, Error -> Error"))
-		(expr (type "Error -> Error"))
+		(expr (type "Str, Str -> Error"))
+		(expr (type "Error, Str -> Error"))
+		(expr (type "Str -> Error"))
 		(expr (type "Error -> Error"))))
 ~~~

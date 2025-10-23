@@ -200,7 +200,7 @@ InnerModule :
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Error")))
+		(patt (type "Str -> Str")))
 	(type_decls
 		(alias (type "Result(a, b)")
 			(ty-header (name "Result")
@@ -210,5 +210,5 @@ InnerModule :
 		(alias (type "InnerModule")
 			(ty-header (name "InnerModule"))))
 	(expressions
-		(expr (type "Error -> Error"))))
+		(expr (type "Str -> Str"))))
 ~~~

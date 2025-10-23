@@ -23,7 +23,20 @@ answer = composed([42])
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**test_nested_instantiation_crash.md:12:16:12:41:**
+```roc
+composed = |n| get_value(make_record(n))
+```
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+It has the type:
+    _List(a)_
+
+But the type annotation says it should have the type:
+    _Str_
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -200,13 +213,13 @@ answer = composed([42])
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> { tag: Error, value: a }"))
-		(patt (type "{ tag: Error, value: a } -> a"))
+		(patt (type "a -> { tag: Str, value: a }"))
+		(patt (type "{ tag: Str, value: a } -> a"))
 		(patt (type "List(a) -> Error"))
 		(patt (type "Error")))
 	(expressions
-		(expr (type "a -> { tag: Error, value: a }"))
-		(expr (type "{ tag: Error, value: a } -> a"))
+		(expr (type "a -> { tag: Str, value: a }"))
+		(expr (type "{ tag: Str, value: a } -> a"))
 		(expr (type "List(a) -> Error"))
 		(expr (type "Error"))))
 ~~~

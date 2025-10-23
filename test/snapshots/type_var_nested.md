@@ -346,13 +346,13 @@ main = |_| "done"
 		(patt (type "a -> a"))
 		(patt (type "a, b -> { first: a, second: b }"))
 		(patt (type "List(_a) -> Num(Int(Unsigned64))"))
-		(patt (type "a -> Result(Result(a, Error), Error)"))
+		(patt (type "a -> Result(Result(a, Str), Str)"))
 		(patt (type "_arg -> Str")))
 	(expressions
 		(expr (type "Result(a, e), a -> b -> Result(b, e)"))
 		(expr (type "a -> a"))
 		(expr (type "a, b -> { first: a, second: b }"))
 		(expr (type "List(_a) -> Num(Int(Unsigned64))"))
-		(expr (type "a -> Result(Result(a, Error), Error)"))
+		(expr (type "a -> Result(Result(a, Str), Str)"))
 		(expr (type "_arg -> Str"))))
 ~~~

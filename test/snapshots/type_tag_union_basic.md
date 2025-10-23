@@ -253,12 +253,12 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "[None, Some(Error)] -> Error"))
+		(patt (type "[None, Some(Str)] -> Str"))
 		(patt (type "[Err2(_err), Ok2(_ok)] -> Bool"))
 		(patt (type "[Err2(_err2), Ok2(_ok2)] -> Bool"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "[None, Some(Error)] -> Error"))
+		(expr (type "[None, Some(Str)] -> Str"))
 		(expr (type "[Err2(_err), Ok2(_ok)] -> Bool"))
 		(expr (type "[Err2(_err2), Ok2(_ok2)] -> Bool"))
 		(expr (type "_arg -> {}"))))

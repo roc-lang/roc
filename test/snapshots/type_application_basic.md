@@ -16,14 +16,14 @@ main! = |_| processList(["one","two","three"])
 TYPE DOES NOT HAVE METHODS - type_application_basic.md:4:22:4:32
 # PROBLEMS
 **TYPE DOES NOT HAVE METHODS**
-You're trying to call the `len` method on a `List(Error)`:
+You're trying to call the `len` method on a `List(Str)`:
 **type_application_basic.md:4:22:4:32:**
 ```roc
 processList = |list| list.len()
 ```
                      ^^^^^^^^^^
 
-But `List(Error)` doesn't support methods.
+But `List(Str)` doesn't support methods.
 
 # TOKENS
 ~~~zig
@@ -129,9 +129,9 @@ main! = |_| processList(["one", "two", "three"])
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(Error) -> Error"))
+		(patt (type "List(Str) -> Error"))
 		(patt (type "_arg -> Num(Int(Unsigned64))")))
 	(expressions
-		(expr (type "List(Error) -> Error"))
+		(expr (type "List(Str) -> Error"))
 		(expr (type "_arg -> Num(Int(Unsigned64))"))))
 ~~~
