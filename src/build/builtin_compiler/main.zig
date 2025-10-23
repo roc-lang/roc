@@ -335,21 +335,15 @@ fn serializeModuleEnv(
 fn findTypeDeclaration(env: *const ModuleEnv, type_name: []const u8) !CIR.Statement.Idx {
     const all_stmts = env.store.sliceStatements(env.all_statements);
 
-    std.debug.print("[DEBUG findTypeDeclaration] Looking for type '{s}', have {} statements\n", .{ type_name, all_stmts.len });
-
     // Search through all statements to find the one with matching name
-    for (all_stmts, 0..) |stmt_idx, i| {
+    for (all_stmts, 0..) |stmt_idx, _| {
         const stmt = env.store.getStatement(stmt_idx);
-        std.debug.print("[DEBUG findTypeDeclaration] Statement {}: {s}\n", .{ i, @tagName(stmt) });
         switch (stmt) {
             .s_nominal_decl => |decl| {
-                std.debug.print("[DEBUG findTypeDeclaration] Found s_nominal_decl, header={}\n", .{decl.header});
                 const header = env.store.getTypeHeader(decl.header);
                 const ident_idx = header.name;
                 const ident_text = env.getIdentText(ident_idx);
-                std.debug.print("[DEBUG findTypeDeclaration] Type name: '{s}'\n", .{ident_text});
                 if (std.mem.eql(u8, ident_text, type_name)) {
-                    std.debug.print("[DEBUG findTypeDeclaration] FOUND! Returning stmt_idx={}\n", .{stmt_idx});
                     return stmt_idx;
                 }
             },
@@ -357,7 +351,6 @@ fn findTypeDeclaration(env: *const ModuleEnv, type_name: []const u8) !CIR.Statem
         }
     }
 
-    std.debug.print("ERROR: Could not find type declaration '{s}' in module\n", .{type_name});
     return error.TypeDeclarationNotFound;
 }
 
