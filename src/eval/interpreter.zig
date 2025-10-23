@@ -158,10 +158,8 @@ pub const Interpreter = struct {
                 if (modules_map.get(module_ident)) |auto_imported| {
                     try other_envs_list.append(auto_imported.env);
                 } else {
-                    // Import exists in env.imports but not in the map we were given
-                    // We need to append something to maintain the index alignment
-                    // For now, we'll skip and accept the mismatch, but this shouldn't happen
-                    // in practice if the map is properly constructed
+                    // Import exists in env.imports but not in the map we were given.
+                    // This shouldn't happen in practice if the map is properly constructed.
                     return error.ImportNotInMap;
                 }
             }
@@ -1703,7 +1701,7 @@ pub const Interpreter = struct {
 
                 // Check if this is a Def or something else
                 if (node.tag != .def) {
-                    // For now, methods and other non-def lookups are not fully implemented
+                    // Methods and other non-def lookups are not implemented
                     return error.NotImplemented;
                 }
 
