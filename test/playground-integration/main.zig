@@ -841,15 +841,15 @@ fn runTests(arena: std.mem.Allocator, gpa: std.mem.Allocator, test_cases: []cons
         .skipped = 0,
     };
 
-    var failures = std.array_list.Managed(TestFailure).init(arena);
-    defer failures.deinit();
+    var failures = std.ArrayList(TestFailure).empty;
+    defer failures.deinit(arena);
 
     for (test_cases) |case| {
         logDebug("\n[INFO] Setting up WASM interface for test case: {s}...\n", .{case.name});
         var wasm_interface = setupWasm(gpa, arena, wasm_path) catch |err| {
             logDebug("[ERROR] Failed to setup WASM for test case '{s}': {}\n", .{ case.name, err });
             stats.failed += 1;
-            try failures.append(.{
+            try failures.append(arena, .{
                 .case_name = case.name,
                 .step_index = 0,
                 .message = "WASM setup failed",
@@ -865,7 +865,7 @@ fn runTests(arena: std.mem.Allocator, gpa: std.mem.Allocator, test_cases: []cons
             .failed => {
                 stats.failed += 1;
                 const failure_msg = case_execution_result.failure_message orelse "Test failed";
-                try failures.append(.{
+                try failures.append(arena, .{
                     .case_name = case.name,
                     .step_index = 0, // Could be enhanced to track specific step
                     .message = failure_msg,
@@ -964,8 +964,8 @@ pub fn main() !void {
     const playground_wasm_path = wasm_path orelse "zig-out/bin/playground.wasm";
 
     // Setup our test cases
-    var test_cases = std.array_list.Managed(TestCase).init(allocator);
-    defer test_cases.deinit(); // This will free the TestCase structs and their `steps` slices.
+    var test_cases = std.ArrayList(TestCase).empty;
+    defer test_cases.deinit(allocator); // This will free the TestCase structs and their `steps` slices.
 
     // Functional Test
     var happy_path_steps = try allocator.alloc(MessageStep, 8);
@@ -1009,21 +1009,21 @@ pub fn main() !void {
         .expected_status = "SUCCESS",
         .expected_hover_info_contains = "Str",
     };
-    try test_cases.append(.{
+    try test_cases.append(allocator, .{
         .name = "Happy Path - Simple Roc Program",
         .steps = happy_path_steps,
     });
 
     // Error Handling Test
     const syntax_error_code_val = try TestData.syntaxErrorRocCode(allocator);
-    try test_cases.append(try createSimpleTest(allocator, "Syntax Error - Mismatched Braces", syntax_error_code_val, .{ .min_errors = 1, .error_messages = &.{"LIST NOT CLOSED"} }, true));
+    try test_cases.append(allocator, try createSimpleTest(allocator, "Syntax Error - Mismatched Braces", syntax_error_code_val, .{ .min_errors = 1, .error_messages = &.{"LIST NOT CLOSED"} }, true));
 
     const type_error_code_val = try TestData.typeErrorRocCode(allocator);
-    try test_cases.append(try createSimpleTest(allocator, "Type Error - Adding String and Number", type_error_code_val, .{ .min_errors = 1, .error_messages = &.{"TYPE MISMATCH"} }, true));
+    try test_cases.append(allocator, try createSimpleTest(allocator, "Type Error - Adding String and Number", type_error_code_val, .{ .min_errors = 1, .error_messages = &.{"TYPE MISMATCH"} }, true));
 
     // Empty Source Test
     const empty_source_code = try allocator.dupe(u8, "");
-    try test_cases.append(try createSimpleTest(allocator, "Empty Source Code", empty_source_code, null, false)); // Disable diagnostic expectations
+    try test_cases.append(allocator, try createSimpleTest(allocator, "Empty Source Code", empty_source_code, null, false)); // Disable diagnostic expectations
 
     // Code Formatting Test
     var formatted_test_steps = try allocator.alloc(MessageStep, 3);
@@ -1040,7 +1040,7 @@ pub fn main() !void {
         .expected_status = "SUCCESS",
         .expected_data_contains = "foo",
     };
-    try test_cases.append(.{
+    try test_cases.append(allocator, .{
         .name = "QUERY_FORMATTED - Code Formatting",
         .steps = formatted_test_steps,
     });
@@ -1053,7 +1053,7 @@ pub fn main() !void {
         .expected_status = "INVALID_MESSAGE",
         .expected_message_contains = "Unknown message type",
     };
-    try test_cases.append(.{
+    try test_cases.append(allocator, .{
         .name = "Invalid Message Type",
         .steps = invalid_msg_type_steps,
     });
@@ -1077,7 +1077,7 @@ pub fn main() !void {
         .owned_source = happy_code_after_reset,
     };
     reset_test_steps[4] = .{ .message = .{ .type = "QUERY_TYPES" }, .expected_status = "SUCCESS", .expected_data_contains = "inferred-types" };
-    try test_cases.append(.{
+    try test_cases.append(allocator, .{
         .name = "RESET Message Functionality",
         .steps = reset_test_steps,
     });
@@ -1099,7 +1099,7 @@ pub fn main() !void {
         .expected_diagnostics = .{ .min_errors = 1, .error_messages = &.{"LIST NOT CLOSED"} },
         .owned_source = code_for_mem_test_2,
     };
-    try test_cases.append(.{
+    try test_cases.append(allocator, .{
         .name = "Memory Corruption on Reset - Load, Reset, Load",
         .steps = memory_corruption_steps,
     });
@@ -1127,7 +1127,7 @@ pub fn main() !void {
         .expected_status = "SUCCESS",
         .expected_hover_info_contains = "Num(Int(Signed32))",
     };
-    try test_cases.append(.{
+    try test_cases.append(allocator, .{
         .name = "GET_HOVER_INFO - Specific Type Query",
         .steps = get_hover_info_steps,
     });
@@ -1142,7 +1142,7 @@ pub fn main() !void {
     repl_lifecycle_steps[3] = .{ .message = .{ .type = "CLEAR_REPL" }, .expected_status = "SUCCESS", .expected_message_contains = "REPL cleared" };
     repl_lifecycle_steps[4] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
 
-    try test_cases.append(.{
+    try test_cases.append(allocator, .{
         .name = "REPL Lifecycle - Init, Step, Clear, Reset",
         .steps = repl_lifecycle_steps,
     });
@@ -1156,7 +1156,7 @@ pub fn main() !void {
     repl_core_steps[4] = .{ .message = .{ .type = "REPL_STEP", .input = "y" }, .expected_status = "SUCCESS", .expected_result_output_contains = "15" };
     repl_core_steps[5] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
 
-    try test_cases.append(.{
+    try test_cases.append(allocator, .{
         .name = "REPL Core - Definitions and Expressions",
         .steps = repl_core_steps,
     });
@@ -1176,7 +1176,7 @@ pub fn main() !void {
     };
     repl_redefinition_steps[7] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
 
-    try test_cases.append(.{
+    try test_cases.append(allocator, .{
         .name = "REPL Variable Redefinition - Dependency Updates",
         .steps = repl_redefinition_steps,
     });
@@ -1200,7 +1200,7 @@ pub fn main() !void {
     };
     repl_error_steps[5] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
 
-    try test_cases.append(.{
+    try test_cases.append(allocator, .{
         .name = "REPL Error Handling - Invalid Syntax Recovery",
         .steps = repl_error_steps,
     });
@@ -1217,7 +1217,7 @@ pub fn main() !void {
         .expected_data_contains = "can-ir",
     };
 
-    try test_cases.append(.{
+    try test_cases.append(allocator, .{
         .name = "REPL Compiler Integration - Query After Evaluation",
         .steps = repl_compiler_steps,
     });
@@ -1238,7 +1238,7 @@ pub fn main() !void {
     };
     repl_isolation_steps[5] = .{ .message = .{ .type = "QUERY_TYPES" }, .expected_status = "SUCCESS" };
 
-    try test_cases.append(.{
+    try test_cases.append(allocator, .{
         .name = "REPL State Isolation - Mode Switching",
         .steps = repl_isolation_steps,
     });
