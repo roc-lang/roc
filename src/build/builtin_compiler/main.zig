@@ -336,7 +336,7 @@ fn findTypeDeclaration(env: *const ModuleEnv, type_name: []const u8) !CIR.Statem
     const all_stmts = env.store.sliceStatements(env.all_statements);
 
     // Search through all statements to find the one with matching name
-    for (all_stmts, 0..) |stmt_idx, _| {
+    for (all_stmts) |stmt_idx| {
         const stmt = env.store.getStatement(stmt_idx);
         switch (stmt) {
             .s_nominal_decl => |decl| {

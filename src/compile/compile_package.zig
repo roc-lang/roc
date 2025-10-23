@@ -729,10 +729,29 @@ pub const PackageEnv = struct {
             .str_stmt = builtin_indices.str_type,
         };
 
-        // Build other_modules array according to env.imports order
+        // Load builtin modules for type checking (Bool, Result, Str)
+        // These need to be loaded BEFORE type checking so they're available for external type resolution
+        const bool_source = "Bool := [True, False].{}\n";
+        const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+        const str_source = "Str := [].{}\n";
+        var bool_module_for_check = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+        defer bool_module_for_check.deinit();
+        var result_module_for_check = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.result_bin, "Result", result_source);
+        defer result_module_for_check.deinit();
+        var str_module_for_check = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.str_bin, "Str", str_source);
+        defer str_module_for_check.deinit();
+
+        // Build other_modules array according to env.imports order, PLUS the builtin modules
         const import_count = env.imports.imports.items.items.len;
-        var imported_envs = try std.array_list.Managed(*ModuleEnv).initCapacity(self.gpa, import_count);
+        var imported_envs = try std.array_list.Managed(*const ModuleEnv).initCapacity(self.gpa, import_count + 3); // +3 for Bool, Result, Str
         // NOTE: Don't deinit 'imported_envs' yet - comptime_evaluator holds a reference to imported_envs.items
+
+        // First, add the builtin modules (Bool, Result, Str) so they're at known indices
+        try imported_envs.append(bool_module_for_check.env);
+        try imported_envs.append(result_module_for_check.env);
+        try imported_envs.append(str_module_for_check.env);
+
+        // Then add the explicitly imported modules
         for (env.imports.imports.items.items[0..import_count]) |str_idx| {
             const import_name = env.getString(str_idx);
             // Determine external vs local from CIR s_import qualifier metadata directly
@@ -776,18 +795,8 @@ pub const PackageEnv = struct {
         }
 
         // After type checking, evaluate top-level declarations at compile time
-        // Load builtin modules required by the interpreter (reuse builtin_indices from above)
-        const bool_source = "Bool := [True, False].{}\n";
-        const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-        const str_source = "Str := [].{}\n";
-        var bool_module = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.bool_bin, "Bool", bool_source);
-        defer bool_module.deinit();
-        var result_module = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.result_bin, "Result", result_source);
-        defer result_module.deinit();
-        var str_module = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.str_bin, "Str", str_source);
-        defer str_module.deinit();
-
-        const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+        // Reuse the builtin modules that were loaded before type checking
+        const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, bool_module_for_check.env, result_module_for_check.env, str_module_for_check.env);
         var comptime_evaluator = try eval.ComptimeEvaluator.init(self.gpa, env, imported_envs.items, &checker.problems, builtin_types_for_eval);
         _ = try comptime_evaluator.evalAll();
 
