@@ -762,6 +762,31 @@ pub const BuildEnv = struct {
         var ast = try parse.parse(&env.common, self.gpa);
         defer ast.deinit(self.gpa);
 
+        // Check for parse errors - if any exist, we cannot proceed
+        if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) {
+            // Convert diagnostics to reports and emit them
+            // Use placeholder package name since we haven't determined it yet
+            const pkg_name = "main";
+            const module_name = file_abs;
+
+            for (ast.tokenize_diagnostics.items) |diagnostic| {
+                const report = try ast.tokenizeDiagnosticToReport(diagnostic, self.gpa);
+                self.sink.emitReport(pkg_name, module_name, report);
+            }
+            for (ast.parse_diagnostics.items) |diagnostic| {
+                const report = try ast.parseDiagnosticToReport(&env.common, diagnostic, self.gpa, file_abs);
+                self.sink.emitReport(pkg_name, module_name, report);
+            }
+
+            // Build the order so drainReports can find these reports
+            try self.sink.buildOrder(&[_][]const u8{pkg_name}, &[_][]const u8{module_name}, &[_]u32{0});
+
+            // Emit ready entries (marks them as emitted so they can be drained)
+            self.sink.tryEmit();
+
+            return error.UnsupportedHeader;
+        }
+
         const file = ast.store.getFile();
         const header = ast.store.getHeader(file.header);
 
@@ -1441,6 +1466,13 @@ pub const OrderedSink = struct {
 
         // Attempt ordered emission only if order has been built
         if (self.order.items.len > 0) self.tryEmitLocked();
+    }
+
+    // Attempt to emit entries in order prefix while next entries are ready (with locking).
+    pub fn tryEmit(self: *OrderedSink) void {
+        self.lock.lock();
+        defer self.lock.unlock();
+        self.tryEmitLocked();
     }
 
     // Attempt to emit entries in order prefix while next entries are ready.

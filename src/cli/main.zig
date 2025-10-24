@@ -2928,6 +2928,20 @@ fn checkFileWithBuildEnv(
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
         defer build_env.gpa.free(drained);
 
+        // Count errors and warnings
+        var error_count: u32 = 0;
+        var warning_count: u32 = 0;
+
+        for (drained) |mod| {
+            for (mod.reports) |report| {
+                switch (report.severity) {
+                    .info => {},
+                    .runtime_error, .fatal => error_count += 1,
+                    .warning => warning_count += 1,
+                }
+            }
+        }
+
         // Convert BuildEnv drained reports to our format
         // Note: Transfer ownership of reports directly (no dupe) since drainReports() already transferred them
         var reports = try build_env.gpa.alloc(DrainedReport, drained.len);
@@ -2940,6 +2954,8 @@ fn checkFileWithBuildEnv(
 
         return CheckResult{
             .reports = reports,
+            .error_count = error_count,
+            .warning_count = warning_count,
         };
     };
 
