@@ -34,9 +34,9 @@ PARSE ERROR - multi_qualified_import.md:12:37:12:38
 MODULE NOT FOUND - multi_qualified_import.md:1:1:1:17
 UNDECLARED TYPE - multi_qualified_import.md:3:16:3:23
 UNDEFINED VARIABLE - multi_qualified_import.md:4:16:4:45
-MODULE NOT IMPORTED - multi_qualified_import.md:7:11:7:33
+UNDECLARED TYPE - multi_qualified_import.md:7:25:7:33
 UNUSED VARIABLE - multi_qualified_import.md:8:12:8:19
-MODULE NOT IMPORTED - multi_qualified_import.md:11:8:11:34
+UNDECLARED TYPE - multi_qualified_import.md:11:22:11:34
 UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
 # PROBLEMS
 **PARSE ERROR**
@@ -216,15 +216,15 @@ json_encoder = Json.Core.Utf8.defaultEncoder
                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `json.Core.Utf8` imported into this Roc file.
+**UNDECLARED TYPE**
+The type _json.Core.Utf8.Encoder_ is not declared in this scope.
 
-You're attempting to use this module here:
-**multi_qualified_import.md:7:11:7:33:**
+This type is referenced here:
+**multi_qualified_import.md:7:25:7:33:**
 ```roc
 process : json.Core.Utf8.Encoder -> Str
 ```
-          ^^^^^^^^^^^^^^^^^^^^^^
+                        ^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -239,15 +239,15 @@ process = |encoder| "processing"
            ^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `json.Core.Utf8` imported into this Roc file.
+**UNDECLARED TYPE**
+The type _json.Core.Utf8.EncodedData_ is not declared in this scope.
 
-You're attempting to use this module here:
-**multi_qualified_import.md:11:8:11:34:**
+This type is referenced here:
+**multi_qualified_import.md:11:22:11:34:**
 ```roc
 data : json.Core.Utf8.EncodedData
 ```
-       ^^^^^^^^^^^^^^^^^^^^^^^^^^
+                     ^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**

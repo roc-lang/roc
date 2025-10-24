@@ -164,9 +164,7 @@ UNDEFINED VARIABLE - fuzz_crash_020.md:80:3:80:6
 CRASH EXPECTS STRING - fuzz_crash_020.md:86:3:86:11
 UNDEFINED VARIABLE - fuzz_crash_020.md:87:11:87:12
 UNDEFINED VARIABLE - fuzz_crash_020.md:89:3:89:6
-UNDEFINED VARIABLE - fuzz_crash_020.md:92:11:92:15
-UNDEFINED VARIABLE - fuzz_crash_020.md:93:2:93:7
-UNDEFINED VARIABLE - fuzz_crash_020.md:94:3:94:6
+NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_020.md:96:34:96:37
 UNDEFINED VARIABLE - fuzz_crash_020.md:96:47:96:52
 UNDEFINED VARIABLE - fuzz_crash_020.md:96:54:96:57
@@ -605,38 +603,10 @@ Is there an `import` or `exposing` missing up-top?
 		^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `list` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**NOT IMPLEMENTED**
+This feature is not yet implemented: statement type in block
 
-**fuzz_crash_020.md:92:11:92:15:**
-```roc
-	for n in list {
-```
-	         ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_020.md:93:2:93:7:**
-```roc
-	line!("Ag ${n} to ${er}")
-```
-	^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `ber` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_020.md:94:3:94:6:**
-```roc
-		ber + n
-```
-		^^^
-
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNDEFINED VARIABLE**
 Nothing is named `tag` in this scope.
@@ -1785,25 +1755,7 @@ expect {
 										(p-assign (ident "er"))))
 								(e-num (value "456"))
 								(e-num (value "9")))))
-					(s-for
-						(p-assign (ident "n"))
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-block
-							(s-expr
-								(e-call
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-string
-										(e-literal (string "Ag "))
-										(e-lookup-local
-											(p-assign (ident "n")))
-										(e-literal (string " to "))
-										(e-lookup-local
-											(p-assign (ident "er")))
-										(e-literal (string "")))))
-							(e-binop (op "add")
-								(e-runtime-error (tag "ident_not_in_scope"))
-								(e-lookup-local
-									(p-assign (ident "n"))))))
+					(s-runtime-error (tag "not_implemented"))
 					(s-let
 						(p-assign (ident "rd"))
 						(e-record

@@ -248,7 +248,7 @@ UNDEFINED VARIABLE - syntax_grab_bag.md:141:2:141:6
 UNDECLARED TYPE - syntax_grab_bag.md:143:14:143:20
 UNDEFINED VARIABLE - syntax_grab_bag.md:147:9:147:13
 UNDEFINED VARIABLE - syntax_grab_bag.md:158:2:158:11
-UNDEFINED VARIABLE - syntax_grab_bag.md:175:3:175:15
+NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - syntax_grab_bag.md:178:63:178:69
 UNDEFINED VARIABLE - syntax_grab_bag.md:179:42:179:48
 UNDEFINED VARIABLE - syntax_grab_bag.md:183:3:183:7
@@ -260,6 +260,7 @@ UNDEFINED VARIABLE - syntax_grab_bag.md:191:2:191:14
 UNDEFINED VARIABLE - syntax_grab_bag.md:193:4:193:13
 UNUSED VARIABLE - syntax_grab_bag.md:164:2:164:18
 UNUSED VARIABLE - syntax_grab_bag.md:165:2:165:14
+UNUSED VARIABLE - syntax_grab_bag.md:166:2:166:6
 UNUSED VARIABLE - syntax_grab_bag.md:178:2:178:8
 UNUSED VARIABLE - syntax_grab_bag.md:180:2:180:17
 UNUSED VARIABLE - syntax_grab_bag.md:188:2:188:15
@@ -617,16 +618,10 @@ Is there an `import` or `exposing` missing up-top?
 	^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**NOT IMPLEMENTED**
+This feature is not yet implemented: statement type in block
 
-**syntax_grab_bag.md:175:3:175:15:**
-```roc
-		Stdout.line!("Adding ${n} to ${number}")
-```
-		^^^^^^^^^^^^
-
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNDEFINED VARIABLE**
 Nothing is named `punned` in this scope.
@@ -737,6 +732,18 @@ The unused variable is declared here:
 	interpolated = "Hello, ${world}"
 ```
 	^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `list` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
+The unused variable is declared here:
+**syntax_grab_bag.md:166:2:166:6:**
+```roc
+	list = [
+```
+	^^^^
 
 
 **UNUSED VARIABLE**
@@ -1901,8 +1908,8 @@ expect {
 		(e-closure
 			(captures
 				(capture (ident "x"))
-				(capture (ident "x"))
-				(capture (ident "dude")))
+				(capture (ident "dude"))
+				(capture (ident "x")))
 			(e-lambda
 				(args
 					(p-assign (ident "a"))
@@ -2114,8 +2121,8 @@ expect {
 		(p-assign (ident "main!"))
 		(e-closure
 			(captures
-				(capture (ident "match_time"))
-				(capture (ident "add_one")))
+				(capture (ident "add_one"))
+				(capture (ident "match_time")))
 			(e-lambda
 				(args
 					(p-underscore))
@@ -2175,30 +2182,7 @@ expect {
 											(p-assign (ident "number")))))
 								(e-num (value "456"))
 								(e-num (value "789")))))
-					(s-for
-						(p-assign (ident "n"))
-						(e-lookup-local
-							(p-assign (ident "list")))
-						(e-block
-							(s-expr
-								(e-call
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-string
-										(e-literal (string "Adding "))
-										(e-lookup-local
-											(p-assign (ident "n")))
-										(e-literal (string " to "))
-										(e-lookup-local
-											(p-assign (ident "number")))
-										(e-literal (string "")))))
-							(s-reassign
-								(p-assign (ident "number"))
-								(e-binop (op "add")
-									(e-lookup-local
-										(p-assign (ident "number")))
-									(e-lookup-local
-										(p-assign (ident "n")))))
-							(e-empty_record)))
+					(s-runtime-error (tag "not_implemented"))
 					(s-let
 						(p-assign (ident "record"))
 						(e-record

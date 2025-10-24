@@ -118,6 +118,11 @@ pub const Diagnostic = union(enum) {
         type_name: Ident.Idx,
         region: Region,
     },
+    type_from_missing_module: struct {
+        module_name: Ident.Idx,
+        type_name: Ident.Idx,
+        region: Region,
+    },
     module_not_imported: struct {
         module_name: Ident.Idx,
         region: Region,
@@ -269,6 +274,7 @@ pub const Diagnostic = union(enum) {
             .module_not_found => |d| d.region,
             .value_not_exposed => |d| d.region,
             .type_not_exposed => |d| d.region,
+            .type_from_missing_module => |d| d.region,
             .module_not_imported => |d| d.region,
             .too_many_exports => |d| d.region,
             .undeclared_type => |d| d.region,

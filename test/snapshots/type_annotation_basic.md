@@ -230,9 +230,9 @@ main! = |_| {
 		(p-assign (ident "main!"))
 		(e-closure
 			(captures
+				(capture (ident "addOne"))
 				(capture (ident "identity"))
-				(capture (ident "combine"))
-				(capture (ident "addOne")))
+				(capture (ident "combine")))
 			(e-lambda
 				(args
 					(p-underscore))

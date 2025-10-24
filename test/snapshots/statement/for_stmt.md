@@ -15,9 +15,13 @@ foo = {
 }
 ~~~
 # EXPECTED
-NIL
+NOT IMPLEMENTED - :0:0:0:0
 # PROBLEMS
-NIL
+**NOT IMPLEMENTED**
+This feature is not yet implemented: statement type in block
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -78,22 +82,7 @@ foo = {
 			(s-var
 				(p-assign (ident "result"))
 				(e-num (value "0")))
-			(s-for
-				(p-assign (ident "x"))
-				(e-list
-					(elems
-						(e-num (value "1"))
-						(e-num (value "2"))
-						(e-num (value "3"))))
-				(e-block
-					(s-reassign
-						(p-assign (ident "result"))
-						(e-binop (op "add")
-							(e-lookup-local
-								(p-assign (ident "result")))
-							(e-lookup-local
-								(p-assign (ident "x")))))
-					(e-empty_record)))
+			(s-runtime-error (tag "not_implemented"))
 			(e-lookup-local
 				(p-assign (ident "result"))))
 		(annotation

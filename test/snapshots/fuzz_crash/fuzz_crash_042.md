@@ -10,7 +10,7 @@ import u.R}g:r->R.a.E
 # EXPECTED
 PARSE ERROR - fuzz_crash_042.md:1:11:1:12
 MODULE NOT FOUND - fuzz_crash_042.md:1:1:1:11
-MODULE NOT IMPORTED - fuzz_crash_042.md:1:17:1:22
+TYPE NOT EXPOSED - fuzz_crash_042.md:1:20:1:22
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
@@ -34,15 +34,15 @@ import u.R}g:r->R.a.E
 ^^^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `R.a` imported into this Roc file.
+**TYPE NOT EXPOSED**
+The type `E` is not an exposed by the module `u.R`.
 
-You're attempting to use this module here:
-**fuzz_crash_042.md:1:17:1:22:**
+You're attempting to use this type here:
+**fuzz_crash_042.md:1:20:1:22:**
 ```roc
 import u.R}g:r->R.a.E
 ```
-                ^^^^^
+                   ^^
 
 
 # TOKENS

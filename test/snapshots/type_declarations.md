@@ -24,7 +24,7 @@ UNDECLARED TYPE - type_declarations.md:3:8:3:11
 UNDECLARED TYPE - type_declarations.md:3:13:3:16
 UNDECLARED TYPE - type_declarations.md:5:19:5:21
 UNDECLARED TYPE - type_declarations.md:5:32:5:41
-MODULE NOT IMPORTED - type_declarations.md:13:11:13:24
+UNDECLARED TYPE - type_declarations.md:13:17:13:24
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Bar_ is not declared in this scope.
@@ -70,15 +70,15 @@ Some(a) : { foo : Ok(a), bar : Something }
                                ^^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `Module` imported into this Roc file.
+**UNDECLARED TYPE**
+The type _Module.Thingy_ is not declared in this scope.
 
-You're attempting to use this module here:
-**type_declarations.md:13:11:13:24:**
+This type is referenced here:
+**type_declarations.md:13:17:13:24:**
 ```roc
 MyType2 : Module.Thingy
 ```
-          ^^^^^^^^^^^^^
+                ^^^^^^^
 
 
 # TOKENS

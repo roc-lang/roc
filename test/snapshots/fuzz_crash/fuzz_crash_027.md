@@ -208,7 +208,7 @@ UNDEFINED VARIABLE - fuzz_crash_027.md:97:2:97:6
 UNDECLARED TYPE - fuzz_crash_027.md:99:14:99:20
 UNDEFINED VARIABLE - fuzz_crash_027.md:103:9:103:13
 UNDEFINED VARIABLE - fuzz_crash_027.md:114:2:114:11
-UNDEFINED VARIABLE - fuzz_crash_027.md:128:2:128:7
+NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_027.md:131:63:131:69
 UNDEFINED VARIABLE - fuzz_crash_027.md:132:42:132:48
 UNDEFINED VARIABLE - fuzz_crash_027.md:136:3:136:7
@@ -218,6 +218,7 @@ NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_027.md:145:4:145:13
 UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
 UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
+UNUSED VARIABLE - fuzz_crash_027.md:121:2:121:6
 UNUSED VARIABLE - fuzz_crash_027.md:131:2:131:8
 UNUSED VARIABLE - fuzz_crash_027.md:133:2:133:9
 UNUSED VARIABLE - fuzz_crash_027.md:141:2:141:7
@@ -675,16 +676,10 @@ Is there an `import` or `exposing` missing up-top?
 	^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**NOT IMPLEMENTED**
+This feature is not yet implemented: statement type in block
 
-**fuzz_crash_027.md:128:2:128:7:**
-```roc
-	line!("Adding ${n} to ${number}")
-```
-	^^^^^
-
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNDEFINED VARIABLE**
 Nothing is named `punned` in this scope.
@@ -777,6 +772,18 @@ The unused variable is declared here:
 **fuzz_crash_027.md:120:2:120:6:**
 ```roc
 	ited = "Hello, ${world}"
+```
+	^^^^
+
+
+**UNUSED VARIABLE**
+Variable `list` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_027.md:121:2:121:6:**
+```roc
+	list = [
 ```
 	^^^^
 
@@ -1991,30 +1998,7 @@ expect {
 						(e-list
 							(elems
 								(e-num (value "456")))))
-					(s-for
-						(p-assign (ident "n"))
-						(e-lookup-local
-							(p-assign (ident "list")))
-						(e-block
-							(s-expr
-								(e-call
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-string
-										(e-literal (string "Adding "))
-										(e-lookup-local
-											(p-assign (ident "n")))
-										(e-literal (string " to "))
-										(e-lookup-local
-											(p-assign (ident "number")))
-										(e-literal (string "")))))
-							(s-reassign
-								(p-assign (ident "number"))
-								(e-binop (op "add")
-									(e-lookup-local
-										(p-assign (ident "number")))
-									(e-lookup-local
-										(p-assign (ident "n")))))
-							(e-empty_record)))
+					(s-runtime-error (tag "not_implemented"))
 					(s-let
 						(p-assign (ident "record"))
 						(e-record

@@ -16,7 +16,7 @@ AnotherType : SomeModule.MissingType
 ~~~
 # EXPECTED
 UNDECLARED TYPE - type_undeclared_usage.md:1:10:1:21
-MODULE NOT IMPORTED - type_undeclared_usage.md:8:15:8:37
+UNDECLARED TYPE - type_undeclared_usage.md:8:25:8:37
 UNDECLARED TYPE - type_undeclared_usage.md:3:16:3:32
 UNUSED VARIABLE - type_undeclared_usage.md:4:17:4:22
 # PROBLEMS
@@ -31,15 +31,15 @@ MyType : UnknownType
          ^^^^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `SomeModule` imported into this Roc file.
+**UNDECLARED TYPE**
+The type _SomeModule.MissingType_ is not declared in this scope.
 
-You're attempting to use this module here:
-**type_undeclared_usage.md:8:15:8:37:**
+This type is referenced here:
+**type_undeclared_usage.md:8:25:8:37:**
 ```roc
 AnotherType : SomeModule.MissingType
 ```
-              ^^^^^^^^^^^^^^^^^^^^^^
+                        ^^^^^^^^^^^^
 
 
 **UNDECLARED TYPE**
