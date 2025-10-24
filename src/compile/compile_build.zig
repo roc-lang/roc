@@ -470,7 +470,6 @@ pub const BuildEnv = struct {
 
         var header_info = try self.parseHeaderDeps(root_abs);
         defer header_info.deinit(self.gpa);
-
         // Allow app, module, type_module, and default_app files
         const is_executable = header_info.kind == .app or header_info.kind == .default_app;
 
@@ -1059,6 +1058,12 @@ pub const BuildEnv = struct {
             const dep_name = try self.gpa.dupe(u8, alias);
             try self.ensurePackage(dep_name, .platform, abs);
 
+            // If key already exists, free the old value before overwriting
+            if (pack.shorthands.fetchRemove(dep_key)) |old_entry| {
+                freeConstSlice(self.gpa, old_entry.key);
+                freeConstSlice(self.gpa, old_entry.value.name);
+                freeConstSlice(self.gpa, old_entry.value.root_file);
+            }
             try pack.shorthands.put(self.gpa, dep_key, .{
                 .name = dep_name,
                 .root_file = try self.gpa.dupe(u8, abs),
@@ -1103,6 +1108,12 @@ pub const BuildEnv = struct {
 
             try self.ensurePackage(dep_name, child_info.kind, abs);
 
+            // If key already exists, free the old value before overwriting
+            if (pack.shorthands.fetchRemove(dep_key)) |old_entry| {
+                freeConstSlice(self.gpa, old_entry.key);
+                freeConstSlice(self.gpa, old_entry.value.name);
+                freeConstSlice(self.gpa, old_entry.value.root_file);
+            }
             try pack.shorthands.put(self.gpa, dep_key, .{
                 .name = dep_name,
                 .root_file = try self.gpa.dupe(u8, abs),
@@ -1150,6 +1161,11 @@ pub const BuildEnv = struct {
 
         // Build the deterministic order
         try self.sink.buildOrder(pkg_names.items, module_names.items, depths.items);
+
+        // Now that order is built, mark ready reports as emitted so they can be drained
+        self.sink.lock.lock();
+        defer self.sink.lock.unlock();
+        self.sink.tryEmitLocked();
     }
 
     fn depthOf(self: *BuildEnv, pkg_name: []const u8, module_name: []const u8) !u32 {

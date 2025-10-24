@@ -2941,8 +2941,8 @@ fn rocCheck(allocs: *Allocators, args: cli_args.CheckArgs) !void {
         cache_config,
     ) catch |err| {
         handleProcessFileError(err, stderr, args.path);
+        return;
     };
-
     defer check_result.deinit(allocs.gpa);
 
     const elapsed = timer.read();
@@ -2975,17 +2975,16 @@ fn rocCheck(allocs: *Allocators, args: cli_args.CheckArgs) !void {
             for (module.reports) |*report| {
 
                 // Render the diagnostic report to stderr
-                reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
-                    stderr.print("Error rendering diagnostic report: {}", .{render_err}) catch {};
-                    // Fallback to just printing the title
-                    stderr.print("  {s}", .{report.title}) catch {};
-                };
+                try reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal());
 
                 if (report.severity == .fatal or report.severity == .runtime_error) {
                     has_errors = true;
                 }
             }
         }
+
+        // Flush stderr to ensure all error output is visible
+        stderr_writer.interface.flush() catch {};
 
         if (check_result.error_count > 0 or check_result.warning_count > 0) {
             stderr.writeAll("\n") catch {};
@@ -2994,13 +2993,16 @@ fn rocCheck(allocs: *Allocators, args: cli_args.CheckArgs) !void {
                 check_result.warning_count,
             }) catch {};
             formatElapsedTime(stderr, elapsed) catch {};
-            stderr.print(" for {s}.", .{args.path}) catch {};
+            stderr.print(" for {s}.\n", .{args.path}) catch {};
 
+            // Flush before exit
+            stderr_writer.interface.flush() catch {};
             std.process.exit(1);
         } else {
             stdout.print("No errors found in ", .{}) catch {};
             formatElapsedTime(stdout, elapsed) catch {};
-            stdout.print(" for {s}", .{args.path}) catch {};
+            stdout.print(" for {s}\n", .{args.path}) catch {};
+            stdout_writer.interface.flush() catch {};
         }
     }
 

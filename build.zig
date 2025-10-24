@@ -133,25 +133,6 @@ pub fn build(b: *std.Build) void {
 
     const roc_modules = modules.RocModules.create(b, build_options, zstd);
 
-    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd) orelse return;
-    roc_modules.addAll(roc_exe);
-    install_and_run(b, no_bin, roc_exe, roc_step, run_step, run_args);
-
-    // CLI integration tests - run actual roc programs like CI does
-    if (!no_bin) {
-        const install = b.addInstallArtifact(roc_exe, .{});
-
-        // Test int platform (should pass)
-        const test_int = b.addSystemCommand(&.{ b.getInstallPath(.bin, "roc"), "--no-cache", "test/int/app.roc" });
-        test_int.step.dependOn(&install.step);
-        test_cli_step.dependOn(&test_int.step);
-
-        // Test str platform (currently fails with TypeMismatch - this is expected until Str support is complete)
-        const test_str = b.addSystemCommand(&.{ b.getInstallPath(.bin, "roc"), "--no-cache", "test/str/app.roc" });
-        test_str.step.dependOn(&install.step);
-        test_cli_step.dependOn(&test_str.step);
-    }
-
     // Build-time compiler for builtin .roc modules with caching
     //
     // Changes to .roc files in src/build/roc/ are automatically detected and trigger recompilation.
@@ -272,6 +253,25 @@ pub fn build(b: *std.Build) void {
 
     roc_modules.repl.addImport("compiled_builtins", compiled_builtins_module);
     roc_modules.compile.addImport("compiled_builtins", compiled_builtins_module);
+
+    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins) orelse return;
+    roc_modules.addAll(roc_exe);
+    install_and_run(b, no_bin, roc_exe, roc_step, run_step, run_args);
+
+    // CLI integration tests - run actual roc programs like CI does
+    if (!no_bin) {
+        const install = b.addInstallArtifact(roc_exe, .{});
+
+        // Test int platform (should pass)
+        const test_int = b.addSystemCommand(&.{ b.getInstallPath(.bin, "roc"), "--no-cache", "test/int/app.roc" });
+        test_int.step.dependOn(&install.step);
+        test_cli_step.dependOn(&test_int.step);
+
+        // Test str platform (currently fails with TypeMismatch - this is expected until Str support is complete)
+        const test_str = b.addSystemCommand(&.{ b.getInstallPath(.bin, "roc"), "--no-cache", "test/str/app.roc" });
+        test_str.step.dependOn(&install.step);
+        test_cli_step.dependOn(&test_str.step);
+    }
 
     // Manual rebuild command: zig build rebuild-builtins
     // Use this after making compiler changes to ensure those changes are reflected in builtins
@@ -746,6 +746,8 @@ fn addMainExe(
     user_llvm_path: ?[]const u8,
     tracy: ?[]const u8,
     zstd: *Dependency,
+    compiled_builtins_module: *std.Build.Module,
+    write_compiled_builtins: *Step.WriteFile,
 ) ?*Step.Compile {
     const exe = b.addExecutable(.{
         .name = "roc",
@@ -877,6 +879,9 @@ fn addMainExe(
     configureBackend(shim_lib, target);
     // Add all modules from roc_modules that the shim needs
     roc_modules.addAll(shim_lib);
+    // Add compiled builtins module for loading builtin types
+    shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    shim_lib.step.dependOn(&write_compiled_builtins.step);
     // Link against the pre-built builtins library
     shim_lib.addObject(builtins_obj);
     // Bundle compiler-rt for our math symbols

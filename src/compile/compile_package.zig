@@ -263,9 +263,11 @@ pub const PackageEnv = struct {
         // Notify schedule hook so a global queue can pick this up
         self.schedule_hook.onSchedule(self.schedule_hook.ctx, self.package_name, name, root_file_path, 0);
 
-        // If a global schedule_hook is installed, do not start internal scheduling loops.
-        // In dispatch-only mode, the unified global queue will drive processing via process().
-        if (self.schedule_hook.isNoOp()) {
+        // If a global schedule_hook is installed AND we're in multi-threaded mode,
+        // the unified global queue will drive processing via process().
+        // In single-threaded mode, we always need to run our local processing loop.
+        const should_run_local = self.schedule_hook.isNoOp() or self.mode == .single_threaded;
+        if (should_run_local) {
             if (@import("builtin").target.cpu.arch == .wasm32) {
                 // On wasm32, always run single-threaded at comptime
                 try self.runSingleThread();
@@ -289,7 +291,9 @@ pub const PackageEnv = struct {
                 self.injector.items.len = idx;
                 try self.process(task);
                 try self.tryEmitReady();
-            } else if (self.remaining_modules == 0) break;
+            } else if (self.remaining_modules == 0) {
+                break;
+            }
         }
     }
 
@@ -381,13 +385,13 @@ pub const PackageEnv = struct {
     }
 
     fn enqueue(self: *PackageEnv, module_id: ModuleId) !void {
+        const st = &self.modules.items[module_id];
         // In multi_threaded mode with a non-noop schedule_hook, forward to the global queue
         if (self.mode == .multi_threaded and !self.schedule_hook.isNoOp()) {
             // Look up the module to get its path and depth for the hook
             self.lock.lock();
             defer self.lock.unlock();
 
-            const st = &self.modules.items[module_id];
             self.schedule_hook.onSchedule(self.schedule_hook.ctx, self.package_name, st.name, st.path, st.depth);
         } else {
             // Default behavior: use internal injector
@@ -500,11 +504,21 @@ pub const PackageEnv = struct {
         }
 
         switch (phase) {
-            .Parse => try self.doParse(task.module_id),
-            .Canonicalize => try self.doCanonicalize(task.module_id),
-            .WaitingOnImports => try self.tryUnblock(task.module_id),
-            .TypeCheck => try self.doTypeCheck(task.module_id),
-            .Done => return,
+            .Parse => {
+                try self.doParse(task.module_id);
+            },
+            .Canonicalize => {
+                try self.doCanonicalize(task.module_id);
+            },
+            .WaitingOnImports => {
+                try self.tryUnblock(task.module_id);
+            },
+            .TypeCheck => {
+                try self.doTypeCheck(task.module_id);
+            },
+            .Done => {
+                return;
+            },
         }
         try self.tryEmitReady();
     }
@@ -544,6 +558,16 @@ pub const PackageEnv = struct {
         const parse_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         if (@import("builtin").target.cpu.arch != .wasm32) {
             self.total_tokenize_parse_ns += @intCast(parse_end - parse_start);
+        }
+
+        // Convert parse diagnostics to reports
+        for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
+            const report = try parse_ast.tokenizeDiagnosticToReport(diagnostic, self.gpa);
+            try st.reports.append(report);
+        }
+        for (parse_ast.parse_diagnostics.items) |diagnostic| {
+            const report = try parse_ast.parseDiagnosticToReport(&env.common, diagnostic, self.gpa, st.path);
+            try st.reports.append(report);
         }
 
         // canonicalize using the AST
