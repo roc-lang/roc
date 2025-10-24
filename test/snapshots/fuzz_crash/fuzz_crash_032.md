@@ -26,7 +26,6 @@ UNEXPECTED TOKEN IN PATTERN - fuzz_crash_032.md:7:21:7:22
 PARSE ERROR - fuzz_crash_032.md:7:22:7:22
 UNDECLARED TYPE VARIABLE - fuzz_crash_032.md:1:14:1:17
 UNDECLARED TYPE - fuzz_crash_032.md:1:21:1:24
-NOT IMPLEMENTED - :0:0:0:0
 UNDECLARED TYPE - fuzz_crash_032.md:4:25:4:30
 EXPECTED NOMINAL TYPE - fuzz_crash_032.md:6:26:6:37
 INVALID PATTERN - :0:0:0:0
@@ -157,11 +156,6 @@ LocalStatus :lue => Loc= [Pending, Complete]
 ```
                     ^^^
 
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: statement type in block
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNDECLARED TYPE**
 The type _Color_ is not declared in this scope.
@@ -296,7 +290,6 @@ olor = |color| {
 			(args
 				(p-assign (ident "color")))
 			(e-block
-				(s-runtime-error (tag "not_implemented"))
 				(s-expr
 					(e-runtime-error (tag "undeclared_type")))
 				(e-match

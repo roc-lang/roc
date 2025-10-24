@@ -597,6 +597,32 @@ pub fn SafeMultiList(comptime T: type) type {
             len: u64,
             capacity: u64,
 
+            // We copy capacity-sized regions below; clear per-field slack so the writer never
+            // observes uninitialized bytes. Leaving that memory undefined is UB and makes the
+            // output non-deterministic. The one-time zeroing cost is negligible next to writing
+            // the same memory to disk.
+            fn zeroUnusedCapacity(list: *SafeMultiList(T)) void {
+                const list_len = list.items.len;
+                const total_capacity = list.items.capacity;
+                if (total_capacity == 0 or total_capacity <= list_len) return;
+
+                const slice = list.items.slice();
+                inline for (std.meta.fields(T), 0..) |field_info, field_index| {
+                    const field_size = @sizeOf(field_info.type);
+                    if (field_size == 0) continue;
+
+                    const capacity_bytes = field_size * total_capacity;
+                    const initialized_bytes = field_size * list_len;
+
+                    if (initialized_bytes < capacity_bytes) {
+                        const field_ptr = slice.ptrs[field_index];
+                        const tail_ptr = field_ptr + initialized_bytes;
+                        const tail_len = capacity_bytes - initialized_bytes;
+                        @memset(tail_ptr[0..tail_len], 0);
+                    }
+                }
+            }
+
             /// Serialize a SafeMultiList into this Serialized struct, appending data to the writer
             pub fn serialize(
                 self: *Serialized,
@@ -606,6 +632,8 @@ pub fn SafeMultiList(comptime T: type) type {
             ) Allocator.Error!void {
                 // MultiArrayList reorders fields by alignment internally.
                 // We need to copy the raw bytes exactly as they are laid out.
+                zeroUnusedCapacity(@constCast(safe_multi_list));
+
                 const data_offset = if (safe_multi_list.items.len > 0) blk: {
                     const MultiArrayListType = std.MultiArrayList(T);
                     // We need to write all the bytes up to where the actual data is stored
@@ -1945,36 +1973,36 @@ test "SafeMultiList CompactWriter verify exact memory layout" {
                     const field_items = original.field(.a);
                     const field_bytes = std.mem.sliceAsBytes(field_items);
                     @memcpy(field_dest[0..field_bytes.len], field_bytes);
-                    // Fill remaining capacity with pattern (0xAA) to match uninitialized memory
+                    // Fill remaining capacity with zeros to match serialization sanitization
                     if (field_bytes.len < field_capacity_bytes) {
-                        @memset(field_dest[field_bytes.len..], 0xAA);
+                        @memset(field_dest[field_bytes.len..], 0);
                     }
                 },
                 1 => { // field b
                     const field_items = original.field(.b);
                     const field_bytes = std.mem.sliceAsBytes(field_items);
                     @memcpy(field_dest[0..field_bytes.len], field_bytes);
-                    // Fill remaining capacity with pattern (0xAA) to match uninitialized memory
+                    // Fill remaining capacity with zeros to match serialization sanitization
                     if (field_bytes.len < field_capacity_bytes) {
-                        @memset(field_dest[field_bytes.len..], 0xAA);
+                        @memset(field_dest[field_bytes.len..], 0);
                     }
                 },
                 2 => { // field c
                     const field_items = original.field(.c);
                     const field_bytes = std.mem.sliceAsBytes(field_items);
                     @memcpy(field_dest[0..field_bytes.len], field_bytes);
-                    // Fill remaining capacity with pattern (0xAA) to match uninitialized memory
+                    // Fill remaining capacity with zeros to match serialization sanitization
                     if (field_bytes.len < field_capacity_bytes) {
-                        @memset(field_dest[field_bytes.len..], 0xAA);
+                        @memset(field_dest[field_bytes.len..], 0);
                     }
                 },
                 3 => { // field d
                     const field_items = original.field(.d);
                     const field_bytes = std.mem.sliceAsBytes(field_items);
                     @memcpy(field_dest[0..field_bytes.len], field_bytes);
-                    // Fill remaining capacity with pattern (0xAA) to match uninitialized memory
+                    // Fill remaining capacity with zeros to match serialization sanitization
                     if (field_bytes.len < field_capacity_bytes) {
-                        @memset(field_dest[field_bytes.len..], 0xAA);
+                        @memset(field_dest[field_bytes.len..], 0);
                     }
                 },
                 else => unreachable,
@@ -1983,9 +2011,9 @@ test "SafeMultiList CompactWriter verify exact memory layout" {
             offset += field_info.size * original.items.capacity;
         }
 
-        // Fill remaining space with pattern
+        // Fill remaining space with zeros to match serialization sanitization
         if (offset < expected_bytes.len) {
-            @memset(expected_bytes[offset..], 0xAA);
+            @memset(expected_bytes[offset..], 0);
         }
 
         // Now serialize using our implementation

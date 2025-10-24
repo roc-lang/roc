@@ -49,6 +49,16 @@
 ##
 ## Interpolation can be used in multiline strings, but the part inside the parentheses must still be on one line.
 ##
+## ### Import Str from File
+##
+## To avoid verbose code to read the contents of a file into a Str, you can import it directly:
+##
+## ```
+## import "some-file.txt" as some_str : Str
+## ```
+##
+## Note: The file content is included in the Roc app executable, if you publish the executable, you do not need to provide the file alongside it.
+##
 ## ### Escapes
 ##
 ## There are a few special escape sequences in strings:

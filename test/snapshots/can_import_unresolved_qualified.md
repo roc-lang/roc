@@ -250,7 +250,7 @@ NO CHANGE
 					(p-assign (ident "data")))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "InvalidType") (external (module-idx "4") (target-node-idx "0")))
+				(ty-lookup (name "InvalidType") (external-module "json.Json"))
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "processRequest"))

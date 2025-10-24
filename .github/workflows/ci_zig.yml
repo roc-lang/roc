@@ -144,10 +144,17 @@ jobs:
       - name: zig snapshot tests
         run: zig build snapshot -- --debug
 
-      - name: build tests and repro executables
+      - name: build and execute tests, build repro executables
         uses: ./.github/actions/flaky-retry
         with:
           command: 'zig build test -Dfuzz -Dsystem-afl=false'
+          error_string_contains: 'double roundtrip bundle'
+          retry_count: 3
+
+      - name: Build and execute tests, build repro executables. All in release mode.
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: 'zig build test -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false'
           error_string_contains: 'double roundtrip bundle'
           retry_count: 3
 

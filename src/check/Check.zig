@@ -1589,6 +1589,13 @@ fn generateBuiltinTypeInstance(
     }
 }
 
+// types //
+
+const Expected = union(enum) {
+    no_expectation,
+    expected: struct { var_: Var, from_annotation: bool },
+};
+
 // pattern //
 
 /// Check the types for the provided pattern, saving the type in-place
@@ -2036,11 +2043,6 @@ fn checkPatternHelp(
 
 // expr //
 
-const Expected = union(enum) {
-    no_expectation,
-    expected: struct { var_: Var, from_annotation: bool },
-};
-
 fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected: Expected) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -2474,110 +2476,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
 
             // Check all statements in the block
             const statements = self.cir.store.sliceStatements(block.stmts);
-            for (statements) |stmt_idx| {
-                const stmt = self.cir.store.getStatement(stmt_idx);
-                switch (stmt) {
-                    .s_decl => |decl_stmt| {
-                        // Check the pattern
-                        try self.checkPattern(decl_stmt.pattern, rank, .no_expectation);
-                        const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
-
-                        // Check the annotation, if it exists
-                        const check_mode = blk: {
-                            if (decl_stmt.anno) |annotation_idx| {
-                                // Generate the annotation type var in-place
-                                try self.generateAnnotationType(annotation_idx);
-                                const annotation_var = ModuleEnv.varFrom(annotation_idx);
-
-                                // Return the expectation
-                                break :blk Expected{
-                                    .expected = .{ .var_ = annotation_var, .from_annotation = true },
-                                };
-                            } else {
-                                break :blk Expected.no_expectation;
-                            }
-                        };
-
-                        {
-                            // Enter a new rank
-                            try self.var_pool.pushRank();
-                            defer self.var_pool.popRank();
-
-                            const next_rank = rank.next();
-                            std.debug.assert(next_rank == self.var_pool.current_rank);
-
-                            does_fx = try self.checkExpr(decl_stmt.expr, next_rank, check_mode) or does_fx;
-
-                            // Now that we are existing the scope, we must generalize then pop this rank
-                            try self.generalizer.generalize(&self.var_pool, next_rank);
-                        }
-
-                        // Unify the pattern with the expression
-                        const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
-                        _ = try self.unify(decl_pattern_var, decl_expr_var, rank);
-                    },
-                    .s_reassign => |reassign| {
-                        // Check the pattern
-                        try self.checkPattern(reassign.pattern_idx, rank, .no_expectation);
-                        const reassign_pattern_var: Var = ModuleEnv.varFrom(reassign.pattern_idx);
-
-                        {
-                            // Enter a new rank
-                            try self.var_pool.pushRank();
-                            defer self.var_pool.popRank();
-
-                            const next_rank = rank.next();
-                            std.debug.assert(next_rank == self.var_pool.current_rank);
-
-                            does_fx = try self.checkExpr(reassign.expr, next_rank, .no_expectation) or does_fx;
-
-                            // Now that we are existing the scope, we must generalize then pop this rank
-                            try self.generalizer.generalize(&self.var_pool, next_rank);
-                        }
-
-                        // Unify the pattern with the expression
-                        const reassign_expr_var: Var = ModuleEnv.varFrom(reassign.expr);
-                        _ = try self.unify(reassign_pattern_var, reassign_expr_var, rank);
-                    },
-                    .s_expr => |expr_stmt| {
-                        does_fx = try self.checkExpr(expr_stmt.expr, rank, .no_expectation) or does_fx;
-                    },
-                    .s_expect => |expr_stmt| {
-                        does_fx = try self.checkExpr(expr_stmt.body, rank, .no_expectation) or does_fx;
-                        const stmt_expr: Var = ModuleEnv.varFrom(expr_stmt.body);
-
-                        const bool_var = try self.freshBool(rank, expr_region);
-                        _ = try self.unify(bool_var, stmt_expr, rank);
-                    },
-                    .s_var => |var_stmt| {
-
-                        // Check the pattern
-                        try self.checkPattern(var_stmt.pattern_idx, rank, .no_expectation);
-                        const var_pattern_var: Var = ModuleEnv.varFrom(var_stmt.pattern_idx);
-
-                        {
-                            // Enter a new rank
-                            try self.var_pool.pushRank();
-                            defer self.var_pool.popRank();
-
-                            const next_rank = rank.next();
-                            std.debug.assert(next_rank == self.var_pool.current_rank);
-
-                            does_fx = try self.checkExpr(var_stmt.expr, next_rank, Expected.no_expectation) or does_fx;
-
-                            // Now that we are existing the scope, we must generalize then pop this rank
-                            try self.generalizer.generalize(&self.var_pool, next_rank);
-                        }
-
-                        // Unify the pattern with the expression
-                        const var_expr_var: Var = ModuleEnv.varFrom(var_stmt.expr);
-                        _ = try self.unify(var_pattern_var, var_expr_var, rank);
-                    },
-                    else => {
-                        // TODO
-                    },
-                }
-            }
+            does_fx = try self.checkBlockStatements(statements, rank, expr_region) or does_fx;
 
             // Check the final expression
             does_fx = try self.checkExpr(block.final_expr, rank, expected) or does_fx;
@@ -3090,6 +2989,199 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
         },
     }
 
+    return does_fx;
+}
+
+// stmts //
+
+/// Given a slice of stmts, type check each one
+fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, rank: types_mod.Rank, _: Region) std.mem.Allocator.Error!bool {
+    var does_fx = false;
+    for (statements) |stmt_idx| {
+        const stmt = self.cir.store.getStatement(stmt_idx);
+        const stmt_var = ModuleEnv.varFrom(stmt_idx);
+        const stmt_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(stmt_idx));
+
+        switch (stmt) {
+            .s_decl => |decl_stmt| {
+                // Check the pattern
+                try self.checkPattern(decl_stmt.pattern, rank, .no_expectation);
+                const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
+
+                // Check the annotation, if it exists
+                const expectation = blk: {
+                    if (decl_stmt.anno) |annotation_idx| {
+                        // Generate the annotation type var in-place
+                        try self.generateAnnotationType(annotation_idx);
+                        const annotation_var = ModuleEnv.varFrom(annotation_idx);
+
+                        // Return the expectation
+                        break :blk Expected{
+                            .expected = .{ .var_ = annotation_var, .from_annotation = true },
+                        };
+                    } else {
+                        break :blk Expected.no_expectation;
+                    }
+                };
+
+                // Evaluate the rhs of the expression
+                {
+                    // Enter a new rank
+                    try self.var_pool.pushRank();
+                    defer self.var_pool.popRank();
+
+                    const next_rank = rank.next();
+                    std.debug.assert(next_rank == self.var_pool.current_rank);
+
+                    does_fx = try self.checkExpr(decl_stmt.expr, next_rank, expectation) or does_fx;
+
+                    // Now that we are existing the scope, we must generalize then pop this rank
+                    try self.generalizer.generalize(&self.var_pool, next_rank);
+                }
+
+                // Unify the pattern with the expression
+                const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
+                _ = try self.unify(decl_pattern_var, decl_expr_var, rank);
+
+                try self.types.setVarRedirect(stmt_var, decl_expr_var);
+            },
+            .s_var => |var_stmt| {
+                // Check the pattern
+                try self.checkPattern(var_stmt.pattern_idx, rank, .no_expectation);
+                const reassign_pattern_var: Var = ModuleEnv.varFrom(var_stmt.pattern_idx);
+
+                // Evaluate the rhs of the expression
+                {
+                    // Enter a new rank
+                    try self.var_pool.pushRank();
+                    defer self.var_pool.popRank();
+
+                    const next_rank = rank.next();
+                    std.debug.assert(next_rank == self.var_pool.current_rank);
+
+                    does_fx = try self.checkExpr(var_stmt.expr, next_rank, .no_expectation) or does_fx;
+
+                    // Now that we are existing the scope, we must generalize then pop this rank
+                    try self.generalizer.generalize(&self.var_pool, next_rank);
+                }
+
+                // Unify the pattern with the expression
+                const var_expr: Var = ModuleEnv.varFrom(var_stmt.expr);
+                _ = try self.unify(reassign_pattern_var, var_expr, rank);
+
+                try self.types.setVarRedirect(stmt_var, var_expr);
+            },
+            .s_reassign => |reassign| {
+                // Check the pattern
+                try self.checkPattern(reassign.pattern_idx, rank, .no_expectation);
+                const reassign_pattern_var: Var = ModuleEnv.varFrom(reassign.pattern_idx);
+
+                // Evaluate the rhs of the expression
+                {
+                    // Enter a new rank
+                    try self.var_pool.pushRank();
+                    defer self.var_pool.popRank();
+
+                    const next_rank = rank.next();
+                    std.debug.assert(next_rank == self.var_pool.current_rank);
+
+                    does_fx = try self.checkExpr(reassign.expr, next_rank, .no_expectation) or does_fx;
+
+                    // Now that we are existing the scope, we must generalize then pop this rank
+                    try self.generalizer.generalize(&self.var_pool, next_rank);
+                }
+
+                // Unify the pattern with the expression
+                const reassign_expr_var: Var = ModuleEnv.varFrom(reassign.expr);
+                _ = try self.unify(reassign_pattern_var, reassign_expr_var, rank);
+
+                try self.types.setVarRedirect(stmt_var, reassign_expr_var);
+            },
+            .s_for => |for_stmt| {
+                // Check the pattern
+                // for item in [1,2,3] {
+                //     ^^^^
+                try self.checkPattern(for_stmt.patt, rank, .no_expectation);
+                const for_ptrn_var: Var = ModuleEnv.varFrom(for_stmt.patt);
+
+                // Check the expr
+                // for item in [1,2,3] {
+                //             ^^^^^^^
+                does_fx = try self.checkExpr(for_stmt.expr, rank, .no_expectation) or does_fx;
+                const for_expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(for_stmt.expr));
+                const for_expr_var: Var = ModuleEnv.varFrom(for_stmt.expr);
+
+                // Check that the expr is list of the ptrn
+                const list_var = try self.freshFromContent(.{ .structure = .{ .list = for_ptrn_var } }, rank, for_expr_region);
+                _ = try self.unify(list_var, for_expr_var, rank);
+
+                // Check the body
+                // for item in [1,2,3] {
+                //     print!(item.toStr())  <<<<
+                // }
+                does_fx = try self.checkExpr(for_stmt.body, rank, .no_expectation) or does_fx;
+                const for_body_var: Var = ModuleEnv.varFrom(for_stmt.body);
+
+                // Check that the for body evaluates to {}
+                const body_ret = try self.freshFromContent(.{ .structure = .empty_record }, rank, for_expr_region);
+                _ = try self.unify(body_ret, for_body_var, rank);
+
+                try self.types.setVarRedirect(stmt_var, for_body_var);
+            },
+            .s_expr => |expr| {
+                does_fx = try self.checkExpr(expr.expr, rank, .no_expectation) or does_fx;
+                const expr_var: Var = ModuleEnv.varFrom(expr.expr);
+
+                const resolved = self.types.resolveVar(expr_var).desc.content;
+                if (resolved == .err or (resolved == .structure and resolved.structure == .empty_record)) {
+                    // If this type resolves to an empty record, then we are good!
+                } else {
+                    const snapshot = try self.snapshots.deepCopyVar(self.types, expr_var);
+                    _ = try self.problems.appendProblem(self.cir.gpa, .{ .unused_value = .{
+                        .var_ = expr_var,
+                        .snapshot = snapshot,
+                    } });
+                }
+
+                try self.types.setVarRedirect(stmt_var, expr_var);
+            },
+            .s_dbg => |expr| {
+                does_fx = try self.checkExpr(expr.expr, rank, .no_expectation) or does_fx;
+                const expr_var: Var = ModuleEnv.varFrom(expr.expr);
+
+                try self.types.setVarRedirect(stmt_var, expr_var);
+            },
+            .s_expect => |expr_stmt| {
+                does_fx = try self.checkExpr(expr_stmt.body, rank, .no_expectation) or does_fx;
+                const body_var: Var = ModuleEnv.varFrom(expr_stmt.body);
+
+                const bool_var = try self.freshBool(rank, stmt_region);
+                _ = try self.unify(bool_var, body_var, rank);
+
+                try self.types.setVarRedirect(stmt_var, body_var);
+            },
+            .s_crash => |_| {
+                try self.updateVar(stmt_var, .{ .flex = Flex.init() }, rank);
+            },
+            .s_return => |_| {
+                // To implement early returns and make them usable, we need to:
+                // 1. Update the parse to allow for if statements (as opposed to if expressions)
+                // 2. Track function scope in czer and capture the function for this return in `s_return`
+                // 3. When type checking a lambda, capture all early returns
+                //    a. Unify all early returns together
+                //    b. Unify early returns with func return type
+
+                try self.updateVar(stmt_var, .{ .structure = .empty_record }, rank);
+            },
+            .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno => {
+                // These are only valid at the top level, czer reports error
+                try self.updateVar(stmt_var, .err, rank);
+            },
+            .s_runtime_error => {
+                try self.updateVar(stmt_var, .err, rank);
+            },
+        }
+    }
     return does_fx;
 }
 
