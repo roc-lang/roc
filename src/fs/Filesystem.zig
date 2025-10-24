@@ -155,14 +155,14 @@ pub const Dir = struct {
     /// Find all filepaths in this directory recursively.
     ///
     /// The text of the relative paths are stored in the `string_arena`
-    /// and the slices over said paths are returned in an `ArrayListUnmanaged`
+    /// and the slices over said paths are returned in an `ArrayList`
     /// that must be `deinit`ed by the caller.
     pub fn findAllFilesRecursively(
         dir: *Dir,
         gpa: std.mem.Allocator,
         string_arena: *std.heap.ArenaAllocator,
-    ) !std.array_list.Managed([]const u8) {
-        var files = std.array_list.Managed([]const u8){};
+    ) !std.ArrayList([]const u8) {
+        var files = std.ArrayList([]const u8){};
         errdefer files.deinit(gpa);
 
         var walker = try dir.dir.walk(gpa);

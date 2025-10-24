@@ -136,19 +136,19 @@ pub const Interpreter = struct {
 
     pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, imported_modules_map: ?*const std.AutoHashMap(base_pkg.Ident.Idx, can.Can.AutoImportedType)) !Interpreter {
         // Convert imported modules map to other_envs slice
-        var other_envs_list = std.array_list.Managed(*const can.ModuleEnv).init(allocator);
-        errdefer other_envs_list.deinit();
+        var other_envs_list = std.ArrayList(*const can.ModuleEnv).empty;
+        errdefer other_envs_list.deinit(allocator);
 
         if (imported_modules_map) |modules_map| {
             var iter = modules_map.iterator();
             while (iter.next()) |entry| {
-                try other_envs_list.append(entry.value_ptr.env);
+                try other_envs_list.append(allocator, entry.value_ptr.env);
             }
         }
 
         // Transfer ownership of the slice to the Interpreter
         // Note: The caller is responsible for freeing this via deinitAndFreeOtherEnvs()
-        const other_envs = try other_envs_list.toOwnedSlice();
+        const other_envs = try other_envs_list.toOwnedSlice(allocator);
         return initWithOtherEnvs(allocator, env, other_envs, builtin_types);
     }
 
@@ -3537,7 +3537,7 @@ pub const Interpreter = struct {
                             break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = compact_num } } });
                         },
                         .tag_union => |tu| {
-                            var rt_tag_args = try std.ArrayListUnmanaged(types.Var).initCapacity(self.allocator, 8);
+                            var rt_tag_args = try std.ArrayList(types.Var).initCapacity(self.allocator, 8);
                             defer rt_tag_args.deinit(self.allocator);
 
                             var rt_tags = try self.gatherTags(module, tu);
@@ -3717,8 +3717,8 @@ pub const Interpreter = struct {
         ctx: *const Interpreter,
         module: *can.ModuleEnv,
         tag_union: types.TagUnion,
-    ) std.mem.Allocator.Error!std.ArrayListUnmanaged(types.Tag) {
-        var scratch_tags = try std.ArrayListUnmanaged(types.Tag).initCapacity(ctx.allocator, 8);
+    ) std.mem.Allocator.Error!std.ArrayList(types.Tag) {
+        var scratch_tags = try std.ArrayList(types.Tag).initCapacity(ctx.allocator, 8);
 
         const tag_slice = module.types.getTagsSlice(tag_union.tags);
         for (tag_slice.items(.name), tag_slice.items(.args)) |name, args| {

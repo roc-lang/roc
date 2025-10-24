@@ -699,9 +699,9 @@ pub const BuildEnv = struct {
         // Simple DFS walk on shorthand edges to detect if to_pkg reaches from_pkg
         if (std.mem.eql(u8, from_pkg, to_pkg)) return true;
 
-        var stack = std.array_list.Managed([]const u8).init(self.gpa);
-        defer stack.deinit();
-        stack.append(to_pkg) catch {
+        var stack = std.ArrayList([]const u8).empty;
+        defer stack.deinit(self.gpa);
+        stack.append(self.gpa, to_pkg) catch {
             return false;
         };
 
@@ -723,7 +723,7 @@ pub const BuildEnv = struct {
             var it = pkg.shorthands.iterator();
             while (it.next()) |e| {
                 const next = e.value_ptr.name;
-                stack.append(next) catch {
+                stack.append(self.gpa, next) catch {
                     return false;
                 };
             }
@@ -890,8 +890,8 @@ pub const BuildEnv = struct {
         const e = ast.store.getExpr(expr_idx);
         return switch (e) {
             .string => |s| blk: {
-                var buf = std.array_list.Managed(u8).init(self.gpa);
-                errdefer buf.deinit();
+                var buf = std.ArrayList(u8).empty;
+                errdefer buf.deinit(self.gpa);
 
                 // Use exprSlice to properly iterate through string parts
                 for (ast.store.exprSlice(s.parts)) |part_idx| {
@@ -899,11 +899,11 @@ pub const BuildEnv = struct {
                     if (part == .string_part) {
                         const tok = part.string_part.token;
                         const slice = ast.resolve(tok);
-                        try buf.appendSlice(slice);
+                        try buf.appendSlice(self.gpa, slice);
                     }
                 }
 
-                const result = try buf.toOwnedSlice();
+                const result = try buf.toOwnedSlice(self.gpa);
 
                 // Check for null bytes in the string, which are invalid in file paths
                 if (std.mem.indexOfScalar(u8, result, 0) != null) {
@@ -928,13 +928,13 @@ pub const BuildEnv = struct {
 
     fn dottedToPath(self: *BuildEnv, root_dir: []const u8, dotted: []const u8) ![]const u8 {
         var parts = std.mem.splitScalar(u8, dotted, '.');
-        var segs = std.array_list.Managed([]const u8).init(self.gpa);
-        defer segs.deinit();
+        var segs = std.ArrayList([]const u8).empty;
+        defer segs.deinit(self.gpa);
 
-        try segs.append(root_dir);
+        try segs.append(self.gpa, root_dir);
         while (parts.next()) |p| {
             if (p.len == 0) continue;
-            try segs.append(p);
+            try segs.append(self.gpa, p);
         }
 
         const joined = try std.fs.path.join(self.gpa, segs.items);
@@ -1125,12 +1125,12 @@ pub const BuildEnv = struct {
     // sort by (min dependency depth from root app, then package and module names).
     fn emitDeterministic(self: *BuildEnv) !void {
         // Build arrays of package names, module names, and depths
-        var pkg_names = std.array_list.Managed([]const u8).init(self.gpa);
-        defer pkg_names.deinit();
-        var module_names = std.array_list.Managed([]const u8).init(self.gpa);
-        defer module_names.deinit();
-        var depths = std.array_list.Managed(u32).init(self.gpa);
-        defer depths.deinit();
+        var pkg_names = std.ArrayList([]const u8).empty;
+        defer pkg_names.deinit(self.gpa);
+        var module_names = std.ArrayList([]const u8).empty;
+        defer module_names.deinit(self.gpa);
+        var depths = std.ArrayList(u32).empty;
+        defer depths.deinit(self.gpa);
 
         var it = self.schedulers.iterator();
         while (it.next()) |e| {
@@ -1142,9 +1142,9 @@ pub const BuildEnv = struct {
                 const mod = me.key_ptr.*;
                 const depth = sched.getModuleDepth(mod) orelse @as(u32, std.math.maxInt(u32));
 
-                try pkg_names.append(pkg_name);
-                try module_names.append(mod);
-                try depths.append(depth);
+                try pkg_names.append(self.gpa, pkg_name);
+                try module_names.append(self.gpa, mod);
+                try depths.append(self.gpa, depth);
             }
         }
 
