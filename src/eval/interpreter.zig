@@ -1647,8 +1647,6 @@ pub const Interpreter = struct {
                     return error.MethodNotFound;
                 };
 
-                const constraint = try self.getStaticDispatchConstraint(receiver_rt_var, method_ident);
-
                 // Find the nominal type's origin module from the receiver type
                 const receiver_resolved = self.runtime_types.resolveVar(receiver_rt_var);
                 const nominal_info = blk: {
@@ -1674,7 +1672,6 @@ pub const Interpreter = struct {
                     nominal_info.origin,
                     nominal_info.ident,
                     method_ident,
-                    constraint,
                     roc_ops,
                 );
                 defer method_func.decref(&self.runtime_layout_store, roc_ops);
@@ -3555,11 +3552,8 @@ pub const Interpreter = struct {
         origin_module: base_pkg.Ident.Idx,
         nominal_ident: base_pkg.Ident.Idx,
         method_name: base_pkg.Ident.Idx,
-        constraint: types.StaticDispatchConstraint,
         roc_ops: *RocOps,
     ) Error!StackValue {
-        _ = constraint; // Will be used for polymorphic instantiation in the future
-
         // Get the module environment for this type's origin
         const origin_env = self.getModuleEnvForOrigin(origin_module) orelse {
             return error.MethodLookupFailed;
