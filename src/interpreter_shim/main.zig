@@ -227,9 +227,54 @@ fn createInterpreter(env_ptr: *ModuleEnv, roc_ops: *RocOps) ShimError!Interprete
         .str_env = env_ptr,
     };
 
-    const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, null) catch {
-        roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
+    // Create imported modules map for the interpreter to support qualified calls like Str.is_empty()
+    // In the shim context, all builtins (Bool, Result, Str) are embedded in env_ptr
+    var imported_modules_map = std.AutoHashMap(base.Ident.Idx, can.Can.AutoImportedType).init(allocator);
+    // Note: We can't use const here because insertIdent may modify the ident store
+    const bool_ident = env_ptr.common.findIdent("Bool") orelse blk: {
+        // If Bool isn't already in the ident store, insert it (this can happen if the user code doesn't reference Bool)
+        const ident = base.Ident.for_text("Bool");
+        break :blk env_ptr.common.idents.insert(allocator, ident) catch {
+            roc_ops.crash("INTERPRETER SHIM: Failed to insert Bool identifier");
+            return error.InterpreterSetupFailed;
+        };
+    };
+    const result_ident = env_ptr.common.findIdent("Result") orelse blk: {
+        const ident = base.Ident.for_text("Result");
+        break :blk env_ptr.common.idents.insert(allocator, ident) catch {
+            roc_ops.crash("INTERPRETER SHIM: Failed to insert Result identifier");
+            return error.InterpreterSetupFailed;
+        };
+    };
+    const str_ident = env_ptr.common.findIdent("Str") orelse blk: {
+        const ident = base.Ident.for_text("Str");
+        break :blk env_ptr.common.idents.insert(allocator, ident) catch {
+            roc_ops.crash("INTERPRETER SHIM: Failed to insert Str identifier");
+            return error.InterpreterSetupFailed;
+        };
+    };
+    imported_modules_map.put(bool_ident, .{ .env = env_ptr }) catch {
+        roc_ops.crash("INTERPRETER SHIM: Failed to add Bool to imported modules map");
         return error.InterpreterSetupFailed;
     };
+    imported_modules_map.put(result_ident, .{ .env = env_ptr }) catch {
+        roc_ops.crash("INTERPRETER SHIM: Failed to add Result to imported modules map");
+        return error.InterpreterSetupFailed;
+    };
+    imported_modules_map.put(str_ident, .{ .env = env_ptr }) catch {
+        roc_ops.crash("INTERPRETER SHIM: Failed to add Str to imported modules map");
+        return error.InterpreterSetupFailed;
+    };
+
+    const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, &imported_modules_map) catch |err| {
+        var buf: [512]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "INTERPRETER SHIM: Interpreter initialization failed: {s}", .{@errorName(err)}) catch "INTERPRETER SHIM: Interpreter initialization failed";
+        roc_ops.crash(msg);
+        return error.InterpreterSetupFailed;
+    };
+
+    // Note: We don't deinit imported_modules_map here because the interpreter needs it.
+    // It will be cleaned up when the interpreter is deinitialized.
+
     return interpreter;
 }
