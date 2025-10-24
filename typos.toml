@@ -1,5 +1,6 @@
 [files]
 extend-exclude = [
+    ".git/",
     "design/language/Abilities.md",
     "src/snapshots/fuzz_crash",
     "crates/vendor/",
