@@ -928,7 +928,10 @@ pub fn main() !void {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    const stdout = std.fs.File.stdout().deprecatedWriter();
+    var stdout_buffer: [256]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    const stdout = &stdout_writer.interface;
+    defer stdout.flush() catch {};
 
     // Handle CLI arguments
     const args = try std.process.argsAlloc(allocator);

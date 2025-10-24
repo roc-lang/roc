@@ -58,8 +58,15 @@ fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.c) void {
     };
     defer allocator.free(bytes);
 
-    std.fs.File.stderr().writeAll(bytes) catch |err| {
+    var stderr_buffer: [256]u8 = undefined;
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+    const stderr = &stderr_writer.interface;
+    stderr.writeAll(bytes) catch |err| {
         std.log.err("Failed to write debug message to stderr: {s}", .{@errorName(err)});
+        return;
+    };
+    stderr.flush() catch |err| {
+        std.log.err("Failed to flush debug message to stderr: {s}", .{@errorName(err)});
         return;
     };
 }
@@ -102,7 +109,11 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     _ = argc;
     _ = argv;
     platform_main() catch |err| {
-        std.fs.File.stderr().deprecatedWriter().print("HOST ERROR: {s}", .{@errorName(err)}) catch unreachable;
+        var stderr_buffer: [256]u8 = undefined;
+        var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+        const stderr = &stderr_writer.interface;
+        stderr.print("HOST ERROR: {s}", .{@errorName(err)}) catch unreachable;
+        stderr.flush() catch unreachable;
         return 1;
     };
     return 0;
@@ -116,7 +127,10 @@ fn platform_main() !void {
     };
     defer host_env.arena.deinit(); // Clean up all allocations on exit
 
-    const stdout = std.fs.File.stdout().deprecatedWriter();
+    var stdout_buffer: [256]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    const stdout = &stdout_writer.interface;
+    defer stdout.flush() catch {};
 
     // Create the RocOps struct
     var roc_ops = RocOps{

@@ -83,7 +83,11 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     _ = argc;
     _ = argv;
     platform_main() catch |err| {
-        std.fs.File.stderr().deprecatedWriter().print("HOST ERROR: {s}", .{@errorName(err)}) catch unreachable;
+        var stderr_buffer: [256]u8 = undefined;
+        var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+        const stderr = &stderr_writer.interface;
+        stderr.print("HOST ERROR: {s}", .{@errorName(err)}) catch unreachable;
+        stderr.flush() catch unreachable;
         return 1;
     };
     return 0;
@@ -97,7 +101,10 @@ fn platform_main() !void {
     };
     defer host_env.arena.deinit(); // Clean up all allocations on exit
 
-    const stdout = std.fs.File.stdout().deprecatedWriter();
+    var stdout_buffer: [256]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    const stdout = &stdout_writer.interface;
+    defer stdout.flush() catch {};
 
     // Create the RocOps struct
     var roc_ops = builtins.host_abi.RocOps{
@@ -163,6 +170,7 @@ fn platform_main() !void {
         try stdout.print("\x1b[32mALL TESTS PASSED\x1b[0m: Both entrypoints work correctly!\n", .{});
     } else {
         try stdout.print("\x1b[31mSOME TESTS FAILED\x1b[0m: {}/2 tests passed\n", .{success_count});
+        stdout.flush() catch {};
         std.process.exit(1);
     }
 }
