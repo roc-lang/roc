@@ -1,149 +1,53 @@
 # META
 ~~~ini
-description=Cross-module static dispatch with imported nominal types
-type=file
+description=Static dispatch with method calls on nominal types
+type=file:Container.roc
 ~~~
 # SOURCE
 ~~~roc
 Container := [Box(Str)].{
-  get_value : Container -> Str
-  get_value = |Container.Box(s)| s
-
-  transform : Container, (Str -> Str) -> Container
-  transform = |Container.Box(s), fn| Container.Box(fn(s))
+	get_value : Container -> Str
+	get_value = |Container.Box(s)| s
+	transform : Container, (Str -> Str) -> Container
+	transform = |Container.Box(s), fn| Container.Box(fn(s))
 }
 
 # Generic function that works with any type that has a get_value method
-extract : a -> Str where [ a.get_value : a -> Str ]
+extract : a -> Str where [a.get_value : a -> Str]
 extract = |x| x.get_value()
 
 # Generic function that works with any type that has a transform method
-modify : a, (Str -> Str) -> a where [ a.transform : a, (Str -> Str) -> a ]
+modify : a, (Str -> Str) -> a where [a.transform : a, (Str -> Str) -> a]
 modify = |x, fn| x.transform(fn)
 
 # Test values
 container : Container
 container = Container.Box("hello")
 
+# Another container value with direct method call
+myContainer : Container
+myContainer = Container.Box("world")
+
+directCall : Str
+directCall = myContainer.get_value()
+
 # Use generic functions with Container type
 result1 : Str
 result1 = extract(container)
 
 result2 : Container
-result2 = modify(container, |s| "#{s} world")
+result2 = modify(
+	container,
+	|s| "${s} world",
+)
 
-main : (Str, Str)
-main = (result1, extract(result2))
+main : (Str, Str, Str)
+main = (directCall, result1, extract(result2))
 ~~~
 # EXPECTED
-UNUSED VARIABLE - CrossModule.md:26:30:26:31
-UNUSED VARIABLE - CrossModule.md:3:3:3:35
-UNUSED VARIABLE - CrossModule.md:6:3:6:58
-TYPE MODULE MISSING MATCHING TYPE - CrossModule.md:1:1:29:35
-MISSING METHOD - CrossModule.md:10:28:10:50
-MISSING METHOD - CrossModule.md:14:39:14:73
+NIL
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `s` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_s` to suppress this warning.
-The unused variable is declared here:
-**CrossModule.md:26:30:26:31:**
-```roc
-result2 = modify(container, |s| "#{s} world")
-```
-                             ^
-
-
-**UNUSED VARIABLE**
-Variable `get_value` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_get_value` to suppress this warning.
-The unused variable is declared here:
-**CrossModule.md:3:3:3:35:**
-```roc
-  get_value = |Container.Box(s)| s
-```
-  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `transform` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_transform` to suppress this warning.
-The unused variable is declared here:
-**CrossModule.md:6:3:6:58:**
-```roc
-  transform = |Container.Box(s), fn| Container.Box(fn(s))
-```
-  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**TYPE MODULE MISSING MATCHING TYPE**
-Type modules must have a type declaration matching the module name.
-
-This file is named `CrossModule`.roc, but no top-level type declaration named `CrossModule` was found.
-
-Add either:
-`CrossModule := ...` (nominal type)
-or:
-`CrossModule : ...` (type alias)
-**CrossModule.md:1:1:29:35:**
-```roc
-Container := [Box(Str)].{
-  get_value : Container -> Str
-  get_value = |Container.Box(s)| s
-
-  transform : Container, (Str -> Str) -> Container
-  transform = |Container.Box(s), fn| Container.Box(fn(s))
-}
-
-# Generic function that works with any type that has a get_value method
-extract : a -> Str where [ a.get_value : a -> Str ]
-extract = |x| x.get_value()
-
-# Generic function that works with any type that has a transform method
-modify : a, (Str -> Str) -> a where [ a.transform : a, (Str -> Str) -> a ]
-modify = |x, fn| x.transform(fn)
-
-# Test values
-container : Container
-container = Container.Box("hello")
-
-# Use generic functions with Container type
-result1 : Str
-result1 = extract(container)
-
-result2 : Container
-result2 = modify(container, |s| "#{s} world")
-
-main : (Str, Str)
-main = (result1, extract(result2))
-```
-
-
-**MISSING METHOD**
-The **Container** type does not have a **get_value** method:
-**CrossModule.md:10:28:10:50:**
-```roc
-extract : a -> Str where [ a.get_value : a -> Str ]
-```
-                           ^^^^^^^^^^^^^^^^^^^^^^
-
-
-**Hint:** Did you forget to define **get_value** in the type's method block?
-
-**MISSING METHOD**
-The **Container** type does not have a **transform** method:
-**CrossModule.md:14:39:14:73:**
-```roc
-modify : a, (Str -> Str) -> a where [ a.transform : a, (Str -> Str) -> a ]
-```
-                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**Hint:** Did you forget to define **transform** in the type's method block?
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Dot,OpenCurly,
@@ -159,11 +63,18 @@ LowerIdent,OpAssign,OpBar,LowerIdent,Comma,LowerIdent,OpBar,LowerIdent,NoSpaceDo
 LowerIdent,OpColon,UpperIdent,
 LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,StringStart,StringPart,StringEnd,CloseRound,
 LowerIdent,OpColon,UpperIdent,
+LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,StringStart,StringPart,StringEnd,CloseRound,
+LowerIdent,OpColon,UpperIdent,
+LowerIdent,OpAssign,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,
+LowerIdent,OpColon,UpperIdent,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
 LowerIdent,OpColon,UpperIdent,
-LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,LowerIdent,Comma,OpBar,LowerIdent,OpBar,StringStart,StringPart,StringEnd,CloseRound,
-LowerIdent,OpColon,OpenRound,UpperIdent,Comma,UpperIdent,CloseRound,
-LowerIdent,OpAssign,OpenRound,LowerIdent,Comma,LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,CloseRound,
+LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,
+LowerIdent,Comma,
+OpBar,LowerIdent,OpBar,StringStart,StringPart,OpenStringInterpolation,LowerIdent,CloseStringInterpolation,StringPart,StringEnd,Comma,
+CloseRound,
+LowerIdent,OpColon,OpenRound,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseRound,
+LowerIdent,OpAssign,OpenRound,LowerIdent,Comma,LowerIdent,Comma,LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,CloseRound,
 EndOfFile,
 ~~~
 # PARSE
@@ -262,6 +173,22 @@ EndOfFile,
 				(e-tag (raw "Container.Box"))
 				(e-string
 					(e-string-part (raw "hello")))))
+		(s-type-anno (name "myContainer")
+			(ty (name "Container")))
+		(s-decl
+			(p-ident (raw "myContainer"))
+			(e-apply
+				(e-tag (raw "Container.Box"))
+				(e-string
+					(e-string-part (raw "world")))))
+		(s-type-anno (name "directCall")
+			(ty (name "Str")))
+		(s-decl
+			(p-ident (raw "directCall"))
+			(e-field-access
+				(e-ident (raw "myContainer"))
+				(e-apply
+					(e-ident (raw "get_value")))))
 		(s-type-anno (name "result1")
 			(ty (name "Str")))
 		(s-decl
@@ -280,14 +207,18 @@ EndOfFile,
 					(args
 						(p-ident (raw "s")))
 					(e-string
-						(e-string-part (raw "#{s} world"))))))
+						(e-string-part (raw ""))
+						(e-ident (raw "s"))
+						(e-string-part (raw " world"))))))
 		(s-type-anno (name "main")
 			(ty-tuple
+				(ty (name "Str"))
 				(ty (name "Str"))
 				(ty (name "Str"))))
 		(s-decl
 			(p-ident (raw "main"))
 			(e-tuple
+				(e-ident (raw "directCall"))
 				(e-ident (raw "result1"))
 				(e-apply
 					(e-ident (raw "extract"))
@@ -295,37 +226,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-Container := [Box(Str)].{
-	get_value : Container -> Str
-	get_value = |Container.Box(s)| s
-	transform : Container, (Str -> Str) -> Container
-	transform = |Container.Box(s), fn| Container.Box(fn(s))
-}
-
-# Generic function that works with any type that has a get_value method
-extract : a -> Str where [a.get_value : a -> Str]
-extract = |x| x.get_value()
-
-# Generic function that works with any type that has a transform method
-modify : a, (Str -> Str) -> a where [a.transform : a, (Str -> Str) -> a]
-modify = |x, fn| x.transform(fn)
-
-# Test values
-container : Container
-container = Container.Box("hello")
-
-# Use generic functions with Container type
-result1 : Str
-result1 = extract(container)
-
-result2 : Container
-result2 = modify(
-	container,
-	|s| "#{s} world",
-)
-
-main : (Str, Str)
-main = (result1, extract(result2))
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -389,6 +290,24 @@ main = (result1, extract(result2))
 		(annotation
 			(ty-lookup (name "Container") (local))))
 	(d-let
+		(p-assign (ident "myContainer"))
+		(e-nominal (nominal "Container")
+			(e-tag (name "Box")
+				(args
+					(e-string
+						(e-literal (string "world"))))))
+		(annotation
+			(ty-lookup (name "Container") (local))))
+	(d-let
+		(p-assign (ident "directCall"))
+		(e-dot-access (field "get_value")
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "myContainer"))))
+			(args))
+		(annotation
+			(ty-lookup (name "Str") (builtin))))
+	(d-let
 		(p-assign (ident "result1"))
 		(e-call
 			(e-lookup-local
@@ -408,13 +327,18 @@ main = (result1, extract(result2))
 				(args
 					(p-assign (ident "s")))
 				(e-string
-					(e-literal (string "#{s} world")))))
+					(e-literal (string ""))
+					(e-lookup-local
+						(p-assign (ident "s")))
+					(e-literal (string " world")))))
 		(annotation
 			(ty-lookup (name "Container") (local))))
 	(d-let
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
+				(e-lookup-local
+					(p-assign (ident "directCall")))
 				(e-lookup-local
 					(p-assign (ident "result1")))
 				(e-call
@@ -424,6 +348,7 @@ main = (result1, extract(result2))
 						(p-assign (ident "result2"))))))
 		(annotation
 			(ty-tuple
+				(ty-lookup (name "Str") (builtin))
 				(ty-lookup (name "Str") (builtin))
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
@@ -479,10 +404,12 @@ main = (result1, extract(result2))
 	(defs
 		(patt (type "a -> Str where [a.get_value : a -> Str]"))
 		(patt (type "a, Str -> Str -> a where [a.transform : a, Str -> Str -> aa.transform : a, Str -> Str -> a]"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "(Error, Error)"))
+		(patt (type "Container"))
+		(patt (type "Container"))
+		(patt (type "Str"))
+		(patt (type "Str"))
+		(patt (type "Container"))
+		(patt (type "(Str, Str, Str)"))
 		(patt (type "Container -> Str"))
 		(patt (type "Container, Str -> Str -> Container")))
 	(type_decls
@@ -491,10 +418,12 @@ main = (result1, extract(result2))
 	(expressions
 		(expr (type "a -> Str where [a.get_value : a -> Str]"))
 		(expr (type "a, Str -> Str -> a where [a.transform : a, Str -> Str -> aa.transform : a, Str -> Str -> a]"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "(Error, Error)"))
+		(expr (type "Container"))
+		(expr (type "Container"))
+		(expr (type "Str"))
+		(expr (type "Str"))
+		(expr (type "Container"))
+		(expr (type "(Str, Str, Str)"))
 		(expr (type "Container -> Str"))
 		(expr (type "Container, Str -> Str -> Container"))))
 ~~~
