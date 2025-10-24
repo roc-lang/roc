@@ -535,47 +535,8 @@ pub const PackageEnv = struct {
         // Load source and init ModuleEnv
         var st = &self.modules.items[module_id];
         const src = std.fs.cwd().readFileAlloc(self.gpa, st.path, std.math.maxInt(usize)) catch |read_err| {
-            // If the file wasn't found, create a proper diagnostic report
-            if (read_err == error.FileNotFound) {
-                // Create a diagnostic on the importing module(s)
-                for (st.dependents.items) |importer_id| {
-                    const importer = &self.modules.items[importer_id];
-
-                    var rep = Report.init(self.gpa, "Module not found", .runtime_error);
-
-                    const msg1 = try std.fmt.allocPrint(self.gpa,
-                        "Could not find module '{s}' at the following path:", .{st.name});
-                    _ = try rep.addOwnedString(msg1);
-                    try rep.addErrorMessage(msg1);
-                    try rep.document.addLineBreak();
-
-                    const path_msg = try rep.addOwnedString(st.path);
-                    try rep.document.addText("    ");
-                    try rep.document.addAnnotated(path_msg, .emphasized);
-                    try rep.document.addLineBreak();
-                    try rep.document.addLineBreak();
-
-                    const hint = try rep.addOwnedString(
-                        "This module was imported but the file does not exist. " ++
-                        "If this is a builtin module like Str, Bool, or Result, " ++
-                        "they are automatically available and should not be explicitly imported.");
-                    try rep.document.addText(hint);
-
-                    // Emit the report immediately so it gets displayed
-                    self.sink.emitFn(self.sink.ctx, importer.name, rep);
-                }
-
-                // If no importers (shouldn't happen), add report to this module
-                if (st.dependents.items.len == 0) {
-                    var rep = Report.init(self.gpa, "Module not found", .runtime_error);
-                    const msg = try std.fmt.allocPrint(self.gpa,
-                        "Could not find module file at: {s}", .{st.path});
-                    _ = try rep.addOwnedString(msg);
-                    try rep.addErrorMessage(msg);
-                    // Emit the report immediately so it gets displayed
-                    self.sink.emitFn(self.sink.ctx, st.name, rep);
-                }
-            }
+            // Note: Let the FileNotFound error propagate naturally
+            // The existing error handling will report it appropriately
             return read_err;
         };
 
@@ -680,6 +641,7 @@ pub const PackageEnv = struct {
 
             // Local import - schedule in this package
             const import_path = try self.resolveModulePath(mod_name);
+            defer self.gpa.free(import_path);
             const child_id = try self.ensureModule(mod_name, import_path);
             // Refresh st and env pointers in case ensureModule grew the modules array
             st = &self.modules.items[module_id];

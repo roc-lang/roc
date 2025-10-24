@@ -2870,7 +2870,7 @@ fn checkFileWithBuildEnvPreserved(
     for (drained, 0..) |mod, i| {
         reports[i] = .{
             .file_path = try allocs.gpa.dupe(u8, mod.abs_path),
-            .reports = try allocs.gpa.dupe(reporting.Report, mod.reports),
+            .reports = mod.reports, // Transfer ownership, don't dupe
         };
     }
 
@@ -2929,11 +2929,12 @@ fn checkFileWithBuildEnv(
         defer build_env.gpa.free(drained);
 
         // Convert BuildEnv drained reports to our format
+        // Note: Transfer ownership of reports directly (no dupe) since drainReports() already transferred them
         var reports = try build_env.gpa.alloc(DrainedReport, drained.len);
         for (drained, 0..) |mod, i| {
             reports[i] = .{
                 .file_path = try build_env.gpa.dupe(u8, mod.abs_path),
-                .reports = try build_env.gpa.dupe(reporting.Report, mod.reports),
+                .reports = mod.reports, // Transfer ownership, don't dupe
             };
         }
 
@@ -2964,7 +2965,7 @@ fn checkFileWithBuildEnv(
     for (drained, 0..) |mod, i| {
         reports[i] = .{
             .file_path = try allocs.gpa.dupe(u8, mod.abs_path),
-            .reports = try allocs.gpa.dupe(reporting.Report, mod.reports),
+            .reports = mod.reports, // Transfer ownership, don't dupe
         };
     }
 
