@@ -1,4 +1,5 @@
-app [main] { pf: platform "./platform/main.roc" }
+app [processString] { pf: platform "./platform/main.roc" }
 
-main : Str
-main = "hello world"
+processString : Str -> Str
+processString = |input|
+    input

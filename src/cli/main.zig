@@ -1342,6 +1342,10 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     const basename = std.fs.path.basename(roc_file_path);
     const module_name = try shm_allocator.dupe(u8, basename);
 
+    // Load builtin modules (Bool, Result, Str) for canonicalization and type checking
+    var builtin_modules = try eval.BuiltinModules.init(allocs.gpa);
+    defer builtin_modules.deinit();
+
     // Create arena allocator for scratch memory
     var arena = std.heap.ArenaAllocator.init(shm_allocator);
     defer arena.deinit();
@@ -1363,12 +1367,26 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         .module_name = try env.insertIdent(base.Ident.for_text("test")),
         .list = try env.insertIdent(base.Ident.for_text("List")),
         .box = try env.insertIdent(base.Ident.for_text("Box")),
-        .bool_stmt = @enumFromInt(0), // TODO: load from builtin modules
-        .result_stmt = @enumFromInt(0), // TODO: load from builtin modules
+        .bool_stmt = builtin_modules.builtin_indices.bool_type,
+        .result_stmt = builtin_modules.builtin_indices.result_type,
     };
 
-    // Create canonicalizer
-    var canonicalizer = try Can.init(&env, &parse_ast, null);
+    // Create module_envs map for auto-importing builtin types
+    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
+    defer module_envs_map.deinit();
+
+    // Add Bool, Result, and Str to the map
+    const bool_ident = try env.common.insertIdent(allocs.gpa, base.Ident.for_text("Bool"));
+    try module_envs_map.put(bool_ident, .{ .env = builtin_modules.bool_module.env });
+
+    const result_ident = try env.common.insertIdent(allocs.gpa, base.Ident.for_text("Result"));
+    try module_envs_map.put(result_ident, .{ .env = builtin_modules.result_module.env });
+
+    const str_ident = try env.common.insertIdent(allocs.gpa, base.Ident.for_text("Str"));
+    try module_envs_map.put(str_ident, .{ .env = builtin_modules.str_module.env });
+
+    // Create canonicalizer with module_envs
+    var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map);
 
     // Canonicalize the entire module
     try canonicalizer.canonicalizeFile();
@@ -1398,8 +1416,9 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         def_indices_ptr[i] = @intFromEnum(def_idx);
     }
 
-    // Type check the module
-    var checker = try Check.init(shm_allocator, &env.types, &env, &.{}, null, &env.store.regions, common_idents);
+    // Type check the module - pass builtin modules as imported modules
+    const imported_envs = builtin_modules.envs();
+    var checker = try Check.init(shm_allocator, &env.types, &env, &imported_envs, &module_envs_map, &env.store.regions, common_idents);
     try checker.checkFile();
 
     // Copy the ModuleEnv to the allocated space
