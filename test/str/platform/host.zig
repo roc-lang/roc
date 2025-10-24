@@ -80,7 +80,7 @@ fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.c) no
 
 // External symbol provided by the Roc runtime object file
 // Follows RocCall ABI: ops, ret_ptr, then argument pointers
-extern fn roc__main(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+extern fn roc__processString(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
 
 // OS-specific entry point handling
 comptime {
@@ -130,20 +130,30 @@ fn platform_main() !void {
         .host_fns = undefined, // No host functions for this simple example
     };
 
-    // Call the Roc entrypoint - pass null for arg_ptr since main takes no arguments
+    // Create the input string for the Roc function (if it's a function)
+    const input_string = "string from host";
+    var input_roc_str = RocStr.fromSlice(input_string, &roc_ops);
+    defer input_roc_str.decref(&roc_ops);
+
+    // Arguments struct for single string parameter - consistent with struct-based approach
+    // `extern struct` has well-defined in-memory layout matching the C ABI for the target
+    const Args = extern struct { str: RocStr };
+    var args = Args{ .str = input_roc_str };
+
+    // Call the Roc entrypoint - pass argument pointer for functions, null for values
     var roc_str: RocStr = undefined;
-    roc__main(&roc_ops, @as(*anyopaque, @ptrCast(&roc_str)), null);
+    roc__processString(&roc_ops, @as(*anyopaque, @ptrCast(&roc_str)), @as(*anyopaque, @ptrCast(&args)));
     defer roc_str.decref(&roc_ops);
 
     // Get the string as a slice and print it
     const result_slice = roc_str.asSlice();
-    try stdout.print("{s}\n", .{result_slice});
+    try stdout.print("{s}", .{result_slice});
 
-    // Verify the result matches the expected output
-    const expected_output = "hello world";
-    if (std.mem.eql(u8, result_slice, expected_output)) {
-        try stdout.print("\x1b[32mSUCCESS\x1b[0m: Output matches!\n", .{});
+    // Verify the result contains the expected input
+    const expected_substring = "Got the following from the host: string from host";
+    if (std.mem.indexOf(u8, result_slice, expected_substring) != null) {
+        try stdout.print("\n\x1b[32mSUCCESS\x1b[0m: Result contains expected substring!\n", .{});
     } else {
-        try stdout.print("\x1b[31mFAIL\x1b[0m: Expected '{s}', got '{s}'\n", .{ expected_output, result_slice });
+        try stdout.print("\n\x1b[31mFAIL\x1b[0m: Result does not contain expected substring!\n", .{});
     }
 }

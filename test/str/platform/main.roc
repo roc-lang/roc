@@ -1,7 +1,7 @@
 platform ""
-    requires {} { main : Str }
+    requires {} { processString : Str -> Str }
     exposes []
     packages {}
-    provides { main: "main" }
+    provides { processString: "processString" }
 
-main : Str
+processString : Str -> Str
