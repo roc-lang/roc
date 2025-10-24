@@ -24,8 +24,18 @@ pub fn Scratch(comptime T: type) type {
         }
 
         /// Returns the start position for a new Span of indexes in scratch
-        pub fn top(self: *Self) u32 {
+        pub fn top(self: *const Self) u32 {
             return @as(u32, @intCast(self.items.items.len));
+        }
+
+        /// Check if a value is in the array
+        pub fn contains(self: *const Self, val: T) bool {
+            for (self.items.items) |item| {
+                if (item == val) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         /// Places a new index of type `T` in the scratch
@@ -46,6 +56,25 @@ pub fn Scratch(comptime T: type) type {
         /// Creates slice from the provided start index
         pub fn sliceFromStart(self: *Self, start: u32) []T {
             return self.items.items[@intCast(start)..];
+        }
+
+        /// Creates slice from the provided start index
+        pub fn sliceFromSpan(self: *Self, span: DataSpan) []T {
+            const start: usize = @intCast(span.start);
+            const end: usize = @intCast(span.start + span.len);
+
+            std.debug.assert(start <= end);
+            std.debug.assert(end <= self.items.items.len);
+
+            return self.items.items[start..end];
+        }
+
+        /// Creates span from the provided start index to the end of the list
+        pub fn spanFrom(self: *Self, start: u32) DataSpan {
+            return DataSpan{
+                .start = start,
+                .len = @as(u32, @intCast(self.items.items.len)) - start,
+            };
         }
 
         /// Creates a new span starting at start.  Moves the items from scratch

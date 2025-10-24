@@ -22,7 +22,6 @@ processColor = |color| {
 ~~~
 # EXPECTED
 IMPORT MUST BE TOP LEVEL - nominal_mixed_scope.md:7:5:7:11
-NOT IMPLEMENTED - :0:0:0:0
 UNDECLARED TYPE - nominal_mixed_scope.md:7:12:7:17
 UNDECLARED TYPE - nominal_mixed_scope.md:10:9:10:12
 UNDECLARED TYPE - nominal_mixed_scope.md:11:9:11:12
@@ -38,11 +37,6 @@ Move this import to the top of the file, after the module header but before any 
 ```
     ^^^^^^
 
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: statement type in block
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 **UNDECLARED TYPE**
 The type _Color_ is not declared in this scope.
@@ -166,7 +160,6 @@ processColor = |color| {
 			(args
 				(p-assign (ident "color")))
 			(e-block
-				(s-runtime-error (tag "not_implemented"))
 				(s-expr
 					(e-runtime-error (tag "undeclared_type")))
 				(e-match

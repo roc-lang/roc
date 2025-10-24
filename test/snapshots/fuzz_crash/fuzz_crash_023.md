@@ -253,7 +253,7 @@ UNDEFINED VARIABLE - fuzz_crash_023.md:141:2:141:6
 UNDECLARED TYPE - fuzz_crash_023.md:143:14:143:20
 UNDEFINED VARIABLE - fuzz_crash_023.md:147:9:147:13
 UNDEFINED VARIABLE - fuzz_crash_023.md:158:2:158:11
-NOT IMPLEMENTED - :0:0:0:0
+UNDEFINED VARIABLE - fuzz_crash_023.md:175:3:175:15
 UNRECOGNIZED SYNTAX - fuzz_crash_023.md:178:38:178:40
 UNRECOGNIZED SYNTAX - fuzz_crash_023.md:178:40:178:41
 UNRECOGNIZED SYNTAX - fuzz_crash_023.md:178:45:178:46
@@ -268,7 +268,6 @@ UNDEFINED VARIABLE - fuzz_crash_023.md:191:2:191:14
 UNDEFINED VARIABLE - fuzz_crash_023.md:193:4:193:13
 UNUSED VARIABLE - fuzz_crash_023.md:164:2:164:18
 UNUSED VARIABLE - fuzz_crash_023.md:165:2:165:14
-UNUSED VARIABLE - fuzz_crash_023.md:166:2:166:6
 UNUSED VARIABLE - fuzz_crash_023.md:178:2:178:8
 UNUSED VARIABLE - fuzz_crash_023.md:180:2:180:17
 UNUSED VARIABLE - fuzz_crash_023.md:188:2:188:15
@@ -276,7 +275,10 @@ UNUSED VARIABLE - fuzz_crash_023.md:189:2:189:23
 UNDECLARED TYPE - fuzz_crash_023.md:201:9:201:14
 INVALID IF CONDITION - fuzz_crash_023.md:70:5:70:5
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_023.md:84:2:84:2
+UNUSED VALUE - fuzz_crash_023.md:1:1:1:1
 TYPE MISMATCH - fuzz_crash_023.md:155:2:157:3
+UNUSED VALUE - fuzz_crash_023.md:155:2:157:3
+UNUSED VALUE - fuzz_crash_023.md:178:42:178:45
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_record_field_name`
@@ -679,10 +681,16 @@ Is there an `import` or `exposing` missing up-top?
 	^^^^^^^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: statement type in block
+**UNDEFINED VARIABLE**
+Nothing is named `line!` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+**fuzz_crash_023.md:175:3:175:15:**
+```roc
+		Stdout.line!("Adding ${n} to ${number}")
+```
+		^^^^^^^^^^^^
+
 
 **UNRECOGNIZED SYNTAX**
 I don't recognize this syntax.
@@ -825,18 +833,6 @@ The unused variable is declared here:
 	interpolated = "Hello, ${world}"
 ```
 	^^^^^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `list` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_023.md:166:2:166:6:**
-```roc
-	list = [
-```
-	^^^^
 
 
 **UNUSED VARIABLE**
@@ -983,6 +979,17 @@ All patterns in an `match` must have compatible types.
 
 
 
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_023.md:1:1:1:1:**
+```roc
+# This is a module comment!
+```
+^
+
+It has the type:
+    __d_
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **fuzz_crash_023.md:155:2:157:3:**
@@ -997,6 +1004,29 @@ It has the type:
 
 But I expected it to be:
     _[Red][Blue, Green]_others, _arg -> Error_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_023.md:155:2:157:3:**
+```roc
+	match_time(
+		..., # Single args with comment
+	)
+```
+
+It has the type:
+    __d_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_023.md:178:42:178:45:**
+```roc
+	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
+```
+	                                        ^^^
+
+It has the type:
+    _[Blue]_others_
 
 # TOKENS
 ~~~zig
@@ -1973,8 +2003,8 @@ expect {
 		(e-closure
 			(captures
 				(capture (ident "x"))
-				(capture (ident "dude"))
-				(capture (ident "x")))
+				(capture (ident "x"))
+				(capture (ident "dude")))
 			(e-lambda
 				(args
 					(p-assign (ident "a"))
@@ -2186,8 +2216,8 @@ expect {
 		(p-assign (ident "main!"))
 		(e-closure
 			(captures
-				(capture (ident "add_one"))
-				(capture (ident "match_time")))
+				(capture (ident "match_time"))
+				(capture (ident "add_one")))
 			(e-lambda
 				(args
 					(p-underscore))
@@ -2247,7 +2277,30 @@ expect {
 											(p-assign (ident "number")))))
 								(e-num (value "456"))
 								(e-num (value "789")))))
-					(s-runtime-error (tag "not_implemented"))
+					(s-for
+						(p-assign (ident "n"))
+						(e-lookup-local
+							(p-assign (ident "list")))
+						(e-block
+							(s-expr
+								(e-call
+									(e-runtime-error (tag "ident_not_in_scope"))
+									(e-string
+										(e-literal (string "Adding "))
+										(e-lookup-local
+											(p-assign (ident "n")))
+										(e-literal (string " to "))
+										(e-lookup-local
+											(p-assign (ident "number")))
+										(e-literal (string "")))))
+							(s-reassign
+								(p-assign (ident "number"))
+								(e-binop (op "add")
+									(e-lookup-local
+										(p-assign (ident "number")))
+									(e-lookup-local
+										(p-assign (ident "n")))))
+							(e-empty_record)))
 					(s-let
 						(p-assign (ident "record"))
 						(e-runtime-error (tag "expr_not_canonicalized")))

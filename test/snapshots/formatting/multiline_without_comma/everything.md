@@ -1763,11 +1763,11 @@ h = |x, y| {
 		(p-assign (ident "h"))
 		(e-closure
 			(captures
+				(capture (ident "h"))
 				(capture (ident "a"))
 				(capture (ident "a"))
 				(capture (ident "a"))
-				(capture (ident "a"))
-				(capture (ident "h")))
+				(capture (ident "a")))
 			(e-lambda
 				(args
 					(p-assign (ident "x"))
