@@ -63,6 +63,7 @@ pub fn build(b: *std.Build) void {
     const playground_step = b.step("playground", "Build the WASM playground");
     const playground_test_step = b.step("test-playground", "Build the integration test suite for the WASM playground");
     const serialization_size_step = b.step("test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
+    const test_cli_step = b.step("test-cli", "Test the roc CLI by running test programs");
 
     // general configuration
     const target = blk: {
@@ -135,6 +136,21 @@ pub fn build(b: *std.Build) void {
     const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd) orelse return;
     roc_modules.addAll(roc_exe);
     install_and_run(b, no_bin, roc_exe, roc_step, run_step, run_args);
+
+    // CLI integration tests - run actual roc programs like CI does
+    if (!no_bin) {
+        const install = b.addInstallArtifact(roc_exe, .{});
+
+        // Test int platform (should pass)
+        const test_int = b.addSystemCommand(&.{ b.getInstallPath(.bin, "roc"), "--no-cache", "test/int/app.roc" });
+        test_int.step.dependOn(&install.step);
+        test_cli_step.dependOn(&test_int.step);
+
+        // Test str platform (currently fails with TypeMismatch - this is expected until Str support is complete)
+        const test_str = b.addSystemCommand(&.{ b.getInstallPath(.bin, "roc"), "--no-cache", "test/str/app.roc" });
+        test_str.step.dependOn(&install.step);
+        test_cli_step.dependOn(&test_str.step);
+    }
 
     // Build-time compiler for builtin .roc modules with caching
     //
