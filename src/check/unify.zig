@@ -831,6 +831,19 @@ const Unifier = struct {
                         // Try to unify nominal tag union (a) with anonymous tag union (b)
                         try self.unifyTagUnionWithNominal(vars, a_type, a_backing_var, a_backing_resolved, b_tag_union, .a_is_nominal);
                     },
+                    .empty_tag_union => {
+                        // Try to unify nominal tag union (a) with empty tag union (b)
+                        // Check if the nominal's backing is also an empty tag union
+                        if (a_backing_resolved.desc.content == .structure and
+                            a_backing_resolved.desc.content.structure == .empty_tag_union)
+                        {
+                            // Both are empty, unify with the nominal
+                            self.merge(vars, vars.a.desc.content);
+                        } else {
+                            // Nominal has a non-empty backing, can't unify
+                            return error.TypeMismatch;
+                        }
+                    },
                     else => return error.TypeMismatch,
                 }
             },
@@ -1008,6 +1021,26 @@ const Unifier = struct {
                         if (b_tag_union.tags.len() == 0) {
                             try self.unifyGuarded(vars.a.var_, b_tag_union.ext);
                         } else {
+                            return error.TypeMismatch;
+                        }
+                    },
+                    .nominal_type => |b_type| {
+                        // Try to unify empty tag union (a) with nominal tag union (b)
+                        const b_backing_var = self.types_store.getNominalBackingVar(b_type);
+                        const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
+                        if (b_backing_resolved.desc.content == .err) {
+                            self.merge(vars, vars.a.desc.content);
+                            return;
+                        }
+
+                        // Check if the nominal's backing is also an empty tag union
+                        if (b_backing_resolved.desc.content == .structure and
+                            b_backing_resolved.desc.content.structure == .empty_tag_union)
+                        {
+                            // Both are empty, unify with the nominal
+                            self.merge(vars, vars.b.desc.content);
+                        } else {
+                            // Nominal has a non-empty backing, can't unify
                             return error.TypeMismatch;
                         }
                     },
@@ -1939,15 +1972,35 @@ const Unifier = struct {
         defer trace.end();
 
         _ = nominal_type; // Used for identity in nominal type, but not needed here
-        _ = nominal_backing_var; // We don't unify with backing var directly (see unifyNominalType)
 
-        // Check if the nominal's backing type is a tag union
+        // Check if the nominal's backing type is a tag union (including empty)
         const nominal_backing_content = nominal_backing_resolved.desc.content;
         if (nominal_backing_content != .structure) {
             return error.TypeMismatch;
         }
 
         const nominal_backing_flat = nominal_backing_content.structure;
+
+        // Handle empty tag union case
+        if (nominal_backing_flat == .empty_tag_union) {
+            // The nominal's backing is an empty tag union []
+            // The anon_tag_union should also be empty for unification to succeed
+            if (anon_tag_union.tags.len() == 0) {
+                // Both are empty - unify the extension variables
+                try self.unifyGuarded(anon_tag_union.ext, nominal_backing_var);
+
+                // Merge to the NOMINAL type (not the tag union)
+                switch (direction) {
+                    .a_is_nominal => self.merge(vars, vars.a.desc.content),
+                    .b_is_nominal => self.merge(vars, vars.b.desc.content),
+                }
+                return;
+            } else {
+                // Anon has tags but nominal is empty
+                return error.TypeMismatch;
+            }
+        }
+
         if (nominal_backing_flat != .tag_union) {
             // Nominal's backing is not a tag union (could be record, tuple, etc.)
             // Cannot unify anonymous tag union with non-tag-union nominal
