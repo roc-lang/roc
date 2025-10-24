@@ -4993,8 +4993,7 @@ test "interpreter: unification constrains (a->a) with Str" {
     try std.testing.expect(entry.return_layout_slot != 0);
 }
 
-// GREEN: cross-module method resolution should find methods in origin module
-test "interpreter: cross-module method resolution" {
+test "interpreter: cross-module method resolution should find methods in origin module" {
     const gpa = std.testing.allocator;
 
     // Set up Module A (the imported module where the type and method are defined)
@@ -5037,8 +5036,7 @@ test "interpreter: cross-module method resolution" {
     try std.testing.expectEqual(module_a_id, found_id);
 }
 
-// GREEN: transitive module resolution (A imports B imports C)
-test "interpreter: transitive module method resolution" {
+test "interpreter: transitive module method resolution (A imports B imports C)" {
     const gpa = std.testing.allocator;
 
     // Set up three modules: A (current) imports B, B imports C
