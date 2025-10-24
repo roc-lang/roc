@@ -283,7 +283,7 @@ data = json
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "data"))
 		(e-runtime-error (tag "ident_not_in_scope"))

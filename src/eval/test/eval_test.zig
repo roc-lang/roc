@@ -745,10 +745,13 @@ test "ModuleEnv serialization and interpreter evaluation" {
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const str_source = compiled_builtins.str_source;
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
     // Create original ModuleEnv
     var original_env = try ModuleEnv.init(gpa, source);
@@ -807,7 +810,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
     // Test 1: Evaluate with the original ModuleEnv
     {
-        const builtin_types_local = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+        const builtin_types_local = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
         var interpreter = try Interpreter.init(gpa, &original_env, builtin_types_local, &[_]*const can.ModuleEnv{});
         defer interpreter.deinit();
 
@@ -874,7 +877,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         // Test 4: Evaluate the same expression using the deserialized ModuleEnv
         // The original expression index should still be valid since the NodeStore structure is preserved
         {
-            const builtin_types_local = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+            const builtin_types_local = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
             var interpreter = try Interpreter.init(gpa, deserialized_env, builtin_types_local, &[_]*const can.ModuleEnv{});
             defer interpreter.deinit();
 

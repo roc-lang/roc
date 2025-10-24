@@ -964,30 +964,38 @@ fn compileSource(source: []const u8) !CompilerStageData {
     logDebug("compileSource: Builtin indices loaded, bool_type={}\n", .{@intFromEnum(builtin_indices.bool_type)});
 
     logDebug("compileSource: Loading Bool module\n", .{});
-    const bool_source = "Bool := [True, False].{}\n";
+    const bool_source = compiled_builtins.bool_source;
     var bool_module = try LoadedModule.loadCompiledModule(allocator, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
     logDebug("compileSource: Bool module loaded\n", .{});
 
     logDebug("compileSource: Loading Result module\n", .{});
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const result_source = compiled_builtins.result_source;
     var result_module = try LoadedModule.loadCompiledModule(allocator, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
     logDebug("compileSource: Result module loaded\n", .{});
 
-    // Get Bool and Result statement indices from the IMPORTED modules (not copied!)
+    logDebug("compileSource: Loading Str module\n", .{});
+    const str_source = compiled_builtins.str_source;
+    var str_module = try LoadedModule.loadCompiledModule(allocator, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
+    logDebug("compileSource: Str module loaded\n", .{});
+
+    // Get Bool, Result, and Str statement indices from the IMPORTED modules (not copied!)
     // Use builtin_indices directly - these are the correct statement indices
-    logDebug("compileSource: Getting Bool and Result statement indices from builtin_indices\n", .{});
+    logDebug("compileSource: Getting Bool, Result, and Str statement indices from builtin_indices\n", .{});
     const bool_stmt_in_bool_module = builtin_indices.bool_type;
     const result_stmt_in_result_module = builtin_indices.result_type;
+    const str_stmt_in_str_module = builtin_indices.str_type;
 
     logDebug("compileSource: Using Bool statement from Bool module, idx={}\n", .{@intFromEnum(bool_stmt_in_bool_module)});
     logDebug("compileSource: Using Result statement from Result module, idx={}\n", .{@intFromEnum(result_stmt_in_result_module)});
+    logDebug("compileSource: Using Str statement from Str module, idx={}\n", .{@intFromEnum(str_stmt_in_str_module)});
     logDebug("compileSource: Builtin injection complete\n", .{});
 
     // Store bool_stmt and builtin_types in result for later use (e.g., in test runner)
     result.bool_stmt = bool_stmt_in_bool_module;
-    result.builtin_types = eval.BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    result.builtin_types = eval.BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
 
     const module_common_idents: Check.CommonIdents = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("main")),

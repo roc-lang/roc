@@ -281,10 +281,13 @@ test "Repl - minimal interpreter integration" {
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const str_source = compiled_builtins.str_source;
     var bool_module = try loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
     var result_module = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    var str_module = try loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
     // Step 1: Create module environment
     const source = "42";
@@ -334,7 +337,7 @@ test "Repl - minimal interpreter integration" {
     _ = try checker.checkExprRepl(canonical_expr_idx.get_idx());
 
     // Step 6: Create interpreter
-    const builtin_types = eval.BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types = eval.BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interpreter = try Interpreter.init(gpa, &module_env, builtin_types, &[_]*const ModuleEnv{});
     defer interpreter.deinitAndFreeOtherEnvs();
 

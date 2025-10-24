@@ -63,6 +63,7 @@ pub fn build(b: *std.Build) void {
     const playground_step = b.step("playground", "Build the WASM playground");
     const playground_test_step = b.step("test-playground", "Build the integration test suite for the WASM playground");
     const serialization_size_step = b.step("test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
+    const test_cli_step = b.step("test-cli", "Test the roc CLI by running test programs");
 
     // general configuration
     const target = blk: {
@@ -132,10 +133,6 @@ pub fn build(b: *std.Build) void {
 
     const roc_modules = modules.RocModules.create(b, build_options, zstd);
 
-    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd) orelse return;
-    roc_modules.addAll(roc_exe);
-    install_and_run(b, no_bin, roc_exe, roc_step, run_step, run_args);
-
     // Build-time compiler for builtin .roc modules with caching
     //
     // Changes to .roc files in src/build/roc/ are automatically detected and trigger recompilation.
@@ -176,6 +173,7 @@ pub fn build(b: *std.Build) void {
 
     const write_compiled_builtins = b.addWriteFiles();
 
+    // Regenerate .bin files if necessary
     if (should_rebuild_builtins) {
         // Build and run the compiler
         const builtin_compiler_exe = b.addExecutable(.{
@@ -211,30 +209,25 @@ pub fn build(b: *std.Build) void {
         }
 
         write_compiled_builtins.step.dependOn(&run_builtin_compiler.step);
+    }
 
-        // Copy all generated .bin files from zig-out to build cache
-        for (roc_files) |roc_path| {
-            const roc_basename = std.fs.path.basename(roc_path);
-            const name_without_ext = roc_basename[0 .. roc_basename.len - 4];
-            const bin_filename = b.fmt("{s}.bin", .{name_without_ext});
+    // Use .bin files from zig-out/builtins/ (whether they were just regenerated or
+    // already there from a previous run).
+    for (roc_files) |roc_path| {
+        const roc_basename = std.fs.path.basename(roc_path);
+        const name_without_ext = roc_basename[0 .. roc_basename.len - 4];
+        const bin_filename = b.fmt("{s}.bin", .{name_without_ext});
 
-            _ = write_compiled_builtins.addCopyFile(
-                .{ .cwd_relative = b.fmt("zig-out/builtins/{s}", .{bin_filename}) },
-                bin_filename,
-            );
-        }
-    } else {
-        // Use existing .bin files from zig-out/builtins/
-        for (roc_files) |roc_path| {
-            const roc_basename = std.fs.path.basename(roc_path);
-            const name_without_ext = roc_basename[0 .. roc_basename.len - 4];
-            const bin_filename = b.fmt("{s}.bin", .{name_without_ext});
+        _ = write_compiled_builtins.addCopyFile(
+            .{ .cwd_relative = b.fmt("zig-out/builtins/{s}", .{bin_filename}) },
+            bin_filename,
+        );
 
-            _ = write_compiled_builtins.addCopyFile(
-                .{ .cwd_relative = b.fmt("zig-out/builtins/{s}", .{bin_filename}) },
-                bin_filename,
-            );
-        }
+        // Also copy the source .roc file for embedding
+        _ = write_compiled_builtins.addCopyFile(
+            b.path(roc_path),
+            roc_basename,
+        );
     }
 
     // Also copy builtin_indices.bin
@@ -260,6 +253,26 @@ pub fn build(b: *std.Build) void {
 
     roc_modules.repl.addImport("compiled_builtins", compiled_builtins_module);
     roc_modules.compile.addImport("compiled_builtins", compiled_builtins_module);
+    roc_modules.eval.addImport("compiled_builtins", compiled_builtins_module);
+
+    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins) orelse return;
+    roc_modules.addAll(roc_exe);
+    install_and_run(b, no_bin, roc_exe, roc_step, run_step, run_args);
+
+    // CLI integration tests - run actual roc programs like CI does
+    if (!no_bin) {
+        const install = b.addInstallArtifact(roc_exe, .{});
+
+        // Test int platform
+        const test_int = b.addSystemCommand(&.{ b.getInstallPath(.bin, "roc"), "--no-cache", "test/int/app.roc" });
+        test_int.step.dependOn(&install.step);
+        test_cli_step.dependOn(&test_int.step);
+
+        // Test str platform
+        const test_str = b.addSystemCommand(&.{ b.getInstallPath(.bin, "roc"), "--no-cache", "test/str/app.roc" });
+        test_str.step.dependOn(&install.step);
+        test_cli_step.dependOn(&test_str.step);
+    }
 
     // Manual rebuild command: zig build rebuild-builtins
     // Use this after making compiler changes to ensure those changes are reflected in builtins
@@ -647,6 +660,12 @@ fn generateCompiledBuiltinsSource(b: *std.Build, roc_files: []const []const u8) 
             lower_name,
             name_without_ext,
         });
+
+        // Also embed the source .roc file
+        try writer.print("pub const {s}_source = @embedFile(\"{s}\");\n", .{
+            lower_name,
+            roc_basename,
+        });
     }
 
     // Also embed builtin_indices.bin
@@ -728,6 +747,8 @@ fn addMainExe(
     user_llvm_path: ?[]const u8,
     tracy: ?[]const u8,
     zstd: *Dependency,
+    compiled_builtins_module: *std.Build.Module,
+    write_compiled_builtins: *Step.WriteFile,
 ) ?*Step.Compile {
     const exe = b.addExecutable(.{
         .name = "roc",
@@ -859,6 +880,9 @@ fn addMainExe(
     configureBackend(shim_lib, target);
     // Add all modules from roc_modules that the shim needs
     roc_modules.addAll(shim_lib);
+    // Add compiled builtins module for loading builtin types
+    shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    shim_lib.step.dependOn(&write_compiled_builtins.step);
     // Link against the pre-built builtins library
     shim_lib.addObject(builtins_obj);
     // Bundle compiler-rt for our math symbols

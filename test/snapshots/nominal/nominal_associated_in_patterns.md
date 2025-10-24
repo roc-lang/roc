@@ -93,7 +93,7 @@ handleSuccess = |res| "success"
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Foo.Result") (local))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
 		(ty-tag-union
@@ -104,7 +104,7 @@ handleSuccess = |res| "success"
 			(ty-tag-name (name "Success")
 				(ty-lookup (name "U64") (builtin)))
 			(ty-tag-name (name "Failure")
-				(ty-lookup (name "Str") (builtin))))))
+				(ty-lookup (name "Str") (external-module "Str"))))))
 ~~~
 # TYPES
 ~~~clojure

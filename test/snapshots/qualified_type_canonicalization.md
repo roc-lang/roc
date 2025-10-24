@@ -460,7 +460,7 @@ transform = |result|
 		(annotation
 			(ty-apply (name "Result") (external-module "Result")
 				(ty-lookup (name "I32") (builtin))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "getColor"))
 		(e-lambda
@@ -481,7 +481,7 @@ transform = |result|
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "RGB") (external-module "Color"))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "transform"))
 		(e-closure

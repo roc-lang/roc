@@ -23,6 +23,7 @@ const eval = @import("eval");
 const builtin_loading = eval.builtin_loading;
 const compiled_builtins = @import("compiled_builtins");
 const BuiltinTypes = eval.BuiltinTypes;
+const BuiltinModules = eval.BuiltinModules;
 
 const Check = check.Check;
 const Can = can.Can;
@@ -152,6 +153,8 @@ pub const PackageEnv = struct {
     schedule_hook: ScheduleHook,
     /// Compiler version for cache invalidation
     compiler_version: []const u8,
+    /// Builtin modules (Bool, Result, Str) for auto-importing in canonicalization (not owned)
+    builtin_modules: *const BuiltinModules,
 
     lock: Mutex = .{},
     cond: Condition = .{},
@@ -178,7 +181,7 @@ pub const PackageEnv = struct {
     total_type_checking_ns: u64 = 0,
     total_check_diagnostics_ns: u64 = 0,
 
-    pub fn init(gpa: Allocator, package_name: []const u8, root_dir: []const u8, mode: Mode, max_threads: usize, sink: ReportSink, schedule_hook: ScheduleHook, compiler_version: []const u8) PackageEnv {
+    pub fn init(gpa: Allocator, package_name: []const u8, root_dir: []const u8, mode: Mode, max_threads: usize, sink: ReportSink, schedule_hook: ScheduleHook, compiler_version: []const u8, builtin_modules: *const BuiltinModules) PackageEnv {
         return .{
             .gpa = gpa,
             .package_name = package_name,
@@ -188,6 +191,7 @@ pub const PackageEnv = struct {
             .sink = sink,
             .schedule_hook = schedule_hook,
             .compiler_version = compiler_version,
+            .builtin_modules = builtin_modules,
             .injector = std.ArrayList(Task).empty,
             .modules = std.ArrayList(ModuleState).empty,
             .discovered = std.ArrayList(ModuleId).empty,
@@ -204,6 +208,7 @@ pub const PackageEnv = struct {
         resolver: ImportResolver,
         schedule_hook: ScheduleHook,
         compiler_version: []const u8,
+        builtin_modules: *const BuiltinModules,
     ) PackageEnv {
         return .{
             .gpa = gpa,
@@ -215,6 +220,7 @@ pub const PackageEnv = struct {
             .resolver = resolver,
             .schedule_hook = schedule_hook,
             .compiler_version = compiler_version,
+            .builtin_modules = builtin_modules,
             .injector = std.ArrayList(Task).empty,
             .modules = std.ArrayList(ModuleState).empty,
             .discovered = std.ArrayList(ModuleId).empty,
@@ -222,6 +228,8 @@ pub const PackageEnv = struct {
     }
 
     pub fn deinit(self: *PackageEnv) void {
+        // NOTE: builtin_modules is not owned by PackageEnv, so we don't deinit it here
+
         // Deinit modules
         for (self.modules.items) |*ms| {
             ms.deinit(self.gpa);
@@ -263,9 +271,11 @@ pub const PackageEnv = struct {
         // Notify schedule hook so a global queue can pick this up
         self.schedule_hook.onSchedule(self.schedule_hook.ctx, self.package_name, name, root_file_path, 0);
 
-        // If a global schedule_hook is installed, do not start internal scheduling loops.
-        // In dispatch-only mode, the unified global queue will drive processing via process().
-        if (self.schedule_hook.isNoOp()) {
+        // If a global schedule_hook is installed AND we're in multi-threaded mode,
+        // the unified global queue will drive processing via process().
+        // In single-threaded mode, we always need to run our local processing loop.
+        const should_run_local = self.schedule_hook.isNoOp() or self.mode == .single_threaded;
+        if (should_run_local) {
             if (@import("builtin").target.cpu.arch == .wasm32) {
                 // On wasm32, always run single-threaded at comptime
                 try self.runSingleThread();
@@ -289,7 +299,9 @@ pub const PackageEnv = struct {
                 self.injector.items.len = idx;
                 try self.process(task);
                 try self.tryEmitReady();
-            } else if (self.remaining_modules == 0) break;
+            } else if (self.remaining_modules == 0) {
+                break;
+            }
         }
     }
 
@@ -381,13 +393,13 @@ pub const PackageEnv = struct {
     }
 
     fn enqueue(self: *PackageEnv, module_id: ModuleId) !void {
+        const st = &self.modules.items[module_id];
         // In multi_threaded mode with a non-noop schedule_hook, forward to the global queue
         if (self.mode == .multi_threaded and !self.schedule_hook.isNoOp()) {
             // Look up the module to get its path and depth for the hook
             self.lock.lock();
             defer self.lock.unlock();
 
-            const st = &self.modules.items[module_id];
             self.schedule_hook.onSchedule(self.schedule_hook.ctx, self.package_name, st.name, st.path, st.depth);
         } else {
             // Default behavior: use internal injector
@@ -500,11 +512,21 @@ pub const PackageEnv = struct {
         }
 
         switch (phase) {
-            .Parse => try self.doParse(task.module_id),
-            .Canonicalize => try self.doCanonicalize(task.module_id),
-            .WaitingOnImports => try self.tryUnblock(task.module_id),
-            .TypeCheck => try self.doTypeCheck(task.module_id),
-            .Done => return,
+            .Parse => {
+                try self.doParse(task.module_id);
+            },
+            .Canonicalize => {
+                try self.doCanonicalize(task.module_id);
+            },
+            .WaitingOnImports => {
+                try self.tryUnblock(task.module_id);
+            },
+            .TypeCheck => {
+                try self.doTypeCheck(task.module_id);
+            },
+            .Done => {
+                return;
+            },
         }
         try self.tryEmitReady();
     }
@@ -512,7 +534,11 @@ pub const PackageEnv = struct {
     fn doParse(self: *PackageEnv, module_id: ModuleId) !void {
         // Load source and init ModuleEnv
         var st = &self.modules.items[module_id];
-        const src = try std.fs.cwd().readFileAlloc(self.gpa, st.path, std.math.maxInt(usize));
+        const src = std.fs.cwd().readFileAlloc(self.gpa, st.path, std.math.maxInt(usize)) catch |read_err| {
+            // Note: Let the FileNotFound error propagate naturally
+            // The existing error handling will report it appropriately
+            return read_err;
+        };
 
         // line starts for diagnostics and consistent positions
 
@@ -546,9 +572,34 @@ pub const PackageEnv = struct {
             self.total_tokenize_parse_ns += @intCast(parse_end - parse_start);
         }
 
+        // Convert parse diagnostics to reports
+        for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
+            const report = try parse_ast.tokenizeDiagnosticToReport(diagnostic, self.gpa);
+            try st.reports.append(self.gpa, report);
+        }
+        for (parse_ast.parse_diagnostics.items) |diagnostic| {
+            const report = try parse_ast.parseDiagnosticToReport(&env.common, diagnostic, self.gpa, st.path);
+            try st.reports.append(self.gpa, report);
+        }
+
         // canonicalize using the AST
         const canon_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        var czer = try Can.init(env, &parse_ast, null);
+
+        // Create module_envs map for auto-importing builtin types
+        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(self.gpa);
+        defer module_envs_map.deinit();
+
+        // Add Bool, Result, and Str to the map
+        const bool_ident = try env.common.insertIdent(self.gpa, base.Ident.for_text("Bool"));
+        try module_envs_map.put(bool_ident, .{ .env = self.builtin_modules.bool_module.env });
+
+        const result_ident = try env.common.insertIdent(self.gpa, base.Ident.for_text("Result"));
+        try module_envs_map.put(result_ident, .{ .env = self.builtin_modules.result_module.env });
+
+        const str_ident = try env.common.insertIdent(self.gpa, base.Ident.for_text("Str"));
+        try module_envs_map.put(str_ident, .{ .env = self.builtin_modules.str_module.env });
+
+        var czer = try Can.init(env, &parse_ast, &module_envs_map);
         try czer.canonicalizeFile();
         czer.deinit();
         const canon_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
@@ -590,7 +641,11 @@ pub const PackageEnv = struct {
 
             // Local import - schedule in this package
             const import_path = try self.resolveModulePath(mod_name);
+            defer self.gpa.free(import_path);
             const child_id = try self.ensureModule(mod_name, import_path);
+            // Refresh st and env pointers in case ensureModule grew the modules array
+            st = &self.modules.items[module_id];
+            env = &st.env.?;
             const existed = child_id < self.modules.items.len - 1;
             try st.imports.append(self.gpa, child_id);
             // parent depth + 1
@@ -776,14 +831,17 @@ pub const PackageEnv = struct {
 
         // After type checking, evaluate top-level declarations at compile time
         // Load builtin modules required by the interpreter (reuse builtin_indices from above)
-        const bool_source = "Bool := [True, False].{}\n";
-        const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+        const bool_source = compiled_builtins.bool_source;
+        const result_source = compiled_builtins.result_source;
+        const str_source = compiled_builtins.str_source;
         var bool_module = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.bool_bin, "Bool", bool_source);
         defer bool_module.deinit();
         var result_module = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.result_bin, "Result", result_source);
         defer result_module.deinit();
+        var str_module = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.str_bin, "Str", str_source);
+        defer str_module.deinit();
 
-        const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+        const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
         var comptime_evaluator = try eval.ComptimeEvaluator.init(self.gpa, env, imported_envs.items, &checker.problems, builtin_types_for_eval);
         _ = try comptime_evaluator.evalAll();
 

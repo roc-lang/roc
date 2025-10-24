@@ -406,7 +406,6 @@ pub const TypeAnno = union(enum) {
 
         /// Convert a type name string to the corresponding builtin type
         pub fn fromBytes(bytes: []const u8) ?@This() {
-            if (std.mem.eql(u8, bytes, "Str")) return .str;
             if (std.mem.eql(u8, bytes, "List")) return .list;
             if (std.mem.eql(u8, bytes, "Num")) return .num;
             if (std.mem.eql(u8, bytes, "Frac")) return .frac;

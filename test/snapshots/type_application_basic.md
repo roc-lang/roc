@@ -103,7 +103,7 @@ main! = |_| processList(["one", "two", "three"])
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
-					(ty-lookup (name "Str") (builtin)))
+					(ty-lookup (name "Str") (external-module "Str")))
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "main!"))

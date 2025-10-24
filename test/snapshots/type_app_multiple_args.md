@@ -106,10 +106,10 @@ NO CHANGE
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "Dict") (external-module "Dict")
-					(ty-lookup (name "Str") (builtin))
+					(ty-lookup (name "Str") (external-module "Str"))
 					(ty-lookup (name "U64") (builtin)))
 				(ty-apply (name "List") (builtin)
-					(ty-lookup (name "Str") (builtin))))))
+					(ty-lookup (name "Str") (external-module "Str"))))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-closure

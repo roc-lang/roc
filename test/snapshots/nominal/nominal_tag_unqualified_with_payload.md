@@ -109,7 +109,7 @@ isOk = |result| match result {
 					(e-literal (string "success")))))
 		(annotation
 			(ty-apply (name "MyResult") (local)
-				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (external-module "Str"))
 				(ty-lookup (name "I32") (builtin)))))
 	(d-let
 		(p-assign (ident "isOk"))

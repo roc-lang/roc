@@ -137,10 +137,10 @@ main! = |_| {}
 			(ty-fn (effectful true)
 				(ty-record
 					(field (field "name")
-						(ty-lookup (name "Str") (builtin)))
+						(ty-lookup (name "Str") (external-module "Str")))
 					(field (field "age")
 						(ty-lookup (name "U64") (builtin))))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda

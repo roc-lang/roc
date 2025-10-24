@@ -323,7 +323,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "authenticate"))
 		(e-lambda
@@ -338,8 +338,8 @@ validateAuth = |creds| HttpAuth.validate(creds)
 					(p-assign (ident "pass")))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Str") (builtin))
-				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (external-module "Str"))
+				(ty-lookup (name "Str") (external-module "Str"))
 				(ty-lookup (name "Token") (external-module "http.Client.Auth")))))
 	(d-let
 		(p-assign (ident "processData"))
@@ -356,9 +356,9 @@ validateAuth = |creds| HttpAuth.validate(creds)
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
-				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (external-module "Str"))
 				(ty-apply (name "Result") (external-module "Result")
-					(ty-lookup (name "Str") (builtin))
+					(ty-lookup (name "Str") (external-module "Str"))
 					(ty-malformed)))))
 	(d-let
 		(p-assign (ident "formatOutput"))
@@ -372,8 +372,8 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(e-runtime-error (tag "ident_not_in_scope"))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Str") (builtin))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str"))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "validateAuth"))
 		(e-lambda

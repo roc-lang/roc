@@ -145,9 +145,9 @@ NO CHANGE
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "MyResult") (local)
-					(ty-lookup (name "Str") (builtin))
+					(ty-lookup (name "Str") (external-module "Str"))
 					(ty-lookup (name "I32") (builtin)))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "getString"))
 		(e-lambda
@@ -158,8 +158,8 @@ NO CHANGE
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "Option") (local)
-					(ty-lookup (name "Str") (builtin)))
-				(ty-lookup (name "Str") (builtin)))))
+					(ty-lookup (name "Str") (external-module "Str")))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "getNumber"))
 		(e-lambda

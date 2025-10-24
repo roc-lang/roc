@@ -43,7 +43,7 @@ process_things : { name : Str, age : U32, thing : a }, (a -> Str) -> Str
 		(ty-fn (effectful false)
 			(ty-record
 				(field (field "name")
-					(ty-lookup (name "Str") (builtin)))
+					(ty-lookup (name "Str") (external-module "Str")))
 				(field (field "age")
 					(ty-lookup (name "U32") (builtin)))
 				(field (field "thing")
@@ -51,8 +51,8 @@ process_things : { name : Str, age : U32, thing : a }, (a -> Str) -> Str
 			(ty-parens
 				(ty-fn (effectful false)
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))
-					(ty-lookup (name "Str") (builtin))))
-			(ty-lookup (name "Str") (builtin)))))
+					(ty-lookup (name "Str") (external-module "Str"))))
+			(ty-lookup (name "Str") (external-module "Str")))))
 ~~~
 # TYPES
 ~~~clojure

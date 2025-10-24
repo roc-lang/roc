@@ -479,7 +479,7 @@ combineResults = |result1, result2|
 					(p-assign (ident "input")))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (external-module "Str"))
 				(ty-lookup (name "Value") (external-module "json.Json")))))
 	(d-let
 		(p-assign (ident "handleApi"))
@@ -551,7 +551,7 @@ combineResults = |result1, result2|
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
-				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (external-module "Str"))
 				(ty-apply (name "Result") (external-module "Result")
 					(ty-lookup (name "Value") (external-module "json.Json"))
 					(ty-malformed)))))

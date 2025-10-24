@@ -20,6 +20,8 @@ pub const ComptimeEvaluator = @import("comptime_evaluator.zig").ComptimeEvaluato
 pub const BuiltinTypes = @import("builtins.zig").BuiltinTypes;
 /// Utilities for loading compiled builtin modules
 pub const builtin_loading = @import("builtin_loading.zig");
+/// Centralized management of builtin modules (Bool, Result, Str)
+pub const BuiltinModules = @import("BuiltinModules.zig").BuiltinModules;
 const crash_context = @import("crash_context.zig");
 pub const CrashContext = crash_context.CrashContext;
 pub const CrashState = crash_context.CrashState;
