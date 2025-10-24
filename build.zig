@@ -262,12 +262,12 @@ pub fn build(b: *std.Build) void {
     if (!no_bin) {
         const install = b.addInstallArtifact(roc_exe, .{});
 
-        // Test int platform (should pass)
+        // Test int platform
         const test_int = b.addSystemCommand(&.{ b.getInstallPath(.bin, "roc"), "--no-cache", "test/int/app.roc" });
         test_int.step.dependOn(&install.step);
         test_cli_step.dependOn(&test_int.step);
 
-        // Test str platform (currently fails with TypeMismatch - this is expected until Str support is complete)
+        // Test str platform
         const test_str = b.addSystemCommand(&.{ b.getInstallPath(.bin, "roc"), "--no-cache", "test/str/app.roc" });
         test_str.step.dependOn(&install.step);
         test_cli_step.dependOn(&test_str.step);
