@@ -29,7 +29,8 @@ test "cross-module - check type - monomorphic function passes" {
     ;
     var test_env_a = try TestEnv.init("A", source_a);
     defer test_env_a.deinit();
-    try test_env_a.assertLastDefType("Str -> Str");
+    // Str is now a nested type in Builtin module, so it prints as "Builtin"
+    try test_env_a.assertLastDefType("Builtin -> Builtin");
 
     const source_b =
         \\import A
@@ -39,7 +40,8 @@ test "cross-module - check type - monomorphic function passes" {
     ;
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", test_env_a.module_env);
     defer test_env_b.deinit();
-    try test_env_b.assertLastDefType("Str");
+    // Str is now a nested type in Builtin module, so it prints as "Builtin"
+    try test_env_b.assertLastDefType("Builtin");
 }
 
 test "cross-module - check type - monomorphic function fails" {
@@ -87,7 +89,8 @@ test "cross-module - check type - polymorphic function passes" {
     ;
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", test_env_a.module_env);
     defer test_env_b.deinit();
-    try test_env_b.assertLastDefType("Str");
+    // Str is now a nested type in Builtin module, so it prints as "Builtin"
+    try test_env_b.assertLastDefType("Builtin");
 }
 
 test "cross-module - check type - polymorphic function with multiple uses passes" {

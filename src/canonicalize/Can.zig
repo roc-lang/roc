@@ -2581,7 +2581,7 @@ pub fn canonicalizeExpr(
                                         var count: usize = 0;
                                         var iter = module_env.common.exposed_items.iterator();
                                         while (iter.next()) |item| {
-                                            const ident_idx: Ident.Idx = @enumFromInt(item.ident_idx);
+                                            const ident_idx: Ident.Idx = @bitCast(item.ident_idx);
                                             const ident_text = module_env.getIdentText(ident_idx);
                                             if (std.mem.startsWith(u8, ident_text, module_text)) {
                                                 std.debug.print("  - {s}\n", .{ident_text});

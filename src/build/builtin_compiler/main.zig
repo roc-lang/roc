@@ -131,11 +131,12 @@ pub fn main() !void {
     }
 
     // Find nested type declarations via string lookup
-    const bool_type_idx = try findNestedTypeDeclaration(builtin_env, "Builtin", "Bool");
-    const result_type_idx = try findNestedTypeDeclaration(builtin_env, "Builtin", "Result");
-    const dict_type_idx = try findNestedTypeDeclaration(builtin_env, "Builtin", "Dict");
-    const set_type_idx = try findNestedTypeDeclaration(builtin_env, "Builtin", "Set");
-    const str_type_idx = try findNestedTypeDeclaration(builtin_env, "Builtin", "Str");
+    // These are nested inside Builtin's record extension, but they're exposed with unqualified names
+    const bool_type_idx = try findNestedTypeDeclaration(builtin_env, "", "Bool");
+    const result_type_idx = try findNestedTypeDeclaration(builtin_env, "", "Result");
+    const dict_type_idx = try findNestedTypeDeclaration(builtin_env, "", "Dict");
+    const set_type_idx = try findNestedTypeDeclaration(builtin_env, "", "Set");
+    const str_type_idx = try findNestedTypeDeclaration(builtin_env, "", "Str");
 
     // Transform Str nominal types to .str primitive types
     // This must happen BEFORE serialization to ensure the .bin file contains
@@ -339,20 +340,20 @@ fn findTypeDeclaration(env: *const ModuleEnv, type_name: []const u8) !CIR.Statem
 /// Find a nested type declaration (e.g., "Bool" inside "Builtin")
 /// Returns the statement index of the nested type declaration
 fn findNestedTypeDeclaration(env: *const ModuleEnv, parent_name: []const u8, nested_name: []const u8) !CIR.Statement.Idx {
+    _ = parent_name;
     const all_stmts = env.store.sliceStatements(env.all_statements);
 
-    // Build the qualified name: "Parent.Nested"
-    var qualified_name_buf: [256]u8 = undefined;
-    const qualified_name = try std.fmt.bufPrint(&qualified_name_buf, "{s}.{s}", .{ parent_name, nested_name });
-
-    // Search for a type declaration with the qualified name
+    std.debug.print("Searching for nested type '{s}'\n", .{nested_name});
+    std.debug.print("All nominal declarations in module:\n", .{});
     for (all_stmts) |stmt_idx| {
         const stmt = env.store.getStatement(stmt_idx);
         switch (stmt) {
             .s_nominal_decl => |decl| {
                 const header = env.store.getTypeHeader(decl.header);
                 const ident_text = env.getIdentText(header.name);
-                if (std.mem.eql(u8, ident_text, qualified_name)) {
+                std.debug.print("  - {s}\n", .{ident_text});
+                if (std.mem.eql(u8, ident_text, nested_name)) {
+                    std.debug.print("Found match for '{s}' at statement index {d}\n", .{ nested_name, @intFromEnum(stmt_idx) });
                     return stmt_idx;
                 }
             },
@@ -360,7 +361,7 @@ fn findNestedTypeDeclaration(env: *const ModuleEnv, parent_name: []const u8, nes
         }
     }
 
-    std.debug.print("ERROR: Could not find nested type declaration '{s}' (searched for '{s}')\n", .{ nested_name, qualified_name });
+    std.debug.print("ERROR: Could not find nested type declaration '{s}'\n", .{nested_name});
     return error.TypeDeclarationNotFound;
 }
 

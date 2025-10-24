@@ -582,26 +582,25 @@ fn updateVar(self: *Self, target_var: Var, content: types_mod.Content, rank: typ
 /// other modules directly. The Bool and Result types are used in language constructs like
 /// `if` conditions and need to be available in every module's type store.
 fn copyBuiltinTypes(self: *Self) !void {
-    // Find the Bool and Result modules in imported_modules
-    var bool_module: ?*const ModuleEnv = null;
-    var result_module: ?*const ModuleEnv = null;
+    // Find the Builtin module in imported_modules
+    // Bool, Result, and Str are all nested types within the Builtin module
+    var builtin_module: ?*const ModuleEnv = null;
 
     for (self.imported_modules) |module_env| {
-        if (std.mem.eql(u8, module_env.module_name, "Bool")) {
-            bool_module = module_env;
-        } else if (std.mem.eql(u8, module_env.module_name, "Result")) {
-            result_module = module_env;
+        if (std.mem.eql(u8, module_env.module_name, "Builtin")) {
+            builtin_module = module_env;
+            break;
         }
     }
 
-    // Copy Bool type from Bool module
-    if (bool_module) |bool_env| {
+    // Copy Bool type from Builtin module
+    if (builtin_module) |builtin_env| {
         const bool_stmt_idx = self.common_idents.bool_stmt;
         const bool_type_var = ModuleEnv.varFrom(bool_stmt_idx);
-        self.bool_var = try self.copyVar(bool_type_var, bool_env, Region.zero());
+        self.bool_var = try self.copyVar(bool_type_var, builtin_env, Region.zero());
     } else {
-        // If Bool module not found, use the statement from the current module
-        // This happens when Bool is loaded as a builtin statement
+        // If Builtin module not found, use the statement from the current module
+        // This happens when Bool is loaded as a builtin statement within the current module
         const bool_stmt_idx = self.common_idents.bool_stmt;
         self.bool_var = ModuleEnv.varFrom(bool_stmt_idx);
     }
