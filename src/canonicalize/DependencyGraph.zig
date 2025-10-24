@@ -20,7 +20,7 @@ const ModuleEnv = @import("ModuleEnv.zig");
 /// Edges point from dependent to dependency (A -> B means A depends on B).
 pub const DependencyGraph = struct {
     /// Map from def_idx to list of def_idx it depends on
-    edges: std.AutoHashMapUnmanaged(CIR.Def.Idx, std.ArrayListUnmanaged(CIR.Def.Idx)),
+    edges: std.AutoHashMapUnmanaged(CIR.Def.Idx, std.ArrayList(CIR.Def.Idx)),
 
     /// All defs in the graph
     nodes: []const CIR.Def.Idx,
@@ -354,13 +354,13 @@ const TarjanState = struct {
     visited: std.AutoHashMapUnmanaged(CIR.Def.Idx, void),
 
     /// Stack for Tarjan's algorithm
-    stack: std.ArrayListUnmanaged(CIR.Def.Idx),
+    stack: std.ArrayList(CIR.Def.Idx),
 
     /// Set of nodes currently on stack
     on_stack: std.AutoHashMapUnmanaged(CIR.Def.Idx, void),
 
     /// Resulting SCCs (in reverse topological order during construction)
-    sccs: std.ArrayListUnmanaged(SCC),
+    sccs: std.ArrayList(SCC),
 
     allocator: std.mem.Allocator,
 
@@ -422,7 +422,7 @@ const TarjanState = struct {
         const v_lowlink = self.lowlinks.get(v).?;
         const v_index = self.indices.get(v).?;
         if (v_lowlink == v_index) {
-            var scc_defs = std.ArrayListUnmanaged(CIR.Def.Idx){};
+            var scc_defs = std.ArrayList(CIR.Def.Idx){};
 
             while (true) {
                 const w = self.stack.pop() orelse unreachable; // Stack should not be empty

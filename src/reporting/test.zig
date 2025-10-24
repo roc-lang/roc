@@ -19,8 +19,8 @@ const ColorPalette = @import("style.zig").ColorPalette;
 
 test "SYNTAX_PROBLEM report along with all four render types" {
     const gpa = testing.allocator;
-    var buffer = std.array_list.Managed(u8).init(gpa);
-    defer buffer.deinit();
+    var buffer = std.ArrayList(u8).empty;
+    defer buffer.deinit(gpa);
 
     // Create a Report
     var r = Report.init(gpa, "SYNTAX PROBLEM", .runtime_error);

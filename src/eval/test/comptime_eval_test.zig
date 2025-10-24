@@ -170,12 +170,12 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     try czer.canonicalizeFile();
 
     // Set up other_envs for type checking (include Bool, Result, and Str modules)
-    var imported_envs = std.array_list.Managed(*const ModuleEnv).init(gpa);
-    defer imported_envs.deinit();
-    try imported_envs.append(imported_module);
-    try imported_envs.append(bool_module.env);
-    try imported_envs.append(result_module.env);
-    try imported_envs.append(str_module.env);
+    var imported_envs = std.ArrayList(*const ModuleEnv).empty;
+    defer imported_envs.deinit(gpa);
+    try imported_envs.append(gpa, imported_module);
+    try imported_envs.append(gpa, bool_module.env);
+    try imported_envs.append(gpa, result_module.env);
+    try imported_envs.append(gpa, str_module.env);
 
     // Type check the module
     var checker = try Check.init(gpa, &module_env.types, module_env, imported_envs.items, &module_envs, &module_env.store.regions, common_idents);

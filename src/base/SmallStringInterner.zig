@@ -305,12 +305,12 @@ test "SmallStringInterner basic CompactWriter roundtrip" {
         "duplicate", // Should reuse the same index
     };
 
-    var indices = std.array_list.Managed(SmallStringInterner.Idx).init(gpa);
-    defer indices.deinit();
+    var indices = std.ArrayList(SmallStringInterner.Idx).empty;
+    defer indices.deinit(gpa);
 
     for (test_strings) |str| {
         const idx = try original.insert(gpa, str);
-        try indices.append(idx);
+        try indices.append(gpa, idx);
     }
 
     // Verify duplicate detection worked
@@ -507,12 +507,12 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
         " start_with_space",
     };
 
-    var indices = std.array_list.Managed(SmallStringInterner.Idx).init(gpa);
-    defer indices.deinit();
+    var indices = std.ArrayList(SmallStringInterner.Idx).empty;
+    defer indices.deinit(gpa);
 
     for (edge_cases) |str| {
         const idx = try original.insert(gpa, str);
-        try indices.append(idx);
+        try indices.append(gpa, idx);
     }
 
     // Create a temp file

@@ -137,8 +137,8 @@ pub const Interpreter = struct {
     pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, imported_modules_map: ?*const std.AutoHashMap(base_pkg.Ident.Idx, can.Can.AutoImportedType)) !Interpreter {
         // Convert imported modules map to other_envs slice
         // IMPORTANT: The order must match Import.Idx order (not hash map iteration order!)
-        var other_envs_list = std.array_list.Managed(*const can.ModuleEnv).init(allocator);
-        errdefer other_envs_list.deinit();
+        var other_envs_list = std.ArrayList(*const can.ModuleEnv).empty;
+        errdefer other_envs_list.deinit(allocator);
 
         if (imported_modules_map) |modules_map| {
             // Iterate through imports in Import.Idx order (0, 1, 2, ...)
@@ -156,7 +156,7 @@ pub const Interpreter = struct {
 
                 // Look up the module env in the map
                 if (modules_map.get(module_ident)) |auto_imported| {
-                    try other_envs_list.append(auto_imported.env);
+                    try other_envs_list.append(allocator, auto_imported.env);
                 } else {
                     // Import exists in env.imports but not in the map we were given.
                     // This shouldn't happen in practice if the map is properly constructed.
@@ -167,7 +167,7 @@ pub const Interpreter = struct {
 
         // Transfer ownership of the slice to the Interpreter
         // Note: The caller is responsible for freeing this via deinitAndFreeOtherEnvs()
-        const other_envs = try other_envs_list.toOwnedSlice();
+        const other_envs = try other_envs_list.toOwnedSlice(allocator);
         return initWithOtherEnvs(allocator, env, other_envs, builtin_types);
     }
 
@@ -3566,7 +3566,7 @@ pub const Interpreter = struct {
                             break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = compact_num } } });
                         },
                         .tag_union => |tu| {
-                            var rt_tag_args = try std.ArrayListUnmanaged(types.Var).initCapacity(self.allocator, 8);
+                            var rt_tag_args = try std.ArrayList(types.Var).initCapacity(self.allocator, 8);
                             defer rt_tag_args.deinit(self.allocator);
 
                             var rt_tags = try self.gatherTags(module, tu);
@@ -3746,8 +3746,8 @@ pub const Interpreter = struct {
         ctx: *const Interpreter,
         module: *can.ModuleEnv,
         tag_union: types.TagUnion,
-    ) std.mem.Allocator.Error!std.ArrayListUnmanaged(types.Tag) {
-        var scratch_tags = try std.ArrayListUnmanaged(types.Tag).initCapacity(ctx.allocator, 8);
+    ) std.mem.Allocator.Error!std.ArrayList(types.Tag) {
+        var scratch_tags = try std.ArrayList(types.Tag).initCapacity(ctx.allocator, 8);
 
         const tag_slice = module.types.getTagsSlice(tag_union.tags);
         for (tag_slice.items(.name), tag_slice.items(.args)) |name, args| {

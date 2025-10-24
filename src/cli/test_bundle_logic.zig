@@ -14,10 +14,10 @@ test "bundle paths - empty list defaults to main.roc" {
 test "bundle paths - single file unchanged" {
     const allocator = testing.allocator;
 
-    var file_paths = std.array_list.Managed([]const u8).init(allocator);
-    defer file_paths.deinit();
+    var file_paths = std.ArrayList([]const u8).empty;
+    defer file_paths.deinit(allocator);
 
-    try file_paths.append("app.roc");
+    try file_paths.append(allocator, "app.roc");
 
     try testing.expectEqual(@as(usize, 1), file_paths.items.len);
     try testing.expectEqualStrings("app.roc", file_paths.items[0]);
@@ -26,14 +26,14 @@ test "bundle paths - single file unchanged" {
 test "bundle paths - sorting and deduplication" {
     const allocator = testing.allocator;
 
-    var file_paths = std.array_list.Managed([]const u8).init(allocator);
-    defer file_paths.deinit();
+    var file_paths = std.ArrayList([]const u8).empty;
+    defer file_paths.deinit(allocator);
 
     // Add paths in non-sorted order with duplicates
-    try file_paths.append("zebra.roc");
-    try file_paths.append("apple.roc");
-    try file_paths.append("banana.roc");
-    try file_paths.append("apple.roc");
+    try file_paths.append(allocator, "zebra.roc");
+    try file_paths.append(allocator, "apple.roc");
+    try file_paths.append(allocator, "banana.roc");
+    try file_paths.append(allocator, "apple.roc");
 
     const first_cli_path = file_paths.items[0]; // "zebra.roc"
 
@@ -85,18 +85,18 @@ test "bundle paths - sorting and deduplication" {
 test "bundle paths - preserves first CLI arg with many files" {
     const allocator = testing.allocator;
 
-    var file_paths = std.array_list.Managed([]const u8).init(allocator);
-    defer file_paths.deinit();
+    var file_paths = std.ArrayList([]const u8).empty;
+    defer file_paths.deinit(allocator);
 
     // Add 8 paths with specific first
-    try file_paths.append("tests/test2.roc");
-    try file_paths.append("main.roc");
-    try file_paths.append("src/app.roc");
-    try file_paths.append("src/lib.roc");
-    try file_paths.append("src/utils/helper.roc");
-    try file_paths.append("tests/test1.roc");
-    try file_paths.append("docs/readme.md");
-    try file_paths.append("config.roc");
+    try file_paths.append(allocator, "tests/test2.roc");
+    try file_paths.append(allocator, "main.roc");
+    try file_paths.append(allocator, "src/app.roc");
+    try file_paths.append(allocator, "src/lib.roc");
+    try file_paths.append(allocator, "src/utils/helper.roc");
+    try file_paths.append(allocator, "tests/test1.roc");
+    try file_paths.append(allocator, "docs/readme.md");
+    try file_paths.append(allocator, "config.roc");
 
     const first_cli_path = file_paths.items[0]; // "tests/test2.roc"
 

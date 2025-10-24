@@ -164,7 +164,9 @@ UNDEFINED VARIABLE - fuzz_crash_020.md:80:3:80:6
 CRASH EXPECTS STRING - fuzz_crash_020.md:86:3:86:11
 UNDEFINED VARIABLE - fuzz_crash_020.md:87:11:87:12
 UNDEFINED VARIABLE - fuzz_crash_020.md:89:3:89:6
-NOT IMPLEMENTED - :0:0:0:0
+UNDEFINED VARIABLE - fuzz_crash_020.md:92:11:92:15
+UNDEFINED VARIABLE - fuzz_crash_020.md:93:2:93:7
+UNDEFINED VARIABLE - fuzz_crash_020.md:94:3:94:6
 UNDEFINED VARIABLE - fuzz_crash_020.md:96:34:96:37
 UNDEFINED VARIABLE - fuzz_crash_020.md:96:47:96:52
 UNDEFINED VARIABLE - fuzz_crash_020.md:96:54:96:57
@@ -188,7 +190,13 @@ UNDEFINED VARIABLE - fuzz_crash_020.md:120:1:120:2
 UNDEFINED VARIABLE - fuzz_crash_020.md:120:6:120:9
 EXPOSED BUT NOT DEFINED - fuzz_crash_020.md:2:6:2:11
 TOO FEW ARGS - fuzz_crash_020.md:17:3:18:4
+UNUSED VALUE - fuzz_crash_020.md:39:2:39:3
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_020.md:52:2:52:2
+UNUSED VALUE - fuzz_crash_020.md:1:1:1:1
+UNUSED VALUE - fuzz_crash_020.md:86:11:86:17
+UNUSED VALUE - fuzz_crash_020.md:98:4:104:3
+UNUSED VALUE - fuzz_crash_020.md:105:2:105:54
+UNUSED VALUE - fuzz_crash_020.md:105:55:105:85
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `match_branch_missing_arrow`
@@ -597,10 +605,38 @@ Is there an `import` or `exposing` missing up-top?
 		^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: statement type in block
+**UNDEFINED VARIABLE**
+Nothing is named `list` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+**fuzz_crash_020.md:92:11:92:15:**
+```roc
+	for n in list {
+```
+	         ^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `line!` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_020.md:93:2:93:7:**
+```roc
+	line!("Ag ${n} to ${er}")
+```
+	^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `ber` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_020.md:94:3:94:6:**
+```roc
+		ber + n
+```
+		^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `tag` in this scope.
@@ -857,6 +893,17 @@ The type _List_ expects  argument, but got  instead.
 
 
 
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_020.md:39:2:39:3:**
+```roc
+	1
+```
+	^
+
+It has the type:
+    _Num(_size)_
+
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:
 **fuzz_crash_020.md:52:2:**
@@ -891,6 +938,66 @@ But all the previous patterns have this type:
 All patterns in an `match` must have compatible types.
 
 
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_020.md:1:1:1:1:**
+```roc
+# Thnt!
+```
+^
+
+It has the type:
+    __f_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_020.md:86:11:86:17:**
+```roc
+	)crash ke"Unr!" #)
+```
+	         ^^^^^^
+
+It has the type:
+    _Str_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_020.md:98:4:104:3:**
+```roc
+	m (
+		123,
+		"World",ag1,
+		O, # nt
+		(ne, tuple),
+		[1, 2, 3],
+	)
+```
+
+It has the type:
+    _(Num(_size), Str, Error, [O]_others, (Error, Error), List(Num(_size2)))_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_020.md:105:2:105:54:**
+```roc
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+```
+	^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+It has the type:
+    _Bool_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_020.md:105:55:105:85:**
+```roc
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+```
+	                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+It has the type:
+    __f_
 
 # TOKENS
 ~~~zig
@@ -1678,7 +1785,25 @@ expect {
 										(p-assign (ident "er"))))
 								(e-num (value "456"))
 								(e-num (value "9")))))
-					(s-runtime-error (tag "not_implemented"))
+					(s-for
+						(p-assign (ident "n"))
+						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-block
+							(s-expr
+								(e-call
+									(e-runtime-error (tag "ident_not_in_scope"))
+									(e-string
+										(e-literal (string "Ag "))
+										(e-lookup-local
+											(p-assign (ident "n")))
+										(e-literal (string " to "))
+										(e-lookup-local
+											(p-assign (ident "er")))
+										(e-literal (string "")))))
+							(e-binop (op "add")
+								(e-runtime-error (tag "ident_not_in_scope"))
+								(e-lookup-local
+									(p-assign (ident "n"))))))
 					(s-let
 						(p-assign (ident "rd"))
 						(e-record

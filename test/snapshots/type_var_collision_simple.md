@@ -207,9 +207,9 @@ main! = |_| {
 				(capture (ident "identity"))
 				(capture (ident "identity2"))
 				(capture (ident "pair"))
+				(capture (ident "a"))
 				(capture (ident "b"))
-				(capture (ident "c"))
-				(capture (ident "a")))
+				(capture (ident "c")))
 			(e-lambda
 				(args
 					(p-underscore))

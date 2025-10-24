@@ -559,10 +559,10 @@ combineResults = |result1, result2|
 		(p-assign (ident "combineResults"))
 		(e-closure
 			(captures
+				(capture (ident "value1"))
 				(capture (ident "value2"))
 				(capture (ident "err"))
-				(capture (ident "err"))
-				(capture (ident "value1")))
+				(capture (ident "err")))
 			(e-lambda
 				(args
 					(p-assign (ident "result1"))

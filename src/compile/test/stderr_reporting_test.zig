@@ -19,8 +19,8 @@ test "roc check writes parse errors to stderr" {
         return error.SkipZigTest;
     };
 
-    // Use the existing test/str/app.roc file which has type errors
-    const test_file = try std.fs.path.join(gpa, &.{ cwd_path, "test", "str", "app.roc" });
+    // Use a test file that intentionally has a parse error
+    const test_file = try std.fs.path.join(gpa, &.{ cwd_path, "test", "compile", "has_parse_error.roc" });
     defer gpa.free(test_file);
 
     // Run roc check and capture stderr
@@ -40,9 +40,9 @@ test "roc check writes parse errors to stderr" {
     // 2. Stderr contains error information (THIS IS THE KEY TEST - without flush, this will be empty)
     try testing.expect(result.stderr.len > 0);
 
-    // 3. Stderr contains error reporting (look for UNDECLARED TYPE error)
-    const has_error = std.mem.indexOf(u8, result.stderr, "UNDECLARED TYPE") != null or
+    // 3. Stderr contains error reporting
+    const has_error = std.mem.indexOf(u8, result.stderr, "Failed to check") != null or
         std.mem.indexOf(u8, result.stderr, "error") != null or
-        std.mem.indexOf(u8, result.stderr, "Found") != null;
+        std.mem.indexOf(u8, result.stderr, "Unsupported") != null;
     try testing.expect(has_error);
 }

@@ -1067,10 +1067,10 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
     var first_bundle_writer: std.Io.Writer.Allocating = .init(allocator);
     defer first_bundle_writer.deinit();
 
-    var paths1 = std.array_list.Managed([]const u8).init(allocator);
-    defer paths1.deinit();
+    var paths1 = std.ArrayList([]const u8).empty;
+    defer paths1.deinit(allocator);
     for (test_files) |test_file| {
-        try paths1.append(test_file.path);
+        try paths1.append(allocator, test_file.path);
     }
     var iter1 = FilePathIterator{ .paths = paths1.items };
 
@@ -1106,10 +1106,10 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
     var second_bundle_writer: std.Io.Writer.Allocating = .init(allocator);
     defer second_bundle_writer.deinit();
 
-    var paths2 = std.array_list.Managed([]const u8).init(allocator);
-    defer paths2.deinit();
+    var paths2 = std.ArrayList([]const u8).empty;
+    defer paths2.deinit(allocator);
     for (test_files) |test_file| {
-        try paths2.append(test_file.path);
+        try paths2.append(allocator, test_file.path);
     }
     var iter2 = FilePathIterator{ .paths = paths2.items };
 
@@ -1216,13 +1216,13 @@ test "CLI unbundle with no args defaults to all .tar.zst files" {
     var cwd = try tmp_dir.openDir(".", .{ .iterate = true });
     defer cwd.close();
 
-    var found_archives = std.array_list.Managed([]const u8).init(allocator);
-    defer found_archives.deinit();
+    var found_archives = std.ArrayList([]const u8).empty;
+    defer found_archives.deinit(allocator);
 
     var iter = cwd.iterate();
     while (try iter.next()) |entry| {
         if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".tar.zst")) {
-            try found_archives.append(entry.name);
+            try found_archives.append(allocator, entry.name);
         }
     }
 
