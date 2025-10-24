@@ -749,7 +749,7 @@ fn addMainExe(
             .root_source_file = b.path("test/str/platform/host.zig"),
             .target = target,
             .optimize = optimize,
-            .strip = true,
+            .strip = optimize != .Debug,
             .pic = true, // Enable Position Independent Code for PIE compatibility
         }),
     });
@@ -773,7 +773,7 @@ fn addMainExe(
             .root_source_file = b.path("test/int/platform/host.zig"),
             .target = target,
             .optimize = optimize,
-            .strip = true,
+            .strip = optimize != .Debug,
             .pic = true, // Enable Position Independent Code for PIE compatibility
         }),
     });
@@ -806,7 +806,7 @@ fn addMainExe(
                 .root_source_file = b.path("test/int/platform/host.zig"),
                 .target = cross_resolved_target,
                 .optimize = optimize,
-                .strip = true,
+                .strip = optimize != .Debug,
                 .pic = true,
             }),
             .linkage = .static,
@@ -851,7 +851,7 @@ fn addMainExe(
             .root_source_file = b.path("src/interpreter_shim/main.zig"),
             .target = target,
             .optimize = optimize,
-            .strip = true,
+            .strip = optimize != .Debug,
             .pic = true, // Enable Position Independent Code for PIE compatibility
         }),
         .linkage = .static,
