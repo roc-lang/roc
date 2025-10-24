@@ -2682,20 +2682,19 @@ fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) noret
     stderr.print("Failed to check {s}: ", .{path}) catch {};
     switch (err) {
         // Custom BuildEnv errors - these need special messages
-        error.ExpectedAppHeader => stderr.print("Expected app header but found different header type", .{}) catch {},
-        error.ExpectedPlatformString => stderr.print("Expected platform string in header", .{}) catch {},
-        error.PathOutsideWorkspace => stderr.print("Dependency path outside workspace not allowed", .{}) catch {},
-        error.UnsupportedHeader => stderr.print("Unsupported header type", .{}) catch {},
-        error.ExpectedString => stderr.print("Expected string in header", .{}) catch {},
-        error.Internal => stderr.print("Internal compiler error", .{}) catch {},
-        error.InvalidDependency => stderr.print("Invalid dependency relationship", .{}) catch {},
-        error.TooNested => stderr.print("Too deeply nested", .{}) catch {},
-        error.InvalidPackageName => stderr.print("Invalid package name", .{}) catch {},
+        error.ExpectedAppHeader => stderr.print("Expected app header but found different header type\n", .{}) catch {},
+        error.ExpectedPlatformString => stderr.print("Expected platform string in header\n", .{}) catch {},
+        error.PathOutsideWorkspace => stderr.print("Dependency path outside workspace not allowed\n", .{}) catch {},
+        error.UnsupportedHeader => stderr.print("Unsupported header type\n", .{}) catch {},
+        error.ExpectedString => stderr.print("Expected string in header\n", .{}) catch {},
+        error.Internal => stderr.print("Internal compiler error\n", .{}) catch {},
+        error.InvalidDependency => stderr.print("Invalid dependency relationship\n", .{}) catch {},
+        error.TooNested => stderr.print("Too deeply nested\n", .{}) catch {},
+        error.InvalidPackageName => stderr.print("Invalid package name\n", .{}) catch {},
 
         // Catch-all for any other errors
-        else => stderr.print("{s}", .{@errorName(err)}) catch {},
+        else => stderr.print("{s}\n", .{@errorName(err)}) catch {},
     }
-    stderr.print("\n", .{}) catch {};
 
     // Flush stderr before exit to ensure error message is visible
     stderr_writer.interface.flush() catch {};
@@ -2803,30 +2802,6 @@ fn checkFileWithBuildEnvPreserved(
         defer build_env.gpa.free(drained);
 
         // Print any error reports to stderr before failing
-        const stderr = std.fs.File.stderr();
-        const num_reports = blk: {
-            var count: usize = 0;
-            for (drained) |mod| count += mod.reports.len;
-            break :blk count;
-        };
-
-        if (num_reports > 0) {
-            _ = stderr.write("DEBUG: Found ") catch {};
-            var buf: [32]u8 = undefined;
-            const count_str = std.fmt.bufPrint(&buf, "{d}", .{num_reports}) catch "?";
-            _ = stderr.write(count_str) catch {};
-            _ = stderr.write(" reports\n") catch {};
-
-            for (drained) |mod| {
-                for (mod.reports) |report| {
-                    _ = stderr.write(report.title) catch {};
-                    _ = stderr.write("\n") catch {};
-                }
-            }
-        } else {
-            _ = stderr.write("DEBUG: No reports found\n") catch {};
-        }
-
         return err;
     };
 
