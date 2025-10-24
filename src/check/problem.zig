@@ -39,6 +39,7 @@ pub const Problem = union(enum) {
     static_dispach: StaticDispatch,
     number_does_not_fit: NumberDoesNotFit,
     negative_unsigned_int: NegativeUnsignedInt,
+    unused_value: UnusedValue,
     infinite_recursion: struct { var_: Var },
     anonymous_recursion: struct { var_: Var },
     invalid_number_type: VarProblem1,
@@ -89,6 +90,12 @@ pub const NumberDoesNotFit = struct {
 pub const NegativeUnsignedInt = struct {
     literal_var: Var,
     expected_type: SnapshotContentIdx,
+};
+
+/// Error when a stmt expression returns a non-empty record value
+pub const UnusedValue = struct {
+    var_: Var,
+    snapshot: SnapshotContentIdx,
 };
 
 // type mismatch //
@@ -350,6 +357,9 @@ pub const ReportBuilder = struct {
             },
             .negative_unsigned_int => |data| {
                 return self.buildNegativeUnsignedIntReport(data);
+            },
+            .unused_value => |data| {
+                return self.buildUnusedValueReport(data);
             },
             .infinite_recursion => |_| return self.buildUnimplementedReport("infinite_recursion"),
             .anonymous_recursion => |_| return self.buildUnimplementedReport("anonymous_recursion"),
@@ -1778,6 +1788,38 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    /// Build a report for "negative unsigned integer" diagnostic
+    fn buildUnusedValueReport(self: *Self, data: UnusedValue) !Report {
+        var report = Report.init(self.gpa, "UNUSED VALUE", .runtime_error);
+        errdefer report.deinit();
+
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(data.snapshot);
+        const owned_expected = try report.addOwnedString(self.snapshot_writer.get());
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
+        const region_info = self.module_env.calcRegionInfo(region.*);
+
+        try report.document.addReflowingText("This expression produces a value, but it's not being used:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addReflowingText("It has the type:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(owned_expected, .type_variable);
+
+        return report;
+    }
+
     // cross-module import //
 
     /// Build a report for cross-module import type mismatch
@@ -2054,11 +2096,11 @@ pub const Store = struct {
     const Self = @This();
     const ALIGNMENT = std.mem.Alignment.@"16";
 
-    problems: std.ArrayListAlignedUnmanaged(Problem, ALIGNMENT) = .{},
+    problems: std.ArrayListAligned(Problem, ALIGNMENT) = .{},
 
     pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
         return .{
-            .problems = try std.ArrayListAlignedUnmanaged(Problem, ALIGNMENT).initCapacity(gpa, capacity),
+            .problems = try std.ArrayListAligned(Problem, ALIGNMENT).initCapacity(gpa, capacity),
         };
     }
 

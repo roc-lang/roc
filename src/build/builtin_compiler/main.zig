@@ -236,12 +236,12 @@ fn compileModule(
 
     // 6. Type check
     // Build the list of other modules for type checking
-    var imported_envs = std.array_list.Managed(*const ModuleEnv).init(gpa);
-    defer imported_envs.deinit();
+    var imported_envs = std.ArrayList(*const ModuleEnv).empty;
+    defer imported_envs.deinit(gpa);
 
     // Add dependencies
     for (deps) |dep| {
-        try imported_envs.append(dep.env);
+        try imported_envs.append(gpa, dep.env);
     }
 
     var checker = try Check.init(

@@ -187,8 +187,15 @@ UNDEFINED VARIABLE - fuzz_crash_019.md:120:1:120:2
 UNDEFINED VARIABLE - fuzz_crash_019.md:120:6:120:9
 EXPOSED BUT NOT DEFINED - fuzz_crash_019.md:2:6:2:11
 TOO FEW ARGS - fuzz_crash_019.md:17:3:18:4
+UNUSED VALUE - fuzz_crash_019.md:39:2:39:3
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_019.md:52:2:52:2
+UNUSED VALUE - fuzz_crash_019.md:1:1:1:1
 TYPE MISMATCH - fuzz_crash_019.md:84:2:86:3
+UNUSED VALUE - fuzz_crash_019.md:84:2:86:3
+UNUSED VALUE - fuzz_crash_019.md:86:11:86:17
+UNUSED VALUE - fuzz_crash_019.md:98:4:104:3
+UNUSED VALUE - fuzz_crash_019.md:105:2:105:54
+UNUSED VALUE - fuzz_crash_019.md:105:55:105:85
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `match_branch_missing_arrow`
@@ -846,6 +853,17 @@ The type _List_ expects  argument, but got  instead.
 
 
 
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_019.md:39:2:39:3:**
+```roc
+	1
+```
+	^
+
+It has the type:
+    _Num(_size)_
+
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:
 **fuzz_crash_019.md:52:2:**
@@ -881,6 +899,17 @@ All patterns in an `match` must have compatible types.
 
 
 
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_019.md:1:1:1:1:**
+```roc
+# Thnt!
+```
+^
+
+It has the type:
+    __f_
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **fuzz_crash_019.md:84:2:86:3:**
@@ -895,6 +924,67 @@ It has the type:
 
 But I expected it to be:
     _[Blue]_others, [Tb]_others2 -> Error_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_019.md:84:2:86:3:**
+```roc
+	me(
+		..., # r
+	)crash ke"Unr!" #)
+```
+
+It has the type:
+    __f_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_019.md:86:11:86:17:**
+```roc
+	)crash ke"Unr!" #)
+```
+	         ^^^^^^
+
+It has the type:
+    _Str_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_019.md:98:4:104:3:**
+```roc
+	m (
+		123,
+		"World",ag1,
+		O, # nt
+		(ne, tuple),
+		[1, 2, 3],
+	)
+```
+
+It has the type:
+    _(Num(_size), Str, Error, [O]_others, (Error, Error), List(Num(_size2)))_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_019.md:105:2:105:54:**
+```roc
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+```
+	^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+It has the type:
+    _Bool_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_019.md:105:55:105:85:**
+```roc
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+```
+	                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+It has the type:
+    __f_
 
 # TOKENS
 ~~~zig

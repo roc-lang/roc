@@ -50,6 +50,8 @@ UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:5:7:7
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:7:7:8
 DOES NOT EXIST - record_different_fields_reserved_error.md:7:9:7:19
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:19:7:20
+UNUSED VALUE - record_different_fields_reserved_error.md:4:13:4:29
+UNUSED VALUE - record_different_fields_reserved_error.md:5:13:5:26
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **:** is not expected in an expression.
@@ -427,6 +429,28 @@ I don't recognize this syntax.
                   ^
 
 This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**record_different_fields_reserved_error.md:4:13:4:29:**
+```roc
+    expect: "test assertion",
+```
+            ^^^^^^^^^^^^^^^^
+
+It has the type:
+    _Str_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**record_different_fields_reserved_error.md:5:13:5:26:**
+```roc
+    import: "module load",
+```
+            ^^^^^^^^^^^^^
+
+It has the type:
+    _Str_
 
 # TOKENS
 ~~~zig

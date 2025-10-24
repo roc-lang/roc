@@ -227,7 +227,9 @@ UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
 TOO FEW ARGS - fuzz_crash_027.md:21:3:22:4
 INVALID IF CONDITION - fuzz_crash_027.md:50:5:50:5
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
+UNUSED VALUE - fuzz_crash_027.md:1:1:1:1
 TYPE MISMATCH - fuzz_crash_027.md:111:2:113:3
+UNUSED VALUE - fuzz_crash_027.md:111:2:113:3
 TYPE MISMATCH - fuzz_crash_027.md:143:2:147:3
 # PROBLEMS
 **LEADING ZERO**
@@ -916,6 +918,17 @@ All patterns in an `match` must have compatible types.
 
 
 
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_027.md:1:1:1:1:**
+```roc
+# Thnt!
+```
+^
+
+It has the type:
+    __d_
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **fuzz_crash_027.md:111:2:113:3:**
@@ -930,6 +943,18 @@ It has the type:
 
 But I expected it to be:
     _[Red, Blue]_others, _arg -> Error_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_027.md:111:2:113:3:**
+```roc
+	match_time(
+		..., #
+	)
+```
+
+It has the type:
+    __d_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

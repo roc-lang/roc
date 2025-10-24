@@ -276,7 +276,10 @@ UNUSED VARIABLE - fuzz_crash_023.md:189:2:189:23
 UNDECLARED TYPE - fuzz_crash_023.md:201:9:201:14
 INVALID IF CONDITION - fuzz_crash_023.md:70:5:70:5
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_023.md:84:2:84:2
+UNUSED VALUE - fuzz_crash_023.md:1:1:1:1
 TYPE MISMATCH - fuzz_crash_023.md:155:2:157:3
+UNUSED VALUE - fuzz_crash_023.md:155:2:157:3
+UNUSED VALUE - fuzz_crash_023.md:178:42:178:45
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_record_field_name`
@@ -983,6 +986,17 @@ All patterns in an `match` must have compatible types.
 
 
 
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_023.md:1:1:1:1:**
+```roc
+# This is a module comment!
+```
+^
+
+It has the type:
+    __d_
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **fuzz_crash_023.md:155:2:157:3:**
@@ -997,6 +1011,29 @@ It has the type:
 
 But I expected it to be:
     _[Red][Blue, Green]_others, _arg -> Error_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_023.md:155:2:157:3:**
+```roc
+	match_time(
+		..., # Single args with comment
+	)
+```
+
+It has the type:
+    __d_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_023.md:178:42:178:45:**
+```roc
+	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
+```
+	                                        ^^^
+
+It has the type:
+    _[Blue]_others_
 
 # TOKENS
 ~~~zig

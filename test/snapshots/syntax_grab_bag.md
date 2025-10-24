@@ -268,7 +268,9 @@ UNUSED VARIABLE - syntax_grab_bag.md:189:2:189:23
 UNDECLARED TYPE - syntax_grab_bag.md:201:9:201:14
 INVALID IF CONDITION - syntax_grab_bag.md:70:5:70:5
 INCOMPATIBLE MATCH PATTERNS - syntax_grab_bag.md:84:2:84:2
+UNUSED VALUE - syntax_grab_bag.md:1:1:1:1
 TYPE MISMATCH - syntax_grab_bag.md:155:2:157:3
+UNUSED VALUE - syntax_grab_bag.md:155:2:157:3
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Bar_ is not declared in this scope.
@@ -888,6 +890,17 @@ All patterns in an `match` must have compatible types.
 
 
 
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**syntax_grab_bag.md:1:1:1:1:**
+```roc
+# This is a module comment!
+```
+^
+
+It has the type:
+    __d_
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **syntax_grab_bag.md:155:2:157:3:**
@@ -902,6 +915,18 @@ It has the type:
 
 But I expected it to be:
     _[Red][Blue, Green]_others, _arg -> Error_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**syntax_grab_bag.md:155:2:157:3:**
+```roc
+	match_time(
+		..., # Single args with comment
+	)
+```
+
+It has the type:
+    __d_
 
 # TOKENS
 ~~~zig

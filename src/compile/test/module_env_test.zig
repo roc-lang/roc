@@ -410,9 +410,9 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
     try env.pushTypesToSExprTree(expr_idx, &tree);
 
     // Convert tree to string
-    var result = std.array_list.Managed(u8).init(gpa);
-    defer result.deinit();
-    try tree.toStringPretty(result.writer().any(), .include_linecol);
+    var result = std.ArrayList(u8).empty;
+    defer result.deinit(gpa);
+    try tree.toStringPretty(result.writer(gpa).any(), .include_linecol);
 
     // Verify the output contains the type information
     const result_str = result.items;

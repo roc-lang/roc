@@ -1368,18 +1368,17 @@ test "thread safety" {
     const global = struct {
         var event_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
         var mutex: std.Thread.Mutex = .{};
-        var events: std.array_list.Managed([]const u8) = undefined;
+        var events: std.ArrayList([]const u8) = .empty;
     };
 
-    global.events = std.array_list.Managed([]const u8).init(allocator);
-    defer global.events.deinit();
+    defer global.events.deinit(allocator);
 
     const callback = struct {
         fn cb(event: WatchEvent) void {
             _ = global.event_count.fetchAdd(1, .seq_cst);
             global.mutex.lock();
             defer global.mutex.unlock();
-            global.events.append(allocator.dupe(u8, event.path) catch return) catch return;
+            global.events.append(allocator, allocator.dupe(u8, event.path) catch return) catch return;
         }
     }.cb;
 
@@ -1541,14 +1540,14 @@ test "windows long path handling" {
     }
 
     // Create the nested directories
-    var current_path = std.array_list.Managed(u8).init(allocator);
-    defer current_path.deinit();
+    var current_path = std.ArrayList(u8).empty;
+    defer current_path.deinit(allocator);
 
     for (path_components.items) |component| {
         if (current_path.items.len > 0) {
-            try current_path.append(std.fs.path.sep);
+            try current_path.append(allocator, std.fs.path.sep);
         }
-        try current_path.appendSlice(component);
+        try current_path.appendSlice(allocator, component);
         try temp_dir.dir.makePath(current_path.items);
     }
 

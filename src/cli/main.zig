@@ -1867,8 +1867,8 @@ pub fn rocBundle(allocs: *Allocators, args: cli_args.BundleArgs) !void {
     }
 
     // Collect all files to bundle
-    var file_paths = std.array_list.Managed([]const u8).init(allocs.arena);
-    defer file_paths.deinit();
+    var file_paths = std.ArrayList([]const u8).empty;
+    defer file_paths.deinit(allocs.arena);
 
     var uncompressed_size: u64 = 0;
 
@@ -1889,7 +1889,7 @@ pub fn rocBundle(allocs: *Allocators, args: cli_args.BundleArgs) !void {
         const stat = try file.stat();
         uncompressed_size += stat.size;
 
-        try file_paths.append(path);
+        try file_paths.append(allocs.arena, path);
     }
 
     // Sort and deduplicate paths
@@ -2598,14 +2598,14 @@ fn rocFormat(allocs: *Allocators, args: cli_args.FormatArgs) !void {
     var exit_code: u8 = 0;
 
     if (args.check) {
-        var unformatted_files = std.array_list.Managed([]const u8).init(allocs.gpa);
-        defer unformatted_files.deinit();
+        var unformatted_files = std.ArrayList([]const u8).empty;
+        defer unformatted_files.deinit(allocs.gpa);
 
         for (args.paths) |path| {
             var result = try fmt.formatPath(allocs.gpa, allocs.arena, std.fs.cwd(), path, true);
             defer result.deinit();
             if (result.unformatted_files) |files| {
-                try unformatted_files.appendSlice(files.items);
+                try unformatted_files.appendSlice(allocs.gpa, files.items);
             }
             failure_count += result.failure;
         }
@@ -3668,11 +3668,11 @@ fn generateAppDocs(
     }
 
     // Convert map to sorted list
-    var modules_list = std.array_list.Managed(ModuleInfo).init(allocs.gpa);
-    defer modules_list.deinit();
+    var modules_list = std.ArrayList(ModuleInfo).empty;
+    defer modules_list.deinit(allocs.gpa);
     var map_iter = modules_map.iterator();
     while (map_iter.next()) |entry| {
-        try modules_list.append(entry.value_ptr.*);
+        try modules_list.append(allocs.gpa, entry.value_ptr.*);
     }
 
     // Collect package shorthands
