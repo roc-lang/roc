@@ -582,17 +582,6 @@ pub const PackageEnv = struct {
             try st.reports.append(self.gpa, report);
         }
 
-        // If there are any parse/tokenize errors, mark as done and return early
-        const has_parse_errors = parse_ast.tokenize_diagnostics.items.len > 0 or parse_ast.parse_diagnostics.items.len > 0;
-        if (has_parse_errors) {
-            st.phase = .Done;
-            self.remaining_modules -= 1;
-            // Wake dependents
-            for (st.dependents.items) |dep| try self.enqueue(dep);
-            if (@import("builtin").target.cpu.arch != .wasm32) self.cond.broadcast();
-            return;
-        }
-
         // canonicalize using the AST
         const canon_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
 
