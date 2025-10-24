@@ -168,10 +168,12 @@ pub const ComptimeEvaluator = struct {
         problems: *ProblemStore,
         builtin_types: BuiltinTypes,
     ) !ComptimeEvaluator {
+        const interp = try Interpreter.init(allocator, cir, builtin_types, other_envs);
+
         return ComptimeEvaluator{
             .allocator = allocator,
             .env = cir,
-            .interpreter = try Interpreter.initWithOtherEnvs(allocator, cir, other_envs, builtin_types),
+            .interpreter = interp,
             .crash = CrashContext.init(allocator),
             .expect = CrashContext.init(allocator),
             .roc_ops = null,

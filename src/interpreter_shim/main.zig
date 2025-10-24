@@ -224,7 +224,7 @@ fn createInterpreter(env_ptr: *ModuleEnv, roc_ops: *RocOps) ShimError!Interprete
         .result_env = env_ptr,
     };
 
-    const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, null) catch {
+    const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, &[_]*const can.ModuleEnv{}) catch {
         roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
         return error.InterpreterSetupFailed;
     };

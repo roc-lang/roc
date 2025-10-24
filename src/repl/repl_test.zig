@@ -335,7 +335,7 @@ test "Repl - minimal interpreter integration" {
 
     // Step 6: Create interpreter
     const builtin_types = eval.BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interpreter = try Interpreter.init(gpa, &module_env, builtin_types, null);
+    var interpreter = try Interpreter.init(gpa, &module_env, builtin_types, &[_]*const ModuleEnv{});
     defer interpreter.deinitAndFreeOtherEnvs();
 
     // Step 7: Evaluate

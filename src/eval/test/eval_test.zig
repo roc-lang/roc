@@ -449,7 +449,7 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interpreter = try Interpreter.init(testing.allocator, resources.module_env, resources.builtin_types, null);
+    var interpreter = try Interpreter.init(testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -808,7 +808,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     // Test 1: Evaluate with the original ModuleEnv
     {
         const builtin_types_local = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-        var interpreter = try Interpreter.init(gpa, &original_env, builtin_types_local, null);
+        var interpreter = try Interpreter.init(gpa, &original_env, builtin_types_local, &[_]*const can.ModuleEnv{});
         defer interpreter.deinit();
 
         const ops = test_env_instance.get_ops();
@@ -875,7 +875,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         // The original expression index should still be valid since the NodeStore structure is preserved
         {
             const builtin_types_local = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-            var interpreter = try Interpreter.init(gpa, deserialized_env, builtin_types_local, null);
+            var interpreter = try Interpreter.init(gpa, deserialized_env, builtin_types_local, &[_]*const can.ModuleEnv{});
             defer interpreter.deinit();
 
             const ops = test_env_instance.get_ops();
