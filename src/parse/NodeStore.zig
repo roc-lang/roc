@@ -1172,6 +1172,7 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                     .start = exposes_start,
                     .len = exposes_len,
                 } },
+                .nested_import = false,
                 .region = node.region,
             } };
         },

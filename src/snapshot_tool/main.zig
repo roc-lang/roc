@@ -1925,7 +1925,7 @@ const Meta = struct {
             \\description=Hello world
             \\type=foobar
         );
-        try std.testing.expectEqual(meta, Error.InvalidNodeType);
+        try std.testing.expectError(Error.InvalidNodeType, meta);
     }
 };
 

@@ -118,6 +118,11 @@ pub const Diagnostic = union(enum) {
         type_name: Ident.Idx,
         region: Region,
     },
+    type_from_missing_module: struct {
+        module_name: Ident.Idx,
+        type_name: Ident.Idx,
+        region: Region,
+    },
     module_not_imported: struct {
         module_name: Ident.Idx,
         region: Region,
@@ -269,6 +274,7 @@ pub const Diagnostic = union(enum) {
             .module_not_found => |d| d.region,
             .value_not_exposed => |d| d.region,
             .type_not_exposed => |d| d.region,
+            .type_from_missing_module => |d| d.region,
             .module_not_imported => |d| d.region,
             .too_many_exports => |d| d.region,
             .undeclared_type => |d| d.region,
@@ -889,9 +895,19 @@ pub const Diagnostic = union(enum) {
     ) !Report {
         var report = Report.init(allocator, "UNDECLARED TYPE", .runtime_error);
         const owned_type_name = try report.addOwnedString(type_name);
-        try report.document.addReflowingText("The type ");
-        try report.document.addType(owned_type_name);
-        try report.document.addReflowingText(" is not declared in this scope.");
+
+        // Check if this looks like a qualified type (contains dots)
+        const has_dots = std.mem.indexOfScalar(u8, type_name, '.') != null;
+
+        if (has_dots) {
+            try report.document.addReflowingText("Cannot resolve qualified type ");
+            try report.document.addType(owned_type_name);
+            try report.document.addReflowingText(".");
+        } else {
+            try report.document.addReflowingText("The type ");
+            try report.document.addType(owned_type_name);
+            try report.document.addReflowingText(" is not declared in this scope.");
+        }
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -1411,13 +1427,32 @@ pub const Diagnostic = union(enum) {
 
         const owned_module = try report.addOwnedString(module_name);
         const owned_type = try report.addOwnedString(type_name);
-        try report.document.addReflowingText("The ");
-        try report.document.addModuleName(owned_module);
-        try report.document.addReflowingText(" module does not expose anything named ");
-        try report.document.addType(owned_type);
-        try report.document.addReflowingText(".");
-        try report.document.addLineBreak();
-        try report.document.addReflowingText("Make sure the module exports this type, or use a type that is exposed.");
+
+        // Check if trying to access a type with the same name as the module (e.g., Result.Result)
+        const is_same_name = std.mem.eql(u8, module_name, type_name);
+
+        if (is_same_name) {
+            // Special message for Result.Result, Color.Color, etc.
+            const qualified_name = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ module_name, type_name });
+            defer allocator.free(qualified_name);
+            const owned_qualified = try report.addOwnedString(qualified_name);
+
+            try report.document.addReflowingText("There is no ");
+            try report.document.addType(owned_qualified);
+            try report.document.addReflowingText(" type.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+        } else {
+            // Standard message for other cases (e.g., Color.RGB where Color is a nominal type)
+            const qualified_name = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ module_name, type_name });
+            defer allocator.free(qualified_name);
+            const owned_qualified = try report.addOwnedString(qualified_name);
+
+            try report.document.addType(owned_qualified);
+            try report.document.addReflowingText(" does not exist.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+        }
 
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
@@ -1427,6 +1462,21 @@ pub const Diagnostic = union(enum) {
             source,
             line_starts,
         );
+
+        // Add tip at the end
+        try report.document.addLineBreak();
+        if (is_same_name) {
+            try report.document.addReflowingText("There is a ");
+            try report.document.addModuleName(owned_module);
+            try report.document.addReflowingText(" module, but it does not have a ");
+            try report.document.addType(owned_type);
+            try report.document.addReflowingText(" type nested inside it.");
+        } else {
+            try report.document.addType(owned_module);
+            try report.document.addReflowingText(" is a valid type, but it does not have an associated ");
+            try report.document.addType(owned_type);
+            try report.document.addReflowingText(".");
+        }
 
         return report;
     }
