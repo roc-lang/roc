@@ -3503,7 +3503,7 @@ pub const Interpreter = struct {
     }
 
     /// Get the numeric module ID for a given origin module identifier.
-    /// Returns 0 for the current module, otherwise looks it up in the module ID map.
+    /// Returns current_module_id (always 0) for the current module, otherwise looks it up in the module ID map.
     fn getModuleIdForOrigin(self: *const Interpreter, origin_module: base_pkg.Ident.Idx) u32 {
         // Check if it's the current module
         if (self.env.module_name_idx == origin_module) {
