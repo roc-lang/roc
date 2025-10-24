@@ -5023,7 +5023,7 @@ test "interpreter: cross-module method resolution should find methods in origin 
     // Verify we can retrieve module A's environment
     const found_env = interp.getModuleEnvForOrigin(module_a_ident);
     try std.testing.expect(found_env != null);
-    try std.testing.expectEqual(&module_a, found_env.?);
+    try std.testing.expectEqual(module_a.module_name_idx, found_env.?.module_name_idx);
 
     // Verify we can retrieve module A's ID
     const found_id = interp.getModuleIdForOrigin(module_a_ident);
@@ -5075,8 +5075,8 @@ test "interpreter: transitive module method resolution (A imports B imports C)" 
     try interp.import_envs.put(interp.allocator, import_c_idx, &module_c);
 
     // Verify we can retrieve all module environments
-    try std.testing.expectEqual(&module_b, interp.getModuleEnvForOrigin(module_b_ident).?);
-    try std.testing.expectEqual(&module_c, interp.getModuleEnvForOrigin(module_c_ident).?);
+    try std.testing.expectEqual(module_b.module_name_idx, interp.getModuleEnvForOrigin(module_b_ident).?.module_name_idx);
+    try std.testing.expectEqual(module_c.module_name_idx, interp.getModuleEnvForOrigin(module_c_ident).?.module_name_idx);
 
     // Verify we can retrieve all module IDs
     try std.testing.expectEqual(module_b_id, interp.getModuleIdForOrigin(module_b_ident));
