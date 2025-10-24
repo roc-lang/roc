@@ -257,12 +257,12 @@ test "Store comprehensive CompactWriter roundtrip" {
         "very long string " ** 50, // long string
     };
 
-    var indices = std.array_list.Managed(Idx).init(gpa);
-    defer indices.deinit();
+    var indices = std.ArrayList(Idx).empty;
+    defer indices.deinit(gpa);
 
     for (test_strings) |str| {
         const idx = try original.insert(gpa, str);
-        try indices.append(idx);
+        try indices.append(gpa, idx);
     }
 
     // Create a temp file

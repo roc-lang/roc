@@ -516,16 +516,16 @@
 //         const mod_name = try std.fmt.allocPrint(gpa, "Mod{}", .{i});
 //         defer gpa.free(mod_name);
 
-//         var imports = std.array_list.Managed(u8).init(gpa);
-//         defer imports.deinit();
+//         var imports = std.ArrayList(u8).empty;
+//         defer imports.deinit(gpa);
 
 //         // Each module imports the next two modules (circular style)
 //         var j: usize = 1;
 //         while (j <= 2) : (j += 1) {
 //             const import_idx = (i + j) % module_count;
-//             try imports.appendSlice("import Mod");
+//             try imports.appendSlice(gpa, "import Mod");
 //             try std.fmt.formatInt(import_idx, 10, .lower, .{}, imports.writer());
-//             try imports.append('\n');
+//             try imports.append(gpa, '\n');
 //         }
 
 //         const content = try std.fmt.allocPrint(gpa,

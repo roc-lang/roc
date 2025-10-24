@@ -13,9 +13,31 @@ type=expr
 }
 ~~~
 # EXPECTED
-NIL
+UNUSED VALUE - ann_effectful_fn.md:2:35:2:39
+UNUSED VALUE - ann_effectful_fn.md:2:40:2:53
 # PROBLEMS
-NIL
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**ann_effectful_fn.md:2:35:2:39:**
+```roc
+    launchTheNukes : {} => Result Bool LaunchNukeErr
+```
+                                  ^^^^
+
+It has the type:
+    _[Bool]_others_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**ann_effectful_fn.md:2:40:2:53:**
+```roc
+    launchTheNukes : {} => Result Bool LaunchNukeErr
+```
+                                       ^^^^^^^^^^^^^
+
+It has the type:
+    _[LaunchNukeErr]_others_
+
 # TOKENS
 ~~~zig
 OpenCurly,

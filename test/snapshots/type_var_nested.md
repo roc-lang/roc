@@ -220,8 +220,8 @@ main = |_| "done"
 		(p-assign (ident "map_result"))
 		(e-closure
 			(captures
-				(capture (ident "error"))
-				(capture (ident "value")))
+				(capture (ident "value"))
+				(capture (ident "error")))
 			(e-lambda
 				(args
 					(p-assign (ident "result"))

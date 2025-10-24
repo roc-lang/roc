@@ -59,6 +59,10 @@ UNDEFINED VARIABLE - record_different_fields_error.md:7:5:7:10
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:7:10:7:17
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:7:17:7:18
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:7:30:7:31
+UNUSED VALUE - record_different_fields_error.md:4:5:4:15
+UNUSED VALUE - record_different_fields_error.md:4:17:4:25
+UNUSED VALUE - record_different_fields_error.md:5:17:5:24
+UNUSED VALUE - record_different_fields_error.md:7:19:7:30
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
 The token **"** is not expected in a type annotation.
@@ -540,6 +544,50 @@ I don't recognize this syntax.
                              ^
 
 This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**record_different_fields_error.md:4:5:4:15:**
+```roc
+    PascalCase: "pascal",
+```
+    ^^^^^^^^^^
+
+It has the type:
+    _[PascalCase]_others_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**record_different_fields_error.md:4:17:4:25:**
+```roc
+    PascalCase: "pascal",
+```
+                ^^^^^^^^
+
+It has the type:
+    _Str_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**record_different_fields_error.md:5:17:5:24:**
+```roc
+    kebab-case: "kebab",
+```
+                ^^^^^^^
+
+It has the type:
+    _Str_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**record_different_fields_error.md:7:19:7:30:**
+```roc
+    field@symbol: "at symbol",
+```
+                  ^^^^^^^^^^^
+
+It has the type:
+    _Str_
 
 # TOKENS
 ~~~zig

@@ -947,7 +947,7 @@ test "check type - patterns record field mismatch" {
     try checkTypesExpr(source, .fail, "INCOMPATIBLE MATCH PATTERNS");
 }
 
-// vars
+// vars + reassignment //
 
 test "check type - var ressignment" {
     const source =
@@ -960,7 +960,7 @@ test "check type - var ressignment" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
 }
 
-// expect
+// expect //
 
 test "check type - expect" {
     const source =
@@ -982,6 +982,92 @@ test "check type - expect not bool" {
         \\}
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+// crash //
+
+test "check type - crash" {
+    const source =
+        \\module []
+        \\
+        \\y : U64
+        \\y = {
+        \\  crash "bug"
+        \\}
+        \\
+        \\main = {
+        \\  x = 1
+        \\  x + y
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "main" } },
+        "Num(Int(Unsigned64))",
+    );
+}
+
+// debug //
+
+test "check type - debug" {
+    const source =
+        \\module []
+        \\
+        \\y : U64
+        \\y = {
+        \\  debug 2
+        \\}
+        \\
+        \\main = {
+        \\  x = 1
+        \\  x + y
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "main" } },
+        "Num(Int(Unsigned64))",
+    );
+}
+
+// for //
+
+test "check type - for" {
+    const source =
+        \\module []
+        \\
+        \\main = {
+        \\  var result = 0
+        \\  for x in [1, 2, 3] {
+        \\    result = result + x
+        \\  } 
+        \\  result
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "main" } },
+        "Num(_size)",
+    );
+}
+
+test "check type - for mismatch" {
+    const source =
+        \\module []
+        \\
+        \\main = {
+        \\  var result = 0
+        \\  for x in ["a", "b", "c"] {
+        \\    result = result + x
+        \\  } 
+        \\  result
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .fail,
+        "TYPE MISMATCH",
+    );
 }
 
 // static dispatch //

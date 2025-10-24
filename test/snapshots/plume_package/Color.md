@@ -839,11 +839,11 @@ is_named_color = |str| {
 		(p-assign (ident "hex"))
 		(e-closure
 			(captures
-				(capture (ident "c"))
-				(capture (ident "e"))
 				(capture (ident "a"))
 				(capture (ident "b"))
+				(capture (ident "c"))
 				(capture (ident "d"))
+				(capture (ident "e"))
 				(capture (ident "f"))
 				(capture (ident "is_valid")))
 			(e-lambda
@@ -996,15 +996,15 @@ is_named_color = |str| {
 		(p-assign (ident "to_str"))
 		(e-closure
 			(captures
-				(capture (ident "r"))
-				(capture (ident "g"))
-				(capture (ident "b"))
-				(capture (ident "inner"))
 				(capture (ident "to_str"))
+				(capture (ident "r"))
 				(capture (ident "g"))
 				(capture (ident "b"))
 				(capture (ident "r"))
+				(capture (ident "g"))
+				(capture (ident "b"))
 				(capture (ident "a"))
+				(capture (ident "inner"))
 				(capture (ident "inner")))
 			(e-lambda
 				(args
