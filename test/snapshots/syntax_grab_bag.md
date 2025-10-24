@@ -267,7 +267,9 @@ UNUSED VARIABLE - syntax_grab_bag.md:189:2:189:23
 UNDECLARED TYPE - syntax_grab_bag.md:201:9:201:14
 INVALID IF CONDITION - syntax_grab_bag.md:70:5:70:5
 INCOMPATIBLE MATCH PATTERNS - syntax_grab_bag.md:84:2:84:2
+UNUSED VALUE - syntax_grab_bag.md:1:1:1:1
 TYPE MISMATCH - syntax_grab_bag.md:155:2:157:3
+UNUSED VALUE - syntax_grab_bag.md:155:2:157:3
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Bar_ is not declared in this scope.

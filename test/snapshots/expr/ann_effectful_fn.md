@@ -13,7 +13,8 @@ type=expr
 }
 ~~~
 # EXPECTED
-NIL
+UNUSED VALUE - ann_effectful_fn.md:2:35:2:39
+UNUSED VALUE - ann_effectful_fn.md:2:40:2:53
 # PROBLEMS
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:

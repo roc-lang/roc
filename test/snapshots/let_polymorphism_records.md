@@ -46,6 +46,7 @@ main = |_| {
 UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_records.md:19:50:19:51
 UNRECOGNIZED SYNTAX - let_polymorphism_records.md:19:50:19:51
 UNUSED VARIABLE - let_polymorphism_records.md:19:27:19:36
+UNUSED VALUE - let_polymorphism_records.md:19:40:19:49
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **&** is not expected in an expression.

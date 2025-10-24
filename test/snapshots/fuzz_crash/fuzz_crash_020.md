@@ -190,7 +190,13 @@ UNDEFINED VARIABLE - fuzz_crash_020.md:120:1:120:2
 UNDEFINED VARIABLE - fuzz_crash_020.md:120:6:120:9
 EXPOSED BUT NOT DEFINED - fuzz_crash_020.md:2:6:2:11
 TOO FEW ARGS - fuzz_crash_020.md:17:3:18:4
+UNUSED VALUE - fuzz_crash_020.md:39:2:39:3
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_020.md:52:2:52:2
+UNUSED VALUE - fuzz_crash_020.md:1:1:1:1
+UNUSED VALUE - fuzz_crash_020.md:86:11:86:17
+UNUSED VALUE - fuzz_crash_020.md:98:4:104:3
+UNUSED VALUE - fuzz_crash_020.md:105:2:105:54
+UNUSED VALUE - fuzz_crash_020.md:105:55:105:85
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `match_branch_missing_arrow`

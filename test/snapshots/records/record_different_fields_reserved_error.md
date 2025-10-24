@@ -49,6 +49,8 @@ UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:5:7:7
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:7:7:8
 DOES NOT EXIST - record_different_fields_reserved_error.md:7:9:7:19
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:19:7:20
+UNUSED VALUE - record_different_fields_reserved_error.md:4:13:4:29
+UNUSED VALUE - record_different_fields_reserved_error.md:5:13:5:26
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **:** is not expected in an expression.

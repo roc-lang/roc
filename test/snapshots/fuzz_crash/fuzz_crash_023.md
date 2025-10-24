@@ -275,7 +275,10 @@ UNUSED VARIABLE - fuzz_crash_023.md:189:2:189:23
 UNDECLARED TYPE - fuzz_crash_023.md:201:9:201:14
 INVALID IF CONDITION - fuzz_crash_023.md:70:5:70:5
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_023.md:84:2:84:2
+UNUSED VALUE - fuzz_crash_023.md:1:1:1:1
 TYPE MISMATCH - fuzz_crash_023.md:155:2:157:3
+UNUSED VALUE - fuzz_crash_023.md:155:2:157:3
+UNUSED VALUE - fuzz_crash_023.md:178:42:178:45
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_record_field_name`
