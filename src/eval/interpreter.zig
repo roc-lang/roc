@@ -1654,11 +1654,7 @@ pub const Interpreter = struct {
                     return error.MethodNotFound;
                 };
 
-                const constraint = self.getStaticDispatchConstraint(receiver_rt_var, method_ident) catch |err| {
-                    // If not a flex/rigid var with constraints, fall back to NotImplemented
-                    if (err == error.MethodNotFound) return error.NotImplemented;
-                    return err;
-                };
+                const constraint = try self.getStaticDispatchConstraint(receiver_rt_var, method_ident);
 
                 // Find the nominal type's origin module from the receiver type
                 const receiver_resolved = self.runtime_types.resolveVar(receiver_rt_var);
@@ -1671,11 +1667,10 @@ pub const Interpreter = struct {
                             },
                             else => return error.InvalidMethodReceiver,
                         },
-                        // Flex/rigid vars can have constraints without being nominal yet
+                        // Flex/rigid vars should have been specialized to nominal types before runtime
                         .flex, .rigid => {
-                            // For now, we need a concrete nominal type to know the origin module
-                            // TODO: Handle method calls on polymorphic receivers
-                            return error.NotImplemented;
+                            // If we reach here, the receiver wasn't properly monomorphized
+                            return error.InvalidMethodReceiver;
                         },
                         else => return error.InvalidMethodReceiver,
                     }
