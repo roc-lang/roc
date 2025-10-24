@@ -57,12 +57,6 @@ test "eval unary not operator" {
     try runExpectBool("!False", true, .no_trace);
 }
 
-test "Bool.not qualified call" {
-    // Test qualified method calls for Bool
-    try runExpectBool("Bool.not(True)", false, .no_trace);
-    try runExpectBool("Bool.not(False)", true, .no_trace);
-}
-
 test "eval double negation" {
     try runExpectBool("!!True", true, .no_trace);
     try runExpectBool("!!False", false, .no_trace);
@@ -455,7 +449,7 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interpreter = try Interpreter.init(testing.allocator, resources.module_env, resources.builtin_types, null);
+    var interpreter = try Interpreter.init(testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -749,8 +743,8 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
     // Load builtin modules (following TestEnv.zig pattern)
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = compiled_builtins.bool_source;
-    const result_source = compiled_builtins.result_source;
+    const bool_source = "Bool := [True, False].{}\n";
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     const str_source = compiled_builtins.str_source;
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
@@ -807,8 +801,8 @@ test "ModuleEnv serialization and interpreter evaluation" {
         return error.CanonicalizeFailure;
     };
 
-    // Type check the expression - pass Bool, Result, and Str as imported modules
-    const imported_envs = [_]*const ModuleEnv{ bool_module.env, result_module.env, str_module.env };
+    // Type check the expression - pass Bool and Result as imported modules
+    const imported_envs = [_]*const ModuleEnv{ bool_module.env, result_module.env };
     var checker = try Check.init(gpa, &original_env.types, &original_env, &imported_envs, &module_envs_map, &original_env.store.regions, common_idents);
     defer checker.deinit();
 
@@ -817,7 +811,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     // Test 1: Evaluate with the original ModuleEnv
     {
         const builtin_types_local = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-        var interpreter = try Interpreter.init(gpa, &original_env, builtin_types_local, null);
+        var interpreter = try Interpreter.init(gpa, &original_env, builtin_types_local, &[_]*const can.ModuleEnv{});
         defer interpreter.deinit();
 
         const ops = test_env_instance.get_ops();
@@ -884,7 +878,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         // The original expression index should still be valid since the NodeStore structure is preserved
         {
             const builtin_types_local = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-            var interpreter = try Interpreter.init(gpa, deserialized_env, builtin_types_local, null);
+            var interpreter = try Interpreter.init(gpa, deserialized_env, builtin_types_local, &[_]*const can.ModuleEnv{});
             defer interpreter.deinit();
 
             const ops = test_env_instance.get_ops();
@@ -896,62 +890,4 @@ test "ModuleEnv serialization and interpreter evaluation" {
             try testing.expectEqual(@as(i128, 13), result.asI128());
         }
     }
-}
-
-test "Str.is_empty qualified call" {
-    // Test qualified call: Str.is_empty("foo") should return False
-    try runExpectBool("Str.is_empty(\"foo\")", false, .no_trace);
-    try runExpectBool("Str.is_empty(\"\")", false, .no_trace);
-    try runExpectBool("Str.is_empty(\"hello world\")", false, .no_trace);
-}
-
-test "Str.is_empty static dispatch - direct" {
-    return error.SkipZigTest; // Static dispatch not yet implemented in interpreter
-    // Test static dispatch: "blah".is_empty() should return False
-    // try runExpectBool("\"blah\".is_empty()", false, .no_trace);
-    // try runExpectBool("\"\".is_empty()", false, .no_trace);
-    // try runExpectBool("\"x\".is_empty()", false, .no_trace);
-}
-
-test "Str.is_empty static dispatch - variable" {
-    return error.SkipZigTest; // Static dispatch not yet implemented in interpreter
-    // Test static dispatch with variable: x = "blah" x.is_empty()
-    // try runExpectBool("x = \"blah\"\nx.is_empty()", false, .no_trace);
-    // try runExpectBool("str = \"\"\nstr.is_empty()", false, .no_trace);
-    // try runExpectBool("myString = \"test\"\nmyString.is_empty()", false, .no_trace);
-}
-
-test "Str.is_empty static dispatch - nested" {
-    return error.SkipZigTest; // Static dispatch not yet implemented in interpreter
-    // Test static dispatch with more complex expressions
-    // try runExpectBool("(\"nested\").is_empty()", false, .no_trace);
-}
-
-test "Str.contains qualified call" {
-    // Test qualified call: Str.contains("foo", "o") should return True
-    try runExpectBool("Str.contains(\"foo\", \"o\")", true, .no_trace);
-    try runExpectBool("Str.contains(\"hello\", \"world\")", true, .no_trace);
-    try runExpectBool("Str.contains(\"\", \"\")", true, .no_trace);
-}
-
-test "Str.contains static dispatch - direct" {
-    return error.SkipZigTest; // Static dispatch not yet implemented in interpreter
-    // Test static dispatch: "foo".contains("o") should return True
-    // try runExpectBool("\"foo\".contains(\"o\")", true, .no_trace);
-    // try runExpectBool("\"hello\".contains(\"ell\")", true, .no_trace);
-    // try runExpectBool("\"test\".contains(\"x\")", true, .no_trace);
-}
-
-test "Str.contains static dispatch - variable" {
-    return error.SkipZigTest; // Static dispatch not yet implemented in interpreter
-    // Test static dispatch with variable
-    // try runExpectBool("x = \"foo\"\nx.contains(\"o\")", true, .no_trace);
-    // try runExpectBool("str = \"hello world\"\nstr.contains(\"world\")", true, .no_trace);
-    // try runExpectBool("myStr = \"test\"\nmyStr.contains(\"es\")", true, .no_trace);
-}
-
-test "Str.contains static dispatch - nested" {
-    return error.SkipZigTest; // Static dispatch not yet implemented in interpreter
-    // Test static dispatch with more complex expressions
-    // try runExpectBool("(\"nested\").contains(\"est\")", true, .no_trace);
 }

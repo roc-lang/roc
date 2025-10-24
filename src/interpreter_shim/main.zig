@@ -10,8 +10,6 @@ const can = @import("can");
 const types = @import("types");
 const eval = @import("eval");
 const ipc = @import("ipc");
-const compiled_builtins = @import("compiled_builtins");
-const builtin_loading = eval.builtin_loading;
 
 const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
 
@@ -213,82 +211,25 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*Modu
 fn createInterpreter(env_ptr: *ModuleEnv, roc_ops: *RocOps) ShimError!Interpreter {
     const allocator = std.heap.page_allocator;
 
-    // Load builtin modules (Bool, Result, Str) from embedded .bin files
-    const builtin_indices = builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin) catch {
-        roc_ops.crash("INTERPRETER SHIM: Failed to deserialize builtin indices");
-        return error.InterpreterSetupFailed;
-    };
-    const bool_module = builtin_loading.loadCompiledModule(allocator, compiled_builtins.bool_bin, "Bool", compiled_builtins.bool_source) catch {
-        roc_ops.crash("INTERPRETER SHIM: Failed to load Bool module");
-        return error.InterpreterSetupFailed;
-    };
-    const result_module = builtin_loading.loadCompiledModule(allocator, compiled_builtins.result_bin, "Result", compiled_builtins.result_source) catch {
-        roc_ops.crash("INTERPRETER SHIM: Failed to load Result module");
-        return error.InterpreterSetupFailed;
-    };
-    const str_module = builtin_loading.loadCompiledModule(allocator, compiled_builtins.str_bin, "Str", compiled_builtins.str_source) catch {
-        roc_ops.crash("INTERPRETER SHIM: Failed to load Str module");
-        return error.InterpreterSetupFailed;
-    };
+    // Extract builtin statement indices from the builtin_statements span
+    // The span contains Bool, Result, and Str statements
+    const bool_stmt: CIR.Statement.Idx = @enumFromInt(env_ptr.builtin_statements.span.start);
+    const result_stmt: CIR.Statement.Idx = @enumFromInt(env_ptr.builtin_statements.span.start + 1);
+    const str_stmt: CIR.Statement.Idx = @enumFromInt(env_ptr.builtin_statements.span.start + 2);
 
-    // Set up builtin types using separate module environments for each builtin
+    // In the shim context, builtins are embedded in the main module_env
     const builtin_types = eval.BuiltinTypes{
-        .bool_stmt = builtin_indices.bool_type,
-        .result_stmt = builtin_indices.result_type,
-        .str_stmt = builtin_indices.str_type,
-        .bool_env = bool_module.env,
-        .result_env = result_module.env,
-        .str_env = str_module.env,
+        .bool_stmt = bool_stmt,
+        .result_stmt = result_stmt,
+        .str_stmt = str_stmt,
+        .bool_env = env_ptr,
+        .result_env = env_ptr,
+        .str_env = env_ptr,
     };
 
-    // Create imported modules map for the interpreter to support qualified calls like Str.is_empty()
-    // Use the separate builtin module environments
-    var imported_modules_map = std.AutoHashMap(base.Ident.Idx, can.Can.AutoImportedType).init(allocator);
-    // Note: We can't use const here because insertIdent may modify the ident store
-    const bool_ident = env_ptr.common.findIdent("Bool") orelse blk: {
-        // If Bool isn't already in the ident store, insert it
-        const ident = base.Ident.for_text("Bool");
-        break :blk env_ptr.common.idents.insert(allocator, ident) catch {
-            roc_ops.crash("INTERPRETER SHIM: Failed to insert Bool identifier");
-            return error.InterpreterSetupFailed;
-        };
-    };
-    const result_ident = env_ptr.common.findIdent("Result") orelse blk: {
-        const ident = base.Ident.for_text("Result");
-        break :blk env_ptr.common.idents.insert(allocator, ident) catch {
-            roc_ops.crash("INTERPRETER SHIM: Failed to insert Result identifier");
-            return error.InterpreterSetupFailed;
-        };
-    };
-    const str_ident = env_ptr.common.findIdent("Str") orelse blk: {
-        const ident = base.Ident.for_text("Str");
-        break :blk env_ptr.common.idents.insert(allocator, ident) catch {
-            roc_ops.crash("INTERPRETER SHIM: Failed to insert Str identifier");
-            return error.InterpreterSetupFailed;
-        };
-    };
-    imported_modules_map.put(bool_ident, .{ .env = bool_module.env }) catch {
-        roc_ops.crash("INTERPRETER SHIM: Failed to add Bool to imported modules map");
+    const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, &[_]*const can.ModuleEnv{}) catch {
+        roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
         return error.InterpreterSetupFailed;
     };
-    imported_modules_map.put(result_ident, .{ .env = result_module.env }) catch {
-        roc_ops.crash("INTERPRETER SHIM: Failed to add Result to imported modules map");
-        return error.InterpreterSetupFailed;
-    };
-    imported_modules_map.put(str_ident, .{ .env = str_module.env }) catch {
-        roc_ops.crash("INTERPRETER SHIM: Failed to add Str to imported modules map");
-        return error.InterpreterSetupFailed;
-    };
-
-    const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, &imported_modules_map) catch |err| {
-        var buf: [512]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "INTERPRETER SHIM: Interpreter initialization failed: {s}", .{@errorName(err)}) catch "INTERPRETER SHIM: Interpreter initialization failed";
-        roc_ops.crash(msg);
-        return error.InterpreterSetupFailed;
-    };
-
-    // Note: We don't deinit imported_modules_map here because the interpreter needs it.
-    // It will be cleaned up when the interpreter is deinitialized.
-
     return interpreter;
 }

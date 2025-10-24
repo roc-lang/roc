@@ -279,8 +279,8 @@ test "Repl - minimal interpreter integration" {
 
     // Load builtin modules (following TestEnv.zig pattern)
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = compiled_builtins.bool_source;
-    const result_source = compiled_builtins.result_source;
+    const bool_source = "Bool := [True, False].{}\n";
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     const str_source = compiled_builtins.str_source;
     var bool_module = try loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
@@ -329,8 +329,8 @@ test "Repl - minimal interpreter integration" {
         return error.CanonicalizeError;
     };
 
-    // Step 5: Type check - Pass Bool, Result, and Str as imported modules
-    const imported_envs = [_]*const ModuleEnv{ bool_module.env, result_module.env, str_module.env };
+    // Step 5: Type check - Pass Bool and Result as imported modules
+    const imported_envs = [_]*const ModuleEnv{ bool_module.env, result_module.env };
     var checker = try Check.init(gpa, &module_env.types, cir, &imported_envs, null, &cir.store.regions, common_idents);
     defer checker.deinit();
 
@@ -338,7 +338,7 @@ test "Repl - minimal interpreter integration" {
 
     // Step 6: Create interpreter
     const builtin_types = eval.BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interpreter = try Interpreter.init(gpa, &module_env, builtin_types, null);
+    var interpreter = try Interpreter.init(gpa, &module_env, builtin_types, &[_]*const ModuleEnv{});
     defer interpreter.deinitAndFreeOtherEnvs();
 
     // Step 7: Evaluate

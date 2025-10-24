@@ -27,13 +27,12 @@ const LoadedModule = struct {
     gpa: std.mem.Allocator,
 
     fn deinit(self: *LoadedModule) void {
-        // IMPORTANT: When a module is deserialized from a buffer, most of its internal structures
-        // (common, types, external_decls, store) contain pointers INTO the buffer,
-        // not separately allocated memory. However, the imports.map is allocated separately
-        // during deserialization and must be freed.
-
-        // Free the imports map (allocated in CIR.Import.Store.Serialized.deserialize)
-        self.env.imports.map.deinit(self.gpa);
+        // IMPORTANT: When a module is deserialized from a buffer, all its internal structures
+        // (common, types, external_decls, imports, store) contain pointers INTO the buffer,
+        // not separately allocated memory. Therefore we should NOT call deinit() on any of them.
+        // The only memory we need to free is:
+        // 1. The buffer itself (which contains all the deserialized data)
+        // 2. The env struct itself (which was allocated with create())
 
         // Free the buffer (all data structures point into this buffer)
         self.gpa.free(self.buffer);
@@ -137,15 +136,18 @@ pub const Repl = struct {
         const builtin_indices = try deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
 
         // Load Bool module once at startup
-        var bool_module = try loadCompiledModule(allocator, compiled_builtins.bool_bin, "Bool", compiled_builtins.bool_source);
+        const bool_source = "Bool := [True, False].{}\n";
+        var bool_module = try loadCompiledModule(allocator, compiled_builtins.bool_bin, "Bool", bool_source);
         errdefer bool_module.deinit();
 
         // Load Result module once at startup
-        var result_module = try loadCompiledModule(allocator, compiled_builtins.result_bin, "Result", compiled_builtins.result_source);
+        const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+        var result_module = try loadCompiledModule(allocator, compiled_builtins.result_bin, "Result", result_source);
         errdefer result_module.deinit();
 
         // Load Str module once at startup
-        var str_module = try loadCompiledModule(allocator, compiled_builtins.str_bin, "Str", compiled_builtins.str_source);
+        const str_source = compiled_builtins.str_source;
+        var str_module = try loadCompiledModule(allocator, compiled_builtins.str_bin, "Str", str_source);
         errdefer str_module.deinit();
 
         return Repl{
@@ -548,9 +550,9 @@ pub const Repl = struct {
             return try std.fmt.allocPrint(self.allocator, "Type check expr error: {}", .{err});
         };
 
-        // Create interpreter instance with BuiltinTypes containing real Bool, Result, and Str modules
+        // Create interpreter instance with BuiltinTypes containing real Bool and Result modules
         const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.bool_module.env, self.result_module.env, self.str_module.env);
-        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, &module_envs_map) catch |err| {
+        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, &imported_modules) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
         };
         defer interpreter.deinitAndFreeOtherEnvs();
