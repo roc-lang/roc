@@ -137,8 +137,8 @@ NO CHANGE
 		(p-assign (ident "process!"))
 		(e-closure
 			(captures
-				(capture (ident "multiply"))
-				(capture (ident "print_number!")))
+				(capture (ident "print_number!"))
+				(capture (ident "multiply")))
 			(e-lambda
 				(args
 					(p-assign (ident "x")))
