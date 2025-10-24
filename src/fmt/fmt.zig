@@ -82,6 +82,7 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
                 } else |err| {
                     if (err != error.NotRocFile) {
                         try stderr.print("Failed to format {s}: {any}\n", .{ entry.path, err });
+                        try stderr.flush();
                         failed_count += 1;
                     }
                 }
@@ -93,6 +94,7 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
         } else |err| {
             if (err != error.NotRocFile) {
                 try stderr.print("Failed to format {s}: {any}\n", .{ path, err });
+                try stderr.flush();
                 failed_count += 1;
             }
         }
@@ -248,6 +250,7 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) 
     }
 
     const stderr = stderrWriter();
+    defer stderr.flush() catch {};
     try stderr.print("Errors:\n", .{});
     for (parse_ast.parse_diagnostics.items) |err| {
         const region = parse_ast.tokens.resolve(@intCast(err.region.start));

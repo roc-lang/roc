@@ -133,6 +133,11 @@ fn stderrWriter() *std.Io.Writer {
     return &stderr_writer.interface;
 }
 
+fn flushAndExit(stderr: *std.Io.Writer, code: u8) noreturn {
+    stderr.flush() catch {};
+    std.process.exit(code);
+}
+
 // POSIX shared memory functions
 const posix = if (!is_windows) struct {
     extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: std.c.mode_t) c_int;
@@ -407,7 +412,9 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
     defer trace.end();
 
     const stdout = stdoutWriter();
+    defer stdout.flush() catch {};
     const stderr = stderrWriter();
+    defer stderr.flush() catch {};
 
     const parsed_args = try cli_args.parse(allocs.arena, args[1..]);
 
@@ -421,7 +428,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
                                 "Error: No app file specified and default 'main.roc' was not found. Additionally, the current directory could not be resolved: {}\n",
                                 .{real_err},
                             ) catch {};
-                            std.process.exit(1);
+                            flushAndExit(stderr, 1);
                         };
                         stderr.print(
                             "Error: No app file specified and default 'main.roc' was not found in {s}\n",
@@ -431,14 +438,14 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
                             "\nHint: pass an explicit path (e.g. `roc my-app.roc`) or create a 'main.roc' in that directory.\n",
                             .{},
                         ) catch {};
-                        std.process.exit(1);
+                        flushAndExit(stderr, 1);
                     },
                     else => {
                         stderr.print(
                             "Error: Unable to access default 'main.roc': {}\n",
                             .{err},
                         ) catch {};
-                        std.process.exit(1);
+                        flushAndExit(stderr, 1);
                     },
                 };
             }
@@ -452,23 +459,29 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
         .fmt => |format_args| rocFormat(allocs, format_args),
         .test_cmd => |test_args| rocTest(allocs, test_args),
         .repl => rocRepl(allocs),
-        .version => stdout.print("Roc compiler version {s}", .{build_options.compiler_version}),
+        .version => {
+            try stdout.print("Roc compiler version {s}", .{build_options.compiler_version});
+        },
         .docs => |docs_args| rocDocs(allocs, docs_args),
         .help => |help_message| {
             try stdout.writeAll(help_message);
-            try stdout.flush();
         },
         .licenses => {
             try stdout.writeAll(legalDetailsFileContent);
-            try stdout.flush();
         },
         .problem => |problem| {
-            try switch (problem) {
-                .missing_flag_value => |details| stderr.print("Error: no value was supplied for {s}", .{details.flag}),
-                .unexpected_argument => |details| stderr.print("Error: roc {s} received an unexpected argument: `{s}`", .{ details.cmd, details.arg }),
-                .invalid_flag_value => |details| stderr.print("Error: `{s}` is not a valid value for {s}. The valid options are {s}", .{ details.value, details.flag, details.valid_options }),
-            };
-            std.process.exit(1);
+            switch (problem) {
+                .missing_flag_value => |details| {
+                    try stderr.print("Error: no value was supplied for {s}", .{details.flag});
+                },
+                .unexpected_argument => |details| {
+                    try stderr.print("Error: roc {s} received an unexpected argument: `{s}`", .{ details.cmd, details.arg });
+                },
+                .invalid_flag_value => |details| {
+                    try stderr.print("Error: `{s}` is not a valid value for {s}. The valid options are {s}", .{ details.value, details.flag, details.valid_options });
+                },
+            }
+            flushAndExit(stderr, 1);
         },
     };
 }
@@ -1844,7 +1857,9 @@ fn formatUnbundlePathValidationReason(reason: unbundle.PathValidationReason) []c
 /// Bundles a roc package and its dependencies into a compressed tar archive
 pub fn rocBundle(allocs: *Allocators, args: cli_args.BundleArgs) !void {
     const stdout = stdoutWriter();
+    defer stdout.flush() catch {};
     const stderr = stderrWriter();
+    defer stderr.flush() catch {};
 
     // Start timing
     const start_time = std.time.nanoTimestamp();
@@ -2003,7 +2018,9 @@ pub fn rocBundle(allocs: *Allocators, args: cli_args.BundleArgs) !void {
 
 fn rocUnbundle(allocs: *Allocators, args: cli_args.UnbundleArgs) !void {
     const stdout = stdoutWriter();
+    defer stdout.flush() catch {};
     const stderr = stderrWriter();
+    defer stderr.flush() catch {};
     const cwd = std.fs.cwd();
 
     var had_errors = false;
@@ -2017,6 +2034,7 @@ fn rocUnbundle(allocs: *Allocators, args: cli_args.UnbundleArgs) !void {
             dir_name = basename[0 .. basename.len - 8];
         } else {
             try stderr.print("Error: {s} is not a .tar.zst file", .{archive_path});
+            try stderr.flush();
             had_errors = true;
             continue;
         }
@@ -2031,6 +2049,7 @@ fn rocUnbundle(allocs: *Allocators, args: cli_args.UnbundleArgs) !void {
 
         if (cwd.openDir(dir_name, .{})) |_| {
             try stderr.print("Error: Directory {s} already exists", .{dir_name});
+            try stderr.flush();
             had_errors = true;
             continue;
         } else |_| {
@@ -2044,6 +2063,7 @@ fn rocUnbundle(allocs: *Allocators, args: cli_args.UnbundleArgs) !void {
         // Open the archive file
         const archive_file = cwd.openFile(archive_path, .{}) catch |err| {
             try stderr.print("Error opening {s}: {s}", .{ archive_path, @errorName(err) });
+            try stderr.flush();
             had_errors = true;
             continue;
         };
@@ -2063,20 +2083,24 @@ fn rocUnbundle(allocs: *Allocators, args: cli_args.UnbundleArgs) !void {
             switch (err) {
                 error.HashMismatch => {
                     try stderr.print("Error: Hash mismatch for {s} - file may be corrupted", .{archive_path});
+                    try stderr.flush();
                     had_errors = true;
                 },
                 error.InvalidFilename => {
                     try stderr.print("Error: Invalid filename format for {s}", .{archive_path});
+                    try stderr.flush();
                     had_errors = true;
                 },
                 error.InvalidPath => {
                     try stderr.print("Error: Invalid path in archive - {s}", .{formatUnbundlePathValidationReason(error_ctx.reason)});
                     try stderr.print("Path: {s}", .{error_ctx.path});
                     try stderr.print("Archive: {s}", .{archive_path});
+                    try stderr.flush();
                     had_errors = true;
                 },
                 else => {
                     try stderr.print("Error unbundling {s}: {s}", .{ archive_path, @errorName(err) });
+                    try stderr.flush();
                     had_errors = true;
                 },
             }
@@ -2084,10 +2108,11 @@ fn rocUnbundle(allocs: *Allocators, args: cli_args.UnbundleArgs) !void {
         };
 
         try stdout.print("Extracted: {s}", .{dir_name});
+        try stdout.flush();
     }
 
     if (had_errors) {
-        std.process.exit(1);
+        flushAndExit(stderr, 1);
     }
 }
 
@@ -2359,12 +2384,14 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     const start_time = std.time.nanoTimestamp();
 
     const stdout = stdoutWriter();
+    defer stdout.flush() catch {};
     const stderr = stderrWriter();
+    defer stderr.flush() catch {};
 
     // Read the Roc file
     const source = std.fs.cwd().readFileAlloc(allocs.gpa, args.path, std.math.maxInt(usize)) catch |err| {
         try stderr.print("Failed to read file '{s}': {}", .{ args.path, err });
-        std.process.exit(1);
+        flushAndExit(stderr, 1);
     };
     defer allocs.gpa.free(source);
 
@@ -2375,7 +2402,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     // Create ModuleEnv
     var env = ModuleEnv.init(allocs.gpa, source) catch |err| {
         try stderr.print("Failed to initialize module environment: {}", .{err});
-        std.process.exit(1);
+        flushAndExit(stderr, 1);
     };
     defer env.deinit();
 
@@ -2394,7 +2421,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     // Parse the source code as a full module
     var parse_ast = parse.parse(&env.common, allocs.gpa) catch |err| {
         try stderr.print("Failed to parse file: {}", .{err});
-        std.process.exit(1);
+        flushAndExit(stderr, 1);
     };
     defer parse_ast.deinit(allocs.gpa);
 
@@ -2407,76 +2434,76 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     // Create canonicalizer
     var canonicalizer = Can.init(&env, &parse_ast, null) catch |err| {
         try stderr.print("Failed to initialize canonicalizer: {}", .{err});
-        std.process.exit(1);
+        flushAndExit(stderr, 1);
     };
     defer canonicalizer.deinit();
 
     // Canonicalize the entire module
     canonicalizer.canonicalizeFile() catch |err| {
         try stderr.print("Failed to canonicalize file: {}", .{err});
-        std.process.exit(1);
+        flushAndExit(stderr, 1);
     };
 
     // Validate for checking mode
     canonicalizer.validateForChecking() catch |err| {
         try stderr.print("Failed to validate module: {}", .{err});
-        std.process.exit(1);
+        flushAndExit(stderr, 1);
     };
 
     // Type check the module
     var checker = Check.init(allocs.gpa, &env.types, &env, &.{}, null, &env.store.regions, module_common_idents) catch |err| {
         try stderr.print("Failed to initialize type checker: {}", .{err});
-        std.process.exit(1);
+        flushAndExit(stderr, 1);
     };
     defer checker.deinit();
 
     checker.checkFile() catch |err| {
         try stderr.print("Type checking failed: {}", .{err});
-        std.process.exit(1);
+        flushAndExit(stderr, 1);
     };
 
     // Evaluate all top-level declarations at compile time
     // Load builtin modules required by the interpreter
     const builtin_indices = builtin_loading.deserializeBuiltinIndices(allocs.gpa, compiled_builtins.builtin_indices_bin) catch |err| {
         try stderr.print("Failed to deserialize builtin indices: {}\n", .{err});
-        std.process.exit(1);
+        flushAndExit(stderr, 1);
     };
     const bool_source = "Bool := [True, False].{}\n";
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var bool_module = builtin_loading.loadCompiledModule(allocs.gpa, compiled_builtins.bool_bin, "Bool", bool_source) catch |err| {
         try stderr.print("Failed to load Bool module: {}\n", .{err});
-        std.process.exit(1);
+        flushAndExit(stderr, 1);
     };
     defer bool_module.deinit();
     var result_module = builtin_loading.loadCompiledModule(allocs.gpa, compiled_builtins.result_bin, "Result", result_source) catch |err| {
         try stderr.print("Failed to load Result module: {}\n", .{err});
-        std.process.exit(1);
+        flushAndExit(stderr, 1);
     };
     defer result_module.deinit();
 
     const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
     var comptime_evaluator = eval.ComptimeEvaluator.init(allocs.gpa, &env, &.{}, &checker.problems, builtin_types_for_eval) catch |err| {
         try stderr.print("Failed to create compile-time evaluator: {}\n", .{err});
-        std.process.exit(1);
+        flushAndExit(stderr, 1);
     };
     // Note: comptime_evaluator must be deinitialized AFTER building reports from checker.problems
     // because the crash messages are owned by the evaluator but referenced by the problems
 
     _ = comptime_evaluator.evalAll() catch |err| {
         try stderr.print("Failed to evaluate declarations: {}\n", .{err});
-        std.process.exit(1);
+        flushAndExit(stderr, 1);
     };
 
     // Create test runner infrastructure for test evaluation (reuse builtin_types_for_eval from above)
     var test_runner = TestRunner.init(allocs.gpa, &env, builtin_types_for_eval) catch |err| {
         try stderr.print("Failed to create test runner: {}\n", .{err});
-        std.process.exit(1);
+        flushAndExit(stderr, 1);
     };
     defer test_runner.deinit();
 
     const summary = test_runner.eval_all() catch |err| {
         try stderr.print("Failed to evaluate tests: {}\n", .{err});
-        std.process.exit(1);
+        flushAndExit(stderr, 1);
     };
     const passed = summary.passed;
     const failed = summary.failed;
@@ -2571,7 +2598,8 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
             }
         }
 
-        std.process.exit(1);
+        stdout.flush() catch {};
+        flushAndExit(stderr, 1);
     }
 }
 
@@ -2644,6 +2672,7 @@ fn rocFormat(allocs: *Allocators, args: cli_args.FormatArgs) !void {
     try formatElapsedTime(stdout, elapsed);
     try stdout.print(".", .{});
 
+    stdout.flush() catch {};
     std.process.exit(exit_code);
 }
 
@@ -2657,20 +2686,40 @@ fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) noret
     stderr.print("Failed to check {s}: ", .{path}) catch {};
     switch (err) {
         // Custom BuildEnv errors - these need special messages
-        error.ExpectedAppHeader => stderr.print("Expected app header but found different header type", .{}) catch {},
-        error.ExpectedPlatformString => stderr.print("Expected platform string in header", .{}) catch {},
-        error.PathOutsideWorkspace => stderr.print("Dependency path outside workspace not allowed", .{}) catch {},
-        error.UnsupportedHeader => stderr.print("Unsupported header type", .{}) catch {},
-        error.ExpectedString => stderr.print("Expected string in header", .{}) catch {},
-        error.Internal => stderr.print("Internal compiler error", .{}) catch {},
-        error.InvalidDependency => stderr.print("Invalid dependency relationship", .{}) catch {},
-        error.TooNested => stderr.print("Too deeply nested", .{}) catch {},
-        error.InvalidPackageName => stderr.print("Invalid package name", .{}) catch {},
+        error.ExpectedAppHeader => {
+            stderr.print("Expected app header but found different header type", .{}) catch {};
+        },
+        error.ExpectedPlatformString => {
+            stderr.print("Expected platform string in header", .{}) catch {};
+        },
+        error.PathOutsideWorkspace => {
+            stderr.print("Dependency path outside workspace not allowed", .{}) catch {};
+        },
+        error.UnsupportedHeader => {
+            stderr.print("Unsupported header type", .{}) catch {};
+        },
+        error.ExpectedString => {
+            stderr.print("Expected string in header", .{}) catch {};
+        },
+        error.Internal => {
+            stderr.print("Internal compiler error", .{}) catch {};
+        },
+        error.InvalidDependency => {
+            stderr.print("Invalid dependency relationship", .{}) catch {};
+        },
+        error.TooNested => {
+            stderr.print("Too deeply nested", .{}) catch {};
+        },
+        error.InvalidPackageName => {
+            stderr.print("Invalid package name", .{}) catch {};
+        },
 
         // Catch-all for any other errors
-        else => stderr.print("{s}", .{@errorName(err)}) catch {},
+        else => {
+            stderr.print("{s}", .{@errorName(err)}) catch {};
+        },
     }
-    std.process.exit(1);
+    flushAndExit(stderr, 1);
 }
 
 /// Result from checking a file using BuildEnv
@@ -2954,7 +3003,7 @@ fn rocCheck(allocs: *Allocators, args: cli_args.CheckArgs) !void {
             }) catch {};
             formatElapsedTime(stderr, elapsed) catch {};
             stderr.print(" for {s} (note module loaded from cache, use --no-cache to display Errors and Warnings.).", .{args.path}) catch {};
-            std.process.exit(1);
+            flushAndExit(stderr, 1);
         } else {
             stdout.print("No errors found in ", .{}) catch {};
             formatElapsedTime(stdout, elapsed) catch {};
@@ -2973,6 +3022,7 @@ fn rocCheck(allocs: *Allocators, args: cli_args.CheckArgs) !void {
                     stderr.print("Error rendering diagnostic report: {}", .{render_err}) catch {};
                     // Fallback to just printing the title
                     stderr.print("  {s}", .{report.title}) catch {};
+                    stderr.flush() catch {};
                 };
 
                 if (report.severity == .fatal or report.severity == .runtime_error) {
@@ -2990,7 +3040,8 @@ fn rocCheck(allocs: *Allocators, args: cli_args.CheckArgs) !void {
             formatElapsedTime(stderr, elapsed) catch {};
             stderr.print(" for {s}.", .{args.path}) catch {};
 
-            std.process.exit(1);
+            stdout.flush() catch {};
+            flushAndExit(stderr, 1);
         } else {
             stdout.print("No errors found in ", .{}) catch {};
             formatElapsedTime(stdout, elapsed) catch {};
@@ -3022,6 +3073,7 @@ fn printTimingBreakdown(writer: anytype, timing: ?CheckTimingInfo) void {
         writer.print("  type checking diagnostics:    ", .{}) catch {};
         formatElapsedTime(writer, t.check_diagnostics_ns) catch {};
         writer.print("  ({} ns)", .{t.check_diagnostics_ns}) catch {};
+        writer.flush() catch {};
     }
 }
 
@@ -3036,7 +3088,9 @@ fn serveDocumentation(allocs: *Allocators, docs_dir: []const u8) !void {
     defer server.deinit();
 
     stdout.print("Visit http://localhost:8080 to view the docs at ./{s}/\n", .{docs_dir}) catch {};
+    stdout.flush() catch {};
     stdout.print("Press Ctrl+C to stop the server\n", .{}) catch {};
+    stdout.flush() catch {};
 
     while (true) {
         const connection = try server.accept();
@@ -3211,7 +3265,7 @@ fn rocDocs(allocs: *Allocators, args: cli_args.DocsArgs) !void {
             }) catch {};
             formatElapsedTime(stderr, elapsed) catch {};
             stderr.print(" for {s} (note module loaded from cache, use --no-cache to display Errors and Warnings.).", .{args.path}) catch {};
-            std.process.exit(1);
+            flushAndExit(stderr, 1);
         }
     } else {
         // For fresh compilation, process and display reports normally
@@ -3226,6 +3280,7 @@ fn rocDocs(allocs: *Allocators, args: cli_args.DocsArgs) !void {
                     stderr.print("Error rendering diagnostic report: {}", .{render_err}) catch {};
                     // Fallback to just printing the title
                     stderr.print("  {s}", .{report.title}) catch {};
+                    stderr.flush() catch {};
                 };
 
                 if (report.severity == .fatal or report.severity == .runtime_error) {
@@ -3244,7 +3299,7 @@ fn rocDocs(allocs: *Allocators, args: cli_args.DocsArgs) !void {
             stderr.print(" for {s}.", .{args.path}) catch {};
 
             if (check_result.error_count > 0) {
-                std.process.exit(1);
+                flushAndExit(stderr, 1);
             }
         }
     }
@@ -3258,6 +3313,7 @@ fn rocDocs(allocs: *Allocators, args: cli_args.DocsArgs) !void {
     try generateDocs(allocs, &result_with_env.build_env, args.path, args.output);
 
     stdout.print("\nDocumentation generation complete for {s}\n", .{args.path}) catch {};
+    stdout.flush() catch {};
 
     // Start HTTP server if --serve flag is enabled
     if (args.serve) {
