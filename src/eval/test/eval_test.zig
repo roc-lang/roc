@@ -741,17 +741,11 @@ test "ModuleEnv serialization and interpreter evaluation" {
     var test_env_instance = TestEnv.init(gpa);
     defer test_env_instance.deinit();
 
-    // Load builtin modules (following TestEnv.zig pattern)
+    // Load builtin module
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = "Bool := [True, False].{}\n";
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    const str_source = compiled_builtins.str_source;
-    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
-    defer bool_module.deinit();
-    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
-    defer result_module.deinit();
-    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
-    defer str_module.deinit();
+    const builtin_source = compiled_builtins.builtin_source;
+    var builtin_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", builtin_source);
+    defer builtin_module.deinit();
 
     // Create original ModuleEnv
     var original_env = try ModuleEnv.init(gpa, source);
@@ -771,25 +765,23 @@ test "ModuleEnv serialization and interpreter evaluation" {
     // Initialize CIR fields in ModuleEnv
     try original_env.initCIRFields(gpa, "test");
 
-    // Get Bool and Result statement indices from IMPORTED modules (not copied!)
-    const bool_stmt_in_bool_module = builtin_indices.bool_type;
-    const result_stmt_in_result_module = builtin_indices.result_type;
+    // Get Bool and Result statement indices from builtin module
+    const bool_stmt_in_builtin_module = builtin_indices.bool_type;
+    const result_stmt_in_builtin_module = builtin_indices.result_type;
 
     const common_idents: Check.CommonIdents = .{
         .module_name = try original_env.insertIdent(base.Ident.for_text("test")),
         .list = try original_env.insertIdent(base.Ident.for_text("List")),
         .box = try original_env.insertIdent(base.Ident.for_text("Box")),
-        .bool_stmt = bool_stmt_in_bool_module,
-        .result_stmt = result_stmt_in_result_module,
+        .bool_stmt = bool_stmt_in_builtin_module,
+        .result_stmt = result_stmt_in_builtin_module,
     };
 
     // Create module_envs map for canonicalization (enables qualified calls)
     var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
     defer module_envs_map.deinit();
-    const bool_ident = try original_env.insertIdent(base.Ident.for_text("Bool"));
-    const result_ident = try original_env.insertIdent(base.Ident.for_text("Result"));
-    try module_envs_map.put(bool_ident, .{ .env = bool_module.env });
-    try module_envs_map.put(result_ident, .{ .env = result_module.env });
+    const builtin_ident = try original_env.insertIdent(base.Ident.for_text("Builtin"));
+    try module_envs_map.put(builtin_ident, .{ .env = builtin_module.env });
 
     // Create canonicalizer with module_envs_map for qualified name resolution
     var czer = try Can.init(&original_env, &parse_ast, &module_envs_map);
@@ -801,8 +793,8 @@ test "ModuleEnv serialization and interpreter evaluation" {
         return error.CanonicalizeFailure;
     };
 
-    // Type check the expression - pass Bool and Result as imported modules
-    const imported_envs = [_]*const ModuleEnv{ bool_module.env, result_module.env };
+    // Type check the expression - pass Builtin as imported module
+    const imported_envs = [_]*const ModuleEnv{ builtin_module.env };
     var checker = try Check.init(gpa, &original_env.types, &original_env, &imported_envs, &module_envs_map, &original_env.store.regions, common_idents);
     defer checker.deinit();
 
@@ -810,7 +802,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
     // Test 1: Evaluate with the original ModuleEnv
     {
-        const builtin_types_local = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+        const builtin_types_local = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
         var interpreter = try Interpreter.init(gpa, &original_env, builtin_types_local, &[_]*const can.ModuleEnv{});
         defer interpreter.deinit();
 
@@ -877,7 +869,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         // Test 4: Evaluate the same expression using the deserialized ModuleEnv
         // The original expression index should still be valid since the NodeStore structure is preserved
         {
-            const builtin_types_local = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+            const builtin_types_local = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
             var interpreter = try Interpreter.init(gpa, deserialized_env, builtin_types_local, &[_]*const can.ModuleEnv{});
             defer interpreter.deinit();
 

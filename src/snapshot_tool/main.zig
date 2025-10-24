@@ -858,26 +858,10 @@ pub fn main() !void {
         }
     }
 
-    // Load compiled builtin modules (Set, Dict, Bool, Result, Str)
-    const dict_source = "Dict := [EmptyDict].{}\n";
-    var dict_loaded = try loadCompiledModule(gpa, compiled_builtins.dict_bin, "Dict", dict_source);
-    defer dict_loaded.deinit();
-
-    const set_source = "import Dict\n\nSet := [EmptySet(Dict)].{}\n";
-    var set_loaded = try loadCompiledModule(gpa, compiled_builtins.set_bin, "Set", set_source);
-    defer set_loaded.deinit();
-
-    const bool_source = compiled_builtins.bool_source;
-    var bool_loaded = try loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
-    defer bool_loaded.deinit();
-
-    const result_source = "Result ok err := [Ok(ok), Err(err)].{}\n";
-    var result_loaded = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
-    defer result_loaded.deinit();
-
-    const str_source = compiled_builtins.str_source;
-    var str_loaded = try loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
-    defer str_loaded.deinit();
+    // Load compiled Builtin module (contains nested Bool, Result, Str, Dict, Set)
+    const builtin_source = compiled_builtins.builtin_source;
+    var builtin_loaded = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", builtin_source);
+    defer builtin_loaded.deinit();
 
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
 
@@ -888,11 +872,7 @@ pub fn main() !void {
         .output_section_command = output_section_command,
         .trace_eval = trace_eval,
         .linecol_mode = linecol_mode,
-        .dict_module = dict_loaded.env,
-        .set_module = set_loaded.env,
-        .bool_module = bool_loaded.env,
-        .result_module = result_loaded.env,
-        .str_module = str_loaded.env,
+        .builtin_module = builtin_loaded.env,
         .builtin_indices = builtin_indices,
     };
 
@@ -931,26 +911,10 @@ pub fn main() !void {
 }
 
 fn checkSnapshotExpectations(gpa: Allocator) !bool {
-    // Load compiled builtin modules (Set, Dict, Bool, Result, Str)
-    const dict_source = "Dict := [EmptyDict].{}\n";
-    var dict_loaded = try loadCompiledModule(gpa, compiled_builtins.dict_bin, "Dict", dict_source);
-    defer dict_loaded.deinit();
-
-    const set_source = "import Dict\n\nSet := [EmptySet(Dict)].{}\n";
-    var set_loaded = try loadCompiledModule(gpa, compiled_builtins.set_bin, "Set", set_source);
-    defer set_loaded.deinit();
-
-    const bool_source = compiled_builtins.bool_source;
-    var bool_loaded = try loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
-    defer bool_loaded.deinit();
-
-    const result_source = "Result ok err := [Ok(ok), Err(err)].{}\n";
-    var result_loaded = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
-    defer result_loaded.deinit();
-
-    const str_source = compiled_builtins.str_source;
-    var str_loaded = try loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
-    defer str_loaded.deinit();
+    // Load compiled Builtin module (contains nested Bool, Result, Str, Dict, Set)
+    const builtin_source = compiled_builtins.builtin_source;
+    var builtin_loaded = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", builtin_source);
+    defer builtin_loaded.deinit();
 
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
 
@@ -960,11 +924,7 @@ fn checkSnapshotExpectations(gpa: Allocator) !bool {
         .expected_section_command = .check,
         .output_section_command = .check,
         .disable_updates = true,
-        .dict_module = dict_loaded.env,
-        .set_module = set_loaded.env,
-        .bool_module = bool_loaded.env,
-        .result_module = result_loaded.env,
-        .str_module = str_loaded.env,
+        .builtin_module = builtin_loaded.env,
         .builtin_indices = builtin_indices,
     };
     const snapshots_dir = "test/snapshots";
@@ -1255,46 +1215,15 @@ fn processSnapshotContent(
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
     defer module_envs.deinit();
 
-    var dict_import_idx: ?CIR.Import.Idx = null;
-    var set_import_idx: ?CIR.Import.Idx = null;
-    var bool_import_idx: ?CIR.Import.Idx = null;
-    var result_import_idx: ?CIR.Import.Idx = null;
-    var str_import_idx: ?CIR.Import.Idx = null;
+    var builtin_import_idx: ?CIR.Import.Idx = null;
 
-    if (config.dict_module) |dict_env| {
-        const dict_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Dict"));
-        dict_import_idx = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Dict");
-        try module_envs.put(dict_ident, .{
-            .env = dict_env,
-        });
-    }
-    if (config.set_module) |set_env| {
-        const set_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Set"));
-        set_import_idx = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Set");
-        try module_envs.put(set_ident, .{
-            .env = set_env,
-        });
-    }
-    // Bool, Result, and Str are registered as imports to make them available as external types
-    if (config.bool_module) |bool_env| {
-        const bool_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Bool"));
-        bool_import_idx = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Bool");
-        try module_envs.put(bool_ident, .{
-            .env = bool_env,
-        });
-    }
-    if (config.result_module) |result_env| {
-        const result_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Result"));
-        result_import_idx = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Result");
-        try module_envs.put(result_ident, .{
-            .env = result_env,
-        });
-    }
-    if (config.str_module) |str_env| {
-        const str_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Str"));
-        str_import_idx = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Str");
-        try module_envs.put(str_ident, .{
-            .env = str_env,
+    // Builtin is registered as import to make it available as external type
+    // Dict and Set are no longer separate modules - they're nested inside Builtin
+    if (config.builtin_module) |builtin_env| {
+        const builtin_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Builtin"));
+        builtin_import_idx = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Builtin");
+        try module_envs.put(builtin_ident, .{
+            .env = builtin_env,
         });
     }
 
@@ -1302,20 +1231,9 @@ fn processSnapshotContent(
     defer czer.deinit();
 
     // Register auto-injected imports with the canonicalizer so it knows they're already imported
-    if (dict_import_idx) |idx| {
-        try czer.import_indices.put(allocator, "Dict", idx);
-    }
-    if (set_import_idx) |idx| {
-        try czer.import_indices.put(allocator, "Set", idx);
-    }
-    if (bool_import_idx) |idx| {
-        try czer.import_indices.put(allocator, "Bool", idx);
-    }
-    if (result_import_idx) |idx| {
-        try czer.import_indices.put(allocator, "Result", idx);
-    }
-    if (str_import_idx) |idx| {
-        try czer.import_indices.put(allocator, "Str", idx);
+    // Dict and Set are now nested inside Builtin, so we only register Builtin
+    if (builtin_import_idx) |idx| {
+        try czer.import_indices.put(allocator, "Builtin", idx);
     }
 
     var maybe_expr_idx: ?Can.CanonicalizedExpr = null;
@@ -1379,30 +1297,15 @@ fn processSnapshotContent(
     defer builtin_modules.deinit();
 
     // Build builtin_modules array in the same order as can_ir.imports
+    // Dict and Set are now nested inside Builtin, so we only have one module to add
     const import_count = can_ir.imports.imports.items.items.len;
     for (can_ir.imports.imports.items.items[0..import_count]) |str_idx| {
         const import_name = can_ir.getString(str_idx);
 
         // Match the import name to the corresponding loaded builtin module
-        if (std.mem.eql(u8, import_name, "Dict")) {
-            if (config.dict_module) |dict_env| {
-                try builtin_modules.append(dict_env);
-            }
-        } else if (std.mem.eql(u8, import_name, "Set")) {
-            if (config.set_module) |set_env| {
-                try builtin_modules.append(set_env);
-            }
-        } else if (std.mem.eql(u8, import_name, "Bool")) {
-            if (config.bool_module) |bool_env| {
-                try builtin_modules.append(bool_env);
-            }
-        } else if (std.mem.eql(u8, import_name, "Result")) {
-            if (config.result_module) |result_env| {
-                try builtin_modules.append(result_env);
-            }
-        } else if (std.mem.eql(u8, import_name, "Str")) {
-            if (config.str_module) |str_env| {
-                try builtin_modules.append(str_env);
+        if (std.mem.eql(u8, import_name, "Builtin")) {
+            if (config.builtin_module) |builtin_env| {
+                try builtin_modules.append(builtin_env);
             }
         }
     }
@@ -1567,12 +1470,8 @@ const Config = struct {
     disable_updates: bool = false, // Disable updates for check mode
     trace_eval: bool = false,
     linecol_mode: LineColMode = .skip_linecol, // Include line/column info in output
-    // Compiled builtin modules loaded at startup
-    dict_module: ?*const ModuleEnv = null,
-    set_module: ?*const ModuleEnv = null,
-    bool_module: ?*const ModuleEnv = null,
-    result_module: ?*const ModuleEnv = null,
-    str_module: ?*const ModuleEnv = null,
+    // Compiled Builtin module (contains nested Bool, Result, Str, Dict, Set)
+    builtin_module: ?*const ModuleEnv = null,
     builtin_indices: CIR.BuiltinIndices,
 };
 

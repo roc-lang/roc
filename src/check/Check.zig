@@ -114,9 +114,9 @@ pub const CommonIdents = struct {
     module_name: base.Ident.Idx,
     list: base.Ident.Idx,
     box: base.Ident.Idx,
-    /// Statement index of Bool type in the current module (injected from Bool.bin)
+    /// Statement index of Bool type in the current module (injected from Builtin.bin)
     bool_stmt: can.CIR.Statement.Idx,
-    /// Statement index of Result type in the current module (injected from Result.bin)
+    /// Statement index of Result type in the current module (injected from Builtin.bin)
     result_stmt: can.CIR.Statement.Idx,
 };
 

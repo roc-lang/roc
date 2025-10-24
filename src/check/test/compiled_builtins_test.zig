@@ -94,7 +94,7 @@ test "compiled builtins - load Dict" {
     const gpa = testing.allocator;
 
     const dict_source = "Dict := [EmptyDict].{}\n";
-    var dict_loaded = try loadCompiledModule(gpa, compiled_builtins.dict_bin, "Dict", dict_source);
+    var dict_loaded = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Dict", dict_source);
     defer dict_loaded.deinit();
 
     // Verify the module loaded
@@ -105,7 +105,7 @@ test "compiled builtins - load Set" {
     const gpa = testing.allocator;
 
     const set_source = "import Dict\n\nSet := [EmptySet(Dict)].{}\n";
-    var set_loaded = try loadCompiledModule(gpa, compiled_builtins.set_bin, "Set", set_source);
+    var set_loaded = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Set", set_source);
     defer set_loaded.deinit();
 
     // Verify the module loaded
@@ -117,21 +117,21 @@ test "compiled builtins - use Set and Dict together" {
 
     // Load builtin modules (following TestEnv.zig pattern)
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = compiled_builtins.bool_source;
-    const result_source = compiled_builtins.result_source;
-    var bool_module = try loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    const bool_source = compiled_builtins.builtin_source;
+    const result_source = compiled_builtins.builtin_source;
+    var bool_module = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
     defer bool_module.deinit();
-    var result_module = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    var result_module = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Result", result_source);
     defer result_module.deinit();
 
     // Load Dict first
     const dict_source = "Dict := [EmptyDict].{}\n";
-    var dict_loaded = try loadCompiledModule(gpa, compiled_builtins.dict_bin, "Dict", dict_source);
+    var dict_loaded = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Dict", dict_source);
     defer dict_loaded.deinit();
 
     // Load Set (which imports Dict)
     const set_source = "import Dict\n\nSet := [EmptySet(Dict)].{}\n";
-    var set_loaded = try loadCompiledModule(gpa, compiled_builtins.set_bin, "Set", set_source);
+    var set_loaded = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Set", set_source);
     defer set_loaded.deinit();
 
     // Now create a test that uses both Set and Dict

@@ -129,12 +129,8 @@ pub const Repl = struct {
     debug_types_html: std.array_list.Managed([]const u8),
     /// Builtin type declaration indices (loaded once at startup from builtin_indices.bin)
     builtin_indices: can.CIR.BuiltinIndices,
-    /// Loaded Bool module (loaded once at startup)
-    bool_module: LoadedModule,
-    /// Loaded Result module (loaded once at startup)
-    result_module: LoadedModule,
-    /// Loaded Str module (loaded once at startup)
-    str_module: LoadedModule,
+    /// Loaded Builtin module (loaded once at startup)
+    builtin_module: LoadedModule,
 
     pub fn init(allocator: Allocator, roc_ops: *RocOps, crash_ctx: ?*CrashContext) !Repl {
         const compiled_builtins = @import("compiled_builtins");
@@ -142,20 +138,10 @@ pub const Repl = struct {
         // Load builtin indices once at startup (generated at build time)
         const builtin_indices = try deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
 
-        // Load Bool module once at startup
-        const bool_source = "Bool := [True, False].{}\n";
-        var bool_module = try loadCompiledModule(allocator, compiled_builtins.bool_bin, "Bool", bool_source);
-        errdefer bool_module.deinit();
-
-        // Load Result module once at startup
-        const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-        var result_module = try loadCompiledModule(allocator, compiled_builtins.result_bin, "Result", result_source);
-        errdefer result_module.deinit();
-
-        // Load Str module once at startup
-        const str_source = compiled_builtins.str_source;
-        var str_module = try loadCompiledModule(allocator, compiled_builtins.str_bin, "Str", str_source);
-        errdefer str_module.deinit();
+        // Load Builtin module once at startup
+        const builtin_source = compiled_builtins.builtin_source;
+        var builtin_module = try loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", builtin_source);
+        errdefer builtin_module.deinit();
 
         return Repl{
             .allocator = allocator,
@@ -168,9 +154,7 @@ pub const Repl = struct {
             .debug_can_html = std.array_list.Managed([]const u8).init(allocator),
             .debug_types_html = std.array_list.Managed([]const u8).init(allocator),
             .builtin_indices = builtin_indices,
-            .bool_module = bool_module,
-            .result_module = result_module,
-            .str_module = str_module,
+            .builtin_module = builtin_module,
         };
     }
 
@@ -290,10 +274,8 @@ pub const Repl = struct {
             self.allocator.destroy(module_env);
         }
 
-        // Clean up loaded builtin modules
-        self.bool_module.deinit();
-        self.result_module.deinit();
-        self.str_module.deinit();
+        // Clean up loaded builtin module
+        self.builtin_module.deinit();
     }
 
     /// Process a line of input and return the result
@@ -512,13 +494,9 @@ pub const Repl = struct {
         // Create canonicalizer with Bool and Result modules available for qualified name resolution
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, can.Can.AutoImportedType).init(self.allocator);
         defer module_envs_map.deinit();
-        const bool_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Bool"));
-        const result_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Result"));
-        try module_envs_map.put(bool_ident, .{
-            .env = self.bool_module.env,
-        });
-        try module_envs_map.put(result_ident, .{
-            .env = self.result_module.env,
+        const builtin_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Builtin"));
+        try module_envs_map.put(builtin_ident, .{
+            .env = self.builtin_module.env,
         });
 
         var czer = Can.init(cir, &parse_ast, &module_envs_map) catch |err| {
@@ -537,8 +515,8 @@ pub const Repl = struct {
         };
         const final_expr_idx = canonical_expr.get_idx();
 
-        // Type check - Pass Bool and Result as imported modules
-        const imported_modules = [_]*const ModuleEnv{ self.bool_module.env, self.result_module.env };
+        // Type check - Pass Builtin as imported module
+        const imported_modules = [_]*const ModuleEnv{ self.builtin_module.env };
         var checker = Check.init(
             self.allocator,
             &module_env.types,
@@ -557,8 +535,8 @@ pub const Repl = struct {
             return try std.fmt.allocPrint(self.allocator, "Type check expr error: {}", .{err});
         };
 
-        // Create interpreter instance with BuiltinTypes containing real Bool and Result modules
-        const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.bool_module.env, self.result_module.env, self.str_module.env);
+        // Create interpreter instance with BuiltinTypes containing real Builtin module
+        const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.builtin_module.env, self.builtin_module.env, self.builtin_module.env);
         var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, &imported_modules) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
         };

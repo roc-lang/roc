@@ -300,12 +300,12 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     const builtin_indices = try deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
-    const str_source = compiled_builtins.str_source;
-    var bool_module = try loadCompiledModule(allocator, compiled_builtins.bool_bin, "Bool", bool_source);
+    const str_source = compiled_builtins.builtin_source;
+    var bool_module = try loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Bool", bool_source);
     errdefer bool_module.deinit();
-    var result_module = try loadCompiledModule(allocator, compiled_builtins.result_bin, "Result", result_source);
+    var result_module = try loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Result", result_source);
     errdefer result_module.deinit();
-    var str_module = try loadCompiledModule(allocator, compiled_builtins.str_bin, "Str", str_source);
+    var str_module = try loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Str", str_source);
     errdefer str_module.deinit();
 
     // Initialize the ModuleEnv

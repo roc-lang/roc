@@ -1508,6 +1508,19 @@ pub fn getExposedNodeIndexById(self: *const Self, ident_idx: Ident.Idx) ?u16 {
     return self.common.getNodeIndexById(self.gpa, ident_idx);
 }
 
+/// Get the exposed node index for a type given its statement index.
+/// This is used for nested builtin types where we have the statement index pre-computed.
+pub fn getExposedNodeIndexByStatementIdx(self: *const Self, stmt_idx: CIR.Statement.Idx) ?u16 {
+    // Find the node that corresponds to this statement
+    const all_stmts = self.store.sliceStatements(self.all_statements);
+    for (all_stmts, 0..) |s_idx, node_idx| {
+        if (@intFromEnum(s_idx) == @intFromEnum(stmt_idx)) {
+            return @intCast(node_idx);
+        }
+    }
+    return null;
+}
+
 /// Ensures that the exposed items are sorted by identifier index.
 pub fn ensureExposedSorted(self: *Self, allocator: std.mem.Allocator) void {
     self.common.exposed_items.ensureSorted(allocator);

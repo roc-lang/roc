@@ -27,6 +27,9 @@ const Node = @import("Node.zig");
 /// Information about an auto-imported module type
 pub const AutoImportedType = struct {
     env: *const ModuleEnv,
+    /// Optional statement index for nested types (e.g., Builtin.Bool, Builtin.Str)
+    /// When set, this points directly to the type declaration, avoiding string lookups
+    statement_idx: ?CIR.Statement.Idx = null,
 };
 
 env: *ModuleEnv,
@@ -2558,27 +2561,45 @@ pub fn canonicalizeExpr(
                             // Need to convert identifier from current module to target module
                             const field_text = self.env.getIdent(ident);
 
-                            // Build the qualified name (e.g., "Bool.not")
-                            const qualified_name_str = try std.fmt.allocPrint(
-                                self.env.gpa,
-                                "{s}.{s}",
-                                .{ module_text, field_text },
-                            );
-                            defer self.env.gpa.free(qualified_name_str);
-
                             const target_node_idx_opt: ?u16 = if (self.module_envs) |envs_map| blk: {
                                 if (envs_map.get(module_name)) |auto_imported_type| {
                                     const module_env = auto_imported_type.env;
-                                    // Try looking up the qualified name first (e.g., "Bool.not")
-                                    if (module_env.common.findIdent(qualified_name_str)) |qname_ident| {
-                                        break :blk module_env.getExposedNodeIndexById(qname_ident);
-                                    }
-                                    // Fall back to unqualified name
-                                    if (module_env.common.findIdent(field_text)) |target_ident| {
-                                        break :blk module_env.getExposedNodeIndexById(target_ident);
-                                    } else {
-                                        break :blk null;
-                                    }
+
+                                    // For nested types (e.g., Bool inside Builtin), we need to use the actual module name
+                                    // Build the qualified name using the real module name (e.g., "Builtin.Bool.not" not "Bool.not")
+                                    const qualified_name_str = try std.fmt.allocPrint(
+                                        self.env.gpa,
+                                        "{s}.{s}.{s}",
+                                        .{ module_env.module_name, module_text, field_text },
+                                    );
+                                    defer self.env.gpa.free(qualified_name_str);
+
+                                    // Look up the fully qualified name (e.g., "Builtin.Bool.not")
+                                    const qname_ident = module_env.common.findIdent(qualified_name_str) orelse {
+                                        std.debug.print("ERROR: Failed to find '{s}' in module '{s}'\n", .{ qualified_name_str, module_env.module_name });
+                                        std.debug.print("Available identifiers matching '{s}':\n", .{module_text});
+                                        var count: usize = 0;
+                                        var iter = module_env.common.exposed_items.iterator();
+                                        while (iter.next()) |item| {
+                                            const ident_idx: Ident.Idx = @enumFromInt(item.ident_idx);
+                                            const ident_text = module_env.getIdentText(ident_idx);
+                                            if (std.mem.startsWith(u8, ident_text, module_text)) {
+                                                std.debug.print("  - {s}\n", .{ident_text});
+                                                count += 1;
+                                                if (count > 20) break;
+                                            }
+                                        }
+                                        std.debug.panic(
+                                            "Failed to find qualified identifier '{s}' in module '{s}' for auto-imported type '{s}'",
+                                            .{ qualified_name_str, module_env.module_name, module_text },
+                                        );
+                                    };
+                                    break :blk module_env.getExposedNodeIndexById(qname_ident) orelse {
+                                        std.debug.panic(
+                                            "Identifier '{s}' found in module '{s}' but not in exposed items",
+                                            .{ qualified_name_str, module_env.module_name },
+                                        );
+                                    };
                                 } else {
                                     break :blk null;
                                 }
@@ -3805,10 +3826,13 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                 const module_name_text = auto_imported_type.env.module_name;
                 const import_idx = try self.getOrCreateAutoImport(module_name_text);
 
-                // Convert identifier from current module to target module's interner
-                const type_tok_text = self.env.getIdent(type_tok_ident);
-                const target_ident = auto_imported_type.env.common.findIdent(type_tok_text) orelse unreachable; // Auto-imported type must exist in its module
-                const target_node_idx = auto_imported_type.env.getExposedNodeIndexById(target_ident) orelse unreachable; // Auto-imported type must be exposed
+                // Get the target node index using the pre-computed statement_idx
+                const stmt_idx = auto_imported_type.statement_idx orelse {
+                    std.debug.panic("AutoImportedType for module '{s}' is missing required statement_idx", .{module_name_text});
+                };
+                const target_node_idx = auto_imported_type.env.getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
+                    std.debug.panic("Failed to find exposed node for statement index {} in module '{s}'", .{ stmt_idx, module_name_text });
+                };
 
                 const expr_idx = try self.env.addExpr(CIR.Expr{
                     .e_nominal_external = .{
@@ -5719,10 +5743,14 @@ fn canonicalizeTypeAnnoBasicType(
                     const module_name_text = auto_imported_type.env.module_name;
                     const import_idx = try self.getOrCreateAutoImport(module_name_text);
 
-                    // Convert identifier from current module to target module's interner
-                    const type_name_text = self.env.getIdent(type_name_ident);
-                    const target_ident = auto_imported_type.env.common.findIdent(type_name_text) orelse unreachable; // Auto-imported type must exist in its module
-                    const target_node_idx = auto_imported_type.env.getExposedNodeIndexById(target_ident) orelse unreachable; // Auto-imported type must be exposed
+                    // Get the target node index using the pre-computed statement_idx
+                    const stmt_idx = auto_imported_type.statement_idx orelse {
+                        std.debug.panic("AutoImportedType for module '{s}' is missing required statement_idx", .{module_name_text});
+                    };
+                    const target_node_idx = auto_imported_type.env.getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
+                        std.debug.panic("Failed to find exposed node for statement index {} in module '{s}'", .{ stmt_idx, module_name_text });
+                    };
+
                     return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
                         .name = type_name_ident,
                         .base = .{ .external = .{

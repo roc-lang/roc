@@ -152,14 +152,14 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
 
     // Load builtin modules as proper imported modules
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = compiled_builtins.bool_source;
-    const result_source = compiled_builtins.result_source;
-    const str_source = compiled_builtins.str_source;
-    var bool_module = try loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    const bool_source = compiled_builtins.builtin_source;
+    const result_source = compiled_builtins.builtin_source;
+    const str_source = compiled_builtins.builtin_source;
+    var bool_module = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
     errdefer bool_module.deinit();
-    var result_module = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    var result_module = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Result", result_source);
     errdefer result_module.deinit();
-    var str_module = try loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    var str_module = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
     errdefer str_module.deinit();
 
     // Initialize the module_env so we can use its ident store
@@ -329,14 +329,14 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
 
     // Load builtin modules as proper imported modules
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const bool_source = compiled_builtins.bool_source;
-    const result_source = compiled_builtins.result_source;
-    const str_source = compiled_builtins.str_source;
-    var bool_module = try loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    const bool_source = compiled_builtins.builtin_source;
+    const result_source = compiled_builtins.builtin_source;
+    const str_source = compiled_builtins.builtin_source;
+    var bool_module = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Bool", bool_source);
     errdefer bool_module.deinit();
-    var result_module = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    var result_module = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Result", result_source);
     errdefer result_module.deinit();
-    var str_module = try loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    var str_module = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Str", str_source);
     errdefer str_module.deinit();
 
     // Set node indices for the exposed types so they can be properly referenced
