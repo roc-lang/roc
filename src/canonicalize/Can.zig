@@ -31,7 +31,7 @@ pub const AutoImportedType = struct {
 
 env: *ModuleEnv,
 parse_ir: *AST,
-scopes: std.ArrayListUnmanaged(Scope) = .{},
+scopes: std.ArrayList(Scope) = .{},
 /// Special scope for rigid type variables in annotations
 type_vars_scope: base.Scratch(TypeVarScope),
 /// Special scope for tracking exposed items from module header
@@ -1524,7 +1524,7 @@ fn bringImportIntoScope(
     // const res = self.env.imports.getOrInsert(gpa, import_name, shorthand);
 
     // if (res.was_present) {
-    //     _ = self.env.problems.append(gpa, Problem.Canonicalize.make(.{ .DuplicateImport = .{
+    //     _ = self.env.problems.append(Problem.Canonicalize.make(.{ .DuplicateImport = .{
     //         .duplicate_import_region = region,
     //     } }));
     // }
@@ -7057,8 +7057,8 @@ fn checkScopeForUnusedVariables(self: *Self, scope: *const Scope) std.mem.Alloca
     const UnusedVar = struct { ident: base.Ident.Idx, region: Region };
 
     // Collect all unused variables first so we can sort them
-    var unused_vars = std.array_list.Managed(UnusedVar).init(self.env.gpa);
-    defer unused_vars.deinit();
+    var unused_vars = std.ArrayList(UnusedVar).empty;
+    defer unused_vars.deinit(self.env.gpa);
 
     // Iterate through all identifiers in this scope
     var iterator = scope.idents.iterator();
@@ -7103,7 +7103,7 @@ fn checkScopeForUnusedVariables(self: *Self, scope: *const Scope) std.mem.Alloca
         const region = self.env.store.getPatternRegion(pattern_idx);
 
         // Collect unused variable for sorting
-        try unused_vars.append(.{
+        try unused_vars.append(self.env.gpa, .{
             .ident = ident_idx,
             .region = region,
         });

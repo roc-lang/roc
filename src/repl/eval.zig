@@ -211,9 +211,9 @@ pub const Repl = struct {
             defer tree.deinit();
             try module_env.pushToSExprTree(expr_idx, &tree);
 
-            var can_buffer = std.array_list.Managed(u8).init(self.allocator);
-            defer can_buffer.deinit();
-            try tree.toStringPretty(can_buffer.writer().any(), .include_linecol);
+            var can_buffer = std.ArrayList(u8).empty;
+            defer can_buffer.deinit(self.allocator);
+            try tree.toStringPretty(can_buffer.writer(self.allocator).any(), .include_linecol);
 
             const can_html = try self.allocator.dupe(u8, can_buffer.items);
             try self.debug_can_html.append(can_html);
@@ -225,9 +225,9 @@ pub const Repl = struct {
             defer tree.deinit();
             try module_env.pushTypesToSExprTree(expr_idx, &tree);
 
-            var types_buffer = std.array_list.Managed(u8).init(self.allocator);
-            defer types_buffer.deinit();
-            try tree.toStringPretty(types_buffer.writer().any(), .include_linecol);
+            var types_buffer = std.ArrayList(u8).empty;
+            defer types_buffer.deinit(self.allocator);
+            try tree.toStringPretty(types_buffer.writer(self.allocator).any(), .include_linecol);
 
             const types_html = try self.allocator.dupe(u8, types_buffer.items);
             try self.debug_types_html.append(types_html);
@@ -423,29 +423,29 @@ pub const Repl = struct {
             return try self.allocator.dupe(u8, current_expr);
         }
 
-        var buffer = std.array_list.Managed(u8).init(self.allocator);
-        defer buffer.deinit();
+        var buffer = std.ArrayList(u8).empty;
+        errdefer buffer.deinit(self.allocator);
 
         // Start block
-        try buffer.appendSlice("{\n");
+        try buffer.appendSlice(self.allocator, "{\n");
 
         // Add all definitions in order
         var iterator = self.definitions.iterator();
         while (iterator.next()) |kv| {
-            try buffer.appendSlice("    ");
-            try buffer.appendSlice(kv.value_ptr.*);
-            try buffer.append('\n');
+            try buffer.appendSlice(self.allocator, "    ");
+            try buffer.appendSlice(self.allocator, kv.value_ptr.*);
+            try buffer.append(self.allocator, '\n');
         }
 
         // Add current expression
-        try buffer.appendSlice("    ");
-        try buffer.appendSlice(current_expr);
-        try buffer.append('\n');
+        try buffer.appendSlice(self.allocator, "    ");
+        try buffer.appendSlice(self.allocator, current_expr);
+        try buffer.append(self.allocator, '\n');
 
         // End block
-        try buffer.append('}');
+        try buffer.append(self.allocator, '}');
 
-        return try buffer.toOwnedSlice();
+        return try buffer.toOwnedSlice(self.allocator);
     }
 
     /// Evaluate source code

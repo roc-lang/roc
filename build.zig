@@ -618,24 +618,24 @@ fn discoverBuiltinRocFiles(b: *std.Build) ![]const []const u8 {
     var builtin_roc_dir = try std.fs.openDirAbsolute(builtin_roc_path, .{ .iterate = true });
     defer builtin_roc_dir.close();
 
-    var roc_files = std.array_list.Managed([]const u8).init(b.allocator);
-    errdefer roc_files.deinit();
+    var roc_files = std.ArrayList([]const u8).empty;
+    errdefer roc_files.deinit(b.allocator);
 
     var iter = builtin_roc_dir.iterate();
     while (try iter.next()) |entry| {
         if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".roc")) {
             const full_path = b.fmt("src/build/roc/{s}", .{entry.name});
-            try roc_files.append(full_path);
+            try roc_files.append(b.allocator, full_path);
         }
     }
 
-    return roc_files.toOwnedSlice();
+    return roc_files.toOwnedSlice(b.allocator);
 }
 
 fn generateCompiledBuiltinsSource(b: *std.Build, roc_files: []const []const u8) ![]const u8 {
-    var builtins_source = std.array_list.Managed(u8).init(b.allocator);
-    errdefer builtins_source.deinit();
-    const writer = builtins_source.writer();
+    var builtins_source = std.ArrayList(u8).empty;
+    errdefer builtins_source.deinit(b.allocator);
+    const writer = builtins_source.writer(b.allocator);
 
     for (roc_files) |roc_path| {
         const roc_basename = std.fs.path.basename(roc_path);
@@ -652,7 +652,7 @@ fn generateCompiledBuiltinsSource(b: *std.Build, roc_files: []const []const u8) 
     // Also embed builtin_indices.bin
     try writer.writeAll("pub const builtin_indices_bin = @embedFile(\"builtin_indices.bin\");\n");
 
-    return builtins_source.toOwnedSlice();
+    return builtins_source.toOwnedSlice(b.allocator);
 }
 
 fn add_fuzz_target(
@@ -929,13 +929,13 @@ const ParsedBuildArgs = struct {
 };
 
 fn appendFilter(
-    list: *std.array_list.Managed([]const u8),
+    list: *std.ArrayList([]const u8),
     b: *std.Build,
     value: []const u8,
 ) void {
     const trimmed = std.mem.trim(u8, value, " \t\n\r");
     if (trimmed.len == 0) return;
-    list.append(b.dupe(trimmed)) catch @panic("OOM while parsing --test-filter value");
+    list.append(b.allocator, b.dupe(trimmed)) catch @panic("OOM while parsing --test-filter value");
 }
 
 fn parseBuildArgs(b: *std.Build) ParsedBuildArgs {
@@ -944,8 +944,8 @@ fn parseBuildArgs(b: *std.Build) ParsedBuildArgs {
         .test_filters = &.{},
     };
 
-    var run_args_list = std.array_list.Managed([]const u8).init(b.allocator);
-    var filter_list = std.array_list.Managed([]const u8).init(b.allocator);
+    var run_args_list = std.ArrayList([]const u8).empty;
+    var filter_list = std.ArrayList([]const u8).empty;
 
     var i: usize = 0;
     while (i < raw_args.len) {
@@ -970,12 +970,12 @@ fn parseBuildArgs(b: *std.Build) ParsedBuildArgs {
             continue;
         }
 
-        run_args_list.append(arg) catch @panic("OOM while recording build arguments");
+        run_args_list.append(b.allocator, arg) catch @panic("OOM while recording build arguments");
         i += 1;
     }
 
-    const run_args = run_args_list.toOwnedSlice() catch @panic("OOM while finalizing build arguments");
-    const test_filters = filter_list.toOwnedSlice() catch @panic("OOM while finalizing test filters");
+    const run_args = run_args_list.toOwnedSlice(b.allocator) catch @panic("OOM while finalizing build arguments");
+    const test_filters = filter_list.toOwnedSlice(b.allocator) catch @panic("OOM while finalizing test filters");
 
     return .{ .run_args = run_args, .test_filters = test_filters };
 }
@@ -1399,10 +1399,10 @@ fn getCompilerVersion(b: *std.Build, optimize: OptimizeMode) []const u8 {
 fn generateGlibcStub(b: *std.Build, target: ResolvedTarget, target_name: []const u8) ?*Step.UpdateSourceFiles {
 
     // Generate assembly stub with comprehensive symbols using the new build module
-    var assembly_buf = std.array_list.Managed(u8).init(b.allocator);
-    defer assembly_buf.deinit();
+    var assembly_buf = std.ArrayList(u8).empty;
+    defer assembly_buf.deinit(b.allocator);
 
-    const writer = assembly_buf.writer();
+    const writer = assembly_buf.writer(b.allocator);
     const target_arch = target.result.cpu.arch;
     const target_abi = target.result.abi;
 
