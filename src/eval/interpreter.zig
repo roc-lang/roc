@@ -4990,13 +4990,18 @@ test "interpreter: unification constrains (a->a) with Str" {
 test "interpreter: cross-module method resolution should find methods in origin module" {
     const gpa = std.testing.allocator;
 
+    const module_a_name = "ModuleA";
+    const module_b_name = "ModuleB";
+
     // Set up Module A (the imported module where the type and method are defined)
-    var module_a = try can.ModuleEnv.init(gpa, "ModuleA");
+    var module_a = try can.ModuleEnv.init(gpa, module_a_name);
     defer module_a.deinit();
+    try module_a.initCIRFields(gpa, module_a_name);
 
     // Set up Module B (the current module that imports Module A)
-    var module_b = try can.ModuleEnv.init(gpa, "ModuleB");
+    var module_b = try can.ModuleEnv.init(gpa, module_b_name);
     defer module_b.deinit();
+    try module_b.initCIRFields(gpa, module_b_name);
 
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";
@@ -5011,7 +5016,7 @@ test "interpreter: cross-module method resolution should find methods in origin 
     defer interp.deinit();
 
     // Register module A as an imported module
-    const module_a_ident = try module_b.common.idents.insert(gpa, @import("base").Ident.for_text("ModuleA"));
+    const module_a_ident = try module_b.common.idents.insert(gpa, @import("base").Ident.for_text(module_a_name));
     try interp.module_envs.put(interp.allocator, module_a_ident, &module_a);
     const module_a_id: u32 = 1;
     try interp.module_ids.put(interp.allocator, module_a_ident, module_a_id);
@@ -5033,15 +5038,22 @@ test "interpreter: cross-module method resolution should find methods in origin 
 test "interpreter: transitive module method resolution (A imports B imports C)" {
     const gpa = std.testing.allocator;
 
+    const module_a_name = "ModuleA";
+    const module_b_name = "ModuleB";
+    const module_c_name = "ModuleC";
+
     // Set up three modules: A (current) imports B, B imports C
-    var module_a = try can.ModuleEnv.init(gpa, "ModuleA");
+    var module_a = try can.ModuleEnv.init(gpa, module_a_name);
     defer module_a.deinit();
+    try module_a.initCIRFields(gpa, module_a_name);
 
-    var module_b = try can.ModuleEnv.init(gpa, "ModuleB");
+    var module_b = try can.ModuleEnv.init(gpa, module_b_name);
     defer module_b.deinit();
+    try module_b.initCIRFields(gpa, module_b_name);
 
-    var module_c = try can.ModuleEnv.init(gpa, "ModuleC");
+    var module_c = try can.ModuleEnv.init(gpa, module_c_name);
     defer module_c.deinit();
+    try module_c.initCIRFields(gpa, module_c_name);
 
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";
@@ -5057,13 +5069,13 @@ test "interpreter: transitive module method resolution (A imports B imports C)" 
     defer interp.deinit();
 
     // Register module B
-    const module_b_ident = try module_a.common.idents.insert(gpa, @import("base").Ident.for_text("ModuleB"));
+    const module_b_ident = try module_a.common.idents.insert(gpa, @import("base").Ident.for_text(module_b_name));
     try interp.module_envs.put(interp.allocator, module_b_ident, &module_b);
     const module_b_id: u32 = 1;
     try interp.module_ids.put(interp.allocator, module_b_ident, module_b_id);
 
     // Register module C
-    const module_c_ident = try module_a.common.idents.insert(gpa, @import("base").Ident.for_text("ModuleC"));
+    const module_c_ident = try module_a.common.idents.insert(gpa, @import("base").Ident.for_text(module_c_name));
     try interp.module_envs.put(interp.allocator, module_c_ident, &module_c);
     const module_c_id: u32 = 2;
     try interp.module_ids.put(interp.allocator, module_c_ident, module_c_id);
