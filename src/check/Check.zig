@@ -3098,9 +3098,6 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, rank
                 try self.types.setVarRedirect(stmt_var, reassign_expr_var);
             },
             .s_for => |for_stmt| {
-                var tw = try self.cir.initTypeWriter();
-                defer tw.deinit();
-
                 // Check the pattern
                 // for item in [1,2,3] {
                 //     ^^^^
@@ -3134,6 +3131,17 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, rank
             .s_expr => |expr| {
                 does_fx = try self.checkExpr(expr.expr, rank, .no_expectation) or does_fx;
                 const expr_var: Var = ModuleEnv.varFrom(expr.expr);
+
+                const resolved = self.types.resolveVar(expr_var).desc.content;
+                if (resolved == .err or (resolved == .structure and resolved.structure == .empty_record)) {
+                    // If this type resolves to an empty record, then we are good!
+                } else {
+                    const snapshot = try self.snapshots.deepCopyVar(self.types, expr_var);
+                    _ = try self.problems.appendProblem(self.cir.gpa, .{ .unused_value = .{
+                        .var_ = expr_var,
+                        .snapshot = snapshot,
+                    } });
+                }
 
                 try self.types.setVarRedirect(stmt_var, expr_var);
             },

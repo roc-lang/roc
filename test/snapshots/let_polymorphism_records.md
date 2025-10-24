@@ -81,6 +81,17 @@ update_data = |container, new_value| { container & data: new_value }
                           ^^^^^^^^^
 
 
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**let_polymorphism_records.md:19:40:19:49:**
+```roc
+update_data = |container, new_value| { container & data: new_value }
+```
+                                       ^^^^^^^^^
+
+It has the type:
+    __a_
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

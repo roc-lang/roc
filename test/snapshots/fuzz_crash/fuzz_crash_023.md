@@ -253,7 +253,7 @@ UNDEFINED VARIABLE - fuzz_crash_023.md:141:2:141:6
 UNDECLARED TYPE - fuzz_crash_023.md:143:14:143:20
 UNDEFINED VARIABLE - fuzz_crash_023.md:147:9:147:13
 UNDEFINED VARIABLE - fuzz_crash_023.md:158:2:158:11
-NOT IMPLEMENTED - :0:0:0:0
+UNDEFINED VARIABLE - fuzz_crash_023.md:175:3:175:15
 UNRECOGNIZED SYNTAX - fuzz_crash_023.md:178:38:178:40
 UNRECOGNIZED SYNTAX - fuzz_crash_023.md:178:40:178:41
 UNRECOGNIZED SYNTAX - fuzz_crash_023.md:178:45:178:46
@@ -268,7 +268,6 @@ UNDEFINED VARIABLE - fuzz_crash_023.md:191:2:191:14
 UNDEFINED VARIABLE - fuzz_crash_023.md:193:4:193:13
 UNUSED VARIABLE - fuzz_crash_023.md:164:2:164:18
 UNUSED VARIABLE - fuzz_crash_023.md:165:2:165:14
-UNUSED VARIABLE - fuzz_crash_023.md:166:2:166:6
 UNUSED VARIABLE - fuzz_crash_023.md:178:2:178:8
 UNUSED VARIABLE - fuzz_crash_023.md:180:2:180:17
 UNUSED VARIABLE - fuzz_crash_023.md:188:2:188:15
@@ -977,6 +976,17 @@ All patterns in an `match` must have compatible types.
 
 
 
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_023.md:1:1:1:1:**
+```roc
+# This is a module comment!
+```
+^
+
+It has the type:
+    __d_
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **fuzz_crash_023.md:155:2:157:3:**
@@ -991,6 +1001,29 @@ It has the type:
 
 But I expected it to be:
     _[Red][Blue, Green]_others, _arg -> Error_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_023.md:155:2:157:3:**
+```roc
+	match_time(
+		..., # Single args with comment
+	)
+```
+
+It has the type:
+    __d_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_023.md:178:42:178:45:**
+```roc
+	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
+```
+	                                        ^^^
+
+It has the type:
+    _[Blue]_others_
 
 # TOKENS
 ~~~zig

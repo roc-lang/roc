@@ -39,7 +39,6 @@ UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:3:25:3:26
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:3:26:3:27
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:4:11:4:12
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:4:29:4:30
-NOT IMPLEMENTED - :0:0:0:0
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:5:11:5:12
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:5:26:5:27
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:6:5:6:8
@@ -422,6 +421,28 @@ I don't recognize this syntax.
                   ^
 
 This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**record_different_fields_reserved_error.md:4:13:4:29:**
+```roc
+    expect: "test assertion",
+```
+            ^^^^^^^^^^^^^^^^
+
+It has the type:
+    _Str_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**record_different_fields_reserved_error.md:5:13:5:26:**
+```roc
+    import: "module load",
+```
+            ^^^^^^^^^^^^^
+
+It has the type:
+    _Str_
 
 # TOKENS
 ~~~zig

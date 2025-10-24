@@ -1,13 +1,18 @@
 # META
 ~~~ini
 description=For expression stmt
-type=statement
+type=snippet
 ~~~
 # SOURCE
 ~~~roc
-for x in ["a", "b", "c"] {
-  result = result + x
-} 
+foo : U64
+foo = {
+	var result = 0
+	for x in [1, 2, 3] {
+	  result = result + x
+	} 
+	result
+}
 ~~~
 # EXPECTED
 NIL
@@ -15,62 +20,90 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwFor,LowerIdent,KwIn,OpenSquare,StringStart,StringPart,StringEnd,Comma,StringStart,StringPart,StringEnd,Comma,StringStart,StringPart,StringEnd,CloseSquare,OpenCurly,
+LowerIdent,OpColon,UpperIdent,
+LowerIdent,OpAssign,OpenCurly,
+KwVar,LowerIdent,OpAssign,Int,
+KwFor,LowerIdent,KwIn,OpenSquare,Int,Comma,Int,Comma,Int,CloseSquare,OpenCurly,
 LowerIdent,OpAssign,LowerIdent,OpPlus,LowerIdent,
+CloseCurly,
+LowerIdent,
 CloseCurly,
 EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(s-for
-	(p-ident (raw "x"))
-	(e-list
-		(e-string
-			(e-string-part (raw "a")))
-		(e-string
-			(e-string-part (raw "b")))
-		(e-string
-			(e-string-part (raw "c"))))
-	(e-block
-		(statements
-			(s-decl
-				(p-ident (raw "result"))
-				(e-binop (op "+")
-					(e-ident (raw "result"))
-					(e-ident (raw "x")))))))
+(file
+	(type-module)
+	(statements
+		(s-type-anno (name "foo")
+			(ty (name "U64")))
+		(s-decl
+			(p-ident (raw "foo"))
+			(e-block
+				(statements
+					(s-var (name "result")
+						(e-int (raw "0")))
+					(s-for
+						(p-ident (raw "x"))
+						(e-list
+							(e-int (raw "1"))
+							(e-int (raw "2"))
+							(e-int (raw "3")))
+						(e-block
+							(statements
+								(s-decl
+									(p-ident (raw "result"))
+									(e-binop (op "+")
+										(e-ident (raw "result"))
+										(e-ident (raw "x")))))))
+					(e-ident (raw "result")))))))
 ~~~
 # FORMATTED
 ~~~roc
-for x in ["a", "b", "c"] {
-	result = result + x
+foo : U64
+foo = {
+	var result = 0
+	for x in [1, 2, 3] {
+		result = result + x
+	}
+	result
 }
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-for
-		(p-assign (ident "x"))
-		(e-list
-			(elems
-				(e-string
-					(e-literal (string "a")))
-				(e-string
-					(e-literal (string "b")))
-				(e-string
-					(e-literal (string "c")))))
+	(d-let
+		(p-assign (ident "foo"))
 		(e-block
-			(s-let
+			(s-var
 				(p-assign (ident "result"))
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "result")))
-					(e-lookup-local
-						(p-assign (ident "x")))))
-			(e-empty_record))))
+				(e-num (value "0")))
+			(s-for
+				(p-assign (ident "x"))
+				(e-list
+					(elems
+						(e-num (value "1"))
+						(e-num (value "2"))
+						(e-num (value "3"))))
+				(e-block
+					(s-reassign
+						(p-assign (ident "result"))
+						(e-binop (op "add")
+							(e-lookup-local
+								(p-assign (ident "result")))
+							(e-lookup-local
+								(p-assign (ident "x")))))
+					(e-empty_record)))
+			(e-lookup-local
+				(p-assign (ident "result"))))
+		(annotation
+			(ty-lookup (name "U64") (builtin)))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs)
-	(expressions))
+	(defs
+		(patt (type "Num(Int(Unsigned64))")))
+	(expressions
+		(expr (type "Num(Int(Unsigned64))"))))
 ~~~

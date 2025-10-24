@@ -22,7 +22,6 @@ processColor = |color| {
 ~~~
 # EXPECTED
 IMPORT MUST BE TOP LEVEL - nominal_mixed_scope.md:7:5:7:11
-NOT IMPLEMENTED - :0:0:0:0
 UNDECLARED TYPE - nominal_mixed_scope.md:7:12:7:17
 UNDECLARED TYPE - nominal_mixed_scope.md:10:9:10:12
 UNDECLARED TYPE - nominal_mixed_scope.md:11:9:11:12
