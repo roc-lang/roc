@@ -2798,6 +2798,35 @@ fn checkFileWithBuildEnvPreserved(
 
     // Build the file (works for both app and module files)
     build_env.build(filepath) catch |err| {
+        // Even on error, try to drain and print any reports that were collected
+        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+        defer build_env.gpa.free(drained);
+
+        // Print any error reports to stderr before failing
+        const stderr = std.fs.File.stderr();
+        const num_reports = blk: {
+            var count: usize = 0;
+            for (drained) |mod| count += mod.reports.len;
+            break :blk count;
+        };
+
+        if (num_reports > 0) {
+            _ = stderr.write("DEBUG: Found ") catch {};
+            var buf: [32]u8 = undefined;
+            const count_str = std.fmt.bufPrint(&buf, "{d}", .{num_reports}) catch "?";
+            _ = stderr.write(count_str) catch {};
+            _ = stderr.write(" reports\n") catch {};
+
+            for (drained) |mod| {
+                for (mod.reports) |report| {
+                    _ = stderr.write(report.title) catch {};
+                    _ = stderr.write("\n") catch {};
+                }
+            }
+        } else {
+            _ = stderr.write("DEBUG: No reports found\n") catch {};
+        }
+
         return err;
     };
 
@@ -2894,7 +2923,24 @@ fn checkFileWithBuildEnv(
     }
 
     // Build the file (works for both app and module files)
-    try build_env.build(filepath);
+    build_env.build(filepath) catch {
+        // Even on error, drain reports to show what went wrong
+        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+        defer build_env.gpa.free(drained);
+
+        // Convert BuildEnv drained reports to our format
+        var reports = try build_env.gpa.alloc(DrainedReport, drained.len);
+        for (drained, 0..) |mod, i| {
+            reports[i] = .{
+                .file_path = try build_env.gpa.dupe(u8, mod.abs_path),
+                .reports = try build_env.gpa.dupe(reporting.Report, mod.reports),
+            };
+        }
+
+        return CheckResult{
+            .reports = reports,
+        };
+    };
 
     // Drain all reports
     const drained = try build_env.drainReports();
