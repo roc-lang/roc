@@ -15,8 +15,10 @@ const can = @import("can");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const reporting = @import("reporting");
+const eval = @import("eval");
 
 const Report = reporting.Report;
+const BuiltinModules = eval.BuiltinModules;
 const Mode = @import("compile_package.zig").Mode;
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
@@ -359,6 +361,9 @@ pub const BuildEnv = struct {
     // Cache manager for compiled modules
     cache_manager: ?*CacheManager = null,
 
+    // Builtin modules (Bool, Result, Str) shared across all packages (heap-allocated to prevent moves)
+    builtin_modules: *BuiltinModules,
+
     // Owned resolver ctx pointers for cleanup (typed)
     resolver_ctxs: std.array_list.Managed(*ResolverCtx),
     // Owned per-package sink contexts for fully-qualified emission
@@ -366,7 +371,14 @@ pub const BuildEnv = struct {
     // Owned schedule ctxs for pre-registration (one per package)
     schedule_ctxs: std.array_list.Managed(*ScheduleCtx),
 
-    pub fn init(gpa: Allocator, mode: Mode, max_threads: usize) BuildEnv {
+    pub fn init(gpa: Allocator, mode: Mode, max_threads: usize) !BuildEnv {
+        // Allocate builtin modules on heap to prevent moves that would invalidate internal pointers
+        const builtin_modules = try gpa.create(BuiltinModules);
+        errdefer gpa.destroy(builtin_modules);
+
+        builtin_modules.* = try BuiltinModules.init(gpa);
+        errdefer builtin_modules.deinit();
+
         return .{
             .gpa = gpa,
             .mode = mode,
@@ -374,6 +386,7 @@ pub const BuildEnv = struct {
             .workspace_roots = std.array_list.Managed([]const u8).init(gpa),
             .sink = OrderedSink.init(gpa),
             .global_queue = GlobalQueue.init(gpa),
+            .builtin_modules = builtin_modules,
             .resolver_ctxs = std.array_list.Managed(*ResolverCtx).init(gpa),
             .pkg_sink_ctxs = std.array_list.Managed(*PkgSinkCtx).init(gpa),
             .schedule_ctxs = std.array_list.Managed(*ScheduleCtx).init(gpa),
@@ -381,6 +394,10 @@ pub const BuildEnv = struct {
     }
 
     pub fn deinit(self: *BuildEnv) void {
+        // Deinit and free builtin modules
+        self.builtin_modules.deinit();
+        self.gpa.destroy(self.builtin_modules);
+
         // Stop global queue workers
         self.global_queue.deinit(self.gpa);
 
@@ -1028,6 +1045,7 @@ pub const BuildEnv = struct {
                 resolver,
                 schedule_hook,
                 self.compiler_version,
+                self.builtin_modules,
             );
 
             const key = try self.gpa.dupe(u8, name);

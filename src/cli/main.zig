@@ -2761,7 +2761,7 @@ fn checkFileWithBuildEnvPreserved(
     defer trace.end();
 
     // Initialize BuildEnv in single-threaded mode for checking
-    var build_env = BuildEnv.init(allocs.gpa, .single_threaded, 1);
+    var build_env = try BuildEnv.init(allocs.gpa, .single_threaded, 1);
     build_env.compiler_version = build_options.compiler_version;
     // Note: We do NOT defer build_env.deinit() here because we're returning it
 
@@ -2858,7 +2858,7 @@ fn checkFileWithBuildEnv(
     defer trace.end();
 
     // Initialize BuildEnv in single-threaded mode for checking
-    var build_env = BuildEnv.init(allocs.gpa, .single_threaded, 1);
+    var build_env = try BuildEnv.init(allocs.gpa, .single_threaded, 1);
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
 

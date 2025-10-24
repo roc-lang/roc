@@ -253,6 +253,7 @@ pub fn build(b: *std.Build) void {
 
     roc_modules.repl.addImport("compiled_builtins", compiled_builtins_module);
     roc_modules.compile.addImport("compiled_builtins", compiled_builtins_module);
+    roc_modules.eval.addImport("compiled_builtins", compiled_builtins_module);
 
     const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins) orelse return;
     roc_modules.addAll(roc_exe);

@@ -23,6 +23,7 @@ const eval = @import("eval");
 const builtin_loading = eval.builtin_loading;
 const compiled_builtins = @import("compiled_builtins");
 const BuiltinTypes = eval.BuiltinTypes;
+const BuiltinModules = eval.BuiltinModules;
 
 const Check = check.Check;
 const Can = can.Can;
@@ -152,6 +153,8 @@ pub const PackageEnv = struct {
     schedule_hook: ScheduleHook,
     /// Compiler version for cache invalidation
     compiler_version: []const u8,
+    /// Builtin modules (Bool, Result, Str) for auto-importing in canonicalization (not owned)
+    builtin_modules: *const BuiltinModules,
 
     lock: Mutex = .{},
     cond: Condition = .{},
@@ -178,7 +181,7 @@ pub const PackageEnv = struct {
     total_type_checking_ns: u64 = 0,
     total_check_diagnostics_ns: u64 = 0,
 
-    pub fn init(gpa: Allocator, package_name: []const u8, root_dir: []const u8, mode: Mode, max_threads: usize, sink: ReportSink, schedule_hook: ScheduleHook, compiler_version: []const u8) PackageEnv {
+    pub fn init(gpa: Allocator, package_name: []const u8, root_dir: []const u8, mode: Mode, max_threads: usize, sink: ReportSink, schedule_hook: ScheduleHook, compiler_version: []const u8, builtin_modules: *const BuiltinModules) PackageEnv {
         return .{
             .gpa = gpa,
             .package_name = package_name,
@@ -188,6 +191,7 @@ pub const PackageEnv = struct {
             .sink = sink,
             .schedule_hook = schedule_hook,
             .compiler_version = compiler_version,
+            .builtin_modules = builtin_modules,
             .injector = std.array_list.Managed(Task).init(gpa),
             .modules = std.array_list.Managed(ModuleState).init(gpa),
             .discovered = std.array_list.Managed(ModuleId).init(gpa),
@@ -204,6 +208,7 @@ pub const PackageEnv = struct {
         resolver: ImportResolver,
         schedule_hook: ScheduleHook,
         compiler_version: []const u8,
+        builtin_modules: *const BuiltinModules,
     ) PackageEnv {
         return .{
             .gpa = gpa,
@@ -215,6 +220,7 @@ pub const PackageEnv = struct {
             .resolver = resolver,
             .schedule_hook = schedule_hook,
             .compiler_version = compiler_version,
+            .builtin_modules = builtin_modules,
             .injector = std.array_list.Managed(Task).init(gpa),
             .modules = std.array_list.Managed(ModuleState).init(gpa),
             .discovered = std.array_list.Managed(ModuleId).init(gpa),
@@ -222,6 +228,8 @@ pub const PackageEnv = struct {
     }
 
     pub fn deinit(self: *PackageEnv) void {
+        // NOTE: builtin_modules is not owned by PackageEnv, so we don't deinit it here
+
         // Deinit modules
         for (self.modules.items) |*ms| {
             ms.deinit(self.gpa);
@@ -572,7 +580,22 @@ pub const PackageEnv = struct {
 
         // canonicalize using the AST
         const canon_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        var czer = try Can.init(env, &parse_ast, null);
+
+        // Create module_envs map for auto-importing builtin types
+        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(self.gpa);
+        defer module_envs_map.deinit();
+
+        // Add Bool, Result, and Str to the map
+        const bool_ident = try env.common.insertIdent(self.gpa, base.Ident.for_text("Bool"));
+        try module_envs_map.put(bool_ident, .{ .env = self.builtin_modules.bool_module.env });
+
+        const result_ident = try env.common.insertIdent(self.gpa, base.Ident.for_text("Result"));
+        try module_envs_map.put(result_ident, .{ .env = self.builtin_modules.result_module.env });
+
+        const str_ident = try env.common.insertIdent(self.gpa, base.Ident.for_text("Str"));
+        try module_envs_map.put(str_ident, .{ .env = self.builtin_modules.str_module.env });
+
+        var czer = try Can.init(env, &parse_ast, &module_envs_map);
         try czer.canonicalizeFile();
         czer.deinit();
         const canon_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
@@ -615,6 +638,9 @@ pub const PackageEnv = struct {
             // Local import - schedule in this package
             const import_path = try self.resolveModulePath(mod_name);
             const child_id = try self.ensureModule(mod_name, import_path);
+            // Refresh st and env pointers in case ensureModule grew the modules array
+            st = &self.modules.items[module_id];
+            env = &st.env.?;
             const existed = child_id < self.modules.items.len - 1;
             try st.imports.append(child_id);
             // parent depth + 1
