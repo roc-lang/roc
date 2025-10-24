@@ -145,7 +145,7 @@ pub const Interpreter = struct {
     imported_modules: std.StringHashMap(*const can.ModuleEnv),
     def_stack: std.array_list.Managed(DefInProgress),
 
-    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, imported_modules_map: ?*const std.AutoHashMap(base_pkg.Ident.Idx, can.Can.AutoImportedType)) !Interpreter {
+    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, other_envs: []const *const can.ModuleEnv) !Interpreter {
         // Build maps from Ident.Idx to ModuleEnv and module ID
         var module_envs = std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv){};
         errdefer module_envs.deinit(allocator);
@@ -156,31 +156,28 @@ pub const Interpreter = struct {
 
         var next_id: u32 = 1; // Start at 1, reserve 0 for current module
 
-        if (imported_modules_map) |modules_map| {
-            try module_envs.ensureTotalCapacity(allocator, modules_map.count());
-            try module_ids.ensureTotalCapacity(allocator, modules_map.count());
-            try import_envs.ensureTotalCapacity(allocator, modules_map.count());
+        if (other_envs.len > 0) {
+            try module_envs.ensureTotalCapacity(allocator, @intCast(other_envs.len));
+            try module_ids.ensureTotalCapacity(allocator, @intCast(other_envs.len));
+            try import_envs.ensureTotalCapacity(allocator, @intCast(other_envs.len));
 
-            var iter = modules_map.iterator();
-            while (iter.next()) |entry| {
-                const ident_idx = entry.key_ptr.*;
-                const module_env = entry.value_ptr.env;
+            // Match imports in order with other_envs
+            const import_count = @min(env.imports.imports.items.items.len, other_envs.len);
+            for (0..import_count) |i| {
+                const module_env = other_envs[i];
+                const str_idx = env.imports.imports.items.items[i];
+                const import_name = env.common.getString(str_idx);
+
+                // Find or create the Ident.Idx for this import name
+                const ident_idx = env.common.findIdent(import_name) orelse continue;
+
+                // Store in all three maps
                 module_envs.putAssumeCapacity(ident_idx, module_env);
                 module_ids.putAssumeCapacity(ident_idx, next_id);
-                next_id += 1;
+                const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
+                import_envs.putAssumeCapacity(import_idx, module_env);
 
-                // Also build Import.Idx -> ModuleEnv mapping
-                // Get the module name string from the ident
-                const module_name = env.common.getIdentStore().getText(ident_idx);
-                // Look up the Import.Idx for this module name in the current module's import store
-                for (env.imports.imports.items.items, 0..) |string_lit_idx, i| {
-                    const import_name = env.common.getString(string_lit_idx);
-                    if (std.mem.eql(u8, import_name, module_name)) {
-                        const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
-                        import_envs.putAssumeCapacity(import_idx, module_env);
-                        break;
-                    }
-                }
+                next_id += 1;
             }
         }
 
@@ -4199,7 +4196,7 @@ test "interpreter: Var->Layout slot caches computed layout" {
     defer result_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     // Create a concrete runtime type: Str
@@ -4233,7 +4230,7 @@ test "interpreter: translateTypeVar for str" {
     defer result_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const ct_str = try env.types.freshFromContent(.{ .structure = .str });
@@ -4260,7 +4257,7 @@ test "interpreter: translateTypeVar for int64" {
     defer result_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const ct_int = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
@@ -4295,7 +4292,7 @@ test "interpreter: translateTypeVar for f64" {
     defer result_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const ct_frac = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } });
@@ -4330,7 +4327,7 @@ test "interpreter: translateTypeVar for tuple(Str, I64)" {
     defer result_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const ct_str = try env.types.freshFromContent(.{ .structure = .str });
@@ -4383,7 +4380,7 @@ test "interpreter: translateTypeVar for record {first: Str, second: I64}" {
     defer result_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     // Build compile-time record content
@@ -4450,7 +4447,7 @@ test "interpreter: translateTypeVar for alias of Str" {
     defer result_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const alias_name = try env.common.idents.insert(gpa, @import("base").Ident.for_text("MyAlias"));
@@ -4486,7 +4483,7 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
     defer result_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const name_nominal = try env.common.idents.insert(gpa, @import("base").Ident.for_text("Point"));
@@ -4527,7 +4524,7 @@ test "interpreter: translateTypeVar for flex var" {
     defer result_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const ct_flex = try env.types.freshFromContent(.{ .flex = types.Flex.init() });
@@ -4552,7 +4549,7 @@ test "interpreter: translateTypeVar for rigid var" {
     defer result_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const name_a = try env.common.idents.insert(gpa, @import("base").Ident.for_text("A"));
@@ -4579,7 +4576,7 @@ test "interpreter: translateTypeVar for flex var with static dispatch constraint
     defer result_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     // Create a method function type: Str -> I64
@@ -4651,7 +4648,7 @@ test "interpreter: translateTypeVar for flex var with multiple static dispatch c
     defer result_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     // Create multiple method function types
@@ -4730,7 +4727,7 @@ test "interpreter: translateTypeVar for rigid var with static dispatch constrain
     defer result_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     // Create a method function type
@@ -4786,7 +4783,7 @@ test "interpreter: getStaticDispatchConstraint finds method on flex var" {
     defer result_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     // Create method types
@@ -4844,7 +4841,7 @@ test "interpreter: getStaticDispatchConstraint returns error for non-constrained
     defer result_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     // Create a plain structure type (no constraints)
@@ -4873,7 +4870,7 @@ test "interpreter: poly cache insert and lookup" {
     defer result_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const f_id: u32 = 12345;
@@ -4918,7 +4915,7 @@ test "interpreter: prepareCall miss then hit" {
     defer result_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const func_id: u32 = 7777;
@@ -4957,7 +4954,7 @@ test "interpreter: prepareCallWithFuncVar populates cache" {
     defer result_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const func_id: u32 = 9999;
@@ -4996,7 +4993,7 @@ test "interpreter: unification constrains (a->a) with Str" {
     defer result_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const func_id: u32 = 42;
@@ -5037,7 +5034,7 @@ test "interpreter: cross-module method resolution" {
     defer result_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &module_b, builtin_types_test, null);
+    var interp = try Interpreter.init(gpa, &module_b, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     // Register module A as an imported module
@@ -5084,7 +5081,7 @@ test "interpreter: transitive module method resolution" {
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
     // Use module_a as the current module
-    var interp = try Interpreter.init(gpa, &module_a, builtin_types_test, null);
+    var interp = try Interpreter.init(gpa, &module_a, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     // Register module B
