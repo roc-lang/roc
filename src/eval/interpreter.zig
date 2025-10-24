@@ -1550,15 +1550,8 @@ pub const Interpreter = struct {
                 if (arg_count > 0) {
                     arg_values = try self.allocator.alloc(StackValue, arg_count);
                 }
-                defer {
-                    if (arg_values.len > 0) {
-                        var idx: usize = 0;
-                        while (idx < arg_values.len) : (idx += 1) {
-                            arg_values[idx].decref(&self.runtime_layout_store, roc_ops);
-                        }
-                        self.allocator.free(arg_values);
-                    }
-                }
+                defer if (arg_values.len > 0) self.allocator.free(arg_values);
+
                 if (method_args) |span| {
                     var i: usize = 0;
                     while (i < arg_values.len) : (i += 1) {
@@ -1691,20 +1684,12 @@ pub const Interpreter = struct {
                 var all_args = try self.allocator.alloc(StackValue, total_args);
                 defer self.allocator.free(all_args);
 
-                // First argument is the receiver (need to copy since we'll decref it)
-                all_args[0] = try self.pushCopy(receiver_value, roc_ops);
-                errdefer all_args[0].decref(&self.runtime_layout_store, roc_ops);
+                // First argument is the receiver
+                all_args[0] = receiver_value;
 
-                // Copy remaining arguments
-                var i: usize = 0;
-                while (i < arg_values.len) : (i += 1) {
-                    all_args[i + 1] = try self.pushCopy(arg_values[i], roc_ops);
-                }
-                errdefer {
-                    i = 1;
-                    while (i < total_args) : (i += 1) {
-                        all_args[i].decref(&self.runtime_layout_store, roc_ops);
-                    }
+                // Remaining arguments
+                for (arg_values, 0..) |arg, i| {
+                    all_args[i + 1] = arg;
                 }
 
                 // Call the method closure
