@@ -491,12 +491,36 @@ pub const Repl = struct {
             .result_stmt = result_stmt_in_result_module,
         };
 
-        // Create canonicalizer with Bool and Result modules available for qualified name resolution
+        // Create canonicalizer with nested types available for qualified name resolution
+        // Register Bool, Result, Str, Dict, and Set individually so qualified access works (e.g., Bool.True)
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, can.Can.AutoImportedType).init(self.allocator);
         defer module_envs_map.deinit();
-        const builtin_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Builtin"));
-        try module_envs_map.put(builtin_ident, .{
+
+        const bool_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Bool"));
+        const result_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Result"));
+        const str_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Str"));
+        const dict_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Dict"));
+        const set_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Set"));
+
+        try module_envs_map.put(bool_ident, .{
             .env = self.builtin_module.env,
+            .statement_idx = self.builtin_indices.bool_type,
+        });
+        try module_envs_map.put(result_ident, .{
+            .env = self.builtin_module.env,
+            .statement_idx = self.builtin_indices.result_type,
+        });
+        // Str does NOT get a statement_idx because it's transformed to a primitive type
+        try module_envs_map.put(str_ident, .{
+            .env = self.builtin_module.env,
+        });
+        try module_envs_map.put(dict_ident, .{
+            .env = self.builtin_module.env,
+            .statement_idx = self.builtin_indices.dict_type,
+        });
+        try module_envs_map.put(set_ident, .{
+            .env = self.builtin_module.env,
+            .statement_idx = self.builtin_indices.set_type,
         });
 
         var czer = Can.init(cir, &parse_ast, &module_envs_map) catch |err| {

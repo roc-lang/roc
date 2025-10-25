@@ -8100,8 +8100,17 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     const module_text = self.env.getIdent(module_name);
 
     // Check if this module is imported in the current scope
-    const import_idx = self.scopeLookupImportedModule(module_text) orelse {
-        // Module not imported in current scope
+    const import_idx = self.scopeLookupImportedModule(module_text) orelse blk: {
+        // Module not in import scope - check if it's an auto-imported module in module_envs
+        if (self.module_envs) |envs_map| {
+            if (envs_map.get(module_name)) |_| {
+                // This is an auto-imported module (like Bool, Result, etc.)
+                // Create an import for it dynamically
+                break :blk try self.getOrCreateAutoImport(module_text);
+            }
+        }
+
+        // Module not imported and not auto-imported
         const region = self.parse_ir.tokenizedRegionToRegion(field_access.region);
         _ = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .module_not_imported = .{
             .module_name = module_name,
@@ -8119,8 +8128,26 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
 
     const region = self.parse_ir.tokenizedRegionToRegion(field_access.region);
 
+    // Check if this is a tag access on an auto-imported nominal type (e.g., Bool.True)
+    if (self.module_envs) |envs_map| {
+        if (envs_map.get(module_name)) |auto_imported_type| {
+            if (auto_imported_type.statement_idx) |_| {
+                // This is an auto-imported nominal type with a statement index
+                // Treat field access as tag access (e.g., Bool.True)
+                // Create an anonymous tag - the type checker will unify it with the nominal type
+                const expr_idx = try self.env.addExpr(CIR.Expr{
+                    .e_tag = .{
+                        .name = field_name,
+                        .args = Expr.Span{ .span = DataSpan.empty() },
+                    },
+                }, region);
+                return expr_idx;
+            }
+        }
+    }
+
+    // Regular module-qualified lookup for definitions (not tags)
     // Look up the target node index in the module's exposed_items
-    // Need to convert identifier from current module to target module
     const field_text = self.env.getIdent(field_name);
     const target_node_idx_opt: ?u16 = if (self.module_envs) |envs_map| blk: {
         if (envs_map.get(module_name)) |auto_imported_type| {
