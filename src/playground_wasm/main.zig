@@ -1026,6 +1026,24 @@ fn compileSource(source: []const u8) !CompilerStageData {
         }
     };
 
+    // This is a hack for type modules to prevent "TYPE MODULE MISSING MATCHING TYPE" error
+    // Maybe there is a better way?
+    if (try czer.checkMainFunction() == .not_found) {
+        for (czer.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
+            const stmt = czer.parse_ir.store.getStatement(stmt_id);
+            if (stmt == .type_decl) {
+                const type_decl = stmt.type_decl;
+                const header = czer.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
+                const type_name_ident = czer.parse_ir.tokens.resolveIdentifier(header.name) orelse continue;
+                const type_name_text = czer.env.getIdent(type_name_ident);
+
+                // Just use the first type declaration as module name
+                module_env.module_name = type_name_text;
+                break;
+            }
+        }
+    }
+
     czer.validateForChecking() catch |err| {
         logDebug("compileSource: validateForChecking failed: {}\n", .{err});
         if (err == error.OutOfMemory) {
@@ -1040,9 +1058,11 @@ fn compileSource(source: []const u8) !CompilerStageData {
     // Collect canonicalization diagnostics
     const diagnostics = try env.getDiagnostics();
 
+    const filename = try std.fmt.allocPrint(allocator, "{s}.roc", .{module_env.module_name});
+
     // Process and store CAN diagnostics
     for (diagnostics) |diagnostic| {
-        const report = env.diagnosticToReport(diagnostic, allocator, "main.roc") catch {
+        const report = env.diagnosticToReport(diagnostic, allocator, filename) catch {
             // Log the error and continue processing other diagnostics
             // This prevents crashes on malformed diagnostics or empty input
             continue;
@@ -1078,7 +1098,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
             result.module_env,
             type_can_ir,
             &solver.snapshots,
-            "main.roc",
+            filename,
             &.{}, // other_modules - empty for playground
         );
         defer report_builder.deinit();
