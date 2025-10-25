@@ -1530,16 +1530,16 @@ pub fn getExposedNodeIndexById(self: *const Self, ident_idx: Ident.Idx) ?u16 {
 }
 
 /// Get the exposed node index for a type given its statement index.
-/// This is used for nested builtin types where we have the statement index pre-computed.
+/// This is used for auto-imported builtin types where we have the statement index pre-computed.
+/// For auto-imported types, the statement index IS the node/var index directly.
 pub fn getExposedNodeIndexByStatementIdx(self: *const Self, stmt_idx: CIR.Statement.Idx) ?u16 {
-    // Find the node that corresponds to this statement
-    const all_stmts = self.store.sliceStatements(self.all_statements);
-    for (all_stmts, 0..) |s_idx, node_idx| {
-        if (@intFromEnum(s_idx) == @intFromEnum(stmt_idx)) {
-            return @intCast(node_idx);
-        }
-    }
-    return null;
+    _ = self; // Not needed for this simplified implementation
+
+    // For auto-imported builtin types (Bool, Result, etc.), the statement index
+    // IS the node/var index. This is because type declarations get type variables
+    // indexed by their statement index, not by their position in arrays.
+    const node_idx: u16 = @intCast(@intFromEnum(stmt_idx));
+    return node_idx;
 }
 
 /// Ensures that the exposed items are sorted by identifier index.

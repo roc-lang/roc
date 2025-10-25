@@ -138,6 +138,20 @@ pub fn main() !void {
     const set_type_idx = try findTypeDeclaration(builtin_env, "Set");
     const str_type_idx = try findTypeDeclaration(builtin_env, "Str");
 
+    // Expose the nested types so they can be found by getExposedNodeIndexById
+    // For builtin types, the statement index IS the node index
+    const bool_ident = builtin_env.common.findIdent("Bool") orelse unreachable;
+    const result_ident = builtin_env.common.findIdent("Result") orelse unreachable;
+    const dict_ident = builtin_env.common.findIdent("Dict") orelse unreachable;
+    const set_ident = builtin_env.common.findIdent("Set") orelse unreachable;
+    const str_ident = builtin_env.common.findIdent("Str") orelse unreachable;
+
+    try builtin_env.common.setNodeIndexById(gpa, bool_ident, @intCast(@intFromEnum(bool_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, result_ident, @intCast(@intFromEnum(result_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, dict_ident, @intCast(@intFromEnum(dict_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, set_ident, @intCast(@intFromEnum(set_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, str_ident, @intCast(@intFromEnum(str_type_idx)));
+
     // Transform Str nominal types to .str primitive types
     // This must happen BEFORE serialization to ensure the .bin file contains
     // methods associated with the .str primitive, not a nominal type

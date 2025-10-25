@@ -232,15 +232,30 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         .result_stmt = result_stmt_in_result_module,
     };
 
-    // Use the same approach as production (roc check) - call builtin_module.envs()
-    const imported_envs = other_test_env.builtin_module.envs();
+    // Build imported_envs array dynamically based on module_env.imports order
+    // This matches the production approach in compile_package.zig
+    const import_count = module_env.imports.imports.items.items.len;
+    var imported_envs = try std.ArrayList(*const ModuleEnv).initCapacity(gpa, import_count);
+    defer imported_envs.deinit(gpa);
+
+    for (module_env.imports.imports.items.items[0..import_count]) |str_idx| {
+        const import_name = module_env.getString(str_idx);
+        if (std.mem.eql(u8, import_name, "Builtin")) {
+            try imported_envs.append(gpa, other_test_env.builtin_module.env);
+        } else if (std.mem.eql(u8, import_name, other_module_name)) {
+            // Cross-module import - append the other test module's env
+            try imported_envs.append(gpa, other_test_env.module_env);
+        } else {
+            std.debug.print("WARNING: Unknown import in test: {s}\n", .{import_name});
+        }
+    }
 
     // Type Check - Pass all imported modules
     var checker = try Check.init(
         gpa,
         &module_env.types,
         module_env,
-        &imported_envs,
+        imported_envs.items,
         &module_envs,
         &module_env.store.regions,
         module_common_idents,
@@ -334,15 +349,29 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
         .result_stmt = result_stmt_in_result_module,
     };
 
-    // Use the same approach as production (roc check) - call builtin_module.envs()
-    const imported_envs = builtin_module.envs();
+    // Build imported_envs array dynamically based on module_env.imports order
+    // This matches the production approach in compile_package.zig
+    const import_count = module_env.imports.imports.items.items.len;
+    var imported_envs = try std.ArrayList(*const ModuleEnv).initCapacity(gpa, import_count);
+    defer imported_envs.deinit(gpa);
+
+    for (module_env.imports.imports.items.items[0..import_count]) |str_idx| {
+        const import_name = module_env.getString(str_idx);
+        // For tests, all imports are to the Builtin module
+        if (std.mem.eql(u8, import_name, "Builtin")) {
+            try imported_envs.append(gpa, builtin_module.env);
+        } else {
+            // If there are other imports in the future, handle them here
+            std.debug.print("WARNING: Unknown import in test: {s}\n", .{import_name});
+        }
+    }
 
     // Type Check - Pass the imported modules in other_modules parameter
     var checker = try Check.init(
         gpa,
         &module_env.types,
         module_env,
-        &imported_envs,
+        imported_envs.items,
         &module_envs,
         &module_env.store.regions,
         module_common_idents,

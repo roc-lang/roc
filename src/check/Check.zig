@@ -603,7 +603,9 @@ fn copyBuiltinTypes(self: *Self) !void {
 
     // If not found in imported_modules, try getting it from module_envs via Bool
     if (builtin_module == null and self.module_envs != null) {
+        std.debug.print("[CHECK DEBUG] Trying to find Builtin module via module_envs\n", .{});
         const module_envs = self.module_envs.?;
+        std.debug.print("[CHECK DEBUG] module_envs size: {}\n", .{module_envs.count()});
 
         // Look up "Bool" in module_envs to get the Builtin module env
         const bool_ident_text = "Bool";
@@ -611,11 +613,16 @@ fn copyBuiltinTypes(self: *Self) !void {
         while (iter.next()) |entry| {
             const ident_idx = entry.key_ptr.*;
             const ident_str = self.cir.common.idents.getText(ident_idx);
+            std.debug.print("[CHECK DEBUG] Found type in module_envs: {s}\n", .{ident_str});
 
             if (std.mem.eql(u8, ident_str, bool_ident_text)) {
                 builtin_module = entry.value_ptr.env;
+                std.debug.print("[CHECK DEBUG] Found Builtin module via Bool!\n", .{});
                 break;
             }
+        }
+        if (builtin_module == null) {
+            std.debug.print("[CHECK DEBUG] Did NOT find Builtin module via module_envs\n", .{});
         }
     }
 
@@ -1078,6 +1085,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenType
                     try self.types.setVarRedirect(anno_var, builtin_var);
                 },
                 .local => |local| {
+
                     // Check if we're in a declaration or an annotation
                     switch (ctx) {
                         .type_decl => |this_decl| {
@@ -1136,7 +1144,9 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenType
                     try self.types.setVarRedirect(anno_var, instantiated_var);
                 },
                 .external => |ext| {
+                    std.debug.print("[ANNO EXTERNAL] module_idx: {}, target_node_idx: {}\n", .{ @intFromEnum(ext.module_idx), ext.target_node_idx });
                     if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
+                        std.debug.print("[ANNO EXTERNAL] Successfully resolved!\n", .{});
                         const ext_instantiated_var = try self.instantiateVar(
                             ext_ref.local_var,
                             Rank.generalized,
@@ -1146,6 +1156,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenType
                     } else {
                         // If this external type is unresolved, can should've reported
                         // an error. So we set to error and continue
+                        std.debug.print("[ANNO EXTERNAL] FAILED - setting to .err\n", .{});
                         try self.updateVar(anno_var, .err, Rank.generalized);
                     }
                 },
@@ -3772,6 +3783,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!v
         const dispatcher_content = dispatcher_resolved.desc.content;
 
         if (dispatcher_content == .err) {
+            std.debug.print("[CHECK DEBUG] dispatcher_content is .err - propagating error\n", .{});
             // If the root type is an error, then skip constraint checking
             // Iterate over the constraints
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
@@ -3809,10 +3821,14 @@ fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!v
                     break :blk self.cir;
                 } else {
                     // Ensure that we have other module envs
+                    std.debug.print("[CHECK DEBUG] Looking up module env for nominal type\n", .{});
+                    std.debug.print("[CHECK DEBUG] original_module_ident: {}\n", .{original_module_ident});
                     std.debug.assert(self.module_envs != null);
                     const module_envs = self.module_envs.?;
+                    std.debug.print("[CHECK DEBUG] module_envs size: {}\n", .{module_envs.count()});
 
                     const mb_original_module_env = module_envs.get(original_module_ident);
+                    std.debug.print("[CHECK DEBUG] lookup result: {}\n", .{mb_original_module_env != null});
 
                     std.debug.assert(mb_original_module_env != null);
                     break :blk mb_original_module_env.?.env;

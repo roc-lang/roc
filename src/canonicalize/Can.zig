@@ -336,6 +336,8 @@ pub fn setupAutoImportedBuiltinTypes(
                         .module_not_found = false,
                     },
                 });
+            } else {
+                std.debug.print("  NOT FOUND in module_envs!\n", .{});
             }
         }
 
@@ -8332,14 +8334,32 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     // Check if this is a tag access on an auto-imported nominal type (e.g., Bool.True)
     if (self.module_envs) |envs_map| {
         if (envs_map.get(module_name)) |auto_imported_type| {
-            if (auto_imported_type.statement_idx) |_| {
+            if (auto_imported_type.statement_idx) |stmt_idx| {
                 // This is an auto-imported nominal type with a statement index
                 // Treat field access as tag access (e.g., Bool.True)
-                // Create an anonymous tag - the type checker will unify it with the nominal type
-                const expr_idx = try self.env.addExpr(CIR.Expr{
+                // Create e_nominal_external to properly track the module origin
+                const module_name_text = auto_imported_type.env.module_name;
+                const auto_import_idx = try self.getOrCreateAutoImport(module_name_text);
+
+                const target_node_idx = auto_imported_type.env.getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
+                    std.debug.panic("Failed to find exposed node for statement index {} in module '{s}'", .{ stmt_idx, module_name_text });
+                };
+
+                // Create the tag expression
+                const tag_expr_idx = try self.env.addExpr(CIR.Expr{
                     .e_tag = .{
                         .name = field_name,
                         .args = Expr.Span{ .span = DataSpan.empty() },
+                    },
+                }, region);
+
+                // Wrap it in e_nominal_external to track the module
+                const expr_idx = try self.env.addExpr(CIR.Expr{
+                    .e_nominal_external = .{
+                        .module_idx = auto_import_idx,
+                        .target_node_idx = target_node_idx,
+                        .backing_expr = tag_expr_idx,
+                        .backing_type = .tag,
                     },
                 }, region);
                 return expr_idx;
