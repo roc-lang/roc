@@ -120,6 +120,8 @@ imported_envs: std.array_list.Managed(*const ModuleEnv),
 
 // Loaded Builtin module (loaded per test, cleaned up in deinit)
 builtin_module: LoadedModule,
+// Whether this TestEnv owns the builtin_module and should deinit it
+owns_builtin_module: bool,
 
 /// Test environment for canonicalization testing, providing a convenient wrapper around ModuleEnv, AST, and Can.
 const TestEnv = @This();
@@ -127,8 +129,10 @@ const TestEnv = @This();
 /// Initialize where the provided source is an entire file
 ///
 /// Accepts another module that should already be can'd and type checked, and will
-/// add that module as an import to this module
-pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_module_env: *const ModuleEnv) !TestEnv {
+/// add that module as an import to this module.
+/// IMPORTANT: This reuses the Builtin module from the imported module to ensure
+/// type variables from auto-imported types (Bool, Result, Str) are shared across modules.
+pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_test_env: *const TestEnv) !TestEnv {
     const gpa = std.testing.allocator;
 
     // Allocate our ModuleEnv, AST, and Can on the heap
@@ -148,10 +152,10 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
 
     std.debug.assert(!std.mem.eql(u8, module_name, other_module_name));
 
-    // Load Builtin module once - Bool, Result, and Str are all types within this module
+    // Reuse the Builtin module from the imported module
+    // This ensures type variables for auto-imported types (Bool, Result, Str) are shared
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    var builtin_module = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
-    errdefer builtin_module.deinit();
+    const builtin_env = other_test_env.builtin_module.env;
 
     // Initialize the module_env so we can use its ident store
     module_env.* = try ModuleEnv.init(gpa, source);
@@ -163,24 +167,35 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
 
     // Put the other module in the env map using module_env's ident store
     const other_module_ident = try module_env.insertIdent(base.Ident.for_text(other_module_name));
-    try module_envs.put(other_module_ident, .{ .env = other_module_env });
+    try module_envs.put(other_module_ident, .{ .env = other_test_env.module_env });
 
-    // Add Bool, Result, and Str to module_envs for auto-importing
-    // All three point to the same Builtin module env with different statement indices
+    // Add Bool, Result, Str, Dict, and Set to module_envs for auto-importing
+    // They all point to the same Builtin module env with different statement indices
     const bool_ident = try module_env.insertIdent(base.Ident.for_text("Bool"));
     const result_ident = try module_env.insertIdent(base.Ident.for_text("Result"));
     const str_ident = try module_env.insertIdent(base.Ident.for_text("Str"));
+    const dict_ident = try module_env.insertIdent(base.Ident.for_text("Dict"));
+    const set_ident = try module_env.insertIdent(base.Ident.for_text("Set"));
     try module_envs.put(bool_ident, .{
-        .env = builtin_module.env,
+        .env = builtin_env,
         .statement_idx = builtin_indices.bool_type,
     });
     try module_envs.put(result_ident, .{
-        .env = builtin_module.env,
+        .env = builtin_env,
         .statement_idx = builtin_indices.result_type,
     });
+    // Str does NOT get a statement_idx because it's transformed to a primitive type
+    // (see transformStrNominalToPrimitive in builtin_compiler)
     try module_envs.put(str_ident, .{
-        .env = builtin_module.env,
-        .statement_idx = builtin_indices.str_type,
+        .env = builtin_env,
+    });
+    try module_envs.put(dict_ident, .{
+        .env = builtin_env,
+        .statement_idx = builtin_indices.dict_type,
+    });
+    try module_envs.put(set_ident, .{
+        .env = builtin_env,
+        .statement_idx = builtin_indices.set_type,
     });
 
     // Parse the AST
@@ -243,25 +258,39 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         const idx_int = @intFromEnum(idx);
         if (idx_int > max_import_idx) max_import_idx = idx_int;
     }
+    if (can.import_indices.get("Dict")) |idx| {
+        const idx_int = @intFromEnum(idx);
+        if (idx_int > max_import_idx) max_import_idx = idx_int;
+    }
+    if (can.import_indices.get("Set")) |idx| {
+        const idx_int = @intFromEnum(idx);
+        if (idx_int > max_import_idx) max_import_idx = idx_int;
+    }
 
     // Allocate array of the right size, initialized to other_module_env as a safe default
     try imported_envs.resize(max_import_idx + 1);
     for (imported_envs.items) |*item| {
-        item.* = other_module_env; // Safe default
+        item.* = other_test_env.module_env; // Safe default
     }
 
     // Fill in the correct modules at their import indices
     if (can.import_indices.get(other_module_name)) |idx| {
-        imported_envs.items[@intFromEnum(idx)] = other_module_env;
+        imported_envs.items[@intFromEnum(idx)] = other_test_env.module_env;
     }
     if (can.import_indices.get("Bool")) |idx| {
-        imported_envs.items[@intFromEnum(idx)] = builtin_module.env;
+        imported_envs.items[@intFromEnum(idx)] = builtin_env;
     }
     if (can.import_indices.get("Result")) |idx| {
-        imported_envs.items[@intFromEnum(idx)] = builtin_module.env;
+        imported_envs.items[@intFromEnum(idx)] = builtin_env;
     }
     if (can.import_indices.get("Str")) |idx| {
-        imported_envs.items[@intFromEnum(idx)] = builtin_module.env;
+        imported_envs.items[@intFromEnum(idx)] = builtin_env;
+    }
+    if (can.import_indices.get("Dict")) |idx| {
+        imported_envs.items[@intFromEnum(idx)] = builtin_env;
+    }
+    if (can.import_indices.get("Set")) |idx| {
+        imported_envs.items[@intFromEnum(idx)] = builtin_env;
     }
 
     // Type Check - Pass all imported modules (Bool, Result, and user module)
@@ -290,7 +319,8 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         .type_writer = type_writer,
         .module_envs = module_envs,
         .imported_envs = imported_envs,
-        .builtin_module = builtin_module,
+        .builtin_module = other_test_env.builtin_module,
+        .owns_builtin_module = false, // Borrowed from other_test_env
     };
 }
 
@@ -326,11 +356,13 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     module_env.module_name = module_name;
     try module_env.common.calcLineStarts(gpa);
 
-    // Add Bool, Result, and Str to module_envs for auto-importing
-    // All three point to the same Builtin module env with different statement indices
+    // Add Bool, Result, Str, Dict, and Set to module_envs for auto-importing
+    // They all point to the same Builtin module env with different statement indices
     const bool_ident = try module_env.insertIdent(base.Ident.for_text("Bool"));
     const result_ident = try module_env.insertIdent(base.Ident.for_text("Result"));
     const str_ident = try module_env.insertIdent(base.Ident.for_text("Str"));
+    const dict_ident = try module_env.insertIdent(base.Ident.for_text("Dict"));
+    const set_ident = try module_env.insertIdent(base.Ident.for_text("Set"));
     try module_envs.put(bool_ident, .{
         .env = builtin_module.env,
         .statement_idx = builtin_indices.bool_type,
@@ -339,9 +371,18 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
         .env = builtin_module.env,
         .statement_idx = builtin_indices.result_type,
     });
+    // Str does NOT get a statement_idx because it's transformed to a primitive type
+    // (see transformStrNominalToPrimitive in builtin_compiler)
     try module_envs.put(str_ident, .{
         .env = builtin_module.env,
-        .statement_idx = builtin_indices.str_type,
+    });
+    try module_envs.put(dict_ident, .{
+        .env = builtin_module.env,
+        .statement_idx = builtin_indices.dict_type,
+    });
+    try module_envs.put(set_ident, .{
+        .env = builtin_module.env,
+        .statement_idx = builtin_indices.set_type,
     });
 
     // Parse the AST
@@ -392,6 +433,14 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
             const idx_int = @intFromEnum(idx);
             if (idx_int > max_import_idx) max_import_idx = idx_int;
         }
+        if (can.import_indices.get("Dict")) |idx| {
+            const idx_int = @intFromEnum(idx);
+            if (idx_int > max_import_idx) max_import_idx = idx_int;
+        }
+        if (can.import_indices.get("Set")) |idx| {
+            const idx_int = @intFromEnum(idx);
+            if (idx_int > max_import_idx) max_import_idx = idx_int;
+        }
 
         // Allocate array of the right size, initialized to builtin_module.env as a safe default
         try imported_envs.resize(max_import_idx + 1);
@@ -400,7 +449,7 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
         }
 
         // Fill in the correct modules at their import indices
-        // All three (Bool, Result, Str) point to the same Builtin module env
+        // Bool, Result, Str, Dict, and Set all point to the same Builtin module env
         if (can.import_indices.get("Bool")) |idx| {
             imported_envs.items[@intFromEnum(idx)] = builtin_module.env;
         }
@@ -408,6 +457,12 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
             imported_envs.items[@intFromEnum(idx)] = builtin_module.env;
         }
         if (can.import_indices.get("Str")) |idx| {
+            imported_envs.items[@intFromEnum(idx)] = builtin_module.env;
+        }
+        if (can.import_indices.get("Dict")) |idx| {
+            imported_envs.items[@intFromEnum(idx)] = builtin_module.env;
+        }
+        if (can.import_indices.get("Set")) |idx| {
             imported_envs.items[@intFromEnum(idx)] = builtin_module.env;
         }
     }
@@ -439,6 +494,7 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
         .module_envs = module_envs,
         .imported_envs = imported_envs,
         .builtin_module = builtin_module,
+        .owns_builtin_module = true, // We own this module
     };
 }
 
@@ -473,8 +529,10 @@ pub fn deinit(self: *TestEnv) void {
     self.module_envs.deinit();
     self.imported_envs.deinit();
 
-    // Clean up loaded Builtin module
-    self.builtin_module.deinit();
+    // Clean up loaded Builtin module (only if we own it)
+    if (self.owns_builtin_module) {
+        self.builtin_module.deinit();
+    }
 }
 
 /// Get the inferred type of the last declaration and compare it to the provided

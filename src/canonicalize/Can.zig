@@ -2565,41 +2565,27 @@ pub fn canonicalizeExpr(
                                 if (envs_map.get(module_name)) |auto_imported_type| {
                                     const module_env = auto_imported_type.env;
 
-                                    // For nested types (e.g., Bool inside Builtin), we need to use the actual module name
-                                    // Build the qualified name using the real module name (e.g., "Builtin.Bool.not" not "Bool.not")
-                                    const qualified_name_str = try std.fmt.allocPrint(
-                                        self.env.gpa,
-                                        "{s}.{s}.{s}",
-                                        .{ module_env.module_name, module_text, field_text },
-                                    );
-                                    defer self.env.gpa.free(qualified_name_str);
+                                    // For nested types (e.g., Bool inside Builtin), build "Bool.not"
+                                    // For regular module imports (e.g., A), just use the field name directly
+                                    const lookup_name: []const u8 = if (auto_imported_type.statement_idx) |_| blk_name: {
+                                        // Auto-imported nested type: build "Bool.not" (not "Builtin.Bool.not"!)
+                                        // The exposed items are stored with the nested type name, not the module name
+                                        const qualified_name = try std.fmt.allocPrint(
+                                            self.env.gpa,
+                                            "{s}.{s}",
+                                            .{ module_text, field_text },
+                                        );
+                                        break :blk_name qualified_name;
+                                    } else field_text;
+                                    defer if (auto_imported_type.statement_idx != null) self.env.gpa.free(lookup_name);
 
-                                    // Look up the fully qualified name (e.g., "Builtin.Bool.not")
-                                    const qname_ident = module_env.common.findIdent(qualified_name_str) orelse {
-                                        std.debug.print("ERROR: Failed to find '{s}' in module '{s}'\n", .{ qualified_name_str, module_env.module_name });
-                                        std.debug.print("Available identifiers matching '{s}':\n", .{module_text});
-                                        var count: usize = 0;
-                                        var iter = module_env.common.exposed_items.iterator();
-                                        while (iter.next()) |item| {
-                                            const ident_idx: Ident.Idx = @bitCast(item.ident_idx);
-                                            const ident_text = module_env.getIdentText(ident_idx);
-                                            if (std.mem.startsWith(u8, ident_text, module_text)) {
-                                                std.debug.print("  - {s}\n", .{ident_text});
-                                                count += 1;
-                                                if (count > 20) break;
-                                            }
-                                        }
-                                        std.debug.panic(
-                                            "Failed to find qualified identifier '{s}' in module '{s}' for auto-imported type '{s}'",
-                                            .{ qualified_name_str, module_env.module_name, module_text },
-                                        );
+                                    // Look up the name in the module's exposed items
+                                    const qname_ident = module_env.common.findIdent(lookup_name) orelse {
+                                        // Identifier not found - just return null
+                                        // The error will be handled by the code below that checks target_node_idx_opt
+                                        break :blk null;
                                     };
-                                    break :blk module_env.getExposedNodeIndexById(qname_ident) orelse {
-                                        std.debug.panic(
-                                            "Identifier '{s}' found in module '{s}' but not in exposed items",
-                                            .{ qualified_name_str, module_env.module_name },
-                                        );
-                                    };
+                                    break :blk module_env.getExposedNodeIndexById(qname_ident);
                                 } else {
                                     break :blk null;
                                 }

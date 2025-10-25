@@ -81,17 +81,14 @@ is_named_color = |str|{
 MODULE HEADER DEPRECATED - Color.md:1:1:8:2
 UNUSED VARIABLE - Color.md:30:5:30:25
 DOES NOT EXIST - Color.md:68:14:68:27
-TYPE MISMATCH - Color.md:32:5:45:6
 TYPE MISMATCH - Color.md:51:104:51:105
 TYPE DOES NOT HAVE METHODS - Color.md:22:15:22:26
-TYPE DOES NOT HAVE METHODS - Color.md:29:13:29:26
 TYPE DOES NOT HAVE METHODS - Color.md:35:17:35:41
 TYPE DOES NOT HAVE METHODS - Color.md:36:21:36:45
 TYPE DOES NOT HAVE METHODS - Color.md:37:21:37:45
 TYPE DOES NOT HAVE METHODS - Color.md:38:21:38:45
 TYPE DOES NOT HAVE METHODS - Color.md:39:21:39:45
 TYPE DOES NOT HAVE METHODS - Color.md:40:21:40:45
-TYPE DOES NOT HAVE METHODS - Color.md:62:8:62:28
 # PROBLEMS
 **MODULE HEADER DEPRECATED**
 The `module` header is deprecated.
@@ -135,32 +132,6 @@ The unused variable is declared here:
 
 
 **TYPE MISMATCH**
-This expression is used in an unexpected way:
-**Color.md:32:5:45:6:**
-```roc
-    match bytes {
-        ['#', a, b, c, d, e, f] => {
-            is_valid =
-                a.is_char_in_hex_range()
-                and b.is_char_in_hex_range()
-                and c.is_char_in_hex_range()
-                and d.is_char_in_hex_range()
-                and e.is_char_in_hex_range()
-                and f.is_char_in_hex_range()
-
-            if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
-        }
-        _ => Err(InvalidHex("Expected Hex must start with # and be 7 characters long, got ${str}"))
-    }
-```
-
-It has the type:
-    _[InvalidHex(Str), Err([InvalidHex(Str)]_others)][Ok(Color)]_others2_
-
-But the type annotation says it should have the type:
-    _Result(Color, [InvalidHex(Str)])_
-
-**TYPE MISMATCH**
 The first argument being passed to this function has the wrong type:
 **Color.md:51:104:51:105:**
 ```roc
@@ -183,16 +154,6 @@ You're trying to call the `to_frac` method on a `Num(Int(Unsigned8))`:
               ^^^^^^^^^^^
 
 But `Num(Int(Unsigned8))` doesn't support methods.
-
-**TYPE DOES NOT HAVE METHODS**
-You're trying to call the `to_utf8` method on a `Str`:
-**Color.md:29:13:29:26:**
-```roc
-    bytes = str.to_utf8()
-```
-            ^^^^^^^^^^^^^
-
-But `Str` doesn't support methods.
 
 **TYPE DOES NOT HAVE METHODS**
 You're trying to call the `is_char_in_hex_range` method on a `Num(Int(_size))`:
@@ -253,16 +214,6 @@ You're trying to call the `is_char_in_hex_range` method on a `Num(Int(_size))`:
                     ^^^^^^^^^^^^^^^^^^^^^^^^
 
 But `Num(Int(_size))` doesn't support methods.
-
-**TYPE DOES NOT HAVE METHODS**
-You're trying to call the `is_named_color` method on a `Str`:
-**Color.md:62:8:62:28:**
-```roc
-    if str.is_named_color()
-```
-       ^^^^^^^^^^^^^^^^^^^^
-
-But `Str` doesn't support methods.
 
 # TOKENS
 ~~~zig
@@ -1222,9 +1173,9 @@ is_named_color = |str| {
 	(defs
 		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
 		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
-		(patt (type "Str -> Error"))
 		(patt (type "Error -> Error"))
-		(patt (type "Str -> Result(Color, [UnknownColor(Str)])"))
+		(patt (type "Error -> Error"))
+		(patt (type "Error -> Error"))
 		(patt (type "_arg -> Error")))
 	(type_decls
 		(nominal (type "Color")
@@ -1232,8 +1183,8 @@ is_named_color = |str| {
 	(expressions
 		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
 		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
-		(expr (type "Str -> Error"))
 		(expr (type "Error -> Error"))
-		(expr (type "Str -> Result(Color, [UnknownColor(Str)])"))
+		(expr (type "Error -> Error"))
+		(expr (type "Error -> Error"))
 		(expr (type "_arg -> Error"))))
 ~~~

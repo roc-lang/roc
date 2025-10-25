@@ -37,7 +37,7 @@ NO CHANGE
 	(if-branches
 		(if-branch
 			(e-nominal-external
-				(external-module "Bool")
+				(external-module "Builtin")
 				(e-tag (name "True")))
 			(e-tag (name "Ok")
 				(args

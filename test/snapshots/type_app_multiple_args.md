@@ -14,7 +14,6 @@ main! = |_| processDict(Dict.empty().insert("one", 1))
 ~~~
 # EXPECTED
 DOES NOT EXIST - type_app_multiple_args.md:6:25:6:35
-TOO MANY ARGS - type_app_multiple_args.md:3:15:3:29
 # PROBLEMS
 **DOES NOT EXIST**
 `Dict.empty` does not exist.
@@ -24,16 +23,6 @@ TOO MANY ARGS - type_app_multiple_args.md:3:15:3:29
 main! = |_| processDict(Dict.empty().insert("one", 1))
 ```
                         ^^^^^^^^^^
-
-
-**TOO MANY ARGS**
-The type _Dict_ expects  argument, but got  instead.
-**type_app_multiple_args.md:3:15:3:29:**
-```roc
-processDict : Dict(Str, U64) -> List(Str)
-```
-              ^^^^^^^^^^^^^^
-
 
 
 # TOKENS
@@ -105,7 +94,7 @@ NO CHANGE
 			(e-empty_list))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "Dict") (external-module "Dict")
+				(ty-apply (name "Dict") (external-module "Builtin")
 					(ty-lookup (name "Str") (external-module "Str"))
 					(ty-lookup (name "U64") (builtin)))
 				(ty-apply (name "List") (builtin)
@@ -134,9 +123,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> List(Str)"))
+		(patt (type "Error -> List(Error)"))
 		(patt (type "_arg -> Error")))
 	(expressions
-		(expr (type "Error -> List(Str)"))
+		(expr (type "Error -> List(Error)"))
 		(expr (type "_arg -> Error"))))
 ~~~

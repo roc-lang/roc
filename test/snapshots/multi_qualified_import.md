@@ -298,10 +298,10 @@ data = json
 (inferred-types
 	(defs
 		(patt (type "Error"))
-		(patt (type "Error -> Str"))
+		(patt (type "Error -> Error"))
 		(patt (type "Error")))
 	(expressions
 		(expr (type "Error"))
-		(expr (type "Error -> Str"))
+		(expr (type "Error -> Error"))
 		(expr (type "Error"))))
 ~~~

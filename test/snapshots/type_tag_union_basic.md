@@ -25,9 +25,24 @@ is_ok_ret_bool = |result| match result {
 main! = |_| {}
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - type_tag_union_basic.md:7:39:10:2
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_tag_union_basic.md:7:39:10:2:**
+```roc
+is_ok_ret_unqualified_bool = |result| match result {
+    Ok2(_) => True
+    Err2(_) => False
+}
+```
+
+It has the type:
+    _[True, False][Empty]_
+
+But the type annotation says it should have the type:
+    _Builtin_
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -224,7 +239,7 @@ main! = |_| {}
 									(p-applied-tag)))
 							(value
 								(e-nominal-external
-									(external-module "Bool")
+									(external-module "Builtin")
 									(e-tag (name "True")))))
 						(branch
 							(patterns
@@ -232,7 +247,7 @@ main! = |_| {}
 									(p-applied-tag)))
 							(value
 								(e-nominal-external
-									(external-module "Bool")
+									(external-module "Builtin")
 									(e-tag (name "False")))))))))
 		(annotation
 			(ty-fn (effectful false)
@@ -253,13 +268,13 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "[None, Some(Str)] -> Str"))
-		(patt (type "[Err2(_err), Ok2(_ok)] -> Bool"))
-		(patt (type "[Err2(_err2), Ok2(_ok2)] -> Bool"))
+		(patt (type "[None, Some(Error)] -> Error"))
+		(patt (type "[Err2(_err), Ok2(_ok)] -> Error"))
+		(patt (type "[Err2(_err2), Ok2(_ok2)] -> Error"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "[None, Some(Str)] -> Str"))
-		(expr (type "[Err2(_err), Ok2(_ok)] -> Bool"))
-		(expr (type "[Err2(_err2), Ok2(_ok2)] -> Bool"))
+		(expr (type "[None, Some(Error)] -> Error"))
+		(expr (type "[Err2(_err), Ok2(_ok)] -> Error"))
+		(expr (type "[Err2(_err2), Ok2(_ok2)] -> Error"))
 		(expr (type "_arg -> {}"))))
 ~~~

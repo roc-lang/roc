@@ -1210,31 +1210,45 @@ fn processSnapshotContent(
         .result_stmt = config.builtin_indices.result_type,
     };
 
-    // Auto-inject Set, Dict, Bool, and Result as available imports (if they're loaded)
+    // Auto-inject Bool, Result, Str, Dict, and Set as available imports (if they're loaded)
     // This makes them available without needing explicit `import` statements in tests
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
     defer module_envs.deinit();
 
-    var builtin_import_idx: ?CIR.Import.Idx = null;
-
-    // Builtin is registered as import to make it available as external type
-    // Dict and Set are no longer separate modules - they're nested inside Builtin
+    // Register each builtin type individually with its statement index
+    // They all point to the same Builtin module env
     if (config.builtin_module) |builtin_env| {
-        const builtin_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Builtin"));
-        builtin_import_idx = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Builtin");
-        try module_envs.put(builtin_ident, .{
+        const bool_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Bool"));
+        const result_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Result"));
+        const str_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Str"));
+        const dict_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Dict"));
+        const set_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Set"));
+
+        try module_envs.put(bool_ident, .{
             .env = builtin_env,
+            .statement_idx = config.builtin_indices.bool_type,
+        });
+        try module_envs.put(result_ident, .{
+            .env = builtin_env,
+            .statement_idx = config.builtin_indices.result_type,
+        });
+        // Str does NOT get a statement_idx because it's transformed to a primitive type
+        // (see transformStrNominalToPrimitive in builtin_compiler)
+        try module_envs.put(str_ident, .{
+            .env = builtin_env,
+        });
+        try module_envs.put(dict_ident, .{
+            .env = builtin_env,
+            .statement_idx = config.builtin_indices.dict_type,
+        });
+        try module_envs.put(set_ident, .{
+            .env = builtin_env,
+            .statement_idx = config.builtin_indices.set_type,
         });
     }
 
     var czer = try Can.init(can_ir, &parse_ast, &module_envs);
     defer czer.deinit();
-
-    // Register auto-injected imports with the canonicalizer so it knows they're already imported
-    // Dict and Set are now nested inside Builtin, so we only register Builtin
-    if (builtin_import_idx) |idx| {
-        try czer.import_indices.put(allocator, "Builtin", idx);
-    }
 
     var maybe_expr_idx: ?Can.CanonicalizedExpr = null;
 

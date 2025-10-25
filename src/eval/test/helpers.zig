@@ -351,6 +351,8 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     const bool_ident = try module_env.insertIdent(base.Ident.for_text("Bool"));
     const result_ident = try module_env.insertIdent(base.Ident.for_text("Result"));
     const str_ident = try module_env.insertIdent(base.Ident.for_text("Str"));
+    const dict_ident = try module_env.insertIdent(base.Ident.for_text("Dict"));
+    const set_ident = try module_env.insertIdent(base.Ident.for_text("Set"));
     try module_envs_map.put(bool_ident, .{
         .env = builtin_module.env,
         .statement_idx = builtin_indices.bool_type,
@@ -359,9 +361,18 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
         .env = builtin_module.env,
         .statement_idx = builtin_indices.result_type,
     });
+    // Str does NOT get a statement_idx because it's transformed to a primitive type
+    // (see transformStrNominalToPrimitive in builtin_compiler)
     try module_envs_map.put(str_ident, .{
         .env = builtin_module.env,
-        .statement_idx = builtin_indices.str_type,
+    });
+    try module_envs_map.put(dict_ident, .{
+        .env = builtin_module.env,
+        .statement_idx = builtin_indices.dict_type,
+    });
+    try module_envs_map.put(set_ident, .{
+        .env = builtin_module.env,
+        .statement_idx = builtin_indices.set_type,
     });
 
     // Create czer with module_envs_map for qualified name resolution (following REPL pattern)

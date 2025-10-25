@@ -47,7 +47,6 @@ TYPE REDECLARED - type_comprehensive_scope.md:10:1:10:37
 UNDECLARED TYPE - type_comprehensive_scope.md:13:19:13:23
 TYPE REDECLARED - type_comprehensive_scope.md:22:1:22:13
 UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
-TOO MANY ARGS - type_comprehensive_scope.md:29:10:29:24
 # PROBLEMS
 **TYPE REDECLARED**
 The type _Result_ is being redeclared.
@@ -105,16 +104,6 @@ This type is referenced here:
 BadType : SomeUndeclaredType
 ```
           ^^^^^^^^^^^^^^^^^^
-
-
-**TOO MANY ARGS**
-The type _Dict_ expects  argument, but got  instead.
-**type_comprehensive_scope.md:29:10:29:24:**
-```roc
-MyDict : Dict(Str, U64)
-```
-         ^^^^^^^^^^^^^^
-
 
 
 # TOKENS
@@ -352,7 +341,7 @@ Complex : {
 			(ty-lookup (name "Str") (external-module "Str"))))
 	(s-alias-decl
 		(ty-header (name "MyDict"))
-		(ty-apply (name "Dict") (external-module "Dict")
+		(ty-apply (name "Dict") (external-module "Builtin")
 			(ty-lookup (name "Str") (external-module "Str"))
 			(ty-lookup (name "U64") (builtin))))
 	(s-alias-decl

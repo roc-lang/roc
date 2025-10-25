@@ -95,7 +95,7 @@ isRed = |color| match color {
 									(p-applied-tag)))
 							(value
 								(e-nominal-external
-									(external-module "Bool")
+									(external-module "Builtin")
 									(e-tag (name "True")))))
 						(branch
 							(patterns
@@ -104,7 +104,7 @@ isRed = |color| match color {
 										(p-applied-tag))))
 							(value
 								(e-nominal-external
-									(external-module "Bool")
+									(external-module "Builtin")
 									(e-tag (name "False")))))
 						(branch
 							(patterns
@@ -112,7 +112,7 @@ isRed = |color| match color {
 									(p-applied-tag)))
 							(value
 								(e-nominal-external
-									(external-module "Bool")
+									(external-module "Builtin")
 									(e-tag (name "False")))))))))
 		(annotation
 			(ty-fn (effectful false)
@@ -129,10 +129,10 @@ isRed = |color| match color {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Color -> Bool")))
+		(patt (type "Color -> Error")))
 	(type_decls
 		(nominal (type "Color")
 			(ty-header (name "Color"))))
 	(expressions
-		(expr (type "Color -> Bool"))))
+		(expr (type "Color -> Error"))))
 ~~~

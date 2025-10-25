@@ -986,7 +986,7 @@ This expression produces a value, but it's not being used:
 	^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _Bool_
+    _Builtin.Bool_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -1975,7 +1975,7 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Bool -> Num(_size)"))
+		(patt (type "Builtin.Bool -> Num(_size)"))
 		(patt (type "[Rum]_others -> Error"))
 		(patt (type "[Blue]_others -> Error"))
 		(patt (type "_arg -> [Stdo!(Error)]_others"))
@@ -2007,7 +2007,7 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Bool -> Num(_size)"))
+		(expr (type "Builtin.Bool -> Num(_size)"))
 		(expr (type "[Rum]_others -> Error"))
 		(expr (type "[Blue]_others -> Error"))
 		(expr (type "_arg -> [Stdo!(Error)]_others"))

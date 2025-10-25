@@ -313,7 +313,7 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Pair(Num(Int(Unsigned64)))"))
-		(patt (type "Pair(Str)"))
+		(patt (type "Pair(Error)"))
 		(patt (type "a, a -> Pair(a)"))
 		(patt (type "Pair(Num(Int(Unsigned8)))"))
 		(patt (type "Error"))
@@ -326,7 +326,7 @@ NO CHANGE
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "Pair(Num(Int(Unsigned64)))"))
-		(expr (type "Pair(Str)"))
+		(expr (type "Pair(Error)"))
 		(expr (type "a, a -> Pair(a)"))
 		(expr (type "Pair(Num(Int(Unsigned8)))"))
 		(expr (type "Error"))

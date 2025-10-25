@@ -128,7 +128,7 @@ isOk = |result| match result {
 									(p-applied-tag)))
 							(value
 								(e-nominal-external
-									(external-module "Bool")
+									(external-module "Builtin")
 									(e-tag (name "True")))))
 						(branch
 							(patterns
@@ -136,7 +136,7 @@ isOk = |result| match result {
 									(p-applied-tag)))
 							(value
 								(e-nominal-external
-									(external-module "Bool")
+									(external-module "Builtin")
 									(e-tag (name "False")))))))))
 		(annotation
 			(ty-fn (effectful false)
@@ -159,8 +159,8 @@ isOk = |result| match result {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "MyResult(Str, Num(Int(Signed32)))"))
-		(patt (type "MyResult(ok, err) -> Bool")))
+		(patt (type "MyResult(Error, Num(Int(Signed32)))"))
+		(patt (type "MyResult(ok, err) -> Error")))
 	(type_decls
 		(nominal (type "MyResult(ok, err)")
 			(ty-header (name "MyResult")
@@ -168,6 +168,6 @@ isOk = |result| match result {
 					(ty-rigid-var (name "ok"))
 					(ty-rigid-var (name "err"))))))
 	(expressions
-		(expr (type "MyResult(Str, Num(Int(Signed32)))"))
-		(expr (type "MyResult(ok, err) -> Bool"))))
+		(expr (type "MyResult(Error, Num(Int(Signed32)))"))
+		(expr (type "MyResult(ok, err) -> Error"))))
 ~~~

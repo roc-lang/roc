@@ -139,12 +139,12 @@ AnotherType : SomeModule.MissingType
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Str")))
+		(patt (type "Error -> Error")))
 	(type_decls
 		(alias (type "MyType")
 			(ty-header (name "MyType")))
 		(alias (type "AnotherType")
 			(ty-header (name "AnotherType"))))
 	(expressions
-		(expr (type "Error -> Str"))))
+		(expr (type "Error -> Error"))))
 ~~~

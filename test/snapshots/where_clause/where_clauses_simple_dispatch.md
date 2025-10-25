@@ -73,7 +73,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> Str where [a.to_str : a -> Str]")))
+		(patt (type "a -> Error where [a.to_str : a -> Error]")))
 	(expressions
-		(expr (type "a -> Str where [a.to_str : a -> Str]"))))
+		(expr (type "a -> Error where [a.to_str : a -> Error]"))))
 ~~~

@@ -59,8 +59,10 @@ MODULE NOT FOUND - qualified_type_canonicalization.md:11:1:11:32
 UNDECLARED TYPE - qualified_type_canonicalization.md:15:19:15:24
 MODULE NOT IMPORTED - qualified_type_canonicalization.md:22:23:22:44
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:23:23:23:32
+TYPE NOT EXPOSED - qualified_type_canonicalization.md:26:20:26:27
 UNDECLARED TYPE - qualified_type_canonicalization.md:31:16:31:21
 UNUSED VARIABLE - qualified_type_canonicalization.md:35:17:35:22
+TYPE NOT EXPOSED - qualified_type_canonicalization.md:39:19:39:26
 MODULE NOT IMPORTED - qualified_type_canonicalization.md:39:55:39:76
 UNDECLARED TYPE - qualified_type_canonicalization.md:42:9:42:15
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:42:27:42:42
@@ -168,6 +170,17 @@ multiLevelQualified = TypeC.new
                       ^^^^^^^^^
 
 
+**TYPE NOT EXPOSED**
+The type `Result` is not an exposed by the module `Result`.
+
+You're attempting to use this type here:
+**qualified_type_canonicalization.md:26:20:26:27:**
+```roc
+resultType : Result.Result(I32, Str)
+```
+                   ^^^^^^^
+
+
 **UNDECLARED TYPE**
 The type _Color_ is not declared in this scope.
 
@@ -189,6 +202,17 @@ The unused variable is declared here:
 processColor = |color|
 ```
                 ^^^^^
+
+
+**TYPE NOT EXPOSED**
+The type `Result` is not an exposed by the module `Result`.
+
+You're attempting to use this type here:
+**qualified_type_canonicalization.md:39:19:39:26:**
+```roc
+transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
+```
+                  ^^^^^^^
 
 
 **MODULE NOT IMPORTED**
@@ -453,14 +477,12 @@ transform = |result|
 	(d-let
 		(p-assign (ident "resultType"))
 		(e-nominal-external
-			(external-module "Result")
+			(external-module "Builtin")
 			(e-tag (name "Ok")
 				(args
 					(e-num (value "42")))))
 		(annotation
-			(ty-apply (name "Result") (external-module "Result")
-				(ty-lookup (name "I32") (builtin))
-				(ty-lookup (name "Str") (external-module "Str")))))
+			(ty-malformed)))
 	(d-let
 		(p-assign (ident "getColor"))
 		(e-lambda
@@ -513,9 +535,7 @@ transform = |result|
 									(e-runtime-error (tag "ident_not_in_scope")))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "Result") (external-module "Result")
-					(ty-lookup (name "RGB") (external-module "Color"))
-					(ty-lookup (name "Error") (external-module "ExternalModule")))
+				(ty-malformed)
 				(ty-malformed))))
 	(s-import (module "Color")
 		(exposes))
@@ -532,16 +552,16 @@ transform = |result|
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "Error"))
-		(patt (type "Result(Num(Int(Signed32)), Str)"))
+		(patt (type "Error"))
 		(patt (type "{  } -> Error"))
-		(patt (type "Error -> Str"))
-		(patt (type "Result(Error, Error) -> Error")))
+		(patt (type "Error -> Error"))
+		(patt (type "Error -> Error")))
 	(expressions
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))
-		(expr (type "Result(Num(Int(Signed32)), Str)"))
+		(expr (type "Error"))
 		(expr (type "{  } -> Error"))
-		(expr (type "Error -> Str"))
-		(expr (type "Result(Error, Error) -> Error"))))
+		(expr (type "Error -> Error"))
+		(expr (type "Error -> Error"))))
 ~~~

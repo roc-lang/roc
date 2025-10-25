@@ -582,14 +582,32 @@ fn updateVar(self: *Self, target_var: Var, content: types_mod.Content, rank: typ
 /// other modules directly. The Bool and Result types are used in language constructs like
 /// `if` conditions and need to be available in every module's type store.
 fn copyBuiltinTypes(self: *Self) !void {
-    // Find the Builtin module in imported_modules
-    // Bool, Result, and Str are all nested types within the Builtin module
+    // Find the Builtin module env - try imported_modules first, then module_envs
     var builtin_module: ?*const ModuleEnv = null;
 
+    // First, check imported_modules for a module named "Builtin"
     for (self.imported_modules) |module_env| {
         if (std.mem.eql(u8, module_env.module_name, "Builtin")) {
             builtin_module = module_env;
             break;
+        }
+    }
+
+    // If not found in imported_modules, try getting it from module_envs via Bool
+    if (builtin_module == null and self.module_envs != null) {
+        const module_envs = self.module_envs.?;
+
+        // Look up "Bool" in module_envs to get the Builtin module env
+        const bool_ident_text = "Bool";
+        var iter = module_envs.iterator();
+        while (iter.next()) |entry| {
+            const ident_idx = entry.key_ptr.*;
+            const ident_str = self.cir.common.idents.getText(ident_idx);
+
+            if (std.mem.eql(u8, ident_str, bool_ident_text)) {
+                builtin_module = entry.value_ptr.env;
+                break;
+            }
         }
     }
 
@@ -599,10 +617,8 @@ fn copyBuiltinTypes(self: *Self) !void {
         const bool_type_var = ModuleEnv.varFrom(bool_stmt_idx);
         self.bool_var = try self.copyVar(bool_type_var, builtin_env, Region.zero());
     } else {
-        // If Builtin module not found, use the statement from the current module
-        // This happens when Bool is loaded as a builtin statement within the current module
-        const bool_stmt_idx = self.common_idents.bool_stmt;
-        self.bool_var = ModuleEnv.varFrom(bool_stmt_idx);
+        // If Builtin module still not found, this is an error - panic with helpful message
+        std.debug.panic("Cannot find Builtin module env to copy Bool type", .{});
     }
 
     // Result type is accessed via external references, no need to copy it here
