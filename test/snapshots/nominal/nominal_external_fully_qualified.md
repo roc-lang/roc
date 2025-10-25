@@ -136,9 +136,9 @@ handleResult = |result| {
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "MyResultType") (external-module "MyResultModule")
-					(ty-lookup (name "Str") (external-module "Str"))
+					(ty-lookup (name "Str") (builtin))
 					(ty-lookup (name "I32") (builtin)))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(s-import (module "MyResultModule")
 		(exposes)))
 ~~~
@@ -146,7 +146,7 @@ handleResult = |result| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Error")))
+		(patt (type "Error -> Str")))
 	(expressions
-		(expr (type "Error -> Error"))))
+		(expr (type "Error -> Str"))))
 ~~~

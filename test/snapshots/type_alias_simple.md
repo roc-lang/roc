@@ -100,7 +100,7 @@ NO CHANGE
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "UserId") (local))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-closure
@@ -121,12 +121,12 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "UserId -> Error"))
-		(patt (type "_arg -> Error")))
+		(patt (type "UserId -> Str"))
+		(patt (type "_arg -> Str")))
 	(type_decls
 		(alias (type "UserId")
 			(ty-header (name "UserId"))))
 	(expressions
-		(expr (type "UserId -> Error"))
-		(expr (type "_arg -> Error"))))
+		(expr (type "UserId -> Str"))
+		(expr (type "_arg -> Str"))))
 ~~~

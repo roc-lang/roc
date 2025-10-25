@@ -71,10 +71,10 @@ process_user! : { name : Str, age :  } => Str
 		(ty-fn (effectful true)
 			(ty-record
 				(field (field "name")
-					(ty-lookup (name "Str") (external-module "Str")))
+					(ty-lookup (name "Str") (builtin)))
 				(field (field "age")
 					(ty-malformed)))
-			(ty-lookup (name "Str") (external-module "Str")))))
+			(ty-lookup (name "Str") (builtin)))))
 ~~~
 # TYPES
 ~~~clojure

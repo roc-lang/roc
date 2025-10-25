@@ -232,7 +232,7 @@ NO CHANGE
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
 					(ty-rigid-var (name "elem")))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "ending_underscore"))
 		(e-lambda
@@ -256,7 +256,7 @@ NO CHANGE
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
 					(ty-rigid-var (name "bad_")))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "valid_single"))
 		(e-lambda
@@ -268,7 +268,7 @@ NO CHANGE
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
 					(ty-rigid-var (name "_elem")))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "valid_multi"))
 		(e-lambda
@@ -295,17 +295,17 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(elem) -> Error"))
+		(patt (type "List(elem) -> Str"))
 		(patt (type "List(elem_) -> Error"))
-		(patt (type "List(bad_) -> Error"))
-		(patt (type "List(_elem) -> Error"))
+		(patt (type "List(bad_) -> Str"))
+		(patt (type "List(_elem) -> Str"))
 		(patt (type "elem -> List(elem)"))
 		(patt (type "_arg -> Str")))
 	(expressions
-		(expr (type "List(elem) -> Error"))
+		(expr (type "List(elem) -> Str"))
 		(expr (type "List(elem_) -> Error"))
-		(expr (type "List(bad_) -> Error"))
-		(expr (type "List(_elem) -> Error"))
+		(expr (type "List(bad_) -> Str"))
+		(expr (type "List(_elem) -> Str"))
 		(expr (type "elem -> List(elem)"))
 		(expr (type "_arg -> Str"))))
 ~~~

@@ -62,18 +62,18 @@ NO CHANGE
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))
-				(ty-lookup (name "Str") (external-module "Str")))
+				(ty-lookup (name "Str") (builtin)))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "to_str")
 					(args
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-					(ty-lookup (name "Str") (external-module "Str")))))))
+					(ty-lookup (name "Str") (builtin)))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> Error where [a.to_str : a -> Error]")))
+		(patt (type "a -> Str where [a.to_str : a -> Str]")))
 	(expressions
-		(expr (type "a -> Error where [a.to_str : a -> Error]"))))
+		(expr (type "a -> Str where [a.to_str : a -> Str]"))))
 ~~~

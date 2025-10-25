@@ -83,12 +83,14 @@ UNUSED VARIABLE - Color.md:30:5:30:25
 DOES NOT EXIST - Color.md:68:14:68:27
 TYPE MISMATCH - Color.md:51:104:51:105
 TYPE DOES NOT HAVE METHODS - Color.md:22:15:22:26
+TYPE DOES NOT HAVE METHODS - Color.md:29:13:29:26
 TYPE DOES NOT HAVE METHODS - Color.md:35:17:35:41
 TYPE DOES NOT HAVE METHODS - Color.md:36:21:36:45
 TYPE DOES NOT HAVE METHODS - Color.md:37:21:37:45
 TYPE DOES NOT HAVE METHODS - Color.md:38:21:38:45
 TYPE DOES NOT HAVE METHODS - Color.md:39:21:39:45
 TYPE DOES NOT HAVE METHODS - Color.md:40:21:40:45
+TYPE DOES NOT HAVE METHODS - Color.md:62:8:62:28
 # PROBLEMS
 **MODULE HEADER DEPRECATED**
 The `module` header is deprecated.
@@ -156,6 +158,16 @@ You're trying to call the `to_frac` method on a `Num(Int(Unsigned8))`:
 But `Num(Int(Unsigned8))` doesn't support methods.
 
 **TYPE DOES NOT HAVE METHODS**
+You're trying to call the `to_utf8` method on a `Str`:
+**Color.md:29:13:29:26:**
+```roc
+    bytes = str.to_utf8()
+```
+            ^^^^^^^^^^^^^
+
+But `Str` doesn't support methods.
+
+**TYPE DOES NOT HAVE METHODS**
 You're trying to call the `is_char_in_hex_range` method on a `Num(Int(_size))`:
 **Color.md:35:17:35:41:**
 ```roc
@@ -214,6 +226,16 @@ You're trying to call the `is_char_in_hex_range` method on a `Num(Int(_size))`:
                     ^^^^^^^^^^^^^^^^^^^^^^^^
 
 But `Num(Int(_size))` doesn't support methods.
+
+**TYPE DOES NOT HAVE METHODS**
+You're trying to call the `is_named_color` method on a `Str`:
+**Color.md:62:8:62:28:**
+```roc
+    if str.is_named_color()
+```
+       ^^^^^^^^^^^^^^^^^^^^
+
+But `Str` doesn't support methods.
 
 # TOKENS
 ~~~zig
@@ -937,12 +959,12 @@ is_named_color = |str| {
 															(e-literal (string "")))))))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Str") (external-module "Str"))
+				(ty-lookup (name "Str") (builtin))
 				(ty-apply (name "Result") (external-module "Result")
 					(ty-lookup (name "Color") (local))
 					(ty-tag-union
 						(ty-tag-name (name "InvalidHex")
-							(ty-lookup (name "Str") (external-module "Str"))))))))
+							(ty-lookup (name "Str") (builtin))))))))
 	(d-let
 		(p-assign (ident "to_str"))
 		(e-closure
@@ -1043,7 +1065,7 @@ is_named_color = |str| {
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Color") (local))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "named"))
 		(e-lambda
@@ -1076,12 +1098,12 @@ is_named_color = |str| {
 										(e-literal (string ""))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Str") (external-module "Str"))
+				(ty-lookup (name "Str") (builtin))
 				(ty-apply (name "Result") (external-module "Result")
 					(ty-lookup (name "Color") (local))
 					(ty-tag-union
 						(ty-tag-name (name "UnknownColor")
-							(ty-lookup (name "Str") (external-module "Str"))))))))
+							(ty-lookup (name "Str") (builtin))))))))
 	(d-let
 		(p-assign (ident "is_named_color"))
 		(e-lambda
@@ -1120,9 +1142,9 @@ is_named_color = |str| {
 				(ty-lookup (name "U8") (builtin))
 				(ty-lookup (name "Dec") (builtin)))
 			(ty-tag-name (name "Named")
-				(ty-lookup (name "Str") (external-module "Str")))
+				(ty-lookup (name "Str") (builtin)))
 			(ty-tag-name (name "Hex")
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(s-expect
 		(e-binop (op "eq")
 			(e-dot-access (field "to_str")
@@ -1173,9 +1195,9 @@ is_named_color = |str| {
 	(defs
 		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
 		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
+		(patt (type "Str -> Error"))
 		(patt (type "Error -> Error"))
-		(patt (type "Error -> Error"))
-		(patt (type "Error -> Error"))
+		(patt (type "Str -> Error"))
 		(patt (type "_arg -> Error")))
 	(type_decls
 		(nominal (type "Color")
@@ -1183,8 +1205,8 @@ is_named_color = |str| {
 	(expressions
 		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
 		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
+		(expr (type "Str -> Error"))
 		(expr (type "Error -> Error"))
-		(expr (type "Error -> Error"))
-		(expr (type "Error -> Error"))
+		(expr (type "Str -> Error"))
 		(expr (type "_arg -> Error"))))
 ~~~

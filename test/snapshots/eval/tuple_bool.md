@@ -67,5 +67,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "([True]_others, [False]_others2, Error, Error, Builtin.Bool, Builtin.Bool, Builtin.Bool, Builtin.Bool)"))
+(expr (type "([True]_others, [False]_others2, Error, Error, Bool, Bool, Bool, Bool)"))
 ~~~

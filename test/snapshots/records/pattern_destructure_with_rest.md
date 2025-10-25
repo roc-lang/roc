@@ -110,5 +110,5 @@ match person {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Builtin.Bool"))
+(expr (type "Bool"))
 ~~~

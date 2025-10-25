@@ -119,7 +119,7 @@ kind = |color| match color {
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Color") (local))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(s-alias-decl
 		(ty-header (name "Color"))
 		(ty-tag-union
@@ -134,10 +134,10 @@ kind = |color| match color {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Color -> Error")))
+		(patt (type "Color -> Str")))
 	(type_decls
 		(alias (type "Color")
 			(ty-header (name "Color"))))
 	(expressions
-		(expr (type "Color -> Error"))))
+		(expr (type "Color -> Str"))))
 ~~~

@@ -228,7 +228,7 @@ NO CHANGE
 						(e-literal (string "world"))))))
 		(annotation
 			(ty-apply (name "Pair") (local)
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "mkPair"))
 		(e-lambda
@@ -313,7 +313,7 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Pair(Num(Int(Unsigned64)))"))
-		(patt (type "Pair(Error)"))
+		(patt (type "Pair(Str)"))
 		(patt (type "a, a -> Pair(a)"))
 		(patt (type "Pair(Num(Int(Unsigned8)))"))
 		(patt (type "Error"))
@@ -326,7 +326,7 @@ NO CHANGE
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "Pair(Num(Int(Unsigned64)))"))
-		(expr (type "Pair(Error)"))
+		(expr (type "Pair(Str)"))
 		(expr (type "a, a -> Pair(a)"))
 		(expr (type "Pair(Num(Int(Unsigned8)))"))
 		(expr (type "Error"))

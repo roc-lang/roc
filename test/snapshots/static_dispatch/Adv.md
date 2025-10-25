@@ -44,9 +44,24 @@ main = {
 }
 ~~~
 # EXPECTED
+TYPE MISMATCH - Adv.md:17:13:17:32
 MISSING METHOD - Adv.md:23:13:23:33
 TYPE DOES NOT HAVE METHODS - Adv.md:28:13:28:32
 # PROBLEMS
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**Adv.md:17:13:17:32:**
+```roc
+	next_val = val.update_str(100)
+```
+	           ^^^^^^^^^^^^^^^^^^^
+
+It has the type:
+    _Adv, Num(_size) -> _ret_
+
+But I expected it to be:
+    _Adv, Str -> Adv_
+
 **MISSING METHOD**
 The **Adv** type does not have a **update_strr** method:
 **Adv.md:23:13:23:33:**
@@ -394,7 +409,7 @@ main = {
 								(p-assign (ident "next_val"))))))))
 		(annotation
 			(ty-tuple
-				(ty-lookup (name "Str") (external-module "Str"))
+				(ty-lookup (name "Str") (builtin))
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "Adv.to_str"))
@@ -410,7 +425,7 @@ main = {
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Adv") (local))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "Adv.to_u64"))
 		(e-closure
@@ -446,7 +461,7 @@ main = {
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Adv") (local))
-				(ty-lookup (name "Str") (external-module "Str"))
+				(ty-lookup (name "Str") (builtin))
 				(ty-lookup (name "Adv") (local)))))
 	(d-let
 		(p-assign (ident "Adv.update_u64"))
@@ -475,7 +490,7 @@ main = {
 		(ty-tag-union
 			(ty-tag-name (name "Val")
 				(ty-lookup (name "U64") (builtin))
-				(ty-lookup (name "Str") (external-module "Str"))))))
+				(ty-lookup (name "Str") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -484,10 +499,10 @@ main = {
 		(patt (type "_a"))
 		(patt (type "_a"))
 		(patt (type "_a"))
-		(patt (type "(Error, Num(Int(Unsigned64)))"))
-		(patt (type "Adv -> Error"))
+		(patt (type "(Str, Num(Int(Unsigned64)))"))
+		(patt (type "Adv -> Str"))
 		(patt (type "Adv -> Num(Int(Unsigned64))"))
-		(patt (type "Adv, Error -> Adv"))
+		(patt (type "Adv, Str -> Adv"))
 		(patt (type "Adv, Num(Int(Unsigned64)) -> Adv")))
 	(type_decls
 		(nominal (type "Adv")
@@ -496,9 +511,9 @@ main = {
 		(expr (type "_a"))
 		(expr (type "_a"))
 		(expr (type "_a"))
-		(expr (type "(Error, Num(Int(Unsigned64)))"))
-		(expr (type "Adv -> Error"))
+		(expr (type "(Str, Num(Int(Unsigned64)))"))
+		(expr (type "Adv -> Str"))
 		(expr (type "Adv -> Num(Int(Unsigned64))"))
-		(expr (type "Adv, Error -> Adv"))
+		(expr (type "Adv, Str -> Adv"))
 		(expr (type "Adv, Num(Int(Unsigned64)) -> Adv"))))
 ~~~

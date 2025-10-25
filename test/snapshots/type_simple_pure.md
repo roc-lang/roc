@@ -72,8 +72,8 @@ NO CHANGE
 				(p-assign (ident "x"))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Str") (external-module "Str"))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda
@@ -85,9 +85,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Error"))
+		(patt (type "Str -> Str"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "Error -> Error"))
+		(expr (type "Str -> Str"))
 		(expr (type "_arg -> {}"))))
 ~~~

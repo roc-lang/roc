@@ -503,7 +503,7 @@ transform = |result|
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "RGB") (external-module "Color"))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "transform"))
 		(e-closure
@@ -554,7 +554,7 @@ transform = |result|
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "{  } -> Error"))
-		(patt (type "Error -> Error"))
+		(patt (type "Error -> Str"))
 		(patt (type "Error -> Error")))
 	(expressions
 		(expr (type "Error"))
@@ -562,6 +562,6 @@ transform = |result|
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "{  } -> Error"))
-		(expr (type "Error -> Error"))
+		(expr (type "Error -> Str"))
 		(expr (type "Error -> Error"))))
 ~~~

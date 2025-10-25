@@ -1218,10 +1218,11 @@ fn processSnapshotContent(
 
     // Register each builtin type individually with its statement index
     // They all point to the same Builtin module env
+    // Note: Str is NOT added because it's handled as a primitive builtin type
+    // in TypeAnno.Builtin.fromBytes() and should never go through module_envs
     if (config.builtin_module) |builtin_env| {
         const bool_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Bool"));
         const result_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Result"));
-        const str_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Str"));
         const dict_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Dict"));
         const set_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Set"));
 
@@ -1232,11 +1233,6 @@ fn processSnapshotContent(
         try module_envs.put(result_ident, .{
             .env = builtin_env,
             .statement_idx = config.builtin_indices.result_type,
-        });
-        // Str does NOT get a statement_idx because it's transformed to a primitive type
-        // (see transformStrNominalToPrimitive in builtin_compiler)
-        try module_envs.put(str_ident, .{
-            .env = builtin_env,
         });
         try module_envs.put(dict_ident, .{
             .env = builtin_env,

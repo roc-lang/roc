@@ -244,12 +244,12 @@ NO CHANGE
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))
-				(ty-lookup (name "Str") (external-module "Str")))
+				(ty-lookup (name "Str") (builtin)))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "get_value")
 					(args
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-					(ty-lookup (name "Str") (external-module "Str"))))))
+					(ty-lookup (name "Str") (builtin))))))
 	(d-let
 		(p-assign (ident "modify"))
 		(e-lambda
@@ -268,8 +268,8 @@ NO CHANGE
 				(ty-rigid-var (name "a"))
 				(ty-parens
 					(ty-fn (effectful false)
-						(ty-lookup (name "Str") (external-module "Str"))
-						(ty-lookup (name "Str") (external-module "Str"))))
+						(ty-lookup (name "Str") (builtin))
+						(ty-lookup (name "Str") (builtin))))
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "transform")
@@ -277,8 +277,8 @@ NO CHANGE
 						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 						(ty-parens
 							(ty-fn (effectful false)
-								(ty-lookup (name "Str") (external-module "Str"))
-								(ty-lookup (name "Str") (external-module "Str")))))
+								(ty-lookup (name "Str") (builtin))
+								(ty-lookup (name "Str") (builtin)))))
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
 		(p-assign (ident "container"))
@@ -306,7 +306,7 @@ NO CHANGE
 					(p-assign (ident "myContainer"))))
 			(args))
 		(annotation
-			(ty-lookup (name "Str") (external-module "Str"))))
+			(ty-lookup (name "Str") (builtin))))
 	(d-let
 		(p-assign (ident "result1"))
 		(e-call
@@ -315,7 +315,7 @@ NO CHANGE
 			(e-lookup-local
 				(p-assign (ident "container"))))
 		(annotation
-			(ty-lookup (name "Str") (external-module "Str"))))
+			(ty-lookup (name "Str") (builtin))))
 	(d-let
 		(p-assign (ident "result2"))
 		(e-call
@@ -348,9 +348,9 @@ NO CHANGE
 						(p-assign (ident "result2"))))))
 		(annotation
 			(ty-tuple
-				(ty-lookup (name "Str") (external-module "Str"))
-				(ty-lookup (name "Str") (external-module "Str"))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "Container.get_value"))
 		(e-closure
@@ -365,7 +365,7 @@ NO CHANGE
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Container") (local))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "Container.transform"))
 		(e-closure
@@ -389,41 +389,41 @@ NO CHANGE
 				(ty-lookup (name "Container") (local))
 				(ty-parens
 					(ty-fn (effectful false)
-						(ty-lookup (name "Str") (external-module "Str"))
-						(ty-lookup (name "Str") (external-module "Str"))))
+						(ty-lookup (name "Str") (builtin))
+						(ty-lookup (name "Str") (builtin))))
 				(ty-lookup (name "Container") (local)))))
 	(s-nominal-decl
 		(ty-header (name "Container"))
 		(ty-tag-union
 			(ty-tag-name (name "Box")
-				(ty-lookup (name "Str") (external-module "Str"))))))
+				(ty-lookup (name "Str") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> Error where [a.get_value : a -> Error]"))
-		(patt (type "a, Error -> Error -> a where [a.transform : a, Error -> Error -> aa.transform : a, Error -> Error -> a]"))
+		(patt (type "a -> Str where [a.get_value : a -> Str]"))
+		(patt (type "a, Str -> Str -> a where [a.transform : a, Str -> Str -> aa.transform : a, Str -> Str -> a]"))
 		(patt (type "Container"))
 		(patt (type "Container"))
-		(patt (type "Error"))
-		(patt (type "Error"))
+		(patt (type "Str"))
+		(patt (type "Str"))
 		(patt (type "Container"))
-		(patt (type "(Error, Error, Error)"))
-		(patt (type "Container -> Error"))
-		(patt (type "Container, Error -> Error -> Container")))
+		(patt (type "(Str, Str, Str)"))
+		(patt (type "Container -> Str"))
+		(patt (type "Container, Str -> Str -> Container")))
 	(type_decls
 		(nominal (type "Container")
 			(ty-header (name "Container"))))
 	(expressions
-		(expr (type "a -> Error where [a.get_value : a -> Error]"))
-		(expr (type "a, Error -> Error -> a where [a.transform : a, Error -> Error -> aa.transform : a, Error -> Error -> a]"))
+		(expr (type "a -> Str where [a.get_value : a -> Str]"))
+		(expr (type "a, Str -> Str -> a where [a.transform : a, Str -> Str -> aa.transform : a, Str -> Str -> a]"))
 		(expr (type "Container"))
 		(expr (type "Container"))
-		(expr (type "Error"))
-		(expr (type "Error"))
+		(expr (type "Str"))
+		(expr (type "Str"))
 		(expr (type "Container"))
-		(expr (type "(Error, Error, Error)"))
-		(expr (type "Container -> Error"))
-		(expr (type "Container, Error -> Error -> Container"))))
+		(expr (type "(Str, Str, Str)"))
+		(expr (type "Container -> Str"))
+		(expr (type "Container, Str -> Str -> Container"))))
 ~~~

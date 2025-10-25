@@ -497,9 +497,9 @@ NO CHANGE
 		(ty-header (name "E"))
 		(ty-record
 			(field (field "a")
-				(ty-lookup (name "Str") (external-module "Str")))
+				(ty-lookup (name "Str") (builtin)))
 			(field (field "b")
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(s-alias-decl
 		(ty-header (name "F"))
 		(ty-tag-union

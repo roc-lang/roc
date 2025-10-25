@@ -328,8 +328,8 @@ main = |_| "done"
 				(ty-apply (name "Result") (external-module "Result")
 					(ty-apply (name "Result") (external-module "Result")
 						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
-						(ty-lookup (name "Str") (external-module "Str")))
-					(ty-lookup (name "Str") (external-module "Str"))))))
+						(ty-lookup (name "Str") (builtin)))
+					(ty-lookup (name "Str") (builtin))))))
 	(d-let
 		(p-assign (ident "main"))
 		(e-lambda

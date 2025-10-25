@@ -44,5 +44,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Builtin.Bool"))
+(expr (type "Bool"))
 ~~~

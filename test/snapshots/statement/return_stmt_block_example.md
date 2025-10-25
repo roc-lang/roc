@@ -142,7 +142,7 @@ foo = |num| {
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))
 				(ty-apply (name "Result") (external-module "Result")
-					(ty-lookup (name "Str") (external-module "Str"))
+					(ty-lookup (name "Str") (builtin))
 					(ty-tag-union
 						(ty-tag-name (name "TooBig"))))))))
 ~~~

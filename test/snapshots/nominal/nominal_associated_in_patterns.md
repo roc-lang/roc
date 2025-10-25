@@ -93,7 +93,7 @@ handleSuccess = |res| "success"
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Foo.Result") (local))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
 		(ty-tag-union
@@ -104,18 +104,18 @@ handleSuccess = |res| "success"
 			(ty-tag-name (name "Success")
 				(ty-lookup (name "U64") (builtin)))
 			(ty-tag-name (name "Failure")
-				(ty-lookup (name "Str") (external-module "Str"))))))
+				(ty-lookup (name "Str") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Foo.Result -> Error")))
+		(patt (type "Foo.Result -> Str")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
 		(nominal (type "Foo.Result")
 			(ty-header (name "Foo.Result"))))
 	(expressions
-		(expr (type "Foo.Result -> Error"))))
+		(expr (type "Foo.Result -> Str"))))
 ~~~
