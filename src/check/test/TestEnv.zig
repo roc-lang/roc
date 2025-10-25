@@ -194,30 +194,14 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     const other_module_ident = try module_env.insertIdent(base.Ident.for_text(other_module_name));
     try module_envs.put(other_module_ident, .{ .env = other_test_env.module_env });
 
-    // Add Bool, Result, Dict, and Set to module_envs for auto-importing
-    // They all point to the same Builtin module env with different statement indices
-    // Note: Str is NOT added because it's a primitive builtin type that's handled
-    // specially in Can.zig line 5667 - it should never go through module_envs
-    const bool_ident = try module_env.insertIdent(base.Ident.for_text("Bool"));
-    const result_ident = try module_env.insertIdent(base.Ident.for_text("Result"));
-    const dict_ident = try module_env.insertIdent(base.Ident.for_text("Dict"));
-    const set_ident = try module_env.insertIdent(base.Ident.for_text("Set"));
-    try module_envs.put(bool_ident, .{
-        .env = builtin_env,
-        .statement_idx = builtin_indices.bool_type,
-    });
-    try module_envs.put(result_ident, .{
-        .env = builtin_env,
-        .statement_idx = builtin_indices.result_type,
-    });
-    try module_envs.put(dict_ident, .{
-        .env = builtin_env,
-        .statement_idx = builtin_indices.dict_type,
-    });
-    try module_envs.put(set_ident, .{
-        .env = builtin_env,
-        .statement_idx = builtin_indices.set_type,
-    });
+    // Populate module_envs with Bool, Result, Dict, Set using shared function
+    // This ensures production and tests use identical logic
+    try Can.populateModuleEnvs(
+        &module_envs,
+        module_env,
+        builtin_env,
+        builtin_indices,
+    );
 
     // Parse the AST
     parse_ast.* = try parse.parse(&module_env.common, gpa);

@@ -1375,25 +1375,14 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
     defer module_envs_map.deinit();
 
-    // Add Bool, Result, and Str to the map, all pointing to the Builtin module with pre-computed statement indices
-    const builtin_indices = builtin_modules.builtin_indices;
-    const bool_ident = try env.common.insertIdent(allocs.gpa, base.Ident.for_text("Bool"));
-    try module_envs_map.put(bool_ident, .{
-        .env = builtin_modules.builtin_module.env,
-        .statement_idx = builtin_indices.bool_type,
-    });
-
-    const result_ident = try env.common.insertIdent(allocs.gpa, base.Ident.for_text("Result"));
-    try module_envs_map.put(result_ident, .{
-        .env = builtin_modules.builtin_module.env,
-        .statement_idx = builtin_indices.result_type,
-    });
-
-    const str_ident = try env.common.insertIdent(allocs.gpa, base.Ident.for_text("Str"));
-    try module_envs_map.put(str_ident, .{
-        .env = builtin_modules.builtin_module.env,
-        .statement_idx = builtin_indices.str_type,
-    });
+    // Populate module_envs with Bool, Result, Dict, Set using shared function
+    // This ensures production and tests use identical logic
+    try Can.populateModuleEnvs(
+        &module_envs_map,
+        &env,
+        builtin_modules.builtin_module.env,
+        builtin_modules.builtin_indices,
+    );
 
     // Create canonicalizer with module_envs
     var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map);
