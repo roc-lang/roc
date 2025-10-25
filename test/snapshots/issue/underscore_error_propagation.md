@@ -136,7 +136,7 @@ NO CHANGE
 		(ty-lookup (name "BadBase") (local)))
 	(s-nominal-decl
 		(ty-header (name "GoodBase"))
-		(ty-lookup (name "Str") (builtin)))
+		(ty-lookup (name "Str") (external-module "Str")))
 	(s-nominal-decl
 		(ty-header (name "GoodDerived"))
 		(ty-lookup (name "GoodBase") (local))))

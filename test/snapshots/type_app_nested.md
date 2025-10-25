@@ -106,10 +106,10 @@ main! = |_| processNested([])
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
 					(ty-apply (name "Result") (external-module "Result")
-						(ty-lookup (name "Str") (builtin))
+						(ty-lookup (name "Str") (external-module "Str"))
 						(ty-malformed)))
 				(ty-apply (name "List") (builtin)
-					(ty-lookup (name "Str") (builtin))))))
+					(ty-lookup (name "Str") (external-module "Str"))))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-closure

@@ -15,8 +15,10 @@ const can = @import("can");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const reporting = @import("reporting");
+const eval = @import("eval");
 
 const Report = reporting.Report;
+const BuiltinModules = eval.BuiltinModules;
 const Mode = @import("compile_package.zig").Mode;
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
@@ -359,6 +361,9 @@ pub const BuildEnv = struct {
     // Cache manager for compiled modules
     cache_manager: ?*CacheManager = null,
 
+    // Builtin modules (Bool, Result, Str) shared across all packages (heap-allocated to prevent moves)
+    builtin_modules: *BuiltinModules,
+
     // Owned resolver ctx pointers for cleanup (typed)
     resolver_ctxs: std.array_list.Managed(*ResolverCtx),
     // Owned per-package sink contexts for fully-qualified emission
@@ -366,7 +371,14 @@ pub const BuildEnv = struct {
     // Owned schedule ctxs for pre-registration (one per package)
     schedule_ctxs: std.array_list.Managed(*ScheduleCtx),
 
-    pub fn init(gpa: Allocator, mode: Mode, max_threads: usize) BuildEnv {
+    pub fn init(gpa: Allocator, mode: Mode, max_threads: usize) !BuildEnv {
+        // Allocate builtin modules on heap to prevent moves that would invalidate internal pointers
+        const builtin_modules = try gpa.create(BuiltinModules);
+        errdefer gpa.destroy(builtin_modules);
+
+        builtin_modules.* = try BuiltinModules.init(gpa);
+        errdefer builtin_modules.deinit();
+
         return .{
             .gpa = gpa,
             .mode = mode,
@@ -374,6 +386,7 @@ pub const BuildEnv = struct {
             .workspace_roots = std.array_list.Managed([]const u8).init(gpa),
             .sink = OrderedSink.init(gpa),
             .global_queue = GlobalQueue.init(gpa),
+            .builtin_modules = builtin_modules,
             .resolver_ctxs = std.array_list.Managed(*ResolverCtx).init(gpa),
             .pkg_sink_ctxs = std.array_list.Managed(*PkgSinkCtx).init(gpa),
             .schedule_ctxs = std.array_list.Managed(*ScheduleCtx).init(gpa),
@@ -381,6 +394,10 @@ pub const BuildEnv = struct {
     }
 
     pub fn deinit(self: *BuildEnv) void {
+        // Deinit and free builtin modules
+        self.builtin_modules.deinit();
+        self.gpa.destroy(self.builtin_modules);
+
         // Stop global queue workers
         self.global_queue.deinit(self.gpa);
 
@@ -470,7 +487,6 @@ pub const BuildEnv = struct {
 
         var header_info = try self.parseHeaderDeps(root_abs);
         defer header_info.deinit(self.gpa);
-
         // Allow app, module, type_module, and default_app files
         const is_executable = header_info.kind == .app or header_info.kind == .default_app;
 
@@ -745,6 +761,31 @@ pub const BuildEnv = struct {
 
         var ast = try parse.parse(&env.common, self.gpa);
         defer ast.deinit(self.gpa);
+
+        // Check for parse errors - if any exist, we cannot proceed
+        if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) {
+            // Convert diagnostics to reports and emit them
+            // Use placeholder package name since we haven't determined it yet
+            const pkg_name = "main";
+            const module_name = file_abs;
+
+            for (ast.tokenize_diagnostics.items) |diagnostic| {
+                const report = try ast.tokenizeDiagnosticToReport(diagnostic, self.gpa);
+                self.sink.emitReport(pkg_name, module_name, report);
+            }
+            for (ast.parse_diagnostics.items) |diagnostic| {
+                const report = try ast.parseDiagnosticToReport(&env.common, diagnostic, self.gpa, file_abs);
+                self.sink.emitReport(pkg_name, module_name, report);
+            }
+
+            // Build the order so drainReports can find these reports
+            try self.sink.buildOrder(&[_][]const u8{pkg_name}, &[_][]const u8{module_name}, &[_]u32{0});
+
+            // Emit ready entries (marks them as emitted so they can be drained)
+            self.sink.tryEmit();
+
+            return error.UnsupportedHeader;
+        }
 
         const file = ast.store.getFile();
         const header = ast.store.getHeader(file.header);
@@ -1029,6 +1070,7 @@ pub const BuildEnv = struct {
                 resolver,
                 schedule_hook,
                 self.compiler_version,
+                self.builtin_modules,
             );
 
             const key = try self.gpa.dupe(u8, name);
@@ -1059,6 +1101,12 @@ pub const BuildEnv = struct {
             const dep_name = try self.gpa.dupe(u8, alias);
             try self.ensurePackage(dep_name, .platform, abs);
 
+            // If key already exists, free the old value before overwriting
+            if (pack.shorthands.fetchRemove(dep_key)) |old_entry| {
+                freeConstSlice(self.gpa, old_entry.key);
+                freeConstSlice(self.gpa, old_entry.value.name);
+                freeConstSlice(self.gpa, old_entry.value.root_file);
+            }
             try pack.shorthands.put(self.gpa, dep_key, .{
                 .name = dep_name,
                 .root_file = try self.gpa.dupe(u8, abs),
@@ -1103,6 +1151,12 @@ pub const BuildEnv = struct {
 
             try self.ensurePackage(dep_name, child_info.kind, abs);
 
+            // If key already exists, free the old value before overwriting
+            if (pack.shorthands.fetchRemove(dep_key)) |old_entry| {
+                freeConstSlice(self.gpa, old_entry.key);
+                freeConstSlice(self.gpa, old_entry.value.name);
+                freeConstSlice(self.gpa, old_entry.value.root_file);
+            }
             try pack.shorthands.put(self.gpa, dep_key, .{
                 .name = dep_name,
                 .root_file = try self.gpa.dupe(u8, abs),
@@ -1150,6 +1204,11 @@ pub const BuildEnv = struct {
 
         // Build the deterministic order
         try self.sink.buildOrder(pkg_names.items, module_names.items, depths.items);
+
+        // Now that order is built, mark ready reports as emitted so they can be drained
+        self.sink.lock.lock();
+        defer self.sink.lock.unlock();
+        self.sink.tryEmitLocked();
     }
 
     fn depthOf(self: *BuildEnv, pkg_name: []const u8, module_name: []const u8) !u32 {
@@ -1407,6 +1466,13 @@ pub const OrderedSink = struct {
 
         // Attempt ordered emission only if order has been built
         if (self.order.items.len > 0) self.tryEmitLocked();
+    }
+
+    // Attempt to emit entries in order prefix while next entries are ready (with locking).
+    pub fn tryEmit(self: *OrderedSink) void {
+        self.lock.lock();
+        defer self.lock.unlock();
+        self.tryEmitLocked();
     }
 
     // Attempt to emit entries in order prefix while next entries are ready.

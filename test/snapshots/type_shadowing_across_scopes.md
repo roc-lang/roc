@@ -180,8 +180,8 @@ InnerModule :
 				(e-literal (string "processed"))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Str") (builtin))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str"))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(s-alias-decl
 		(ty-header (name "Result")
 			(ty-args

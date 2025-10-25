@@ -509,6 +509,77 @@ pub const Interpreter = struct {
                         .s_expr => |sx| {
                             _ = try self.evalExprMinimal(sx.expr, roc_ops, null);
                         },
+                        .s_for => |for_stmt| {
+                            // Evaluate the list expression
+                            const expr_ct_var = can.ModuleEnv.varFrom(for_stmt.expr);
+                            const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+                            const list_value = try self.evalExprMinimal(for_stmt.expr, roc_ops, expr_rt_var);
+                            defer list_value.decref(&self.runtime_layout_store, roc_ops);
+
+                            // Get the list layout
+                            if (list_value.layout.tag != .list) {
+                                return error.TypeMismatch;
+                            }
+                            const elem_layout_idx = list_value.layout.data.list;
+                            const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                            const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(elem_layout));
+
+                            // Get the RocList header
+                            const list_header: *const RocList = @ptrCast(@alignCast(list_value.ptr.?));
+                            const list_len = list_header.len();
+
+                            // Get the element type for binding
+                            const patt_ct_var = can.ModuleEnv.varFrom(for_stmt.patt);
+                            const patt_rt_var = try self.translateTypeVar(self.env, patt_ct_var);
+
+                            // Iterate over each element
+                            var i: usize = 0;
+                            while (i < list_len) : (i += 1) {
+                                // Get pointer to element
+                                const elem_ptr = if (list_header.bytes) |buffer|
+                                    buffer + i * elem_size
+                                else
+                                    return error.TypeMismatch;
+
+                                // Create a StackValue from the element
+                                var elem_value = StackValue{
+                                    .ptr = elem_ptr,
+                                    .layout = elem_layout,
+                                    .is_initialized = true,
+                                };
+
+                                // Increment refcount since we're creating a new reference
+                                elem_value.incref();
+
+                                // Bind the pattern to the element value
+                                var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
+                                defer {
+                                    self.trimBindingList(&temp_binds, 0, roc_ops);
+                                    temp_binds.deinit();
+                                }
+
+                                if (!try self.patternMatchesBind(for_stmt.patt, elem_value, patt_rt_var, roc_ops, &temp_binds)) {
+                                    elem_value.decref(&self.runtime_layout_store, roc_ops);
+                                    return error.TypeMismatch;
+                                }
+
+                                // Add bindings to the environment
+                                const loop_bindings_start = self.bindings.items.len;
+                                for (temp_binds.items) |binding| {
+                                    try self.bindings.append(binding);
+                                }
+
+                                // Evaluate the body
+                                const body_result = try self.evalExprMinimal(for_stmt.body, roc_ops, null);
+                                body_result.decref(&self.runtime_layout_store, roc_ops);
+
+                                // Clean up bindings for this iteration
+                                self.trimBindingList(&self.bindings, loop_bindings_start, roc_ops);
+
+                                // Decrement the element reference (it was incremented above)
+                                elem_value.decref(&self.runtime_layout_store, roc_ops);
+                            }
+                        },
                         else => return error.NotImplemented,
                     }
                 }
@@ -4168,8 +4239,11 @@ test "interpreter: Var->Layout slot caches computed layout" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
@@ -4202,8 +4276,11 @@ test "interpreter: translateTypeVar for str" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
@@ -4229,8 +4306,11 @@ test "interpreter: translateTypeVar for int64" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
@@ -4264,8 +4344,11 @@ test "interpreter: translateTypeVar for f64" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
@@ -4299,8 +4382,11 @@ test "interpreter: translateTypeVar for tuple(Str, I64)" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
@@ -4352,8 +4438,11 @@ test "interpreter: translateTypeVar for record {first: Str, second: I64}" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
@@ -4419,8 +4508,11 @@ test "interpreter: translateTypeVar for alias of Str" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
@@ -4455,8 +4547,11 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
@@ -4496,8 +4591,11 @@ test "interpreter: translateTypeVar for flex var" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
@@ -4521,8 +4619,11 @@ test "interpreter: translateTypeVar for rigid var" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
@@ -4548,8 +4649,11 @@ test "interpreter: translateTypeVar for flex var with static dispatch constraint
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
@@ -4620,8 +4724,11 @@ test "interpreter: translateTypeVar for flex var with multiple static dispatch c
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
@@ -4699,8 +4806,11 @@ test "interpreter: translateTypeVar for rigid var with static dispatch constrain
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
@@ -4755,8 +4865,11 @@ test "interpreter: getStaticDispatchConstraint finds method on flex var" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
@@ -4813,8 +4926,11 @@ test "interpreter: getStaticDispatchConstraint returns error for non-constrained
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
@@ -4842,8 +4958,11 @@ test "interpreter: poly cache insert and lookup" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
@@ -4887,8 +5006,11 @@ test "interpreter: prepareCall miss then hit" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
@@ -4926,8 +5048,11 @@ test "interpreter: prepareCallWithFuncVar populates cache" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
@@ -4965,8 +5090,11 @@ test "interpreter: unification constrains (a->a) with Str" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
@@ -5010,8 +5138,11 @@ test "interpreter: cross-module method resolution should find methods in origin 
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var interp = try Interpreter.init(gpa, &module_b, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
@@ -5062,8 +5193,11 @@ test "interpreter: transitive module method resolution (A imports B imports C)" 
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     // Use module_a as the current module
     var interp = try Interpreter.init(gpa, &module_a, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();

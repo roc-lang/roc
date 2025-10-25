@@ -26,7 +26,72 @@ const BuiltinIndices = struct {
     bool_type: CIR.Statement.Idx,
     /// Statement index of Result type declaration within Result module
     result_type: CIR.Statement.Idx,
+    /// Statement index of Dict type declaration within Dict module
+    dict_type: CIR.Statement.Idx,
+    /// Statement index of Set type declaration within Set module
+    set_type: CIR.Statement.Idx,
+    /// Statement index of Str type declaration within Str module
+    str_type: CIR.Statement.Idx,
 };
+
+/// Transform all Str nominal types to .str primitive types in a module.
+/// This is necessary because the interpreter needs .str to be a primitive type,
+/// but we define methods on Str as a nominal type in Str.roc for ergonomics.
+///
+/// This transformation happens after type-checking but before serialization,
+/// ensuring that the serialized .bin file contains methods associated with
+/// the .str primitive type rather than a nominal Str type.
+fn transformStrNominalToPrimitive(env: *ModuleEnv) !void {
+    const types_mod = @import("types");
+    const Content = types_mod.Content;
+    const FlatType = types_mod.FlatType;
+
+    // Get the Str identifier in this module
+    const str_ident_opt = env.common.findIdent("Str");
+    if (str_ident_opt == null) {
+        // No Str ident found, nothing to transform
+        return;
+    }
+    const str_ident = str_ident_opt.?;
+
+    // Iterate through all slots in the type store
+    var i: u32 = 0;
+    while (i < env.types.len()) : (i += 1) {
+        const var_idx = @as(types_mod.Var, @enumFromInt(i));
+
+        // Skip redirects, only process roots
+        if (env.types.isRedirect(var_idx)) {
+            continue;
+        }
+
+        const resolved = env.types.resolveVar(var_idx);
+        const desc = resolved.desc;
+
+        // Check if this descriptor contains a nominal type
+        switch (desc.content) {
+            .structure => |structure| {
+                switch (structure) {
+                    .nominal_type => |nominal| {
+                        // Check if this is the Str nominal type
+                        // TypeIdent has an ident_idx field that references the identifier
+                        if (nominal.ident.ident_idx == str_ident) {
+                            // Replace with .str primitive type
+                            const new_content = Content{ .structure = FlatType.str };
+                            const new_desc = types_mod.Descriptor{
+                                .content = new_content,
+                                .rank = desc.rank,
+                                .mark = desc.mark,
+                            };
+                            try env.types.setVarDesc(var_idx, new_desc);
+                        }
+                    },
+                    else => {},
+                }
+            },
+            else => {},
+        }
+    }
+}
 
 /// Build-time compiler that compiles builtin .roc sources into serialized ModuleEnvs.
 /// This runs during `zig build` on the host machine to generate .bin files
@@ -55,6 +120,8 @@ pub fn main() !void {
     const dict_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Dict.roc", 1024 * 1024);
 
     const set_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Set.roc", 1024 * 1024);
+
+    const str_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Str.roc", 1024 * 1024);
 
     // Compile Bool.roc (it's completely self-contained, doesn't use Bool or Result types)
     const bool_env = try compileModule(
@@ -124,6 +191,37 @@ pub fn main() !void {
         gpa.free(set_roc_source);
     }
 
+    // Find Dict type declaration via string lookup
+    const dict_type_idx = try findTypeDeclaration(dict_env, "Dict");
+
+    // Find Set type declaration via string lookup
+    const set_type_idx = try findTypeDeclaration(set_env, "Set");
+
+    // Compile Str.roc (uses Bool type in method signatures)
+    const str_env = try compileModule(
+        gpa,
+        "Str",
+        str_roc_source,
+        &[_]ModuleDep{
+            .{ .name = "Bool", .env = bool_env },
+        },
+        bool_type_idx, // Provide Bool type index
+        result_type_idx, // Provide Result type index
+    );
+    defer {
+        str_env.deinit();
+        gpa.destroy(str_env);
+        gpa.free(str_roc_source);
+    }
+
+    // Find Str type declaration via string lookup
+    const str_type_idx = try findTypeDeclaration(str_env, "Str");
+
+    // Transform Str nominal types to .str primitive types
+    // This must happen BEFORE serialization to ensure the .bin file contains
+    // methods associated with the .str primitive, not a nominal type
+    try transformStrNominalToPrimitive(str_env);
+
     // Create output directory
     try std.fs.cwd().makePath("zig-out/builtins");
 
@@ -132,11 +230,15 @@ pub fn main() !void {
     try serializeModuleEnv(gpa, result_env, "zig-out/builtins/Result.bin");
     try serializeModuleEnv(gpa, dict_env, "zig-out/builtins/Dict.bin");
     try serializeModuleEnv(gpa, set_env, "zig-out/builtins/Set.bin");
+    try serializeModuleEnv(gpa, str_env, "zig-out/builtins/Str.bin");
 
     // Create and serialize builtin indices
     const builtin_indices = BuiltinIndices{
         .bool_type = bool_type_idx,
         .result_type = result_type_idx,
+        .dict_type = dict_type_idx,
+        .set_type = set_type_idx,
+        .str_type = str_type_idx,
     };
     try serializeBuiltinIndices(builtin_indices, "zig-out/builtins/builtin_indices.bin");
 }
@@ -210,13 +312,11 @@ fn compileModule(
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
     defer module_envs.deinit();
 
-    // Create temporary ident store for module name lookup
-    var temp_idents = try base.Ident.Store.initCapacity(gpa, 16);
-    defer temp_idents.deinit(gpa);
-
-    // Add dependencies (e.g., Dict for Set)
+    // Add dependencies (e.g., Dict for Set, Bool for Str)
+    // IMPORTANT: Use the module's own ident store, not a temporary one,
+    // because auto-import lookups will use the module's ident store
     for (deps) |dep| {
-        const dep_ident = try temp_idents.insert(gpa, base.Ident.for_text(dep.name));
+        const dep_ident = try module_env.insertIdent(base.Ident.for_text(dep.name));
         try module_envs.put(dep_ident, .{ .env = dep.env });
     }
 

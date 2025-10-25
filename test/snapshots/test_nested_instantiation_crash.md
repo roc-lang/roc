@@ -160,7 +160,7 @@ answer = composed([42])
 					(field (field "value")
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
 					(field (field "tag")
-						(ty-lookup (name "Str") (builtin)))))))
+						(ty-lookup (name "Str") (external-module "Str")))))))
 	(d-let
 		(p-assign (ident "get_value"))
 		(e-lambda
@@ -176,7 +176,7 @@ answer = composed([42])
 					(field (field "value")
 						(ty-rigid-var (name "a")))
 					(field (field "tag")
-						(ty-lookup (name "Str") (builtin))))
+						(ty-lookup (name "Str") (external-module "Str"))))
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(d-let
 		(p-assign (ident "composed"))
@@ -199,7 +199,7 @@ answer = composed([42])
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
 					(ty-rigid-var (name "a")))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "answer"))
 		(e-call

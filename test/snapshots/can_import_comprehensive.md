@@ -42,15 +42,16 @@ main = {
 # EXPECTED
 MODULE NOT FOUND - can_import_comprehensive.md:1:1:1:17
 MODULE NOT FOUND - can_import_comprehensive.md:2:1:2:48
+DUPLICATE DEFINITION - can_import_comprehensive.md:1:1:1:1
 MODULE NOT FOUND - can_import_comprehensive.md:3:1:3:27
 UNDEFINED VARIABLE - can_import_comprehensive.md:6:14:6:22
 UNDEFINED VARIABLE - can_import_comprehensive.md:7:14:7:23
-UNDEFINED VARIABLE - can_import_comprehensive.md:8:14:8:22
+DOES NOT EXIST - can_import_comprehensive.md:8:14:8:22
 UNDEFINED VARIABLE - can_import_comprehensive.md:11:15:11:25
 UNDEFINED VARIABLE - can_import_comprehensive.md:14:15:14:24
 UNDEFINED VARIABLE - can_import_comprehensive.md:17:15:17:18
 UNDEFINED VARIABLE - can_import_comprehensive.md:18:15:18:19
-UNDEFINED VARIABLE - can_import_comprehensive.md:21:16:21:26
+DOES NOT EXIST - can_import_comprehensive.md:21:16:21:26
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `json.Json` was not found in this Roc project.
@@ -72,6 +73,24 @@ You're attempting to use this module here:
 import http.Client as Http exposing [get, post]
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**DUPLICATE DEFINITION**
+The name `Str` is being redeclared in this scope.
+
+The redeclaration is here:
+**can_import_comprehensive.md:1:1:1:1:**
+```roc
+import json.Json
+```
+^
+
+But `Str` was already defined here:
+**can_import_comprehensive.md:1:1:1:1:**
+```roc
+import json.Json
+```
+^
 
 
 **MODULE NOT FOUND**
@@ -107,9 +126,8 @@ Is there an `import` or `exposing` missing up-top?
              ^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `trim` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Str.trim` does not exist.
 
 **can_import_comprehensive.md:8:14:8:22:**
 ```roc
@@ -162,9 +180,8 @@ Is there an `import` or `exposing` missing up-top?
               ^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `concat` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Str.concat` does not exist.
 
 **can_import_comprehensive.md:21:16:21:26:**
 ```roc
@@ -301,7 +318,7 @@ main = {
 				(e-runtime-error (tag "ident_not_in_scope")))
 			(s-let
 				(p-assign (ident "helper"))
-				(e-runtime-error (tag "ident_not_in_scope")))
+				(e-runtime-error (tag "qualified_ident_does_not_exist")))
 			(s-let
 				(p-assign (ident "result1"))
 				(e-runtime-error (tag "ident_not_in_scope")))
@@ -316,7 +333,7 @@ main = {
 				(e-runtime-error (tag "ident_not_in_scope")))
 			(s-let
 				(p-assign (ident "combined"))
-				(e-runtime-error (tag "ident_not_in_scope")))
+				(e-runtime-error (tag "qualified_ident_does_not_exist")))
 			(e-tuple
 				(elems
 					(e-lookup-local

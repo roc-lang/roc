@@ -1881,6 +1881,103 @@ test "unify - anonymous tag union cannot unify with nominal record" {
     try std.testing.expectEqual(false, result.isOk());
 }
 
+// unification - empty nominal types //
+
+test "unify - empty nominal type with empty tag union (nominal on left)" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create nominal type: Empty := []
+    const backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
+    const nominal_var = try env.module_env.types.freshFromContent(
+        try env.mkNominalType("Empty", backing_var, &[_]Var{}),
+    );
+
+    // Create empty tag union: []
+    const empty_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
+
+    // Unify: Empty ~ []
+    const result = try env.unify(nominal_var, empty_var);
+
+    // Should succeed and merge to nominal type
+    try std.testing.expectEqual(.ok, result);
+    const resolved = env.module_env.types.resolveVar(empty_var);
+    try std.testing.expect(resolved.desc.content == .structure);
+    try std.testing.expect(resolved.desc.content.structure == .nominal_type);
+}
+
+test "unify - empty tag union with empty nominal type (nominal on right)" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create empty tag union: []
+    const empty_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
+
+    // Create nominal type: Empty := []
+    const backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
+    const nominal_var = try env.module_env.types.freshFromContent(
+        try env.mkNominalType("Empty", backing_var, &[_]Var{}),
+    );
+
+    // Unify: [] ~ Empty
+    const result = try env.unify(empty_var, nominal_var);
+
+    // Should succeed and merge to nominal type
+    try std.testing.expectEqual(.ok, result);
+    const resolved = env.module_env.types.resolveVar(empty_var);
+    try std.testing.expect(resolved.desc.content == .structure);
+    try std.testing.expect(resolved.desc.content.structure == .nominal_type);
+}
+
+test "unify - two empty nominal types" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create nominal type: Empty1 := []
+    const backing_var1 = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
+    const nominal_var1 = try env.module_env.types.freshFromContent(
+        try env.mkNominalType("Empty1", backing_var1, &[_]Var{}),
+    );
+
+    // Create nominal type: Empty2 := []
+    const backing_var2 = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
+    const nominal_var2 = try env.module_env.types.freshFromContent(
+        try env.mkNominalType("Empty2", backing_var2, &[_]Var{}),
+    );
+
+    // Unify: Empty1 ~ Empty2 - should fail (different nominal types)
+    const result = try env.unify(nominal_var1, nominal_var2);
+
+    // Should fail because they're different nominal types
+    try std.testing.expectEqual(false, result.isOk());
+}
+
+test "unify - empty nominal type with non-empty tag union fails" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create nominal type: Empty := []
+    const backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
+    const nominal_var = try env.module_env.types.freshFromContent(
+        try env.mkNominalType("Empty", backing_var, &[_]Var{}),
+    );
+
+    // Create non-empty tag union: [A]
+    const anon_tag_a = try env.mkTag("A", &[_]Var{});
+    const anon_tu = try env.mkTagUnionOpen(&[_]Tag{anon_tag_a});
+    const anon_var = try env.module_env.types.freshFromContent(anon_tu.content);
+
+    // Unify: Empty ~ [A] - should fail
+    const result = try env.unify(nominal_var, anon_var);
+
+    // Should fail
+    try std.testing.expectEqual(false, result.isOk());
+}
+
 // unification - records - partition fields //
 
 test "partitionFields - same record" {

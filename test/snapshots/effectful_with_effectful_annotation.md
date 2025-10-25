@@ -103,7 +103,7 @@ NO CHANGE
 					(p-assign (ident "msg")))))
 		(annotation
 			(ty-fn (effectful true)
-				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (external-module "Str"))
 				(ty-record))))
 	(d-let
 		(p-assign (ident "main!"))

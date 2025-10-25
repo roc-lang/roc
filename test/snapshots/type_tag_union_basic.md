@@ -173,9 +173,9 @@ main! = |_| {}
 			(ty-fn (effectful false)
 				(ty-tag-union
 					(ty-tag-name (name "Some")
-						(ty-lookup (name "Str") (builtin)))
+						(ty-lookup (name "Str") (external-module "Str")))
 					(ty-tag-name (name "None")))
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "is_ok_ret_unqualified_bool"))
 		(e-lambda
