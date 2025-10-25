@@ -130,13 +130,13 @@ pub fn main() !void {
         gpa.free(builtin_roc_source);
     }
 
-    // Find nested type declarations via string lookup
-    // These are nested inside Builtin's record extension, but they're exposed with unqualified names
-    const bool_type_idx = try findNestedTypeDeclaration(builtin_env, "Builtin", "Bool");
-    const result_type_idx = try findNestedTypeDeclaration(builtin_env, "Builtin", "Result");
-    const dict_type_idx = try findNestedTypeDeclaration(builtin_env, "Builtin", "Dict");
-    const set_type_idx = try findNestedTypeDeclaration(builtin_env, "Builtin", "Set");
-    const str_type_idx = try findNestedTypeDeclaration(builtin_env, "Builtin", "Str");
+    // Find top-level type declarations in Builtin module
+    // These are now top-level types in Builtin.roc
+    const bool_type_idx = try findTypeDeclaration(builtin_env, "Bool");
+    const result_type_idx = try findTypeDeclaration(builtin_env, "Result");
+    const dict_type_idx = try findTypeDeclaration(builtin_env, "Dict");
+    const set_type_idx = try findTypeDeclaration(builtin_env, "Set");
+    const str_type_idx = try findTypeDeclaration(builtin_env, "Str");
 
     // Transform Str nominal types to .str primitive types
     // This must happen BEFORE serialization to ensure the .bin file contains

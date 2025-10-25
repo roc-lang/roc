@@ -582,6 +582,14 @@ fn updateVar(self: *Self, target_var: Var, content: types_mod.Content, rank: typ
 /// other modules directly. The Bool and Result types are used in language constructs like
 /// `if` conditions and need to be available in every module's type store.
 fn copyBuiltinTypes(self: *Self) !void {
+    // Special case: if we're compiling the Builtin module itself, use the current module_env
+    if (std.mem.eql(u8, self.cir.module_name, "Builtin")) {
+        const bool_stmt_idx = self.common_idents.bool_stmt;
+        const bool_type_var = ModuleEnv.varFrom(bool_stmt_idx);
+        self.bool_var = try self.copyVar(bool_type_var, self.cir, Region.zero());
+        return;
+    }
+
     // Find the Builtin module env - try imported_modules first, then module_envs
     var builtin_module: ?*const ModuleEnv = null;
 

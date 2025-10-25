@@ -95,6 +95,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
 /// Helper function to expose all top-level definitions in a module
 /// This makes them available for cross-module imports
 fn exposeAllDefs(module_env: *ModuleEnv) !void {
+    // Expose all value/function definitions
     const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
     for (defs_slice) |def_idx| {
         const def = module_env.store.getDef(def_idx);
@@ -105,6 +106,25 @@ fn exposeAllDefs(module_env: *ModuleEnv) !void {
             const ident_idx = pattern.assign.ident;
             const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
             try module_env.setExposedNodeIndexById(ident_idx, def_idx_u16);
+        }
+    }
+
+    // Expose all type declarations (nominal and alias types)
+    const stmts_slice = module_env.store.sliceStatements(module_env.all_statements);
+    for (stmts_slice) |stmt_idx| {
+        const stmt = module_env.store.getStatement(stmt_idx);
+        switch (stmt) {
+            .s_nominal_decl => |s| {
+                const header = module_env.store.getTypeHeader(s.header);
+                const stmt_idx_u16: u16 = @intCast(@intFromEnum(stmt_idx));
+                try module_env.setExposedNodeIndexById(header.name, stmt_idx_u16);
+            },
+            .s_alias_decl => |s| {
+                const header = module_env.store.getTypeHeader(s.header);
+                const stmt_idx_u16: u16 = @intCast(@intFromEnum(stmt_idx));
+                try module_env.setExposedNodeIndexById(header.name, stmt_idx_u16);
+            },
+            else => {},
         }
     }
 }
@@ -172,7 +192,8 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
 
     // Add Bool, Result, Dict, and Set to module_envs for auto-importing
     // They all point to the same Builtin module env with different statement indices
-    // Note: Str is not added because it's transformed to a primitive type
+    // Note: Str is NOT added because it's a primitive builtin type that's handled
+    // specially in Can.zig line 5667 - it should never go through module_envs
     const bool_ident = try module_env.insertIdent(base.Ident.for_text("Bool"));
     const result_ident = try module_env.insertIdent(base.Ident.for_text("Result"));
     const dict_ident = try module_env.insertIdent(base.Ident.for_text("Dict"));
@@ -354,7 +375,8 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
 
     // Add Bool, Result, Dict, and Set to module_envs for auto-importing
     // They all point to the same Builtin module env with different statement indices
-    // Note: Str is not added because it's transformed to a primitive type
+    // Note: Str is NOT added because it's a primitive builtin type that's handled
+    // specially in Can.zig line 5667 - it should never go through module_envs
     const bool_ident = try module_env.insertIdent(base.Ident.for_text("Bool"));
     const result_ident = try module_env.insertIdent(base.Ident.for_text("Result"));
     const dict_ident = try module_env.insertIdent(base.Ident.for_text("Dict"));
@@ -532,7 +554,7 @@ pub fn deinit(self: *TestEnv) void {
 /// Also assert that there were no problems processing the source code.
 pub fn assertDefType(self: *TestEnv, target_def_name: []const u8, expected: []const u8) !void {
     try self.assertNoParseProblems();
-    // try self.assertNoCanProblems();
+    try self.assertNoCanProblems();
     try self.assertNoTypeProblems();
 
     try testing.expect(self.module_env.all_defs.span.len > 0);

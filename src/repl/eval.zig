@@ -499,6 +499,7 @@ pub const Repl = struct {
 
         const bool_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Bool"));
         const result_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Result"));
+        const str_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Str"));
         const dict_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Dict"));
         const set_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Set"));
 
@@ -510,8 +511,10 @@ pub const Repl = struct {
             .env = self.builtin_module.env,
             .statement_idx = self.builtin_indices.result_type,
         });
-        // Note: Str is not added to module_envs because it's transformed to a primitive type
-        // and should not be accessed as Builtin.Str
+        // Str is added without statement_idx because it's a primitive builtin type
+        try module_envs_map.put(str_ident, .{
+            .env = self.builtin_module.env,
+        });
         try module_envs_map.put(dict_ident, .{
             .env = self.builtin_module.env,
             .statement_idx = self.builtin_indices.dict_type,

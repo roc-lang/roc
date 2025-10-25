@@ -1418,7 +1418,7 @@ pub const Serialized = struct {
     store: NodeStore.Serialized,
     module_kind: ModuleKind,
     evaluation_order_reserved: u64, // Reserved space for evaluation_order field (required for in-place deserialization cast)
-    type_import_mapping_reserved: u64, // Reserved space for type_import_mapping field (not serialized, lazily initialized)
+    type_import_mapping_reserved: [6]u64, // Reserved space for type_import_mapping field (48 bytes total, not serialized, lazily initialized)
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -1446,12 +1446,13 @@ pub const Serialized = struct {
         // Serialize NodeStore
         try self.store.serialize(&env.store, allocator, writer);
 
-        // Set gpa, module_name, module_name_idx_reserved, and evaluation_order_reserved to all zeros; the space needs to be here,
-        // but the values will be set separately during deserialization (module_name_idx and evaluation_order are runtime-only).
+        // Set gpa, module_name, module_name_idx_reserved, evaluation_order_reserved, and type_import_mapping_reserved to all zeros; the space needs to be here,
+        // but the values will be set separately during deserialization (module_name_idx, evaluation_order, and type_import_mapping are runtime-only).
         self.gpa = .{ 0, 0 };
         self.module_name = .{ 0, 0 };
         self.module_name_idx_reserved = 0;
         self.evaluation_order_reserved = 0;
+        self.type_import_mapping_reserved = .{ 0, 0, 0, 0, 0, 0 };
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
