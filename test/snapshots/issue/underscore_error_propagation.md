@@ -121,15 +121,13 @@ NO CHANGE
 		(e-string
 			(e-literal (string "test")))
 		(annotation
-			(declared-type
-				(ty-lookup (name "BadDerived") (local)))))
+			(ty-lookup (name "BadDerived") (local))))
 	(d-let
 		(p-assign (ident "goodValue"))
 		(e-string
 			(e-literal (string "test")))
 		(annotation
-			(declared-type
-				(ty-lookup (name "GoodDerived") (local)))))
+			(ty-lookup (name "GoodDerived") (local))))
 	(s-nominal-decl
 		(ty-header (name "BadBase"))
 		(ty-underscore))
@@ -138,7 +136,7 @@ NO CHANGE
 		(ty-lookup (name "BadBase") (local)))
 	(s-nominal-decl
 		(ty-header (name "GoodBase"))
-		(ty-lookup (name "Str") (builtin)))
+		(ty-lookup (name "Str") (external-module "Str")))
 	(s-nominal-decl
 		(ty-header (name "GoodDerived"))
 		(ty-lookup (name "GoodBase") (local))))

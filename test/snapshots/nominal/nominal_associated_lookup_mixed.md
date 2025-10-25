@@ -97,8 +97,7 @@ result = Foo.transform(Foo.defaultBar)
 			(e-lookup-local
 				(p-assign (ident "Foo.defaultBar"))))
 		(annotation
-			(declared-type
-				(ty-lookup (name "Foo.Bar") (local)))))
+			(ty-lookup (name "Foo.Bar") (local))))
 	(d-let
 		(p-assign (ident "Foo.defaultBar"))
 		(e-nominal (nominal "Foo.Bar")
@@ -111,10 +110,9 @@ result = Foo.transform(Foo.defaultBar)
 			(e-lookup-local
 				(p-assign (ident "x"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "Foo.Bar") (local))
-					(ty-lookup (name "Foo.Bar") (local))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "Foo.Bar") (local))
+				(ty-lookup (name "Foo.Bar") (local)))))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
 		(ty-tag-union

@@ -79,8 +79,7 @@ useMyBar = Foo.Bar.X
 		(e-nominal (nominal "Foo.Bar")
 			(e-tag (name "X")))
 		(annotation
-			(declared-type
-				(ty-lookup (name "MyBar") (local)))))
+			(ty-lookup (name "MyBar") (local))))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
 		(ty-tag-union

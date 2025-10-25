@@ -41,18 +41,18 @@ pub fn copyVar(
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!Var {
+    const resolved = source_store.resolveVar(source_var);
+
     // Check if we've already copied this variable
-    if (var_mapping.get(source_var)) |dest_var| {
+    if (var_mapping.get(resolved.var_)) |dest_var| {
         return dest_var;
     }
-
-    const resolved = source_store.resolveVar(source_var);
 
     // Create a placeholder variable first to break cycles
     const placeholder_var = try dest_store.fresh();
 
     // Record the mapping immediately to handle recursive types
-    try var_mapping.put(source_var, placeholder_var);
+    try var_mapping.put(resolved.var_, placeholder_var);
 
     // Now copy the content (which may recursively reference this variable)
     const dest_content = try copyContent(source_store, dest_store, resolved.desc.content, var_mapping, source_idents, dest_idents, allocator);
@@ -165,17 +165,17 @@ fn copyAlias(
     const type_name_str = source_idents.getText(source_alias.ident.ident_idx);
     const translated_ident = try dest_idents.insert(allocator, base.Ident.for_text(type_name_str));
 
-    var dest_args = std.array_list.Managed(Var).init(dest_store.gpa);
-    defer dest_args.deinit();
+    var dest_args = std.ArrayList(Var).empty;
+    defer dest_args.deinit(dest_store.gpa);
 
     const origin_backing = source_store.getAliasBackingVar(source_alias);
     const dest_backing = try copyVar(source_store, dest_store, origin_backing, var_mapping, source_idents, dest_idents, allocator);
-    try dest_args.append(dest_backing);
+    try dest_args.append(dest_store.gpa, dest_backing);
 
     const origin_args = source_store.sliceAliasArgs(source_alias);
     for (origin_args) |arg_var| {
         const dest_arg = try copyVar(source_store, dest_store, arg_var, var_mapping, source_idents, dest_idents, allocator);
-        try dest_args.append(dest_arg);
+        try dest_args.append(dest_store.gpa, dest_arg);
     }
 
     const dest_vars_span = try dest_store.appendVars(dest_args.items);
@@ -225,12 +225,12 @@ fn copyTuple(
 ) std.mem.Allocator.Error!types_mod.Tuple {
     const elems_slice = source_store.sliceVars(tuple.elems);
 
-    var dest_elems = std.array_list.Managed(Var).init(dest_store.gpa);
-    defer dest_elems.deinit();
+    var dest_elems = std.ArrayList(Var).empty;
+    defer dest_elems.deinit(dest_store.gpa);
 
     for (elems_slice) |elem_var| {
         const dest_elem = try copyVar(source_store, dest_store, elem_var, var_mapping, source_idents, dest_idents, allocator);
-        try dest_elems.append(dest_elem);
+        try dest_elems.append(dest_store.gpa, dest_elem);
     }
 
     const dest_range = try dest_store.appendVars(dest_elems.items);
@@ -270,12 +270,12 @@ fn copyFunc(
 ) std.mem.Allocator.Error!Func {
     const args_slice = source_store.sliceVars(func.args);
 
-    var dest_args = std.array_list.Managed(Var).init(dest_store.gpa);
-    defer dest_args.deinit();
+    var dest_args = std.ArrayList(Var).empty;
+    defer dest_args.deinit(dest_store.gpa);
 
     for (args_slice) |arg_var| {
         const dest_arg = try copyVar(source_store, dest_store, arg_var, var_mapping, source_idents, dest_idents, allocator);
-        try dest_args.append(dest_arg);
+        try dest_args.append(dest_store.gpa, dest_arg);
     }
 
     const dest_ret = try copyVar(source_store, dest_store, func.ret, var_mapping, source_idents, dest_idents, allocator);
@@ -299,13 +299,13 @@ fn copyRecordFields(
 ) std.mem.Allocator.Error!types_mod.RecordField.SafeMultiList.Range {
     const source_fields = source_store.getRecordFieldsSlice(fields_range);
 
-    var fresh_fields = std.array_list.Managed(RecordField).init(allocator);
-    defer fresh_fields.deinit();
+    var fresh_fields = std.ArrayList(RecordField).empty;
+    defer fresh_fields.deinit(allocator);
 
     for (source_fields.items(.name), source_fields.items(.var_)) |name, var_| {
         const name_str = source_idents.getText(name);
         const translated_name = try dest_idents.insert(allocator, base.Ident.for_text(name_str));
-        _ = try fresh_fields.append(.{
+        _ = try fresh_fields.append(allocator, .{
             .name = translated_name, // Field names are local to the record type
             .var_ = try copyVar(source_store, dest_store, var_, var_mapping, source_idents, dest_idents, allocator),
         });
@@ -350,18 +350,18 @@ fn copyTagUnion(
 ) std.mem.Allocator.Error!TagUnion {
     const tags_slice = source_store.getTagsSlice(tag_union.tags);
 
-    var fresh_tags = std.array_list.Managed(Tag).init(allocator);
-    defer fresh_tags.deinit();
+    var fresh_tags = std.ArrayList(Tag).empty;
+    defer fresh_tags.deinit(allocator);
 
     for (tags_slice.items(.name), tags_slice.items(.args)) |name, args_range| {
         const args_slice = source_store.sliceVars(args_range);
 
-        var dest_args = std.array_list.Managed(Var).init(dest_store.gpa);
-        defer dest_args.deinit();
+        var dest_args = std.ArrayList(Var).empty;
+        defer dest_args.deinit(dest_store.gpa);
 
         for (args_slice) |arg_var| {
             const dest_arg = try copyVar(source_store, dest_store, arg_var, var_mapping, source_idents, dest_idents, allocator);
-            try dest_args.append(dest_arg);
+            try dest_args.append(dest_store.gpa, dest_arg);
         }
 
         const dest_args_range = try dest_store.appendVars(dest_args.items);
@@ -369,7 +369,7 @@ fn copyTagUnion(
         const name_str = source_idents.getText(name);
         const translated_name = try dest_idents.insert(allocator, base.Ident.for_text(name_str));
 
-        _ = try fresh_tags.append(.{
+        _ = try fresh_tags.append(allocator, .{
             .name = translated_name, // Tag names are local to the union type
             .args = dest_args_range,
         });
@@ -400,17 +400,17 @@ fn copyNominalType(
     const origin_str = source_idents.getText(source_nominal.origin_module);
     const translated_origin = try dest_idents.insert(allocator, base.Ident.for_text(origin_str));
 
-    var dest_args = std.array_list.Managed(Var).init(dest_store.gpa);
-    defer dest_args.deinit();
+    var dest_args = std.ArrayList(Var).empty;
+    defer dest_args.deinit(dest_store.gpa);
 
     const origin_backing = source_store.getNominalBackingVar(source_nominal);
     const dest_backing = try copyVar(source_store, dest_store, origin_backing, var_mapping, source_idents, dest_idents, allocator);
-    try dest_args.append(dest_backing);
+    try dest_args.append(dest_store.gpa, dest_backing);
 
     const origin_args = source_store.sliceNominalArgs(source_nominal);
     for (origin_args) |arg_var| {
         const dest_arg = try copyVar(source_store, dest_store, arg_var, var_mapping, source_idents, dest_idents, allocator);
-        try dest_args.append(dest_arg);
+        try dest_args.append(dest_store.gpa, dest_arg);
     }
 
     const dest_vars_span = try dest_store.appendVars(dest_args.items);
@@ -439,31 +439,15 @@ fn copyStaticDispatchConstraints(
         var dest_constraints = try std.array_list.Managed(StaticDispatchConstraint).initCapacity(dest_store.gpa, source_constraints_len);
         defer dest_constraints.deinit();
 
-        var dest_fn_args = try std.array_list.Managed(Var).initCapacity(dest_store.gpa, 8);
-        defer dest_fn_args.deinit();
-
         // Iterate over the constraints
         for (source_store.sliceStaticDispatchConstraints(source_constraints)) |source_constraint| {
-            dest_fn_args.clearRetainingCapacity();
-
             // Translate the fn name
             const fn_name_bytes = source_idents.getText(source_constraint.fn_name);
             const translated_fn_name = try dest_idents.insert(allocator, base.Ident.for_text(fn_name_bytes));
 
-            // Copy the args
-            for (source_store.sliceVars(source_constraint.fn_args.nonempty)) |source_fn_arg| {
-                const dest_arg = try copyVar(source_store, dest_store, source_fn_arg, var_mapping, source_idents, dest_idents, allocator);
-                try dest_fn_args.append(dest_arg);
-            }
-            const dest_args_range = try dest_store.appendVars(dest_fn_args.items);
-
-            // Copy the ret
-            const dest_ret = try copyVar(source_store, dest_store, source_constraint.fn_ret, var_mapping, source_idents, dest_idents, allocator);
-
             try dest_constraints.append(StaticDispatchConstraint{
                 .fn_name = translated_fn_name,
-                .fn_args = .{ .nonempty = dest_args_range },
-                .fn_ret = dest_ret,
+                .fn_var = try copyVar(source_store, dest_store, source_constraint.fn_var, var_mapping, source_idents, dest_idents, allocator),
             });
         }
 

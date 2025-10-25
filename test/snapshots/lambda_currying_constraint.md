@@ -129,13 +129,12 @@ NO CHANGE
 						(e-lookup-local
 							(p-assign (ident "y")))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-rigid-var (name "a"))
-					(ty-parens
-						(ty-fn (effectful false)
-							(ty-rigid-var-lookup (ty-rigid-var (name "a")))
-							(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))))
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "a"))
+				(ty-parens
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(d-let
 		(p-assign (ident "curriedAdd"))
 		(e-call
@@ -143,10 +142,9 @@ NO CHANGE
 				(p-assign (ident "makeAdder")))
 			(e-num (value "5")))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "I64") (builtin))
-					(ty-lookup (name "I64") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "I64") (builtin))
+				(ty-lookup (name "I64") (builtin)))))
 	(d-let
 		(p-assign (ident "applyTwice"))
 		(e-lambda
@@ -162,14 +160,13 @@ NO CHANGE
 					(e-lookup-local
 						(p-assign (ident "x"))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-parens
-						(ty-fn (effectful false)
-							(ty-rigid-var (name "a"))
-							(ty-rigid-var-lookup (ty-rigid-var (name "a")))))
-					(ty-rigid-var-lookup (ty-rigid-var (name "a")))
-					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
+			(ty-fn (effectful false)
+				(ty-parens
+					(ty-fn (effectful false)
+						(ty-rigid-var (name "a"))
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))))
+				(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(d-let
 		(p-assign (ident "addThreeTwice"))
 		(e-closure
@@ -191,10 +188,9 @@ NO CHANGE
 					(e-lookup-local
 						(p-assign (ident "n"))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "I64") (builtin))
-					(ty-lookup (name "I64") (builtin)))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "I64") (builtin))
+				(ty-lookup (name "I64") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure

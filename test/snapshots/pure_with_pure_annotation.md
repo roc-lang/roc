@@ -108,11 +108,10 @@ NO CHANGE
 								(e-lookup-local
 									(p-assign (ident "y")))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "I32") (builtin))
-					(ty-lookup (name "I32") (builtin))
-					(ty-lookup (name "I32") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "I32") (builtin))
+				(ty-lookup (name "I32") (builtin))
+				(ty-lookup (name "I32") (builtin)))))
 	(d-let
 		(p-assign (ident "double"))
 		(e-closure
@@ -129,10 +128,9 @@ NO CHANGE
 					(e-lookup-local
 						(p-assign (ident "x"))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "I32") (builtin))
-					(ty-lookup (name "I32") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "I32") (builtin))
+				(ty-lookup (name "I32") (builtin)))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-call

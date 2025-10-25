@@ -133,20 +133,17 @@ green = Green
 		(p-assign (ident "red"))
 		(e-tag (name "Red"))
 		(annotation
-			(declared-type
-				(ty-malformed))))
+			(ty-malformed)))
 	(d-let
 		(p-assign (ident "blue"))
 		(e-tag (name "Blue"))
 		(annotation
-			(declared-type
-				(ty-malformed))))
+			(ty-malformed)))
 	(d-let
 		(p-assign (ident "green"))
 		(e-tag (name "Green"))
 		(annotation
-			(declared-type
-				(ty-malformed))))
+			(ty-malformed)))
 	(s-import (module "Color")
 		(exposes)))
 ~~~

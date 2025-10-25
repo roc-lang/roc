@@ -47,7 +47,7 @@ Foo(a, b) : (a, b, Str, U64)
 		(ty-tuple
 			(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 			(ty-rigid-var-lookup (ty-rigid-var (name "b")))
-			(ty-lookup (name "Str") (builtin))
+			(ty-lookup (name "Str") (external-module "Str"))
 			(ty-lookup (name "U64") (builtin)))))
 ~~~
 # TYPES

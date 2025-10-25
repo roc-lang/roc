@@ -654,15 +654,11 @@ pub const Expr = union(enum) {
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
                 const attrs = tree.beginNode();
 
-                // Add module index
-                var buf: [32]u8 = undefined;
-                const module_idx_str = std.fmt.bufPrint(&buf, "{}", .{@intFromEnum(e.module_idx)}) catch unreachable;
-                try tree.pushStringPair("module-idx", module_idx_str);
-
-                // Add target node index
-                var buf2: [32]u8 = undefined;
-                const target_idx_str = std.fmt.bufPrint(&buf2, "{}", .{e.target_node_idx}) catch unreachable;
-                try tree.pushStringPair("target-node-idx", target_idx_str);
+                const module_idx_int = @intFromEnum(e.module_idx);
+                std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
+                const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
+                const module_name = ir.common.strings.get(string_lit_idx);
+                try tree.pushStringPair("external-module", module_name);
 
                 try tree.endNode(begin, attrs);
             },
@@ -829,15 +825,11 @@ pub const Expr = union(enum) {
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
 
-                // Add module index
-                var buf: [32]u8 = undefined;
-                const module_idx_str = std.fmt.bufPrint(&buf, "{}", .{@intFromEnum(e.module_idx)}) catch unreachable;
-                try tree.pushStringPair("module-idx", module_idx_str);
-
-                // Add target node index
-                var buf2: [32]u8 = undefined;
-                const target_idx_str = std.fmt.bufPrint(&buf2, "{}", .{e.target_node_idx}) catch unreachable;
-                try tree.pushStringPair("target-node-idx", target_idx_str);
+                const module_idx_int = @intFromEnum(e.module_idx);
+                std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
+                const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
+                const module_name = ir.common.strings.get(string_lit_idx);
+                try tree.pushStringPair("external-module", module_name);
 
                 try ir.store.getExpr(e.backing_expr).pushToSExprTree(ir, tree, e.backing_expr);
 

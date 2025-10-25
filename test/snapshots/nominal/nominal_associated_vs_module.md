@@ -87,8 +87,7 @@ useBar = Something
 		(p-assign (ident "useBar"))
 		(e-tag (name "Something"))
 		(annotation
-			(declared-type
-				(ty-lookup (name "Foo.Bar") (local)))))
+			(ty-lookup (name "Foo.Bar") (local))))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
 		(ty-tag-union

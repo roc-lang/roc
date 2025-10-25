@@ -38,7 +38,20 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(s-type-anno (name "create_user!")
+		(ty-fn (effectful true)
+			(ty-lookup (name "Str") (external-module "Str"))
+			(ty-lookup (name "U32") (builtin))
+			(ty-record
+				(field (field "name")
+					(ty-lookup (name "Str") (external-module "Str")))
+				(field (field "age")
+					(ty-lookup (name "U32") (builtin)))
+				(field (field "id")
+					(ty-lookup (name "U64") (builtin)))
+				(field (field "active")
+					(ty-lookup (name "Bool") (external-module "Bool")))))))
 ~~~
 # TYPES
 ~~~clojure

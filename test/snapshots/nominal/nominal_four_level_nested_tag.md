@@ -94,8 +94,7 @@ value = Foo.Bar.Baz.Qux.Y
 		(e-nominal (nominal "Foo.Bar.Baz.Qux")
 			(e-tag (name "Y")))
 		(annotation
-			(declared-type
-				(ty-lookup (name "Foo.Bar.Baz.Qux") (local)))))
+			(ty-lookup (name "Foo.Bar.Baz.Qux") (local))))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
 		(ty-tag-union

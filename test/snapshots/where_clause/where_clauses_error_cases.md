@@ -188,17 +188,7 @@ broken_fn3 : a -> b
 			(ty-rigid-var (name "a"))
 			(ty-rigid-var (name "b")))
 		(where
-			(malformed)))
-	(s-type-anno (name "broken_fn3")
-		(ty-fn (effectful false)
-			(ty-rigid-var (name "a"))
-			(ty-rigid-var (name "b")))
-		(where
-			(method (module-of "c") (ident "method")
-				(args
-					(ty-rigid-var (name "c")))
-				(ty-rigid-var (name "d")))))
-	(ext-decl (ident "c.method") (kind "value")))
+			(malformed))))
 ~~~
 # TYPES
 ~~~clojure

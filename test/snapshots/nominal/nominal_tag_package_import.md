@@ -64,16 +64,14 @@ blue = CC.Color.RGB(0, 0, 255)
 	(d-let
 		(p-assign (ident "blue"))
 		(e-nominal-external
-			(module-idx "4")
-			(target-node-idx "0")
+			(external-module "styles.Color")
 			(e-tag (name "RGB")
 				(args
 					(e-num (value "0"))
 					(e-num (value "0"))
 					(e-num (value "255")))))
 		(annotation
-			(declared-type
-				(ty-lookup (name "Color") (external (module-idx "4") (target-node-idx "0"))))))
+			(ty-lookup (name "Color") (external-module "styles.Color"))))
 	(s-import (module "styles.Color")
 		(exposes)))
 ~~~

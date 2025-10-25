@@ -96,6 +96,8 @@ EndOfFile,
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
+	(s-type-anno (name "age")
+		(ty-malformed))
 	(e-empty_record))
 ~~~
 # TYPES

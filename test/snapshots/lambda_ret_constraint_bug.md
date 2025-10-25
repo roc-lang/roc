@@ -85,10 +85,9 @@ NO CHANGE
 					(p-assign (ident "n")))
 				(e-num (value "2"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "I64") (builtin))
-					(ty-lookup (name "I64") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "I64") (builtin))
+				(ty-lookup (name "I64") (builtin)))))
 	(d-let
 		(p-assign (ident "main"))
 		(e-closure
@@ -103,11 +102,10 @@ NO CHANGE
 						(p-assign (ident "helper")))
 					(e-num (value "5")))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "I64") (builtin))
-					(ty-lookup (name "I64") (builtin))
-					(ty-lookup (name "I64") (builtin)))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "I64") (builtin))
+				(ty-lookup (name "I64") (builtin))
+				(ty-lookup (name "I64") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure

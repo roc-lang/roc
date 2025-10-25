@@ -63,6 +63,7 @@ pub fn build(b: *std.Build) void {
     const playground_step = b.step("playground", "Build the WASM playground");
     const playground_test_step = b.step("test-playground", "Build the integration test suite for the WASM playground");
     const serialization_size_step = b.step("test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
+    const test_cli_step = b.step("test-cli", "Test the roc CLI by running test programs");
 
     // general configuration
     const target = blk: {
@@ -132,10 +133,6 @@ pub fn build(b: *std.Build) void {
 
     const roc_modules = modules.RocModules.create(b, build_options, zstd);
 
-    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd) orelse return;
-    roc_modules.addAll(roc_exe);
-    install_and_run(b, no_bin, roc_exe, roc_step, run_step, run_args);
-
     // Build-time compiler for builtin .roc modules with caching
     //
     // Changes to .roc files in src/build/roc/ are automatically detected and trigger recompilation.
@@ -176,6 +173,7 @@ pub fn build(b: *std.Build) void {
 
     const write_compiled_builtins = b.addWriteFiles();
 
+    // Regenerate .bin files if necessary
     if (should_rebuild_builtins) {
         // Build and run the compiler
         const builtin_compiler_exe = b.addExecutable(.{
@@ -211,30 +209,25 @@ pub fn build(b: *std.Build) void {
         }
 
         write_compiled_builtins.step.dependOn(&run_builtin_compiler.step);
+    }
 
-        // Copy all generated .bin files from zig-out to build cache
-        for (roc_files) |roc_path| {
-            const roc_basename = std.fs.path.basename(roc_path);
-            const name_without_ext = roc_basename[0 .. roc_basename.len - 4];
-            const bin_filename = b.fmt("{s}.bin", .{name_without_ext});
+    // Use .bin files from zig-out/builtins/ (whether they were just regenerated or
+    // already there from a previous run).
+    for (roc_files) |roc_path| {
+        const roc_basename = std.fs.path.basename(roc_path);
+        const name_without_ext = roc_basename[0 .. roc_basename.len - 4];
+        const bin_filename = b.fmt("{s}.bin", .{name_without_ext});
 
-            _ = write_compiled_builtins.addCopyFile(
-                .{ .cwd_relative = b.fmt("zig-out/builtins/{s}", .{bin_filename}) },
-                bin_filename,
-            );
-        }
-    } else {
-        // Use existing .bin files from zig-out/builtins/
-        for (roc_files) |roc_path| {
-            const roc_basename = std.fs.path.basename(roc_path);
-            const name_without_ext = roc_basename[0 .. roc_basename.len - 4];
-            const bin_filename = b.fmt("{s}.bin", .{name_without_ext});
+        _ = write_compiled_builtins.addCopyFile(
+            .{ .cwd_relative = b.fmt("zig-out/builtins/{s}", .{bin_filename}) },
+            bin_filename,
+        );
 
-            _ = write_compiled_builtins.addCopyFile(
-                .{ .cwd_relative = b.fmt("zig-out/builtins/{s}", .{bin_filename}) },
-                bin_filename,
-            );
-        }
+        // Also copy the source .roc file for embedding
+        _ = write_compiled_builtins.addCopyFile(
+            b.path(roc_path),
+            roc_basename,
+        );
     }
 
     // Also copy builtin_indices.bin
@@ -260,6 +253,26 @@ pub fn build(b: *std.Build) void {
 
     roc_modules.repl.addImport("compiled_builtins", compiled_builtins_module);
     roc_modules.compile.addImport("compiled_builtins", compiled_builtins_module);
+    roc_modules.eval.addImport("compiled_builtins", compiled_builtins_module);
+
+    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins) orelse return;
+    roc_modules.addAll(roc_exe);
+    install_and_run(b, no_bin, roc_exe, roc_step, run_step, run_args);
+
+    // CLI integration tests - run actual roc programs like CI does
+    if (!no_bin) {
+        const install = b.addInstallArtifact(roc_exe, .{});
+
+        // Test int platform
+        const test_int = b.addSystemCommand(&.{ b.getInstallPath(.bin, "roc"), "--no-cache", "test/int/app.roc" });
+        test_int.step.dependOn(&install.step);
+        test_cli_step.dependOn(&test_int.step);
+
+        // Test str platform
+        const test_str = b.addSystemCommand(&.{ b.getInstallPath(.bin, "roc"), "--no-cache", "test/str/app.roc" });
+        test_str.step.dependOn(&install.step);
+        test_cli_step.dependOn(&test_str.step);
+    }
 
     // Manual rebuild command: zig build rebuild-builtins
     // Use this after making compiler changes to ensure those changes are reflected in builtins
@@ -614,27 +627,28 @@ pub fn build(b: *std.Build) void {
 const ModuleTest = modules.ModuleTest;
 
 fn discoverBuiltinRocFiles(b: *std.Build) ![]const []const u8 {
-    var builtin_roc_dir = try std.fs.cwd().openDir("src/build/roc", .{ .iterate = true });
+    const builtin_roc_path = try b.build_root.join(b.allocator, &.{ "src", "build", "roc" });
+    var builtin_roc_dir = try std.fs.openDirAbsolute(builtin_roc_path, .{ .iterate = true });
     defer builtin_roc_dir.close();
 
-    var roc_files = std.array_list.Managed([]const u8).init(b.allocator);
-    errdefer roc_files.deinit();
+    var roc_files = std.ArrayList([]const u8).empty;
+    errdefer roc_files.deinit(b.allocator);
 
     var iter = builtin_roc_dir.iterate();
     while (try iter.next()) |entry| {
         if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".roc")) {
             const full_path = b.fmt("src/build/roc/{s}", .{entry.name});
-            try roc_files.append(full_path);
+            try roc_files.append(b.allocator, full_path);
         }
     }
 
-    return roc_files.toOwnedSlice();
+    return roc_files.toOwnedSlice(b.allocator);
 }
 
 fn generateCompiledBuiltinsSource(b: *std.Build, roc_files: []const []const u8) ![]const u8 {
-    var builtins_source = std.array_list.Managed(u8).init(b.allocator);
-    errdefer builtins_source.deinit();
-    const writer = builtins_source.writer();
+    var builtins_source = std.ArrayList(u8).empty;
+    errdefer builtins_source.deinit(b.allocator);
+    const writer = builtins_source.writer(b.allocator);
 
     for (roc_files) |roc_path| {
         const roc_basename = std.fs.path.basename(roc_path);
@@ -646,12 +660,18 @@ fn generateCompiledBuiltinsSource(b: *std.Build, roc_files: []const []const u8) 
             lower_name,
             name_without_ext,
         });
+
+        // Also embed the source .roc file
+        try writer.print("pub const {s}_source = @embedFile(\"{s}\");\n", .{
+            lower_name,
+            roc_basename,
+        });
     }
 
     // Also embed builtin_indices.bin
     try writer.writeAll("pub const builtin_indices_bin = @embedFile(\"builtin_indices.bin\");\n");
 
-    return builtins_source.toOwnedSlice();
+    return builtins_source.toOwnedSlice(b.allocator);
 }
 
 fn add_fuzz_target(
@@ -727,6 +747,8 @@ fn addMainExe(
     user_llvm_path: ?[]const u8,
     tracy: ?[]const u8,
     zstd: *Dependency,
+    compiled_builtins_module: *std.Build.Module,
+    write_compiled_builtins: *Step.WriteFile,
 ) ?*Step.Compile {
     const exe = b.addExecutable(.{
         .name = "roc",
@@ -748,7 +770,7 @@ fn addMainExe(
             .root_source_file = b.path("test/str/platform/host.zig"),
             .target = target,
             .optimize = optimize,
-            .strip = true,
+            .strip = optimize != .Debug,
             .pic = true, // Enable Position Independent Code for PIE compatibility
         }),
     });
@@ -772,7 +794,7 @@ fn addMainExe(
             .root_source_file = b.path("test/int/platform/host.zig"),
             .target = target,
             .optimize = optimize,
-            .strip = true,
+            .strip = optimize != .Debug,
             .pic = true, // Enable Position Independent Code for PIE compatibility
         }),
     });
@@ -805,7 +827,7 @@ fn addMainExe(
                 .root_source_file = b.path("test/int/platform/host.zig"),
                 .target = cross_resolved_target,
                 .optimize = optimize,
-                .strip = true,
+                .strip = optimize != .Debug,
                 .pic = true,
             }),
             .linkage = .static,
@@ -850,7 +872,7 @@ fn addMainExe(
             .root_source_file = b.path("src/interpreter_shim/main.zig"),
             .target = target,
             .optimize = optimize,
-            .strip = true,
+            .strip = optimize != .Debug,
             .pic = true, // Enable Position Independent Code for PIE compatibility
         }),
         .linkage = .static,
@@ -858,6 +880,9 @@ fn addMainExe(
     configureBackend(shim_lib, target);
     // Add all modules from roc_modules that the shim needs
     roc_modules.addAll(shim_lib);
+    // Add compiled builtins module for loading builtin types
+    shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    shim_lib.step.dependOn(&write_compiled_builtins.step);
     // Link against the pre-built builtins library
     shim_lib.addObject(builtins_obj);
     // Bundle compiler-rt for our math symbols
@@ -928,13 +953,13 @@ const ParsedBuildArgs = struct {
 };
 
 fn appendFilter(
-    list: *std.array_list.Managed([]const u8),
+    list: *std.ArrayList([]const u8),
     b: *std.Build,
     value: []const u8,
 ) void {
     const trimmed = std.mem.trim(u8, value, " \t\n\r");
     if (trimmed.len == 0) return;
-    list.append(b.dupe(trimmed)) catch @panic("OOM while parsing --test-filter value");
+    list.append(b.allocator, b.dupe(trimmed)) catch @panic("OOM while parsing --test-filter value");
 }
 
 fn parseBuildArgs(b: *std.Build) ParsedBuildArgs {
@@ -943,8 +968,8 @@ fn parseBuildArgs(b: *std.Build) ParsedBuildArgs {
         .test_filters = &.{},
     };
 
-    var run_args_list = std.array_list.Managed([]const u8).init(b.allocator);
-    var filter_list = std.array_list.Managed([]const u8).init(b.allocator);
+    var run_args_list = std.ArrayList([]const u8).empty;
+    var filter_list = std.ArrayList([]const u8).empty;
 
     var i: usize = 0;
     while (i < raw_args.len) {
@@ -969,12 +994,12 @@ fn parseBuildArgs(b: *std.Build) ParsedBuildArgs {
             continue;
         }
 
-        run_args_list.append(arg) catch @panic("OOM while recording build arguments");
+        run_args_list.append(b.allocator, arg) catch @panic("OOM while recording build arguments");
         i += 1;
     }
 
-    const run_args = run_args_list.toOwnedSlice() catch @panic("OOM while finalizing build arguments");
-    const test_filters = filter_list.toOwnedSlice() catch @panic("OOM while finalizing test filters");
+    const run_args = run_args_list.toOwnedSlice(b.allocator) catch @panic("OOM while finalizing build arguments");
+    const test_filters = filter_list.toOwnedSlice(b.allocator) catch @panic("OOM while finalizing test filters");
 
     return .{ .run_args = run_args, .test_filters = test_filters };
 }
@@ -1398,10 +1423,10 @@ fn getCompilerVersion(b: *std.Build, optimize: OptimizeMode) []const u8 {
 fn generateGlibcStub(b: *std.Build, target: ResolvedTarget, target_name: []const u8) ?*Step.UpdateSourceFiles {
 
     // Generate assembly stub with comprehensive symbols using the new build module
-    var assembly_buf = std.array_list.Managed(u8).init(b.allocator);
-    defer assembly_buf.deinit();
+    var assembly_buf = std.ArrayList(u8).empty;
+    defer assembly_buf.deinit(b.allocator);
 
-    const writer = assembly_buf.writer();
+    const writer = assembly_buf.writer(b.allocator);
     const target_arch = target.result.cpu.arch;
     const target_abi = target.result.abi;
 

@@ -83,8 +83,8 @@ test "nominal type origin - displays origin in snapshot writer" {
 
     // Test 3: Origin shown with type arguments
     {
-        var buf = std.array_list.Managed(u8).init(test_allocator);
-        defer buf.deinit();
+        var buf = std.ArrayList(u8).empty;
+        defer buf.deinit(test_allocator);
 
         // Create type arguments
         const str_content = snapshot.SnapshotContent{ .structure = .{ .str = {} } };

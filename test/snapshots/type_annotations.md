@@ -106,7 +106,29 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(s-type-anno (name "foo")
+		(ty-lookup (name "U64") (builtin)))
+	(s-type-anno (name "bar")
+		(ty-malformed))
+	(s-type-anno (name "baz")
+		(ty-tuple
+			(ty-rigid-var (name "_a"))
+			(ty-rigid-var (name "_b"))
+			(ty-rigid-var (name "_c"))))
+	(s-type-anno (name "add_one")
+		(ty-parens
+			(ty-fn (effectful false)
+				(ty-lookup (name "U8") (builtin))
+				(ty-lookup (name "U16") (builtin))
+				(ty-lookup (name "U32") (builtin)))))
+	(s-type-anno (name "main!")
+		(ty-fn (effectful false)
+			(ty-apply (name "List") (builtin)
+				(ty-malformed))
+			(ty-apply (name "Result") (external-module "Result")
+				(ty-record)
+				(ty-underscore)))))
 ~~~
 # TYPES
 ~~~clojure

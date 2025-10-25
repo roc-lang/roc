@@ -79,7 +79,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .exports = serialized_ptr.exports,
         .builtin_statements = serialized_ptr.builtin_statements,
         .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
-        .imports = serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+        .imports = (try serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa)).*,
         .module_name = module_name,
         .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
         .diagnostics = serialized_ptr.diagnostics,
@@ -281,10 +281,13 @@ test "Repl - minimal interpreter integration" {
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const str_source = compiled_builtins.str_source;
     var bool_module = try loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
     var result_module = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    var str_module = try loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
     // Step 1: Create module environment
     const source = "42";
@@ -327,15 +330,15 @@ test "Repl - minimal interpreter integration" {
     };
 
     // Step 5: Type check - Pass Bool and Result as imported modules
-    const other_modules = [_]*const ModuleEnv{ bool_module.env, result_module.env };
-    var checker = try Check.init(gpa, &module_env.types, cir, &other_modules, &cir.store.regions, common_idents);
+    const imported_envs = [_]*const ModuleEnv{ bool_module.env, result_module.env };
+    var checker = try Check.init(gpa, &module_env.types, cir, &imported_envs, null, &cir.store.regions, common_idents);
     defer checker.deinit();
 
     _ = try checker.checkExprRepl(canonical_expr_idx.get_idx());
 
     // Step 6: Create interpreter
-    const builtin_types = eval.BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interpreter = try Interpreter.init(gpa, &module_env, builtin_types, null);
+    const builtin_types = eval.BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+    var interpreter = try Interpreter.init(gpa, &module_env, builtin_types, &[_]*const ModuleEnv{});
     defer interpreter.deinitAndFreeOtherEnvs();
 
     // Step 7: Evaluate

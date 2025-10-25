@@ -14,6 +14,7 @@ main! = |_| mapList([1,2,3,4,5])
 ~~~
 # EXPECTED
 TYPE MISMATCH - type_app_with_vars.md:6:13:6:33
+TYPE DOES NOT HAVE METHODS - type_app_with_vars.md:4:22:4:34
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -27,7 +28,17 @@ It has the type:
     _List(Num(_size)) -> _ret_
 
 But I expected it to be:
-    _List(a), a -> b -> Error_
+    _List(a), a -> b -> List(b)_
+
+**TYPE DOES NOT HAVE METHODS**
+You're trying to call the `map` method on a `List(a)`:
+**type_app_with_vars.md:4:22:4:34:**
+```roc
+mapList = |list, fn| list.map(fn)
+```
+                     ^^^^^^^^^^^^
+
+But `List(a)` doesn't support methods.
 
 # TOKENS
 ~~~zig
@@ -114,16 +125,15 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 					(e-lookup-local
 						(p-assign (ident "fn"))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "List") (builtin)
-						(ty-rigid-var (name "a")))
-					(ty-parens
-						(ty-fn (effectful false)
-							(ty-rigid-var-lookup (ty-rigid-var (name "a")))
-							(ty-rigid-var (name "b"))))
-					(ty-apply (name "List") (builtin)
-						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))))
+			(ty-fn (effectful false)
+				(ty-apply (name "List") (builtin)
+					(ty-rigid-var (name "a")))
+				(ty-parens
+					(ty-fn (effectful false)
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-rigid-var (name "b"))))
+				(ty-apply (name "List") (builtin)
+					(ty-rigid-var-lookup (ty-rigid-var (name "b")))))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-closure

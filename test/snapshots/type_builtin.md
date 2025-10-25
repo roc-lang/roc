@@ -44,7 +44,7 @@ NO CHANGE
 		(ty-lookup (name "U64") (builtin)))
 	(s-alias-decl
 		(ty-header (name "MyString"))
-		(ty-lookup (name "Str") (builtin))))
+		(ty-lookup (name "Str") (external-module "Str"))))
 ~~~
 # TYPES
 ~~~clojure

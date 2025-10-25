@@ -49,26 +49,20 @@ NO CHANGE
 		(p-assign (ident "convert_me"))
 		(e-not-implemented)
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-rigid-var (name "a"))
-					(ty-rigid-var (name "b"))))))
-	(s-type-anno (name "convert_me")
-		(ty-fn (effectful false)
-			(ty-rigid-var (name "a"))
-			(ty-rigid-var (name "b")))
-		(where
-			(method (module-of "a") (ident "convert")
-				(args
-					(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-				(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))
-	(ext-decl (ident "a.convert") (kind "value")))
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "a"))
+				(ty-rigid-var (name "b")))
+			(where
+				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "convert")
+					(args
+						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
+					(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> b")))
+		(patt (type "a -> b where [a.convert : a -> b]")))
 	(expressions
-		(expr (type "a -> b"))))
+		(expr (type "a -> b where [a.convert : a -> b]"))))
 ~~~

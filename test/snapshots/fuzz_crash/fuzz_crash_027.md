@@ -208,7 +208,7 @@ UNDEFINED VARIABLE - fuzz_crash_027.md:97:2:97:6
 UNDECLARED TYPE - fuzz_crash_027.md:99:14:99:20
 UNDEFINED VARIABLE - fuzz_crash_027.md:103:9:103:13
 UNDEFINED VARIABLE - fuzz_crash_027.md:114:2:114:11
-NOT IMPLEMENTED - :0:0:0:0
+UNDEFINED VARIABLE - fuzz_crash_027.md:128:2:128:7
 UNDEFINED VARIABLE - fuzz_crash_027.md:131:63:131:69
 UNDEFINED VARIABLE - fuzz_crash_027.md:132:42:132:48
 UNDEFINED VARIABLE - fuzz_crash_027.md:136:3:136:7
@@ -218,7 +218,6 @@ NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_027.md:145:4:145:13
 UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
 UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
-UNUSED VARIABLE - fuzz_crash_027.md:121:2:121:6
 UNUSED VARIABLE - fuzz_crash_027.md:131:2:131:8
 UNUSED VARIABLE - fuzz_crash_027.md:133:2:133:9
 UNUSED VARIABLE - fuzz_crash_027.md:141:2:141:7
@@ -227,7 +226,9 @@ UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
 TOO FEW ARGS - fuzz_crash_027.md:21:3:22:4
 INVALID IF CONDITION - fuzz_crash_027.md:50:5:50:5
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
+UNUSED VALUE - fuzz_crash_027.md:1:1:1:1
 TYPE MISMATCH - fuzz_crash_027.md:111:2:113:3
+UNUSED VALUE - fuzz_crash_027.md:111:2:113:3
 TYPE MISMATCH - fuzz_crash_027.md:143:2:147:3
 # PROBLEMS
 **LEADING ZERO**
@@ -674,10 +675,16 @@ Is there an `import` or `exposing` missing up-top?
 	^^^^^^^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: statement type in block
+**UNDEFINED VARIABLE**
+Nothing is named `line!` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+**fuzz_crash_027.md:128:2:128:7:**
+```roc
+	line!("Adding ${n} to ${number}")
+```
+	^^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `punned` in this scope.
@@ -770,18 +777,6 @@ The unused variable is declared here:
 **fuzz_crash_027.md:120:2:120:6:**
 ```roc
 	ited = "Hello, ${world}"
-```
-	^^^^
-
-
-**UNUSED VARIABLE**
-Variable `list` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:121:2:121:6:**
-```roc
-	list = [
 ```
 	^^^^
 
@@ -916,6 +911,17 @@ All patterns in an `match` must have compatible types.
 
 
 
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_027.md:1:1:1:1:**
+```roc
+# Thnt!
+```
+^
+
+It has the type:
+    __d_
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **fuzz_crash_027.md:111:2:113:3:**
@@ -931,6 +937,18 @@ It has the type:
 But I expected it to be:
     _[Red, Blue]_others, _arg -> Error_
 
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_027.md:111:2:113:3:**
+```roc
+	match_time(
+		..., #
+	)
+```
+
+It has the type:
+    __d_
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **fuzz_crash_027.md:143:2:147:3:**
@@ -943,7 +961,7 @@ This expression is used in an unexpected way:
 ```
 
 It has the type:
-    _[Stdoline!(Str)][Err(_d), Ok({  })]_
+    _[Stdoline!(Error)][Err(_d), Ok({  })]_
 
 But the type annotation says it should have the type:
     _Result({  }, _d)_
@@ -1753,10 +1771,9 @@ expect {
 							(e-lookup-local
 								(p-assign (ident "other"))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "U64") (builtin))
-					(ty-lookup (name "U64") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "U64") (builtin))
+				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "match_time"))
 		(e-lambda
@@ -1974,7 +1991,30 @@ expect {
 						(e-list
 							(elems
 								(e-num (value "456")))))
-					(s-runtime-error (tag "not_implemented"))
+					(s-for
+						(p-assign (ident "n"))
+						(e-lookup-local
+							(p-assign (ident "list")))
+						(e-block
+							(s-expr
+								(e-call
+									(e-runtime-error (tag "ident_not_in_scope"))
+									(e-string
+										(e-literal (string "Adding "))
+										(e-lookup-local
+											(p-assign (ident "n")))
+										(e-literal (string " to "))
+										(e-lookup-local
+											(p-assign (ident "number")))
+										(e-literal (string "")))))
+							(s-reassign
+								(p-assign (ident "number"))
+								(e-binop (op "add")
+									(e-lookup-local
+										(p-assign (ident "number")))
+									(e-lookup-local
+										(p-assign (ident "n")))))
+							(e-empty_record)))
 					(s-let
 						(p-assign (ident "record"))
 						(e-record
@@ -2087,19 +2127,17 @@ expect {
 										(p-assign (ident "number"))))
 								(e-literal (string " as a"))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "List") (builtin)
-						(ty-malformed))
-					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
-						(ty-record)
-						(ty-underscore))))))
+			(ty-fn (effectful false)
+				(ty-apply (name "List") (builtin)
+					(ty-malformed))
+				(ty-apply (name "Result") (external-module "Result")
+					(ty-record)
+					(ty-underscore)))))
 	(d-let
 		(p-assign (ident "empty"))
 		(e-empty_record)
 		(annotation
-			(declared-type
-				(ty-record))))
+			(ty-record)))
 	(s-alias-decl
 		(ty-header (name "Map")
 			(ty-args
@@ -2177,10 +2215,16 @@ expect {
 		(exposes))
 	(s-import (module "Ba")
 		(exposes))
+	(s-type-anno (name "line")
+		(ty-tuple
+			(ty-malformed)
+			(ty-malformed)))
 	(s-expect
 		(e-binop (op "eq")
 			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-num (value "1"))))
+	(s-type-anno (name "tuple")
+		(ty-malformed))
 	(s-expect
 		(e-block
 			(s-let

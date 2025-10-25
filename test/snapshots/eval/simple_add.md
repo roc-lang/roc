@@ -76,11 +76,10 @@ NO CHANGE
 				(e-lookup-local
 					(p-assign (ident "b")))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "U8") (builtin))
-					(ty-lookup (name "U8") (builtin))
-					(ty-lookup (name "U8") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "U8") (builtin))
+				(ty-lookup (name "U8") (builtin))
+				(ty-lookup (name "U8") (builtin)))))
 	(s-expect
 		(e-binop (op "eq")
 			(e-call

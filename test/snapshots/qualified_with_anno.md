@@ -51,8 +51,7 @@ NO CHANGE
 		(e-nominal (nominal "MyType")
 			(e-tag (name "TagA")))
 		(annotation
-			(declared-type
-				(ty-lookup (name "MyType") (local)))))
+			(ty-lookup (name "MyType") (local))))
 	(s-nominal-decl
 		(ty-header (name "MyType"))
 		(ty-tag-union

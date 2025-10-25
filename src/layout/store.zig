@@ -189,12 +189,12 @@ pub const Store = struct {
         field_layouts: []const Layout,
         field_names: []const Ident.Idx,
     ) std.mem.Allocator.Error!Idx {
-        var temp_fields = std.array_list.Managed(RecordField).init(self.env.gpa);
-        defer temp_fields.deinit();
+        var temp_fields = std.ArrayList(RecordField).empty;
+        defer temp_fields.deinit(self.env.gpa);
 
         for (field_layouts, field_names) |field_layout, field_name| {
             const field_layout_idx = try self.insertLayout(field_layout);
-            try temp_fields.append(.{
+            try temp_fields.append(self.env.gpa, .{
                 .name = field_name,
                 .layout = field_layout_idx,
             });
@@ -263,12 +263,12 @@ pub const Store = struct {
     /// Insert a tuple layout from concrete element layouts
     pub fn putTuple(self: *Self, element_layouts: []const Layout) std.mem.Allocator.Error!Idx {
         // Collect fields
-        var temp_fields = std.array_list.Managed(TupleField).init(self.env.gpa);
-        defer temp_fields.deinit();
+        var temp_fields = std.ArrayList(TupleField).empty;
+        defer temp_fields.deinit(self.env.gpa);
 
         for (element_layouts, 0..) |elem_layout, i| {
             const elem_idx = try self.insertLayout(elem_layout);
-            try temp_fields.append(.{ .index = @intCast(i), .layout = elem_idx });
+            try temp_fields.append(self.env.gpa, .{ .index = @intCast(i), .layout = elem_idx });
         }
 
         // Sort by alignment desc, then by original index asc
@@ -620,11 +620,11 @@ pub const Store = struct {
         const field_idxs = self.work.resolved_record_fields.items(.field_idx);
 
         // First, collect the fields into a temporary array so we can sort them
-        var temp_fields = std.array_list.Managed(RecordField).init(self.env.gpa);
-        defer temp_fields.deinit();
+        var temp_fields = std.ArrayList(RecordField).empty;
+        defer temp_fields.deinit(self.env.gpa);
 
         for (updated_record.resolved_fields_start..resolved_fields_end) |i| {
-            try temp_fields.append(.{
+            try temp_fields.append(self.env.gpa, .{
                 .name = field_names[i],
                 .layout = field_idxs[i],
             });
@@ -721,11 +721,11 @@ pub const Store = struct {
         const field_idxs = self.work.resolved_tuple_fields.items(.field_idx);
 
         // First, collect the fields into a temporary array so we can sort them
-        var temp_fields = std.array_list.Managed(TupleField).init(self.env.gpa);
-        defer temp_fields.deinit();
+        var temp_fields = std.ArrayList(TupleField).empty;
+        defer temp_fields.deinit(self.env.gpa);
 
         for (updated_tuple.resolved_fields_start..resolved_fields_end) |i| {
-            try temp_fields.append(.{
+            try temp_fields.append(self.env.gpa, .{
                 .index = field_indices[i],
                 .layout = field_idxs[i],
             });

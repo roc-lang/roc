@@ -28,7 +28,7 @@ test {
     try std.testing.expectEqual(20, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(16, @sizeOf(NominalType));
-    try std.testing.expectEqual(16, @sizeOf(StaticDispatchConstraint));
+    try std.testing.expectEqual(8, @sizeOf(StaticDispatchConstraint));
 }
 
 /// A type variable
@@ -200,6 +200,21 @@ pub const Content = union(enum) {
                     .nominal_type => |nominal_type| {
                         return nominal_type;
                     },
+                    else => return null,
+                }
+            },
+            else => return null,
+        }
+    }
+
+    /// Unwrap a function (pure, eff, or unbound) and return it
+    pub fn unwrapFunc(content: Self) ?Func {
+        switch (content) {
+            .structure => |flat_type| {
+                switch (flat_type) {
+                    .fn_pure => |func| return func,
+                    .fn_effectful => |func| return func,
+                    .fn_unbound => |func| return func,
                     else => return null,
                 }
             },
@@ -938,17 +953,14 @@ test "BitsNeeded.fromValue calculates correct bits for various values" {
 /// Represents a static dispatch constraints on a variable
 ///
 /// sort  : List(a) -> List(a) where [a.ord : a -> Ord]
-///
-/// TODO: This is WIP, likely to change during real implementation
+///                                   ^^^^^^^^^^^^^^^
 pub const StaticDispatchConstraint = struct {
     const Self = @This();
 
     /// the dispatch fn name
     fn_name: Ident.Idx,
-    /// the dispatch fn args
-    fn_args: Var.SafeList.NonEmptyRange,
-    /// the dispatch fn ret
-    fn_ret: Var,
+    /// the dispatch fn var, a function
+    fn_var: Var,
 
     /// A safe list of static dispatch constraints
     pub const SafeList = MkSafeList(Self);

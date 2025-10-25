@@ -189,7 +189,17 @@ main! = |_| {}
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-empty_record))))
+			(e-empty_record)))
+	(s-type-anno (name "compose")
+		(ty-fn (effectful false)
+			(ty-parens
+				(ty-fn (effectful false)
+					(ty-rigid-var (name "_b"))
+					(ty-rigid-var (name "_c"))))
+			(ty-parens
+				(ty-fn (effectful false)
+					(ty-rigid-var (name "_a"))
+					(ty-rigid-var-lookup (ty-rigid-var (name "_b"))))))))
 ~~~
 # TYPES
 ~~~clojure

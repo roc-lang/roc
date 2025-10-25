@@ -68,26 +68,17 @@ NO CHANGE
 		(p-assign (ident "decodeThings"))
 		(e-not-implemented)
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
+			(ty-fn (effectful false)
+				(ty-apply (name "List") (builtin)
 					(ty-apply (name "List") (builtin)
-						(ty-apply (name "List") (builtin)
-							(ty-lookup (name "U8") (builtin))))
-					(ty-apply (name "List") (builtin)
-						(ty-rigid-var (name "a")))))))
+						(ty-lookup (name "U8") (builtin))))
+				(ty-apply (name "List") (builtin)
+					(ty-rigid-var (name "a"))))
+			(where
+				(alias (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "Decode")))))
 	(s-import (module "Decode")
 		(exposes
-			(exposed (name "Decode") (wildcard false))))
-	(s-type-anno (name "decodeThings")
-		(ty-fn (effectful false)
-			(ty-apply (name "List") (builtin)
-				(ty-apply (name "List") (builtin)
-					(ty-lookup (name "U8") (builtin))))
-			(ty-apply (name "List") (builtin)
-				(ty-rigid-var (name "a"))))
-		(where
-			(alias (module-of "a") (ident "Decode"))))
-	(ext-decl (ident "a.Decode") (kind "type")))
+			(exposed (name "Decode") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure

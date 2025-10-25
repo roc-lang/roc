@@ -164,5 +164,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ addOne: Num(_size) -> Num(_size2), errTag: [Err(Str)]_others, nested: [Some([Ok([Just(Num(_size3))]_others2)]_others3)]_others4, noneTag: [None]_others5, okTag: [Ok(Str)]_others6, result: _field, someTag: [Some(Num(_size4))]_others7, tagList: List([Some(Num(_size5))][None]_others8) }"))
+(expr (type "{ addOne: Num(_size) -> Num(_size2), errTag: [Err(Str)]_others, nested: [Some([Ok([Just(Num(_size3))]_others2)]_others3)]_others4, noneTag: [None]_others5, okTag: [Ok(Str)]_others6, result: Error, someTag: [Some(Num(_size4))]_others7, tagList: List([Some(Num(_size5))][None]_others8) }"))
 ~~~

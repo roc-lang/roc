@@ -206,10 +206,9 @@ main! = |_| {
 				(p-underscore))
 			(e-not-implemented))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "U64") (builtin))
-					(ty-lookup (name "U64") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "U64") (builtin))
+				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "testCrash"))
 		(e-lambda
@@ -218,10 +217,9 @@ main! = |_| {
 			(e-block
 				(e-crash (msg "This is a crash message"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "U64") (builtin))
-					(ty-lookup (name "U64") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "U64") (builtin))
+				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "testCrashSimple"))
 		(e-lambda
@@ -230,16 +228,15 @@ main! = |_| {
 			(e-block
 				(e-crash (msg "oops"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "U64") (builtin))
-					(ty-lookup (name "U64") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "U64") (builtin))
+				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-closure
 			(captures
-				(capture (ident "testCrash"))
 				(capture (ident "testEllipsis"))
+				(capture (ident "testCrash"))
 				(capture (ident "testCrashSimple")))
 			(e-lambda
 				(args

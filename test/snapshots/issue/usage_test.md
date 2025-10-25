@@ -91,8 +91,7 @@ NO CHANGE
 		(p-assign (ident "value"))
 		(e-num (value "42"))
 		(annotation
-			(declared-type
-				(ty-lookup (name "UsedType") (local)))))
+			(ty-lookup (name "UsedType") (local))))
 	(s-nominal-decl
 		(ty-header (name "UnusedType"))
 		(ty-underscore))

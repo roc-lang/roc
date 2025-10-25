@@ -58,9 +58,8 @@ NO CHANGE
 		(e-nominal (nominal "ConsList")
 			(e-tag (name "Nil")))
 		(annotation
-			(declared-type
-				(ty-apply (name "ConsList") (local)
-					(ty-rigid-var (name "_a"))))))
+			(ty-apply (name "ConsList") (local)
+				(ty-rigid-var (name "_a")))))
 	(s-nominal-decl
 		(ty-header (name "ConsList")
 			(ty-args

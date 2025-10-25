@@ -40,8 +40,7 @@ NO CHANGE
 		(p-assign (ident "x"))
 		(e-frac-dec (value "123.456"))
 		(annotation
-			(declared-type
-				(ty-lookup (name "Dec") (builtin))))))
+			(ty-lookup (name "Dec") (builtin)))))
 ~~~
 # TYPES
 ~~~clojure

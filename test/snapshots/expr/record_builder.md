@@ -181,8 +181,12 @@ EndOfFile,
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
+	(s-type-anno (name "x")
+		(ty-malformed))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
+	(s-type-anno (name "y")
+		(ty-malformed))
 	(e-runtime-error (tag "expr_not_canonicalized")))
 ~~~
 # TYPES

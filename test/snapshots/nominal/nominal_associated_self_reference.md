@@ -106,14 +106,12 @@ external = Foo.defaultBar
 		(e-lookup-local
 			(p-assign (ident "Foo.defaultBar")))
 		(annotation
-			(declared-type
-				(ty-lookup (name "Foo.Bar") (local)))))
+			(ty-lookup (name "Foo.Bar") (local))))
 	(d-let
 		(p-assign (ident "Foo.defaultBar"))
 		(e-tag (name "X"))
 		(annotation
-			(declared-type
-				(ty-lookup (name "Bar") (local)))))
+			(ty-lookup (name "Bar") (local))))
 	(d-let
 		(p-assign (ident "Foo.transform"))
 		(e-lambda
@@ -122,10 +120,9 @@ external = Foo.defaultBar
 			(e-lookup-local
 				(p-assign (ident "x"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "Bar") (local))
-					(ty-lookup (name "Bar") (local))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "Bar") (local))
+				(ty-lookup (name "Bar") (local)))))
 	(d-let
 		(p-assign (ident "Foo.useDefault"))
 		(e-call

@@ -32,7 +32,7 @@ test "U8: 255 fits" {
         \\}
     ;
 
-    var test_env = try TestEnv.initExpr(source);
+    var test_env = try TestEnv.initExpr("Test", source);
     defer test_env.deinit();
     try test_env.assertLastDefType("Num(Int(Unsigned8))");
 }
@@ -47,7 +47,7 @@ test "U8: 256 does not fit" {
         \\}
     ;
 
-    var test_env = try TestEnv.initExpr(source);
+    var test_env = try TestEnv.initExpr("Test", source);
     defer test_env.deinit();
     try test_env.assertOneTypeError("NUMBER DOES NOT FIT IN TYPE");
 }
@@ -62,7 +62,7 @@ test "U8: negative does not fit" {
         \\}
     ;
 
-    var test_env = try TestEnv.initExpr(source);
+    var test_env = try TestEnv.initExpr("Test", source);
     defer test_env.deinit();
     try test_env.assertOneTypeError("NEGATIVE UNSIGNED INTEGER");
 }
@@ -77,7 +77,7 @@ test "I8: -128 fits" {
         \\}
     ;
 
-    var test_env = try TestEnv.initExpr(source);
+    var test_env = try TestEnv.initExpr("Test", source);
     defer test_env.deinit();
     try test_env.assertLastDefType("Num(Int(Signed8))");
 }
@@ -92,7 +92,7 @@ test "I8: -129 does not fit" {
         \\}
     ;
 
-    var test_env = try TestEnv.initExpr(source);
+    var test_env = try TestEnv.initExpr("Test", source);
     defer test_env.deinit();
     try test_env.assertOneTypeError("NUMBER DOES NOT FIT IN TYPE");
 }
@@ -107,7 +107,7 @@ test "F32: fits" {
         \\}
     ;
 
-    var test_env = try TestEnv.initExpr(source);
+    var test_env = try TestEnv.initExpr("Test", source);
     defer test_env.deinit();
     try test_env.assertLastDefType("Num(Frac(Float32))");
 }

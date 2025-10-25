@@ -41,16 +41,16 @@ fn extendWithAggregatorFilters(
     const extras = aggregatorFilters(module_type);
     if (extras.len == 0) return base;
 
-    var list = std.array_list.Managed([]const u8).init(b.allocator);
-    list.ensureTotalCapacity(base.len + extras.len) catch @panic("OOM while extending module test filters");
-    list.appendSlice(base) catch @panic("OOM while extending module test filters");
+    var list = std.ArrayList([]const u8).empty;
+    list.ensureTotalCapacity(b.allocator, base.len + extras.len) catch @panic("OOM while extending module test filters");
+    list.appendSlice(b.allocator, base) catch @panic("OOM while extending module test filters");
 
     for (extras) |extra| {
         if (filtersContain(base, extra)) continue;
-        list.append(b.dupe(extra)) catch @panic("OOM while extending module test filters");
+        list.append(b.allocator, b.dupe(extra)) catch @panic("OOM while extending module test filters");
     }
 
-    return list.toOwnedSlice() catch @panic("OOM while finalizing module test filters");
+    return list.toOwnedSlice(b.allocator) catch @panic("OOM while finalizing module test filters");
 }
 
 /// Represents a test module with its compilation and execution steps.

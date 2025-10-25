@@ -698,13 +698,13 @@ test "Document string memory safety" {
     defer document.deinit();
 
     // Create temporary strings that would be freed in real usage
-    var temp_text = std.array_list.Managed(u8).init(gpa);
-    defer temp_text.deinit();
-    try temp_text.appendSlice("This is test text");
+    var temp_text = std.ArrayList(u8).empty;
+    defer temp_text.deinit(gpa);
+    try temp_text.appendSlice(gpa, "This is test text");
 
-    var temp_annotated = std.array_list.Managed(u8).init(gpa);
-    defer temp_annotated.deinit();
-    try temp_annotated.appendSlice("This is annotated");
+    var temp_annotated = std.ArrayList(u8).empty;
+    defer temp_annotated.deinit(gpa);
+    try temp_annotated.appendSlice(gpa, "This is annotated");
 
     // Add text and annotated content (should be copied)
     try document.addText(temp_text.items);

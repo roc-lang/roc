@@ -69,38 +69,28 @@ NO CHANGE
 				(p-underscore))
 			(e-not-implemented))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "List") (builtin)
-						(ty-lookup (name "U8") (builtin)))
-					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
-						(ty-rigid-var (name "a"))
-						(ty-tag-union
-							(ty-tag-name (name "DecodeErr"))))))))
-	(s-type-anno (name "deserialize")
-		(ty-fn (effectful false)
-			(ty-apply (name "List") (builtin)
-				(ty-lookup (name "U8") (builtin)))
-			(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
-				(ty-rigid-var (name "a"))
-				(ty-tag-union
-					(ty-tag-name (name "DecodeErr")))))
-		(where
-			(method (module-of "a") (ident "decode")
-				(args
-					(ty-apply (name "List") (builtin)
-						(ty-lookup (name "U8") (builtin))))
-				(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
-					(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+			(ty-fn (effectful false)
+				(ty-apply (name "List") (builtin)
+					(ty-lookup (name "U8") (builtin)))
+				(ty-apply (name "Result") (external-module "Result")
+					(ty-rigid-var (name "a"))
 					(ty-tag-union
-						(ty-tag-name (name "DecodeErr")))))))
-	(ext-decl (ident "a.decode") (kind "value")))
+						(ty-tag-name (name "DecodeErr")))))
+			(where
+				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "decode")
+					(args
+						(ty-apply (name "List") (builtin)
+							(ty-lookup (name "U8") (builtin))))
+					(ty-apply (name "Result") (external-module "Result")
+						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+						(ty-tag-union
+							(ty-tag-name (name "DecodeErr")))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(Num(Int(Unsigned8))) -> Result(a, [DecodeErr])")))
+		(patt (type "List(Num(Int(Unsigned8))) -> Result(a, [DecodeErr]) where [List(Num(Int(Unsigned8))).decode : List(Num(Int(Unsigned8))) -> Result(a, [DecodeErr])]")))
 	(expressions
-		(expr (type "List(Num(Int(Unsigned8))) -> Result(a, [DecodeErr])"))))
+		(expr (type "List(Num(Int(Unsigned8))) -> Result(a, [DecodeErr]) where [List(Num(Int(Unsigned8))).decode : List(Num(Int(Unsigned8))) -> Result(a, [DecodeErr])]"))))
 ~~~

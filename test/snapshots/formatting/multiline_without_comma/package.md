@@ -100,7 +100,11 @@ b! : Str => Str
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(s-type-anno (name "a!")
+		(ty-fn (effectful true)
+			(ty-lookup (name "Str") (external-module "Str"))
+			(ty-lookup (name "Str") (external-module "Str")))))
 ~~~
 # TYPES
 ~~~clojure

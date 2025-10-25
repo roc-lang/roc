@@ -51,8 +51,7 @@ NO CHANGE
 		(p-assign (ident "myColor"))
 		(e-tag (name "Red"))
 		(annotation
-			(declared-type
-				(ty-lookup (name "Color") (local)))))
+			(ty-lookup (name "Color") (local))))
 	(s-nominal-decl
 		(ty-header (name "Color"))
 		(ty-tag-union

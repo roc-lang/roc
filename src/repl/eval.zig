@@ -27,14 +27,21 @@ const LoadedModule = struct {
     gpa: std.mem.Allocator,
 
     fn deinit(self: *LoadedModule) void {
-        // IMPORTANT: When a module is deserialized from a buffer, all its internal structures
-        // (common, types, external_decls, imports, store) contain pointers INTO the buffer,
-        // not separately allocated memory. Therefore we should NOT call deinit() on any of them.
-        // The only memory we need to free is:
-        // 1. The buffer itself (which contains all the deserialized data)
-        // 2. The env struct itself (which was allocated with create())
+        // IMPORTANT: When a module is deserialized from a buffer, most internal structures
+        // (common, types, external_decls, store, imports.items) contain pointers INTO the buffer,
+        // not separately allocated memory. However, the imports HASHMAP IS separately
+        // allocated during deserialization and MUST be freed.
+        //
+        // Memory to free:
+        // 1. The imports hashmap only (allocated during deserialization at CIR.zig:648)
+        // 2. The buffer itself (which contains all the deserialized data)
+        // 3. The env struct itself (which was allocated with create())
 
-        // Free the buffer (all data structures point into this buffer)
+        // Free ONLY the imports hashmap (allocated during deserialization at CIR.zig:648)
+        // Do NOT call full deinit on imports store as the items list points into the buffer!
+        self.env.imports.map.deinit(self.gpa);
+
+        // Free the buffer (all other data structures point into this buffer)
         self.gpa.free(self.buffer);
 
         // Free the env struct itself
@@ -86,7 +93,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .exports = serialized_ptr.exports,
         .builtin_statements = serialized_ptr.builtin_statements,
         .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
-        .imports = serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+        .imports = (try serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa)).*,
         .module_name = module_name,
         .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
         .diagnostics = serialized_ptr.diagnostics,
@@ -126,6 +133,8 @@ pub const Repl = struct {
     bool_module: LoadedModule,
     /// Loaded Result module (loaded once at startup)
     result_module: LoadedModule,
+    /// Loaded Str module (loaded once at startup)
+    str_module: LoadedModule,
 
     pub fn init(allocator: Allocator, roc_ops: *RocOps, crash_ctx: ?*CrashContext) !Repl {
         const compiled_builtins = @import("compiled_builtins");
@@ -143,6 +152,11 @@ pub const Repl = struct {
         var result_module = try loadCompiledModule(allocator, compiled_builtins.result_bin, "Result", result_source);
         errdefer result_module.deinit();
 
+        // Load Str module once at startup
+        const str_source = compiled_builtins.str_source;
+        var str_module = try loadCompiledModule(allocator, compiled_builtins.str_bin, "Str", str_source);
+        errdefer str_module.deinit();
+
         return Repl{
             .allocator = allocator,
             .definitions = std.StringHashMap([]const u8).init(allocator),
@@ -156,6 +170,7 @@ pub const Repl = struct {
             .builtin_indices = builtin_indices,
             .bool_module = bool_module,
             .result_module = result_module,
+            .str_module = str_module,
         };
     }
 
@@ -211,9 +226,9 @@ pub const Repl = struct {
             defer tree.deinit();
             try module_env.pushToSExprTree(expr_idx, &tree);
 
-            var can_buffer = std.array_list.Managed(u8).init(self.allocator);
-            defer can_buffer.deinit();
-            try tree.toStringPretty(can_buffer.writer().any(), .include_linecol);
+            var can_buffer = std.ArrayList(u8).empty;
+            defer can_buffer.deinit(self.allocator);
+            try tree.toStringPretty(can_buffer.writer(self.allocator).any(), .include_linecol);
 
             const can_html = try self.allocator.dupe(u8, can_buffer.items);
             try self.debug_can_html.append(can_html);
@@ -225,9 +240,9 @@ pub const Repl = struct {
             defer tree.deinit();
             try module_env.pushTypesToSExprTree(expr_idx, &tree);
 
-            var types_buffer = std.array_list.Managed(u8).init(self.allocator);
-            defer types_buffer.deinit();
-            try tree.toStringPretty(types_buffer.writer().any(), .include_linecol);
+            var types_buffer = std.ArrayList(u8).empty;
+            defer types_buffer.deinit(self.allocator);
+            try tree.toStringPretty(types_buffer.writer(self.allocator).any(), .include_linecol);
 
             const types_html = try self.allocator.dupe(u8, types_buffer.items);
             try self.debug_types_html.append(types_html);
@@ -278,6 +293,7 @@ pub const Repl = struct {
         // Clean up loaded builtin modules
         self.bool_module.deinit();
         self.result_module.deinit();
+        self.str_module.deinit();
     }
 
     /// Process a line of input and return the result
@@ -423,29 +439,29 @@ pub const Repl = struct {
             return try self.allocator.dupe(u8, current_expr);
         }
 
-        var buffer = std.array_list.Managed(u8).init(self.allocator);
-        defer buffer.deinit();
+        var buffer = std.ArrayList(u8).empty;
+        errdefer buffer.deinit(self.allocator);
 
         // Start block
-        try buffer.appendSlice("{\n");
+        try buffer.appendSlice(self.allocator, "{\n");
 
         // Add all definitions in order
         var iterator = self.definitions.iterator();
         while (iterator.next()) |kv| {
-            try buffer.appendSlice("    ");
-            try buffer.appendSlice(kv.value_ptr.*);
-            try buffer.append('\n');
+            try buffer.appendSlice(self.allocator, "    ");
+            try buffer.appendSlice(self.allocator, kv.value_ptr.*);
+            try buffer.append(self.allocator, '\n');
         }
 
         // Add current expression
-        try buffer.appendSlice("    ");
-        try buffer.appendSlice(current_expr);
-        try buffer.append('\n');
+        try buffer.appendSlice(self.allocator, "    ");
+        try buffer.appendSlice(self.allocator, current_expr);
+        try buffer.append(self.allocator, '\n');
 
         // End block
-        try buffer.append('}');
+        try buffer.append(self.allocator, '}');
 
-        return try buffer.toOwnedSlice();
+        return try buffer.toOwnedSlice(self.allocator);
     }
 
     /// Evaluate source code
@@ -522,8 +538,16 @@ pub const Repl = struct {
         const final_expr_idx = canonical_expr.get_idx();
 
         // Type check - Pass Bool and Result as imported modules
-        const other_modules = [_]*const ModuleEnv{ self.bool_module.env, self.result_module.env };
-        var checker = Check.init(self.allocator, &module_env.types, cir, &other_modules, &cir.store.regions, module_common_idents) catch |err| {
+        const imported_modules = [_]*const ModuleEnv{ self.bool_module.env, self.result_module.env };
+        var checker = Check.init(
+            self.allocator,
+            &module_env.types,
+            cir,
+            &imported_modules,
+            &module_envs_map,
+            &cir.store.regions,
+            module_common_idents,
+        ) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Type check init error: {}", .{err});
         };
         defer checker.deinit();
@@ -534,8 +558,8 @@ pub const Repl = struct {
         };
 
         // Create interpreter instance with BuiltinTypes containing real Bool and Result modules
-        const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.bool_module.env, self.result_module.env);
-        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, &module_envs_map) catch |err| {
+        const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.bool_module.env, self.result_module.env, self.str_module.env);
+        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, &imported_modules) catch |err| {
             return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
         };
         defer interpreter.deinitAndFreeOtherEnvs();

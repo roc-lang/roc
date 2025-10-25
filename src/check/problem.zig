@@ -36,8 +36,10 @@ const Content = types_mod.Content;
 pub const Problem = union(enum) {
     type_mismatch: TypeMismatch,
     type_apply_mismatch_arities: TypeApplyArityMismatch,
+    static_dispach: StaticDispatch,
     number_does_not_fit: NumberDoesNotFit,
     negative_unsigned_int: NegativeUnsignedInt,
+    unused_value: UnusedValue,
     infinite_recursion: struct { var_: Var },
     anonymous_recursion: struct { var_: Var },
     invalid_number_type: VarProblem1,
@@ -88,6 +90,12 @@ pub const NumberDoesNotFit = struct {
 pub const NegativeUnsignedInt = struct {
     literal_var: Var,
     expected_type: SnapshotContentIdx,
+};
+
+/// Error when a stmt expression returns a non-empty record value
+pub const UnusedValue = struct {
+    var_: Var,
+    snapshot: SnapshotContentIdx,
 };
 
 // type mismatch //
@@ -192,6 +200,30 @@ pub const InvalidBoolBinop = struct {
     binop_expr: CIR.Expr.Idx,
     problem_side: enum { lhs, rhs },
     binop: enum { @"and", @"or" },
+};
+
+// static dispatch //
+
+/// Error related to static dispatch
+pub const StaticDispatch = union(enum) {
+    dispatcher_not_nominal: DispatcherNotNominal,
+    dispatcher_does_not_impl_method: DispatcherDoesNotImplMethod,
+};
+
+/// Error when you try to static dispatch on something that's not a nominal type
+pub const DispatcherNotNominal = struct {
+    dispatcher_var: Var,
+    dispatcher_snapshot: SnapshotContentIdx,
+    fn_var: Var,
+    method_name: Ident.Idx,
+};
+
+/// Error when you try to static dispatch but the dispatcher does not have that method
+pub const DispatcherDoesNotImplMethod = struct {
+    dispatcher_var: Var,
+    dispatcher_snapshot: SnapshotContentIdx,
+    fn_var: Var,
+    method_name: Ident.Idx,
 };
 
 // bug //
@@ -314,11 +346,20 @@ pub const ReportBuilder = struct {
             .type_apply_mismatch_arities => |data| {
                 return self.buildTypeApplyArityMismatchReport(data);
             },
+            .static_dispach => |detail| {
+                switch (detail) {
+                    .dispatcher_not_nominal => |data| return self.buildStaticDispatchDispatcherNotNominal(data),
+                    .dispatcher_does_not_impl_method => |data| return self.buildStaticDispatchDispatcherDoesNotImplMethod(data),
+                }
+            },
             .number_does_not_fit => |data| {
                 return self.buildNumberDoesNotFitReport(data);
             },
             .negative_unsigned_int => |data| {
                 return self.buildNegativeUnsignedIntReport(data);
+            },
+            .unused_value => |data| {
+                return self.buildUnusedValueReport(data);
             },
             .infinite_recursion => |_| return self.buildUnimplementedReport("infinite_recursion"),
             .anonymous_recursion => |_| return self.buildUnimplementedReport("anonymous_recursion"),
@@ -1568,6 +1609,99 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    // static dispatch //
+
+    /// Build a report for when a type is not nominal, but you're tryint to
+    /// static  dispatch on it
+    fn buildStaticDispatchDispatcherNotNominal(
+        self: *Self,
+        data: DispatcherNotNominal,
+    ) !Report {
+        var report = Report.init(self.gpa, "TYPE DOES NOT HAVE METHODS", .runtime_error);
+        errdefer report.deinit();
+
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(data.dispatcher_snapshot);
+        const snapshot_str = try report.addOwnedString(self.snapshot_writer.get());
+
+        const method_name_str = try report.addOwnedString(self.can_ir.getIdentText(data.method_name));
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.fn_var)));
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(region.*);
+
+        try report.document.addReflowingText("You're trying to call the ");
+        try report.document.addAnnotated(method_name_str, .inline_code);
+        try report.document.addReflowingText(" method on a ");
+        try report.document.addAnnotated(snapshot_str, .inline_code);
+        try report.document.addReflowingText(":");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addReflowingText("But ");
+        try report.document.addAnnotated(snapshot_str, .inline_code);
+        try report.document.addReflowingText(" doesn't support methods.");
+
+        return report;
+    }
+
+    /// Build a report for when a type doesn't have the expected static dispatch
+    /// method
+    fn buildStaticDispatchDispatcherDoesNotImplMethod(
+        self: *Self,
+        data: DispatcherDoesNotImplMethod,
+    ) !Report {
+        var report = Report.init(self.gpa, "MISSING METHOD", .runtime_error);
+        errdefer report.deinit();
+
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(data.dispatcher_snapshot);
+        const snapshot_str = try report.addOwnedString(self.snapshot_writer.get());
+
+        const method_name_str = try report.addOwnedString(self.can_ir.getIdentText(data.method_name));
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.fn_var)));
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(region.*);
+
+        try report.document.addReflowingText("The ");
+        try report.document.addAnnotated(snapshot_str, .emphasized);
+        try report.document.addReflowingText(" type does not have a ");
+        try report.document.addAnnotated(method_name_str, .emphasized);
+        try report.document.addReflowingText(" method:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+
+        // TODO: Find similar method names and show a more helpful error message
+        // here
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addAnnotated("Hint:", .emphasized);
+        try report.document.addReflowingText(" Did you forget to define ");
+        try report.document.addAnnotated(method_name_str, .emphasized);
+        try report.document.addReflowingText(" in the type's method block?");
+
+        return report;
+    }
+
     // number problems //
 
     /// Build a report for "number does not fit in type" diagnostic
@@ -1647,6 +1781,38 @@ pub const ReportBuilder = struct {
         try report.document.addText("However, its inferred type is ");
         try report.document.addAnnotated("unsigned", .emphasized);
         try report.document.addReflowingText(":");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(owned_expected, .type_variable);
+
+        return report;
+    }
+
+    /// Build a report for "negative unsigned integer" diagnostic
+    fn buildUnusedValueReport(self: *Self, data: UnusedValue) !Report {
+        var report = Report.init(self.gpa, "UNUSED VALUE", .runtime_error);
+        errdefer report.deinit();
+
+        self.snapshot_writer.resetContext();
+        try self.snapshot_writer.write(data.snapshot);
+        const owned_expected = try report.addOwnedString(self.snapshot_writer.get());
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
+        const region_info = self.module_env.calcRegionInfo(region.*);
+
+        try report.document.addReflowingText("This expression produces a value, but it's not being used:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addReflowingText("It has the type:");
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(owned_expected, .type_variable);
@@ -1930,11 +2096,11 @@ pub const Store = struct {
     const Self = @This();
     const ALIGNMENT = std.mem.Alignment.@"16";
 
-    problems: std.ArrayListAlignedUnmanaged(Problem, ALIGNMENT) = .{},
+    problems: std.ArrayListAligned(Problem, ALIGNMENT) = .{},
 
     pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
         return .{
-            .problems = try std.ArrayListAlignedUnmanaged(Problem, ALIGNMENT).initCapacity(gpa, capacity),
+            .problems = try std.ArrayListAligned(Problem, ALIGNMENT).initCapacity(gpa, capacity),
         };
     }
 

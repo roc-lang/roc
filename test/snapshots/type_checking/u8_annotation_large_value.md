@@ -50,8 +50,7 @@ NO CHANGE
 		(p-assign (ident "x"))
 		(e-num (value "500"))
 		(annotation
-			(declared-type
-				(ty-lookup (name "U8") (builtin))))))
+			(ty-lookup (name "U8") (builtin)))))
 ~~~
 # TYPES
 ~~~clojure

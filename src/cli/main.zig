@@ -1342,6 +1342,10 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     const basename = std.fs.path.basename(roc_file_path);
     const module_name = try shm_allocator.dupe(u8, basename);
 
+    // Load builtin modules (Bool, Result, Str) for canonicalization and type checking
+    var builtin_modules = try eval.BuiltinModules.init(allocs.gpa);
+    defer builtin_modules.deinit();
+
     // Create arena allocator for scratch memory
     var arena = std.heap.ArenaAllocator.init(shm_allocator);
     defer arena.deinit();
@@ -1363,12 +1367,26 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         .module_name = try env.insertIdent(base.Ident.for_text("test")),
         .list = try env.insertIdent(base.Ident.for_text("List")),
         .box = try env.insertIdent(base.Ident.for_text("Box")),
-        .bool_stmt = @enumFromInt(0), // TODO: load from builtin modules
-        .result_stmt = @enumFromInt(0), // TODO: load from builtin modules
+        .bool_stmt = builtin_modules.builtin_indices.bool_type,
+        .result_stmt = builtin_modules.builtin_indices.result_type,
     };
 
-    // Create canonicalizer
-    var canonicalizer = try Can.init(&env, &parse_ast, null);
+    // Create module_envs map for auto-importing builtin types
+    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
+    defer module_envs_map.deinit();
+
+    // Add Bool, Result, and Str to the map
+    const bool_ident = try env.common.insertIdent(allocs.gpa, base.Ident.for_text("Bool"));
+    try module_envs_map.put(bool_ident, .{ .env = builtin_modules.bool_module.env });
+
+    const result_ident = try env.common.insertIdent(allocs.gpa, base.Ident.for_text("Result"));
+    try module_envs_map.put(result_ident, .{ .env = builtin_modules.result_module.env });
+
+    const str_ident = try env.common.insertIdent(allocs.gpa, base.Ident.for_text("Str"));
+    try module_envs_map.put(str_ident, .{ .env = builtin_modules.str_module.env });
+
+    // Create canonicalizer with module_envs
+    var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map);
 
     // Canonicalize the entire module
     try canonicalizer.canonicalizeFile();
@@ -1398,8 +1416,9 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         def_indices_ptr[i] = @intFromEnum(def_idx);
     }
 
-    // Type check the module
-    var checker = try Check.init(shm_allocator, &env.types, &env, &.{}, &env.store.regions, common_idents);
+    // Type check the module - pass builtin modules as imported modules
+    const imported_envs = builtin_modules.envs();
+    var checker = try Check.init(shm_allocator, &env.types, &env, &imported_envs, &module_envs_map, &env.store.regions, common_idents);
     try checker.checkFile();
 
     // Copy the ModuleEnv to the allocated space
@@ -1867,8 +1886,8 @@ pub fn rocBundle(allocs: *Allocators, args: cli_args.BundleArgs) !void {
     }
 
     // Collect all files to bundle
-    var file_paths = std.array_list.Managed([]const u8).init(allocs.arena);
-    defer file_paths.deinit();
+    var file_paths = std.ArrayList([]const u8).empty;
+    defer file_paths.deinit(allocs.arena);
 
     var uncompressed_size: u64 = 0;
 
@@ -1889,7 +1908,7 @@ pub fn rocBundle(allocs: *Allocators, args: cli_args.BundleArgs) !void {
         const stat = try file.stat();
         uncompressed_size += stat.size;
 
-        try file_paths.append(path);
+        try file_paths.append(allocs.arena, path);
     }
 
     // Sort and deduplicate paths
@@ -2424,7 +2443,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     };
 
     // Type check the module
-    var checker = Check.init(allocs.gpa, &env.types, &env, &.{}, &env.store.regions, module_common_idents) catch |err| {
+    var checker = Check.init(allocs.gpa, &env.types, &env, &.{}, null, &env.store.regions, module_common_idents) catch |err| {
         try stderr.print("Failed to initialize type checker: {}", .{err});
         std.process.exit(1);
     };
@@ -2441,8 +2460,9 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
         try stderr.print("Failed to deserialize builtin indices: {}\n", .{err});
         std.process.exit(1);
     };
-    const bool_source = "Bool := [True, False].{}\n";
-    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const bool_source = compiled_builtins.bool_source;
+    const result_source = compiled_builtins.result_source;
+    const str_source = compiled_builtins.str_source;
     var bool_module = builtin_loading.loadCompiledModule(allocs.gpa, compiled_builtins.bool_bin, "Bool", bool_source) catch |err| {
         try stderr.print("Failed to load Bool module: {}\n", .{err});
         std.process.exit(1);
@@ -2453,8 +2473,13 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
         std.process.exit(1);
     };
     defer result_module.deinit();
+    var str_module = builtin_loading.loadCompiledModule(allocs.gpa, compiled_builtins.str_bin, "Str", str_source) catch |err| {
+        try stderr.print("Failed to load Str module: {}\n", .{err});
+        std.process.exit(1);
+    };
+    defer str_module.deinit();
 
-    const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
+    const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     var comptime_evaluator = eval.ComptimeEvaluator.init(allocs.gpa, &env, &.{}, &checker.problems, builtin_types_for_eval) catch |err| {
         try stderr.print("Failed to create compile-time evaluator: {}\n", .{err});
         std.process.exit(1);
@@ -2598,14 +2623,14 @@ fn rocFormat(allocs: *Allocators, args: cli_args.FormatArgs) !void {
     var exit_code: u8 = 0;
 
     if (args.check) {
-        var unformatted_files = std.array_list.Managed([]const u8).init(allocs.gpa);
-        defer unformatted_files.deinit();
+        var unformatted_files = std.ArrayList([]const u8).empty;
+        defer unformatted_files.deinit(allocs.gpa);
 
         for (args.paths) |path| {
             var result = try fmt.formatPath(allocs.gpa, allocs.arena, std.fs.cwd(), path, true);
             defer result.deinit();
             if (result.unformatted_files) |files| {
-                try unformatted_files.appendSlice(files.items);
+                try unformatted_files.appendSlice(allocs.gpa, files.items);
             }
             failure_count += result.failure;
         }
@@ -2657,19 +2682,22 @@ fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) noret
     stderr.print("Failed to check {s}: ", .{path}) catch {};
     switch (err) {
         // Custom BuildEnv errors - these need special messages
-        error.ExpectedAppHeader => stderr.print("Expected app header but found different header type", .{}) catch {},
-        error.ExpectedPlatformString => stderr.print("Expected platform string in header", .{}) catch {},
-        error.PathOutsideWorkspace => stderr.print("Dependency path outside workspace not allowed", .{}) catch {},
-        error.UnsupportedHeader => stderr.print("Unsupported header type", .{}) catch {},
-        error.ExpectedString => stderr.print("Expected string in header", .{}) catch {},
-        error.Internal => stderr.print("Internal compiler error", .{}) catch {},
-        error.InvalidDependency => stderr.print("Invalid dependency relationship", .{}) catch {},
-        error.TooNested => stderr.print("Too deeply nested", .{}) catch {},
-        error.InvalidPackageName => stderr.print("Invalid package name", .{}) catch {},
+        error.ExpectedAppHeader => stderr.print("Expected app header but found different header type\n", .{}) catch {},
+        error.ExpectedPlatformString => stderr.print("Expected platform string in header\n", .{}) catch {},
+        error.PathOutsideWorkspace => stderr.print("Dependency path outside workspace not allowed\n", .{}) catch {},
+        error.UnsupportedHeader => stderr.print("Unsupported header type\n", .{}) catch {},
+        error.ExpectedString => stderr.print("Expected string in header\n", .{}) catch {},
+        error.Internal => stderr.print("Internal compiler error\n", .{}) catch {},
+        error.InvalidDependency => stderr.print("Invalid dependency relationship\n", .{}) catch {},
+        error.TooNested => stderr.print("Too deeply nested\n", .{}) catch {},
+        error.InvalidPackageName => stderr.print("Invalid package name\n", .{}) catch {},
 
         // Catch-all for any other errors
-        else => stderr.print("{s}", .{@errorName(err)}) catch {},
+        else => stderr.print("{s}\n", .{@errorName(err)}) catch {},
     }
+
+    // Flush stderr before exit to ensure error message is visible
+    stderr_writer.interface.flush() catch {};
     std.process.exit(1);
 }
 
@@ -2755,7 +2783,7 @@ fn checkFileWithBuildEnvPreserved(
     defer trace.end();
 
     // Initialize BuildEnv in single-threaded mode for checking
-    var build_env = BuildEnv.init(allocs.gpa, .single_threaded, 1);
+    var build_env = try BuildEnv.init(allocs.gpa, .single_threaded, 1);
     build_env.compiler_version = build_options.compiler_version;
     // Note: We do NOT defer build_env.deinit() here because we're returning it
 
@@ -2769,6 +2797,11 @@ fn checkFileWithBuildEnvPreserved(
 
     // Build the file (works for both app and module files)
     build_env.build(filepath) catch |err| {
+        // Even on error, try to drain and print any reports that were collected
+        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+        defer build_env.gpa.free(drained);
+
+        // Print any error reports to stderr before failing
         return err;
     };
 
@@ -2812,7 +2845,7 @@ fn checkFileWithBuildEnvPreserved(
     for (drained, 0..) |mod, i| {
         reports[i] = .{
             .file_path = try allocs.gpa.dupe(u8, mod.abs_path),
-            .reports = try allocs.gpa.dupe(reporting.Report, mod.reports),
+            .reports = mod.reports, // Transfer ownership, don't dupe
         };
     }
 
@@ -2852,7 +2885,7 @@ fn checkFileWithBuildEnv(
     defer trace.end();
 
     // Initialize BuildEnv in single-threaded mode for checking
-    var build_env = BuildEnv.init(allocs.gpa, .single_threaded, 1);
+    var build_env = try BuildEnv.init(allocs.gpa, .single_threaded, 1);
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
 
@@ -2865,7 +2898,41 @@ fn checkFileWithBuildEnv(
     }
 
     // Build the file (works for both app and module files)
-    try build_env.build(filepath);
+    build_env.build(filepath) catch {
+        // Even on error, drain reports to show what went wrong
+        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+        defer build_env.gpa.free(drained);
+
+        // Count errors and warnings
+        var error_count: u32 = 0;
+        var warning_count: u32 = 0;
+
+        for (drained) |mod| {
+            for (mod.reports) |report| {
+                switch (report.severity) {
+                    .info => {},
+                    .runtime_error, .fatal => error_count += 1,
+                    .warning => warning_count += 1,
+                }
+            }
+        }
+
+        // Convert BuildEnv drained reports to our format
+        // Note: Transfer ownership of reports directly (no dupe) since drainReports() already transferred them
+        var reports = try build_env.gpa.alloc(DrainedReport, drained.len);
+        for (drained, 0..) |mod, i| {
+            reports[i] = .{
+                .file_path = try build_env.gpa.dupe(u8, mod.abs_path),
+                .reports = mod.reports, // Transfer ownership, don't dupe
+            };
+        }
+
+        return CheckResult{
+            .reports = reports,
+            .error_count = error_count,
+            .warning_count = warning_count,
+        };
+    };
 
     // Drain all reports
     const drained = try build_env.drainReports();
@@ -2889,7 +2956,7 @@ fn checkFileWithBuildEnv(
     for (drained, 0..) |mod, i| {
         reports[i] = .{
             .file_path = try allocs.gpa.dupe(u8, mod.abs_path),
-            .reports = try allocs.gpa.dupe(reporting.Report, mod.reports),
+            .reports = mod.reports, // Transfer ownership, don't dupe
         };
     }
 
@@ -2935,8 +3002,8 @@ fn rocCheck(allocs: *Allocators, args: cli_args.CheckArgs) !void {
         cache_config,
     ) catch |err| {
         handleProcessFileError(err, stderr, args.path);
+        return;
     };
-
     defer check_result.deinit(allocs.gpa);
 
     const elapsed = timer.read();
@@ -2969,17 +3036,16 @@ fn rocCheck(allocs: *Allocators, args: cli_args.CheckArgs) !void {
             for (module.reports) |*report| {
 
                 // Render the diagnostic report to stderr
-                reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
-                    stderr.print("Error rendering diagnostic report: {}", .{render_err}) catch {};
-                    // Fallback to just printing the title
-                    stderr.print("  {s}", .{report.title}) catch {};
-                };
+                try reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal());
 
                 if (report.severity == .fatal or report.severity == .runtime_error) {
                     has_errors = true;
                 }
             }
         }
+
+        // Flush stderr to ensure all error output is visible
+        stderr_writer.interface.flush() catch {};
 
         if (check_result.error_count > 0 or check_result.warning_count > 0) {
             stderr.writeAll("\n") catch {};
@@ -2988,13 +3054,16 @@ fn rocCheck(allocs: *Allocators, args: cli_args.CheckArgs) !void {
                 check_result.warning_count,
             }) catch {};
             formatElapsedTime(stderr, elapsed) catch {};
-            stderr.print(" for {s}.", .{args.path}) catch {};
+            stderr.print(" for {s}.\n", .{args.path}) catch {};
 
+            // Flush before exit
+            stderr_writer.interface.flush() catch {};
             std.process.exit(1);
         } else {
             stdout.print("No errors found in ", .{}) catch {};
             formatElapsedTime(stdout, elapsed) catch {};
-            stdout.print(" for {s}", .{args.path}) catch {};
+            stdout.print(" for {s}\n", .{args.path}) catch {};
+            stdout_writer.interface.flush() catch {};
         }
     }
 
@@ -3668,11 +3737,11 @@ fn generateAppDocs(
     }
 
     // Convert map to sorted list
-    var modules_list = std.array_list.Managed(ModuleInfo).init(allocs.gpa);
-    defer modules_list.deinit();
+    var modules_list = std.ArrayList(ModuleInfo).empty;
+    defer modules_list.deinit(allocs.gpa);
     var map_iter = modules_map.iterator();
     while (map_iter.next()) |entry| {
-        try modules_list.append(entry.value_ptr.*);
+        try modules_list.append(allocs.gpa, entry.value_ptr.*);
     }
 
     // Collect package shorthands

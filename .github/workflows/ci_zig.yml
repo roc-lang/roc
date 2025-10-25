@@ -101,18 +101,17 @@ jobs:
         run: |
           sudo rm /usr/lib/llvm-18/bin/llvm-config
 
-      - name: build repro executables
+      - name: build roc + repro executables
         uses: ./.github/actions/flaky-retry
         with:
-          command: 'zig build -Dfuzz -Dsystem-afl=false'
+          command: 'zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast'
           error_string_contains: 'EndOfStream'
           retry_count: 3
 
       - name: Run Test Platforms (Unix)
         if: runner.os != 'Windows'
         run: |
-          ./zig-out/bin/roc --no-cache test/str/app.roc
-          ./zig-out/bin/roc --no-cache test/int/app.roc
+          zig build test-cli
 
       - name: Setup MSVC (Windows)
         if: runner.os == 'Windows'
@@ -123,8 +122,7 @@ jobs:
       - name: Run Test Platforms (Windows)
         if: runner.os == 'Windows'
         run: |
-          zig-out\bin\roc.exe --no-cache test/str/app.roc
-          zig-out\bin\roc.exe --no-cache test/int/app.roc
+          zig build test-cli
 
       - name: Build Test Platforms (cross-compile)
         if: runner.os != 'Windows'
@@ -144,10 +142,17 @@ jobs:
       - name: zig snapshot tests
         run: zig build snapshot -- --debug
 
-      - name: build tests and repro executables
+      - name: build and execute tests, build repro executables
         uses: ./.github/actions/flaky-retry
         with:
           command: 'zig build test -Dfuzz -Dsystem-afl=false'
+          error_string_contains: 'double roundtrip bundle'
+          retry_count: 3
+
+      - name: Build and execute tests, build repro executables. All in release mode.
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: 'zig build test -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false'
           error_string_contains: 'double roundtrip bundle'
           retry_count: 3
 

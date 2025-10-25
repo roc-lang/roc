@@ -88,15 +88,13 @@ myNum = Foo.Bar.baz
 		(p-assign (ident "myType"))
 		(e-tag (name "Something"))
 		(annotation
-			(declared-type
-				(ty-lookup (name "Foo.Bar") (local)))))
+			(ty-lookup (name "Foo.Bar") (local))))
 	(d-let
 		(p-assign (ident "myNum"))
 		(e-lookup-local
 			(p-assign (ident "Foo.Bar.baz")))
 		(annotation
-			(declared-type
-				(ty-lookup (name "U64") (builtin)))))
+			(ty-lookup (name "U64") (builtin))))
 	(d-let
 		(p-assign (ident "Foo.Bar.baz"))
 		(e-num (value "5")))

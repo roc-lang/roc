@@ -33,13 +33,17 @@ pub const Interpreter = struct {
     pub const Error = error{
         Crash,
         DivisionByZero,
+        InvalidMethodReceiver,
+        InvalidNumExt,
+        InvalidTagExt,
         ListIndexOutOfBounds,
+        MethodLookupFailed,
+        MethodNotFound,
+        NoSpaceLeft,
         NotImplemented,
         NotNumeric,
         NullStackPointer,
         RecordIndexOutOfBounds,
-        InvalidNumExt,
-        InvalidTagExt,
         StringOrderingNotSupported,
         StackOverflow,
         TupleIndexOutOfBounds,
@@ -47,6 +51,7 @@ pub const Interpreter = struct {
         ZeroSizedType,
     } || std.mem.Allocator.Error || layout.LayoutError;
     const PolyKey = struct {
+        module_id: u32,
         func_id: u32,
         args_len: u32,
         args_ptr: [*]const types.Var,
@@ -56,8 +61,9 @@ pub const Interpreter = struct {
             return self.args_ptr[0..self.args_len];
         }
 
-        fn init(func_id: u32, args: []const types.Var) PolyKey {
+        fn init(module_id: u32, func_id: u32, args: []const types.Var) PolyKey {
             return .{
+                .module_id = module_id,
                 .func_id = func_id,
                 .args_len = @intCast(args.len),
                 .args_ptr = if (args.len == 0) undefined else args.ptr,
@@ -74,6 +80,7 @@ pub const Interpreter = struct {
     const PolyKeyCtx = struct {
         pub fn hash(_: PolyKeyCtx, k: PolyKey) u64 {
             var h = std.hash.Wyhash.init(0);
+            h.update(std.mem.asBytes(&k.module_id));
             h.update(std.mem.asBytes(&k.func_id));
             h.update(std.mem.asBytes(&k.args_len));
             if (k.args_len > 0) {
@@ -86,12 +93,17 @@ pub const Interpreter = struct {
             return h.final();
         }
         pub fn eql(_: PolyKeyCtx, a: PolyKey, b: PolyKey) bool {
-            if (a.func_id != b.func_id or a.args_len != b.args_len) return false;
+            if (a.module_id != b.module_id or a.func_id != b.func_id or a.args_len != b.args_len) return false;
             if (a.args_len == 0) return true;
             return std.mem.eql(types.Var, a.args_ptr[0..a.args_len], b.args_ptr[0..b.args_len]);
         }
     };
     const Binding = struct { pattern_idx: can.CIR.Pattern.Idx, value: StackValue };
+    const DefInProgress = struct {
+        pattern_idx: can.CIR.Pattern.Idx,
+        expr_idx: can.CIR.Expr.Idx,
+        value: ?StackValue,
+    };
     allocator: std.mem.Allocator,
     runtime_types: *types.store.Store,
     runtime_layout_store: layout.Store,
@@ -108,7 +120,11 @@ pub const Interpreter = struct {
 
     // Runtime unification context
     env: *can.ModuleEnv,
-    other_envs: []const *const can.ModuleEnv,
+    module_envs: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv),
+    module_ids: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, u32),
+    import_envs: std.AutoHashMapUnmanaged(can.CIR.Import.Idx, *const can.ModuleEnv),
+    current_module_id: u32,
+    next_module_id: u32,
     problems: problem_mod.Store,
     snapshots: snapshot_mod.Store,
     unify_scratch: unify.Scratch,
@@ -127,36 +143,61 @@ pub const Interpreter = struct {
     builtins: BuiltinTypes,
     /// Map from module name to ModuleEnv for resolving e_lookup_external expressions
     imported_modules: std.StringHashMap(*const can.ModuleEnv),
+    def_stack: std.array_list.Managed(DefInProgress),
 
-    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, imported_modules_map: ?*const std.AutoHashMap(base_pkg.Ident.Idx, can.Can.AutoImportedType)) !Interpreter {
-        // Convert imported modules map to other_envs slice
-        var other_envs_list = std.array_list.Managed(*const can.ModuleEnv).init(allocator);
-        errdefer other_envs_list.deinit();
+    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, other_envs: []const *const can.ModuleEnv) !Interpreter {
+        // Build maps from Ident.Idx to ModuleEnv and module ID
+        var module_envs = std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv){};
+        errdefer module_envs.deinit(allocator);
+        var module_ids = std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, u32){};
+        errdefer module_ids.deinit(allocator);
+        var import_envs = std.AutoHashMapUnmanaged(can.CIR.Import.Idx, *const can.ModuleEnv){};
+        errdefer import_envs.deinit(allocator);
 
-        if (imported_modules_map) |modules_map| {
-            var iter = modules_map.iterator();
-            while (iter.next()) |entry| {
-                try other_envs_list.append(entry.value_ptr.env);
+        var next_id: u32 = 1; // Start at 1, reserve 0 for current module
+
+        if (other_envs.len > 0) {
+            try module_envs.ensureTotalCapacity(allocator, @intCast(other_envs.len));
+            try module_ids.ensureTotalCapacity(allocator, @intCast(other_envs.len));
+            try import_envs.ensureTotalCapacity(allocator, @intCast(other_envs.len));
+
+            // Match imports in order with other_envs
+            const import_count = @min(env.imports.imports.items.items.len, other_envs.len);
+            for (0..import_count) |i| {
+                const module_env = other_envs[i];
+                const str_idx = env.imports.imports.items.items[i];
+                const import_name = env.common.getString(str_idx);
+
+                // Find or create the Ident.Idx for this import name
+                const ident_idx = env.common.findIdent(import_name) orelse continue;
+
+                // Store in all three maps
+                module_envs.putAssumeCapacity(ident_idx, module_env);
+                module_ids.putAssumeCapacity(ident_idx, next_id);
+                const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
+                import_envs.putAssumeCapacity(import_idx, module_env);
+
+                next_id += 1;
             }
         }
 
-        // Transfer ownership of the slice to the Interpreter
-        // Note: The caller is responsible for freeing this via deinitAndFreeOtherEnvs()
-        const other_envs = try other_envs_list.toOwnedSlice();
-        return initWithOtherEnvs(allocator, env, other_envs, builtin_types);
+        return initWithModuleEnvs(allocator, env, module_envs, module_ids, import_envs, next_id, builtin_types);
     }
 
-    /// Deinit the interpreter and also free the other_envs slice if it was allocated by init()
+    /// Deinit the interpreter and also free the module maps if they were allocated by init()
     pub fn deinitAndFreeOtherEnvs(self: *Interpreter) void {
-        const other_envs = self.other_envs;
-        const allocator = self.allocator;
         self.deinit();
-        if (other_envs.len > 0) {
-            allocator.free(other_envs);
-        }
     }
 
-    pub fn initWithOtherEnvs(allocator: std.mem.Allocator, env: *can.ModuleEnv, other_envs: []const *const can.ModuleEnv, builtin_types: BuiltinTypes) !Interpreter {
+    pub fn initWithModuleEnvs(
+        allocator: std.mem.Allocator,
+        env: *can.ModuleEnv,
+        module_envs: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv),
+        module_ids: std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, u32),
+        import_envs: std.AutoHashMapUnmanaged(can.CIR.Import.Idx, *const can.ModuleEnv),
+        next_module_id: u32,
+        builtin_types: BuiltinTypes,
+    ) !Interpreter {
         const rt_types_ptr = try allocator.create(types.store.Store);
         rt_types_ptr.* = try types.store.Store.initCapacity(allocator, 1024, 512);
         var slots = try std.array_list.Managed(u32).initCapacity(allocator, 1024);
@@ -171,7 +212,11 @@ pub const Interpreter = struct {
             .translate_cache = std.AutoHashMap(u64, types.Var).init(allocator),
             .poly_cache = HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80).init(allocator),
             .env = env,
-            .other_envs = other_envs,
+            .module_envs = module_envs,
+            .module_ids = module_ids,
+            .import_envs = import_envs,
+            .current_module_id = 0, // Current module always gets ID 0
+            .next_module_id = next_module_id,
             .problems = try problem_mod.Store.initCapacity(allocator, 64),
             .snapshots = try snapshot_mod.Store.initCapacity(allocator, 256),
             .unify_scratch = try unify.Scratch.init(allocator),
@@ -184,6 +229,7 @@ pub const Interpreter = struct {
             .scratch_tags = try std.array_list.Managed(types.Tag).initCapacity(allocator, 8),
             .builtins = builtin_types,
             .imported_modules = std.StringHashMap(*const can.ModuleEnv).init(allocator),
+            .def_stack = try std.array_list.Managed(DefInProgress).initCapacity(allocator, 4),
         };
         result.runtime_layout_store = try layout.Store.init(env, result.runtime_types);
 
@@ -193,6 +239,14 @@ pub const Interpreter = struct {
     // Minimal evaluator for subset: string literals, lambdas without captures, and lambda calls
     pub fn evalMinimal(self: *Interpreter, expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) Error!StackValue {
         return try self.evalExprMinimal(expr_idx, roc_ops, null);
+    }
+
+    fn registerDefValue(self: *Interpreter, expr_idx: can.CIR.Expr.Idx, value: StackValue) void {
+        if (self.def_stack.items.len == 0) return;
+        var top = &self.def_stack.items[self.def_stack.items.len - 1];
+        if (top.expr_idx == expr_idx and top.value == null) {
+            top.value = value;
+        }
     }
 
     pub fn startTrace(self: *Interpreter) void {
@@ -454,6 +508,77 @@ pub const Interpreter = struct {
                         },
                         .s_expr => |sx| {
                             _ = try self.evalExprMinimal(sx.expr, roc_ops, null);
+                        },
+                        .s_for => |for_stmt| {
+                            // Evaluate the list expression
+                            const expr_ct_var = can.ModuleEnv.varFrom(for_stmt.expr);
+                            const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+                            const list_value = try self.evalExprMinimal(for_stmt.expr, roc_ops, expr_rt_var);
+                            defer list_value.decref(&self.runtime_layout_store, roc_ops);
+
+                            // Get the list layout
+                            if (list_value.layout.tag != .list) {
+                                return error.TypeMismatch;
+                            }
+                            const elem_layout_idx = list_value.layout.data.list;
+                            const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                            const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(elem_layout));
+
+                            // Get the RocList header
+                            const list_header: *const RocList = @ptrCast(@alignCast(list_value.ptr.?));
+                            const list_len = list_header.len();
+
+                            // Get the element type for binding
+                            const patt_ct_var = can.ModuleEnv.varFrom(for_stmt.patt);
+                            const patt_rt_var = try self.translateTypeVar(self.env, patt_ct_var);
+
+                            // Iterate over each element
+                            var i: usize = 0;
+                            while (i < list_len) : (i += 1) {
+                                // Get pointer to element
+                                const elem_ptr = if (list_header.bytes) |buffer|
+                                    buffer + i * elem_size
+                                else
+                                    return error.TypeMismatch;
+
+                                // Create a StackValue from the element
+                                var elem_value = StackValue{
+                                    .ptr = elem_ptr,
+                                    .layout = elem_layout,
+                                    .is_initialized = true,
+                                };
+
+                                // Increment refcount since we're creating a new reference
+                                elem_value.incref();
+
+                                // Bind the pattern to the element value
+                                var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
+                                defer {
+                                    self.trimBindingList(&temp_binds, 0, roc_ops);
+                                    temp_binds.deinit();
+                                }
+
+                                if (!try self.patternMatchesBind(for_stmt.patt, elem_value, patt_rt_var, roc_ops, &temp_binds)) {
+                                    elem_value.decref(&self.runtime_layout_store, roc_ops);
+                                    return error.TypeMismatch;
+                                }
+
+                                // Add bindings to the environment
+                                const loop_bindings_start = self.bindings.items.len;
+                                for (temp_binds.items) |binding| {
+                                    try self.bindings.append(binding);
+                                }
+
+                                // Evaluate the body
+                                const body_result = try self.evalExprMinimal(for_stmt.body, roc_ops, null);
+                                body_result.decref(&self.runtime_layout_store, roc_ops);
+
+                                // Clean up bindings for this iteration
+                                self.trimBindingList(&self.bindings, loop_bindings_start, roc_ops);
+
+                                // Decrement the element reference (it was incremented above)
+                                elem_value.decref(&self.runtime_layout_store, roc_ops);
+                            }
                         },
                         else => return error.NotImplemented,
                     }
@@ -1236,6 +1361,7 @@ pub const Interpreter = struct {
                 // Expect a closure layout from type-to-layout translation
                 if (closure_layout.tag != .closure) return error.NotImplemented;
                 const value = try self.pushRaw(closure_layout, 0);
+                self.registerDefValue(expr_idx, value);
                 // Initialize the closure header
                 if (value.ptr) |ptr| {
                     const header: *layout.Closure = @ptrCast(@alignCast(ptr));
@@ -1298,7 +1424,24 @@ pub const Interpreter = struct {
                         for (all_defs) |def_idx| {
                             const def = self_interp.env.store.getDef(def_idx);
                             if (def.pattern == cap.pattern_idx) {
+                                var k: usize = self_interp.def_stack.items.len;
+                                while (k > 0) {
+                                    k -= 1;
+                                    const entry = self_interp.def_stack.items[k];
+                                    if (entry.pattern_idx == cap.pattern_idx) {
+                                        if (entry.value) |val| {
+                                            return val;
+                                        }
+                                    }
+                                }
                                 // Found the def! Evaluate it to get the captured value
+                                const new_entry = DefInProgress{
+                                    .pattern_idx = def.pattern,
+                                    .expr_idx = def.expr,
+                                    .value = null,
+                                };
+                                self_interp.def_stack.append(new_entry) catch return null;
+                                defer _ = self_interp.def_stack.pop();
                                 return self_interp.evalMinimal(def.expr, ops) catch null;
                             }
                         }
@@ -1309,14 +1452,16 @@ pub const Interpreter = struct {
                 for (caps, 0..) |cap_idx, i| {
                     const cap = self.env.store.getCapture(cap_idx);
                     field_names[i] = cap.name;
-                    const captured_val = resolveCapture(self, cap, roc_ops) orelse return error.NotImplemented;
-                    field_layouts[i] = captured_val.layout;
+                    const cap_ct_var = can.ModuleEnv.varFrom(cap.pattern_idx);
+                    const cap_rt_var = try self.translateTypeVar(self.env, cap_ct_var);
+                    field_layouts[i] = try self.getRuntimeLayout(cap_rt_var);
                 }
 
                 const captures_layout_idx = try self.runtime_layout_store.putRecord(field_layouts, field_names);
                 const captures_layout = self.runtime_layout_store.getLayout(captures_layout_idx);
                 const closure_layout = Layout.closure(captures_layout_idx);
                 const value = try self.pushRaw(closure_layout, 0);
+                self.registerDefValue(expr_idx, value);
 
                 // Initialize header
                 if (value.ptr) |ptr| {
@@ -1362,7 +1507,7 @@ pub const Interpreter = struct {
                     const arg_ct_var = can.ModuleEnv.varFrom(arg_indices[i]);
                     arg_rt_buf[i] = try self.translateTypeVar(self.env, arg_ct_var);
                 }
-                const poly_entry = try self.prepareCallWithFuncVar(@intCast(@intFromEnum(func_idx)), func_rt_var, arg_rt_buf);
+                const poly_entry = try self.prepareCallWithFuncVar(0, @intCast(@intFromEnum(func_idx)), func_rt_var, arg_rt_buf);
                 // Unify this call expression's return var with the function's constrained return var
                 const call_ret_ct_var = can.ModuleEnv.varFrom(expr_idx);
                 const call_ret_rt_var = try self.translateTypeVar(self.env, call_ret_ct_var);
@@ -1476,15 +1621,8 @@ pub const Interpreter = struct {
                 if (arg_count > 0) {
                     arg_values = try self.allocator.alloc(StackValue, arg_count);
                 }
-                defer {
-                    if (arg_values.len > 0) {
-                        var idx: usize = 0;
-                        while (idx < arg_values.len) : (idx += 1) {
-                            arg_values[idx].decref(&self.runtime_layout_store, roc_ops);
-                        }
-                        self.allocator.free(arg_values);
-                    }
-                }
+                defer if (arg_values.len > 0) self.allocator.free(arg_values);
+
                 if (method_args) |span| {
                     var i: usize = 0;
                     while (i < arg_values.len) : (i += 1) {
@@ -1575,7 +1713,101 @@ pub const Interpreter = struct {
                     }
                 }
 
-                return error.NotImplemented;
+                // Try static dispatch for nominal types with method constraints
+                const method_ident = self.env.common.findIdent(field_name) orelse {
+                    return error.MethodNotFound;
+                };
+
+                // Find the nominal type's origin module from the receiver type
+                const receiver_resolved = self.runtime_types.resolveVar(receiver_rt_var);
+                const nominal_info = blk: {
+                    switch (receiver_resolved.desc.content) {
+                        .structure => |s| switch (s) {
+                            .nominal_type => |nom| break :blk .{
+                                .origin = nom.origin_module,
+                                .ident = nom.ident.ident_idx,
+                            },
+                            else => return error.InvalidMethodReceiver,
+                        },
+                        // Flex/rigid vars should have been specialized to nominal types before runtime
+                        .flex, .rigid => {
+                            // If we reach here, the receiver wasn't properly monomorphized
+                            return error.InvalidMethodReceiver;
+                        },
+                        else => return error.InvalidMethodReceiver,
+                    }
+                };
+
+                // Resolve and evaluate the method function
+                const method_func = try self.resolveMethodFunction(
+                    nominal_info.origin,
+                    nominal_info.ident,
+                    method_ident,
+                    roc_ops,
+                );
+                defer method_func.decref(&self.runtime_layout_store, roc_ops);
+
+                // Prepare arguments: receiver + explicit args
+                const total_args = 1 + arg_values.len;
+                var all_args = try self.allocator.alloc(StackValue, total_args);
+                defer self.allocator.free(all_args);
+
+                // First argument is the receiver
+                all_args[0] = receiver_value;
+
+                // Remaining arguments
+                for (arg_values, 0..) |arg, i| {
+                    all_args[i + 1] = arg;
+                }
+
+                // Call the method closure
+                if (method_func.layout.tag != .closure) {
+                    // Decref all args before returning error
+                    for (all_args) |arg| {
+                        arg.decref(&self.runtime_layout_store, roc_ops);
+                    }
+                    return error.TypeMismatch;
+                }
+
+                const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+
+                // Switch to the closure's source module for correct expression evaluation
+                const saved_env = self.env;
+                const saved_bindings_len = self.bindings.items.len;
+                self.env = @constCast(closure_header.source_env);
+                defer {
+                    self.env = saved_env;
+                    self.bindings.shrinkRetainingCapacity(saved_bindings_len);
+                }
+
+                const params = self.env.store.slicePatterns(closure_header.params);
+                if (params.len != all_args.len) {
+                    // Decref all args before returning error
+                    for (all_args) |arg| {
+                        arg.decref(&self.runtime_layout_store, roc_ops);
+                    }
+                    return error.TypeMismatch;
+                }
+
+                // Provide closure context for capture lookup during body eval
+                try self.active_closures.append(method_func);
+                defer _ = self.active_closures.pop();
+
+                var bind_count: usize = 0;
+                while (bind_count < params.len) : (bind_count += 1) {
+                    try self.bindings.append(.{ .pattern_idx = params[bind_count], .value = all_args[bind_count] });
+                }
+                defer {
+                    var k = params.len;
+                    while (k > 0) {
+                        k -= 1;
+                        if (self.bindings.pop()) |binding| {
+                            binding.value.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                    }
+                }
+
+                return try self.evalExprMinimal(closure_header.body_idx, roc_ops, null);
             },
             .e_lookup_local => |lookup| {
                 // Search bindings in reverse
@@ -1634,11 +1866,9 @@ pub const Interpreter = struct {
             },
             .e_lookup_external => |lookup| {
                 // Cross-module reference - look up in imported module
-                const import_idx: usize = @intFromEnum(lookup.module_idx);
-                if (import_idx >= self.other_envs.len) {
+                const other_env = self.import_envs.get(lookup.module_idx) orelse {
                     return error.NotImplemented;
-                }
-                const other_env = self.other_envs[import_idx];
+                };
 
                 // The target_node_idx is a Def.Idx in the other module
                 const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
@@ -3311,6 +3541,9 @@ pub const Interpreter = struct {
             }
         }
         self.poly_cache.deinit();
+        self.module_envs.deinit(self.allocator);
+        self.module_ids.deinit(self.allocator);
+        self.import_envs.deinit(self.allocator);
         self.var_to_layout_slot.deinit();
         self.runtime_layout_store.deinit();
         self.runtime_types.deinit();
@@ -3321,8 +3554,125 @@ pub const Interpreter = struct {
         self.stack_memory.deinit();
         self.bindings.deinit();
         self.active_closures.deinit();
+        self.def_stack.deinit();
         self.scratch_tags.deinit();
         self.imported_modules.deinit();
+    }
+
+    /// Get the module environment for a given origin module identifier.
+    /// Returns the current module's env if the identifier matches, otherwise looks it up in the module map.
+    fn getModuleEnvForOrigin(self: *const Interpreter, origin_module: base_pkg.Ident.Idx) ?*const can.ModuleEnv {
+        // Check if it's the current module
+        if (self.env.module_name_idx == origin_module) {
+            return self.env;
+        }
+        // Look up in imported modules
+        return self.module_envs.get(origin_module);
+    }
+
+    /// Get the numeric module ID for a given origin module identifier.
+    /// Returns current_module_id (always 0) for the current module, otherwise looks it up in the module ID map.
+    fn getModuleIdForOrigin(self: *const Interpreter, origin_module: base_pkg.Ident.Idx) u32 {
+        // Check if it's the current module
+        if (self.env.module_name_idx == origin_module) {
+            return self.current_module_id;
+        }
+        // Look up in imported modules (should always exist if getModuleEnvForOrigin succeeded)
+        return self.module_ids.get(origin_module) orelse self.current_module_id;
+    }
+
+    /// Build a fully-qualified method identifier in the form "TypeName.method".
+    fn getMethodQualifiedIdent(self: *const Interpreter, nominal_ident: base_pkg.Ident.Idx, method_name: base_pkg.Ident.Idx, buf: []u8) ![]const u8 {
+        const ident_store = self.env.common.getIdentStore();
+        const type_name = ident_store.getText(nominal_ident);
+        const method_name_str = ident_store.getText(method_name);
+        return std.fmt.bufPrint(buf, "{s}.{s}", .{ type_name, method_name_str });
+    }
+
+    /// Extract the static dispatch constraint for a given method name from a resolved receiver type variable.
+    /// Returns the constraint if found, or MethodNotFound if the receiver doesn't expose the method.
+    fn getStaticDispatchConstraint(
+        self: *const Interpreter,
+        receiver_var: types.Var,
+        method_name: base_pkg.Ident.Idx,
+    ) Error!types.StaticDispatchConstraint {
+        const resolved = self.runtime_types.resolveVar(receiver_var);
+
+        // Get constraints from flex or rigid vars
+        const constraints: []const types.StaticDispatchConstraint = switch (resolved.desc.content) {
+            .flex => |flex| self.runtime_types.sliceStaticDispatchConstraints(flex.constraints),
+            .rigid => |rigid| self.runtime_types.sliceStaticDispatchConstraints(rigid.constraints),
+            else => return error.MethodNotFound,
+        };
+
+        // Linear search for the matching method name (constraints are typically few)
+        for (constraints) |constraint| {
+            if (constraint.fn_name == method_name) {
+                return constraint;
+            }
+        }
+
+        return error.MethodNotFound;
+    }
+
+    /// Resolve and evaluate a method function from its origin module.
+    /// Returns a StackValue representing the method function.
+    /// The caller is responsible for decref'ing the returned value.
+    fn resolveMethodFunction(
+        self: *Interpreter,
+        origin_module: base_pkg.Ident.Idx,
+        nominal_ident: base_pkg.Ident.Idx,
+        method_name: base_pkg.Ident.Idx,
+        roc_ops: *RocOps,
+    ) Error!StackValue {
+        // Get the module environment for this type's origin
+        const origin_env = self.getModuleEnvForOrigin(origin_module) orelse {
+            return error.MethodLookupFailed;
+        };
+
+        // Build the qualified method name: "TypeName.method"
+        var qualified_name_buf: [256]u8 = undefined;
+        const qualified_name = try self.getMethodQualifiedIdent(nominal_ident, method_name, &qualified_name_buf);
+
+        // Try to find the method in the origin module's exposed items
+        const method_ident = blk: {
+            if (origin_env.common.findIdent(qualified_name)) |ident| {
+                break :blk ident;
+            }
+            // Try unqualified name as fallback
+            const method_name_str = self.env.common.getIdentStore().getText(method_name);
+            if (origin_env.common.findIdent(method_name_str)) |ident| {
+                break :blk ident;
+            }
+            return error.MethodLookupFailed;
+        };
+
+        const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse {
+            return error.MethodLookupFailed;
+        };
+
+        // The node should be a Def
+        const target_def_idx: can.CIR.Def.Idx = @enumFromInt(node_idx);
+        const target_def = origin_env.store.getDef(target_def_idx);
+
+        // Save current environment and bindings
+        const saved_env = self.env;
+        const saved_bindings_len = self.bindings.items.len;
+        self.env = @constCast(origin_env);
+        defer {
+            self.env = saved_env;
+            // Restore bindings
+            self.bindings.items.len = saved_bindings_len;
+        }
+
+        // Translate the def's type var to runtime
+        const def_var = can.ModuleEnv.varFrom(target_def_idx);
+        const rt_def_var = try self.translateTypeVar(@constCast(origin_env), def_var);
+
+        // Evaluate the method's expression
+        const method_value = try self.evalExprMinimal(target_def.expr, roc_ops, rt_def_var);
+
+        return method_value;
     }
 
     /// Ensure the slot array can index at least `min_len` entries; zero-fill new entries.
@@ -3501,7 +3851,7 @@ pub const Interpreter = struct {
                             break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = compact_num } } });
                         },
                         .tag_union => |tu| {
-                            var rt_tag_args = try std.ArrayListUnmanaged(types.Var).initCapacity(self.allocator, 8);
+                            var rt_tag_args = try std.ArrayList(types.Var).initCapacity(self.allocator, 8);
                             defer rt_tag_args.deinit(self.allocator);
 
                             var rt_tags = try self.gatherTags(module, tu);
@@ -3658,11 +4008,49 @@ pub const Interpreter = struct {
                     break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                 },
                 .flex => |flex| {
-                    const content: types.Content = .{ .flex = flex };
+                    // Translate static dispatch constraints if present
+                    const rt_flex = if (flex.constraints.len() > 0) blk_flex: {
+                        const ct_constraints = module.types.sliceStaticDispatchConstraints(flex.constraints);
+                        var rt_constraints = try std.ArrayList(types.StaticDispatchConstraint).initCapacity(self.allocator, ct_constraints.len);
+                        defer rt_constraints.deinit(self.allocator);
+
+                        for (ct_constraints) |ct_constraint| {
+                            // Translate the constraint's fn_var recursively
+                            const rt_fn_var = try self.translateTypeVar(module, ct_constraint.fn_var);
+                            try rt_constraints.append(self.allocator, .{
+                                .fn_name = ct_constraint.fn_name,
+                                .fn_var = rt_fn_var,
+                            });
+                        }
+
+                        const rt_constraints_range = try self.runtime_types.appendStaticDispatchConstraints(rt_constraints.items);
+                        break :blk_flex flex.withConstraints(rt_constraints_range);
+                    } else flex;
+
+                    const content: types.Content = .{ .flex = rt_flex };
                     break :blk try self.runtime_types.freshFromContent(content);
                 },
                 .rigid => |rigid| {
-                    const content: types.Content = .{ .rigid = rigid };
+                    // Translate static dispatch constraints if present
+                    const rt_rigid = if (rigid.constraints.len() > 0) blk_rigid: {
+                        const ct_constraints = module.types.sliceStaticDispatchConstraints(rigid.constraints);
+                        var rt_constraints = try std.ArrayList(types.StaticDispatchConstraint).initCapacity(self.allocator, ct_constraints.len);
+                        defer rt_constraints.deinit(self.allocator);
+
+                        for (ct_constraints) |ct_constraint| {
+                            // Translate the constraint's fn_var recursively
+                            const rt_fn_var = try self.translateTypeVar(module, ct_constraint.fn_var);
+                            try rt_constraints.append(self.allocator, .{
+                                .fn_name = ct_constraint.fn_name,
+                                .fn_var = rt_fn_var,
+                            });
+                        }
+
+                        const rt_constraints_range = try self.runtime_types.appendStaticDispatchConstraints(rt_constraints.items);
+                        break :blk_rigid rigid.withConstraints(rt_constraints_range);
+                    } else rigid;
+
+                    const content: types.Content = .{ .rigid = rt_rigid };
                     break :blk try self.runtime_types.freshFromContent(content);
                 },
                 .err => {
@@ -3681,8 +4069,8 @@ pub const Interpreter = struct {
         ctx: *const Interpreter,
         module: *can.ModuleEnv,
         tag_union: types.TagUnion,
-    ) std.mem.Allocator.Error!std.ArrayListUnmanaged(types.Tag) {
-        var scratch_tags = try std.ArrayListUnmanaged(types.Tag).initCapacity(ctx.allocator, 8);
+    ) std.mem.Allocator.Error!std.ArrayList(types.Tag) {
+        var scratch_tags = try std.ArrayList(types.Tag).initCapacity(ctx.allocator, 8);
 
         const tag_slice = module.types.getTagsSlice(tag_union.tags);
         for (tag_slice.items(.name), tag_slice.items(.args)) |name, args| {
@@ -3729,24 +4117,24 @@ pub const Interpreter = struct {
         return scratch_tags;
     }
 
-    pub fn makePolyKey(self: *Interpreter, func_id: u32, args: []const types.Var) PolyKey {
+    pub fn makePolyKey(self: *Interpreter, module_id: u32, func_id: u32, args: []const types.Var) PolyKey {
         _ = self;
-        return PolyKey.init(func_id, args);
+        return PolyKey.init(module_id, func_id, args);
     }
 
-    fn polyLookup(self: *Interpreter, func_id: u32, args: []const types.Var) ?PolyEntry {
-        const key = self.makePolyKey(func_id, args);
+    fn polyLookup(self: *Interpreter, module_id: u32, func_id: u32, args: []const types.Var) ?PolyEntry {
+        const key = self.makePolyKey(module_id, func_id, args);
         return self.poly_cache.get(key);
     }
 
-    fn polyInsert(self: *Interpreter, func_id: u32, entry: PolyEntry) !void {
-        const key = PolyKey.init(func_id, entry.args);
+    fn polyInsert(self: *Interpreter, module_id: u32, func_id: u32, entry: PolyEntry) !void {
+        const key = PolyKey.init(module_id, func_id, entry.args);
         try self.poly_cache.put(key, entry);
     }
 
     /// Prepare a call: return cached instantiation entry if present; on miss, insert using return_var_hint if provided.
-    pub fn prepareCall(self: *Interpreter, func_id: u32, args: []const types.Var, return_var_hint: ?types.Var) !?PolyEntry {
-        if (self.polyLookup(func_id, args)) |found| return found;
+    pub fn prepareCall(self: *Interpreter, module_id: u32, func_id: u32, args: []const types.Var, return_var_hint: ?types.Var) !?PolyEntry {
+        if (self.polyLookup(module_id, func_id, args)) |found| return found;
 
         if (return_var_hint) |ret| {
             _ = try self.getRuntimeLayout(ret);
@@ -3757,7 +4145,7 @@ pub const Interpreter = struct {
             errdefer self.allocator.free(args_copy_mut);
             std.mem.copyForwards(types.Var, args_copy_mut, args);
             const entry = PolyEntry{ .return_var = ret, .return_layout_slot = slot, .args = args_copy_mut };
-            try self.polyInsert(func_id, entry);
+            try self.polyInsert(module_id, func_id, entry);
             return entry;
         }
 
@@ -3766,8 +4154,8 @@ pub const Interpreter = struct {
 
     /// Prepare a call using a known runtime function type var.
     /// Builds and inserts a cache entry on miss using the function's declared return var.
-    pub fn prepareCallWithFuncVar(self: *Interpreter, func_id: u32, func_type_var: types.Var, args: []const types.Var) !PolyEntry {
-        if (self.polyLookup(func_id, args)) |found| return found;
+    pub fn prepareCallWithFuncVar(self: *Interpreter, module_id: u32, func_id: u32, func_type_var: types.Var, args: []const types.Var) !PolyEntry {
+        if (self.polyLookup(module_id, func_id, args)) |found| return found;
 
         const func_resolved = self.runtime_types.resolveVar(func_type_var);
         const ret_var: types.Var = switch (func_resolved.desc.content) {
@@ -3818,7 +4206,7 @@ pub const Interpreter = struct {
         std.mem.copyForwards(types.Var, args_copy_mut, args);
 
         const entry = PolyEntry{ .return_var = ret_var, .return_layout_slot = slot, .args = args_copy_mut };
-        try self.polyInsert(func_id, entry);
+        try self.polyInsert(module_id, func_id, entry);
         return entry;
     }
 
@@ -3851,9 +4239,12 @@ test "interpreter: Var->Layout slot caches computed layout" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     // Create a concrete runtime type: Str
@@ -3885,9 +4276,12 @@ test "interpreter: translateTypeVar for str" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const ct_str = try env.types.freshFromContent(.{ .structure = .str });
@@ -3912,9 +4306,12 @@ test "interpreter: translateTypeVar for int64" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const ct_int = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
@@ -3947,9 +4344,12 @@ test "interpreter: translateTypeVar for f64" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const ct_frac = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } });
@@ -3982,9 +4382,12 @@ test "interpreter: translateTypeVar for tuple(Str, I64)" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const ct_str = try env.types.freshFromContent(.{ .structure = .str });
@@ -4035,9 +4438,12 @@ test "interpreter: translateTypeVar for record {first: Str, second: I64}" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     // Build compile-time record content
@@ -4102,9 +4508,12 @@ test "interpreter: translateTypeVar for alias of Str" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const alias_name = try env.common.idents.insert(gpa, @import("base").Ident.for_text("MyAlias"));
@@ -4138,9 +4547,12 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const name_nominal = try env.common.idents.insert(gpa, @import("base").Ident.for_text("Point"));
@@ -4179,9 +4591,12 @@ test "interpreter: translateTypeVar for flex var" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const ct_flex = try env.types.freshFromContent(.{ .flex = types.Flex.init() });
@@ -4204,9 +4619,12 @@ test "interpreter: translateTypeVar for rigid var" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const name_a = try env.common.idents.insert(gpa, @import("base").Ident.for_text("A"));
@@ -4215,6 +4633,315 @@ test "interpreter: translateTypeVar for rigid var" {
     const resolved = interp.runtime_types.resolveVar(rt_var);
     try std.testing.expect(resolved.desc.content == .rigid);
     try std.testing.expectEqual(name_a, resolved.desc.content.rigid.name);
+}
+
+// RED: translating a flex var with static dispatch constraints should preserve constraints
+test "interpreter: translateTypeVar for flex var with static dispatch constraint" {
+    const gpa = std.testing.allocator;
+
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
+    defer interp.deinit();
+
+    // Create a method function type: Str -> I64
+    const ct_str = try env.types.freshFromContent(.{ .structure = .str });
+    const ct_i64 = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
+    const ct_fn_args = [_]types.Var{ct_str};
+    const ct_fn_content = try env.types.mkFuncPure(&ct_fn_args, ct_i64);
+    const ct_fn_var = try env.types.register(.{ .content = ct_fn_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+
+    // Create a static dispatch constraint
+    const method_name = try env.common.idents.insert(gpa, @import("base").Ident.for_text("len"));
+    const ct_constraint = types.StaticDispatchConstraint{
+        .fn_name = method_name,
+        .fn_var = ct_fn_var,
+    };
+    const ct_constraints = [_]types.StaticDispatchConstraint{ct_constraint};
+    const ct_constraints_range = try env.types.appendStaticDispatchConstraints(&ct_constraints);
+
+    // Create a flex var with the constraint
+    const ct_flex = try env.types.freshFromContent(.{ .flex = types.Flex.init().withConstraints(ct_constraints_range) });
+
+    // Translate to runtime
+    const rt_var = try interp.translateTypeVar(&env, ct_flex);
+    const resolved = interp.runtime_types.resolveVar(rt_var);
+
+    // Verify it's still a flex var
+    try std.testing.expect(resolved.desc.content == .flex);
+    const rt_flex = resolved.desc.content.flex;
+
+    // Verify constraints were translated
+    const rt_constraints = interp.runtime_types.sliceStaticDispatchConstraints(rt_flex.constraints);
+    try std.testing.expectEqual(@as(usize, 1), rt_constraints.len);
+
+    // Verify the method name is preserved
+    try std.testing.expectEqual(method_name, rt_constraints[0].fn_name);
+
+    // Verify the fn_var was translated (should resolve in runtime store)
+    const rt_fn_resolved = interp.runtime_types.resolveVar(rt_constraints[0].fn_var);
+    try std.testing.expect(rt_fn_resolved.desc.content == .structure);
+    switch (rt_fn_resolved.desc.content.structure) {
+        .fn_pure => |f| {
+            const rt_fn_args = interp.runtime_types.sliceVars(f.args);
+            try std.testing.expectEqual(@as(usize, 1), rt_fn_args.len);
+            // Arg should be Str
+            const rt_arg_resolved = interp.runtime_types.resolveVar(rt_fn_args[0]);
+            try std.testing.expect(rt_arg_resolved.desc.content == .structure);
+            try std.testing.expect(rt_arg_resolved.desc.content.structure == .str);
+            // Return should be I64
+            const rt_ret_resolved = interp.runtime_types.resolveVar(f.ret);
+            try std.testing.expect(rt_ret_resolved.desc.content == .structure);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+// Test multiple constraints on a single flex var
+test "interpreter: translateTypeVar for flex var with multiple static dispatch constraints" {
+    const gpa = std.testing.allocator;
+
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
+    defer interp.deinit();
+
+    // Create multiple method function types
+    const ct_str = try env.types.freshFromContent(.{ .structure = .str });
+    const ct_i64 = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
+    const ct_bool = try env.types.freshFromContent(.{ .structure = .{ .tag_union = .{ .tags = types.Tag.SafeMultiList.Range.empty(), .ext = try env.types.freshFromContent(.{ .structure = .empty_tag_union }) } } });
+
+    // First method: len: self -> I64
+    const ct_fn1_args = [_]types.Var{ct_str};
+    const ct_fn1_content = try env.types.mkFuncPure(&ct_fn1_args, ct_i64);
+    const ct_fn1_var = try env.types.register(.{ .content = ct_fn1_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+
+    // Second method: isEmpty: self -> Bool
+    const ct_fn2_args = [_]types.Var{ct_str};
+    const ct_fn2_content = try env.types.mkFuncPure(&ct_fn2_args, ct_bool);
+    const ct_fn2_var = try env.types.register(.{ .content = ct_fn2_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+
+    // Third method: toStr: self -> Str
+    const ct_fn3_args = [_]types.Var{ct_str};
+    const ct_fn3_content = try env.types.mkFuncPure(&ct_fn3_args, ct_str);
+    const ct_fn3_var = try env.types.register(.{ .content = ct_fn3_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+
+    // Create static dispatch constraints
+    const method_len = try env.common.idents.insert(gpa, @import("base").Ident.for_text("len"));
+    const method_isEmpty = try env.common.idents.insert(gpa, @import("base").Ident.for_text("isEmpty"));
+    const method_toStr = try env.common.idents.insert(gpa, @import("base").Ident.for_text("toStr"));
+
+    const ct_constraints = [_]types.StaticDispatchConstraint{
+        .{ .fn_name = method_len, .fn_var = ct_fn1_var },
+        .{ .fn_name = method_isEmpty, .fn_var = ct_fn2_var },
+        .{ .fn_name = method_toStr, .fn_var = ct_fn3_var },
+    };
+    const ct_constraints_range = try env.types.appendStaticDispatchConstraints(&ct_constraints);
+
+    // Create a flex var with all constraints
+    const ct_flex = try env.types.freshFromContent(.{ .flex = types.Flex.init().withConstraints(ct_constraints_range) });
+
+    // Translate to runtime
+    const rt_var = try interp.translateTypeVar(&env, ct_flex);
+    const resolved = interp.runtime_types.resolveVar(rt_var);
+
+    // Verify it's still a flex var
+    try std.testing.expect(resolved.desc.content == .flex);
+    const rt_flex = resolved.desc.content.flex;
+
+    // Verify all constraints were translated
+    const rt_constraints = interp.runtime_types.sliceStaticDispatchConstraints(rt_flex.constraints);
+    try std.testing.expectEqual(@as(usize, 3), rt_constraints.len);
+
+    // Verify the method names are preserved
+    try std.testing.expectEqual(method_len, rt_constraints[0].fn_name);
+    try std.testing.expectEqual(method_isEmpty, rt_constraints[1].fn_name);
+    try std.testing.expectEqual(method_toStr, rt_constraints[2].fn_name);
+
+    // Verify each constraint's fn_var was translated
+    for (rt_constraints) |constraint| {
+        const rt_fn_resolved = interp.runtime_types.resolveVar(constraint.fn_var);
+        try std.testing.expect(rt_fn_resolved.desc.content == .structure);
+        try std.testing.expect(rt_fn_resolved.desc.content.structure == .fn_pure);
+    }
+}
+
+// Test rigid var with static dispatch constraints
+test "interpreter: translateTypeVar for rigid var with static dispatch constraints" {
+    const gpa = std.testing.allocator;
+
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
+    defer interp.deinit();
+
+    // Create a method function type
+    const ct_str = try env.types.freshFromContent(.{ .structure = .str });
+    const ct_i64 = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
+    const ct_fn_args = [_]types.Var{ct_str};
+    const ct_fn_content = try env.types.mkFuncPure(&ct_fn_args, ct_i64);
+    const ct_fn_var = try env.types.register(.{ .content = ct_fn_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+
+    // Create a static dispatch constraint
+    const method_name = try env.common.idents.insert(gpa, @import("base").Ident.for_text("size"));
+    const ct_constraint = types.StaticDispatchConstraint{
+        .fn_name = method_name,
+        .fn_var = ct_fn_var,
+    };
+    const ct_constraints = [_]types.StaticDispatchConstraint{ct_constraint};
+    const ct_constraints_range = try env.types.appendStaticDispatchConstraints(&ct_constraints);
+
+    // Create a rigid var with the constraint
+    const rigid_name = try env.common.idents.insert(gpa, @import("base").Ident.for_text("T"));
+    const ct_rigid = try env.types.freshFromContent(.{ .rigid = types.Rigid.init(rigid_name).withConstraints(ct_constraints_range) });
+
+    // Translate to runtime
+    const rt_var = try interp.translateTypeVar(&env, ct_rigid);
+    const resolved = interp.runtime_types.resolveVar(rt_var);
+
+    // Verify it's still a rigid var
+    try std.testing.expect(resolved.desc.content == .rigid);
+    const rt_rigid = resolved.desc.content.rigid;
+
+    // Verify the rigid var name is preserved
+    try std.testing.expectEqual(rigid_name, rt_rigid.name);
+
+    // Verify constraints were translated
+    const rt_constraints = interp.runtime_types.sliceStaticDispatchConstraints(rt_rigid.constraints);
+    try std.testing.expectEqual(@as(usize, 1), rt_constraints.len);
+    try std.testing.expectEqual(method_name, rt_constraints[0].fn_name);
+}
+
+// Test getStaticDispatchConstraint helper with flex var
+test "interpreter: getStaticDispatchConstraint finds method on flex var" {
+    const gpa = std.testing.allocator;
+
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
+    defer interp.deinit();
+
+    // Create method types
+    const ct_str = try env.types.freshFromContent(.{ .structure = .str });
+    const ct_i64 = try env.types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
+
+    const ct_fn1_args = [_]types.Var{ct_str};
+    const ct_fn1_content = try env.types.mkFuncPure(&ct_fn1_args, ct_i64);
+    const ct_fn1_var = try env.types.register(.{ .content = ct_fn1_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+
+    const ct_fn2_args = [_]types.Var{ct_str};
+    const ct_fn2_content = try env.types.mkFuncPure(&ct_fn2_args, ct_str);
+    const ct_fn2_var = try env.types.register(.{ .content = ct_fn2_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+
+    // Create constraints
+    const method_count = try env.common.idents.insert(gpa, @import("base").Ident.for_text("count"));
+    const method_reverse = try env.common.idents.insert(gpa, @import("base").Ident.for_text("reverse"));
+
+    const ct_constraints = [_]types.StaticDispatchConstraint{
+        .{ .fn_name = method_count, .fn_var = ct_fn1_var },
+        .{ .fn_name = method_reverse, .fn_var = ct_fn2_var },
+    };
+    const ct_constraints_range = try env.types.appendStaticDispatchConstraints(&ct_constraints);
+
+    // Create flex var and translate
+    const ct_flex = try env.types.freshFromContent(.{ .flex = types.Flex.init().withConstraints(ct_constraints_range) });
+    const rt_var = try interp.translateTypeVar(&env, ct_flex);
+
+    // Test finding existing methods
+    const found_count = try interp.getStaticDispatchConstraint(rt_var, method_count);
+    try std.testing.expectEqual(method_count, found_count.fn_name);
+
+    const found_reverse = try interp.getStaticDispatchConstraint(rt_var, method_reverse);
+    try std.testing.expectEqual(method_reverse, found_reverse.fn_name);
+
+    // Test finding non-existent method
+    const method_missing = try env.common.idents.insert(gpa, @import("base").Ident.for_text("nonexistent"));
+    const result = interp.getStaticDispatchConstraint(rt_var, method_missing);
+    try std.testing.expectError(error.MethodNotFound, result);
+}
+
+// Test getStaticDispatchConstraint with non-constrained type
+test "interpreter: getStaticDispatchConstraint returns error for non-constrained types" {
+    const gpa = std.testing.allocator;
+
+    var env = try can.ModuleEnv.init(gpa, "");
+    defer env.deinit();
+
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
+    defer interp.deinit();
+
+    // Create a plain structure type (no constraints)
+    const ct_str = try env.types.freshFromContent(.{ .structure = .str });
+    const rt_var = try interp.translateTypeVar(&env, ct_str);
+
+    // Try to get a constraint from a non-flex/rigid type
+    const method_name = try env.common.idents.insert(gpa, @import("base").Ident.for_text("someMethod"));
+    const result = interp.getStaticDispatchConstraint(rt_var, method_name);
+    try std.testing.expectError(error.MethodNotFound, result);
 }
 
 // RED: poly cache miss then hit
@@ -4231,9 +4958,12 @@ test "interpreter: poly cache insert and lookup" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const f_id: u32 = 12345;
@@ -4242,7 +4972,7 @@ test "interpreter: poly cache insert and lookup" {
     const rt_i64 = try interp.runtime_types.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
     const args = [_]types.Var{ rt_str, rt_i64 };
 
-    try std.testing.expect(interp.polyLookup(f_id, &args) == null);
+    try std.testing.expect(interp.polyLookup(0, f_id, &args) == null);
 
     // For testing, say return type is Str
     const ret_var = rt_str;
@@ -4255,8 +4985,8 @@ test "interpreter: poly cache insert and lookup" {
 
     const args_copy = try interp.allocator.alloc(types.Var, args.len);
     std.mem.copyForwards(types.Var, args_copy, &args);
-    try interp.polyInsert(f_id, .{ .return_var = ret_var, .return_layout_slot = slot, .args = args_copy });
-    const found = interp.polyLookup(f_id, &args) orelse return error.TestUnexpectedResult;
+    try interp.polyInsert(0, f_id, .{ .return_var = ret_var, .return_layout_slot = slot, .args = args_copy });
+    const found = interp.polyLookup(0, f_id, &args) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(ret_var, found.return_var);
     try std.testing.expectEqual(slot, found.return_layout_slot);
     try std.testing.expect(std.mem.eql(types.Var, found.args, &args));
@@ -4276,9 +5006,12 @@ test "interpreter: prepareCall miss then hit" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const func_id: u32 = 7777;
@@ -4287,16 +5020,16 @@ test "interpreter: prepareCall miss then hit" {
     const args = [_]types.Var{ rt_str, rt_i64 };
 
     // miss without hint
-    const miss = try interp.prepareCall(func_id, &args, null);
+    const miss = try interp.prepareCall(0, func_id, &args, null);
     try std.testing.expect(miss == null);
 
     // insert with hint
-    const entry = (try interp.prepareCall(func_id, &args, rt_str)) orelse return error.TestUnexpectedResult;
+    const entry = (try interp.prepareCall(0, func_id, &args, rt_str)) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(rt_str, entry.return_var);
     try std.testing.expect(entry.return_layout_slot != 0);
 
     // subsequent call should hit without hint
-    const hit = (try interp.prepareCall(func_id, &args, null)) orelse return error.TestUnexpectedResult;
+    const hit = (try interp.prepareCall(0, func_id, &args, null)) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(rt_str, hit.return_var);
     try std.testing.expectEqual(entry.return_layout_slot, hit.return_layout_slot);
 }
@@ -4315,9 +5048,12 @@ test "interpreter: prepareCallWithFuncVar populates cache" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const func_id: u32 = 9999;
@@ -4330,12 +5066,12 @@ test "interpreter: prepareCallWithFuncVar populates cache" {
     const func_var = try interp.runtime_types.register(.{ .content = func_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
 
     // Should populate cache
-    const entry = try interp.prepareCallWithFuncVar(func_id, func_var, &args);
+    const entry = try interp.prepareCallWithFuncVar(0, func_id, func_var, &args);
     try std.testing.expectEqual(rt_str, entry.return_var);
     try std.testing.expect(entry.return_layout_slot != 0);
 
     // Now a plain prepareCall without hint should hit
-    const hit = (try interp.prepareCall(func_id, &args, null)) orelse return error.TestUnexpectedResult;
+    const hit = (try interp.prepareCall(0, func_id, &args, null)) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(rt_str, hit.return_var);
     try std.testing.expectEqual(entry.return_layout_slot, hit.return_layout_slot);
 }
@@ -4354,9 +5090,12 @@ test "interpreter: unification constrains (a->a) with Str" {
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
-    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null);
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, &[_]*const can.ModuleEnv{});
     defer interp.deinit();
 
     const func_id: u32 = 42;
@@ -4367,11 +5106,125 @@ test "interpreter: unification constrains (a->a) with Str" {
 
     // Call with Str
     const rt_str = try interp.runtime_types.freshFromContent(.{ .structure = .str });
-    const entry = try interp.prepareCallWithFuncVar(func_id, func_var, &.{rt_str});
+    const entry = try interp.prepareCallWithFuncVar(0, func_id, func_var, &.{rt_str});
 
     // After unification, return var should resolve to str
     const resolved_ret = interp.runtime_types.resolveVar(entry.return_var);
     try std.testing.expect(resolved_ret.desc.content == .structure);
     try std.testing.expect(resolved_ret.desc.content.structure == .str);
     try std.testing.expect(entry.return_layout_slot != 0);
+}
+
+test "interpreter: cross-module method resolution should find methods in origin module" {
+    const gpa = std.testing.allocator;
+
+    const module_a_name = "ModuleA";
+    const module_b_name = "ModuleB";
+
+    // Set up Module A (the imported module where the type and method are defined)
+    var module_a = try can.ModuleEnv.init(gpa, module_a_name);
+    defer module_a.deinit();
+    try module_a.initCIRFields(gpa, module_a_name);
+
+    // Set up Module B (the current module that imports Module A)
+    var module_b = try can.ModuleEnv.init(gpa, module_b_name);
+    defer module_b.deinit();
+    try module_b.initCIRFields(gpa, module_b_name);
+
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+    var interp = try Interpreter.init(gpa, &module_b, builtin_types_test, &[_]*const can.ModuleEnv{});
+    defer interp.deinit();
+
+    // Register module A as an imported module
+    const module_a_ident = try module_b.common.idents.insert(gpa, @import("base").Ident.for_text(module_a_name));
+    try interp.module_envs.put(interp.allocator, module_a_ident, &module_a);
+    const module_a_id: u32 = 1;
+    try interp.module_ids.put(interp.allocator, module_a_ident, module_a_id);
+
+    // Create an Import.Idx for module A
+    const import_idx: can.CIR.Import.Idx = @enumFromInt(0);
+    try interp.import_envs.put(interp.allocator, import_idx, &module_a);
+
+    // Verify we can retrieve module A's environment
+    const found_env = interp.getModuleEnvForOrigin(module_a_ident);
+    try std.testing.expect(found_env != null);
+    try std.testing.expectEqual(module_a.module_name_idx, found_env.?.module_name_idx);
+
+    // Verify we can retrieve module A's ID
+    const found_id = interp.getModuleIdForOrigin(module_a_ident);
+    try std.testing.expectEqual(module_a_id, found_id);
+}
+
+test "interpreter: transitive module method resolution (A imports B imports C)" {
+    const gpa = std.testing.allocator;
+
+    const module_a_name = "ModuleA";
+    const module_b_name = "ModuleB";
+    const module_c_name = "ModuleC";
+
+    // Set up three modules: A (current) imports B, B imports C
+    var module_a = try can.ModuleEnv.init(gpa, module_a_name);
+    defer module_a.deinit();
+    try module_a.initCIRFields(gpa, module_a_name);
+
+    var module_b = try can.ModuleEnv.init(gpa, module_b_name);
+    defer module_b.deinit();
+    try module_b.initCIRFields(gpa, module_b_name);
+
+    var module_c = try can.ModuleEnv.init(gpa, module_c_name);
+    defer module_c.deinit();
+    try module_c.initCIRFields(gpa, module_c_name);
+
+    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    const bool_source = "Bool := [True, False].{}\n";
+    var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
+    defer bool_module.deinit();
+    const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
+    defer result_module.deinit();
+    const str_source = compiled_builtins.str_source;
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
+
+    const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+    // Use module_a as the current module
+    var interp = try Interpreter.init(gpa, &module_a, builtin_types_test, &[_]*const can.ModuleEnv{});
+    defer interp.deinit();
+
+    // Register module B
+    const module_b_ident = try module_a.common.idents.insert(gpa, @import("base").Ident.for_text(module_b_name));
+    try interp.module_envs.put(interp.allocator, module_b_ident, &module_b);
+    const module_b_id: u32 = 1;
+    try interp.module_ids.put(interp.allocator, module_b_ident, module_b_id);
+
+    // Register module C
+    const module_c_ident = try module_a.common.idents.insert(gpa, @import("base").Ident.for_text(module_c_name));
+    try interp.module_envs.put(interp.allocator, module_c_ident, &module_c);
+    const module_c_id: u32 = 2;
+    try interp.module_ids.put(interp.allocator, module_c_ident, module_c_id);
+
+    // Create Import.Idx entries for both modules
+    const import_b_idx: can.CIR.Import.Idx = @enumFromInt(0);
+    const import_c_idx: can.CIR.Import.Idx = @enumFromInt(1);
+    try interp.import_envs.put(interp.allocator, import_b_idx, &module_b);
+    try interp.import_envs.put(interp.allocator, import_c_idx, &module_c);
+
+    // Verify we can retrieve all module environments
+    try std.testing.expectEqual(module_b.module_name_idx, interp.getModuleEnvForOrigin(module_b_ident).?.module_name_idx);
+    try std.testing.expectEqual(module_c.module_name_idx, interp.getModuleEnvForOrigin(module_c_ident).?.module_name_idx);
+
+    // Verify we can retrieve all module IDs
+    try std.testing.expectEqual(module_b_id, interp.getModuleIdForOrigin(module_b_ident));
+    try std.testing.expectEqual(module_c_id, interp.getModuleIdForOrigin(module_c_ident));
 }

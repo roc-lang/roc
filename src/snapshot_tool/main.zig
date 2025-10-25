@@ -572,7 +572,7 @@ fn renderReportsToExpectedContent(allocator: std.mem.Allocator, reports: *const 
     }
 
     // Render all reports to markdown and then parse the problems
-    var problems_buffer_unmanaged = std.ArrayListUnmanaged(u8).empty;
+    var problems_buffer_unmanaged = std.ArrayList(u8).empty;
     var problems_writer_allocating: std.Io.Writer.Allocating = .fromArrayList(allocator, &problems_buffer_unmanaged);
     defer problems_buffer_unmanaged.deinit(allocator);
 
@@ -695,7 +695,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .exports = serialized_ptr.exports,
         .builtin_statements = serialized_ptr.builtin_statements,
         .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
-        .imports = serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+        .imports = (try serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa)).*,
         .module_name = module_name,
         .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
         .diagnostics = serialized_ptr.diagnostics,
@@ -858,7 +858,7 @@ pub fn main() !void {
         }
     }
 
-    // Load compiled builtin modules (Set, Dict, Bool, Result)
+    // Load compiled builtin modules (Set, Dict, Bool, Result, Str)
     const dict_source = "Dict := [EmptyDict].{}\n";
     var dict_loaded = try loadCompiledModule(gpa, compiled_builtins.dict_bin, "Dict", dict_source);
     defer dict_loaded.deinit();
@@ -867,13 +867,17 @@ pub fn main() !void {
     var set_loaded = try loadCompiledModule(gpa, compiled_builtins.set_bin, "Set", set_source);
     defer set_loaded.deinit();
 
-    const bool_source = "Bool := [True, False].{}\n";
+    const bool_source = compiled_builtins.bool_source;
     var bool_loaded = try loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_loaded.deinit();
 
     const result_source = "Result ok err := [Ok(ok), Err(err)].{}\n";
     var result_loaded = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_loaded.deinit();
+
+    const str_source = compiled_builtins.str_source;
+    var str_loaded = try loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_loaded.deinit();
 
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
 
@@ -888,6 +892,7 @@ pub fn main() !void {
         .set_module = set_loaded.env,
         .bool_module = bool_loaded.env,
         .result_module = result_loaded.env,
+        .str_module = str_loaded.env,
         .builtin_indices = builtin_indices,
     };
 
@@ -926,7 +931,7 @@ pub fn main() !void {
 }
 
 fn checkSnapshotExpectations(gpa: Allocator) !bool {
-    // Load compiled builtin modules (Set, Dict, Bool, Result)
+    // Load compiled builtin modules (Set, Dict, Bool, Result, Str)
     const dict_source = "Dict := [EmptyDict].{}\n";
     var dict_loaded = try loadCompiledModule(gpa, compiled_builtins.dict_bin, "Dict", dict_source);
     defer dict_loaded.deinit();
@@ -935,13 +940,17 @@ fn checkSnapshotExpectations(gpa: Allocator) !bool {
     var set_loaded = try loadCompiledModule(gpa, compiled_builtins.set_bin, "Set", set_source);
     defer set_loaded.deinit();
 
-    const bool_source = "Bool := [True, False].{}\n";
+    const bool_source = compiled_builtins.bool_source;
     var bool_loaded = try loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_loaded.deinit();
 
     const result_source = "Result ok err := [Ok(ok), Err(err)].{}\n";
     var result_loaded = try loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_loaded.deinit();
+
+    const str_source = compiled_builtins.str_source;
+    var str_loaded = try loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_loaded.deinit();
 
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
 
@@ -955,6 +964,7 @@ fn checkSnapshotExpectations(gpa: Allocator) !bool {
         .set_module = set_loaded.env,
         .bool_module = bool_loaded.env,
         .result_module = result_loaded.env,
+        .str_module = str_loaded.env,
         .builtin_indices = builtin_indices,
     };
     const snapshots_dir = "test/snapshots";
@@ -1249,6 +1259,7 @@ fn processSnapshotContent(
     var set_import_idx: ?CIR.Import.Idx = null;
     var bool_import_idx: ?CIR.Import.Idx = null;
     var result_import_idx: ?CIR.Import.Idx = null;
+    var str_import_idx: ?CIR.Import.Idx = null;
 
     if (config.dict_module) |dict_env| {
         const dict_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Dict"));
@@ -1264,7 +1275,7 @@ fn processSnapshotContent(
             .env = set_env,
         });
     }
-    // Bool and Result are registered as imports to make them available as external types
+    // Bool, Result, and Str are registered as imports to make them available as external types
     if (config.bool_module) |bool_env| {
         const bool_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Bool"));
         bool_import_idx = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Bool");
@@ -1277,6 +1288,13 @@ fn processSnapshotContent(
         result_import_idx = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Result");
         try module_envs.put(result_ident, .{
             .env = result_env,
+        });
+    }
+    if (config.str_module) |str_env| {
+        const str_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Str"));
+        str_import_idx = try can_ir.imports.getOrPut(allocator, &can_ir.common.strings, "Str");
+        try module_envs.put(str_ident, .{
+            .env = str_env,
         });
     }
 
@@ -1295,6 +1313,9 @@ fn processSnapshotContent(
     }
     if (result_import_idx) |idx| {
         try czer.import_indices.put(allocator, "Result", idx);
+    }
+    if (str_import_idx) |idx| {
+        try czer.import_indices.put(allocator, "Str", idx);
     }
 
     var maybe_expr_idx: ?Can.CanonicalizedExpr = null;
@@ -1351,7 +1372,7 @@ fn processSnapshotContent(
         can_ir.evaluation_order = eval_order_ptr;
     }
 
-    // Types - include Set, Dict, Bool, and Result modules in the order they appear in imports
+    // Types - include Set, Dict, Bool, Result, and Str modules in the order they appear in imports
     // The order MUST match the import order in can_ir.imports because module_idx in external
     // type references is based on the import index
     var builtin_modules = std.array_list.Managed(*const ModuleEnv).init(allocator);
@@ -1379,6 +1400,10 @@ fn processSnapshotContent(
             if (config.result_module) |result_env| {
                 try builtin_modules.append(result_env);
             }
+        } else if (std.mem.eql(u8, import_name, "Str")) {
+            if (config.str_module) |str_env| {
+                try builtin_modules.append(str_env);
+            }
         }
     }
 
@@ -1387,6 +1412,7 @@ fn processSnapshotContent(
         &can_ir.types,
         can_ir,
         builtin_modules.items,
+        &module_envs,
         &can_ir.store.regions,
         common_idents,
     );
@@ -1452,11 +1478,11 @@ fn processSnapshotContent(
     }
 
     // Buffer all output in memory before writing files
-    var md_buffer_unmanaged = std.ArrayListUnmanaged(u8).empty;
+    var md_buffer_unmanaged = std.ArrayList(u8).empty;
     var md_writer_allocating: std.Io.Writer.Allocating = .fromArrayList(allocator, &md_buffer_unmanaged);
     defer md_buffer_unmanaged.deinit(allocator);
 
-    var html_buffer_unmanaged: ?std.ArrayListUnmanaged(u8) = if (config.generate_html) std.ArrayListUnmanaged(u8).empty else null;
+    var html_buffer_unmanaged: ?std.ArrayList(u8) = if (config.generate_html) std.ArrayList(u8).empty else null;
     var html_writer_allocating: ?std.Io.Writer.Allocating = if (config.generate_html) .fromArrayList(allocator, &html_buffer_unmanaged.?) else null;
     defer {
         if (html_buffer_unmanaged) |*buf| buf.deinit(allocator);
@@ -1546,6 +1572,7 @@ const Config = struct {
     set_module: ?*const ModuleEnv = null,
     bool_module: ?*const ModuleEnv = null,
     result_module: ?*const ModuleEnv = null,
+    str_module: ?*const ModuleEnv = null,
     builtin_indices: CIR.BuiltinIndices,
 };
 
@@ -1898,7 +1925,7 @@ const Meta = struct {
             \\description=Hello world
             \\type=foobar
         );
-        try std.testing.expectEqual(meta, Error.InvalidNodeType);
+        try std.testing.expectError(Error.InvalidNodeType, meta);
     }
 };
 
@@ -2463,7 +2490,7 @@ fn generateTypesSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx:
 /// Generate TYPES section displaying types store for both markdown and HTML
 /// This is used for debugging.
 fn generateTypesStoreSection(gpa: std.mem.Allocator, output: *DualOutput, can_ir: *ModuleEnv) !void {
-    var solved_unmanaged = std.ArrayListUnmanaged(u8).empty;
+    var solved_unmanaged = std.ArrayList(u8).empty;
     var solved_writer: std.Io.Writer.Allocating = .fromArrayList(output.gpa, &solved_unmanaged);
     defer solved_unmanaged.deinit(output.gpa);
 
@@ -2580,7 +2607,7 @@ fn generateHtmlClosing(output: *DualOutput) !void {
 }
 
 /// Write HTML buffer to file
-fn writeHtmlFile(gpa: Allocator, snapshot_path: []const u8, html_buffer: *std.ArrayListUnmanaged(u8)) !void {
+fn writeHtmlFile(gpa: Allocator, snapshot_path: []const u8, html_buffer: *std.ArrayList(u8)) !void {
     // Convert .md path to .html path
     const html_path = blk: {
         if (std.mem.endsWith(u8, snapshot_path, ".md")) {
@@ -2778,11 +2805,11 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
     log("Processing REPL snapshot: {s}", .{output_path});
 
     // Buffer all output in memory before writing files
-    var md_buffer_unmanaged = std.ArrayListUnmanaged(u8).empty;
+    var md_buffer_unmanaged = std.ArrayList(u8).empty;
     var md_writer_allocating: std.Io.Writer.Allocating = .fromArrayList(allocator, &md_buffer_unmanaged);
     defer md_buffer_unmanaged.deinit(allocator);
 
-    var html_buffer_unmanaged: ?std.ArrayListUnmanaged(u8) = if (config.generate_html) std.ArrayListUnmanaged(u8).empty else null;
+    var html_buffer_unmanaged: ?std.ArrayList(u8) = if (config.generate_html) std.ArrayList(u8).empty else null;
     var html_writer_allocating: ?std.Io.Writer.Allocating = if (config.generate_html) .fromArrayList(allocator, &html_buffer_unmanaged.?) else null;
     defer {
         if (html_buffer_unmanaged) |*buf| buf.deinit(allocator);

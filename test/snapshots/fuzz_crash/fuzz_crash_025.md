@@ -269,50 +269,42 @@ j = -17011687303715884105728
 		(p-assign (ident "a"))
 		(e-num (value "255"))
 		(annotation
-			(declared-type
-				(ty-lookup (name "U8") (builtin)))))
+			(ty-lookup (name "U8") (builtin))))
 	(d-let
 		(p-assign (ident "b"))
 		(e-num (value "65535"))
 		(annotation
-			(declared-type
-				(ty-lookup (name "U16") (builtin)))))
+			(ty-lookup (name "U16") (builtin))))
 	(d-let
 		(p-assign (ident "c"))
 		(e-num (value "429496729"))
 		(annotation
-			(declared-type
-				(ty-lookup (name "U32") (builtin)))))
+			(ty-lookup (name "U32") (builtin))))
 	(d-let
 		(p-assign (ident "e"))
 		(e-frac-f64 (value "3.4028236692093846e39"))
 		(annotation
-			(declared-type
-				(ty-lookup (name "U128") (builtin)))))
+			(ty-lookup (name "U128") (builtin))))
 	(d-let
 		(p-assign (ident "g"))
 		(e-num (value "-32768"))
 		(annotation
-			(declared-type
-				(ty-lookup (name "I16") (builtin)))))
+			(ty-lookup (name "I16") (builtin))))
 	(d-let
 		(p-assign (ident "h"))
 		(e-num (value "-483648"))
 		(annotation
-			(declared-type
-				(ty-lookup (name "I32") (builtin)))))
+			(ty-lookup (name "I32") (builtin))))
 	(d-let
 		(p-assign (ident "i"))
 		(e-num (value "-92233725808"))
 		(annotation
-			(declared-type
-				(ty-lookup (name "I64") (builtin)))))
+			(ty-lookup (name "I64") (builtin))))
 	(d-let
 		(p-assign (ident "j"))
 		(e-num (value "-17011687303715884105728"))
 		(annotation
-			(declared-type
-				(ty-lookup (name "I128") (builtin))))))
+			(ty-lookup (name "I128") (builtin)))))
 ~~~
 # TYPES
 ~~~clojure

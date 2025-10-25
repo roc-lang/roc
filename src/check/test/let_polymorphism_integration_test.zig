@@ -275,7 +275,7 @@ test "polymorphic pipe function" {
 
 /// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
 fn typeCheck(comptime source_expr: []const u8, expected_type: []const u8) !void {
-    var test_env = try TestEnv.initExpr(source_expr);
+    var test_env = try TestEnv.initExpr("Test", source_expr);
     defer test_env.deinit();
     return test_env.assertLastDefType(expected_type);
 }

@@ -344,9 +344,9 @@
 //     defer original_tree.deinit();
 //     try module_env.pushToSExprTree(null, &original_tree);
 
-//     var original_sexpr = std.array_list.Managed(u8).init(gpa);
-//     defer original_sexpr.deinit();
-//     try original_tree.toStringPretty(original_sexpr.writer().any());
+//     var original_sexpr = std.ArrayList(u8).empty;
+//     defer original_sexpr.deinit(gpa);
+//     try original_tree.toStringPretty(original_sexpr.writer(gpa).any());
 
 //     // Create arena for serialization
 //     var arena = std.heap.ArenaAllocator.init(gpa);
@@ -373,8 +373,8 @@
 
 //     try restored_env.pushToSExprTree(null, &restored_tree);
 
-//     var restored_sexpr = std.array_list.Managed(u8).init(gpa);
-//     defer restored_sexpr.deinit();
+//     var restored_sexpr = std.ArrayList(u8).empty;
+//     defer restored_sexpr.deinit(gpa);
 
 //     try restored_tree.toStringPretty(restored_sexpr.writer().any());
 
@@ -420,9 +420,9 @@
 // //     defer original_tree.deinit();
 // //     try module_env.pushToSExprTree(null, &original_tree);
 
-// //     var original_sexpr = std.array_list.Managed(u8).init(gpa);
-// //     defer original_sexpr.deinit();
-// //     try original_tree.toStringPretty(original_sexpr.writer().any());
+// //     var original_sexpr = std.ArrayList(u8).empty;
+// //     defer original_sexpr.deinit(gpa);
+// //     try original_tree.toStringPretty(original_sexpr.writer(gpa).any());
 
 // //     // Create arena for serialization
 // //     var arena = std.heap.ArenaAllocator.init(gpa);
@@ -515,8 +515,8 @@
 
 // //     try restored_env.pushToSExprTree(null, &restored_tree);
 
-// //     var restored_sexpr = std.array_list.Managed(u8).init(gpa);
-// //     defer restored_sexpr.deinit();
+// //     var restored_sexpr = std.ArrayList(u8).empty;
+// //     defer restored_sexpr.deinit(gpa);
 
 // //     try restored_tree.toStringPretty(restored_sexpr.writer().any());
 

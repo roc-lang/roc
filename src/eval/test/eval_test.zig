@@ -449,7 +449,7 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interpreter = try Interpreter.init(testing.allocator, resources.module_env, resources.builtin_types, null);
+    var interpreter = try Interpreter.init(testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -745,10 +745,13 @@ test "ModuleEnv serialization and interpreter evaluation" {
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";
     const result_source = "Result(ok, err) := [Ok(ok), Err(err)].{}\n";
+    const str_source = compiled_builtins.str_source;
     var bool_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.bool_bin, "Bool", bool_source);
     defer bool_module.deinit();
     var result_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.result_bin, "Result", result_source);
     defer result_module.deinit();
+    var str_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.str_bin, "Str", str_source);
+    defer str_module.deinit();
 
     // Create original ModuleEnv
     var original_env = try ModuleEnv.init(gpa, source);
@@ -799,16 +802,16 @@ test "ModuleEnv serialization and interpreter evaluation" {
     };
 
     // Type check the expression - pass Bool and Result as imported modules
-    const other_modules = [_]*const ModuleEnv{ bool_module.env, result_module.env };
-    var checker = try Check.init(gpa, &original_env.types, &original_env, &other_modules, &original_env.store.regions, common_idents);
+    const imported_envs = [_]*const ModuleEnv{ bool_module.env, result_module.env };
+    var checker = try Check.init(gpa, &original_env.types, &original_env, &imported_envs, &module_envs_map, &original_env.store.regions, common_idents);
     defer checker.deinit();
 
     _ = try checker.checkExprRepl(canonicalized_expr_idx.get_idx());
 
     // Test 1: Evaluate with the original ModuleEnv
     {
-        const builtin_types_local = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-        var interpreter = try Interpreter.init(gpa, &original_env, builtin_types_local, null);
+        const builtin_types_local = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+        var interpreter = try Interpreter.init(gpa, &original_env, builtin_types_local, &[_]*const can.ModuleEnv{});
         defer interpreter.deinit();
 
         const ops = test_env_instance.get_ops();
@@ -854,7 +857,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
         // Deserialize the ModuleEnv
         const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr + env_start_offset)));
-        var deserialized_env = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa, source, "TestModule");
+        var deserialized_env = try deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa, source, "TestModule");
         // Free the imports map that was allocated during deserialization
         defer deserialized_env.imports.map.deinit(gpa);
 
@@ -874,8 +877,8 @@ test "ModuleEnv serialization and interpreter evaluation" {
         // Test 4: Evaluate the same expression using the deserialized ModuleEnv
         // The original expression index should still be valid since the NodeStore structure is preserved
         {
-            const builtin_types_local = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env);
-            var interpreter = try Interpreter.init(gpa, deserialized_env, builtin_types_local, null);
+            const builtin_types_local = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+            var interpreter = try Interpreter.init(gpa, deserialized_env, builtin_types_local, &[_]*const can.ModuleEnv{});
             defer interpreter.deinit();
 
             const ops = test_env_instance.get_ops();

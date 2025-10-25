@@ -180,10 +180,9 @@ NO CHANGE
 			(e-string
 				(e-literal (string "processed"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "Result") (external (module-idx "3") (target-node-idx "3")))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "Result") (external-module "Result"))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "handleResponse"))
 		(e-lambda
@@ -192,10 +191,9 @@ NO CHANGE
 			(e-string
 				(e-literal (string "handled"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "Response") (local))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "Response") (local))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda
@@ -212,34 +210,34 @@ NO CHANGE
 		(ty-header (name "Result"))
 		(ty-tag-union
 			(ty-tag-name (name "Success")
-				(ty-lookup (name "Str") (builtin)))
+				(ty-lookup (name "Str") (external-module "Str")))
 			(ty-tag-name (name "Error")
-				(ty-lookup (name "Str") (builtin)))
+				(ty-lookup (name "Str") (external-module "Str")))
 			(ty-tag-name (name "Warning")
-				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (external-module "Str"))
 				(ty-lookup (name "I32") (builtin)))))
 	(s-alias-decl
 		(ty-header (name "Response"))
 		(ty-tag-union
 			(ty-tag-name (name "Ok")
-				(ty-lookup (name "Result") (external (module-idx "3") (target-node-idx "3"))))
+				(ty-lookup (name "Result") (external-module "Result")))
 			(ty-tag-name (name "NetworkError"))
 			(ty-tag-name (name "ParseError"))))
 	(s-alias-decl
 		(ty-header (name "UserState"))
 		(ty-tag-union
 			(ty-tag-name (name "Active")
-				(ty-lookup (name "Str") (builtin)))
+				(ty-lookup (name "Str") (external-module "Str")))
 			(ty-tag-name (name "Inactive"))
 			(ty-tag-name (name "Suspended")
-				(ty-lookup (name "Str") (builtin)))))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(s-alias-decl
 		(ty-header (name "ConnectionState"))
 		(ty-tag-union
 			(ty-tag-name (name "Active"))
 			(ty-tag-name (name "Disconnected"))
 			(ty-tag-name (name "Connecting")
-				(ty-lookup (name "Str") (builtin))))))
+				(ty-lookup (name "Str") (external-module "Str"))))))
 ~~~
 # TYPES
 ~~~clojure

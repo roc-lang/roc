@@ -39,7 +39,6 @@ UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:3:25:3:26
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:3:26:3:27
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:4:11:4:12
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:4:29:4:30
-NOT IMPLEMENTED - :0:0:0:0
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:5:11:5:12
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:5:26:5:27
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:6:5:6:8
@@ -50,6 +49,8 @@ UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:5:7:7
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:7:7:8
 DOES NOT EXIST - record_different_fields_reserved_error.md:7:9:7:19
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:19:7:20
+UNUSED VALUE - record_different_fields_reserved_error.md:4:13:4:29
+UNUSED VALUE - record_different_fields_reserved_error.md:5:13:5:26
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **:** is not expected in an expression.
@@ -315,11 +316,6 @@ I don't recognize this syntax.
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: statement type in block
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
 **UNRECOGNIZED SYNTAX**
 I don't recognize this syntax.
 
@@ -428,6 +424,28 @@ I don't recognize this syntax.
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**record_different_fields_reserved_error.md:4:13:4:29:**
+```roc
+    expect: "test assertion",
+```
+            ^^^^^^^^^^^^^^^^
+
+It has the type:
+    _Str_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**record_different_fields_reserved_error.md:5:13:5:26:**
+```roc
+    import: "module load",
+```
+            ^^^^^^^^^^^^^
+
+It has the type:
+    _Str_
+
 # TOKENS
 ~~~zig
 OpenCurly,
@@ -491,6 +509,8 @@ EndOfFile,
 (e-block
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
+	(s-type-anno (name "when")
+		(ty-malformed))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
@@ -504,7 +524,6 @@ EndOfFile,
 			(e-literal (string "test assertion"))))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-runtime-error (tag "not_implemented"))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr

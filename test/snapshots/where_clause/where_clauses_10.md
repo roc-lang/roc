@@ -73,17 +73,7 @@ decode_things # After member name
 (can-ir
 	(s-import (module "Decode")
 		(exposes
-			(exposed (name "Decode") (wildcard false))))
-	(s-type-anno (name "decode_things")
-		(ty-fn (effectful false)
-			(ty-apply (name "List") (builtin)
-				(ty-apply (name "List") (builtin)
-					(ty-lookup (name "U8") (builtin))))
-			(ty-apply (name "List") (builtin)
-				(ty-rigid-var (name "a"))))
-		(where
-			(alias (module-of "a") (ident "Decode"))))
-	(ext-decl (ident "a.Decode") (kind "type")))
+			(exposed (name "Decode") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure

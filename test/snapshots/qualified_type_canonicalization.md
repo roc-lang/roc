@@ -53,12 +53,8 @@ transform = |result|
 # EXPECTED
 PARSE ERROR - qualified_type_canonicalization.md:8:1:8:7
 PARSE ERROR - qualified_type_canonicalization.md:8:14:8:21
-PARSE ERROR - qualified_type_canonicalization.md:10:15:10:23
-PARSE ERROR - qualified_type_canonicalization.md:10:24:10:32
-PARSE ERROR - qualified_type_canonicalization.md:10:33:10:34
-PARSE ERROR - qualified_type_canonicalization.md:10:39:10:40
 MODULE NOT FOUND - qualified_type_canonicalization.md:9:1:9:13
-MODULE NOT FOUND - qualified_type_canonicalization.md:10:1:10:15
+MODULE NOT FOUND - qualified_type_canonicalization.md:10:1:10:40
 MODULE NOT FOUND - qualified_type_canonicalization.md:11:1:11:32
 UNDECLARED TYPE - qualified_type_canonicalization.md:15:19:15:24
 MODULE NOT IMPORTED - qualified_type_canonicalization.md:22:23:22:44
@@ -106,62 +102,6 @@ import Basics.Result
              ^^^^^^^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**qualified_type_canonicalization.md:10:15:10:23:**
-```roc
-import ModuleA.ModuleB exposing [TypeC]
-```
-              ^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**qualified_type_canonicalization.md:10:24:10:32:**
-```roc
-import ModuleA.ModuleB exposing [TypeC]
-```
-                       ^^^^^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**qualified_type_canonicalization.md:10:33:10:34:**
-```roc
-import ModuleA.ModuleB exposing [TypeC]
-```
-                                ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Result(a, Str)`
-    `Maybe(List(U64))`
-
-**qualified_type_canonicalization.md:10:39:10:40:**
-```roc
-import ModuleA.ModuleB exposing [TypeC]
-```
-                                      ^
-
-
 **MODULE NOT FOUND**
 The module `Color` was not found in this Roc project.
 
@@ -174,14 +114,14 @@ import Color
 
 
 **MODULE NOT FOUND**
-The module `ModuleA` was not found in this Roc project.
+The module `ModuleB` was not found in this Roc project.
 
 You're attempting to use this module here:
-**qualified_type_canonicalization.md:10:1:10:15:**
+**qualified_type_canonicalization.md:10:1:10:40:**
 ```roc
 import ModuleA.ModuleB exposing [TypeC]
 ```
-^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **MODULE NOT FOUND**
@@ -358,11 +298,9 @@ EndOfFile,
 	(statements
 		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-import (raw "Color"))
-		(s-import (raw "ModuleA"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "expected_colon_after_type_annotation"))
+		(s-import (raw ".ModuleB")
+			(exposing
+				(exposed-upper-ident (text "TypeC"))))
 		(s-import (raw "ExternalModule") (alias "ExtMod"))
 		(s-type-anno (name "simpleQualified")
 			(ty (name "Color.RGB")))
@@ -456,8 +394,7 @@ EndOfFile,
 ~~~roc
 
 import Color
-import ModuleA
-
+import ModuleB exposing [TypeC]
 import ExternalModule as ExtMod
 
 # Simple qualified type
@@ -500,36 +437,30 @@ transform = |result|
 		(p-assign (ident "simpleQualified"))
 		(e-runtime-error (tag "undeclared_type"))
 		(annotation
-			(declared-type
-				(ty-lookup (name "RGB") (external (module-idx "4") (target-node-idx "0"))))))
+			(ty-lookup (name "RGB") (external-module "Color"))))
 	(d-let
 		(p-assign (ident "aliasedQualified"))
 		(e-nominal-external
-			(module-idx "6")
-			(target-node-idx "0")
+			(external-module "ExternalModule")
 			(e-tag (name "Default")))
 		(annotation
-			(declared-type
-				(ty-lookup (name "DataType") (external (module-idx "6") (target-node-idx "0"))))))
+			(ty-lookup (name "DataType") (external-module "ExternalModule"))))
 	(d-let
 		(p-assign (ident "multiLevelQualified"))
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation
-			(declared-type
-				(ty-malformed))))
+			(ty-malformed)))
 	(d-let
 		(p-assign (ident "resultType"))
 		(e-nominal-external
-			(module-idx "3")
-			(target-node-idx "3")
+			(external-module "Result")
 			(e-tag (name "Ok")
 				(args
 					(e-num (value "42")))))
 		(annotation
-			(declared-type
-				(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
-					(ty-lookup (name "I32") (builtin))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-apply (name "Result") (external-module "Result")
+				(ty-lookup (name "I32") (builtin))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "getColor"))
 		(e-lambda
@@ -537,10 +468,9 @@ transform = |result|
 				(p-underscore))
 			(e-runtime-error (tag "undeclared_type")))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-record)
-					(ty-lookup (name "RGB") (external (module-idx "4") (target-node-idx "0")))))))
+			(ty-fn (effectful false)
+				(ty-record)
+				(ty-lookup (name "RGB") (external-module "Color")))))
 	(d-let
 		(p-assign (ident "processColor"))
 		(e-lambda
@@ -549,10 +479,9 @@ transform = |result|
 			(e-string
 				(e-literal (string "Color processed"))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-lookup (name "RGB") (external (module-idx "4") (target-node-idx "0")))
-					(ty-lookup (name "Str") (builtin))))))
+			(ty-fn (effectful false)
+				(ty-lookup (name "RGB") (external-module "Color"))
+				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "transform"))
 		(e-closure
@@ -583,16 +512,16 @@ transform = |result|
 								(value
 									(e-runtime-error (tag "ident_not_in_scope")))))))))
 		(annotation
-			(declared-type
-				(ty-fn (effectful false)
-					(ty-apply (name "Result") (external (module-idx "3") (target-node-idx "3"))
-						(ty-lookup (name "RGB") (external (module-idx "4") (target-node-idx "0")))
-						(ty-lookup (name "Error") (external (module-idx "6") (target-node-idx "0"))))
-					(ty-malformed)))))
+			(ty-fn (effectful false)
+				(ty-apply (name "Result") (external-module "Result")
+					(ty-lookup (name "RGB") (external-module "Color"))
+					(ty-lookup (name "Error") (external-module "ExternalModule")))
+				(ty-malformed))))
 	(s-import (module "Color")
 		(exposes))
-	(s-import (module "ModuleA")
-		(exposes))
+	(s-import (module "ModuleB")
+		(exposes
+			(exposed (name "TypeC") (wildcard false))))
 	(s-import (module "ExternalModule")
 		(exposes)))
 ~~~

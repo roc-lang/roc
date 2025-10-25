@@ -83,7 +83,9 @@ b : S
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(s-type-anno (name "b")
+		(ty-malformed)))
 ~~~
 # TYPES
 ~~~clojure

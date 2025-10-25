@@ -115,14 +115,12 @@ deepType = C
 		(e-lookup-local
 			(p-assign (ident "Foo.Level1.Level2.Level3.value")))
 		(annotation
-			(declared-type
-				(ty-lookup (name "U64") (builtin)))))
+			(ty-lookup (name "U64") (builtin))))
 	(d-let
 		(p-assign (ident "deepType"))
 		(e-tag (name "C"))
 		(annotation
-			(declared-type
-				(ty-lookup (name "Foo.Level1.Level2.Level3") (local)))))
+			(ty-lookup (name "Foo.Level1.Level2.Level3") (local))))
 	(d-let
 		(p-assign (ident "Foo.Level1.Level2.Level3.value"))
 		(e-num (value "42")))
