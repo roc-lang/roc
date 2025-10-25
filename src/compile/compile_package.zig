@@ -782,6 +782,18 @@ pub const PackageEnv = struct {
             .result_stmt = builtin_indices.result_type,
         };
 
+        // Create module_envs map for auto-importing builtin types
+        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(self.gpa);
+        defer module_envs_map.deinit();
+
+        // Populate module_envs with Bool, Result, Dict, Set using shared function
+        try Can.populateModuleEnvs(
+            &module_envs_map,
+            env,
+            self.builtin_modules.builtin_module.env,
+            builtin_indices,
+        );
+
         // Build other_modules array according to env.imports order
         const import_count = env.imports.imports.items.items.len;
         var imported_envs = try std.ArrayList(*ModuleEnv).initCapacity(self.gpa, import_count);
@@ -815,7 +827,7 @@ pub const PackageEnv = struct {
             &env.types,
             env,
             imported_envs.items,
-            null, // TODO: Propagate other module envs map from Can
+            &module_envs_map,
             &env.store.regions,
             module_common_idents,
         );
