@@ -229,12 +229,37 @@ pub fn init(
     // Top-level scope is not a function boundary
     try result.scopeEnter(gpa, false);
 
+    // Set up auto-imported builtin types (Bool, Result, Dict, Set)
+    try result.setupAutoImportedBuiltinTypes(env, gpa, module_envs);
+
+    const scratch_statements_start = result.env.store.scratch.?.statements.top();
+
+    result.env.builtin_statements = try result.env.store.statementSpanFrom(scratch_statements_start);
+
+    // Assert that the node store is completely empty
+    env.debugAssertArraysInSync();
+
+    return result;
+}
+
+/// Set up auto-imported builtin types (Bool, Result, Dict, Set) from the Builtin module.
+/// This function is shared between production and test environments to ensure consistency.
+///
+/// These nested types in Builtin.roc need special handling:
+/// 1. Add them to scope's type_bindings so type annotations work
+/// 2. Populate unqualified_nominal_tags for Bool's True/False tags
+pub fn setupAutoImportedBuiltinTypes(
+    self: *Self,
+    env: *ModuleEnv,
+    gpa: std.mem.Allocator,
+    module_envs: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType),
+) std.mem.Allocator.Error!void {
     // Auto-import builtin types (Bool, Result, Dict, Set)
     // These are nested types in Builtin module but need to be auto-imported like standalone modules
     // Note: Str is NOT auto-imported because it's a primitive builtin type
     if (module_envs) |envs_map| {
         const zero_region = Region{ .start = Region.Position.zero(), .end = Region.Position.zero() };
-        const current_scope = &result.scopes.items[0]; // Top-level scope
+        const current_scope = &self.scopes.items[0]; // Top-level scope
 
         const builtin_types = [_][]const u8{ "Bool", "Result", "Dict", "Set" };
         for (builtin_types) |type_name_text| {
@@ -244,9 +269,9 @@ pub fn init(
 
                 // Create an import for the parent Builtin module
                 const builtin_module_name = module_env.module_name;
-                const module_import_idx = try result.env.imports.getOrPut(
+                const module_import_idx = try self.env.imports.getOrPut(
                     gpa,
-                    result.env.common.getStringStore(),
+                    self.env.common.getStringStore(),
                     builtin_module_name,
                 );
 
@@ -287,7 +312,7 @@ pub fn init(
                             if (tag_anno == .tag) {
                                 const tag_name_ident = tag_anno.tag.name;
                                 const tag_name_text = bool_entry.env.getIdentText(tag_name_ident);
-                                try result.unqualified_nominal_tags.put(env.gpa, tag_name_text, bool_ident);
+                                try self.unqualified_nominal_tags.put(env.gpa, tag_name_text, bool_ident);
                             }
                         }
                     }
@@ -295,15 +320,6 @@ pub fn init(
             }
         }
     }
-
-    const scratch_statements_start = result.env.store.scratch.?.statements.top();
-
-    result.env.builtin_statements = try result.env.store.statementSpanFrom(scratch_statements_start);
-
-    // Assert that the node store is completely empty
-    env.debugAssertArraysInSync();
-
-    return result;
 }
 
 // canonicalize //
