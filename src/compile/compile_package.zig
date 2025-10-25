@@ -589,24 +589,14 @@ pub const PackageEnv = struct {
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(self.gpa);
         defer module_envs_map.deinit();
 
-        // Add Bool, Result, and Str to the map, all pointing to the Builtin module with pre-computed statement indices
-        const bool_ident = try env.common.insertIdent(self.gpa, base.Ident.for_text("Bool"));
-        try module_envs_map.put(bool_ident, .{
-            .env = self.builtin_modules.builtin_module.env,
-            .statement_idx = self.builtin_modules.builtin_indices.bool_type,
-        });
-
-        const result_ident = try env.common.insertIdent(self.gpa, base.Ident.for_text("Result"));
-        try module_envs_map.put(result_ident, .{
-            .env = self.builtin_modules.builtin_module.env,
-            .statement_idx = self.builtin_modules.builtin_indices.result_type,
-        });
-
-        const str_ident = try env.common.insertIdent(self.gpa, base.Ident.for_text("Str"));
-        try module_envs_map.put(str_ident, .{
-            .env = self.builtin_modules.builtin_module.env,
-            .statement_idx = self.builtin_modules.builtin_indices.str_type,
-        });
+        // Populate module_envs with Bool, Result, Dict, Set using shared function
+        // This ensures production and tests use identical logic
+        try Can.populateModuleEnvs(
+            &module_envs_map,
+            env,
+            self.builtin_modules.builtin_module.env,
+            self.builtin_modules.builtin_indices,
+        );
 
         var czer = try Can.init(env, &parse_ast, &module_envs_map);
         try czer.canonicalizeFile();

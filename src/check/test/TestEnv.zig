@@ -33,6 +33,12 @@ const LoadedModule = struct {
         // Free the env struct itself
         self.gpa.destroy(self.env);
     }
+
+    /// Get an array of module environments for type checking
+    /// Uses the same shared helper as production for consistency
+    pub fn envs(self: *const LoadedModule) [3]*const ModuleEnv {
+        return ModuleEnv.makeBuiltinEnvsArray(self.env);
+    }
 };
 
 /// Deserialize BuiltinIndices from the binary data generated at build time
@@ -137,7 +143,6 @@ checker: Check,
 type_writer: types.TypeWriter,
 
 module_envs: std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
-imported_envs: std.array_list.Managed(*const ModuleEnv),
 
 // Loaded Builtin module (loaded per test, cleaned up in deinit)
 builtin_module: LoadedModule,
@@ -169,7 +174,6 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     errdefer gpa.destroy(can);
 
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
-    var imported_envs = std.array_list.Managed(*const ModuleEnv).init(gpa);
 
     std.debug.assert(!std.mem.eql(u8, module_name, other_module_name));
 
@@ -244,78 +248,15 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         .result_stmt = result_stmt_in_result_module,
     };
 
-    // Build imported_envs array to match the import indices assigned by canonicalizer
-    // The canonicalizer assigns import indices for:
-    // 1. Explicit imports (like "import A")
-    // 2. Auto-imported modules that are actually used (like Bool, Result)
+    // Use the same approach as production (roc check) - call builtin_module.envs()
+    const imported_envs = other_test_env.builtin_module.envs();
 
-    // Determine the size needed for imported_envs
-    var max_import_idx: usize = 0;
-
-    // Check the user module
-    if (can.import_indices.get(other_module_name)) |idx| {
-        const idx_int = @intFromEnum(idx);
-        if (idx_int > max_import_idx) max_import_idx = idx_int;
-    }
-
-    // Check Bool
-    if (can.import_indices.get("Bool")) |idx| {
-        const idx_int = @intFromEnum(idx);
-        if (idx_int > max_import_idx) max_import_idx = idx_int;
-    }
-
-    // Check Result
-    if (can.import_indices.get("Result")) |idx| {
-        const idx_int = @intFromEnum(idx);
-        if (idx_int > max_import_idx) max_import_idx = idx_int;
-    }
-
-    // Check Str
-    if (can.import_indices.get("Str")) |idx| {
-        const idx_int = @intFromEnum(idx);
-        if (idx_int > max_import_idx) max_import_idx = idx_int;
-    }
-    if (can.import_indices.get("Dict")) |idx| {
-        const idx_int = @intFromEnum(idx);
-        if (idx_int > max_import_idx) max_import_idx = idx_int;
-    }
-    if (can.import_indices.get("Set")) |idx| {
-        const idx_int = @intFromEnum(idx);
-        if (idx_int > max_import_idx) max_import_idx = idx_int;
-    }
-
-    // Allocate array of the right size, initialized to other_module_env as a safe default
-    try imported_envs.resize(max_import_idx + 1);
-    for (imported_envs.items) |*item| {
-        item.* = other_test_env.module_env; // Safe default
-    }
-
-    // Fill in the correct modules at their import indices
-    if (can.import_indices.get(other_module_name)) |idx| {
-        imported_envs.items[@intFromEnum(idx)] = other_test_env.module_env;
-    }
-    if (can.import_indices.get("Bool")) |idx| {
-        imported_envs.items[@intFromEnum(idx)] = builtin_env;
-    }
-    if (can.import_indices.get("Result")) |idx| {
-        imported_envs.items[@intFromEnum(idx)] = builtin_env;
-    }
-    if (can.import_indices.get("Str")) |idx| {
-        imported_envs.items[@intFromEnum(idx)] = builtin_env;
-    }
-    if (can.import_indices.get("Dict")) |idx| {
-        imported_envs.items[@intFromEnum(idx)] = builtin_env;
-    }
-    if (can.import_indices.get("Set")) |idx| {
-        imported_envs.items[@intFromEnum(idx)] = builtin_env;
-    }
-
-    // Type Check - Pass all imported modules (Bool, Result, and user module)
+    // Type Check - Pass all imported modules
     var checker = try Check.init(
         gpa,
         &module_env.types,
         module_env,
-        imported_envs.items,
+        &imported_envs,
         &module_envs,
         &module_env.store.regions,
         module_common_idents,
@@ -335,7 +276,6 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         .checker = checker,
         .type_writer = type_writer,
         .module_envs = module_envs,
-        .imported_envs = imported_envs,
         .builtin_module = other_test_env.builtin_module,
         .owns_builtin_module = false, // Borrowed from other_test_env
     };
@@ -358,7 +298,6 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     errdefer gpa.destroy(can);
 
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
-    var imported_envs = std.array_list.Managed(*const ModuleEnv).init(gpa);
 
     // Load Builtin module once - Bool, Result, and Str are all types within this module
     const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
@@ -373,30 +312,14 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     module_env.module_name = module_name;
     try module_env.common.calcLineStarts(gpa);
 
-    // Add Bool, Result, Dict, and Set to module_envs for auto-importing
-    // They all point to the same Builtin module env with different statement indices
-    // Note: Str is NOT added because it's a primitive builtin type that's handled
-    // specially in Can.zig line 5667 - it should never go through module_envs
-    const bool_ident = try module_env.insertIdent(base.Ident.for_text("Bool"));
-    const result_ident = try module_env.insertIdent(base.Ident.for_text("Result"));
-    const dict_ident = try module_env.insertIdent(base.Ident.for_text("Dict"));
-    const set_ident = try module_env.insertIdent(base.Ident.for_text("Set"));
-    try module_envs.put(bool_ident, .{
-        .env = builtin_module.env,
-        .statement_idx = builtin_indices.bool_type,
-    });
-    try module_envs.put(result_ident, .{
-        .env = builtin_module.env,
-        .statement_idx = builtin_indices.result_type,
-    });
-    try module_envs.put(dict_ident, .{
-        .env = builtin_module.env,
-        .statement_idx = builtin_indices.dict_type,
-    });
-    try module_envs.put(set_ident, .{
-        .env = builtin_module.env,
-        .statement_idx = builtin_indices.set_type,
-    });
+    // Populate module_envs with Bool, Result, Dict, Set using shared function
+    // This ensures production and tests use identical logic
+    try Can.populateModuleEnvs(
+        &module_envs,
+        module_env,
+        builtin_module.env,
+        builtin_indices,
+    );
 
     // Parse the AST
     parse_ast.* = try parse.parse(&module_env.common, gpa);
@@ -427,65 +350,15 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
         .result_stmt = result_stmt_in_result_module,
     };
 
-    // Build imported_envs array to match the import indices assigned by canonicalizer
-    // (imported_envs already declared above as std.array_list.Managed)
-
-    // Only build the array if there are actual imports
-    if (can.import_indices.size > 0) {
-        // Determine the size needed
-        var max_import_idx: usize = 0;
-        if (can.import_indices.get("Bool")) |idx| {
-            const idx_int = @intFromEnum(idx);
-            if (idx_int > max_import_idx) max_import_idx = idx_int;
-        }
-        if (can.import_indices.get("Result")) |idx| {
-            const idx_int = @intFromEnum(idx);
-            if (idx_int > max_import_idx) max_import_idx = idx_int;
-        }
-        if (can.import_indices.get("Str")) |idx| {
-            const idx_int = @intFromEnum(idx);
-            if (idx_int > max_import_idx) max_import_idx = idx_int;
-        }
-        if (can.import_indices.get("Dict")) |idx| {
-            const idx_int = @intFromEnum(idx);
-            if (idx_int > max_import_idx) max_import_idx = idx_int;
-        }
-        if (can.import_indices.get("Set")) |idx| {
-            const idx_int = @intFromEnum(idx);
-            if (idx_int > max_import_idx) max_import_idx = idx_int;
-        }
-
-        // Allocate array of the right size, initialized to builtin_module.env as a safe default
-        try imported_envs.resize(max_import_idx + 1);
-        for (imported_envs.items) |*item| {
-            item.* = builtin_module.env; // Safe default
-        }
-
-        // Fill in the correct modules at their import indices
-        // Bool, Result, Str, Dict, and Set all point to the same Builtin module env
-        if (can.import_indices.get("Bool")) |idx| {
-            imported_envs.items[@intFromEnum(idx)] = builtin_module.env;
-        }
-        if (can.import_indices.get("Result")) |idx| {
-            imported_envs.items[@intFromEnum(idx)] = builtin_module.env;
-        }
-        if (can.import_indices.get("Str")) |idx| {
-            imported_envs.items[@intFromEnum(idx)] = builtin_module.env;
-        }
-        if (can.import_indices.get("Dict")) |idx| {
-            imported_envs.items[@intFromEnum(idx)] = builtin_module.env;
-        }
-        if (can.import_indices.get("Set")) |idx| {
-            imported_envs.items[@intFromEnum(idx)] = builtin_module.env;
-        }
-    }
+    // Use the same approach as production (roc check) - call builtin_module.envs()
+    const imported_envs = builtin_module.envs();
 
     // Type Check - Pass the imported modules in other_modules parameter
     var checker = try Check.init(
         gpa,
         &module_env.types,
         module_env,
-        imported_envs.items,
+        &imported_envs,
         &module_envs,
         &module_env.store.regions,
         module_common_idents,
@@ -505,7 +378,6 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
         .checker = checker,
         .type_writer = type_writer,
         .module_envs = module_envs,
-        .imported_envs = imported_envs,
         .builtin_module = builtin_module,
         .owns_builtin_module = true, // We own this module
     };
@@ -540,7 +412,6 @@ pub fn deinit(self: *TestEnv) void {
     self.gpa.destroy(self.module_env);
 
     self.module_envs.deinit();
-    self.imported_envs.deinit();
 
     // Clean up loaded Builtin module (only if we own it)
     if (self.owns_builtin_module) {

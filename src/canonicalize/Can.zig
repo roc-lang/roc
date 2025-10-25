@@ -242,6 +242,37 @@ pub fn init(
     return result;
 }
 
+/// Populate module_envs map with auto-imported builtin types.
+/// This function is called BEFORE Can.init() by both production and test environments
+/// to ensure they use identical module setup logic.
+///
+/// Adds Bool, Result, Dict, and Set from the Builtin module to module_envs.
+/// Note: Str is NOT added because it's a primitive builtin type handled specially.
+pub fn populateModuleEnvs(
+    module_envs_map: *std.AutoHashMap(Ident.Idx, AutoImportedType),
+    calling_module_env: *ModuleEnv,
+    builtin_module_env: *const ModuleEnv,
+    builtin_indices: anytype, // Has fields: bool_type, result_type, dict_type, set_type
+) !void {
+    const types_to_add = .{
+        .{ "Bool", builtin_indices.bool_type },
+        .{ "Result", builtin_indices.result_type },
+        .{ "Dict", builtin_indices.dict_type },
+        .{ "Set", builtin_indices.set_type },
+    };
+
+    inline for (types_to_add) |type_info| {
+        const type_name = type_info[0];
+        const statement_idx = type_info[1];
+
+        const type_ident = try calling_module_env.insertIdent(base.Ident.for_text(type_name));
+        try module_envs_map.put(type_ident, .{
+            .env = builtin_module_env,
+            .statement_idx = statement_idx,
+        });
+    }
+}
+
 /// Set up auto-imported builtin types (Bool, Result, Dict, Set) from the Builtin module.
 /// This function is shared between production and test environments to ensure consistency.
 ///

@@ -42,11 +42,7 @@ pub const BuiltinModules = struct {
     /// Get an array of all builtin module environments for type checking
     /// For compatibility, we return the same Builtin env three times
     pub fn envs(self: *const BuiltinModules) [3]*const ModuleEnv {
-        return .{
-            self.builtin_module.env,
-            self.builtin_module.env,
-            self.builtin_module.env,
-        };
+        return ModuleEnv.makeBuiltinEnvsArray(self.builtin_module.env);
     }
 
     /// Create a BuiltinTypes instance from these builtin modules
