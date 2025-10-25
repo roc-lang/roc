@@ -99,6 +99,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .diagnostics = serialized_ptr.diagnostics,
         .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
         .evaluation_order = null,
+        .type_import_mapping = null,
     };
 
     return LoadedModule{
@@ -498,7 +499,6 @@ pub const Repl = struct {
 
         const bool_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Bool"));
         const result_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Result"));
-        const str_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Str"));
         const dict_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Dict"));
         const set_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Set"));
 
@@ -510,10 +510,8 @@ pub const Repl = struct {
             .env = self.builtin_module.env,
             .statement_idx = self.builtin_indices.result_type,
         });
-        // Str does NOT get a statement_idx because it's transformed to a primitive type
-        try module_envs_map.put(str_ident, .{
-            .env = self.builtin_module.env,
-        });
+        // Note: Str is not added to module_envs because it's transformed to a primitive type
+        // and should not be accessed as Builtin.Str
         try module_envs_map.put(dict_ident, .{
             .env = self.builtin_module.env,
             .statement_idx = self.builtin_indices.dict_type,

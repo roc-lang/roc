@@ -4141,7 +4141,7 @@ pub const Interpreter = struct {
 
     /// Initial a TypeWriter from an interpreter. Useful when debugging
     fn initTypeWriter(self: *const Interpreter) std.mem.Allocator.Error!types.TypeWriter {
-        return try types.TypeWriter.initFromParts(self.allocator, self.runtime_types, self.env.common.getIdentStore());
+        return try types.TypeWriter.initFromParts(self.allocator, self.runtime_types, self.env.common.getIdentStore(), null);
     }
 };
 

@@ -82,6 +82,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .diagnostics = serialized_ptr.diagnostics,
         .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
         .evaluation_order = null,
+        .type_import_mapping = null,
     };
 
     return LoadedModule{
@@ -169,11 +170,11 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     const other_module_ident = try module_env.insertIdent(base.Ident.for_text(other_module_name));
     try module_envs.put(other_module_ident, .{ .env = other_test_env.module_env });
 
-    // Add Bool, Result, Str, Dict, and Set to module_envs for auto-importing
+    // Add Bool, Result, Dict, and Set to module_envs for auto-importing
     // They all point to the same Builtin module env with different statement indices
+    // Note: Str is not added because it's transformed to a primitive type
     const bool_ident = try module_env.insertIdent(base.Ident.for_text("Bool"));
     const result_ident = try module_env.insertIdent(base.Ident.for_text("Result"));
-    const str_ident = try module_env.insertIdent(base.Ident.for_text("Str"));
     const dict_ident = try module_env.insertIdent(base.Ident.for_text("Dict"));
     const set_ident = try module_env.insertIdent(base.Ident.for_text("Set"));
     try module_envs.put(bool_ident, .{
@@ -183,11 +184,6 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     try module_envs.put(result_ident, .{
         .env = builtin_env,
         .statement_idx = builtin_indices.result_type,
-    });
-    // Str does NOT get a statement_idx because it's transformed to a primitive type
-    // (see transformStrNominalToPrimitive in builtin_compiler)
-    try module_envs.put(str_ident, .{
-        .env = builtin_env,
     });
     try module_envs.put(dict_ident, .{
         .env = builtin_env,
@@ -356,11 +352,11 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     module_env.module_name = module_name;
     try module_env.common.calcLineStarts(gpa);
 
-    // Add Bool, Result, Str, Dict, and Set to module_envs for auto-importing
+    // Add Bool, Result, Dict, and Set to module_envs for auto-importing
     // They all point to the same Builtin module env with different statement indices
+    // Note: Str is not added because it's transformed to a primitive type
     const bool_ident = try module_env.insertIdent(base.Ident.for_text("Bool"));
     const result_ident = try module_env.insertIdent(base.Ident.for_text("Result"));
-    const str_ident = try module_env.insertIdent(base.Ident.for_text("Str"));
     const dict_ident = try module_env.insertIdent(base.Ident.for_text("Dict"));
     const set_ident = try module_env.insertIdent(base.Ident.for_text("Set"));
     try module_envs.put(bool_ident, .{
@@ -370,11 +366,6 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     try module_envs.put(result_ident, .{
         .env = builtin_module.env,
         .statement_idx = builtin_indices.result_type,
-    });
-    // Str does NOT get a statement_idx because it's transformed to a primitive type
-    // (see transformStrNominalToPrimitive in builtin_compiler)
-    try module_envs.put(str_ident, .{
-        .env = builtin_module.env,
     });
     try module_envs.put(dict_ident, .{
         .env = builtin_module.env,

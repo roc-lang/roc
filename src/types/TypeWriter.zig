@@ -61,11 +61,15 @@ name_counters: std.EnumMap(TypeContext, u32),
 flex_var_names_map: std.AutoHashMap(Var, FlexVarNameRange),
 flex_var_names: std.array_list.Managed(u8),
 static_dispatch_constraints: std.array_list.Managed(types_mod.StaticDispatchConstraint),
+/// Optional mapping from fully-qualified type names to their display names based on top-level imports.
+/// This allows error messages to show "Str" instead of "Builtin.Str" for auto-imported types,
+/// "Bar" instead of "Foo.Bar" for nested imports, and aliases like "Baz" instead of "Foo".
+import_mapping: ?*const std.StringHashMap([]const u8),
 
 const FlexVarNameRange = struct { start: usize, end: usize };
 
 /// Initialize a TypeWriter with immutable types and idents references.
-pub fn initFromParts(gpa: std.mem.Allocator, types_store: *const TypesStore, idents: *const Ident.Store) std.mem.Allocator.Error!TypeWriter {
+pub fn initFromParts(gpa: std.mem.Allocator, types_store: *const TypesStore, idents: *const Ident.Store, import_mapping: ?*const std.StringHashMap([]const u8)) std.mem.Allocator.Error!TypeWriter {
     return .{
         .types = types_store,
         .idents = idents,
@@ -77,6 +81,7 @@ pub fn initFromParts(gpa: std.mem.Allocator, types_store: *const TypesStore, ide
         .flex_var_names_map = std.AutoHashMap(Var, FlexVarNameRange).init(gpa),
         .flex_var_names = try std.array_list.Managed(u8).initCapacity(gpa, 32),
         .static_dispatch_constraints = try std.array_list.Managed(types_mod.StaticDispatchConstraint).initCapacity(gpa, 32),
+        .import_mapping = import_mapping,
     };
 }
 
@@ -454,7 +459,7 @@ fn writeTuple(self: *TypeWriter, tuple: Tuple, root_var: Var) std.mem.Allocator.
 
 /// Write a nominal type
 fn writeNominalType(self: *TypeWriter, nominal_type: NominalType, root_var: Var) std.mem.Allocator.Error!void {
-    _ = try self.buf.writer().write(self.getIdent(nominal_type.ident.ident_idx));
+    _ = try self.buf.writer().write(self.getDisplayName(nominal_type.ident.ident_idx));
 
     var args_iter = self.types.iterNominalArgs(nominal_type);
     if (args_iter.count() > 0) {
@@ -947,4 +952,19 @@ fn countVarInFlatType(self: *TypeWriter, search_var: Var, flat_type: FlatType, c
 /// This is used when formatting types that reference named identifiers.
 pub fn getIdent(self: *const TypeWriter, idx: Ident.Idx) []const u8 {
     return self.idents.getText(idx);
+}
+
+/// Gets the display name for a type identifier, accounting for import mappings.
+/// If the identifier is in the import_mapping, returns the mapped name.
+/// Otherwise, returns the original identifier text.
+fn getDisplayName(self: *const TypeWriter, idx: Ident.Idx) []const u8 {
+    const original_name = self.idents.getText(idx);
+
+    if (self.import_mapping) |mapping| {
+        if (mapping.get(original_name)) |display_name| {
+            return display_name;
+        }
+    }
+
+    return original_name;
 }
