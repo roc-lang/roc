@@ -47,7 +47,6 @@ TYPE REDECLARED - type_comprehensive_scope.md:10:1:10:37
 UNDECLARED TYPE - type_comprehensive_scope.md:13:19:13:23
 TYPE REDECLARED - type_comprehensive_scope.md:22:1:22:13
 UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
-TOO MANY ARGS - type_comprehensive_scope.md:29:10:29:24
 # PROBLEMS
 **TYPE REDECLARED**
 The type _Result_ is being redeclared.
@@ -105,16 +104,6 @@ This type is referenced here:
 BadType : SomeUndeclaredType
 ```
           ^^^^^^^^^^^^^^^^^^
-
-
-**TOO MANY ARGS**
-The type _Dict_ expects  argument, but got  instead.
-**type_comprehensive_scope.md:29:10:29:24:**
-```roc
-MyDict : Dict(Str, U64)
-```
-         ^^^^^^^^^^^^^^
-
 
 
 # TOKENS
@@ -294,7 +283,7 @@ Complex : {
 		(ty-lookup (name "U64") (builtin)))
 	(s-alias-decl
 		(ty-header (name "MyString"))
-		(ty-lookup (name "Str") (external-module "Str")))
+		(ty-lookup (name "Str") (builtin)))
 	(s-alias-decl
 		(ty-header (name "MyBool"))
 		(ty-lookup (name "Bool") (external-module "Bool")))
@@ -302,7 +291,7 @@ Complex : {
 		(ty-header (name "Person"))
 		(ty-record
 			(field (field "name")
-				(ty-lookup (name "Str") (external-module "Str")))
+				(ty-lookup (name "Str") (builtin)))
 			(field (field "age")
 				(ty-lookup (name "U64") (builtin)))))
 	(s-alias-decl
@@ -338,7 +327,7 @@ Complex : {
 	(s-alias-decl
 		(ty-header (name "MyResult"))
 		(ty-apply (name "Result") (external-module "Result")
-			(ty-lookup (name "Str") (external-module "Str"))
+			(ty-lookup (name "Str") (builtin))
 			(ty-lookup (name "U64") (builtin))))
 	(s-alias-decl
 		(ty-header (name "Person"))
@@ -349,11 +338,11 @@ Complex : {
 	(s-alias-decl
 		(ty-header (name "MyList"))
 		(ty-apply (name "List") (builtin)
-			(ty-lookup (name "Str") (external-module "Str"))))
+			(ty-lookup (name "Str") (builtin))))
 	(s-alias-decl
 		(ty-header (name "MyDict"))
-		(ty-apply (name "Dict") (external-module "Dict")
-			(ty-lookup (name "Str") (external-module "Str"))
+		(ty-apply (name "Dict") (external-module "Builtin")
+			(ty-lookup (name "Str") (builtin))
 			(ty-lookup (name "U64") (builtin))))
 	(s-alias-decl
 		(ty-header (name "Complex"))
@@ -363,7 +352,7 @@ Complex : {
 			(field (field "result")
 				(ty-apply (name "Result") (external-module "Result")
 					(ty-lookup (name "Bool") (external-module "Bool"))
-					(ty-lookup (name "Str") (external-module "Str"))))
+					(ty-lookup (name "Str") (builtin))))
 			(field (field "tree")
 				(ty-apply (name "Tree") (local)
 					(ty-lookup (name "U64") (builtin)))))))

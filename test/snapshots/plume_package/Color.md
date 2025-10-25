@@ -81,7 +81,6 @@ is_named_color = |str|{
 MODULE HEADER DEPRECATED - Color.md:1:1:8:2
 UNUSED VARIABLE - Color.md:30:5:30:25
 DOES NOT EXIST - Color.md:68:14:68:27
-TYPE MISMATCH - Color.md:32:5:45:6
 TYPE MISMATCH - Color.md:51:104:51:105
 TYPE DOES NOT HAVE METHODS - Color.md:22:15:22:26
 TYPE DOES NOT HAVE METHODS - Color.md:29:13:29:26
@@ -133,32 +132,6 @@ The unused variable is declared here:
 ```
              ^^^^^^^^^^^^^
 
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**Color.md:32:5:45:6:**
-```roc
-    match bytes {
-        ['#', a, b, c, d, e, f] => {
-            is_valid =
-                a.is_char_in_hex_range()
-                and b.is_char_in_hex_range()
-                and c.is_char_in_hex_range()
-                and d.is_char_in_hex_range()
-                and e.is_char_in_hex_range()
-                and f.is_char_in_hex_range()
-
-            if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
-        }
-        _ => Err(InvalidHex("Expected Hex must start with # and be 7 characters long, got ${str}"))
-    }
-```
-
-It has the type:
-    _[InvalidHex(Str), Err([InvalidHex(Str)]_others)][Ok(Color)]_others2_
-
-But the type annotation says it should have the type:
-    _Result(Color, [InvalidHex(Str)])_
 
 **TYPE MISMATCH**
 The first argument being passed to this function has the wrong type:
@@ -986,12 +959,12 @@ is_named_color = |str| {
 															(e-literal (string "")))))))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Str") (external-module "Str"))
+				(ty-lookup (name "Str") (builtin))
 				(ty-apply (name "Result") (external-module "Result")
 					(ty-lookup (name "Color") (local))
 					(ty-tag-union
 						(ty-tag-name (name "InvalidHex")
-							(ty-lookup (name "Str") (external-module "Str"))))))))
+							(ty-lookup (name "Str") (builtin))))))))
 	(d-let
 		(p-assign (ident "to_str"))
 		(e-closure
@@ -1092,7 +1065,7 @@ is_named_color = |str| {
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Color") (local))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "named"))
 		(e-lambda
@@ -1125,12 +1098,12 @@ is_named_color = |str| {
 										(e-literal (string ""))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Str") (external-module "Str"))
+				(ty-lookup (name "Str") (builtin))
 				(ty-apply (name "Result") (external-module "Result")
 					(ty-lookup (name "Color") (local))
 					(ty-tag-union
 						(ty-tag-name (name "UnknownColor")
-							(ty-lookup (name "Str") (external-module "Str"))))))))
+							(ty-lookup (name "Str") (builtin))))))))
 	(d-let
 		(p-assign (ident "is_named_color"))
 		(e-lambda
@@ -1169,9 +1142,9 @@ is_named_color = |str| {
 				(ty-lookup (name "U8") (builtin))
 				(ty-lookup (name "Dec") (builtin)))
 			(ty-tag-name (name "Named")
-				(ty-lookup (name "Str") (external-module "Str")))
+				(ty-lookup (name "Str") (builtin)))
 			(ty-tag-name (name "Hex")
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(s-expect
 		(e-binop (op "eq")
 			(e-dot-access (field "to_str")
@@ -1224,7 +1197,7 @@ is_named_color = |str| {
 		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
 		(patt (type "Str -> Error"))
 		(patt (type "Error -> Error"))
-		(patt (type "Str -> Result(Color, [UnknownColor(Str)])"))
+		(patt (type "Str -> Error"))
 		(patt (type "_arg -> Error")))
 	(type_decls
 		(nominal (type "Color")
@@ -1234,6 +1207,6 @@ is_named_color = |str| {
 		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
 		(expr (type "Str -> Error"))
 		(expr (type "Error -> Error"))
-		(expr (type "Str -> Result(Color, [UnknownColor(Str)])"))
+		(expr (type "Str -> Error"))
 		(expr (type "_arg -> Error"))))
 ~~~

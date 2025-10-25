@@ -167,8 +167,8 @@ main = (helper1(val), helper2(val))
 						(p-assign (ident "val"))))))
 		(annotation
 			(ty-tuple
-				(ty-lookup (name "Str") (external-module "Str"))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "BasicNoAnno.to_str"))
 		(e-closure
@@ -194,7 +194,7 @@ main = (helper1(val), helper2(val))
 		(ty-header (name "BasicNoAnno"))
 		(ty-tag-union
 			(ty-tag-name (name "Val")
-				(ty-lookup (name "Str") (external-module "Str"))))))
+				(ty-lookup (name "Str") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure

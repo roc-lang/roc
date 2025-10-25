@@ -52,7 +52,7 @@ NO CHANGE
 		(ty-lookup (name "U64") (builtin)))
 	(s-alias-decl
 		(ty-header (name "SecondType"))
-		(ty-lookup (name "Str") (external-module "Str")))
+		(ty-lookup (name "Str") (builtin)))
 	(s-alias-decl
 		(ty-header (name "ThirdType"))
 		(ty-apply (name "List") (builtin)

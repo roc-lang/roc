@@ -142,32 +142,25 @@ pub fn build(b: *std.Build) void {
     // We cache the builtin compiler executable to avoid ~doubling normal build times.
     // CI always rebuilds from scratch, so it's not affected by this caching.
 
-    // Discover all .roc files in src/build/roc/
-    const roc_files = discoverBuiltinRocFiles(b) catch |err| {
-        std.debug.print("Failed to discover builtin .roc files: {}\n", .{err});
-        return;
-    };
+    // Use the single Builtin.roc file
+    const builtin_roc_path = "src/build/roc/Builtin.roc";
 
     // Check if we need to rebuild builtins by comparing .roc and .bin file timestamps
     const should_rebuild_builtins = blk: {
-        for (roc_files) |roc_path| {
-            // Get the base name (e.g., "Dict" from "src/build/roc/Dict.roc")
-            const roc_basename = std.fs.path.basename(roc_path);
-            const name_without_ext = roc_basename[0 .. roc_basename.len - 4]; // Remove ".roc"
+        const builtin_bin_path = "zig-out/builtins/Builtin.bin";
 
-            // Check if corresponding .bin file exists and is up-to-date
-            const bin_path = b.fmt("zig-out/builtins/{s}.bin", .{name_without_ext});
+        const roc_stat = std.fs.cwd().statFile(builtin_roc_path) catch break :blk true;
+        const bin_stat = std.fs.cwd().statFile(builtin_bin_path) catch break :blk true;
 
-            const roc_stat = std.fs.cwd().statFile(roc_path) catch break :blk true;
-            const bin_stat = std.fs.cwd().statFile(bin_path) catch break :blk true;
-
-            // If .roc file is newer than .bin file, rebuild
-            if (roc_stat.mtime > bin_stat.mtime) {
-                break :blk true;
-            }
+        // If .roc file is newer than .bin file, rebuild
+        if (roc_stat.mtime > bin_stat.mtime) {
+            break :blk true;
         }
 
-        // All .bin files exist and are up-to-date
+        // Check if builtin_indices.bin exists
+        _ = std.fs.cwd().statFile("zig-out/builtins/builtin_indices.bin") catch break :blk true;
+
+        // Builtin.bin exists and is up-to-date
         break :blk false;
     };
 
@@ -203,44 +196,37 @@ pub fn build(b: *std.Build) void {
         // Run the builtin compiler to generate .bin files in zig-out/builtins/
         const run_builtin_compiler = b.addRunArtifact(builtin_compiler_exe);
 
-        // Add all .roc files as explicit file inputs so Zig's cache tracks them
-        for (roc_files) |roc_path| {
-            run_builtin_compiler.addFileArg(b.path(roc_path));
-        }
+        // Add Builtin.roc as explicit file input so Zig's cache tracks it
+        run_builtin_compiler.addFileArg(b.path(builtin_roc_path));
 
         write_compiled_builtins.step.dependOn(&run_builtin_compiler.step);
     }
 
-    // Use .bin files from zig-out/builtins/ (whether they were just regenerated or
-    // already there from a previous run).
-    for (roc_files) |roc_path| {
-        const roc_basename = std.fs.path.basename(roc_path);
-        const name_without_ext = roc_basename[0 .. roc_basename.len - 4];
-        const bin_filename = b.fmt("{s}.bin", .{name_without_ext});
+    // Copy Builtin.bin from zig-out/builtins/
+    _ = write_compiled_builtins.addCopyFile(
+        .{ .cwd_relative = "zig-out/builtins/Builtin.bin" },
+        "Builtin.bin",
+    );
 
-        _ = write_compiled_builtins.addCopyFile(
-            .{ .cwd_relative = b.fmt("zig-out/builtins/{s}", .{bin_filename}) },
-            bin_filename,
-        );
+    // Copy the source Builtin.roc file for embedding
+    _ = write_compiled_builtins.addCopyFile(
+        b.path(builtin_roc_path),
+        "Builtin.roc",
+    );
 
-        // Also copy the source .roc file for embedding
-        _ = write_compiled_builtins.addCopyFile(
-            b.path(roc_path),
-            roc_basename,
-        );
-    }
-
-    // Also copy builtin_indices.bin
+    // Copy builtin_indices.bin
     _ = write_compiled_builtins.addCopyFile(
         .{ .cwd_relative = "zig-out/builtins/builtin_indices.bin" },
         "builtin_indices.bin",
     );
 
-    // Generate compiled_builtins.zig dynamically based on discovered .roc files
-    const builtins_source_str = generateCompiledBuiltinsSource(b, roc_files) catch |err| {
-        std.debug.print("Failed to generate compiled_builtins.zig: {}\n", .{err});
-        return;
-    };
+    // Generate compiled_builtins.zig with hardcoded Builtin module
+    const builtins_source_str =
+        \\pub const builtin_bin = @embedFile("Builtin.bin");
+        \\pub const builtin_source = @embedFile("Builtin.roc");
+        \\pub const builtin_indices_bin = @embedFile("builtin_indices.bin");
+        \\
+    ;
 
     const compiled_builtins_source = write_compiled_builtins.add(
         "compiled_builtins.zig",

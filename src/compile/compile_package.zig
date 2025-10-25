@@ -589,15 +589,24 @@ pub const PackageEnv = struct {
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(self.gpa);
         defer module_envs_map.deinit();
 
-        // Add Bool, Result, and Str to the map
+        // Add Bool, Result, and Str to the map, all pointing to the Builtin module with pre-computed statement indices
         const bool_ident = try env.common.insertIdent(self.gpa, base.Ident.for_text("Bool"));
-        try module_envs_map.put(bool_ident, .{ .env = self.builtin_modules.bool_module.env });
+        try module_envs_map.put(bool_ident, .{
+            .env = self.builtin_modules.builtin_module.env,
+            .statement_idx = self.builtin_modules.builtin_indices.bool_type,
+        });
 
         const result_ident = try env.common.insertIdent(self.gpa, base.Ident.for_text("Result"));
-        try module_envs_map.put(result_ident, .{ .env = self.builtin_modules.result_module.env });
+        try module_envs_map.put(result_ident, .{
+            .env = self.builtin_modules.builtin_module.env,
+            .statement_idx = self.builtin_modules.builtin_indices.result_type,
+        });
 
         const str_ident = try env.common.insertIdent(self.gpa, base.Ident.for_text("Str"));
-        try module_envs_map.put(str_ident, .{ .env = self.builtin_modules.str_module.env });
+        try module_envs_map.put(str_ident, .{
+            .env = self.builtin_modules.builtin_module.env,
+            .statement_idx = self.builtin_modules.builtin_indices.str_type,
+        });
 
         var czer = try Can.init(env, &parse_ast, &module_envs_map);
         try czer.canonicalizeFile();
@@ -830,18 +839,12 @@ pub const PackageEnv = struct {
         }
 
         // After type checking, evaluate top-level declarations at compile time
-        // Load builtin modules required by the interpreter (reuse builtin_indices from above)
-        const bool_source = compiled_builtins.bool_source;
-        const result_source = compiled_builtins.result_source;
-        const str_source = compiled_builtins.str_source;
-        var bool_module = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.bool_bin, "Bool", bool_source);
-        defer bool_module.deinit();
-        var result_module = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.result_bin, "Result", result_source);
-        defer result_module.deinit();
-        var str_module = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.str_bin, "Str", str_source);
-        defer str_module.deinit();
+        // Load builtin module required by the interpreter (reuse builtin_indices from above)
+        const builtin_source = compiled_builtins.builtin_source;
+        var builtin_module = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.builtin_bin, "Builtin", builtin_source);
+        defer builtin_module.deinit();
 
-        const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+        const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
         var comptime_evaluator = try eval.ComptimeEvaluator.init(self.gpa, env, imported_envs.items, &checker.problems, builtin_types_for_eval);
         _ = try comptime_evaluator.evalAll();
 

@@ -114,9 +114,9 @@ pub const CommonIdents = struct {
     module_name: base.Ident.Idx,
     list: base.Ident.Idx,
     box: base.Ident.Idx,
-    /// Statement index of Bool type in the current module (injected from Bool.bin)
+    /// Statement index of Bool type in the current module (injected from Builtin.bin)
     bool_stmt: can.CIR.Statement.Idx,
-    /// Statement index of Result type in the current module (injected from Result.bin)
+    /// Statement index of Result type in the current module (injected from Builtin.bin)
     result_stmt: can.CIR.Statement.Idx,
 };
 
@@ -582,28 +582,51 @@ fn updateVar(self: *Self, target_var: Var, content: types_mod.Content, rank: typ
 /// other modules directly. The Bool and Result types are used in language constructs like
 /// `if` conditions and need to be available in every module's type store.
 fn copyBuiltinTypes(self: *Self) !void {
-    // Find the Bool and Result modules in imported_modules
-    var bool_module: ?*const ModuleEnv = null;
-    var result_module: ?*const ModuleEnv = null;
+    // Special case: if we're compiling the Builtin module itself, use the current module_env
+    if (std.mem.eql(u8, self.cir.module_name, "Builtin")) {
+        const bool_stmt_idx = self.common_idents.bool_stmt;
+        const bool_type_var = ModuleEnv.varFrom(bool_stmt_idx);
+        self.bool_var = try self.copyVar(bool_type_var, self.cir, Region.zero());
+        return;
+    }
 
+    // Find the Builtin module env - try imported_modules first, then module_envs
+    var builtin_module: ?*const ModuleEnv = null;
+
+    // First, check imported_modules for a module named "Builtin"
     for (self.imported_modules) |module_env| {
-        if (std.mem.eql(u8, module_env.module_name, "Bool")) {
-            bool_module = module_env;
-        } else if (std.mem.eql(u8, module_env.module_name, "Result")) {
-            result_module = module_env;
+        if (std.mem.eql(u8, module_env.module_name, "Builtin")) {
+            builtin_module = module_env;
+            break;
         }
     }
 
-    // Copy Bool type from Bool module
-    if (bool_module) |bool_env| {
+    // If not found in imported_modules, try getting it from module_envs via Bool
+    if (builtin_module == null and self.module_envs != null) {
+        const module_envs = self.module_envs.?;
+
+        // Look up "Bool" in module_envs to get the Builtin module env
+        const bool_ident_text = "Bool";
+        var iter = module_envs.iterator();
+        while (iter.next()) |entry| {
+            const ident_idx = entry.key_ptr.*;
+            const ident_str = self.cir.common.idents.getText(ident_idx);
+
+            if (std.mem.eql(u8, ident_str, bool_ident_text)) {
+                builtin_module = entry.value_ptr.env;
+                break;
+            }
+        }
+    }
+
+    // Copy Bool type from Builtin module
+    if (builtin_module) |builtin_env| {
         const bool_stmt_idx = self.common_idents.bool_stmt;
         const bool_type_var = ModuleEnv.varFrom(bool_stmt_idx);
-        self.bool_var = try self.copyVar(bool_type_var, bool_env, Region.zero());
+        self.bool_var = try self.copyVar(bool_type_var, builtin_env, Region.zero());
     } else {
-        // If Bool module not found, use the statement from the current module
-        // This happens when Bool is loaded as a builtin statement
-        const bool_stmt_idx = self.common_idents.bool_stmt;
-        self.bool_var = ModuleEnv.varFrom(bool_stmt_idx);
+        // If Builtin module still not found, this is an error - panic with helpful message
+        std.debug.panic("Cannot find Builtin module env to copy Bool type", .{});
     }
 
     // Result type is accessed via external references, no need to copy it here

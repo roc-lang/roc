@@ -165,7 +165,7 @@ MultiType(_, _, c) : c
 		(ty-header (name "MyType")
 			(ty-args
 				(ty-underscore)))
-		(ty-lookup (name "Str") (external-module "Str")))
+		(ty-lookup (name "Str") (builtin)))
 	(s-alias-decl
 		(ty-header (name "MyType2")
 			(ty-args

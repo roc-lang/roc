@@ -62,12 +62,12 @@ NO CHANGE
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))
-				(ty-lookup (name "Str") (external-module "Str")))
+				(ty-lookup (name "Str") (builtin)))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "to_str")
 					(args
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-					(ty-lookup (name "Str") (external-module "Str")))))))
+					(ty-lookup (name "Str") (builtin)))))))
 ~~~
 # TYPES
 ~~~clojure
