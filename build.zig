@@ -141,8 +141,6 @@ pub fn build(b: *std.Build) void {
     //
     // We cache the builtin compiler executable to avoid ~doubling normal build times.
     // CI always rebuilds from scratch, so it's not affected by this caching.
-
-    // Use the single Builtin.roc file
     const builtin_roc_path = "src/build/roc/Builtin.roc";
 
     // Check if we need to rebuild builtins by comparing .roc and .bin file timestamps

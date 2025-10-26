@@ -130,8 +130,8 @@ pub fn main() !void {
         gpa.free(builtin_roc_source);
     }
 
-    // Find top-level type declarations in Builtin module
-    // These are now top-level types in Builtin.roc
+    // Find nested type declarations in Builtin module
+    // These are nested inside Builtin's record extension (Builtin := [Empty].{...})
     const bool_type_idx = try findTypeDeclaration(builtin_env, "Bool");
     const result_type_idx = try findTypeDeclaration(builtin_env, "Result");
     const dict_type_idx = try findTypeDeclaration(builtin_env, "Dict");
