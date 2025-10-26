@@ -74,14 +74,14 @@ foo = |a| {
 					(p-assign (ident "a")))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Bool") (external-module "Bool"))
-				(ty-lookup (name "Bool") (external-module "Bool"))))))
+				(ty-lookup (name "Bool") (external-module "Builtin"))
+				(ty-lookup (name "Bool") (external-module "Builtin"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Error")))
+		(patt (type "Bool -> Bool")))
 	(expressions
-		(expr (type "Error -> Error"))))
+		(expr (type "Bool -> Bool"))))
 ~~~

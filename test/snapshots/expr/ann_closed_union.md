@@ -56,5 +56,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[Apple][IsFruit(Error)]"))
+(expr (type "[Apple][IsFruit(Bool)]"))
 ~~~

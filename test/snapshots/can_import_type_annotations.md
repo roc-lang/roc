@@ -46,7 +46,6 @@ combineResults = |result1, result2|
 # EXPECTED
 MODULE NOT FOUND - can_import_type_annotations.md:1:1:1:56
 MODULE NOT FOUND - can_import_type_annotations.md:2:1:2:17
-DUPLICATE DEFINITION - can_import_type_annotations.md:1:1:1:1
 MODULE NOT FOUND - can_import_type_annotations.md:3:1:3:38
 UNDECLARED TYPE - can_import_type_annotations.md:5:18:5:25
 UNDECLARED TYPE - can_import_type_annotations.md:5:29:5:37
@@ -80,24 +79,6 @@ You're attempting to use this module here:
 import json.Json
 ```
 ^^^^^^^^^^^^^^^^
-
-
-**DUPLICATE DEFINITION**
-The name `Result` is being redeclared in this scope.
-
-The redeclaration is here:
-**can_import_type_annotations.md:1:1:1:1:**
-```roc
-import http.Client as Http exposing [Request, Response]
-```
-^
-
-But `Result` was already defined here:
-**can_import_type_annotations.md:1:1:1:1:**
-```roc
-import http.Client as Http exposing [Request, Response]
-```
-^
 
 
 **MODULE NOT FOUND**
@@ -528,7 +509,7 @@ combineResults = |result1, result2|
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Request") (external-module "http.Client"))
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-apply (name "Result") (external-module "Builtin")
 					(ty-lookup (name "Response") (external-module "http.Client"))
 					(ty-lookup (name "Error") (external-module "json.Json"))))))
 	(d-let
@@ -552,7 +533,7 @@ combineResults = |result1, result2|
 			(ty-fn (effectful false)
 				(ty-malformed)
 				(ty-lookup (name "Str") (builtin))
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-apply (name "Result") (external-module "Builtin")
 					(ty-lookup (name "Value") (external-module "json.Json"))
 					(ty-malformed)))))
 	(d-let
@@ -617,13 +598,13 @@ combineResults = |result1, result2|
 												(p-assign (ident "err"))))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-apply (name "Result") (external-module "Builtin")
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "err")))
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-apply (name "Result") (external-module "Builtin")
 					(ty-rigid-var (name "b"))
 					(ty-rigid-var-lookup (ty-rigid-var (name "err"))))
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-apply (name "Result") (external-module "Builtin")
 					(ty-tuple
 						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))
@@ -644,15 +625,15 @@ combineResults = |result1, result2|
 	(defs
 		(patt (type "Error -> Error"))
 		(patt (type "Str -> Error"))
-		(patt (type "Error -> Error"))
+		(patt (type "Error -> Result(Error, Error)"))
 		(patt (type "Error"))
 		(patt (type "Error, Str -> Error"))
-		(patt (type "Error, Error -> Error")))
+		(patt (type "Result(a, err), Result(b, err) -> Result((a, b), err)")))
 	(expressions
 		(expr (type "Error -> Error"))
 		(expr (type "Str -> Error"))
-		(expr (type "Error -> Error"))
+		(expr (type "Error -> Result(Error, Error)"))
 		(expr (type "Error"))
 		(expr (type "Error, Str -> Error"))
-		(expr (type "Error, Error -> Error"))))
+		(expr (type "Result(a, err), Result(b, err) -> Result((a, b), err)"))))
 ~~~

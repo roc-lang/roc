@@ -181,7 +181,7 @@ NO CHANGE
 				(e-literal (string "processed"))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Result") (external-module "Result"))
+				(ty-lookup (name "Result") (external-module "Builtin"))
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "handleResponse"))
@@ -220,7 +220,7 @@ NO CHANGE
 		(ty-header (name "Response"))
 		(ty-tag-union
 			(ty-tag-name (name "Ok")
-				(ty-lookup (name "Result") (external-module "Result")))
+				(ty-lookup (name "Result") (external-module "Builtin")))
 			(ty-tag-name (name "NetworkError"))
 			(ty-tag-name (name "ParseError"))))
 	(s-alias-decl
@@ -243,7 +243,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Str"))
+		(patt (type "Result(ok, err) -> Str"))
 		(patt (type "Response -> Str"))
 		(patt (type "_arg -> {}")))
 	(type_decls
@@ -258,7 +258,7 @@ NO CHANGE
 		(alias (type "ConnectionState")
 			(ty-header (name "ConnectionState"))))
 	(expressions
-		(expr (type "Error -> Str"))
+		(expr (type "Result(ok, err) -> Str"))
 		(expr (type "Response -> Str"))
 		(expr (type "_arg -> {}"))))
 ~~~

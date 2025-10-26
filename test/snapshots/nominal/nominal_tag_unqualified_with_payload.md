@@ -143,7 +143,7 @@ isOk = |result| match result {
 				(ty-apply (name "MyResult") (local)
 					(ty-rigid-var (name "ok"))
 					(ty-rigid-var (name "err")))
-				(ty-lookup (name "Bool") (external-module "Bool")))))
+				(ty-lookup (name "Bool") (external-module "Builtin")))))
 	(s-nominal-decl
 		(ty-header (name "MyResult")
 			(ty-args
@@ -160,7 +160,7 @@ isOk = |result| match result {
 (inferred-types
 	(defs
 		(patt (type "MyResult(Str, Num(Int(Signed32)))"))
-		(patt (type "MyResult(ok, err) -> Error")))
+		(patt (type "MyResult(ok, err) -> Bool")))
 	(type_decls
 		(nominal (type "MyResult(ok, err)")
 			(ty-header (name "MyResult")
@@ -169,5 +169,5 @@ isOk = |result| match result {
 					(ty-rigid-var (name "err"))))))
 	(expressions
 		(expr (type "MyResult(Str, Num(Int(Signed32)))"))
-		(expr (type "MyResult(ok, err) -> Error"))))
+		(expr (type "MyResult(ok, err) -> Bool"))))
 ~~~

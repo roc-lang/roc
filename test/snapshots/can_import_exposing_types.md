@@ -64,7 +64,6 @@ UNDECLARED TYPE - can_import_exposing_types.md:30:18:30:24
 UNDECLARED TYPE - can_import_exposing_types.md:31:23:31:31
 MODULE NOT FOUND - can_import_exposing_types.md:1:1:1:49
 MODULE NOT FOUND - can_import_exposing_types.md:2:1:2:64
-DUPLICATE DEFINITION - can_import_exposing_types.md:1:1:1:1
 MODULE NOT FOUND - can_import_exposing_types.md:3:1:3:38
 UNDECLARED TYPE - can_import_exposing_types.md:6:27:6:32
 UNDECLARED TYPE - can_import_exposing_types.md:6:34:6:39
@@ -145,24 +144,6 @@ You're attempting to use this module here:
 import http.Client as Http exposing [Request, Response, Status]
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**DUPLICATE DEFINITION**
-The name `Result` is being redeclared in this scope.
-
-The redeclaration is here:
-**can_import_exposing_types.md:1:1:1:1:**
-```roc
-import json.Json exposing [Value, Error, Config]
-```
-^
-
-But `Result` was already defined here:
-**can_import_exposing_types.md:1:1:1:1:**
-```roc
-import json.Json exposing [Value, Error, Config]
-```
-^
 
 
 **MODULE NOT FOUND**
@@ -744,7 +725,7 @@ combineResults = |jsonResult, httpStatus|
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-apply (name "Result") (external-module "Builtin")
 					(ty-malformed)
 					(ty-malformed)))))
 	(d-let
@@ -820,7 +801,7 @@ combineResults = |jsonResult, httpStatus|
 				(ty-malformed)
 				(ty-apply (name "List") (builtin)
 					(ty-malformed))
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-apply (name "Result") (external-module "Builtin")
 					(ty-apply (name "List") (builtin)
 						(ty-malformed))
 					(ty-malformed)))))
@@ -920,11 +901,11 @@ combineResults = |jsonResult, httpStatus|
 												(p-assign (ident "error"))))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-apply (name "Result") (external-module "Builtin")
 					(ty-malformed)
 					(ty-malformed))
 				(ty-malformed)
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-apply (name "Result") (external-module "Builtin")
 					(ty-malformed)
 					(ty-malformed)))))
 	(s-alias-decl
@@ -959,7 +940,7 @@ combineResults = |jsonResult, httpStatus|
 		(patt (type "Error, List(Error) -> Error"))
 		(patt (type "Error -> Error"))
 		(patt (type "Error -> Error"))
-		(patt (type "Error, Error -> Error")))
+		(patt (type "Result(Error, Error), Error -> Result(Error, Error)")))
 	(type_decls
 		(alias (type "ServerConfig")
 			(ty-header (name "ServerConfig"))))
@@ -969,5 +950,5 @@ combineResults = |jsonResult, httpStatus|
 		(expr (type "Error, List(Error) -> Error"))
 		(expr (type "Error -> Error"))
 		(expr (type "Error -> Error"))
-		(expr (type "Error, Error -> Error"))))
+		(expr (type "Result(Error, Error), Error -> Result(Error, Error)"))))
 ~~~

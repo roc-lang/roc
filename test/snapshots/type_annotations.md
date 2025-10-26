@@ -126,7 +126,7 @@ NO CHANGE
 		(ty-fn (effectful false)
 			(ty-apply (name "List") (builtin)
 				(ty-malformed))
-			(ty-apply (name "Result") (external-module "Result")
+			(ty-apply (name "Result") (external-module "Builtin")
 				(ty-record)
 				(ty-underscore)))))
 ~~~

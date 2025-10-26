@@ -84,7 +84,7 @@ EndOfFile,
 	(s-type-anno (name "launchTheNukes")
 		(ty-fn (effectful true)
 			(ty-record)
-			(ty-lookup (name "Result") (external-module "Result"))))
+			(ty-lookup (name "Result") (external-module "Builtin"))))
 	(s-expr
 		(e-tag (name "Bool")))
 	(s-expr

@@ -19,45 +19,28 @@ boxed : Box(Foo.Bar)
 boxed = Box(X)
 ~~~
 # EXPECTED
-UNDECLARED TYPE VARIABLE - nominal_associated_in_tuples.md:9:7:9:8
-UNDECLARED TYPE VARIABLE - nominal_associated_in_tuples.md:9:17:9:18
-TOO MANY ARGS - nominal_associated_in_tuples.md:11:9:11:21
+COMPILER DIAGNOSTIC - /Users/rtfeldman/code/roc/test/snapshots/nominal/nominal_associated_in_tuples.md:0:0:0:0
+TYPE MISMATCH - nominal_associated_in_tuples.md:12:9:12:15
 # PROBLEMS
-**UNDECLARED TYPE VARIABLE**
-The type variable _a_ is not declared in this scope.
+**COMPILER DIAGNOSTIC**
 
-Type variables must be introduced in a type annotation before they can be used.
+**Compiler Diagnostic**
+Diagnostic type 'ident_already_in_scope' is not yet handled in report generation.
+**/Users/rtfeldman/code/roc/test/snapshots/nominal/nominal_associated_in_tuples.md:0:0:0:0**
 
-This type variable is referenced here:
-**nominal_associated_in_tuples.md:9:7:9:8:**
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**nominal_associated_in_tuples.md:12:9:12:15:**
 ```roc
-Box : a -> [Box(a)]
+boxed = Box(X)
 ```
-      ^
+        ^^^^^^
 
+It has the type:
+    _[Box([X]_others)]_others2_
 
-**UNDECLARED TYPE VARIABLE**
-The type variable _a_ is not declared in this scope.
-
-Type variables must be introduced in a type annotation before they can be used.
-
-This type variable is referenced here:
-**nominal_associated_in_tuples.md:9:17:9:18:**
-```roc
-Box : a -> [Box(a)]
-```
-                ^
-
-
-**TOO MANY ARGS**
-The type _Box_ expects  argument, but got  instead.
-**nominal_associated_in_tuples.md:11:9:11:21:**
-```roc
-boxed : Box(Foo.Bar)
-```
-        ^^^^^^^^^^^^
-
-
+But the type annotation says it should have the type:
+    _Box(Foo.Bar)_
 
 # TOKENS
 ~~~zig
@@ -160,7 +143,7 @@ boxed = Box(X)
 			(args
 				(e-tag (name "X"))))
 		(annotation
-			(ty-apply (name "Box") (local)
+			(ty-apply (name "Box") (builtin)
 				(ty-lookup (name "Foo.Bar") (local)))))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
@@ -174,14 +157,7 @@ boxed = Box(X)
 	(s-nominal-decl
 		(ty-header (name "Foo.Baz"))
 		(ty-tag-union
-			(ty-tag-name (name "Z"))))
-	(s-alias-decl
-		(ty-header (name "Box"))
-		(ty-fn (effectful false)
-			(ty-malformed)
-			(ty-tag-union
-				(ty-tag-name (name "Box")
-					(ty-malformed))))))
+			(ty-tag-name (name "Z")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -195,9 +171,7 @@ boxed = Box(X)
 		(nominal (type "Foo.Bar")
 			(ty-header (name "Foo.Bar")))
 		(nominal (type "Foo.Baz")
-			(ty-header (name "Foo.Baz")))
-		(alias (type "Box")
-			(ty-header (name "Box"))))
+			(ty-header (name "Foo.Baz"))))
 	(expressions
 		(expr (type "(Foo.Bar, Foo.Baz)"))
 		(expr (type "Error"))))

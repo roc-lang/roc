@@ -11,8 +11,8 @@ match person {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - pattern_destructure_with_rest.md:1:7:1:13
-DOES NOT EXIST - pattern_destructure_with_rest.md:2:33:2:40
-DOES NOT EXIST - pattern_destructure_with_rest.md:2:55:2:62
+UNDEFINED VARIABLE - pattern_destructure_with_rest.md:2:33:2:40
+UNDEFINED VARIABLE - pattern_destructure_with_rest.md:2:55:2:62
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `person` in this scope.
@@ -25,8 +25,9 @@ match person {
       ^^^^^^
 
 
-**DOES NOT EXIST**
-`Str.len` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `len` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **pattern_destructure_with_rest.md:2:33:2:40:**
 ```roc
@@ -35,8 +36,9 @@ match person {
                                 ^^^^^^^
 
 
-**DOES NOT EXIST**
-`Str.len` does not exist.
+**UNDEFINED VARIABLE**
+Nothing is named `len` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **pattern_destructure_with_rest.md:2:55:2:62:**
 ```roc
@@ -98,11 +100,11 @@ match person {
 				(value
 					(e-binop (op "gt")
 						(e-call
-							(e-runtime-error (tag "qualified_ident_does_not_exist"))
+							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local
 								(p-assign (ident "first_name"))))
 						(e-call
-							(e-runtime-error (tag "qualified_ident_does_not_exist"))
+							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-dot-access (field "last_name")
 								(receiver
 									(e-lookup-local

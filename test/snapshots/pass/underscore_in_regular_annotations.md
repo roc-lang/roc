@@ -326,7 +326,7 @@ transform = |_, b| b
 										(p-assign (ident "msg"))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-apply (name "Result") (external-module "Builtin")
 					(ty-underscore)
 					(ty-lookup (name "Str") (builtin)))
 				(ty-lookup (name "Str") (builtin)))))
@@ -368,7 +368,7 @@ transform = |_, b| b
 		(patt (type "a -> a"))
 		(patt (type "List(_elem) -> Str"))
 		(patt (type "{ field: _field2, other: Num(Int(Unsigned32)) } -> Num(Int(Unsigned32))"))
-		(patt (type "Error -> Str"))
+		(patt (type "Result(_c, Str) -> Str"))
 		(patt (type "a -> b, List(a) -> List(b)"))
 		(patt (type "_arg, c -> c")))
 	(expressions
@@ -376,7 +376,7 @@ transform = |_, b| b
 		(expr (type "a -> a"))
 		(expr (type "List(_elem) -> Str"))
 		(expr (type "{ field: _field2, other: Num(Int(Unsigned32)) } -> Num(Int(Unsigned32))"))
-		(expr (type "Error -> Str"))
+		(expr (type "Result(_c, Str) -> Str"))
 		(expr (type "a -> b, List(a) -> List(b)"))
 		(expr (type "_arg, c -> c"))))
 ~~~
