@@ -331,6 +331,11 @@ fn serializeModuleEnv(
 /// For builtin_compiler, types are always in all_statements (not builtin_statements)
 /// because we're compiling Builtin.roc itself, not importing from it.
 fn findTypeDeclaration(env: *const ModuleEnv, type_name: []const u8) !CIR.Statement.Idx {
+    // Construct the qualified name (e.g., "Builtin.Bool")
+    // Types in nested declarations are stored with their full qualified names
+    var qualified_name_buf: [256]u8 = undefined;
+    const qualified_name = try std.fmt.bufPrint(&qualified_name_buf, "{s}.{s}", .{ env.module_name, type_name });
+
     // Search in all_statements (where Builtin.roc's own types are stored)
     const all_stmts = env.store.sliceStatements(env.all_statements);
     for (all_stmts) |stmt_idx| {
@@ -340,23 +345,14 @@ fn findTypeDeclaration(env: *const ModuleEnv, type_name: []const u8) !CIR.Statem
                 const header = env.store.getTypeHeader(decl.header);
                 const ident_idx = header.name;
                 const ident_text = env.getIdentText(ident_idx);
-                // Try both exact match and qualified name match
-                if (std.mem.eql(u8, ident_text, type_name)) {
+                if (std.mem.eql(u8, ident_text, qualified_name)) {
                     return stmt_idx;
-                }
-                // For qualified names (e.g., "Builtin.Bool"), match the suffix
-                if (std.mem.endsWith(u8, ident_text, type_name)) {
-                    // Check if it ends with ".TypeName"
-                    if (ident_text.len > type_name.len and ident_text[ident_text.len - type_name.len - 1] == '.') {
-                        return stmt_idx;
-                    }
                 }
             },
             else => continue,
         }
     }
 
-    std.debug.print("ERROR: Could not find type declaration '{s}' in all_statements\n", .{type_name});
     return error.TypeDeclarationNotFound;
 }
 
