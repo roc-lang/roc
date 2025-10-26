@@ -915,9 +915,7 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx) std.m
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    std.debug.print("DEBUG generateAnnotationType: annotation_idx={}\n", .{@intFromEnum(annotation_idx)});
     const annotation = self.cir.store.getAnnotation(annotation_idx);
-    std.debug.print("DEBUG generateAnnotationType: annotation.anno={}\n", .{@intFromEnum(annotation.anno)});
 
     // Reset seen type annos
     self.seen_annos.clearRetainingCapacity();
@@ -935,13 +933,10 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx) std.m
     }
 
     // Then, generate the type for the annotation
-    std.debug.print("DEBUG generateAnnotationType: calling generateAnnoTypeInPlace\n", .{});
     try self.generateAnnoTypeInPlace(annotation.anno, .annotation);
-    std.debug.print("DEBUG generateAnnotationType: generateAnnoTypeInPlace succeeded\n", .{});
 
     // Redirect the root annotation to inner annotation
     _ = try self.types.setVarRedirect(ModuleEnv.varFrom(annotation_idx), ModuleEnv.varFrom(annotation.anno));
-    std.debug.print("DEBUG generateAnnotationType: redirect set\n", .{});
 }
 
 /// Given a where clause, generate static dispatch constraints and add to scratch_static_dispatch_constraints
@@ -2454,18 +2449,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             // Unify this expression with the referenced pattern
         },
         .e_lookup_external => |ext| {
-            std.debug.print("DEBUG Check e_lookup_external: module_idx={}, target_node_idx={}\n", .{ @intFromEnum(ext.module_idx), ext.target_node_idx });
             if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
-                std.debug.print("DEBUG Check e_lookup_external: resolved successfully, local_var={}\n", .{@intFromEnum(ext_ref.local_var)});
                 const ext_instantiated_var = try self.instantiateVar(
                     ext_ref.local_var,
                     Rank.generalized,
                     .{ .explicit = expr_region },
                 );
-                std.debug.print("DEBUG Check e_lookup_external: instantiated to var={}\n", .{@intFromEnum(ext_instantiated_var)});
                 try self.types.setVarRedirect(expr_var, ext_instantiated_var);
             } else {
-                std.debug.print("DEBUG Check e_lookup_external: resolveVarFromExternal returned null, setting err\n", .{});
                 try self.updateVar(expr_var, .err, rank);
             }
         },
@@ -3012,7 +3003,6 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, rank
 
         switch (stmt) {
             .s_decl => |decl_stmt| {
-                std.debug.print("DEBUG checkStatement s_decl: pattern={}, expr={}, anno={?}\n", .{ @intFromEnum(decl_stmt.pattern), @intFromEnum(decl_stmt.expr), if (decl_stmt.anno) |a| @intFromEnum(a) else null });
                 // Check the pattern
                 try self.checkPattern(decl_stmt.pattern, rank, .no_expectation);
                 const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
@@ -3020,7 +3010,6 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, rank
                 // Check the annotation, if it exists
                 const expectation = blk: {
                     if (decl_stmt.anno) |annotation_idx| {
-                        std.debug.print("DEBUG checkStatement s_decl: has annotation, calling generateAnnotationType\n", .{});
                         // Generate the annotation type var in-place
                         try self.generateAnnotationType(annotation_idx);
                         const annotation_var = ModuleEnv.varFrom(annotation_idx);
@@ -3662,7 +3651,6 @@ fn resolveVarFromExternal(
     node_idx: u16,
 ) std.mem.Allocator.Error!?ExternalType {
     const module_idx_int = @intFromEnum(module_idx);
-    std.debug.print("DEBUG resolveVarFromExternal: module_idx_int={}, imported_modules.len={}\n", .{ module_idx_int, self.imported_modules.len });
     // Import.Idx starts at 1 (0 is reserved for current module), so subtract 1 for array index
     if (module_idx_int > 0 and module_idx_int - 1 < self.imported_modules.len) {
         const other_module_cir = self.imported_modules[module_idx_int - 1];
@@ -3679,7 +3667,6 @@ fn resolveVarFromExternal(
 
         const copied_var = if (self.import_cache.get(cache_key)) |cached_var| blk_cached: {
             // Reuse the previously copied type.
-            std.debug.print("DEBUG resolveVarFromExternal: using cached var {}\n", .{@intFromEnum(cached_var)});
             break :blk_cached cached_var;
         } else blk: {
             // First time importing this type - copy it and cache the result
@@ -3690,7 +3677,6 @@ fn resolveVarFromExternal(
                 const stmt_idx: CIR.Statement.Idx = @enumFromInt(@intFromEnum(target_node_idx));
                 const stmt = other_module_env.store.getStatement(stmt_idx);
                 if (stmt == .s_decl) {
-                    std.debug.print("DEBUG resolveVarFromExternal: target is s_decl, extracting annotation\n", .{});
                     if (stmt.s_decl.anno) |anno_idx| {
                         break :blk_anno @as(Var, @enumFromInt(@intFromEnum(anno_idx)));
                     } else {
@@ -3699,13 +3685,10 @@ fn resolveVarFromExternal(
                     }
                 } else {
                     // Assume it's a Def.Idx or direct type var
-                    std.debug.print("DEBUG resolveVarFromExternal: target is not s_decl, using node_idx directly\n", .{});
                     break :blk_anno @as(Var, @enumFromInt(@intFromEnum(target_node_idx)));
                 }
             };
-            std.debug.print("DEBUG resolveVarFromExternal: first import, calling copyVar with imported_var={}\n", .{@intFromEnum(imported_var)});
             const new_copy = try self.copyVar(imported_var, other_module_env, null);
-            std.debug.print("DEBUG resolveVarFromExternal: copyVar returned new_copy={}\n", .{@intFromEnum(new_copy)});
             try self.import_cache.put(self.gpa, cache_key, new_copy);
             break :blk new_copy;
         };
@@ -3722,13 +3705,6 @@ fn resolveVarFromExternal(
 
 /// Instantiate a variable, writing su
 fn copyVar(self: *Self, other_module_var: Var, other_module_env: *const ModuleEnv, mb_region: ?Region) std.mem.Allocator.Error!Var {
-    std.debug.print("=== COPYVAR START var={} ===\n", .{@intFromEnum(other_module_var)});
-    std.debug.print("DEBUG copyVar: copying var {} from module {s}\n", .{ @intFromEnum(other_module_var), other_module_env.module_name });
-
-    // Check what the source type looks like
-    const resolved_source = other_module_env.types.resolveVar(other_module_var);
-    std.debug.print("DEBUG copyVar: source var resolved to {}, content = {s}\n", .{ @intFromEnum(resolved_source.var_), @tagName(resolved_source.desc.content) });
-
     // First, reset state
     self.var_map.clearRetainingCapacity();
 
@@ -3742,10 +3718,6 @@ fn copyVar(self: *Self, other_module_var: Var, other_module_env: *const ModuleEn
         self.cir.getIdentStore(),
         self.gpa,
     );
-
-    // Check what the copied type looks like
-    const resolved_copied = self.types.resolveVar(copied_var);
-    std.debug.print("DEBUG copyVar: copied to var {}, content = {s}\n", .{ @intFromEnum(copied_var), @tagName(resolved_copied.desc.content) });
 
     const region = if (mb_region) |region| region else base.Region.zero();
 

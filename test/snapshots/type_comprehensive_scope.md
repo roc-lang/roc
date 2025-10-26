@@ -107,16 +107,6 @@ BadType : SomeUndeclaredType
           ^^^^^^^^^^^^^^^^^^
 
 
-**TOO MANY ARGS**
-The type _Builtin.Dict_ expects  argument, but got  instead.
-**type_comprehensive_scope.md:29:10:29:24:**
-```roc
-MyDict : Dict(Str, U64)
-```
-         ^^^^^^^^^^^^^^
-
-
-
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,UpperIdent,
