@@ -475,7 +475,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
 
 /// Generate platform host shim object file using LLVM.
 /// Returns the path to the generated object file (allocated from arena, no need to free), or null if LLVM unavailable.
-fn generatePlatformHostShim(allocs: *Allocators, cache_dir: []const u8, entrypoint_names: []const []const u8, target: builder.RocTarget) !?[]const u8 {
+fn generatePlatformHostShim(allocs: *Allocators, cache_dir: []const u8, entrypoint_names: []const []const u8, target: builder.RocTarget, shm_handle: SharedMemoryHandle) !?[]const u8 {
     // Check if LLVM is available (this is a compile-time check)
     if (!llvm_available) {
         std.log.debug("LLVM not available, skipping platform host shim generation", .{});
@@ -503,7 +503,8 @@ fn generatePlatformHostShim(allocs: *Allocators, cache_dir: []const u8, entrypoi
     }
 
     // Create the complete platform shim
-    platform_host_shim.createInterpreterShim(&llvm_builder, entrypoints.items) catch |err| {
+    const serialized_module = @as([*]u8, @ptrCast(shm_handle.ptr))[0..shm_handle.size];
+    platform_host_shim.createInterpreterShim(&llvm_builder, entrypoints.items, serialized_module) catch |err| {
         std.log.err("Failed to create interpreter shim: {}", .{err});
         return err;
     };
@@ -660,6 +661,14 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) void {
         break :blk true;
     };
 
+    // Set up shared memory with ModuleEnv
+    std.log.debug("Setting up shared memory for Roc file: {s}", .{args.path});
+    const shm_handle = setupSharedMemoryWithModuleEnv(allocs, args.path) catch |err| {
+        std.log.err("Failed to set up shared memory with ModuleEnv: {}", .{err});
+        std.process.exit(1);
+    };
+    std.log.debug("Shared memory setup complete, size: {} bytes", .{shm_handle.size});
+
     if (!exe_exists) {
 
         // Check for cached shim library, extract if not present
@@ -687,7 +696,7 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) void {
 
         // Generate platform host shim using the detected entrypoints
 
-        const platform_shim_path = generatePlatformHostShim(allocs, exe_cache_dir, entrypoints.items, shim_target) catch |err| {
+        const platform_shim_path = generatePlatformHostShim(allocs, exe_cache_dir, entrypoints.items, shim_target, shm_handle) catch |err| {
             std.log.err("Failed to generate platform host shim: {}", .{err});
             std.process.exit(1);
         };
@@ -1008,14 +1017,6 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) void {
         };
     }
 
-    // Set up shared memory with ModuleEnv
-    std.log.debug("Setting up shared memory for Roc file: {s}", .{args.path});
-    const shm_handle = setupSharedMemoryWithModuleEnv(allocs, args.path) catch |err| {
-        std.log.err("Failed to set up shared memory with ModuleEnv: {}", .{err});
-        std.process.exit(1);
-    };
-    std.log.debug("Shared memory setup complete, size: {} bytes", .{shm_handle.size});
-
     // Ensure we clean up shared memory resources on all exit paths
     defer {
         if (comptime is_windows) {
@@ -1305,16 +1306,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
 
     const shm_allocator = shm.allocator();
 
-    // Create a properly aligned header structure
-    const Header = struct {
-        parent_base_addr: u64,
-        entry_count: u32,
-        _padding: u32, // Ensure 8-byte alignment
-        def_indices_offset: u64,
-        module_env_offset: u64,
-    };
-
-    const header_ptr = try shm_allocator.create(Header);
+    const header_ptr = try shm_allocator.create(ipc.ModuleEnvHeader);
 
     // Store the base address of the shared memory mapping (for ASLR-safe relocation)
     // The child will calculate the offset from its own base address
@@ -1345,10 +1337,6 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     // Load builtin modules (Bool, Result, Str) for canonicalization and type checking
     var builtin_modules = try eval.BuiltinModules.init(allocs.gpa);
     defer builtin_modules.deinit();
-
-    // Create arena allocator for scratch memory
-    var arena = std.heap.ArenaAllocator.init(shm_allocator);
-    defer arena.deinit();
 
     var env = try ModuleEnv.init(shm_allocator, source);
     env.common.source = source;
