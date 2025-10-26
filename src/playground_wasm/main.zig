@@ -994,8 +994,13 @@ fn compileSource(source: []const u8) !CompilerStageData {
     // Create module_envs map for canonicalization (enables qualified calls)
     var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
     defer module_envs_map.deinit();
-    const builtin_ident = try module_env.insertIdent(base.Ident.for_text("Builtin"));
-    try module_envs_map.put(builtin_ident, .{ .env = builtin_module.env });
+    // Add entries for all auto-imported types from Builtin module
+    const bool_ident = try module_env.insertIdent(base.Ident.for_text("Bool"));
+    try module_envs_map.put(bool_ident, .{ .env = builtin_module.env });
+    const result_ident = try module_env.insertIdent(base.Ident.for_text("Result"));
+    try module_envs_map.put(result_ident, .{ .env = builtin_module.env });
+    const str_ident = try module_env.insertIdent(base.Ident.for_text("Str"));
+    try module_envs_map.put(str_ident, .{ .env = builtin_module.env });
 
     logDebug("compileSource: Starting canonicalization\n", .{});
     var czer = try Can.init(env, &result.parse_ast.?, &module_envs_map);
@@ -1041,7 +1046,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
         const type_can_ir = result.module_env;
         const imported_envs: []const *ModuleEnv = &.{};
         // Use pointer to the stored CIR to ensure solver references valid memory
-        var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, null, &type_can_ir.store.regions, module_common_idents);
+        var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, &module_envs_map, &type_can_ir.store.regions, module_common_idents);
         result.solver = solver;
 
         solver.checkFile() catch |check_err| {
