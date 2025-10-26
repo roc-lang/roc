@@ -328,33 +328,10 @@ fn serializeModuleEnv(
 
 /// Find a type declaration by name in a compiled module
 /// Returns the statement index of the type declaration
-/// Searches both all_statements and builtin_statements
+/// For builtin_compiler, types are always in all_statements (not builtin_statements)
+/// because we're compiling Builtin.roc itself, not importing from it.
 fn findTypeDeclaration(env: *const ModuleEnv, type_name: []const u8) !CIR.Statement.Idx {
-    // First, search in builtin_statements (where nested types inside record extensions are stored)
-    const builtin_stmts = env.store.sliceStatements(env.builtin_statements);
-    for (builtin_stmts) |stmt_idx| {
-        const stmt = env.store.getStatement(stmt_idx);
-        switch (stmt) {
-            .s_nominal_decl => |decl| {
-                const header = env.store.getTypeHeader(decl.header);
-                const ident_idx = header.name;
-                const ident_text = env.getIdentText(ident_idx);
-                // For nested types, the ident_text will be qualified (e.g., "Builtin.Bool")
-                // We want to match just the type name part
-                if (std.mem.endsWith(u8, ident_text, type_name)) {
-                    // Check if it's an exact match or ends with ".TypeName"
-                    if (std.mem.eql(u8, ident_text, type_name) or
-                        (ident_text.len > type_name.len and ident_text[ident_text.len - type_name.len - 1] == '.'))
-                    {
-                        return stmt_idx;
-                    }
-                }
-            },
-            else => continue,
-        }
-    }
-
-    // If not found in builtin_statements, search in all_statements
+    // Search in all_statements (where Builtin.roc's own types are stored)
     const all_stmts = env.store.sliceStatements(env.all_statements);
     for (all_stmts) |stmt_idx| {
         const stmt = env.store.getStatement(stmt_idx);
@@ -379,7 +356,7 @@ fn findTypeDeclaration(env: *const ModuleEnv, type_name: []const u8) !CIR.Statem
         }
     }
 
-    std.debug.print("ERROR: Could not find type declaration '{s}' in module\n", .{type_name});
+    std.debug.print("ERROR: Could not find type declaration '{s}' in all_statements\n", .{type_name});
     return error.TypeDeclarationNotFound;
 }
 
