@@ -511,9 +511,10 @@ pub const Repl = struct {
             .env = self.builtin_module.env,
             .statement_idx = self.builtin_indices.result_type,
         });
-        // Str is added without statement_idx because it's a primitive builtin type
+        // Str is added with statement_idx to allow qualified lookups (e.g., Str.is_empty)
         try module_envs_map.put(str_ident, .{
             .env = self.builtin_module.env,
+            .statement_idx = self.builtin_indices.str_type,
         });
         try module_envs_map.put(dict_ident, .{
             .env = self.builtin_module.env,
@@ -539,6 +540,8 @@ pub const Repl = struct {
             return try self.allocator.dupe(u8, "Canonicalize expr error: expression returned null");
         };
         const final_expr_idx = canonical_expr.get_idx();
+        const final_expr = module_env.store.getExpr(final_expr_idx);
+        std.debug.print("DEBUG: Canonicalized to expr type = {s} at index {}\n", .{ @tagName(final_expr), @intFromEnum(final_expr_idx) });
 
         // Type check - Pass Builtin as imported module
         const imported_modules = [_]*const ModuleEnv{self.builtin_module.env};
@@ -556,9 +559,12 @@ pub const Repl = struct {
         defer checker.deinit();
 
         // Check the expression (no need to check defs since we're parsing as expressions)
+        std.debug.print("DEBUG: About to type check expression\n", .{});
         _ = checker.checkExprRepl(final_expr_idx) catch |err| {
+            std.debug.print("DEBUG: Type check failed with error: {}\n", .{err});
             return try std.fmt.allocPrint(self.allocator, "Type check expr error: {}", .{err});
         };
+        std.debug.print("DEBUG: Type check succeeded\n", .{});
 
         // Create interpreter instance with BuiltinTypes containing real Builtin module
         const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.builtin_module.env, self.builtin_module.env, self.builtin_module.env);

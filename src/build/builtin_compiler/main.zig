@@ -104,14 +104,23 @@ fn transformStrNominalToPrimitive(env: *ModuleEnv) !void {
 /// This function will convert the orphaned s_type_anno statement into an s_decl
 /// statement with an e_low_level_lambda expression as the body.
 fn insertLowLevelLambdas(env: *ModuleEnv, gpa: Allocator) !void {
+    const DependencyGraph = @import("can").DependencyGraph;
+
     // Map of identifier names to their corresponding LowLevelLambda
     var low_level_map = std.StringHashMap(base.LowLevelLambda).init(gpa);
     defer low_level_map.deinit();
 
+    // Add both unqualified and qualified names
     try low_level_map.put("is_empty", .str_is_empty);
+    try low_level_map.put("Builtin.Str.is_empty", .str_is_empty);
     // Future: add more mappings as needed
     // try low_level_map.put("contains", .str_contains);
+    // try low_level_map.put("Builtin.Str.contains", .str_contains);
     // try low_level_map.put("len", .list_len);
+
+    // Track new def indices that we create
+    var new_defs = std.ArrayList(CIR.Def.Idx).empty;
+    defer new_defs.deinit(gpa);
 
     // Iterate through all statements looking for orphaned type annotations
     const all_stmts = env.store.sliceStatements(env.all_statements);
@@ -158,10 +167,53 @@ fn insertLowLevelLambdas(env: *ModuleEnv, gpa: Allocator) !void {
 
                     // Replace the statement in place
                     try env.store.setStatementNode(stmt_idx, new_stmt);
+
+                    // Create a Def for this declaration so it gets type-checked
+                    const def = CIR.Def{
+                        .pattern = pattern_idx,
+                        .expr = expr_idx,
+                        .annotation = annotation_idx,
+                        .kind = .let,
+                    };
+                    const def_idx = try env.addDef(def, region);
+                    try new_defs.append(gpa, def_idx);
                 }
             },
             else => {},
         }
+    }
+
+    // If we created any new defs, rebuild all_defs and evaluation_order
+    if (new_defs.items.len > 0) {
+        // Get the old defs
+        const old_defs = env.store.sliceDefs(env.all_defs);
+
+        // Use scratch buffer to build new all_defs span
+        const scratch_start = env.store.scratchDefTop();
+        for (old_defs) |def_idx| {
+            try env.store.addScratchDef(def_idx);
+        }
+        for (new_defs.items) |def_idx| {
+            try env.store.addScratchDef(def_idx);
+        }
+        env.all_defs = try env.store.defSpanFrom(scratch_start);
+
+        // Rebuild dependency graph and evaluation order
+        var graph = try DependencyGraph.buildDependencyGraph(env, env.all_defs, gpa);
+        defer graph.deinit();
+
+        const eval_order = try DependencyGraph.computeSCCs(&graph, gpa);
+
+        // Free old evaluation order if it exists
+        if (env.evaluation_order) |old_eval_order| {
+            old_eval_order.deinit();
+            gpa.destroy(old_eval_order);
+        }
+
+        // Set new evaluation order
+        const eval_order_ptr = try gpa.create(DependencyGraph.EvaluationOrder);
+        eval_order_ptr.* = eval_order;
+        env.evaluation_order = eval_order_ptr;
     }
 }
 

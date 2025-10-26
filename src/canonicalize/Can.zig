@@ -279,14 +279,13 @@ pub fn setupAutoImportedBuiltinTypes(
     gpa: std.mem.Allocator,
     module_envs: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType),
 ) std.mem.Allocator.Error!void {
-    // Auto-import builtin types (Bool, Result, Dict, Set)
+    // Auto-import builtin types (Bool, Result, Dict, Set, Str)
     // These are nested types in Builtin module but need to be auto-imported like standalone modules
-    // Note: Str is NOT auto-imported because it's a primitive builtin type
     if (module_envs) |envs_map| {
         const zero_region = Region{ .start = Region.Position.zero(), .end = Region.Position.zero() };
         const current_scope = &self.scopes.items[0]; // Top-level scope
 
-        const builtin_types = [_][]const u8{ "Bool", "Result", "Dict", "Set" };
+        const builtin_types = [_][]const u8{ "Bool", "Result", "Dict", "Set", "Str" };
         for (builtin_types) |type_name_text| {
             const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
             if (envs_map.get(type_ident)) |type_entry| {
@@ -2664,13 +2663,39 @@ pub fn canonicalizeExpr(
                                     } else field_text;
                                     defer if (auto_imported_type.statement_idx != null) self.env.gpa.free(lookup_name);
 
-                                    // Look up the name in the module's exposed items
-                                    const qname_ident = module_env.common.findIdent(lookup_name) orelse {
-                                        // Identifier not found - just return null
-                                        // The error will be handled by the code below that checks target_node_idx_opt
-                                        break :blk null;
-                                    };
-                                    break :blk module_env.getExposedNodeIndexById(qname_ident);
+                                    // Look up the name in the module's exposed items (using full qualified name)
+                                    if (module_env.common.findIdent(lookup_name)) |qname_ident| {
+                                        if (module_env.getExposedNodeIndexById(qname_ident)) |node_idx| {
+                                            break :blk node_idx;
+                                        }
+                                    }
+
+                                    // Not exposed - search all statements for nested declarations
+                                    // For nested declarations stored with qualified names like "Builtin.Str.is_empty",
+                                    // we need to search for the full qualified name including the module name
+                                    const full_qualified_name = try std.fmt.allocPrint(
+                                        self.env.gpa,
+                                        "{s}.{s}",
+                                        .{ module_env.module_name, lookup_name },
+                                    );
+                                    defer self.env.gpa.free(full_qualified_name);
+                                    if (module_env.common.findIdent(full_qualified_name)) |search_ident| {
+                                        const all_stmts = module_env.store.sliceStatements(module_env.all_statements);
+                                        for (all_stmts) |stmt_idx| {
+                                            const stmt = module_env.store.getStatement(stmt_idx);
+                                            if (stmt == .s_decl) {
+                                                const pattern = module_env.store.getPattern(stmt.s_decl.pattern);
+                                                if (pattern == .assign) {
+                                                    if (pattern.assign.ident == search_ident) {
+                                                        // Return the statement index itself - the interpreter will
+                                                        // extract the expression from it
+                                                        break :blk @intCast(@intFromEnum(stmt_idx));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    break :blk null;
                                 } else {
                                     break :blk null;
                                 }
@@ -2758,7 +2783,26 @@ pub fn canonicalizeExpr(
                                 if (envs_map.get(exposed_info.module_name)) |auto_imported_type| {
                                     const module_env = auto_imported_type.env;
                                     if (module_env.common.findIdent(field_text)) |target_ident| {
-                                        break :blk module_env.getExposedNodeIndexById(target_ident);
+                                        // First try to find in exposed items
+                                        if (module_env.getExposedNodeIndexById(target_ident)) |node_idx| {
+                                            break :blk node_idx;
+                                        }
+
+                                        // If not exposed, search all statements for a matching declaration
+                                        // This handles nested declarations like Str.is_empty which are stored as top-level statements
+                                        const all_stmts = module_env.store.sliceStatements(module_env.all_statements);
+                                        for (all_stmts) |stmt_idx| {
+                                            const stmt = module_env.store.getStatement(stmt_idx);
+                                            if (stmt == .s_decl) {
+                                                const pattern = module_env.store.getPattern(stmt.s_decl.pattern);
+                                                if (pattern == .assign and pattern.assign.ident == target_ident) {
+                                                    // Found the declaration!
+                                                    // The node index is the statement index
+                                                    break :blk @intCast(@intFromEnum(stmt_idx));
+                                                }
+                                            }
+                                        }
+                                        break :blk null;
                                     } else {
                                         break :blk null;
                                     }
