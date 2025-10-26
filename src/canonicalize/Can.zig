@@ -43,9 +43,6 @@ exposed_scope: Scope = undefined,
 exposed_ident_texts: std.StringHashMapUnmanaged(Region) = .{},
 /// Track exposed types by text to handle changing indices
 exposed_type_texts: std.StringHashMapUnmanaged(Region) = .{},
-/// Special scope for unqualified nominal tags (e.g., True, False)
-/// Maps tag name to type name identifier (e.g., "True" -> Bool identifier)
-unqualified_nominal_tags: std.StringHashMapUnmanaged(Ident.Idx) = .{},
 /// Stack of function regions for tracking var reassignment across function boundaries
 function_regions: std.array_list.Managed(Region),
 /// Maps var patterns to the function region they were declared in
@@ -168,7 +165,6 @@ pub fn deinit(
     self.exposed_scope.deinit(gpa);
     self.exposed_ident_texts.deinit(gpa);
     self.exposed_type_texts.deinit(gpa);
-    self.unqualified_nominal_tags.deinit(gpa);
 
     for (0..self.scopes.items.len) |i| {
         var scope = &self.scopes.items[i];
@@ -221,7 +217,6 @@ pub fn init(
         .type_vars_scope = try base.Scratch(TypeVarScope).init(gpa),
         .exposed_scope = Scope.init(false),
         .scratch_tags = try base.Scratch(types.Tag).init(gpa),
-        .unqualified_nominal_tags = std.StringHashMapUnmanaged(Ident.Idx){},
         .scratch_free_vars = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_captures = try base.Scratch(Pattern.Idx).init(gpa),
     };
@@ -278,7 +273,6 @@ pub fn populateModuleEnvs(
 ///
 /// These nested types in Builtin.roc need special handling:
 /// 1. Add them to scope's type_bindings so type annotations work
-/// 2. Populate unqualified_nominal_tags for Bool's True/False tags
 pub fn setupAutoImportedBuiltinTypes(
     self: *Self,
     env: *ModuleEnv,
@@ -338,31 +332,6 @@ pub fn setupAutoImportedBuiltinTypes(
                 });
             } else {
                 std.debug.print("  NOT FOUND in module_envs!\n", .{});
-            }
-        }
-
-        // Populate unqualified_nominal_tags for Bool
-        // This allows tags like `True` and `False` to be used without `Bool.` qualification
-        const bool_ident = try env.insertIdent(base.Ident.for_text("Bool"));
-        if (envs_map.get(bool_ident)) |bool_entry| {
-            if (bool_entry.statement_idx) |bool_stmt_idx| {
-                const bool_stmt = bool_entry.env.store.getStatement(bool_stmt_idx);
-                if (bool_stmt == .s_nominal_decl) {
-                    const bool_anno_idx = bool_stmt.s_nominal_decl.anno;
-                    const bool_anno = bool_entry.env.store.getTypeAnno(bool_anno_idx);
-                    if (bool_anno == .tag_union) {
-                        const tags_span = bool_anno.tag_union.tags;
-                        const tags_slice = bool_entry.env.store.sliceTypeAnnos(tags_span);
-                        for (tags_slice) |tag_anno_idx| {
-                            const tag_anno = bool_entry.env.store.getTypeAnno(tag_anno_idx);
-                            if (tag_anno == .tag) {
-                                const tag_name_ident = tag_anno.tag.name;
-                                const tag_name_text = bool_entry.env.getIdentText(tag_name_ident);
-                                try self.unqualified_nominal_tags.put(env.gpa, tag_name_text, bool_ident);
-                            }
-                        }
-                    }
-                }
             }
         }
     }
@@ -3823,7 +3792,6 @@ fn canonicalizeExprOrMalformed(
 // Canonicalize a tag expr
 fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, region: base.Region) std.mem.Allocator.Error!?CanonicalizedExpr {
     const tag_name = self.parse_ir.tokens.resolveIdentifier(e.token) orelse @panic("tag token is not an ident");
-    const tag_name_text = self.parse_ir.env.getIdent(tag_name);
 
     var args_span = Expr.Span{ .span = DataSpan.empty() };
 
@@ -3856,71 +3824,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
     }, region);
 
     if (e.qualifiers.span.len == 0) {
-        // Check if this is an unqualified nominal tag (e.g. True or False are in scope unqualified by default)
-        if (self.unqualified_nominal_tags.get(tag_name_text)) |type_ident| {
-            // Look up the type binding (handles both local and external types)
-            const type_binding = blk: {
-                var i = self.scopes.items.len;
-                while (i > 0) {
-                    i -= 1;
-                    const scope = &self.scopes.items[i];
-                    if (scope.type_bindings.get(type_ident)) |binding| {
-                        break :blk binding;
-                    }
-                }
-                // Type not found in scope, fall through to treat as anonymous tag
-                break :blk null;
-            };
-
-            if (type_binding) |binding| {
-                switch (binding) {
-                    .local_nominal, .associated_nominal => |stmt_idx| {
-                        // Local nominal type - use e_nominal expression
-                        const expr_idx = try self.env.addExpr(CIR.Expr{
-                            .e_nominal = .{
-                                .nominal_type_decl = stmt_idx,
-                                .backing_expr = tag_expr_idx,
-                                .backing_type = .tag,
-                            },
-                        }, region);
-                        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
-                    },
-                    .external_nominal => |external| {
-                        // External nominal type (like auto-imported Bool from Builtin module)
-                        // Look up the type in module_envs to get the statement_idx and create e_nominal_external
-                        if (self.module_envs) |envs_map| {
-                            if (envs_map.get(external.module_ident)) |auto_imported_type| {
-                                if (auto_imported_type.statement_idx) |stmt_idx| {
-                                    const target_node_idx = auto_imported_type.env.getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
-                                        std.debug.panic("Failed to find exposed node for unqualified tag '{s}' statement index {} in module '{s}'", .{ tag_name_text, stmt_idx, auto_imported_type.env.module_name });
-                                    };
-
-                                    const expr_idx = try self.env.addExpr(CIR.Expr{
-                                        .e_nominal_external = .{
-                                            .module_idx = external.import_idx orelse {
-                                                std.debug.panic("import_idx is null for unqualified tag '{s}'", .{tag_name_text});
-                                            },
-                                            .target_node_idx = target_node_idx,
-                                            .backing_expr = tag_expr_idx,
-                                            .backing_type = .tag,
-                                        },
-                                    }, region);
-                                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
-                                }
-                            }
-                        }
-                        // Fallback: treat as anonymous tag if module_envs lookup fails
-                        return CanonicalizedExpr{ .idx = tag_expr_idx, .free_vars = null };
-                    },
-                    .local_alias => {
-                        // Alias types can't have tags, fall through to anonymous
-                    },
-                }
-            }
-        }
-
-        // If this is a tag without a prefix and not in unqualified_nominal_tags,
-        // then it is an anonymous tag and we can just return it
+        // Tag without a qualifier is an anonymous structural tag
         return CanonicalizedExpr{ .idx = tag_expr_idx, .free_vars = null };
     } else if (e.qualifiers.span.len == 1) {
         // If this is a tag with a single qualifier, then it is a nominal tag and the qualifier
@@ -4660,7 +4564,6 @@ fn canonicalizePattern(
         },
         .tag => |e| {
             const tag_name = self.parse_ir.tokens.resolveIdentifier(e.tag_tok) orelse return null;
-            const tag_name_text = self.parse_ir.env.getIdent(tag_name);
 
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
@@ -4689,47 +4592,7 @@ fn canonicalizePattern(
             }, region);
 
             if (e.qualifiers.span.len == 0) {
-                // Check if this is an unqualified nominal tag (e.g. True or False are in scope unqualified by default)
-                if (self.unqualified_nominal_tags.get(tag_name_text)) |type_ident| {
-                    // Look up the type binding (handles both local and external types)
-                    const type_binding = blk: {
-                        var i = self.scopes.items.len;
-                        while (i > 0) {
-                            i -= 1;
-                            const scope = &self.scopes.items[i];
-                            if (scope.type_bindings.get(type_ident)) |binding| {
-                                break :blk binding;
-                            }
-                        }
-                        break :blk null;
-                    };
-
-                    if (type_binding) |binding| {
-                        switch (binding) {
-                            .local_nominal, .associated_nominal => |stmt_idx| {
-                                const nominal_pattern_idx = try self.env.addPattern(CIR.Pattern{
-                                    .nominal = .{
-                                        .nominal_type_decl = stmt_idx,
-                                        .backing_pattern = tag_pattern_idx,
-                                        .backing_type = .tag,
-                                    },
-                                }, region);
-                                return nominal_pattern_idx;
-                            },
-                            .external_nominal => {
-                                // External nominal type - use simple tag pattern
-                                // NOTE: Using nominal_external causes validation issues
-                                return tag_pattern_idx;
-                            },
-                            .local_alias => {
-                                // Alias types can't have tags, fall through
-                            },
-                        }
-                    }
-                }
-
-                // If this is a tag without a prefix and not in unqualified_nominal_tags,
-                // then it is an anonymous tag and we can just return it
+                // Tag without a qualifier is an anonymous structural tag
                 return tag_pattern_idx;
             } else if (e.qualifiers.span.len == 1) {
                 // If this is a tag with a single, then is it a nominal tag and the qualifier is the type

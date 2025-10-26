@@ -1144,9 +1144,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenType
                     try self.types.setVarRedirect(anno_var, instantiated_var);
                 },
                 .external => |ext| {
-                    std.debug.print("[ANNO EXTERNAL] module_idx: {}, target_node_idx: {}\n", .{ @intFromEnum(ext.module_idx), ext.target_node_idx });
                     if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
-                        std.debug.print("[ANNO EXTERNAL] Successfully resolved!\n", .{});
                         const ext_instantiated_var = try self.instantiateVar(
                             ext_ref.local_var,
                             Rank.generalized,
@@ -1156,7 +1154,6 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenType
                     } else {
                         // If this external type is unresolved, can should've reported
                         // an error. So we set to error and continue
-                        std.debug.print("[ANNO EXTERNAL] FAILED - setting to .err\n", .{});
                         try self.updateVar(anno_var, .err, Rank.generalized);
                     }
                 },

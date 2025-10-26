@@ -101,7 +101,6 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
 /// Helper function to expose all top-level definitions in a module
 /// This makes them available for cross-module imports
 fn exposeAllDefs(module_env: *ModuleEnv) !void {
-    // Expose all value/function definitions
     const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
     for (defs_slice) |def_idx| {
         const def = module_env.store.getDef(def_idx);
@@ -112,25 +111,6 @@ fn exposeAllDefs(module_env: *ModuleEnv) !void {
             const ident_idx = pattern.assign.ident;
             const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
             try module_env.setExposedNodeIndexById(ident_idx, def_idx_u16);
-        }
-    }
-
-    // Expose all type declarations (nominal and alias types)
-    const stmts_slice = module_env.store.sliceStatements(module_env.all_statements);
-    for (stmts_slice) |stmt_idx| {
-        const stmt = module_env.store.getStatement(stmt_idx);
-        switch (stmt) {
-            .s_nominal_decl => |s| {
-                const header = module_env.store.getTypeHeader(s.header);
-                const stmt_idx_u16: u16 = @intCast(@intFromEnum(stmt_idx));
-                try module_env.setExposedNodeIndexById(header.name, stmt_idx_u16);
-            },
-            .s_alias_decl => |s| {
-                const header = module_env.store.getTypeHeader(s.header);
-                const stmt_idx_u16: u16 = @intCast(@intFromEnum(stmt_idx));
-                try module_env.setExposedNodeIndexById(header.name, stmt_idx_u16);
-            },
-            else => {},
         }
     }
 }
@@ -188,11 +168,32 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
 
     module_env.common.source = source;
     module_env.module_name = module_name;
+    module_env.module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
     try module_env.common.calcLineStarts(gpa);
 
     // Put the other module in the env map using module_env's ident store
     const other_module_ident = try module_env.insertIdent(base.Ident.for_text(other_module_name));
-    try module_envs.put(other_module_ident, .{ .env = other_test_env.module_env });
+
+    // For type modules, look up the exposed type statement index
+    // The type name matches the module name for type modules
+    const statement_idx = blk: {
+        if (other_test_env.module_env.module_kind == .type_module) {
+            // Type modules expose their main type under the module name
+            const type_ident = other_test_env.module_env.common.findIdent(other_module_name);
+            if (type_ident) |ident| {
+                if (other_test_env.module_env.getExposedNodeIndexById(ident)) |node_idx| {
+                    // The node index IS the statement index for type declarations
+                    break :blk @as(CIR.Statement.Idx, @enumFromInt(node_idx));
+                }
+            }
+        }
+        break :blk null;
+    };
+
+    try module_envs.put(other_module_ident, .{
+        .env = other_test_env.module_env,
+        .statement_idx = statement_idx,
+    });
 
     // Populate module_envs with Bool, Result, Dict, Set using shared function
     // This ensures production and tests use identical logic
@@ -309,6 +310,7 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
 
     module_env.common.source = source;
     module_env.module_name = module_name;
+    module_env.module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
     try module_env.common.calcLineStarts(gpa);
 
     // Populate module_envs with Bool, Result, Dict, Set using shared function
