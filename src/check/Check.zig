@@ -582,14 +582,6 @@ fn updateVar(self: *Self, target_var: Var, content: types_mod.Content, rank: typ
 /// other modules directly. The Bool and Result types are used in language constructs like
 /// `if` conditions and need to be available in every module's type store.
 fn copyBuiltinTypes(self: *Self) !void {
-    // Special case: if we're compiling the Builtin module itself, use the current module_env
-    if (std.mem.eql(u8, self.cir.module_name, "Builtin")) {
-        const bool_stmt_idx = self.common_idents.bool_stmt;
-        const bool_type_var = ModuleEnv.varFrom(bool_stmt_idx);
-        self.bool_var = try self.copyVar(bool_type_var, self.cir, Region.zero());
-        return;
-    }
-
     // Find the Builtin module env - try imported_modules first, then module_envs
     var builtin_module: ?*const ModuleEnv = null;
 
@@ -603,9 +595,7 @@ fn copyBuiltinTypes(self: *Self) !void {
 
     // If not found in imported_modules, try getting it from module_envs via Bool
     if (builtin_module == null and self.module_envs != null) {
-        std.debug.print("[CHECK DEBUG] Trying to find Builtin module via module_envs\n", .{});
         const module_envs = self.module_envs.?;
-        std.debug.print("[CHECK DEBUG] module_envs size: {}\n", .{module_envs.count()});
 
         // Look up "Bool" in module_envs to get the Builtin module env
         const bool_ident_text = "Bool";
@@ -613,27 +603,23 @@ fn copyBuiltinTypes(self: *Self) !void {
         while (iter.next()) |entry| {
             const ident_idx = entry.key_ptr.*;
             const ident_str = self.cir.common.idents.getText(ident_idx);
-            std.debug.print("[CHECK DEBUG] Found type in module_envs: {s}\n", .{ident_str});
 
             if (std.mem.eql(u8, ident_str, bool_ident_text)) {
                 builtin_module = entry.value_ptr.env;
-                std.debug.print("[CHECK DEBUG] Found Builtin module via Bool!\n", .{});
                 break;
             }
-        }
-        if (builtin_module == null) {
-            std.debug.print("[CHECK DEBUG] Did NOT find Builtin module via module_envs\n", .{});
         }
     }
 
     // Copy Bool type from Builtin module
+    const bool_stmt_idx = self.common_idents.bool_stmt;
     if (builtin_module) |builtin_env| {
-        const bool_stmt_idx = self.common_idents.bool_stmt;
         const bool_type_var = ModuleEnv.varFrom(bool_stmt_idx);
         self.bool_var = try self.copyVar(bool_type_var, builtin_env, Region.zero());
     } else {
-        // If Builtin module still not found, this is an error - panic with helpful message
-        std.debug.panic("Cannot find Builtin module env to copy Bool type", .{});
+        // If Builtin module not found, use the statement from the current module
+        // This happens when compiling the Builtin module itself
+        self.bool_var = ModuleEnv.varFrom(bool_stmt_idx);
     }
 
     // Result type is accessed via external references, no need to copy it here
@@ -3780,7 +3766,6 @@ fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!v
         const dispatcher_content = dispatcher_resolved.desc.content;
 
         if (dispatcher_content == .err) {
-            std.debug.print("[CHECK DEBUG] dispatcher_content is .err - propagating error\n", .{});
             // If the root type is an error, then skip constraint checking
             // Iterate over the constraints
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
@@ -3817,16 +3802,10 @@ fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!v
                 if (is_this_module) {
                     break :blk self.cir;
                 } else {
-                    // Ensure that we have other module envs
-                    std.debug.print("[CHECK DEBUG] Looking up module env for nominal type\n", .{});
-                    std.debug.print("[CHECK DEBUG] original_module_ident: {}\n", .{original_module_ident});
+                    // Get the module env from module_envs
                     std.debug.assert(self.module_envs != null);
                     const module_envs = self.module_envs.?;
-                    std.debug.print("[CHECK DEBUG] module_envs size: {}\n", .{module_envs.count()});
-
                     const mb_original_module_env = module_envs.get(original_module_ident);
-                    std.debug.print("[CHECK DEBUG] lookup result: {}\n", .{mb_original_module_env != null});
-
                     std.debug.assert(mb_original_module_env != null);
                     break :blk mb_original_module_env.?.env;
                 }

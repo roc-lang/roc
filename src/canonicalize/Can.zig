@@ -330,8 +330,6 @@ pub fn setupAutoImportedBuiltinTypes(
                         .module_not_found = false,
                     },
                 });
-            } else {
-                std.debug.print("  NOT FOUND in module_envs!\n", .{});
             }
         }
     }
