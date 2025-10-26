@@ -541,7 +541,7 @@ pub const Repl = struct {
         const final_expr_idx = canonical_expr.get_idx();
 
         // Type check - Pass Builtin as imported module
-        const imported_modules = [_]*const ModuleEnv{ self.builtin_module.env };
+        const imported_modules = [_]*const ModuleEnv{self.builtin_module.env};
         var checker = Check.init(
             self.allocator,
             &module_env.types,

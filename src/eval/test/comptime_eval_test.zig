@@ -68,7 +68,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     try czer.canonicalizeFile();
 
     // Type check the module with builtins
-    const imported_envs = [_]*const ModuleEnv{ builtin_module.env };
+    const imported_envs = [_]*const ModuleEnv{builtin_module.env};
     var checker = try Check.init(gpa, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, common_idents);
     defer checker.deinit();
 
