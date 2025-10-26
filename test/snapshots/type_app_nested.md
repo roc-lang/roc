@@ -105,7 +105,7 @@ main! = |_| processNested([])
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
-					(ty-apply (name "Result") (external-module "Builtin")
+					(ty-apply (name "Result") (builtin)
 						(ty-lookup (name "Str") (builtin))
 						(ty-malformed)))
 				(ty-apply (name "List") (builtin)

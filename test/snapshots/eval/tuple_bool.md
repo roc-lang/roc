@@ -47,10 +47,10 @@ NO CHANGE
 		(e-tag (name "True"))
 		(e-tag (name "False"))
 		(e-nominal-external
-			(external-module "Builtin")
+			(builtin)
 			(e-tag (name "True")))
 		(e-nominal-external
-			(external-module "Builtin")
+			(builtin)
 			(e-tag (name "False")))
 		(e-unary-not
 			(e-tag (name "True")))

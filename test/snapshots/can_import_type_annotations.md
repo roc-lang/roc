@@ -509,7 +509,7 @@ combineResults = |result1, result2|
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Request") (external-module "http.Client"))
-				(ty-apply (name "Result") (external-module "Builtin")
+				(ty-apply (name "Result") (builtin)
 					(ty-lookup (name "Response") (external-module "http.Client"))
 					(ty-lookup (name "Error") (external-module "json.Json"))))))
 	(d-let
@@ -533,7 +533,7 @@ combineResults = |result1, result2|
 			(ty-fn (effectful false)
 				(ty-malformed)
 				(ty-lookup (name "Str") (builtin))
-				(ty-apply (name "Result") (external-module "Builtin")
+				(ty-apply (name "Result") (builtin)
 					(ty-lookup (name "Value") (external-module "json.Json"))
 					(ty-malformed)))))
 	(d-let
@@ -598,13 +598,13 @@ combineResults = |result1, result2|
 												(p-assign (ident "err"))))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "Result") (external-module "Builtin")
+				(ty-apply (name "Result") (builtin)
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "err")))
-				(ty-apply (name "Result") (external-module "Builtin")
+				(ty-apply (name "Result") (builtin)
 					(ty-rigid-var (name "b"))
 					(ty-rigid-var-lookup (ty-rigid-var (name "err"))))
-				(ty-apply (name "Result") (external-module "Builtin")
+				(ty-apply (name "Result") (builtin)
 					(ty-tuple
 						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))

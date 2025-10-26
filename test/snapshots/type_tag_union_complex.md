@@ -181,7 +181,7 @@ NO CHANGE
 				(e-literal (string "processed"))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Result") (external-module "Builtin"))
+				(ty-lookup (name "Result") (builtin))
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "handleResponse"))
@@ -220,7 +220,7 @@ NO CHANGE
 		(ty-header (name "Response"))
 		(ty-tag-union
 			(ty-tag-name (name "Ok")
-				(ty-lookup (name "Result") (external-module "Builtin")))
+				(ty-lookup (name "Result") (builtin)))
 			(ty-tag-name (name "NetworkError"))
 			(ty-tag-name (name "ParseError"))))
 	(s-alias-decl

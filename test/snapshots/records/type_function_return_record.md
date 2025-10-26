@@ -51,7 +51,7 @@ NO CHANGE
 				(field (field "id")
 					(ty-lookup (name "U64") (builtin)))
 				(field (field "active")
-					(ty-lookup (name "Bool") (external-module "Builtin")))))))
+					(ty-lookup (name "Bool") (builtin)))))))
 ~~~
 # TYPES
 ~~~clojure

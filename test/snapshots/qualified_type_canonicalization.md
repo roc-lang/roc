@@ -477,7 +477,7 @@ transform = |result|
 	(d-let
 		(p-assign (ident "resultType"))
 		(e-nominal-external
-			(external-module "Builtin")
+			(builtin)
 			(e-tag (name "Ok")
 				(args
 					(e-num (value "42")))))

@@ -95,7 +95,7 @@ isRed = |color| match color {
 									(p-applied-tag)))
 							(value
 								(e-nominal-external
-									(external-module "Builtin")
+									(builtin)
 									(e-tag (name "True")))))
 						(branch
 							(patterns
@@ -103,7 +103,7 @@ isRed = |color| match color {
 									(p-applied-tag)))
 							(value
 								(e-nominal-external
-									(external-module "Builtin")
+									(builtin)
 									(e-tag (name "False")))))
 						(branch
 							(patterns
@@ -111,12 +111,12 @@ isRed = |color| match color {
 									(p-applied-tag)))
 							(value
 								(e-nominal-external
-									(external-module "Builtin")
+									(builtin)
 									(e-tag (name "False")))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Color") (local))
-				(ty-lookup (name "Bool") (external-module "Builtin")))))
+				(ty-lookup (name "Bool") (builtin)))))
 	(s-nominal-decl
 		(ty-header (name "Color"))
 		(ty-tag-union

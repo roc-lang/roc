@@ -326,7 +326,7 @@ transform = |_, b| b
 										(p-assign (ident "msg"))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "Result") (external-module "Builtin")
+				(ty-apply (name "Result") (builtin)
 					(ty-underscore)
 					(ty-lookup (name "Str") (builtin)))
 				(ty-lookup (name "Str") (builtin)))))

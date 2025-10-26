@@ -105,7 +105,7 @@ NO CHANGE
 			(e-empty_list))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "Dict") (external-module "Builtin")
+				(ty-apply (name "Dict") (builtin)
 					(ty-lookup (name "Str") (builtin))
 					(ty-lookup (name "U64") (builtin)))
 				(ty-apply (name "List") (builtin)
