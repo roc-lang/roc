@@ -131,7 +131,7 @@ pub fn main() !void {
     }
 
     // Find nested type declarations in Builtin module
-    // These are nested inside Builtin's record extension (Builtin := [Empty].{...})
+    // These are nested inside Builtin's record extension (Builtin := [].{...})
     const bool_type_idx = try findTypeDeclaration(builtin_env, "Bool");
     const result_type_idx = try findTypeDeclaration(builtin_env, "Result");
     const dict_type_idx = try findTypeDeclaration(builtin_env, "Dict");

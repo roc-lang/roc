@@ -1,4 +1,4 @@
-Builtin := [Empty].{
+Builtin := [].{
 	Str := [ProvidedByCompiler].{
 		is_empty : Str -> Bool
 		is_empty = |_str| False
