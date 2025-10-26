@@ -259,8 +259,6 @@ pub const ComptimeEvaluator = struct {
         const ops = self.get_ops();
 
         const result = self.interpreter.evalMinimal(expr_idx, ops) catch |err| {
-            const debug_expr = self.env.store.getExpr(expr_idx);
-            std.debug.print("DEBUG evalDecl caught error: {} for expr type {s}\n", .{err, @tagName(debug_expr)});
             // If this is a lambda/closure and it failed to evaluate, just skip it
             // Top-level function definitions can fail for various reasons and that's ok
             // The interpreter will evaluate them on-demand when they're called
@@ -268,15 +266,11 @@ pub const ComptimeEvaluator = struct {
             if (is_lambda) {
                 // Lambdas that fail to evaluate won't be added to bindings
                 // They'll be re-evaluated on-demand when called
-                std.debug.print("DEBUG evalDecl: is_lambda=true, returning success=null\n", .{});
                 return EvalResult{ .success = null };
             }
 
             if (err == error.Crash) {
-                std.debug.print("DEBUG evalDecl: error matches error.Crash\n", .{});
-
                 if (self.expect.crashMessage()) |msg| {
-                    std.debug.print("DEBUG evalDecl: expect.crashMessage returned: {s}\n", .{msg});
                     return EvalResult{
                         .expect_failed = .{
                             .message = msg,
@@ -284,24 +278,13 @@ pub const ComptimeEvaluator = struct {
                         },
                     };
                 }
-                const msg = self.crash.crashMessage();
-                std.debug.print("DEBUG evalDecl: crash.crashMessage returned: {?s}\n", .{msg});
-                if (msg) |m| {
-                    return EvalResult{
-                        .crash = .{
-                            .message = m,
-                            .region = region,
-                        },
-                    };
-                } else {
-                    std.debug.print("DEBUG evalDecl: NO CRASH MESSAGE! Returning error_eval\n", .{});
-                    return EvalResult{
-                        .error_eval = .{
-                            .err = err,
-                            .region = region,
-                        },
-                    };
-                }
+                const msg = self.crash.crashMessage() orelse unreachable;
+                return EvalResult{
+                    .crash = .{
+                        .message = msg,
+                        .region = region,
+                    },
+                };
             }
             return EvalResult{
                 .error_eval = .{

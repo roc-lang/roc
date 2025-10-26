@@ -3672,22 +3672,9 @@ fn resolveVarFromExternal(
             // First time importing this type - copy it and cache the result
             // The target_node_idx can be a Statement.Idx (for nested declarations) or a Def.Idx
             // We need to extract the annotation to get the type variable
-            const imported_var: Var = blk_anno: {
-                // Try treating it as a Statement.Idx first
-                const stmt_idx: CIR.Statement.Idx = @enumFromInt(@intFromEnum(target_node_idx));
-                const stmt = other_module_env.store.getStatement(stmt_idx);
-                if (stmt == .s_decl) {
-                    if (stmt.s_decl.anno) |anno_idx| {
-                        break :blk_anno @as(Var, @enumFromInt(@intFromEnum(anno_idx)));
-                    } else {
-                        // No annotation - use expression var
-                        break :blk_anno @as(Var, @enumFromInt(@intFromEnum(stmt.s_decl.expr)));
-                    }
-                } else {
-                    // Assume it's a Def.Idx or direct type var
-                    break :blk_anno @as(Var, @enumFromInt(@intFromEnum(target_node_idx)));
-                }
-            };
+            // BUG: This is treating target_node_idx directly as a Var, which may not be correct
+            // TODO: Need to properly extract the Var from the target node
+            const imported_var: Var = @as(Var, @enumFromInt(@intFromEnum(target_node_idx)));
             const new_copy = try self.copyVar(imported_var, other_module_env, null);
             try self.import_cache.put(self.gpa, cache_key, new_copy);
             break :blk new_copy;

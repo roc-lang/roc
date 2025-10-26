@@ -684,10 +684,7 @@ fn processAssociatedItemsSecondPass(
                         },
                         else => {
                             // If the next stmt does not match this annotation,
-                            // then just add the annotation independently
-
-                            // TODO: Capture diagnostic that this anno doesn't
-                            // have a corresponding def
+                            // create an annotation-only definition with an ellipsis body
 
                             const region = self.parse_ir.tokenizedRegionToRegion(ta.region);
 
@@ -703,13 +700,41 @@ fn processAssociatedItemsSecondPass(
                             const qualified_ident = base.Ident.for_text(qualified_name_str);
                             const qualified_idx = try self.env.insertIdent(qualified_ident);
 
-                            const type_anno_stmt = Statement{ .s_type_anno = .{
-                                .name = qualified_idx,
+                            // Create an ellipsis expression as the body
+                            const ellipsis_expr = Expr{ .e_ellipsis = .{} };
+                            const ellipsis_expr_idx = try self.env.addExpr(ellipsis_expr, region);
+
+                            // Create a pattern for the binding (identifier pattern)
+                            const pattern = Pattern{ .assign = .{
+                                .ident = qualified_idx,
+                            } };
+                            const pattern_idx = try self.env.addPattern(pattern, region);
+
+                            // Create the annotation structure
+                            const annotation = Annotation{
                                 .anno = type_anno_idx,
                                 .where = where_clauses,
+                            };
+                            const annotation_idx = try self.env.addAnnotation(annotation, region);
+
+                            // Create a declaration statement
+                            const decl_stmt = Statement{ .s_decl = .{
+                                .pattern = pattern_idx,
+                                .expr = ellipsis_expr_idx,
+                                .anno = annotation_idx,
                             } };
-                            const type_anno_stmt_idx = try self.env.addStatement(type_anno_stmt, region);
-                            try self.env.store.addScratchStatement(type_anno_stmt_idx);
+                            const decl_stmt_idx = try self.env.addStatement(decl_stmt, region);
+                            try self.env.store.addScratchStatement(decl_stmt_idx);
+
+                            // Create a Def so it gets type-checked and is findable
+                            const def = CIR.Def{
+                                .pattern = pattern_idx,
+                                .expr = ellipsis_expr_idx,
+                                .annotation = annotation_idx,
+                                .kind = .let,
+                            };
+                            const def_idx = try self.env.addDef(def, region);
+                            try self.env.store.addScratchDef(def_idx);
                         },
                     }
                 }
@@ -1111,20 +1136,84 @@ pub fn canonicalizeFile(
                         },
                         else => {
                             // If the next stmt does not match this annotation,
-                            // then just add the annotation independently
+                            // create an annotation-only definition with an ellipsis body
 
-                            // TODO: Capture diagnostic that this anno doesn't
-                            // have a corresponding def
+                            // Create an ellipsis expression as the body
+                            const ellipsis_expr = Expr{ .e_ellipsis = .{} };
+                            const ellipsis_expr_idx = try self.env.addExpr(ellipsis_expr, region);
 
-                            const type_anno_stmt = Statement{ .s_type_anno = .{
-                                .name = name_ident,
+                            // Create a pattern for the binding (identifier pattern)
+                            const pattern = Pattern{ .assign = .{
+                                .ident = name_ident,
+                            } };
+                            const pattern_idx = try self.env.addPattern(pattern, region);
+
+                            // Create the annotation structure
+                            const annotation = Annotation{
                                 .anno = type_anno_idx,
                                 .where = where_clauses,
+                            };
+                            const annotation_idx = try self.env.addAnnotation(annotation, region);
+
+                            // Create a declaration statement
+                            const decl_stmt = Statement{ .s_decl = .{
+                                .pattern = pattern_idx,
+                                .expr = ellipsis_expr_idx,
+                                .anno = annotation_idx,
                             } };
-                            const type_anno_stmt_idx = try self.env.addStatement(type_anno_stmt, region);
-                            try self.env.store.addScratchStatement(type_anno_stmt_idx);
+                            const decl_stmt_idx = try self.env.addStatement(decl_stmt, region);
+                            try self.env.store.addScratchStatement(decl_stmt_idx);
+
+                            // Create a Def so it gets type-checked and is findable
+                            const def = CIR.Def{
+                                .pattern = pattern_idx,
+                                .expr = ellipsis_expr_idx,
+                                .annotation = annotation_idx,
+                                .kind = .let,
+                            };
+                            const def_idx = try self.env.addDef(def, region);
+                            try self.env.store.addScratchDef(def_idx);
                         },
                     }
+                } else {
+                    // No next statement - this annotation is at the end of the file
+                    // Create an annotation-only definition with an ellipsis body
+
+                    // Create an ellipsis expression as the body
+                    const ellipsis_expr = Expr{ .e_ellipsis = .{} };
+                    const ellipsis_expr_idx = try self.env.addExpr(ellipsis_expr, region);
+
+                    // Create a pattern for the binding (identifier pattern)
+                    const pattern = Pattern{ .assign = .{
+                        .ident = name_ident,
+                    } };
+                    const pattern_idx = try self.env.addPattern(pattern, region);
+
+                    // Create the annotation structure
+                    const annotation = Annotation{
+                        .anno = type_anno_idx,
+                        .where = where_clauses,
+                    };
+                    const annotation_idx = try self.env.addAnnotation(annotation, region);
+
+                    // Create a declaration statement
+                    const decl_stmt = Statement{ .s_decl = .{
+                        .pattern = pattern_idx,
+                        .expr = ellipsis_expr_idx,
+                        .anno = annotation_idx,
+                    } };
+                    const decl_stmt_idx = try self.env.addStatement(decl_stmt, region);
+                    try self.env.store.addScratchStatement(decl_stmt_idx);
+
+                    // Create a Def so it gets type-checked and is findable
+                    const def = CIR.Def{
+                        .pattern = pattern_idx,
+                        .expr = ellipsis_expr_idx,
+                        .annotation = annotation_idx,
+                        .kind = .let,
+                    };
+                    const def_idx = try self.env.addDef(def, region);
+                    try self.env.store.addScratchDef(def_idx);
                 }
             },
             .malformed => |malformed| {
