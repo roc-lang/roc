@@ -509,6 +509,77 @@ pub const Interpreter = struct {
                         .s_expr => |sx| {
                             _ = try self.evalExprMinimal(sx.expr, roc_ops, null);
                         },
+                        .s_for => |for_stmt| {
+                            // Evaluate the list expression
+                            const expr_ct_var = can.ModuleEnv.varFrom(for_stmt.expr);
+                            const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+                            const list_value = try self.evalExprMinimal(for_stmt.expr, roc_ops, expr_rt_var);
+                            defer list_value.decref(&self.runtime_layout_store, roc_ops);
+
+                            // Get the list layout
+                            if (list_value.layout.tag != .list) {
+                                return error.TypeMismatch;
+                            }
+                            const elem_layout_idx = list_value.layout.data.list;
+                            const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                            const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(elem_layout));
+
+                            // Get the RocList header
+                            const list_header: *const RocList = @ptrCast(@alignCast(list_value.ptr.?));
+                            const list_len = list_header.len();
+
+                            // Get the element type for binding
+                            const patt_ct_var = can.ModuleEnv.varFrom(for_stmt.patt);
+                            const patt_rt_var = try self.translateTypeVar(self.env, patt_ct_var);
+
+                            // Iterate over each element
+                            var i: usize = 0;
+                            while (i < list_len) : (i += 1) {
+                                // Get pointer to element
+                                const elem_ptr = if (list_header.bytes) |buffer|
+                                    buffer + i * elem_size
+                                else
+                                    return error.TypeMismatch;
+
+                                // Create a StackValue from the element
+                                var elem_value = StackValue{
+                                    .ptr = elem_ptr,
+                                    .layout = elem_layout,
+                                    .is_initialized = true,
+                                };
+
+                                // Increment refcount since we're creating a new reference
+                                elem_value.incref();
+
+                                // Bind the pattern to the element value
+                                var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
+                                defer {
+                                    self.trimBindingList(&temp_binds, 0, roc_ops);
+                                    temp_binds.deinit();
+                                }
+
+                                if (!try self.patternMatchesBind(for_stmt.patt, elem_value, patt_rt_var, roc_ops, &temp_binds)) {
+                                    elem_value.decref(&self.runtime_layout_store, roc_ops);
+                                    return error.TypeMismatch;
+                                }
+
+                                // Add bindings to the environment
+                                const loop_bindings_start = self.bindings.items.len;
+                                for (temp_binds.items) |binding| {
+                                    try self.bindings.append(binding);
+                                }
+
+                                // Evaluate the body
+                                const body_result = try self.evalExprMinimal(for_stmt.body, roc_ops, null);
+                                body_result.decref(&self.runtime_layout_store, roc_ops);
+
+                                // Clean up bindings for this iteration
+                                self.trimBindingList(&self.bindings, loop_bindings_start, roc_ops);
+
+                                // Decrement the element reference (it was incremented above)
+                                elem_value.decref(&self.runtime_layout_store, roc_ops);
+                            }
+                        },
                         else => return error.NotImplemented,
                     }
                 }
