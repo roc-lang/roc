@@ -86,11 +86,6 @@ TYPE MISMATCH - Color.md:51:104:51:105
 TYPE DOES NOT HAVE METHODS - Color.md:22:15:22:26
 TYPE DOES NOT HAVE METHODS - Color.md:29:13:29:26
 TYPE DOES NOT HAVE METHODS - Color.md:35:17:35:41
-TYPE DOES NOT HAVE METHODS - Color.md:36:21:36:45
-TYPE DOES NOT HAVE METHODS - Color.md:37:21:37:45
-TYPE DOES NOT HAVE METHODS - Color.md:38:21:38:45
-TYPE DOES NOT HAVE METHODS - Color.md:39:21:39:45
-TYPE DOES NOT HAVE METHODS - Color.md:40:21:40:45
 TYPE DOES NOT HAVE METHODS - Color.md:62:8:62:28
 # PROBLEMS
 **MODULE HEADER DEPRECATED**
@@ -201,56 +196,6 @@ You're trying to call the `is_char_in_hex_range` method on a `Num(Int(_size))`:
                 a.is_char_in_hex_range()
 ```
                 ^^^^^^^^^^^^^^^^^^^^^^^^
-
-But `Num(Int(_size))` doesn't support methods.
-
-**TYPE DOES NOT HAVE METHODS**
-You're trying to call the `is_char_in_hex_range` method on a `Num(Int(_size))`:
-**Color.md:36:21:36:45:**
-```roc
-                and b.is_char_in_hex_range()
-```
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
-
-But `Num(Int(_size))` doesn't support methods.
-
-**TYPE DOES NOT HAVE METHODS**
-You're trying to call the `is_char_in_hex_range` method on a `Num(Int(_size))`:
-**Color.md:37:21:37:45:**
-```roc
-                and c.is_char_in_hex_range()
-```
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
-
-But `Num(Int(_size))` doesn't support methods.
-
-**TYPE DOES NOT HAVE METHODS**
-You're trying to call the `is_char_in_hex_range` method on a `Num(Int(_size))`:
-**Color.md:38:21:38:45:**
-```roc
-                and d.is_char_in_hex_range()
-```
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
-
-But `Num(Int(_size))` doesn't support methods.
-
-**TYPE DOES NOT HAVE METHODS**
-You're trying to call the `is_char_in_hex_range` method on a `Num(Int(_size))`:
-**Color.md:39:21:39:45:**
-```roc
-                and e.is_char_in_hex_range()
-```
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
-
-But `Num(Int(_size))` doesn't support methods.
-
-**TYPE DOES NOT HAVE METHODS**
-You're trying to call the `is_char_in_hex_range` method on a `Num(Int(_size))`:
-**Color.md:40:21:40:45:**
-```roc
-                and f.is_char_in_hex_range()
-```
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
 
 But `Num(Int(_size))` doesn't support methods.
 

@@ -99,6 +99,8 @@ bool_var: Var,
 deferred_static_dispatch_constraints: DeferredConstraintCheck.SafeList,
 /// Used when looking up static dispatch functions
 static_dispatch_method_name_buf: std.ArrayList(u8),
+/// Map representation of Idet -> Var, user in checking static dispatch constraints
+static_dispatch_constraints_map: std.AutoHashMap(Ident.Idx, Var),
 
 /// A map of rigid variables that we build up during a branch of type checking
 const FreeVar = struct { ident: base.Ident.Idx, var_: Var };
@@ -159,6 +161,7 @@ pub fn init(
         .bool_var = undefined, // Will be initialized in copyBuiltinTypes()
         .deferred_static_dispatch_constraints = try DeferredConstraintCheck.SafeList.initCapacity(gpa, 128),
         .static_dispatch_method_name_buf = try std.ArrayList(u8).initCapacity(gpa, 32),
+        .static_dispatch_constraints_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
     };
 }
 
@@ -183,6 +186,7 @@ pub fn deinit(self: *Self) void {
     self.constraint_origins.deinit();
     self.deferred_static_dispatch_constraints.deinit(self.gpa);
     self.static_dispatch_method_name_buf.deinit(self.gpa);
+    self.static_dispatch_constraints_map.deinit();
 }
 
 /// Assert that type vars and regions in sync
@@ -3749,22 +3753,70 @@ fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!v
         const dispatcher_content = dispatcher_resolved.desc.content;
 
         if (dispatcher_content == .err) {
+
             // If the root type is an error, then skip constraint checking
-            // Iterate over the constraints
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
             for (constraints) |constraint| {
+                try self.markConstraintFunctionAsError(constraint);
+            }
+            try self.updateVar(deferred_constraint.var_, .err, Rank.generalized);
+        } else if (dispatcher_content == .rigid) {
+            // Get the rigid variable and the constraints it has defined
+            const rigid = dispatcher_content.rigid;
+            const rigid_constraints = self.types.sliceStaticDispatchConstraints(rigid.constraints);
+
+            // Get the deferred constraints to validate against
+            const deferred_constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
+
+            // First, special case if this rigid has no constraints
+            if (deferred_constraints.len > 0 and rigid_constraints.len == 0) {
+                const constraint = deferred_constraints[0];
+                try self.reportConstraintError(
+                    deferred_constraint.var_,
+                    constraint,
+                    .missing_method,
+                );
+                continue;
+            }
+
+            // Build a map of constraints the rigid has
+            self.static_dispatch_constraints_map.clearRetainingCapacity();
+            try self.static_dispatch_constraints_map.ensureUnusedCapacity(@intCast(rigid_constraints.len));
+            for (rigid_constraints) |rigid_constraint| {
+                self.static_dispatch_constraints_map.putAssumeCapacity(rigid_constraint.fn_name, rigid_constraint.fn_var);
+            }
+
+            // Iterate over the constraints
+            for (deferred_constraints) |constraint| {
                 // Extract the function and return type from the constraint
                 const resolved_constraint = self.types.resolveVar(constraint.fn_var);
                 const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
                 std.debug.assert(mb_resolved_func != null);
                 const resolved_func = mb_resolved_func.?;
 
-                // Set it to be an error
-                try self.updateVar(resolved_func.ret, .err, Rank.generalized);
+                // Then, lookup the inferred constraint in the actual list of rigid constraints
+                if (self.static_dispatch_constraints_map.get(constraint.fn_name)) |rigid_var| {
+                    // Unify the actual function var against the inferred var
+                    //
+                    // TODO: For better error messages, we should check if these
+                    // types are functions, unify each arg, etc. This should look
+                    // similar to e_call
+                    const result = try self.unify(rigid_var, constraint.fn_var, Rank.generalized);
+                    if (result.isProblem()) {
+                        try self.updateVar(deferred_constraint.var_, .err, Rank.generalized);
+                        try self.updateVar(resolved_func.ret, .err, Rank.generalized);
+                    }
+                } else {
+                    try self.reportConstraintError(
+                        deferred_constraint.var_,
+                        constraint,
+                        .missing_method,
+                    );
+                    continue;
+                }
             }
-        } else if (dispatcher_content == .rigid or dispatcher_content == .flex) {
-            // If the root type is an flex or rigid, then we there's nothing to check
-            // since the type is not concrete
+        } else if (dispatcher_content == .flex) {
+            // If the root type is aa flex, then we there's nothing to check
             continue;
         } else if (dispatcher_content == .structure and dispatcher_content.structure == .nominal_type) {
             // TODO: Internal types like Str, Result, List, etc are not
@@ -3822,36 +3874,24 @@ fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!v
 
                 // Get the ident of this method in the original env
                 const ident_in_original_env = original_env.getIdentStoreConst().findByString(qualified_name_bytes) orelse {
-                    const snapshot = try self.snapshots.deepCopyVar(self.types, deferred_constraint.var_);
-                    _ = try self.problems.appendProblem(self.cir.gpa, .{ .static_dispach = .{
-                        .dispatcher_does_not_impl_method = .{
-                            .dispatcher_var = deferred_constraint.var_,
-                            .dispatcher_snapshot = snapshot,
-                            .fn_var = constraint.fn_var,
-                            .method_name = constraint.fn_name,
-                        },
-                    } });
-                    try self.updateVar(resolved_func.ret, .err, Rank.generalized);
+                    try self.reportConstraintError(
+                        deferred_constraint.var_,
+                        constraint,
+                        .missing_method,
+                    );
                     continue;
                 };
 
                 // Get the def index in the original env
                 const node_idx_in_original_env = original_env.getExposedNodeIndexById(ident_in_original_env) orelse {
-                    // This can happen if somehow, the original module has
-                    // an ident that matches the method/type, but it doesn't
-                    // actually have/expose the method. This should be
-                    // impossible, but we handle it gracefully
-
-                    const snapshot = try self.snapshots.deepCopyVar(self.types, deferred_constraint.var_);
-                    _ = try self.problems.appendProblem(self.cir.gpa, .{ .static_dispach = .{
-                        .dispatcher_does_not_impl_method = .{
-                            .dispatcher_var = deferred_constraint.var_,
-                            .dispatcher_snapshot = snapshot,
-                            .fn_var = constraint.fn_var,
-                            .method_name = constraint.fn_name,
-                        },
-                    } });
-                    try self.updateVar(resolved_func.ret, .err, Rank.generalized);
+                    // This can happen if the original module has an ident that
+                    // matches the method/type, but it doesn't actually have
+                    // that method.
+                    try self.reportConstraintError(
+                        deferred_constraint.var_,
+                        constraint,
+                        .missing_method,
+                    );
                     continue;
                 };
                 const def_idx: Var = @enumFromInt(@as(u32, @intCast(node_idx_in_original_env)));
@@ -3869,6 +3909,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!v
                 // similar to e_call
                 const result = try self.unify(real_method_var, constraint.fn_var, Rank.generalized);
                 if (result.isProblem()) {
+                    try self.updateVar(deferred_constraint.var_, .err, Rank.generalized);
                     try self.updateVar(resolved_func.ret, .err, Rank.generalized);
                 }
             }
@@ -3877,27 +3918,11 @@ fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!v
 
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
             if (constraints.len > 0) {
-                const constraint = constraints[0];
-
-                // Snapshot the constraint and add a problem
-                const snapshot = try self.snapshots.deepCopyVar(self.types, deferred_constraint.var_);
-                _ = try self.problems.appendProblem(self.cir.gpa, .{ .static_dispach = .{
-                    .dispatcher_not_nominal = .{
-                        .dispatcher_var = deferred_constraint.var_,
-                        .dispatcher_snapshot = snapshot,
-                        .fn_var = constraint.fn_var,
-                        .method_name = constraint.fn_name,
-                    },
-                } });
-
-                // Extract the function and return type from the constraint
-                const resolved_constraint = self.types.resolveVar(constraint.fn_var);
-                const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
-                std.debug.assert(mb_resolved_func != null);
-                const resolved_func = mb_resolved_func.?;
-
-                // Set it to be an error
-                try self.updateVar(resolved_func.ret, .err, Rank.generalized);
+                try self.reportConstraintError(
+                    deferred_constraint.var_,
+                    constraints[0],
+                    .not_nominal,
+                );
             } else {
                 // It should be impossible to have a deferred constraint check
                 // that has no constraints.
@@ -3905,4 +3930,46 @@ fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!v
             }
         }
     }
+}
+
+/// Mark a constraint function's return type as error
+fn markConstraintFunctionAsError(self: *Self, constraint: StaticDispatchConstraint) !void {
+    const resolved_constraint = self.types.resolveVar(constraint.fn_var);
+    const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
+    std.debug.assert(mb_resolved_func != null);
+    const resolved_func = mb_resolved_func.?;
+    try self.updateVar(resolved_func.ret, .err, Rank.generalized);
+}
+
+/// Report a constraint validation error
+fn reportConstraintError(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    kind: enum { missing_method, not_nominal },
+) !void {
+    const snapshot = try self.snapshots.deepCopyVar(self.types, dispatcher_var);
+
+    const constraint_problem = switch (kind) {
+        .missing_method => problem.Problem{ .static_dispach = .{
+            .dispatcher_does_not_impl_method = .{
+                .dispatcher_var = dispatcher_var,
+                .dispatcher_snapshot = snapshot,
+                .fn_var = constraint.fn_var,
+                .method_name = constraint.fn_name,
+            },
+        } },
+        .not_nominal => problem.Problem{ .static_dispach = .{
+            .dispatcher_not_nominal = .{
+                .dispatcher_var = dispatcher_var,
+                .dispatcher_snapshot = snapshot,
+                .fn_var = constraint.fn_var,
+                .method_name = constraint.fn_name,
+            },
+        } },
+    };
+
+    _ = try self.problems.appendProblem(self.cir.gpa, constraint_problem);
+    try self.markConstraintFunctionAsError(constraint);
+    try self.updateVar(dispatcher_var, .err, Rank.generalized);
 }
