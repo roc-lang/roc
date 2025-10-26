@@ -1415,8 +1415,8 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         def_indices_ptr[i] = @intFromEnum(def_idx);
     }
 
-    // Type check the module - pass builtin modules as imported modules
-    const imported_envs = builtin_modules.envs();
+    // Type check the module - pass the single Builtin module as the only imported module
+    const imported_envs = [_]*const can.ModuleEnv{builtin_modules.builtin_module.env};
     var checker = try Check.init(shm_allocator, &env.types, &env, &imported_envs, &module_envs_map, &env.store.regions, common_idents);
     try checker.checkFile();
 

@@ -33,12 +33,6 @@ const LoadedModule = struct {
         // Free the env struct itself
         self.gpa.destroy(self.env);
     }
-
-    /// Get an array of module environments for type checking
-    /// Uses the same shared helper as production for consistency
-    pub fn envs(self: *const LoadedModule) [3]*const ModuleEnv {
-        return ModuleEnv.makeBuiltinEnvsArray(self.env);
-    }
 };
 
 /// Deserialize BuiltinIndices from the binary data generated at build time

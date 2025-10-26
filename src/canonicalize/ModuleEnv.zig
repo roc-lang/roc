@@ -30,16 +30,6 @@ const TypeStore = types_mod.Store;
 
 const Self = @This();
 
-/// Shared helper to create builtin envs array for type checking
-/// Both production and tests use this to ensure consistent behavior
-pub fn makeBuiltinEnvsArray(builtin_env: *const Self) [3]*const Self {
-    return .{
-        builtin_env,
-        builtin_env,
-        builtin_env,
-    };
-}
-
 /// The kind of module being canonicalized, set during header processing
 pub const ModuleKind = union(enum) {
     type_module: Ident.Idx, // Holds the main type identifier for type modules
