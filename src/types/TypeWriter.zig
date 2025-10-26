@@ -61,15 +61,36 @@ name_counters: std.EnumMap(TypeContext, u32),
 flex_var_names_map: std.AutoHashMap(Var, FlexVarNameRange),
 flex_var_names: std.array_list.Managed(u8),
 static_dispatch_constraints: std.array_list.Managed(types_mod.StaticDispatchConstraint),
-/// Optional mapping from fully-qualified type names to their display names based on top-level imports.
+/// Mapping from fully-qualified type identifiers to their display names based on top-level imports.
 /// This allows error messages to show "Str" instead of "Builtin.Str" for auto-imported types,
 /// "Bar" instead of "Foo.Bar" for nested imports, and aliases like "Baz" instead of "Foo".
-import_mapping: ?*const std.StringHashMap([]const u8),
+import_mapping: std.AutoHashMap(Ident.Idx, Ident.Idx),
 
 const FlexVarNameRange = struct { start: usize, end: usize };
 
 /// Initialize a TypeWriter with immutable types and idents references.
-pub fn initFromParts(gpa: std.mem.Allocator, types_store: *const TypesStore, idents: *const Ident.Store, import_mapping: ?*const std.StringHashMap([]const u8)) std.mem.Allocator.Error!TypeWriter {
+pub fn initFromParts(gpa: std.mem.Allocator, types_store: *const TypesStore, idents: *const Ident.Store) std.mem.Allocator.Error!TypeWriter {
+    // Build import mapping for auto-imported builtin types
+    // This allows error messages to show "Str" instead of "Builtin.Str", etc.
+    var import_mapping = std.AutoHashMap(Ident.Idx, Ident.Idx).init(gpa);
+    errdefer import_mapping.deinit();
+
+    // Helper to add a mapping if both identifiers exist
+    const tryAddMapping = struct {
+        fn call(mapping: *std.AutoHashMap(Ident.Idx, Ident.Idx), ident_store: *const Ident.Store, qualified: []const u8, display: []const u8) !void {
+            const qualified_ident = ident_store.findByString(qualified) orelse return;
+            const display_ident = ident_store.findByString(display) orelse return;
+            try mapping.put(qualified_ident, display_ident);
+        }
+    }.call;
+
+    // Map auto-imported builtin types to their user-visible names
+    try tryAddMapping(&import_mapping, idents, "Builtin.Str", "Str");
+    try tryAddMapping(&import_mapping, idents, "Builtin.Bool", "Bool");
+    try tryAddMapping(&import_mapping, idents, "Builtin.Result", "Result");
+    try tryAddMapping(&import_mapping, idents, "Builtin.Dict", "Dict");
+    try tryAddMapping(&import_mapping, idents, "Builtin.Set", "Set");
+
     return .{
         .types = types_store,
         .idents = idents,
@@ -93,6 +114,7 @@ pub fn deinit(self: *TypeWriter) void {
     self.flex_var_names_map.deinit();
     self.flex_var_names.deinit();
     self.static_dispatch_constraints.deinit();
+    self.import_mapping.deinit();
 }
 
 /// Reset type writer state
@@ -958,13 +980,9 @@ pub fn getIdent(self: *const TypeWriter, idx: Ident.Idx) []const u8 {
 /// If the identifier is in the import_mapping, returns the mapped name.
 /// Otherwise, returns the original identifier text.
 fn getDisplayName(self: *const TypeWriter, idx: Ident.Idx) []const u8 {
-    const original_name = self.idents.getText(idx);
-
-    if (self.import_mapping) |mapping| {
-        if (mapping.get(original_name)) |display_name| {
-            return display_name;
-        }
+    if (self.import_mapping.get(idx)) |display_idx| {
+        return self.idents.getText(display_idx);
     }
 
-    return original_name;
+    return self.idents.getText(idx);
 }

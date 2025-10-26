@@ -78,9 +78,6 @@ store: NodeStore,
 /// Dependency analysis results (evaluation order for defs)
 /// Set after canonicalization completes. Must not be accessed before then.
 evaluation_order: ?*DependencyGraph.EvaluationOrder,
-/// Cached import mapping for type pretty-printing
-/// Lazily initialized when first TypeWriter is created
-type_import_mapping: ?std.StringHashMap([]const u8),
 
 /// Relocate all pointers in the ModuleEnv by the given offset.
 /// This is used when loading a ModuleEnv from shared memory at a different address.
@@ -115,7 +112,6 @@ pub fn initCIRFields(self: *Self, gpa: std.mem.Allocator, module_name: []const u
     self.diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
     // Note: self.store already exists from ModuleEnv.init(), so we don't create a new one
     self.evaluation_order = null; // Will be set after canonicalization completes
-    self.type_import_mapping = null; // Will be lazily initialized when needed
 }
 
 /// Alias for initCIRFields for backwards compatibility with tests
@@ -143,7 +139,6 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
         .store = try NodeStore.initCapacity(gpa, 10_000), // Default node store capacity
         .evaluation_order = null, // Will be set after canonicalization completes
-        .type_import_mapping = null, // Will be lazily initialized when needed
     };
 }
 
@@ -153,9 +148,6 @@ pub fn deinit(self: *Self) void {
     self.types.deinit();
     self.external_decls.deinit(self.gpa);
     self.imports.deinit(self.gpa);
-    if (self.type_import_mapping) |*mapping| {
-        mapping.deinit();
-    }
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
 
@@ -1424,7 +1416,6 @@ pub const Serialized = struct {
     store: NodeStore.Serialized,
     module_kind: ModuleKind,
     evaluation_order_reserved: u64, // Reserved space for evaluation_order field (required for in-place deserialization cast)
-    type_import_mapping_reserved: [6]u64, // Reserved space for type_import_mapping field (48 bytes total, not serialized, lazily initialized)
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -1452,13 +1443,12 @@ pub const Serialized = struct {
         // Serialize NodeStore
         try self.store.serialize(&env.store, allocator, writer);
 
-        // Set gpa, module_name, module_name_idx_reserved, evaluation_order_reserved, and type_import_mapping_reserved to all zeros; the space needs to be here,
-        // but the values will be set separately during deserialization (module_name_idx, evaluation_order, and type_import_mapping are runtime-only).
+        // Set gpa, module_name, module_name_idx_reserved, and evaluation_order_reserved to all zeros; the space needs to be here,
+        // but the values will be set separately during deserialization (module_name_idx and evaluation_order are runtime-only).
         self.gpa = .{ 0, 0 };
         self.module_name = .{ 0, 0 };
         self.module_name_idx_reserved = 0;
         self.evaluation_order_reserved = 0;
-        self.type_import_mapping_reserved = .{ 0, 0, 0, 0, 0, 0 };
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
@@ -1493,7 +1483,6 @@ pub const Serialized = struct {
             .diagnostics = self.diagnostics,
             .store = self.store.deserialize(offset, gpa).*,
             .evaluation_order = null, // Not serialized, will be recomputed if needed
-            .type_import_mapping = null, // Not serialized, will be lazily initialized when needed
         };
 
         return env;
@@ -2095,23 +2084,9 @@ pub fn getLineStartsAll(self: *const Self) []const u32 {
 }
 
 /// Initialize a TypeWriter with an immutable ModuleEnv reference.
+/// The TypeWriter will build its own import mapping for auto-imported builtin types.
 pub fn initTypeWriter(self: *Self) std.mem.Allocator.Error!TypeWriter {
-    // Lazily build import mapping for auto-imported builtin types
-    // This allows error messages to show "Str" instead of "Builtin.Str", etc.
-    if (self.type_import_mapping == null) {
-        var import_mapping = std.StringHashMap([]const u8).init(self.gpa);
-
-        // Map auto-imported builtin types to their user-visible names
-        try import_mapping.put("Builtin.Str", "Str");
-        try import_mapping.put("Builtin.Bool", "Bool");
-        try import_mapping.put("Builtin.Result", "Result");
-        try import_mapping.put("Builtin.Dict", "Dict");
-        try import_mapping.put("Builtin.Set", "Set");
-
-        self.type_import_mapping = import_mapping;
-    }
-
-    return TypeWriter.initFromParts(self.gpa, &self.types, self.getIdentStore(), if (self.type_import_mapping) |*mapping| mapping else null);
+    return TypeWriter.initFromParts(self.gpa, &self.types, self.getIdentStore());
 }
 
 /// Inserts an identifier into the common environment and returns its index.
