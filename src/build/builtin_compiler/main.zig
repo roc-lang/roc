@@ -328,8 +328,9 @@ fn serializeModuleEnv(
 
 /// Find a type declaration by name in a compiled module
 /// Returns the statement index of the type declaration
-/// Searches only builtin_statements (where nested types inside record extensions are stored)
+/// Searches both all_statements and builtin_statements
 fn findTypeDeclaration(env: *const ModuleEnv, type_name: []const u8) !CIR.Statement.Idx {
+    // First, search in builtin_statements (where nested types inside record extensions are stored)
     const builtin_stmts = env.store.sliceStatements(env.builtin_statements);
     for (builtin_stmts) |stmt_idx| {
         const stmt = env.store.getStatement(stmt_idx);
@@ -353,7 +354,32 @@ fn findTypeDeclaration(env: *const ModuleEnv, type_name: []const u8) !CIR.Statem
         }
     }
 
-    std.debug.print("ERROR: Could not find type declaration '{s}' in builtin_statements\n", .{type_name});
+    // If not found in builtin_statements, search in all_statements
+    const all_stmts = env.store.sliceStatements(env.all_statements);
+    for (all_stmts) |stmt_idx| {
+        const stmt = env.store.getStatement(stmt_idx);
+        switch (stmt) {
+            .s_nominal_decl => |decl| {
+                const header = env.store.getTypeHeader(decl.header);
+                const ident_idx = header.name;
+                const ident_text = env.getIdentText(ident_idx);
+                // Try both exact match and qualified name match
+                if (std.mem.eql(u8, ident_text, type_name)) {
+                    return stmt_idx;
+                }
+                // For qualified names (e.g., "Builtin.Bool"), match the suffix
+                if (std.mem.endsWith(u8, ident_text, type_name)) {
+                    // Check if it ends with ".TypeName"
+                    if (ident_text.len > type_name.len and ident_text[ident_text.len - type_name.len - 1] == '.') {
+                        return stmt_idx;
+                    }
+                }
+            },
+            else => continue,
+        }
+    }
+
+    std.debug.print("ERROR: Could not find type declaration '{s}' in module\n", .{type_name});
     return error.TypeDeclarationNotFound;
 }
 
