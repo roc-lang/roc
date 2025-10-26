@@ -597,7 +597,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
 
 /// Generate platform host shim object file using LLVM.
 /// Returns the path to the generated object file (allocated from arena, no need to free), or null if LLVM unavailable.
-fn generatePlatformHostShim(allocs: *Allocators, cache_dir: []const u8, entrypoint_names: []const []const u8, target: builder.RocTarget) !?[]const u8 {
+fn generatePlatformHostShim(allocs: *Allocators, cache_dir: []const u8, entrypoint_names: []const []const u8, target: builder.RocTarget, shm_handle: SharedMemoryHandle) !?[]const u8 {
     // Check if LLVM is available (this is a compile-time check)
     if (!llvm_available) {
         std.log.debug("LLVM not available, skipping platform host shim generation", .{});
@@ -626,7 +626,8 @@ fn generatePlatformHostShim(allocs: *Allocators, cache_dir: []const u8, entrypoi
 
     // Create the complete platform shim
     // Note: Symbol names include platform-specific prefixes (underscore for macOS)
-    platform_host_shim.createInterpreterShim(&llvm_builder, entrypoints.items, target) catch |err| {
+    // Pass null for serialized_module since roc run uses IPC mode
+    platform_host_shim.createInterpreterShim(&llvm_builder, entrypoints.items, target, null) catch |err| {
         std.log.err("Failed to create interpreter shim: {}", .{err});
         return err;
     };
@@ -783,6 +784,14 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
         break :blk true;
     };
 
+    // Set up shared memory with ModuleEnv
+    std.log.debug("Setting up shared memory for Roc file: {s}", .{args.path});
+    const shm_handle = setupSharedMemoryWithModuleEnv(allocs, args.path) catch |err| {
+        std.log.err("Failed to set up shared memory with ModuleEnv: {}", .{err});
+        std.process.exit(1);
+    };
+    std.log.debug("Shared memory setup complete, size: {} bytes", .{shm_handle.size});
+
     if (!exe_exists) {
 
         // Check for cached shim library, extract if not present
@@ -810,7 +819,7 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
 
         // Generate platform host shim using the detected entrypoints
 
-        const platform_shim_path = generatePlatformHostShim(allocs, exe_cache_dir, entrypoints.items, shim_target) catch |err| {
+        const platform_shim_path = generatePlatformHostShim(allocs, exe_cache_dir, entrypoints.items, shim_target, shm_handle) catch |err| {
             std.log.err("Failed to generate platform host shim: {}", .{err});
             return err;
         };

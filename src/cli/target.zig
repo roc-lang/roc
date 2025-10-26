@@ -207,6 +207,15 @@ pub const RocTarget = enum {
         };
     }
 
+    /// Get the pointer bit width for this target
+    pub fn ptrBitWidth(self: RocTarget) u16 {
+        return switch (self.toCpuArch()) {
+            .x86_64, .aarch64, .aarch64_be => 64,
+            .arm, .wasm32 => 32,
+            else => 64, // Default to 64-bit
+        };
+    }
+
     /// Get the dynamic linker path for this target
     pub fn getDynamicLinkerPath(self: RocTarget) ![]const u8 {
         return switch (self) {
