@@ -222,8 +222,12 @@ pub const DispatcherNotNominal = struct {
 pub const DispatcherDoesNotImplMethod = struct {
     dispatcher_var: Var,
     dispatcher_snapshot: SnapshotContentIdx,
+    dispatcher_type: DispatcherType,
     fn_var: Var,
     method_name: Ident.Idx,
+
+    /// Type of the dispatcher
+    pub const DispatcherType = enum { nominal, rigid };
 };
 
 // bug //
@@ -1695,9 +1699,18 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         try report.document.addAnnotated("Hint:", .emphasized);
-        try report.document.addReflowingText(" Did you forget to define ");
-        try report.document.addAnnotated(method_name_str, .emphasized);
-        try report.document.addReflowingText(" in the type's method block?");
+        switch (data.dispatcher_type) {
+            .nominal => {
+                try report.document.addReflowingText(" Did you forget to define ");
+                try report.document.addAnnotated(method_name_str, .emphasized);
+                try report.document.addReflowingText(" in the type's method block?");
+            },
+            .rigid => {
+                try report.document.addReflowingText(" Did you forget to specify ");
+                try report.document.addAnnotated(method_name_str, .emphasized);
+                try report.document.addReflowingText(" in the type annotation?");
+            },
+        }
 
         return report;
     }

@@ -99,8 +99,8 @@ bool_var: Var,
 deferred_static_dispatch_constraints: DeferredConstraintCheck.SafeList,
 /// Used when looking up static dispatch functions
 static_dispatch_method_name_buf: std.ArrayList(u8),
-/// Map representation of Idet -> Var, user in checking static dispatch constraints
-static_dispatch_constraints_map: std.AutoHashMap(Ident.Idx, Var),
+/// Map representation of Ident -> Var, used in checking static dispatch constraints
+ident_to_var_map: std.AutoHashMap(Ident.Idx, Var),
 
 /// A map of rigid variables that we build up during a branch of type checking
 const FreeVar = struct { ident: base.Ident.Idx, var_: Var };
@@ -161,7 +161,7 @@ pub fn init(
         .bool_var = undefined, // Will be initialized in copyBuiltinTypes()
         .deferred_static_dispatch_constraints = try DeferredConstraintCheck.SafeList.initCapacity(gpa, 128),
         .static_dispatch_method_name_buf = try std.ArrayList(u8).initCapacity(gpa, 32),
-        .static_dispatch_constraints_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
+        .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
     };
 }
 
@@ -186,7 +186,7 @@ pub fn deinit(self: *Self) void {
     self.constraint_origins.deinit();
     self.deferred_static_dispatch_constraints.deinit(self.gpa);
     self.static_dispatch_method_name_buf.deinit(self.gpa);
-    self.static_dispatch_constraints_map.deinit();
+    self.ident_to_var_map.deinit();
 }
 
 /// Assert that type vars and regions in sync
@@ -3774,16 +3774,16 @@ fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!v
                 try self.reportConstraintError(
                     deferred_constraint.var_,
                     constraint,
-                    .missing_method,
+                    .{ .missing_method = .rigid },
                 );
                 continue;
             }
 
             // Build a map of constraints the rigid has
-            self.static_dispatch_constraints_map.clearRetainingCapacity();
-            try self.static_dispatch_constraints_map.ensureUnusedCapacity(@intCast(rigid_constraints.len));
+            self.ident_to_var_map.clearRetainingCapacity();
+            try self.ident_to_var_map.ensureUnusedCapacity(@intCast(rigid_constraints.len));
             for (rigid_constraints) |rigid_constraint| {
-                self.static_dispatch_constraints_map.putAssumeCapacity(rigid_constraint.fn_name, rigid_constraint.fn_var);
+                self.ident_to_var_map.putAssumeCapacity(rigid_constraint.fn_name, rigid_constraint.fn_var);
             }
 
             // Iterate over the constraints
@@ -3795,7 +3795,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!v
                 const resolved_func = mb_resolved_func.?;
 
                 // Then, lookup the inferred constraint in the actual list of rigid constraints
-                if (self.static_dispatch_constraints_map.get(constraint.fn_name)) |rigid_var| {
+                if (self.ident_to_var_map.get(constraint.fn_name)) |rigid_var| {
                     // Unify the actual function var against the inferred var
                     //
                     // TODO: For better error messages, we should check if these
@@ -3810,7 +3810,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!v
                     try self.reportConstraintError(
                         deferred_constraint.var_,
                         constraint,
-                        .missing_method,
+                        .{ .missing_method = .nominal },
                     );
                     continue;
                 }
@@ -3877,7 +3877,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!v
                     try self.reportConstraintError(
                         deferred_constraint.var_,
                         constraint,
-                        .missing_method,
+                        .{ .missing_method = .nominal },
                     );
                     continue;
                 };
@@ -3890,7 +3890,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!v
                     try self.reportConstraintError(
                         deferred_constraint.var_,
                         constraint,
-                        .missing_method,
+                        .{ .missing_method = .nominal },
                     );
                     continue;
                 };
@@ -3946,15 +3946,19 @@ fn reportConstraintError(
     self: *Self,
     dispatcher_var: Var,
     constraint: StaticDispatchConstraint,
-    kind: enum { missing_method, not_nominal },
+    kind: union(enum) {
+        missing_method: problem.DispatcherDoesNotImplMethod.DispatcherType,
+        not_nominal,
+    },
 ) !void {
     const snapshot = try self.snapshots.deepCopyVar(self.types, dispatcher_var);
 
     const constraint_problem = switch (kind) {
-        .missing_method => problem.Problem{ .static_dispach = .{
+        .missing_method => |dispatcher_type| problem.Problem{ .static_dispach = .{
             .dispatcher_does_not_impl_method = .{
                 .dispatcher_var = dispatcher_var,
                 .dispatcher_snapshot = snapshot,
+                .dispatcher_type = dispatcher_type,
                 .fn_var = constraint.fn_var,
                 .method_name = constraint.fn_name,
             },
