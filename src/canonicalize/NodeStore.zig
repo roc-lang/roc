@@ -130,7 +130,7 @@ pub fn deinit(store: *NodeStore) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 57;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 33;
+pub const MODULEENV_EXPR_NODE_COUNT = 34;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 14;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -623,6 +623,11 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         => {
             return CIR.Expr{ .e_runtime_error = .{
                 .diagnostic = @enumFromInt(0),
+            } };
+        },
+        .expr_low_level_lambda => {
+            return CIR.Expr{ .e_low_level_lambda = .{
+                .low_level = @enumFromInt(node.data_1),
             } };
         },
         .expr_ellipsis => {
@@ -1475,6 +1480,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_dbg => |d| {
             node.tag = .expr_dbg;
             node.data_1 = @intFromEnum(d.expr);
+        },
+        .e_low_level_lambda => |ll| {
+            node.tag = .expr_low_level_lambda;
+            node.data_1 = @intFromEnum(ll.low_level);
         },
         .e_ellipsis => |_| {
             node.tag = .expr_ellipsis;

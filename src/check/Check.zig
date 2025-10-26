@@ -2960,6 +2960,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             does_fx = try self.checkExpr(expect.body, rank, expected) or does_fx;
             try self.updateVar(expr_var, .{ .structure = .empty_record }, rank);
         },
+        .e_low_level_lambda => {
+            // Low-level lambdas get their type from the associated annotation.
+            // The type checking for the annotation will have already happened
+            // when we check the s_decl that contains this expression.
+            // Here we just mark it as a flexible type that will be unified
+            // with the annotation's type.
+            try self.updateVar(expr_var, .{ .flex = Flex.init() }, rank);
+        },
         .e_ellipsis => {
             try self.updateVar(expr_var, .{ .flex = Flex.init() }, rank);
         },

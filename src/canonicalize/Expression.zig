@@ -349,6 +349,23 @@ pub const Expr = union(enum) {
     e_expect: struct {
         body: Expr.Idx,
     },
+    /// A compiler-provided low-level lambda implementation.
+    /// These are special builtin methods where the type annotation exists in Builtin.roc
+    /// but the implementation is provided directly by the compiler instead of being
+    /// written in Roc source code.
+    ///
+    /// During the builtin_compiler's post-canonicalization pass, orphaned type annotations
+    /// (s_type_anno statements without corresponding definitions) are converted into
+    /// declarations with e_low_level_lambda expressions as their bodies.
+    ///
+    /// ```roc
+    /// # In Builtin.roc:
+    /// is_empty : Str -> Bool
+    /// # No implementation provided - compiler will inject LowLevelLambda.str_is_empty
+    /// ```
+    e_low_level_lambda: struct {
+        low_level: base.LowLevelLambda,
+    },
     /// Ellipsis placeholder expression (...).
     /// This is valid syntax that represents an unimplemented expression.
     /// It will crash at runtime if execution reaches this point.
@@ -965,6 +982,19 @@ pub const Expr = union(enum) {
                 defer ir.gpa.free(msg);
 
                 try tree.pushStringPair("tag", msg);
+
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .e_low_level_lambda => |ll| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-low-level-lambda");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+
+                // Add the low-level lambda variant name
+                const ll_name = @tagName(ll.low_level);
+                try tree.pushStringPair("low-level", ll_name);
 
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);

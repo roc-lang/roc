@@ -58,6 +58,20 @@ pub const CalledVia = enum {
     record_builder,
 };
 
+/// Low-level lambda implementations provided directly by the compiler.
+/// These are used for builtin methods that have type annotations in Builtin.roc
+/// but no user-defined implementations. The compiler provides the actual implementation.
+pub const LowLevelLambda = enum {
+    /// Str.is_empty : Str -> Bool
+    /// Returns true if the string has zero length.
+    str_is_empty,
+
+    // Future additions can be added here:
+    // str_contains,
+    // list_len,
+    // etc.
+};
+
 /// Represents a value written as-is in a Roc source file.
 pub const Literal = union(enum) {
     Int: IntLiteral,

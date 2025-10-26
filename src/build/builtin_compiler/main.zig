@@ -93,6 +93,78 @@ fn transformStrNominalToPrimitive(env: *ModuleEnv) !void {
     }
 }
 
+/// Insert low-level lambda expressions after orphaned type annotations.
+/// This pass runs after canonicalization to provide compiler implementations
+/// for builtin methods that have type annotations but no user-defined bodies.
+///
+/// For example, in Builtin.roc:
+///   is_empty : Str -> Bool
+///   # No implementation provided
+///
+/// This function will convert the orphaned s_type_anno statement into an s_decl
+/// statement with an e_low_level_lambda expression as the body.
+fn insertLowLevelLambdas(env: *ModuleEnv, gpa: Allocator) !void {
+    // Map of identifier names to their corresponding LowLevelLambda
+    var low_level_map = std.StringHashMap(base.LowLevelLambda).init(gpa);
+    defer low_level_map.deinit();
+
+    try low_level_map.put("is_empty", .str_is_empty);
+    // Future: add more mappings as needed
+    // try low_level_map.put("contains", .str_contains);
+    // try low_level_map.put("len", .list_len);
+
+    // Iterate through all statements looking for orphaned type annotations
+    const all_stmts = env.store.sliceStatements(env.all_statements);
+    for (all_stmts) |stmt_idx| {
+        const stmt = env.store.getStatement(stmt_idx);
+
+        // Look for orphaned type annotations (s_type_anno)
+        switch (stmt) {
+            .s_type_anno => |anno| {
+                const ident_text = env.getIdentText(anno.name);
+
+                // Check if this annotation has a compiler-provided implementation
+                if (low_level_map.get(ident_text)) |low_level| {
+                    // Get the region for this statement
+                    const region = env.store.getRegionAt(@enumFromInt(@intFromEnum(stmt_idx)));
+
+                    // Create a low-level lambda expression
+                    const expr = CIR.Expr{ .e_low_level_lambda = .{
+                        .low_level = low_level,
+                    } };
+                    const expr_idx = try env.addExpr(expr, region);
+
+                    // Create a pattern for the binding (identifier pattern)
+                    const pattern = CIR.Pattern{ .assign = .{
+                        .ident = anno.name,
+                    } };
+                    const pattern_idx = try env.addPattern(pattern, region);
+
+                    // Create the annotation structure
+                    const annotation_idx = try env.store.addAnnotation(
+                        CIR.Annotation{
+                            .anno = anno.anno,
+                            .where = anno.where,
+                        },
+                        region,
+                    );
+
+                    // Convert s_type_anno to s_decl with the low-level lambda as body
+                    const new_stmt = CIR.Statement{ .s_decl = .{
+                        .pattern = pattern_idx,
+                        .expr = expr_idx,
+                        .anno = annotation_idx,
+                    } };
+
+                    // Replace the statement in place
+                    try env.store.setStatementNode(stmt_idx, new_stmt);
+                }
+            },
+            else => {},
+        }
+    }
+}
+
 /// Build-time compiler that compiles builtin .roc sources into serialized ModuleEnvs.
 /// This runs during `zig build` on the host machine to generate .bin files
 /// that get embedded into the final roc executable.
@@ -265,6 +337,9 @@ fn compileModule(
 
     try can_result.canonicalizeFile();
     try can_result.validateForChecking();
+
+    // Insert low-level lambda implementations for compiler-provided builtins
+    try insertLowLevelLambdas(module_env, gpa);
 
     // 6. Type check
     // Build the list of other modules for type checking
