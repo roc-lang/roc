@@ -1369,6 +1369,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         .box = try env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = builtin_modules.builtin_indices.bool_type,
         .result_stmt = builtin_modules.builtin_indices.result_type,
+        .builtin_module = builtin_modules.builtin_module.env,
     };
 
     // Create module_envs map for auto-importing builtin types
@@ -2407,6 +2408,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
         .box = try env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = @enumFromInt(0), // TODO: load from builtin modules
         .result_stmt = @enumFromInt(0), // TODO: load from builtin modules
+        .builtin_module = null,
     };
 
     // Parse the source code as a full module

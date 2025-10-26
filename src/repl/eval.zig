@@ -489,6 +489,7 @@ pub const Repl = struct {
             .box = try module_env.insertIdent(base.Ident.for_text("Box")),
             .bool_stmt = bool_stmt_in_bool_module,
             .result_stmt = result_stmt_in_result_module,
+            .builtin_module = self.builtin_module.env,
         };
 
         // Create canonicalizer with nested types available for qualified name resolution

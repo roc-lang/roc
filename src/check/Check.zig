@@ -118,6 +118,8 @@ pub const CommonIdents = struct {
     bool_stmt: can.CIR.Statement.Idx,
     /// Statement index of Result type in the current module (injected from Builtin.bin)
     result_stmt: can.CIR.Statement.Idx,
+    /// Direct reference to the Builtin module env (null when compiling Builtin module itself)
+    builtin_module: ?*const ModuleEnv,
 };
 
 /// Init type solver
@@ -582,42 +584,14 @@ fn updateVar(self: *Self, target_var: Var, content: types_mod.Content, rank: typ
 /// other modules directly. The Bool and Result types are used in language constructs like
 /// `if` conditions and need to be available in every module's type store.
 fn copyBuiltinTypes(self: *Self) !void {
-    // Find the Builtin module env - try imported_modules first, then module_envs
-    var builtin_module: ?*const ModuleEnv = null;
-
-    // First, check imported_modules for a module named "Builtin"
-    for (self.imported_modules) |module_env| {
-        if (std.mem.eql(u8, module_env.module_name, "Builtin")) {
-            builtin_module = module_env;
-            break;
-        }
-    }
-
-    // If not found in imported_modules, try getting it from module_envs via Bool
-    if (builtin_module == null and self.module_envs != null) {
-        const module_envs = self.module_envs.?;
-
-        // Look up "Bool" in module_envs to get the Builtin module env
-        const bool_ident_text = "Bool";
-        var iter = module_envs.iterator();
-        while (iter.next()) |entry| {
-            const ident_idx = entry.key_ptr.*;
-            const ident_str = self.cir.common.idents.getText(ident_idx);
-
-            if (std.mem.eql(u8, ident_str, bool_ident_text)) {
-                builtin_module = entry.value_ptr.env;
-                break;
-            }
-        }
-    }
-
-    // Copy Bool type from Builtin module
     const bool_stmt_idx = self.common_idents.bool_stmt;
-    if (builtin_module) |builtin_env| {
+
+    if (self.common_idents.builtin_module) |builtin_env| {
+        // Copy Bool type from Builtin module using the direct reference
         const bool_type_var = ModuleEnv.varFrom(bool_stmt_idx);
         self.bool_var = try self.copyVar(bool_type_var, builtin_env, Region.zero());
     } else {
-        // If Builtin module not found, use the statement from the current module
+        // If Builtin module reference is null, use the statement from the current module
         // This happens when compiling the Builtin module itself
         self.bool_var = ModuleEnv.varFrom(bool_stmt_idx);
     }

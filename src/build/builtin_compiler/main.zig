@@ -215,6 +215,7 @@ fn compileModule(
         .box = box_ident,
         .bool_stmt = bool_stmt_opt orelse undefined,
         .result_stmt = result_stmt_opt orelse undefined,
+        .builtin_module = null,
     };
 
     // 3. Parse

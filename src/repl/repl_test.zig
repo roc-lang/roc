@@ -312,6 +312,7 @@ test "Repl - minimal interpreter integration" {
         .box = try cir.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = bool_stmt_in_builtin_module,
         .result_stmt = result_stmt_in_builtin_module,
+        .builtin_module = builtin_module.env,
     };
 
     // Step 4: Canonicalize

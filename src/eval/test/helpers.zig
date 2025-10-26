@@ -343,6 +343,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = bool_stmt_in_bool_module,
         .result_stmt = result_stmt_in_result_module,
+        .builtin_module = builtin_module.env,
     };
 
     // Create module_envs map for canonicalization (enables qualified calls)

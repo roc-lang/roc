@@ -989,6 +989,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = bool_stmt_in_builtin_module,
         .result_stmt = result_stmt_in_builtin_module,
+        .builtin_module = builtin_module.env,
     };
 
     // Create module_envs map for canonicalization (enables qualified calls)

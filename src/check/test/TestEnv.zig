@@ -224,6 +224,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = bool_stmt_in_bool_module,
         .result_stmt = result_stmt_in_result_module,
+        .builtin_module = other_test_env.builtin_module.env,
     };
 
     // Build imported_envs array dynamically based on module_env.imports order
@@ -342,6 +343,7 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = bool_stmt_in_bool_module,
         .result_stmt = result_stmt_in_result_module,
+        .builtin_module = builtin_module.env,
     };
 
     // Build imported_envs array dynamically based on module_env.imports order

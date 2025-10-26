@@ -58,6 +58,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = builtin_indices.bool_type,
         .result_stmt = builtin_indices.result_type,
+        .builtin_module = builtin_module.env,
     };
 
     // Create canonicalizer
@@ -130,6 +131,7 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = builtin_indices.bool_type,
         .result_stmt = builtin_indices.result_type,
+        .builtin_module = builtin_module.env,
     };
 
     // Set up imports with correct type (AutoHashMap with Ident.Idx keys)

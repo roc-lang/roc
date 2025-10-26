@@ -780,6 +780,7 @@ pub const PackageEnv = struct {
             .box = try env.insertIdent(base.Ident.for_text("Box")),
             .bool_stmt = builtin_indices.bool_type,
             .result_stmt = builtin_indices.result_type,
+            .builtin_module = self.builtin_modules.builtin_module.env,
         };
 
         // Create module_envs map for auto-importing builtin types
