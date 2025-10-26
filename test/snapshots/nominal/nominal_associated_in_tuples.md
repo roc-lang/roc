@@ -19,7 +19,6 @@ boxed : Box(Foo.Bar)
 boxed = Box(X)
 ~~~
 # EXPECTED
-COMPILER DIAGNOSTIC - /Users/rtfeldman/code/roc/test/snapshots/nominal/nominal_associated_in_tuples.md:0:0:0:0
 TYPE MISMATCH - nominal_associated_in_tuples.md:12:9:12:15
 # PROBLEMS
 **COMPILER DIAGNOSTIC**

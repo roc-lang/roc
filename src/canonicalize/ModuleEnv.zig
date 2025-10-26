@@ -1365,26 +1365,32 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
-        else => {
-            // For unhandled diagnostics, create a generic report
-            const diagnostic_name = @tagName(diagnostic);
+        .ident_already_in_scope => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const ident_name = self.getIdent(data.ident);
 
-            var report = Report.init(allocator, "COMPILER DIAGNOSTIC", .runtime_error);
-            try report.addHeader("Compiler Diagnostic");
-            const message = try std.fmt.allocPrint(allocator, "Diagnostic type '{s}' is not yet handled in report generation.", .{diagnostic_name});
-            defer allocator.free(message);
-            const owned_message = try report.addOwnedString(message);
-            try report.document.addText(owned_message);
+            var report = Report.init(allocator, "SHADOWING", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.document.addReflowingText("The name ");
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" is already defined in this scope.");
             try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Choose a different name for this identifier.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
 
-            // Add location info even without specific region
-            const location_msg = try std.fmt.allocPrint(allocator, "**{s}:0:0:0:0**", .{filename});
-            defer allocator.free(location_msg);
-            const owned_location = try report.addOwnedString(location_msg);
-            try report.document.addText(owned_location);
-
-            return report;
+            break :blk report;
         },
+        else => unreachable, // All diagnostics must have explicit handlers
     };
 }
 
