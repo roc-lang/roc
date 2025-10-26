@@ -2950,6 +2950,85 @@ test "snapshot validation" {
     }
 }
 
+test "no Builtin module leaks in snapshots" {
+    // IMPORTANT: The "Builtin" module is an implementation detail that should NEVER
+    // appear in user-facing error messages. We consolidate all builtin types (Bool,
+    // Result, Dict, Set, Str) into a single Builtin module so they can have cyclic
+    // dependencies with each other. However, users should only see the type names
+    // (e.g., "Dict", "Bool") not qualified names like "Builtin.Dict" or references
+    // to the Builtin module in error messages.
+    //
+    // This test searches all snapshot files for the string "Builtin" (case-sensitive)
+    // to detect any leaks. We use case-sensitive search because lowercase "builtin"
+    // appears in harmless contexts like "(builtin)" annotations in debug output.
+
+    const allocator = std.testing.allocator;
+
+    // Find all snapshot files
+    var snapshots_dir = try std.fs.cwd().openDir("test/snapshots", .{ .iterate = true });
+    defer snapshots_dir.close();
+
+    var files_with_builtin: std.array_list.Managed([]const u8) = .{ .allocator = allocator, .items = &.{}, .capacity = 0 };
+    defer {
+        for (files_with_builtin.items) |path| {
+            allocator.free(path);
+        }
+        files_with_builtin.deinit();
+    }
+
+    // Recursively search for .md files
+    try searchDirectoryForBuiltin(allocator, &snapshots_dir, "", &files_with_builtin);
+
+    if (files_with_builtin.items.len > 0) {
+        std.debug.print("\n\n❌ FOUND 'Builtin' IN SNAPSHOT FILES (implementation detail leaked!):\n", .{});
+        for (files_with_builtin.items) |path| {
+            std.debug.print("  - test/snapshots/{s}\n", .{path});
+        }
+        std.debug.print("\nThe Builtin module should never appear in user-facing error messages.\n", .{});
+        std.debug.print("Users should see type names like 'Dict', 'Bool', etc., not 'Builtin.Dict'.\n\n", .{});
+        return error.BuiltinModuleLeakedInSnapshots;
+    }
+}
+
+fn searchDirectoryForBuiltin(
+    allocator: std.mem.Allocator,
+    dir: *std.fs.Dir,
+    relative_path: []const u8,
+    files_with_builtin: *std.array_list.Managed([]const u8),
+) !void {
+    var iter = dir.iterate();
+    while (try iter.next()) |entry| {
+        const full_path = if (relative_path.len > 0)
+            try std.fmt.allocPrint(allocator, "{s}/{s}", .{ relative_path, entry.name })
+        else
+            try allocator.dupe(u8, entry.name);
+        defer allocator.free(full_path);
+
+        switch (entry.kind) {
+            .directory => {
+                var subdir = try dir.openDir(entry.name, .{ .iterate = true });
+                defer subdir.close();
+                try searchDirectoryForBuiltin(allocator, &subdir, full_path, files_with_builtin);
+            },
+            .file => {
+                if (std.mem.endsWith(u8, entry.name, ".md")) {
+                    const file = try dir.openFile(entry.name, .{});
+                    defer file.close();
+
+                    const content = try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
+                    defer allocator.free(content);
+
+                    // Search for "Builtin" (case-sensitive)
+                    if (std.mem.indexOf(u8, content, "Builtin")) |_| {
+                        try files_with_builtin.append(try allocator.dupe(u8, full_path));
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+}
+
 test "TODO: cross-module function calls - fibonacci" {
     return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
 }
