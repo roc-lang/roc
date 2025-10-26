@@ -4031,7 +4031,7 @@ test "unify - flex with subset of constraints (a subset b)" {
     try std.testing.expectEqual(2, result_constraints.len());
 }
 
-test "unify - flex with constraints vs rigid with subset constraints" {
+test "unify - flex with constraints vs rigid with constraints" {
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);
     defer env.deinit();
@@ -4041,13 +4041,15 @@ test "unify - flex with constraints vs rigid with subset constraints" {
 
     // flex has 2 constraints
     const foo_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
+    const foo_ident = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("foo"));
     const foo_constraint = types_mod.StaticDispatchConstraint{
-        .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("foo")),
+        .fn_name = foo_ident,
         .fn_var = foo_fn,
     };
     const bar_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{int}, int));
+    const bar_ident = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("bar"));
     const bar_constraint = types_mod.StaticDispatchConstraint{
-        .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("bar")),
+        .fn_name = bar_ident,
         .fn_var = bar_fn,
     };
     const flex_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{ foo_constraint, bar_constraint });
@@ -4066,10 +4068,20 @@ test "unify - flex with constraints vs rigid with subset constraints" {
     } });
 
     const result = try env.unify(flex_var, rigid_var);
-    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(true, result.isOk());
+
+    try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
+    const deferred = env.scratch.deferred_constraints.get(@enumFromInt(0));
+    try std.testing.expectEqual(rigid_var, deferred.var_);
+
+    try std.testing.expectEqual(2, deferred.constraints.len());
+    const constraint1 = env.module_env.types.static_dispatch_constraints.get(@enumFromInt(0));
+    try std.testing.expectEqual(foo_ident, constraint1.fn_name);
+    const constraint2 = env.module_env.types.static_dispatch_constraints.get(@enumFromInt(1));
+    try std.testing.expectEqual(bar_ident, constraint2.fn_name);
 }
 
-test "unify - flex with constraints vs rigid with superset constraints" {
+test "unify - flex with constraints vs rigid constraints 2" {
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);
     defer env.deinit();
@@ -4079,8 +4091,9 @@ test "unify - flex with constraints vs rigid with superset constraints" {
 
     // flex has 1 constraint
     const foo_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
+    const foo_ident = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("foo"));
     const foo_constraint = types_mod.StaticDispatchConstraint{
-        .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("foo")),
+        .fn_name = foo_ident,
         .fn_var = foo_fn,
     };
     const flex_constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{foo_constraint});
@@ -4105,6 +4118,13 @@ test "unify - flex with constraints vs rigid with superset constraints" {
 
     const result = try env.unify(flex_var, rigid_var);
     try std.testing.expectEqual(.ok, result);
+
+    try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
+    const deferred = env.scratch.deferred_constraints.get(@enumFromInt(0));
+    try std.testing.expectEqual(rigid_var, deferred.var_);
+    try std.testing.expectEqual(1, deferred.constraints.len());
+    const constraint = env.module_env.types.static_dispatch_constraints.get(@enumFromInt(0));
+    try std.testing.expectEqual(foo_ident, constraint.fn_name);
 }
 
 test "unify - empty constraints unify with any" {
