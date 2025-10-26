@@ -19,6 +19,7 @@ boxed : Box(Foo.Bar)
 boxed = Box(X)
 ~~~
 # EXPECTED
+SHADOWING - nominal_associated_in_tuples.md:9:1:9:4
 TYPE MISMATCH - nominal_associated_in_tuples.md:12:9:12:15
 # PROBLEMS
 **COMPILER DIAGNOSTIC**
