@@ -22,11 +22,17 @@ boxed = Box(X)
 SHADOWING - nominal_associated_in_tuples.md:9:1:9:4
 TYPE MISMATCH - nominal_associated_in_tuples.md:12:9:12:15
 # PROBLEMS
-**COMPILER DIAGNOSTIC**
+**SHADOWING**
+The name `Box` is already defined in this scope.
 
-**Compiler Diagnostic**
-Diagnostic type 'ident_already_in_scope' is not yet handled in report generation.
-**/Users/rtfeldman/code/roc/test/snapshots/nominal/nominal_associated_in_tuples.md:0:0:0:0**
+Choose a different name for this identifier.
+
+**nominal_associated_in_tuples.md:9:1:9:4:**
+```roc
+Box : a -> [Box(a)]
+```
+^^^
+
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
