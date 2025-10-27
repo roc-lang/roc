@@ -3952,7 +3952,6 @@ fn reportConstraintError(
     },
 ) !void {
     const snapshot = try self.snapshots.deepCopyVar(self.types, dispatcher_var);
-
     const constraint_problem = switch (kind) {
         .missing_method => |dispatcher_type| problem.Problem{ .static_dispach = .{
             .dispatcher_does_not_impl_method = .{
@@ -3972,8 +3971,7 @@ fn reportConstraintError(
             },
         } },
     };
-
     _ = try self.problems.appendProblem(self.cir.gpa, constraint_problem);
+
     try self.markConstraintFunctionAsError(constraint);
-    try self.updateVar(dispatcher_var, .err, Rank.generalized);
 }
