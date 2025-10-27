@@ -132,18 +132,12 @@ foo = Json.parse(data)
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign (ident "data"))
-		(e-not-implemented)
-		(annotation
-			(ty-lookup (name "Str") (builtin))))
-	(d-let
 		(p-assign (ident "foo"))
 		(e-call
 			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-runtime-error (tag "ident_not_in_scope"))))
-	(s-let
-		(p-assign (ident "data"))
-		(e-not-implemented))
+	(s-type-anno (name "data")
+		(ty-lookup (name "Str") (builtin)))
 	(s-import (module "Json")
 		(exposes)))
 ~~~
@@ -151,9 +145,7 @@ foo = Json.parse(data)
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str"))
 		(patt (type "Error")))
 	(expressions
-		(expr (type "Str"))
 		(expr (type "Error"))))
 ~~~

@@ -63,24 +63,11 @@ multiplyInts : I64, I64 -> I64
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign (ident "multiplyInts"))
-		(e-not-implemented)
-		(annotation
-			(ty-fn (effectful false)
-				(ty-lookup (name "I64") (builtin))
-				(ty-lookup (name "I64") (builtin))
-				(ty-lookup (name "I64") (builtin)))))
-	(s-let
-		(p-assign (ident "multiplyInts"))
-		(e-not-implemented)))
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs
-		(patt (type "Num(Int(Signed64)), Num(Int(Signed64)) -> Num(Int(Signed64))")))
-	(expressions
-		(expr (type "Num(Int(Signed64)), Num(Int(Signed64)) -> Num(Int(Signed64))"))))
+	(defs)
+	(expressions))
 ~~~

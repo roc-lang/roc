@@ -103,20 +103,12 @@ o :
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign (ident "o"))
-		(e-not-implemented)
-		(annotation
-			(ty-malformed)))
-	(s-let
-		(p-assign (ident "o"))
-		(e-not-implemented)))
+	(s-type-anno (name "o")
+		(ty-malformed)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs
-		(patt (type "Error")))
-	(expressions
-		(expr (type "Error"))))
+	(defs)
+	(expressions))
 ~~~

@@ -103,16 +103,6 @@ main! = |_| {}
 (can-ir
 	(d-let
 		(p-assign (ident "apply"))
-		(e-not-implemented)
-		(annotation
-			(ty-fn (effectful false)
-				(ty-parens
-					(ty-fn (effectful false)
-						(ty-rigid-var (name "_a"))
-						(ty-rigid-var (name "_b"))))
-				(ty-rigid-var-lookup (ty-rigid-var (name "_a"))))))
-	(d-let
-		(p-assign (ident "apply"))
 		(e-lambda
 			(args
 				(p-assign (ident "fn"))
@@ -128,19 +118,21 @@ main! = |_| {}
 			(args
 				(p-underscore))
 			(e-empty_record)))
-	(s-let
-		(p-assign (ident "apply"))
-		(e-not-implemented)))
+	(s-type-anno (name "apply")
+		(ty-fn (effectful false)
+			(ty-parens
+				(ty-fn (effectful false)
+					(ty-rigid-var (name "_a"))
+					(ty-rigid-var (name "_b"))))
+			(ty-rigid-var-lookup (ty-rigid-var (name "_a"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_a -> _b -> _a"))
 		(patt (type "a -> b, a -> b"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "_a -> _b -> _a"))
 		(expr (type "a -> b, a -> b"))
 		(expr (type "_arg -> {}"))))
 ~~~

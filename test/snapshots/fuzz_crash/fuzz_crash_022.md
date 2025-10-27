@@ -207,11 +207,6 @@ ain! = |_| getUser(900)
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign (ident "f"))
-		(e-not-implemented)
-		(annotation
-			(ty-malformed)))
-	(d-let
 		(p-assign (ident "getUser"))
 		(e-lambda
 			(args
@@ -232,22 +227,19 @@ ain! = |_| getUser(900)
 	(s-alias-decl
 		(ty-header (name "UserId"))
 		(ty-lookup (name "U64") (builtin)))
-	(s-let
-		(p-assign (ident "f"))
-		(e-not-implemented)))
+	(s-type-anno (name "f")
+		(ty-malformed)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
 		(patt (type "_arg -> Error"))
 		(patt (type "_arg -> Error")))
 	(type_decls
 		(alias (type "UserId")
 			(ty-header (name "UserId"))))
 	(expressions
-		(expr (type "Error"))
 		(expr (type "_arg -> Error"))
 		(expr (type "_arg -> Error"))))
 ~~~

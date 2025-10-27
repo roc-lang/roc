@@ -70,24 +70,12 @@ g : r -> R.a.E
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign (ident "g"))
-		(e-not-implemented)
-		(annotation
-			(ty-fn (effectful false)
-				(ty-rigid-var (name "r"))
-				(ty-malformed))))
 	(s-import (module "u.R")
-		(exposes))
-	(s-let
-		(p-assign (ident "g"))
-		(e-not-implemented)))
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs
-		(patt (type "r -> Error")))
-	(expressions
-		(expr (type "r -> Error"))))
+	(defs)
+	(expressions))
 ~~~

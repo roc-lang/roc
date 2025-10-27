@@ -349,22 +349,16 @@ transform = |_, b| b
 					(ty-rigid-var-lookup (ty-rigid-var (name "b")))))))
 	(d-let
 		(p-assign (ident "transform"))
-		(e-not-implemented)
-		(annotation
-			(ty-fn (effectful false)
-				(ty-rigid-var (name "_a"))
-				(ty-rigid-var (name "_b")))))
-	(d-let
-		(p-assign (ident "transform"))
 		(e-lambda
 			(args
 				(p-underscore)
 				(p-assign (ident "b")))
 			(e-lookup-local
 				(p-assign (ident "b")))))
-	(s-let
-		(p-assign (ident "transform"))
-		(e-not-implemented)))
+	(s-type-anno (name "transform")
+		(ty-fn (effectful false)
+			(ty-rigid-var (name "_a"))
+			(ty-rigid-var (name "_b")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -374,17 +368,15 @@ transform = |_, b| b
 		(patt (type "a -> a"))
 		(patt (type "List(_elem) -> Str"))
 		(patt (type "{ field: _field2, other: Num(Int(Unsigned32)) } -> Num(Int(Unsigned32))"))
-		(patt (type "Error -> Str"))
+		(patt (type "Result(_c, Str) -> Str"))
 		(patt (type "a -> b, List(a) -> List(b)"))
-		(patt (type "_a -> _b"))
 		(patt (type "_arg, c -> c")))
 	(expressions
 		(expr (type "_arg -> _ret"))
 		(expr (type "a -> a"))
 		(expr (type "List(_elem) -> Str"))
 		(expr (type "{ field: _field2, other: Num(Int(Unsigned32)) } -> Num(Int(Unsigned32))"))
-		(expr (type "Error -> Str"))
+		(expr (type "Result(_c, Str) -> Str"))
 		(expr (type "a -> b, List(a) -> List(b)"))
-		(expr (type "_a -> _b"))
 		(expr (type "_arg, c -> c"))))
 ~~~

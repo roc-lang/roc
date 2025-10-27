@@ -151,11 +151,11 @@ isRed = |color| match color {
 (inferred-types
 	(defs
 		(patt (type "Color"))
-		(patt (type "Color -> Error")))
+		(patt (type "Color -> Bool")))
 	(type_decls
 		(nominal (type "Color")
 			(ty-header (name "Color"))))
 	(expressions
 		(expr (type "Color"))
-		(expr (type "Color -> Error"))))
+		(expr (type "Color -> Bool"))))
 ~~~

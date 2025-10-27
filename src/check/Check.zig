@@ -739,18 +739,12 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
         try self.generateAnnotationType(annotation_idx);
         const annotation_var = ModuleEnv.varFrom(annotation_idx);
 
-        const anno_resolved = self.types.resolveVar(annotation_var);
-        std.debug.print("DEBUG checkDef: After generating annotation, var={}, content={s}\n", .{ annotation_var, @tagName(anno_resolved.desc.content) });
-
         // TODO: I think we need to instantiate annotation_var here so if there's
         // a mismatch in the body, callers of this def still get the an unpolluted def
 
         _ = try self.checkExpr(def.expr, rank, .{
             .expected = .{ .var_ = annotation_var, .from_annotation = true },
         });
-
-        const anno_resolved_after = self.types.resolveVar(annotation_var);
-        std.debug.print("DEBUG checkDef: After checkExpr, var={}, content={s}\n", .{ annotation_var, @tagName(anno_resolved_after.desc.content) });
     } else {
         _ = try self.checkExpr(def.expr, rank, .no_expectation);
     }
@@ -761,35 +755,8 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
     // Unify the fresh pattern var with the placeholder
     _ = try self.unify(fresh_ptrn_var, placeholder_ptrn_var, rank);
 
-    const expr_resolved = self.types.resolveVar(expr_var);
-    std.debug.print("DEBUG checkDef: Final expr_var={}, resolved_to={}, content={s}\n", .{ expr_var, expr_resolved.var_, @tagName(expr_resolved.desc.content) });
-
     // Now that we are existing the scope, we must generalize then pop this rank
     try self.generalizer.generalize(&self.var_pool, rank);
-
-    // Copy the final type to the def var
-    // This is needed so that when this def is used (either locally or imported),
-    // it gets the correct type from the expression
-    const def_var = ModuleEnv.varFrom(def_idx);
-    const final_resolved = self.types.resolveVar(expr_var);
-
-    // Check what def_var currently resolves to
-    const def_var_before = self.types.resolveVar(def_var);
-    std.debug.print("DEBUG checkDef: BEFORE copy - def_var={} resolves to var={}, content={s}\n", .{def_var, def_var_before.var_, @tagName(def_var_before.desc.content)});
-    std.debug.print("DEBUG checkDef: After generalization - expr_var={} resolves to var={}, content={s}\n", .{expr_var, final_resolved.var_, @tagName(final_resolved.desc.content)});
-
-    // Ensure def_var points to the final resolved variable
-    // During unification, def_var may have been set to redirect to an intermediate var
-    // After generalization, we need to update it to point to the final var
-    // This ensures cross-module imports get the correct generalized type
-    std.debug.print("DEBUG checkDef: Comparing def_var={} with final_resolved.var_={}\n", .{ def_var, final_resolved.var_ });
-    if (def_var != final_resolved.var_) {
-        // Update the redirect to point to the final resolved var
-        try self.types.setVarRedirect(def_var, final_resolved.var_);
-        std.debug.print("DEBUG checkDef: Updated def_var={} redirect to final_resolved.var_={}\n", .{ def_var, final_resolved.var_ });
-    } else {
-        std.debug.print("DEBUG checkDef: def_var and final_resolved.var_ are the same, no update needed\n", .{});
-    }
 }
 
 // create types for type decls //
@@ -1137,20 +1104,16 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenType
                     try self.types.setVarRedirect(anno_var, instantiated_var);
                 },
                 .external => |ext| {
-                    std.debug.print("DEBUG generateAnnoTypeInPlace: About to resolveVarFromExternal for module_idx={}, node_idx={}\n", .{ @intFromEnum(ext.module_idx), ext.target_node_idx });
                     if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
-                        std.debug.print("DEBUG generateAnnoTypeInPlace: resolveVarFromExternal returned successfully, instantiating var\n", .{});
                         const ext_instantiated_var = try self.instantiateVar(
                             ext_ref.local_var,
                             Rank.generalized,
                             .{ .explicit = anno_region },
                         );
                         try self.types.setVarRedirect(anno_var, ext_instantiated_var);
-                        std.debug.print("DEBUG generateAnnoTypeInPlace: Successfully set var redirect\n", .{});
                     } else {
                         // If this external type is unresolved, can should've reported
                         // an error. So we set to error and continue
-                        std.debug.print("DEBUG generateAnnoTypeInPlace: resolveVarFromExternal returned NULL, setting to .err\n", .{});
                         try self.updateVar(anno_var, .err, Rank.generalized);
                     }
                 },
@@ -3003,7 +2966,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             // when we check the s_decl that contains this expression.
             // Here we just mark it as a flexible type that will be unified
             // with the annotation's type.
-            std.debug.print("DEBUG Check e_low_level_lambda: expr_var={}, expected={}\n", .{ expr_var, expected });
             try self.updateVar(expr_var, .{ .flex = Flex.init() }, rank);
         },
         .e_ellipsis => {
@@ -3018,19 +2980,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
     switch (expected) {
         .no_expectation => {},
         .expected => |expected_type| {
-            const before_anno = self.types.resolveVar(expected_type.var_);
-            const before_expr = self.types.resolveVar(expr_var);
-            std.debug.print("DEBUG checkExpr: BEFORE unify - anno_var={}, content={s}, expr_var={}, content={s}\n", .{ expected_type.var_, @tagName(before_anno.desc.content), expr_var, @tagName(before_expr.desc.content) });
-
             if (expected_type.from_annotation) {
                 _ = try self.unifyFromAnno(expected_type.var_, expr_var, rank);
             } else {
                 _ = try self.unify(expected_type.var_, expr_var, rank);
             }
-
-            const after_anno = self.types.resolveVar(expected_type.var_);
-            const after_expr = self.types.resolveVar(expr_var);
-            std.debug.print("DEBUG checkExpr: AFTER unify - anno_var={}, content={s}, expr_var={}, content={s}\n", .{ expected_type.var_, @tagName(after_anno.desc.content), expr_var, @tagName(after_expr.desc.content) });
         },
     }
 
@@ -3059,10 +3013,6 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, rank
                         // Generate the annotation type var in-place
                         try self.generateAnnotationType(annotation_idx);
                         const annotation_var = ModuleEnv.varFrom(annotation_idx);
-
-                        // Debug: Check what the annotation type resolved to
-                        const anno_resolved = self.types.resolveVar(annotation_var);
-                        std.debug.print("DEBUG Check s_decl annotation: var={}, content={s}\n", .{ annotation_var, @tagName(anno_resolved.desc.content) });
 
                         // Return the expectation
                         break :blk Expected{
@@ -3701,61 +3651,43 @@ fn resolveVarFromExternal(
     node_idx: u16,
 ) std.mem.Allocator.Error!?ExternalType {
     const module_idx_int = @intFromEnum(module_idx);
-    std.debug.print("DEBUG resolveVarFromExternal: called with module_idx={}, node_idx={}, imported_modules.len={}\n", .{ module_idx_int, node_idx, self.imported_modules.len });
+    // Import.Idx starts at 1 (0 is reserved for current module), so subtract 1 for array index
+    if (module_idx_int > 0 and module_idx_int - 1 < self.imported_modules.len) {
+        const other_module_cir = self.imported_modules[module_idx_int - 1];
+        const other_module_env = other_module_cir;
 
-    // The idx of the expression in the other module
-    const target_node_idx = @as(CIR.Node.Idx, @enumFromInt(node_idx));
+        // The idx of the expression in the other module
+        const target_node_idx = @as(CIR.Node.Idx, @enumFromInt(node_idx));
 
-    // Import.Idx of 0 means auto-imported builtin type (Bool, Str, Result, etc.)
-    // Import.Idx starts at 1 for regular imports, so subtract 1 for array index
-    const other_module_env = if (module_idx_int == 0) blk: {
-        // Auto-imported builtin type - use builtin_module reference
-        if (self.common_idents.builtin_module) |builtin_env| {
-            std.debug.print("DEBUG resolveVarFromExternal: Using builtin_module for auto-imported type at node_idx={}\n", .{node_idx});
-            break :blk builtin_env;
-        } else {
-            // When compiling Builtin module itself, builtin_module is null
-            // In this case, auto-imports don't make sense, so return null
-            std.debug.print("DEBUG resolveVarFromExternal: module_idx=0 but builtin_module is null (compiling Builtin itself?)\n", .{});
-            return null;
-        }
-    } else if (module_idx_int > 0 and module_idx_int - 1 < self.imported_modules.len) blk: {
-        // Regular import from imported_modules array
-        break :blk self.imported_modules[module_idx_int - 1];
+        // Check if we've already copied this import
+        const cache_key = ImportCacheKey{
+            .module_idx = module_idx,
+            .node_idx = target_node_idx,
+        };
+
+        const copied_var = if (self.import_cache.get(cache_key)) |cached_var| blk_cached: {
+            // Reuse the previously copied type.
+            break :blk_cached cached_var;
+        } else blk: {
+            // First time importing this type - copy it and cache the result
+            // The target_node_idx can be a Statement.Idx (for nested declarations) or a Def.Idx
+            // We need to extract the annotation to get the type variable
+            // BUG: This is treating target_node_idx directly as a Var, which may not be correct
+            // TODO: Need to properly extract the Var from the target node
+            const imported_var: Var = @as(Var, @enumFromInt(@intFromEnum(target_node_idx)));
+            const new_copy = try self.copyVar(imported_var, other_module_env, null);
+            try self.import_cache.put(self.gpa, cache_key, new_copy);
+            break :blk new_copy;
+        };
+
+        return .{
+            .local_var = copied_var,
+            .other_cir_node_idx = target_node_idx,
+            .other_cir = other_module_env,
+        };
     } else {
-        // Invalid module_idx
-        std.debug.print("DEBUG resolveVarFromExternal: Invalid module_idx={}, returning null\n", .{module_idx_int});
         return null;
-    };
-
-    // Check if we've already copied this import
-    const cache_key = ImportCacheKey{
-        .module_idx = module_idx,
-        .node_idx = target_node_idx,
-    };
-
-    const copied_var = if (self.import_cache.get(cache_key)) |cached_var| blk_cached: {
-        // Reuse the previously copied type.
-        break :blk_cached cached_var;
-    } else blk: {
-        // First time importing this type - copy it and cache the result
-        // The target_node_idx is the index of a statement or def in the other module
-        // We need to get the type variable associated with that node
-        const imported_var: Var = ModuleEnv.varFrom(target_node_idx);
-        const imported_resolved = other_module_env.types.resolveVar(imported_var);
-        std.debug.print("DEBUG resolveVarFromExternal: Importing node_idx={}, var={}, resolved_to_var={}, content={s}\n", .{ @intFromEnum(target_node_idx), imported_var, imported_resolved.var_, @tagName(imported_resolved.desc.content) });
-        const new_copy = try self.copyVar(imported_var, other_module_env, null);
-        const new_copy_resolved = self.types.resolveVar(new_copy);
-        std.debug.print("DEBUG resolveVarFromExternal: Copied to local var={}, content={s}\n", .{ new_copy, @tagName(new_copy_resolved.desc.content) });
-        try self.import_cache.put(self.gpa, cache_key, new_copy);
-        break :blk new_copy;
-    };
-
-    return .{
-        .local_var = copied_var,
-        .other_cir_node_idx = target_node_idx,
-        .other_cir = other_module_env,
-    };
+    }
 }
 
 /// Instantiate a variable, writing su

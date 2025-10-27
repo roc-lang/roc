@@ -319,7 +319,6 @@ pub fn setupAutoImportedBuiltinTypes(
                     null;
 
                 // Add type binding to scope
-                std.debug.print("DEBUG setupAutoImportedBuiltinTypes: Adding {s} to type_bindings, target_node_idx={?}, import_idx={}\n", .{ type_name_text, target_node_idx, @intFromEnum(module_import_idx) });
                 try current_scope.type_bindings.put(gpa, type_ident, Scope.TypeBinding{
                     .external_nominal = .{
                         .module_ident = type_ident, // Use type name as module ident for module_envs lookup
@@ -736,18 +735,6 @@ fn processAssociatedItemsSecondPass(
                             };
                             const def_idx = try self.env.addDef(def, region);
                             try self.env.store.addScratchDef(def_idx);
-
-                            // Set node index for exposed associated item
-                            // For annotation-only associated items, they should be exposed if the parent type is exposed
-                            // (in Roc, associated items are public by default)
-                            // IMPORTANT: We expose the EXPR index, not the DEF index!
-                            // This is because the def index gets its redirect changed during unification,
-                            // but the expr index is stable and has the correct type.
-                            const expr_idx_u16: u16 = @intCast(@intFromEnum(ellipsis_expr_idx));
-                            const qualified_text = self.env.getIdent(qualified_idx);
-                            std.debug.print("DEBUG Can.zig annotation-only: {s}, registering as exposed\n", .{qualified_text});
-                            try self.env.setExposedNodeIndexById(qualified_idx, expr_idx_u16);
-                            std.debug.print("DEBUG Can.zig: Registered {s} as exposed def\n", .{qualified_text});
                         },
                     }
                 }
@@ -1004,12 +991,6 @@ pub fn canonicalizeFile(
                 _ = try self.canonicalizeImportStatement(import_stmt);
             },
             .decl => |decl| {
-                const pattern = self.parse_ir.store.getPattern(decl.pattern);
-                const debug_ident_text = if (pattern == .ident) blk: {
-                    const token_region = self.parse_ir.tokens.resolve(@intCast(pattern.ident.ident_tok));
-                    break :blk self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
-                } else "non-ident";
-                std.debug.print("DEBUG Can: Second pass processing .decl for '{s}'\n", .{debug_ident_text});
                 _ = try self.canonicalizeStmtDecl(decl, null);
             },
             .@"var" => |var_stmt| {
@@ -1192,16 +1173,6 @@ pub fn canonicalizeFile(
                             };
                             const def_idx = try self.env.addDef(def, region);
                             try self.env.store.addScratchDef(def_idx);
-
-                            // Register annotation-only def as exposed
-                            // (Annotation-only defs should be exported since they have a type signature)
-                            // IMPORTANT: We expose the EXPR index, not the DEF index!
-                            // This is because the def index gets its redirect changed during unification,
-                            // but the expr index is stable and has the correct type.
-                            const expr_idx_u16: u16 = @intCast(@intFromEnum(ellipsis_expr_idx));
-                            try self.env.setExposedNodeIndexById(name_ident, expr_idx_u16);
-                            const ident_text = self.env.getIdent(name_ident);
-                            _ = self.exposed_ident_texts.remove(ident_text);
                         },
                     }
                 } else {
@@ -1243,17 +1214,6 @@ pub fn canonicalizeFile(
                     };
                     const def_idx = try self.env.addDef(def, region);
                     try self.env.store.addScratchDef(def_idx);
-
-                    // Register annotation-only def as exposed
-                    // (Annotation-only defs should be exported since they have a type signature)
-                    // IMPORTANT: We expose the EXPR index, not the DEF index!
-                    // This is because the def index gets its redirect changed during unification,
-                    // but the expr index is stable and has the correct type.
-                    const expr_idx_u16: u16 = @intCast(@intFromEnum(ellipsis_expr_idx));
-                    const ident_text = self.env.getIdent(name_ident);
-                    std.debug.print("DEBUG Can: Exposing annotation-only '{s}': def_idx={}, expr_idx={}, anno_idx={}\n", .{ ident_text, @intFromEnum(def_idx), @intFromEnum(ellipsis_expr_idx), @intFromEnum(annotation_idx) });
-                    try self.env.setExposedNodeIndexById(name_ident, expr_idx_u16);
-                    _ = self.exposed_ident_texts.remove(ident_text);
                 }
             },
             .malformed => |malformed| {
@@ -1455,7 +1415,6 @@ fn canonicalizeStmtDecl(self: *Self, decl: AST.Statement.Decl, mb_last_anno: ?Ty
             const idx = try self.env.insertIdent(ident);
             // Store the def index as u16 in exposed_items
             const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-            std.debug.print("DEBUG canonicalizeStmtDecl: Exposing '{s}' with def_idx={}\n", .{ ident_text, def_idx_u16 });
             try self.env.setExposedNodeIndexById(idx, def_idx_u16);
         }
 
@@ -5901,11 +5860,8 @@ fn canonicalizeTypeAnnoBasicType(
             } }, region);
         } else {
             // If it's not a builtin, look up in scope using unified type bindings
-            const type_name_text = self.env.getIdentText(type_name_ident);
-            std.debug.print("DEBUG canonicalizeTypeAnnoBasicType: Looking up type '{s}'\n", .{type_name_text});
             if (self.scopeLookupTypeBinding(type_name_ident)) |binding_location| {
                 const binding = binding_location.binding.*;
-                std.debug.print("DEBUG canonicalizeTypeAnnoBasicType: Found binding for '{s}', type={s}\n", .{ type_name_text, @tagName(binding) });
                 return switch (binding) {
                     .local_nominal => |stmt| try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
                         .name = type_name_ident,
@@ -5920,7 +5876,6 @@ fn canonicalizeTypeAnnoBasicType(
                         .base = .{ .local = .{ .decl_idx = stmt } },
                     } }, region),
                     .external_nominal => |external| blk: {
-                        std.debug.print("DEBUG canonicalizeTypeAnnoBasicType: external_nominal for '{s}', target_node_idx={?}\n", .{ type_name_text, external.target_node_idx });
                         const import_idx = external.import_idx orelse {
                             break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .module_not_imported = .{
                                 .module_name = external.module_ident,

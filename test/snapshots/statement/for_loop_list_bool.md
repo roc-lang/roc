@@ -144,7 +144,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "Bool")))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "Bool"))))
 ~~~

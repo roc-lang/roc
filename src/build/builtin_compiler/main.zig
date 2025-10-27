@@ -123,7 +123,6 @@ fn insertLowLevelLambdas(env: *ModuleEnv, gpa: Allocator) !void {
 
     // Iterate through all defs looking for annotation-only defs with ellipsis bodies
     const all_defs = env.store.sliceDefs(env.all_defs);
-    std.debug.print("DEBUG insertLowLevelLambdas: Processing {} defs\n", .{all_defs.len});
     for (all_defs) |def_idx| {
         const def = env.store.getDef(def_idx);
         const expr = env.store.getExpr(def.expr);
@@ -134,11 +133,9 @@ fn insertLowLevelLambdas(env: *ModuleEnv, gpa: Allocator) !void {
             const pattern = env.store.getPattern(def.pattern);
             if (pattern == .assign) {
                 const ident_text = env.getIdentText(pattern.assign.ident);
-                std.debug.print("DEBUG: Found ellipsis def: {s}\n", .{ident_text});
 
                 // Check if this annotation has a compiler-provided implementation
                 if (low_level_map.get(ident_text)) |low_level| {
-                    std.debug.print("DEBUG: Replacing {s} with low_level_lambda\n", .{ident_text});
                     // Get the region for the def
                     const region = env.store.getRegionAt(@enumFromInt(@intFromEnum(def_idx)));
 
@@ -149,7 +146,13 @@ fn insertLowLevelLambdas(env: *ModuleEnv, gpa: Allocator) !void {
                     const new_expr_idx = try env.addExpr(new_expr, region);
 
                     // Update the def's expression
-                    env.store.setDefExpr(def_idx, new_expr_idx);
+                    const updated_def = CIR.Def{
+                        .pattern = def.pattern,
+                        .expr = new_expr_idx,
+                        .annotation = def.annotation,
+                        .kind = def.kind,
+                    };
+                    try env.store.setDefNode(def_idx, updated_def);
 
                     // Also update the statement if it exists
                     const all_stmts = env.store.sliceStatements(env.all_statements);
@@ -172,18 +175,6 @@ fn insertLowLevelLambdas(env: *ModuleEnv, gpa: Allocator) !void {
                     modified_any = true;
                 }
             }
-        }
-    }
-
-    // Debug: Print all exports
-    const exports_slice = env.store.sliceDefs(env.exports);
-    std.debug.print("DEBUG: Module has {} exports\n", .{exports_slice.len});
-    for (exports_slice) |export_idx| {
-        const def = env.store.getDef(export_idx);
-        const pattern = env.store.getPattern(def.pattern);
-        if (pattern == .assign) {
-            const name = env.getIdentText(pattern.assign.ident);
-            std.debug.print("DEBUG: Export: {s}\n", .{name});
         }
     }
 
@@ -231,7 +222,6 @@ pub fn main() !void {
     const builtin_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Builtin.roc", 1024 * 1024);
 
     // Compile Builtin.roc (it's completely self-contained)
-    // Note: Type exposure happens inside compileModule now, before type-checking
     const builtin_env = try compileModule(
         gpa,
         "Builtin",
@@ -246,13 +236,27 @@ pub fn main() !void {
         gpa.free(builtin_roc_source);
     }
 
-    // Find nested type declarations in Builtin module (for indices file)
+    // Find nested type declarations in Builtin module
     // These are nested inside Builtin's record extension (Builtin := [].{...})
     const bool_type_idx = try findTypeDeclaration(builtin_env, "Bool");
     const result_type_idx = try findTypeDeclaration(builtin_env, "Result");
     const dict_type_idx = try findTypeDeclaration(builtin_env, "Dict");
     const set_type_idx = try findTypeDeclaration(builtin_env, "Set");
     const str_type_idx = try findTypeDeclaration(builtin_env, "Str");
+
+    // Expose the nested types so they can be found by getExposedNodeIndexById
+    // For builtin types, the statement index IS the node index
+    const bool_ident = builtin_env.common.findIdent("Bool") orelse unreachable;
+    const result_ident = builtin_env.common.findIdent("Result") orelse unreachable;
+    const dict_ident = builtin_env.common.findIdent("Dict") orelse unreachable;
+    const set_ident = builtin_env.common.findIdent("Set") orelse unreachable;
+    const str_ident = builtin_env.common.findIdent("Str") orelse unreachable;
+
+    try builtin_env.common.setNodeIndexById(gpa, bool_ident, @intCast(@intFromEnum(bool_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, result_ident, @intCast(@intFromEnum(result_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, dict_ident, @intCast(@intFromEnum(dict_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, set_ident, @intCast(@intFromEnum(set_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, str_ident, @intCast(@intFromEnum(str_type_idx)));
 
     // Transform Str nominal types to .str primitive types
     // This must happen BEFORE serialization to ensure the .bin file contains
@@ -371,18 +375,6 @@ fn compileModule(
     // Insert low-level lambda implementations for compiler-provided builtins
     try insertLowLevelLambdas(module_env, gpa);
 
-    // Expose type declarations before type-checking so they can be resolved in annotations
-    // This is critical for forward references within the module (e.g., is_empty : Str -> Bool
-    // references Bool which is defined later in the file)
-    std.debug.print("DEBUG compileModule: module_name = {s}, checking if should expose types\n", .{module_name});
-    if (std.mem.eql(u8, module_name, "Builtin")) {
-        std.debug.print("DEBUG compileModule: About to call exposeBuiltinTypes\n", .{});
-        try exposeBuiltinTypes(module_env);
-        std.debug.print("DEBUG compileModule: exposeBuiltinTypes completed\n", .{});
-    } else {
-        std.debug.print("DEBUG compileModule: Not Builtin module, skipping type exposure\n", .{});
-    }
-
     // 6. Type check
     // Build the list of other modules for type checking
     var imported_envs = std.ArrayList(*const ModuleEnv).empty;
@@ -442,37 +434,6 @@ fn serializeModuleEnv(
 
     // Write to file
     try writer.writeGather(arena_alloc, file);
-}
-
-/// Expose builtin type declarations before type-checking
-/// This allows forward references within the module to be resolved
-fn exposeBuiltinTypes(env: *ModuleEnv) !void {
-    // List of builtin types that need to be exposed
-    const type_names = [_][]const u8{ "Bool", "Str", "Result", "Dict", "Set" };
-
-    for (type_names) |type_name| {
-        // Find the statement index for this type
-        const stmt_idx = findTypeDeclaration(env, type_name) catch |err| {
-            std.debug.print("Warning: Could not find type {s}: {any}\n", .{ type_name, err });
-            continue;
-        };
-
-        // Get the type header to find the ident
-        const stmt = env.store.getStatement(stmt_idx);
-        const decl = switch (stmt) {
-            .s_nominal_decl => |d| d,
-            else => continue,
-        };
-        const header = env.store.getTypeHeader(decl.header);
-        const ident_idx = header.name;
-
-        // Expose the type by its ident
-        const node_idx: u16 = @intCast(@intFromEnum(stmt_idx));
-        try env.setExposedNodeIndexById(ident_idx, node_idx);
-
-        const ident_text = env.getIdentText(ident_idx);
-        std.debug.print("Exposed builtin type: {s} (stmt_idx={}, node_idx={})\n", .{ ident_text, @intFromEnum(stmt_idx), node_idx });
-    }
 }
 
 /// Find a type declaration by name in a compiled module

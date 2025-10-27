@@ -1,4 +1,11 @@
 Builtin := [].{
+	Str := [ProvidedByCompiler].{
+		is_empty : Str -> Bool
+
+		contains : Str, Str -> Bool
+		contains = |_str, _other| True
+	}
+
 	Bool := [True, False].{
 		not : Bool -> Bool
 		not = |bool| match bool {
@@ -23,13 +30,6 @@ Builtin := [].{
 		#encoder =
 
 		#Encoder fmt := List U8, fmt -> List U8 where fmt implements EncoderFormatting
-	}
-
-	Str := [ProvidedByCompiler].{
-		is_empty : Str -> Bool
-
-		contains : Str, Str -> Bool
-		contains = |_str, _other| True
 	}
 
 	Result(ok, err) := [Ok(ok), Err(err)].{

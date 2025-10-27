@@ -949,6 +949,23 @@ This expression produces a value, but it's not being used:
 It has the type:
     __d_
 
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_027.md:143:2:147:3:**
+```roc
+	Stdoline!(
+		"How about ${ #
+			Num.toStr(number) # on expr
+		} as a",
+	)
+```
+
+It has the type:
+    _[Stdoline!(Error)][Err(_d), Ok({  })]_
+
+But the type annotation says it should have the type:
+    _Builtin.Result({  }, _d)_
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -1717,13 +1734,6 @@ expect {
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign (ident "line"))
-		(e-not-implemented)
-		(annotation
-			(ty-tuple
-				(ty-malformed)
-				(ty-malformed))))
-	(d-let
 		(p-assign (ident "ane"))
 		(e-lambda
 			(args
@@ -2128,11 +2138,6 @@ expect {
 		(e-empty_record)
 		(annotation
 			(ty-record)))
-	(d-let
-		(p-assign (ident "tuple"))
-		(e-not-implemented)
-		(annotation
-			(ty-malformed)))
 	(s-alias-decl
 		(ty-header (name "Map")
 			(ty-args
@@ -2210,16 +2215,16 @@ expect {
 		(exposes))
 	(s-import (module "Ba")
 		(exposes))
-	(s-let
-		(p-assign (ident "line"))
-		(e-not-implemented))
+	(s-type-anno (name "line")
+		(ty-tuple
+			(ty-malformed)
+			(ty-malformed)))
 	(s-expect
 		(e-binop (op "eq")
 			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-num (value "1"))))
-	(s-let
-		(p-assign (ident "tuple"))
-		(e-not-implemented))
+	(s-type-anno (name "tuple")
+		(ty-malformed))
 	(s-expect
 		(e-block
 			(s-let
@@ -2238,13 +2243,11 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "(Error, Error)"))
 		(patt (type "Bool -> Num(_size)"))
 		(patt (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(patt (type "[Red, Blue]_others, _arg -> Error"))
 		(patt (type "List(Error) -> Error"))
-		(patt (type "{}"))
-		(patt (type "Error")))
+		(patt (type "{}")))
 	(type_decls
 		(alias (type "Map(a, b)")
 			(ty-header (name "Map")
@@ -2275,11 +2278,9 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "(Error, Error)"))
 		(expr (type "Bool -> Num(_size)"))
 		(expr (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(expr (type "[Red, Blue]_others, _arg -> Error"))
 		(expr (type "List(Error) -> Error"))
-		(expr (type "{}"))
-		(expr (type "Error"))))
+		(expr (type "{}"))))
 ~~~

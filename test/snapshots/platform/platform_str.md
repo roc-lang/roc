@@ -61,23 +61,11 @@ processString : Str -> Str
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(d-let
-		(p-assign (ident "processString"))
-		(e-not-implemented)
-		(annotation
-			(ty-fn (effectful false)
-				(ty-lookup (name "Str") (builtin))
-				(ty-lookup (name "Str") (builtin)))))
-	(s-let
-		(p-assign (ident "processString"))
-		(e-not-implemented)))
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs
-		(patt (type "Str -> Str")))
-	(expressions
-		(expr (type "Str -> Str"))))
+	(defs)
+	(expressions))
 ~~~

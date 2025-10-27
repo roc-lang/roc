@@ -33,16 +33,6 @@ Other valid examples:
 ^
 
 
-**TOO FEW ARGS**
-The type _List_ expects  argument, but got  instead.
-**type_annotation_missing_parens.md:1:8:1:12:**
-```roc
-nums : List U8
-```
-       ^^^^
-
-
-
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,UpperIdent,
@@ -64,20 +54,12 @@ nums : List
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let
-		(p-assign (ident "nums"))
-		(e-not-implemented)
-		(annotation
-			(ty-lookup (name "List") (builtin))))
-	(s-let
-		(p-assign (ident "nums"))
-		(e-not-implemented)))
+	(s-type-anno (name "nums")
+		(ty-lookup (name "List") (builtin))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs
-		(patt (type "Error")))
-	(expressions
-		(expr (type "Error"))))
+	(defs)
+	(expressions))
 ~~~

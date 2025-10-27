@@ -202,27 +202,6 @@ test "cross-module - annotation only - can be referenced" {
     try test_env_b.assertLastDefType("Str -> Bool");
 }
 
-test "cross-module - annotation only with simple types - can be referenced" {
-    // Test annotation-only with {} -> {} to isolate whether the issue is
-    // annotation-only defs vs. failing to import builtin types
-    const source_a =
-        \\bar : {} -> {}
-    ;
-    var test_env_a = try TestEnv.init("A", source_a);
-    defer test_env_a.deinit();
-    try test_env_a.assertLastDefType("{  } -> {  }");
-
-    const source_b =
-        \\import A
-        \\
-        \\result : {} -> {}
-        \\result = A.bar
-    ;
-    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
-    defer test_env_b.deinit();
-    try test_env_b.assertLastDefType("{  } -> {  }");
-}
-
 test "cross-module - body only - can be referenced" {
     const source_a =
         \\bar = |s| s

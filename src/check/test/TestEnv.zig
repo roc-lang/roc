@@ -102,19 +102,8 @@ fn exposeAllDefs(module_env: *ModuleEnv) !void {
         const pattern = module_env.store.getPattern(def.pattern);
         if (pattern == .assign) {
             const ident_idx = pattern.assign.ident;
-
-            // For annotation-only defs (with ellipsis body), expose the ANNOTATION index
-            // For regular defs, expose the DEF index
-            // This is because def_idx can get redirected during unification,
-            // and expr_idx (ellipsis) is temporary and gets cleared after type-checking.
-            // The annotation index has the stable, generalized type.
-            const expr = module_env.store.getExpr(def.expr);
-            const node_idx_u16: u16 = if (expr == .e_ellipsis and def.annotation) |anno_idx|
-                @intCast(@intFromEnum(anno_idx)) // Expose anno_idx for annotation-only
-            else
-                @intCast(@intFromEnum(def_idx)); // Expose def_idx for regular defs
-
-            try module_env.setExposedNodeIndexById(ident_idx, node_idx_u16);
+            const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+            try module_env.setExposedNodeIndexById(ident_idx, def_idx_u16);
         }
     }
 }
@@ -489,11 +478,7 @@ pub fn assertLastDefType(self: *TestEnv, expected: []const u8) !void {
     const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);
     const last_def_idx = defs_slice[defs_slice.len - 1];
 
-    const def_var = ModuleEnv.varFrom(last_def_idx);
-    const actual_type_str = try self.type_writer.writeGet(def_var);
-    std.debug.print("\nDEBUG assertLastDefType: last_def_idx={}, def_var={}\n", .{@intFromEnum(last_def_idx), def_var});
-    std.debug.print("DEBUG assertLastDefType: expected='{s}', actual='{s}'\n", .{expected, actual_type_str});
-    try testing.expectEqualStrings(expected, actual_type_str);
+    try testing.expectEqualStrings(expected, try self.type_writer.writeGet(ModuleEnv.varFrom(last_def_idx)));
 }
 
 /// Get the inferred type descriptor of the last declaration
