@@ -107,32 +107,82 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-anno (name "foo")
-		(ty-lookup (name "U64") (builtin)))
-	(s-type-anno (name "bar")
-		(ty-malformed))
-	(s-type-anno (name "baz")
-		(ty-tuple
-			(ty-rigid-var (name "_a"))
-			(ty-rigid-var (name "_b"))
-			(ty-rigid-var (name "_c"))))
-	(s-type-anno (name "add_one")
-		(ty-parens
+	(d-let
+		(p-assign (ident "foo"))
+		(e-not-implemented)
+		(annotation
+			(ty-lookup (name "U64") (builtin))))
+	(d-let
+		(p-assign (ident "bar"))
+		(e-not-implemented)
+		(annotation
+			(ty-malformed)))
+	(d-let
+		(p-assign (ident "baz"))
+		(e-not-implemented)
+		(annotation
+			(ty-tuple
+				(ty-rigid-var (name "_a"))
+				(ty-rigid-var (name "_b"))
+				(ty-rigid-var (name "_c")))))
+	(d-let
+		(p-assign (ident "add_one"))
+		(e-not-implemented)
+		(annotation
+			(ty-parens
+				(ty-fn (effectful false)
+					(ty-lookup (name "U8") (builtin))
+					(ty-lookup (name "U16") (builtin))
+					(ty-lookup (name "U32") (builtin))))))
+	(d-let
+		(p-assign (ident "main!"))
+		(e-not-implemented)
+		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "U8") (builtin))
-				(ty-lookup (name "U16") (builtin))
-				(ty-lookup (name "U32") (builtin)))))
-	(s-type-anno (name "main!")
-		(ty-fn (effectful false)
-			(ty-apply (name "List") (builtin)
-				(ty-malformed))
-			(ty-apply (name "Result") (external-module "Builtin")
-				(ty-record)
-				(ty-underscore)))))
+				(ty-apply (name "List") (builtin)
+					(ty-malformed))
+				(ty-apply (name "Result") (external-module "Builtin")
+					(ty-record)
+					(ty-underscore)))))
+	(d-let
+		(p-assign (ident "tag_tuple"))
+		(e-not-implemented)
+		(annotation
+			(ty-malformed)))
+	(s-let
+		(p-assign (ident "foo"))
+		(e-not-implemented))
+	(s-let
+		(p-assign (ident "bar"))
+		(e-not-implemented))
+	(s-let
+		(p-assign (ident "baz"))
+		(e-not-implemented))
+	(s-let
+		(p-assign (ident "add_one"))
+		(e-not-implemented))
+	(s-let
+		(p-assign (ident "main!"))
+		(e-not-implemented))
+	(s-let
+		(p-assign (ident "tag_tuple"))
+		(e-not-implemented)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs)
-	(expressions))
+	(defs
+		(patt (type "Num(Int(Unsigned64))"))
+		(patt (type "Error"))
+		(patt (type "(_a, _b, _c)"))
+		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned16)) -> Num(Int(Unsigned32))"))
+		(patt (type "List(Error) -> Error"))
+		(patt (type "Error")))
+	(expressions
+		(expr (type "Num(Int(Unsigned64))"))
+		(expr (type "Error"))
+		(expr (type "(_a, _b, _c)"))
+		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned16)) -> Num(Int(Unsigned32))"))
+		(expr (type "List(Error) -> Error"))
+		(expr (type "Error"))))
 ~~~

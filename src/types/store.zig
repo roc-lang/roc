@@ -214,7 +214,23 @@ pub const Store = struct {
         std.debug.assert(@intFromEnum(target_var) < self.len());
         std.debug.assert(@intFromEnum(redirect_to) < self.len());
         const slot_idx = Self.varToSlotIdx(target_var);
+        const old_slot = self.slots.get(slot_idx);
+        const old_redirect_str = if (old_slot == .redirect) blk: {
+            break :blk @intFromEnum(old_slot.redirect);
+        } else 0;
+        std.debug.print("DEBUG setVarRedirect: target_var={}, redirect_to={}, old_slot={s}", .{ target_var, redirect_to, @tagName(old_slot) });
+        if (old_slot == .redirect) {
+            std.debug.print(" (was redirecting to {})", .{old_redirect_str});
+        }
+        std.debug.print("\n", .{});
         self.slots.set(slot_idx, .{ .redirect = redirect_to });
+
+        // Verify it was set
+        const new_slot = self.slots.get(slot_idx);
+        std.debug.print("DEBUG setVarRedirect: AFTER setting, slot is now {s}\n", .{@tagName(new_slot)});
+        if (new_slot != .redirect) {
+            @panic("setVarRedirect failed to set redirect!");
+        }
     }
 
     // make builtin types //
@@ -620,6 +636,13 @@ pub const Store = struct {
     pub fn resolveVar(self: *const Self, initial_var: Var) ResolvedVarDesc {
         var redirected_slot_idx = Self.varToSlotIdx(initial_var);
         var redirected_slot: Slot = self.slots.get(redirected_slot_idx);
+
+        if (@intFromEnum(initial_var) == 8) {
+            std.debug.print("DEBUG resolveVar: initial_var=8, slot={s}\n", .{@tagName(redirected_slot)});
+            if (redirected_slot == .redirect) {
+                std.debug.print("DEBUG resolveVar: var=8 redirects to {}\n", .{redirected_slot.redirect});
+            }
+        }
 
         while (true) {
             switch (redirected_slot) {

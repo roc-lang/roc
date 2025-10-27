@@ -165,6 +165,19 @@ main! = |_| {}
 (can-ir
 	(d-let
 		(p-assign (ident "compose"))
+		(e-not-implemented)
+		(annotation
+			(ty-fn (effectful false)
+				(ty-parens
+					(ty-fn (effectful false)
+						(ty-rigid-var (name "_b"))
+						(ty-rigid-var (name "_c"))))
+				(ty-parens
+					(ty-fn (effectful false)
+						(ty-rigid-var (name "_a"))
+						(ty-rigid-var-lookup (ty-rigid-var (name "_b"))))))))
+	(d-let
+		(p-assign (ident "compose"))
 		(e-lambda
 			(args
 				(p-assign (ident "f"))
@@ -190,24 +203,19 @@ main! = |_| {}
 			(args
 				(p-underscore))
 			(e-empty_record)))
-	(s-type-anno (name "compose")
-		(ty-fn (effectful false)
-			(ty-parens
-				(ty-fn (effectful false)
-					(ty-rigid-var (name "_b"))
-					(ty-rigid-var (name "_c"))))
-			(ty-parens
-				(ty-fn (effectful false)
-					(ty-rigid-var (name "_a"))
-					(ty-rigid-var-lookup (ty-rigid-var (name "_b"))))))))
+	(s-let
+		(p-assign (ident "compose"))
+		(e-not-implemented)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
+		(patt (type "_b -> _c -> _a -> _b"))
 		(patt (type "a -> b, c -> a -> c -> b"))
 		(patt (type "_arg -> {}")))
 	(expressions
+		(expr (type "_b -> _c -> _a -> _b"))
 		(expr (type "a -> b, c -> a -> c -> b"))
 		(expr (type "_arg -> {}"))))
 ~~~

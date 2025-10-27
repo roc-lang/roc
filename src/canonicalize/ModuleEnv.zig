@@ -1506,6 +1506,8 @@ pub fn addExposedById(self: *Self, ident_idx: Ident.Idx) !void {
 
 /// Associates a node index with an exposed identifier.
 pub fn setExposedNodeIndexById(self: *Self, ident_idx: Ident.Idx, node_idx: u16) !void {
+    const ident_text = self.getIdent(ident_idx);
+    std.debug.print("DEBUG setExposedNodeIndexById: Setting '{s}' to node_idx={}\n", .{ ident_text, node_idx });
     return try self.common.exposed_items.setNodeIndexById(self.gpa, @bitCast(ident_idx), node_idx);
 }
 

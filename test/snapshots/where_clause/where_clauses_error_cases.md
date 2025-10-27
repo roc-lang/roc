@@ -177,22 +177,55 @@ broken_fn3 : a -> b
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-anno (name "broken_fn1")
-		(ty-fn (effectful false)
-			(ty-rigid-var (name "a"))
-			(ty-rigid-var (name "b")))
-		(where
-			(malformed)))
-	(s-type-anno (name "broken_fn2")
-		(ty-fn (effectful false)
-			(ty-rigid-var (name "a"))
-			(ty-rigid-var (name "b")))
-		(where
-			(malformed))))
+	(d-let
+		(p-assign (ident "broken_fn1"))
+		(e-not-implemented)
+		(annotation
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "a"))
+				(ty-rigid-var (name "b")))
+			(where
+				(malformed))))
+	(d-let
+		(p-assign (ident "broken_fn2"))
+		(e-not-implemented)
+		(annotation
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "a"))
+				(ty-rigid-var (name "b")))
+			(where
+				(malformed))))
+	(d-let
+		(p-assign (ident "broken_fn3"))
+		(e-not-implemented)
+		(annotation
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "a"))
+				(ty-rigid-var (name "b")))
+			(where
+				(method (ty-rigid-var (name "c")) (name "method")
+					(args
+						(ty-rigid-var-lookup (ty-rigid-var (name "c"))))
+					(ty-rigid-var (name "d"))))))
+	(s-let
+		(p-assign (ident "broken_fn1"))
+		(e-not-implemented))
+	(s-let
+		(p-assign (ident "broken_fn2"))
+		(e-not-implemented))
+	(s-let
+		(p-assign (ident "broken_fn3"))
+		(e-not-implemented)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs)
-	(expressions))
+	(defs
+		(patt (type "a -> b"))
+		(patt (type "a -> b"))
+		(patt (type "a -> b")))
+	(expressions
+		(expr (type "a -> b"))
+		(expr (type "a -> b"))
+		(expr (type "a -> b"))))
 ~~~

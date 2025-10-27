@@ -172,7 +172,7 @@ is_ok = |result| match result {
 (inferred-types
 	(defs
 		(patt (type "ok -> MyResult(ok, err)"))
-		(patt (type "MyResult(_ok, _err) -> Bool")))
+		(patt (type "MyResult(_ok, _err) -> Error")))
 	(type_decls
 		(nominal (type "MyResult(ok, err)")
 			(ty-header (name "MyResult")
@@ -181,5 +181,5 @@ is_ok = |result| match result {
 					(ty-rigid-var (name "err"))))))
 	(expressions
 		(expr (type "ok -> MyResult(ok, err)"))
-		(expr (type "MyResult(_ok, _err) -> Bool"))))
+		(expr (type "MyResult(_ok, _err) -> Error"))))
 ~~~

@@ -1595,6 +1595,11 @@ expect {
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign (ident "line"))
+		(e-not-implemented)
+		(annotation
+			(ty-tuple)))
+	(d-let
 		(p-assign (ident "ane"))
 		(e-lambda
 			(args
@@ -1900,6 +1905,11 @@ expect {
 	(d-let
 		(p-assign (ident "e"))
 		(e-empty_record))
+	(d-let
+		(p-assign (ident "t"))
+		(e-not-implemented)
+		(annotation
+			(ty-malformed)))
 	(s-alias-decl
 		(ty-header (name "Map")
 			(ty-args
@@ -1955,12 +1965,14 @@ expect {
 		(exposes))
 	(s-import (module "Ba")
 		(exposes))
-	(s-type-anno (name "line")
-		(ty-tuple))
+	(s-let
+		(p-assign (ident "line"))
+		(e-not-implemented))
 	(s-expect
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-type-anno (name "t")
-		(ty-malformed))
+	(s-let
+		(p-assign (ident "t"))
+		(e-not-implemented))
 	(s-expect
 		(e-block
 			(s-expr
@@ -1975,11 +1987,13 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
+		(patt (type "()"))
 		(patt (type "Bool -> Num(_size)"))
 		(patt (type "[Rum]_others -> Error"))
 		(patt (type "[Blue]_others -> Error"))
 		(patt (type "_arg -> [Stdo!(Error)]_others"))
-		(patt (type "{}")))
+		(patt (type "{}"))
+		(patt (type "Error")))
 	(type_decls
 		(alias (type "Map(a, b)")
 			(ty-header (name "Map")
@@ -2007,9 +2021,11 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
+		(expr (type "()"))
 		(expr (type "Bool -> Num(_size)"))
 		(expr (type "[Rum]_others -> Error"))
 		(expr (type "[Blue]_others -> Error"))
 		(expr (type "_arg -> [Stdo!(Error)]_others"))
-		(expr (type "{}"))))
+		(expr (type "{}"))
+		(expr (type "Error"))))
 ~~~

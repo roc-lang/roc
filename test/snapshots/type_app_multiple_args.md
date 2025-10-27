@@ -26,16 +26,6 @@ main! = |_| processDict(Dict.empty().insert("one", 1))
                         ^^^^^^^^^^
 
 
-**TOO MANY ARGS**
-The type _Builtin.Dict_ expects  argument, but got  instead.
-**type_app_multiple_args.md:3:15:3:29:**
-```roc
-processDict : Dict(Str, U64) -> List(Str)
-```
-              ^^^^^^^^^^^^^^
-
-
-
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

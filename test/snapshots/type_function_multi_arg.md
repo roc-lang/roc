@@ -130,6 +130,17 @@ main! = |_| {}
 (can-ir
 	(d-let
 		(p-assign (ident "curry"))
+		(e-not-implemented)
+		(annotation
+			(ty-fn (effectful false)
+				(ty-parens
+					(ty-fn (effectful false)
+						(ty-rigid-var (name "_a"))
+						(ty-rigid-var (name "_b"))
+						(ty-rigid-var (name "_c"))))
+				(ty-malformed))))
+	(d-let
+		(p-assign (ident "curry"))
 		(e-lambda
 			(args
 				(p-assign (ident "fn")))
@@ -159,22 +170,19 @@ main! = |_| {}
 			(args
 				(p-underscore))
 			(e-empty_record)))
-	(s-type-anno (name "curry")
-		(ty-fn (effectful false)
-			(ty-parens
-				(ty-fn (effectful false)
-					(ty-rigid-var (name "_a"))
-					(ty-rigid-var (name "_b"))
-					(ty-rigid-var (name "_c"))))
-			(ty-malformed))))
+	(s-let
+		(p-assign (ident "curry"))
+		(e-not-implemented)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
+		(patt (type "_a, _b -> _c -> Error"))
 		(patt (type "a, b -> c -> a -> b -> c"))
 		(patt (type "_arg -> {}")))
 	(expressions
+		(expr (type "_a, _b -> _c -> Error"))
 		(expr (type "a, b -> c -> a -> b -> c"))
 		(expr (type "_arg -> {}"))))
 ~~~

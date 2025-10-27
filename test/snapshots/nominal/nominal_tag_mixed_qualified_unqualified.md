@@ -129,10 +129,10 @@ isRed = |color| match color {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Color -> Bool")))
+		(patt (type "Color -> Error")))
 	(type_decls
 		(nominal (type "Color")
 			(ty-header (name "Color"))))
 	(expressions
-		(expr (type "Color -> Bool"))))
+		(expr (type "Color -> Error"))))
 ~~~

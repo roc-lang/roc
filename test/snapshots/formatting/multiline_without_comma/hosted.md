@@ -79,14 +79,34 @@ b! : Str => Str
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-anno (name "a!")
-		(ty-fn (effectful true)
-			(ty-lookup (name "Str") (builtin))
-			(ty-lookup (name "Str") (builtin)))))
+	(d-let
+		(p-assign (ident "a!"))
+		(e-not-implemented)
+		(annotation
+			(ty-fn (effectful true)
+				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (builtin)))))
+	(d-let
+		(p-assign (ident "b!"))
+		(e-not-implemented)
+		(annotation
+			(ty-fn (effectful true)
+				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (builtin)))))
+	(s-let
+		(p-assign (ident "a!"))
+		(e-not-implemented))
+	(s-let
+		(p-assign (ident "b!"))
+		(e-not-implemented)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs)
-	(expressions))
+	(defs
+		(patt (type "Str => Str"))
+		(patt (type "Str => Str")))
+	(expressions
+		(expr (type "Str => Str"))
+		(expr (type "Str => Str"))))
 ~~~
