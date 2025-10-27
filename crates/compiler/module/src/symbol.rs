@@ -1533,6 +1533,7 @@ define_builtins! {
         95 LIST_WALK_TRY_FX: "walk_try!"
         96 LIST_MAP_TRY_FX: "map_try!"
         97 LIST_KEEP_IF_TRY_FX: "keep_if_try!"
+        98 LIST_JOIN_MAP_FX: "join_map!"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
