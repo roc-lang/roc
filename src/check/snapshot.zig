@@ -779,10 +779,20 @@ pub const SnapshotWriter = struct {
 
         if (self.static_dispatch_constraints.items.len > 0) {
             _ = try self.buf.writer().write(" where [");
-            for (self.static_dispatch_constraints.items) |constraint| {
+            for (self.static_dispatch_constraints.items, 0..) |constraint, i| {
+                if (i > 0) {
+                    _ = try self.buf.writer().write(", ");
+                }
+
+                const fn_resolved = self.snapshots.getContent(constraint.fn_content);
+
+                if (fn_resolved != .structure) {
+                    _ = try self.buf.writer().write("dispach_fn_error");
+                    continue;
+                }
+
                 // TODO: Find a better way to do this
                 const dispatcher = blk: {
-                    const fn_resolved = self.snapshots.getContent(constraint.fn_content);
                     std.debug.assert(fn_resolved == .structure);
 
                     const fn_args = switch (fn_resolved.structure) {
@@ -827,21 +837,33 @@ pub const SnapshotWriter = struct {
                 }
 
                 for (self.snapshots.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
-                    try self.static_dispatch_constraints.append(constraint);
+                    try self.appendStaticDispatchConstraint(constraint);
                 }
             },
             .rigid => |rigid| {
                 _ = try self.buf.writer().write(self.idents.getText(rigid.name));
 
                 for (self.snapshots.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                    try self.static_dispatch_constraints.append(constraint);
+                    try self.appendStaticDispatchConstraint(constraint);
                 }
+
+                // Useful in debugging to see if a var is rigid or not
+                // _ = try self.buf.writer().write("[r]");
             },
             .alias => |alias| {
                 try self.writeAlias(alias, root_idx);
             },
             .structure => |flat_type| {
+                const should_wrap_in_parens = ((context == .FunctionArgument or context == .FunctionReturn) and (flat_type == .fn_effectful or flat_type == .fn_pure or flat_type == .fn_unbound));
+                if (should_wrap_in_parens) {
+                    _ = try self.buf.writer().write("(");
+                }
+
                 try self.writeFlatType(flat_type, root_idx);
+
+                if (should_wrap_in_parens) {
+                    _ = try self.buf.writer().write(")");
+                }
             },
             .recursive => {
                 _ = try self.buf.writer().write("RecursiveType");
@@ -1080,7 +1102,7 @@ pub const SnapshotWriter = struct {
                 }
 
                 for (self.snapshots.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
-                    try self.static_dispatch_constraints.append(constraint);
+                    try self.appendStaticDispatchConstraint(constraint);
                 }
             },
             .structure => |flat_type| switch (flat_type) {
@@ -1093,7 +1115,7 @@ pub const SnapshotWriter = struct {
                 _ = try self.buf.writer().write(self.idents.getText(rigid.name));
 
                 for (self.snapshots.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                    try self.static_dispatch_constraints.append(constraint);
+                    try self.appendStaticDispatchConstraint(constraint);
                 }
             },
             else => {
@@ -1220,6 +1242,16 @@ pub const SnapshotWriter = struct {
                 };
             },
         }
+    }
+
+    /// Append a constraint to the list, if it doesn't already exist
+    fn appendStaticDispatchConstraint(self: *Self, constraint_to_add: SnapshotStaticDispatchConstraint) std.mem.Allocator.Error!void {
+        for (self.static_dispatch_constraints.items) |constraint| {
+            if (constraint.fn_name == constraint_to_add.fn_name and constraint.fn_content == constraint_to_add.fn_content) {
+                return;
+            }
+        }
+        _ = try self.static_dispatch_constraints.append(constraint_to_add);
     }
 
     /// Generate a name for a flex var that may appear multiple times in the type

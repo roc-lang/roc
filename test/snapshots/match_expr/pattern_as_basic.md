@@ -92,5 +92,5 @@ match (1, 2) {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])])"))
 ~~~

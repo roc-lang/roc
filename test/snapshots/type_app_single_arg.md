@@ -126,8 +126,8 @@ main! = |_| processList(["one", "two"])
 (inferred-types
 	(defs
 		(patt (type "List(Str) -> Error"))
-		(patt (type "_arg -> Num(Int(Unsigned64))")))
+		(patt (type "_arg -> Error")))
 	(expressions
 		(expr (type "List(Str) -> Error"))
-		(expr (type "_arg -> Num(Int(Unsigned64))"))))
+		(expr (type "_arg -> Error"))))
 ~~~

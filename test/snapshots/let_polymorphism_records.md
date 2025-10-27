@@ -48,6 +48,7 @@ UNRECOGNIZED SYNTAX - let_polymorphism_records.md:19:50:19:51
 UNUSED VARIABLE - let_polymorphism_records.md:19:52:19:67
 UNUSED VARIABLE - let_polymorphism_records.md:19:27:19:36
 UNUSED VALUE - let_polymorphism_records.md:19:40:19:49
+TYPE MISMATCH - let_polymorphism_records.md:19:58:19:67
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **&** is not expected in an expression.
@@ -105,6 +106,20 @@ update_data = |container, new_value| { container & data: new_value }
 
 It has the type:
     __a_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**let_polymorphism_records.md:19:58:19:67:**
+```roc
+update_data = |container, new_value| { container & data: new_value }
+```
+                                                         ^^^^^^^^^
+
+It has the type:
+    _new_value_
+
+But I expected it to be:
+    _new_value_
 
 # TOKENS
 ~~~zig
@@ -449,16 +464,16 @@ main = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])])"))
+		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
 		(patt (type "Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])])"))
 		(patt (type "Str"))
 		(patt (type "List(_elem)"))
 		(patt (type "List(Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])]))"))
 		(patt (type "a -> { count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: a }"))
-		(patt (type "{ count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])]) }"))
+		(patt (type "{ count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] }"))
 		(patt (type "{ count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: Str }"))
 		(patt (type "{ count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: List(_elem) }"))
-		(patt (type "new_value"))
+		(patt (type "Error"))
 		(patt (type "_arg, _arg2 -> {}"))
 		(patt (type "{}"))
 		(patt (type "{}"))
@@ -468,16 +483,16 @@ main = |_| {
 		(patt (type "{ value: List(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]) }"))
 		(patt (type "_arg -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]")))
 	(expressions
-		(expr (type "Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])])"))
+		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
 		(expr (type "Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])])"))
 		(expr (type "Str"))
 		(expr (type "List(_elem)"))
 		(expr (type "List(Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])]))"))
 		(expr (type "a -> { count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: a }"))
-		(expr (type "{ count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])]) }"))
+		(expr (type "{ count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] }"))
 		(expr (type "{ count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: Str }"))
 		(expr (type "{ count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: List(_elem) }"))
-		(expr (type "new_value"))
+		(expr (type "Error"))
 		(expr (type "_arg, _arg2 -> {}"))
 		(expr (type "{}"))
 		(expr (type "{}"))

@@ -73,5 +73,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error -> _arg -> Error"))
+(expr (type "Error -> (_arg -> Error)"))
 ~~~

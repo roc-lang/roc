@@ -13,9 +13,19 @@ mapList = |list, fn| list.map(fn)
 main! = |_| mapList([1,2,3,4,5])
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_app_with_vars.md:6:13:6:33
 TYPE DOES NOT HAVE METHODS - type_app_with_vars.md:4:22:4:34
+TYPE MISMATCH - type_app_with_vars.md:6:13:6:33
 # PROBLEMS
+**TYPE DOES NOT HAVE METHODS**
+You're trying to call the `map` method on a `List(a)`:
+**type_app_with_vars.md:4:22:4:34:**
+```roc
+mapList = |list, fn| list.map(fn)
+```
+                     ^^^^^^^^^^^^
+
+But `List(a)` doesn't support methods.
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **type_app_with_vars.md:6:13:6:33:**
@@ -28,17 +38,7 @@ It has the type:
     _List(Num(_size)) -> _ret_
 
 But I expected it to be:
-    _List(a), a -> b -> List(b)_
-
-**TYPE DOES NOT HAVE METHODS**
-You're trying to call the `map` method on a `List(a)`:
-**type_app_with_vars.md:4:22:4:34:**
-```roc
-mapList = |list, fn| list.map(fn)
-```
-                     ^^^^^^^^^^^^
-
-But `List(a)` doesn't support methods.
+    _List(a), (a -> b) -> Error_
 
 # TOKENS
 ~~~zig
@@ -157,9 +157,9 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(a), a -> b -> Error"))
+		(patt (type "List(a), (a -> b) -> Error"))
 		(patt (type "_arg -> _ret")))
 	(expressions
-		(expr (type "List(a), a -> b -> Error"))
+		(expr (type "List(a), (a -> b) -> Error"))
 		(expr (type "_arg -> _ret"))))
 ~~~

@@ -259,6 +259,17 @@ test "check type - def - nested lambda" {
     try checkTypesModule(source, .{ .pass = .last_def }, "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
 }
 
+test "check type - def - nested lambda with wrong annotation" {
+    return error.SkipZigTest;
+
+    // Currently the below produces two errors instead of just one.
+    // const source =
+    //     \\curried_add : Num(a), Num(a), Num(a), Num(a) -> Num(a)
+    //     \\curried_add = |a| |b| |c| |d| a + b + c + d
+    // ;
+    // try checkTypesModule(source, .fail, "Num(_size)");
+}
+
 // calling functions
 
 test "check type - def - monomorphic id" {
@@ -291,11 +302,27 @@ test "check type - def - polymorphic id 2" {
     try checkTypesModule(source, .{ .pass = .last_def }, "(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], Str)");
 }
 
+test "check type - def - out of order" {
+    // Currently errors out in czer
+    return error.SkipZigTest;
+
+    // const source =
+    //     \\id_1 : x -> x
+    //     \\id_1 = |x| id_2(x)
+    //     \\
+    //     \\id_2 : x -> x
+    //     \\id_2 = |x| x
+    //     \\
+    //     \\test = id_1("Hellor")
+    // ;
+    // try checkTypesModule(source, .{ .pass = .{ .def = "test" } }, "Str");
+}
+
 test "check type - def - polymorphic higher order 1" {
     const source =
         \\f = |g, v| g(v)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "a -> b, a -> b");
+    try checkTypesModule(source, .{ .pass = .last_def }, "(a -> b), a -> b");
 }
 
 test "check type - top level polymorphic function is generalized" {
@@ -509,9 +536,9 @@ test "check type - nominal w/ polymorphic function" {
         \\swapPair : Pair(a, b) -> Pair(b, a)
         \\swapPair = |(x, y)| (y, x)
         \\
-        \\test = |_| swapPair((1, "test"))
+        \\test = swapPair((1, "test"))
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Pair(Str, num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Pair(Str, num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])])");
 }
 
 // bool
@@ -855,10 +882,8 @@ test "check type - patterns int mismatch" {
 test "check type - patterns frac 1" {
     const source =
         \\{
-        \\  x = 10.0dec
-        \\
-        \\  match(x) {
-        \\    10 => x,
+        \\  match(20) {
+        \\    10dec as x => x,
         \\    _ => 15,
         \\  }
         \\}
@@ -869,10 +894,8 @@ test "check type - patterns frac 1" {
 test "check type - patterns frac 2" {
     const source =
         \\{
-        \\  x = 10.0
-        \\
-        \\  match(x) {
-        \\    10f32 => x,
+        \\  match(10) {
+        \\    10f32 as x => x,
         \\    _ => 15,
         \\  }
         \\}
@@ -883,11 +906,9 @@ test "check type - patterns frac 2" {
 test "check type - patterns frac 3" {
     const source =
         \\{
-        \\  x = 10.0
-        \\
-        \\  match(x) {
-        \\    10 => x,
-        \\    15f64 => x,
+        \\  match(50) {
+        \\    10 as x => x,
+        \\    15f64 as x => x,
         \\    _ => 20,
         \\  }
         \\}
@@ -1185,26 +1206,29 @@ test "check type - static dispatch - concrete - indirection 1" {
 
 test "check type - static dispatch - concrete - indirection 2" {
     const source =
+        \\main! = |_| {}
+        \\
         \\Test := [Val(Str)].{
         \\  to_str = |Test.Val(s)| s
         \\  to_str2 = |test| test.to_str()
         \\}
         \\
-        \\main = Test.Val("hello").to_str2()
+        \\
+        \\func = Test.Val("hello").to_str2()
     ;
     try checkTypesModule(
         source,
-        .{ .pass = .{ .def = "main" } },
+        .{ .pass = .{ .def = "func" } },
         "Str",
     );
 }
 
 test "check type - static dispatch - fail if not in type signature" {
     const source =
-        \\module []
+        \\main! = |_| {}
         \\
-        \\main : a -> a
-        \\main = |a| {
+        \\func : a -> a
+        \\func = |a| {
         \\  _val = a.method()
         \\  a
         \\}
@@ -1215,6 +1239,372 @@ test "check type - static dispatch - fail if not in type signature" {
         "MISSING METHOD",
     );
 }
+
+test "check type - static dispatch - let poly" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\process_container : a -> Str where [a.get_or : a, Str -> Str]
+        \\process_container = |container| {
+        \\  result = container.get_or("empty")
+        \\  result
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "process_container" } },
+        "a -> Str where [a.get_or : a, Str -> Str]",
+    );
+}
+
+test "check type - static dispatch - let poly 2" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\# Define a Container type with methods
+        \\Container(a) := [Empty, Value(a)].{
+        \\
+        \\  # Method to get value or provide default
+        \\  get_or : Container(a), a -> a
+        \\  get_or = |container, default| {
+        \\    match container {
+        \\      Value(val) => val
+        \\      Empty => default
+        \\    }
+        \\  }
+        \\}
+        \\
+        \\process_container : a -> Str where [a.get_or : a, Str -> Str]
+        \\process_container = |container| {
+        \\  result = container.get_or("empty")
+        \\  result
+        \\}
+        \\
+        \\func = {
+        \\  c = Container.Empty
+        \\  process_container(c)
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "func" } },
+        "Str",
+    );
+}
+
+test "check type - static dispatch - polymorphic type" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Container(a) := [Value(a)].{
+        \\  # Method to map over the contained value
+        \\  map : Container(a), (a -> b) -> Container(b)
+        \\  map = |Value(val), f| {
+        \\      Value(f(val))
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "Container.map" } },
+        "Container(a), (a -> b) -> Container(b)",
+    );
+}
+
+test "check type - static dispatch - polymorphic type 2" {
+    const source =
+        \\Container(a) := [Value(a)].{
+        \\  # Method to map over the contained value
+        \\  map : Container(a), (a -> b) -> Container(b)
+        \\  map = |c, f| {
+        \\    match c {
+        \\      Value(val) => Value(f(val))
+        \\    }
+        \\  }
+        \\}
+        \\
+        \\main! = |_| {}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "Container.map" } },
+        "Container(a), (a -> b) -> Container(b)",
+    );
+}
+
+test "check type - static dispatch - polymorphic type 3" {
+    const source =
+        \\Container(a) := [Empty, Value(a)].{
+        \\  # Method to map over the contained value
+        \\  map : Container(a), (a -> b) -> Container(b)
+        \\  map = |container, f| {
+        \\    match container {
+        \\      Value(val) => Value(f(val))
+        \\      Empty => Empty
+        \\    }
+        \\  }
+        \\}
+        \\
+        \\main! = |_| {}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "Container.map" } },
+        "Container(a), (a -> b) -> Container(b)",
+    );
+}
+
+// comprehensive //
+
+test "check type - comprehensive - multiple layers of let-polymorphism" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\# First layer: polymorphic identity
+        \\id : a -> a
+        \\id = |x| x
+        \\
+        \\# Second layer: uses id polymorphically multiple times
+        \\apply_twice : (a -> a), a -> a
+        \\apply_twice = |f, x| {
+        \\  first = f(x)
+        \\  second = f(first)
+        \\  second
+        \\}
+        \\
+        \\# Third layer: uses apply_twice with different types
+        \\func = {
+        \\  num_result = apply_twice(id, 42)
+        \\  str_result = apply_twice(id, "hello")
+        \\  bool_result = apply_twice(id, Bool.True)
+        \\  (num_result, str_result, bool_result)
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "func" } },
+        "(Num(_size), Str, Bool)",
+    );
+}
+
+test "check type - comprehensive - multiple layers of lambdas" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\# Four layers of nested lambdas
+        \\curried_add : Num(a) -> (Num(a) -> (Num(a) -> (Num(a) -> Num(a))))
+        \\curried_add = |a| |b| |c| |d| a + b + c + d
+        \\
+        \\func = {
+        \\  step1 = curried_add(1)
+        \\  step2 = step1(2)
+        \\  step3 = step2(3)
+        \\  result = step3(4)
+        \\  result
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "func" } },
+        "Num(_size)",
+    );
+}
+
+test "check type - comprehensive - static dispatch with multiple methods" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\# Define a polymorphic container with static dispatch
+        \\Container(a) := [Empty, Value(a)].{
+        \\  # Method with annotation
+        \\  map : Container(a), (a -> b) -> Container(b)
+        \\  map = |container, f| {
+        \\    match container {
+        \\      Value(val) => Value(f(val))
+        \\      Empty => Empty
+        \\    }
+        \\  }
+        \\
+        \\  # Method without annotation (inferred)
+        \\  get_or = |container, default| {
+        \\    match container {
+        \\      Container.Value(val) => val
+        \\      Empty => default
+        \\    }
+        \\  }
+        \\
+        \\  # Chained method dispatch
+        \\  flat_map : Container(a), (a -> Container(b)) -> Container(b)
+        \\  flat_map = |container, f| {
+        \\    match container {
+        \\      Value(val) => f(val)
+        \\      Empty => Empty
+        \\    }
+        \\  }
+        \\}
+        \\
+        \\func = {
+        \\  num_container = Container.Value(100)
+        \\
+        \\  chained = num_container
+        \\    .map(|x| x + 1)
+        \\    .flat_map(|x| Container.Value(x + 2))
+        \\    .get_or(0)
+        \\
+        \\  chained
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "func" } },
+        "Num(_size)",
+    );
+}
+
+test "check type - comprehensive - annotations with inferred types" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\# Annotated function
+        \\add : Num(a), Num(a) -> Num(a)
+        \\add = |x, y| x + y
+        \\
+        \\# Inferred function that uses annotated one
+        \\add_three = |a, b, c| add(add(a, b), c)
+        \\
+        \\# Annotated function using inferred one
+        \\compute : U32 -> U32
+        \\compute = |x| add_three(x, 1u32, 2u32)
+        \\
+        \\func = compute(10u32)
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "func" } },
+        "Num(Int(Unsigned32))",
+    );
+}
+
+// test "check type - comprehensive: polymorphism + lambdas + dispatch + annotations" {
+//     const source =
+//         \\main! = |_| {}
+//         \\
+//         \\# Define a polymorphic container with static dispatch
+//         \\Container(a) := [Empty, Value(a)].{
+//         \\  # Method with annotation
+//         \\  map : Container(a), (a -> b) -> Container(b)
+//         \\  map = |container, f| {
+//         \\    match container {
+//         \\      Value(val) => Value(f(val))
+//         \\      Empty => Empty
+//         \\    }
+//         \\  }
+//         \\
+//         \\  # Method without annotation (inferred)
+//         \\  get_or = |container, default| {
+//         \\    match container {
+//         \\      Value(val) => val
+//         \\      Empty => default
+//         \\    }
+//         \\  }
+//         \\
+//         \\  # Chained method dispatch
+//         \\  flat_map : Container(a), (a -> Container(b)) -> Container(b)
+//         \\  flat_map = |container, f| {
+//         \\    match container {
+//         \\      Value(val) => f(val)
+//         \\      Empty => Empty
+//         \\    }
+//         \\  }
+//         \\}
+//         \\
+//         \\# First layer: polymorphic helper with annotation
+//         \\compose : (b -> c), (a -> b), a -> c
+//         \\compose = |g, f, x| g(f(x))
+//         \\
+//         \\# Second layer: inferred polymorphic function using compose
+//         \\transform_twice = |f, x| {
+//         \\  first = compose(f, f, x)
+//         \\  second = compose(f, f, first)
+//         \\  second
+//         \\}
+//         \\
+//         \\# Third layer: curried function (multiple lambda layers)
+//         \\make_processor : (a -> b) -> ((b -> c) -> (a -> c))
+//         \\make_processor = |f1| |f2| |x| {
+//         \\  step1 = f1(x)
+//         \\  step2 = f2(step1)
+//         \\  step2
+//         \\}
+//         \\
+//         \\# Fourth layer: polymorphic function using static dispatch
+//         \\process_with_method : a, c -> d where [a.map : a, (b -> c) -> d]
+//         \\process_with_method = |container, value| {
+//         \\  # Multiple nested lambdas with let-polymorphism
+//         \\  id = |x| x
+//         \\
+//         \\  result = container.map(|_| id(value))
+//         \\  result
+//         \\}
+//         \\
+//         \\# Fifth layer: combine everything
+//         \\main = {
+//         \\  # Let-polymorphism layer 1
+//         \\  # TODO INLINE ANNOS
+//         \\  # id : a -> a
+//         \\  id = |x| x
+//         \\
+//         \\  # Let-polymorphism layer 2 with nested lambdas
+//         \\  _apply_to_container = |f| |container| |default| {
+//         \\    mapped = container.map(f)
+//         \\    mapped.get_or(default)
+//         \\  }
+//         \\
+//         \\  # Create containers
+//         \\  num_container = Container.Value(100)
+//         \\  str_container = Container.Value("hello")
+//         \\  _empty_container = Container.Empty
+//         \\
+//         \\  # Use id polymorphically on different types
+//         \\  id_num = id(42)
+//         \\  id_str = id("world")
+//         \\  id_bool = id(Bool.True)
+//         \\
+//         \\  # Multiple layers of curried application
+//         \\  add_ten = |x| x + 10
+//         \\  processor = make_processor(add_ten)(add_ten)
+//         \\  processed = processor(5)
+//         \\
+//         \\  # Static dispatch with polymorphic methods
+//         \\  num_result = num_container.map(|x| x + 1)
+//         \\  _str_result = str_container.map(|s| s)
+//         \\
+//         \\  # Chain method calls with static dispatch
+//         \\  chained = num_container
+//         \\    .map(|x| x + 1)
+//         \\    .flat_map(|x| Container.Value(x + 2))
+//         \\    .get_or(0)
+//         \\
+//         \\  # Use transform_twice with let-polymorphism
+//         \\  double_fn = |x| x + x
+//         \\  transformed = transform_twice(double_fn, 3)
+//         \\
+//         \\  # Final result combining all techniques
+//         \\  {
+//         \\    id_results: (id_num, id_str, id_bool),
+//         \\    processed: processed,
+//         \\    chained: chained,
+//         \\    transformed: transformed,
+//         \\    final: num_result.get_or(0),
+//         \\  }
+//         \\}
+//     ;
+//     try checkTypesModule(
+//         source,
+//         .{ .pass = .{ .def = "main" } },
+//         "{ id_results: (Num(_size), Str, Bool), processed: Num(_size), chained: Num(_size), transformed: Num(_size), final: Num(_size) }",
+//     );
+// }
 
 // helpers - module //
 

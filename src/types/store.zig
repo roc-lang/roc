@@ -185,8 +185,8 @@ pub const Store = struct {
     }
 
     /// Create a new variable with the provided content assuming there is capacity
-    pub fn appendFromContentAssumeCapacity(self: *Self, content: Content) Var {
-        const desc_idx = self.descs.appendAssumeCapacity(.{ .content = content, .rank = Rank.top_level, .mark = Mark.none });
+    pub fn appendFromContentAssumeCapacity(self: *Self, content: Content, rank: Rank) Var {
+        const desc_idx = self.descs.appendAssumeCapacity(.{ .content = content, .rank = rank, .mark = Mark.none });
         const slot_idx = self.slots.appendAssumeCapacity(.{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
     }

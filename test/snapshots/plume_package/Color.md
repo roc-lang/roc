@@ -88,7 +88,6 @@ DOES NOT EXIST - Color.md:51:57:51:67
 DOES NOT EXIST - Color.md:51:75:51:85
 DOES NOT EXIST - Color.md:51:93:51:103
 DOES NOT EXIST - Color.md:68:14:68:27
-TYPE MISMATCH - Color.md:32:5:45:6
 TYPE DOES NOT HAVE METHODS - Color.md:22:15:22:26
 TYPE DOES NOT HAVE METHODS - Color.md:29:13:29:26
 TYPE DOES NOT HAVE METHODS - Color.md:35:17:35:41
@@ -97,6 +96,7 @@ TYPE DOES NOT HAVE METHODS - Color.md:37:21:37:45
 TYPE DOES NOT HAVE METHODS - Color.md:38:21:38:45
 TYPE DOES NOT HAVE METHODS - Color.md:39:21:39:45
 TYPE DOES NOT HAVE METHODS - Color.md:40:21:40:45
+TYPE MISMATCH - Color.md:32:5:45:6
 TYPE DOES NOT HAVE METHODS - Color.md:62:8:62:28
 # PROBLEMS
 **MODULE HEADER DEPRECATED**
@@ -210,32 +210,6 @@ The unused variable is declared here:
              ^^^^^^^^^^^^^
 
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**Color.md:32:5:45:6:**
-```roc
-    match bytes {
-        ['#', a, b, c, d, e, f] => {
-            is_valid =
-                a.is_char_in_hex_range()
-                and b.is_char_in_hex_range()
-                and c.is_char_in_hex_range()
-                and d.is_char_in_hex_range()
-                and e.is_char_in_hex_range()
-                and f.is_char_in_hex_range()
-
-            if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
-        }
-        _ => Err(InvalidHex("Expected Hex must start with # and be 7 characters long, got ${str}"))
-    }
-```
-
-It has the type:
-    _[InvalidHex(Str), Err([InvalidHex(Str)]_others)][Ok(Color)]_others2_
-
-But the type annotation says it should have the type:
-    _Try(Color, [InvalidHex(Str)])_
-
 **TYPE DOES NOT HAVE METHODS**
 You're trying to call the `to_frac` method on a `Num(Int(Unsigned8))`:
 **Color.md:22:15:22:26:**
@@ -315,6 +289,32 @@ You're trying to call the `is_char_in_hex_range` method on a `Num(Int(_size))`:
                     ^^^^^^^^^^^^^^^^^^^^^^^^
 
 But `Num(Int(_size))` doesn't support methods.
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**Color.md:32:5:45:6:**
+```roc
+    match bytes {
+        ['#', a, b, c, d, e, f] => {
+            is_valid =
+                a.is_char_in_hex_range()
+                and b.is_char_in_hex_range()
+                and c.is_char_in_hex_range()
+                and d.is_char_in_hex_range()
+                and e.is_char_in_hex_range()
+                and f.is_char_in_hex_range()
+
+            if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
+        }
+        _ => Err(InvalidHex("Expected Hex must start with # and be 7 characters long, got ${str}"))
+    }
+```
+
+It has the type:
+    _[InvalidHex(Str), Err([InvalidHex(Str)]_others)][Ok(Color)]_others2_
+
+But the type annotation says it should have the type:
+    _Try(Color, [InvalidHex(Str)])_
 
 **TYPE DOES NOT HAVE METHODS**
 You're trying to call the `is_named_color` method on a `Str`:

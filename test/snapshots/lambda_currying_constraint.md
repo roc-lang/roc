@@ -196,13 +196,13 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> a -> a"))
+		(patt (type "a -> (a -> a)"))
 		(patt (type "Num(Int(Signed64)) -> Num(Int(Signed64))"))
-		(patt (type "a -> a, a -> a"))
+		(patt (type "(a -> a), a -> a"))
 		(patt (type "Num(Int(Signed64)) -> Num(Int(Signed64))")))
 	(expressions
-		(expr (type "a -> a -> a"))
+		(expr (type "a -> (a -> a)"))
 		(expr (type "Num(Int(Signed64)) -> Num(Int(Signed64))"))
-		(expr (type "a -> a, a -> a"))
+		(expr (type "(a -> a), a -> a"))
 		(expr (type "Num(Int(Signed64)) -> Num(Int(Signed64))"))))
 ~~~

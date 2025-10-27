@@ -99,5 +99,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error -> { full_record: Error, greeting: Str, is_adult: Bool }"))
+(expr (type "{ a: b, age: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], name: c } -> { full_record: { a: b, age: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], name: c }, greeting: Str, is_adult: Bool }"))
 ~~~

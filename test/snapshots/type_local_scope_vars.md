@@ -7,9 +7,17 @@ type=file
 ~~~roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
-outer : a -> a
-outer = |x| {
+fail : a -> a
+fail = |x| {
     inner : b -> b
+    inner = |y| y
+
+    inner(x)
+}
+
+pass : a -> a
+pass = |x| {
+    inner : a -> a
     inner = |y| y
 
     inner(x)
@@ -18,12 +26,31 @@ outer = |x| {
 main! = |_| {}
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - type_local_scope_vars.md:8:11:8:12
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+The first argument being passed to this function has the wrong type:
+**type_local_scope_vars.md:8:11:8:12:**
+```roc
+    inner(x)
+```
+          ^
+
+This argument has the type:
+    _a_
+
+But `inner` needs the first argument to be:
+    _b_
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
+LowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,
+LowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,
+LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
+CloseCurly,
 LowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,
 LowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,
@@ -48,12 +75,12 @@ EndOfFile,
 				(e-string
 					(e-string-part (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno (name "outer")
+		(s-type-anno (name "fail")
 			(ty-fn
 				(ty-var (raw "a"))
 				(ty-var (raw "a"))))
 		(s-decl
-			(p-ident (raw "outer"))
+			(p-ident (raw "fail"))
 			(e-lambda
 				(args
 					(p-ident (raw "x")))
@@ -63,6 +90,30 @@ EndOfFile,
 							(ty-fn
 								(ty-var (raw "b"))
 								(ty-var (raw "b"))))
+						(s-decl
+							(p-ident (raw "inner"))
+							(e-lambda
+								(args
+									(p-ident (raw "y")))
+								(e-ident (raw "y"))))
+						(e-apply
+							(e-ident (raw "inner"))
+							(e-ident (raw "x")))))))
+		(s-type-anno (name "pass")
+			(ty-fn
+				(ty-var (raw "a"))
+				(ty-var (raw "a"))))
+		(s-decl
+			(p-ident (raw "pass"))
+			(e-lambda
+				(args
+					(p-ident (raw "x")))
+				(e-block
+					(statements
+						(s-type-anno (name "inner")
+							(ty-fn
+								(ty-var (raw "a"))
+								(ty-var (raw "a"))))
 						(s-decl
 							(p-ident (raw "inner"))
 							(e-lambda
@@ -83,9 +134,17 @@ EndOfFile,
 ~~~roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
-outer : a -> a
-outer = |x| {
+fail : a -> a
+fail = |x| {
 	inner : b -> b
+	inner = |y| y
+
+	inner(x)
+}
+
+pass : a -> a
+pass = |x| {
+	inner : a -> a
 	inner = |y| y
 
 	inner(x)
@@ -97,7 +156,29 @@ main! = |_| {}
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign (ident "outer"))
+		(p-assign (ident "fail"))
+		(e-lambda
+			(args
+				(p-assign (ident "x")))
+			(e-block
+				(s-let
+					(p-assign (ident "inner"))
+					(e-lambda
+						(args
+							(p-assign (ident "y")))
+						(e-lookup-local
+							(p-assign (ident "y")))))
+				(e-call
+					(e-lookup-local
+						(p-assign (ident "inner")))
+					(e-lookup-local
+						(p-assign (ident "x"))))))
+		(annotation
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "a"))
+				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
+	(d-let
+		(p-assign (ident "pass"))
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
@@ -129,9 +210,11 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
+		(patt (type "Error -> Error"))
 		(patt (type "a -> a"))
 		(patt (type "_arg -> {}")))
 	(expressions
+		(expr (type "Error -> Error"))
 		(expr (type "a -> a"))
 		(expr (type "_arg -> {}"))))
 ~~~

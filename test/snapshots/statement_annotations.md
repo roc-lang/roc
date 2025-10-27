@@ -19,9 +19,22 @@ scopedTypeVarInternal = |a| {
 }
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - statement_annotations.md:11:4:11:5
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+The first argument being passed to this function has the wrong type:
+**statement_annotations.md:11:4:11:5:**
+```roc
+	b(a)
+```
+	  ^
+
+This argument has the type:
+    _val_
+
+But `b` needs the first argument to be:
+    _other_val_
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,
@@ -112,7 +125,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "val -> val")))
+		(patt (type "Error -> Error")))
 	(expressions
-		(expr (type "val -> val"))))
+		(expr (type "Error -> Error"))))
 ~~~

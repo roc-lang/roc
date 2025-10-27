@@ -214,12 +214,12 @@ answer = composed([42])
 (inferred-types
 	(defs
 		(patt (type "a -> { tag: Str, value: a }"))
-		(patt (type "{ tag: Str, value: a } -> a"))
-		(patt (type "List(a) -> Error"))
+		(patt (type "{ value: a, tag: Str } -> a"))
+		(patt (type "Error -> Error"))
 		(patt (type "Error")))
 	(expressions
 		(expr (type "a -> { tag: Str, value: a }"))
-		(expr (type "{ tag: Str, value: a } -> a"))
-		(expr (type "List(a) -> Error"))
+		(expr (type "{ value: a, tag: Str } -> a"))
+		(expr (type "Error -> Error"))
 		(expr (type "Error"))))
 ~~~

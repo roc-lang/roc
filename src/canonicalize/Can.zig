@@ -8346,6 +8346,9 @@ fn checkScopeForUnusedVariables(self: *Self, scope: *const Scope) std.mem.Alloca
 
     // Report unused variables in sorted order
     for (unused_vars.items) |unused| {
+        // TODO: Currently, static dispatch functions are marked as "unused"
+        // even if they are used. As a tmp workaround, this is commented out
+
         try self.env.pushDiagnostic(Diagnostic{ .unused_variable = .{
             .ident = unused.ident,
             .region = unused.region,
