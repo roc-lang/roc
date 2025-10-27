@@ -864,6 +864,7 @@ fn is_static_method(module_name: &str, ident: &str) -> bool {
                 | "map_try"
                 | "walk_try"
                 | "join_map"
+                | "join_map!"
                 | "any"
                 | "take_first"
                 | "take_last"
