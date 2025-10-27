@@ -626,11 +626,19 @@ pub const Interpreter = struct {
             .e_binop => |binop| {
                 if (binop.op == .add or binop.op == .sub or binop.op == .mul or binop.op == .div or binop.op == .div_trunc or binop.op == .rem) {
                     const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
-                    const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
+                    const lhs_rt_var = self.translateTypeVar(self.env, lhs_ct_var) catch |err| {
+                        std.debug.print("DEBUG e_binop: translateTypeVar for lhs failed with {}\n", .{err});
+                        return err;
+                    };
                     const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
                     const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
 
-                    const lhs = try self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var);
+                    std.debug.print("DEBUG e_binop: about to eval lhs\n", .{});
+                    const lhs = self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var) catch |err| {
+                        std.debug.print("DEBUG e_binop: eval lhs failed with {}\n", .{err});
+                        return err;
+                    };
+                    std.debug.print("DEBUG e_binop: lhs eval succeeded, about to eval rhs\n", .{});
                     const rhs = try self.evalExprMinimal(binop.rhs, roc_ops, rhs_rt_var);
 
                     return try self.evalArithmeticBinop(binop.op, expr_idx, lhs, rhs, lhs_rt_var, rhs_rt_var);
@@ -1500,64 +1508,36 @@ pub const Interpreter = struct {
                 const func_idx = call.func;
                 const arg_indices = all[0..];
                 const func_expr = self.env.store.getExpr(func_idx);
-                std.debug.print("DEBUG e_call: func_expr type = {s}\n", .{@tagName(func_expr)});
 
                 // Runtime unification for call: constrain return type from arg types
-                // Special handling for e_lookup_external: skip polymorphic caching and type unification
-                // since the type info is in the external module
+                const func_ct_var = can.ModuleEnv.varFrom(func_idx);
+                const func_rt_var = self.translateTypeVar(self.env, func_ct_var) catch |err| {
+                    return err;
+                };
                 var arg_rt_buf = try self.allocator.alloc(types.Var, arg_indices.len);
                 defer self.allocator.free(arg_rt_buf);
-
-                // Get the return type variable for this call (needed for low-level lambdas)
-                const call_ret_ct_var = can.ModuleEnv.varFrom(expr_idx);
-                const call_ret_rt_var = self.translateTypeVar(self.env, call_ret_ct_var) catch |err| blk: {
-                    // For e_lookup_external with .err type, use a flex type as fallback
-                    std.debug.print("DEBUG e_call: translateTypeVar for return type failed with {}, using flex\n", .{err});
-                    break :blk try self.runtime_types.freshFromContent(.{ .flex = types.Flex.init() });
-                };
-
-                if (func_expr != .e_lookup_external) {
-                    const func_ct_var = can.ModuleEnv.varFrom(func_idx);
-                    const func_rt_var = self.translateTypeVar(self.env, func_ct_var) catch |err| {
-                        std.debug.print("DEBUG e_call: translateTypeVar for func failed with error {}\n", .{err});
-                        return err;
-                    };
-                    var i: usize = 0;
-                    while (i < arg_indices.len) : (i += 1) {
-                        const arg_ct_var = can.ModuleEnv.varFrom(arg_indices[i]);
-                        arg_rt_buf[i] = try self.translateTypeVar(self.env, arg_ct_var);
-                    }
-                    std.debug.print("DEBUG e_call: about to prepareCallWithFuncVar\n", .{});
-                    const poly_entry = try self.prepareCallWithFuncVar(0, @intCast(@intFromEnum(func_idx)), func_rt_var, arg_rt_buf);
-                    std.debug.print("DEBUG e_call: prepareCallWithFuncVar succeeded\n", .{});
-                    // Unify this call expression's return var with the function's constrained return var
-                    std.debug.print("DEBUG e_call: about to unifyWithContext\n", .{});
-                    _ = try unify.unifyWithContext(
-                        self.env,
-                        self.runtime_types,
-                        &self.problems,
-                        &self.snapshots,
-                        &self.unify_scratch,
-                        &self.unify_scratch.occurs_scratch,
-                        call_ret_rt_var,
-                        poly_entry.return_var,
-                        false,
-                    );
-                    std.debug.print("DEBUG e_call: unifyWithContext succeeded\n", .{});
-                } else {
-                    std.debug.print("DEBUG e_call: skipping type unification for e_lookup_external\n", .{});
-                    // Still need to populate arg_rt_buf for e_lookup_external
-                    var i: usize = 0;
-                    while (i < arg_indices.len) : (i += 1) {
-                        const arg_ct_var = can.ModuleEnv.varFrom(arg_indices[i]);
-                        arg_rt_buf[i] = try self.translateTypeVar(self.env, arg_ct_var);
-                    }
+                var i: usize = 0;
+                while (i < arg_indices.len) : (i += 1) {
+                    const arg_ct_var = can.ModuleEnv.varFrom(arg_indices[i]);
+                    arg_rt_buf[i] = try self.translateTypeVar(self.env, arg_ct_var);
                 }
+                const poly_entry = try self.prepareCallWithFuncVar(0, @intCast(@intFromEnum(func_idx)), func_rt_var, arg_rt_buf);
+                // Unify this call expression's return var with the function's constrained return var
+                const call_ret_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const call_ret_rt_var = try self.translateTypeVar(self.env, call_ret_ct_var);
+                _ = try unify.unifyWithContext(
+                    self.env,
+                    self.runtime_types,
+                    &self.problems,
+                    &self.snapshots,
+                    &self.unify_scratch,
+                    &self.unify_scratch.occurs_scratch,
+                    call_ret_rt_var,
+                    poly_entry.return_var,
+                    false,
+                );
 
-                std.debug.print("DEBUG e_call: about to evalExprMinimal for func\n", .{});
                 const func_val = try self.evalExprMinimal(func_idx, roc_ops, null);
-                std.debug.print("DEBUG e_call: evalExprMinimal for func completed\n", .{});
-                std.debug.print("DEBUG e_call: func_val layout tag = {s}\n", .{@tagName(func_val.layout.tag)});
 
                 var arg_values = try self.allocator.alloc(StackValue, arg_indices.len);
                 defer self.allocator.free(arg_values);
@@ -1568,44 +1548,27 @@ pub const Interpreter = struct {
                 // Support calling closures produced by evaluating expressions (including nested calls)
                 if (func_val.layout.tag == .closure) {
                     const header: *const layout.Closure = @ptrCast(@alignCast(func_val.ptr.?));
-                    std.debug.print("DEBUG e_call: is closure, body_idx = {}\n", .{@intFromEnum(header.body_idx)});
 
                     // Check if this is a low-level lambda (body_idx == 0 is our special marker)
                     if (@intFromEnum(header.body_idx) == 0) {
-                        std.debug.print("DEBUG e_call: is LOW LEVEL LAMBDA\n", .{});
                         // This is a low-level lambda - decode the variant and execute it
                         const low_level: @import("base").LowLevelLambda = @enumFromInt(@intFromEnum(header.captures_pattern_idx));
 
                         switch (low_level) {
                             .str_is_empty => {
-                                std.debug.print("DEBUG str_is_empty: executing\n", .{});
                                 // Str.is_empty : Str -> Bool
-                                if (arg_values.len != 1) {
-                                    std.debug.print("DEBUG str_is_empty: arg count mismatch, got {}\n", .{arg_values.len});
-                                    return error.TypeMismatch;
-                                }
+                                if (arg_values.len != 1) return error.TypeMismatch;
 
                                 const str_arg = arg_values[0];
-                                std.debug.print("DEBUG str_is_empty: str_arg layout tag = {s}\n", .{@tagName(str_arg.layout.tag)});
                                 // Str is a scalar type
-                                if (str_arg.layout.tag != .scalar) {
-                                    std.debug.print("DEBUG str_is_empty: layout not scalar\n", .{});
-                                    return error.TypeMismatch;
-                                }
-                                if (str_arg.ptr == null) {
-                                    std.debug.print("DEBUG str_is_empty: ptr is null\n", .{});
-                                    return error.ZeroSizedType;
-                                }
+                                if (str_arg.layout.tag != .scalar) return error.TypeMismatch;
+                                if (str_arg.ptr == null) return error.ZeroSizedType;
 
                                 const roc_str_ptr: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
                                 const is_empty = roc_str_ptr.isEmpty();
-                                std.debug.print("DEBUG str_is_empty: is_empty = {}\n", .{is_empty});
 
-                                // Get the Bool type from builtins for proper rendering
-                                const bool_ct_var = can.ModuleEnv.varFrom(self.builtins.bool_stmt);
-                                const bool_rt_var = try self.translateTypeVar(@constCast(self.builtins.bool_env), bool_ct_var);
-                                const result = try self.makeBoolValue(bool_rt_var, is_empty);
-                                std.debug.print("DEBUG str_is_empty: returning result\n", .{});
+                                // Return a Bool value - use call_ret_rt_var which is the expected return type
+                                const result = try self.makeBoolValue(call_ret_rt_var, is_empty);
                                 return result;
                             },
                         }
@@ -1940,91 +1903,25 @@ pub const Interpreter = struct {
                 return error.NotImplemented;
             },
             .e_lookup_external => |lookup| {
-                std.debug.print("DEBUG e_lookup_external: module_idx = {}, target_node_idx = {}\n", .{@intFromEnum(lookup.module_idx), lookup.target_node_idx});
                 // Cross-module reference - look up in imported module
                 const other_env = self.import_envs.get(lookup.module_idx) orelse {
-                    std.debug.print("DEBUG e_lookup_external: module not found\n", .{});
                     return error.NotImplemented;
                 };
 
-                // Check what type of node this is (could be def, statement_decl, or type_header for low-level lambdas)
-                const target_node_idx: @TypeOf(other_env.store.nodes).Idx = @enumFromInt(lookup.target_node_idx);
-                const node = other_env.store.nodes.get(target_node_idx);
-                std.debug.print("DEBUG e_lookup_external: target_node tag = {s}\n", .{@tagName(node.tag)});
-
-                // For low-level lambdas, the node could be a statement_decl containing e_low_level_lambda
-                if (node.tag == .statement_decl) {
-                    std.debug.print("DEBUG e_lookup_external: statement_decl detected\n", .{});
-                    const stmt = other_env.store.getStatement(@enumFromInt(lookup.target_node_idx));
-                    std.debug.print("DEBUG e_lookup_external: stmt type = {s}\n", .{@tagName(stmt)});
-
-                    switch (stmt) {
-                        .s_decl => |decl| {
-                            const target_expr = other_env.store.getExpr(decl.expr);
-                            std.debug.print("DEBUG e_lookup_external: decl.expr type = {s}\n", .{@tagName(target_expr)});
-
-                            // If this is an e_low_level_lambda, evaluate it directly in the other module's context
-                            if (target_expr == .e_low_level_lambda) {
-                                std.debug.print("DEBUG e_lookup_external: is e_low_level_lambda\n", .{});
-                                // Save env state and switch to other module
-                                const saved_env = self.env;
-                                self.env = @constCast(other_env);
-                                defer self.env = saved_env;
-
-                                // Evaluate the e_low_level_lambda in the other module's context
-                                const result = try self.evalExprMinimal(decl.expr, roc_ops, null);
-                                return result;
-                            }
-                        },
-                        else => {},
+                // The target_node_idx can be either a Statement.Idx or a Def.Idx
+                // Try statement first (for nested declarations like Str.is_empty)
+                const target_expr_idx: can.CIR.Expr.Idx = blk: {
+                    const stmt_idx: can.CIR.Statement.Idx = @enumFromInt(lookup.target_node_idx);
+                    const stmt = other_env.store.getStatement(stmt_idx);
+                    if (stmt == .s_decl) {
+                        break :blk stmt.s_decl.expr;
+                    } else {
+                        // Fall back to treating it as a Def.Idx
+                        const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+                        const target_def = other_env.store.getDef(target_def_idx);
+                        break :blk target_def.expr;
                     }
-                }
-
-                // For low-level lambdas, the node might also be a type_header
-                if (node.tag == .type_header) {
-                    std.debug.print("DEBUG e_lookup_external: type_header detected (low-level lambda)\n", .{});
-                    const type_header = other_env.store.getTypeHeader(@enumFromInt(lookup.target_node_idx));
-                    const name = other_env.getIdent(type_header.name);
-                    std.debug.print("DEBUG e_lookup_external: low-level lambda name = {s}\n", .{name});
-
-                    // Determine which low-level lambda this is based on the name
-                    const low_level = if (std.mem.eql(u8, name, "is_empty"))
-                        base_pkg.LowLevelLambda.str_is_empty
-                    else {
-                        std.debug.print("DEBUG e_lookup_external: unknown low-level lambda: {s}\n", .{name});
-                        return error.NotImplemented;
-                    };
-
-                    // Get the type variable for this expression to obtain the correct closure layout
-                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    const rt_var = try self.translateTypeVar(self.env, ct_var);
-                    const closure_layout = try self.getRuntimeLayout(rt_var);
-
-                    // Expect a closure layout from type-to-layout translation
-                    if (closure_layout.tag != .closure) return error.NotImplemented;
-                    const value = try self.pushRaw(closure_layout, 0);
-
-                    // Initialize the closure header with special marker for low-level lambda
-                    // We'll use a special body_idx of 0 and encode the low_level variant in captures_pattern_idx
-                    if (value.ptr) |ptr| {
-                        const header: *layout.Closure = @ptrCast(@alignCast(ptr));
-                        header.* = .{
-                            .body_idx = @enumFromInt(0), // Special marker: body_idx of 0 means low-level lambda
-                            .params = can.CIR.Pattern.Span{ .span = .{ .start = 0, .len = 0 } },
-                            .captures_pattern_idx = @enumFromInt(@intFromEnum(low_level)), // Encode the low-level variant here
-                            .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
-                            .lambda_expr_idx = expr_idx,
-                            .source_env = self.env,
-                        };
-                    }
-                    return value;
-                }
-
-                // The target_node_idx is a Def.Idx in the other module
-                const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
-                const target_def = other_env.store.getDef(target_def_idx);
-                const target_expr = other_env.store.getExpr(target_def.expr);
-                std.debug.print("DEBUG e_lookup_external: target_expr type = {s}\n", .{@tagName(target_expr)});
+                };
 
                 // Save both env and bindings state
                 const saved_env = self.env;
@@ -2036,9 +1933,9 @@ pub const Interpreter = struct {
                 }
 
                 // Evaluate the definition's expression in the other module's context
-                const target_ct_var = can.ModuleEnv.varFrom(target_def.expr);
+                const target_ct_var = can.ModuleEnv.varFrom(target_expr_idx);
                 const target_rt_var = try self.translateTypeVar(self.env, target_ct_var);
-                const result = try self.evalExprMinimal(target_def.expr, roc_ops, target_rt_var);
+                const result = try self.evalExprMinimal(target_expr_idx, roc_ops, target_rt_var);
 
                 return result;
             },
@@ -3963,13 +3860,9 @@ pub const Interpreter = struct {
     /// Minimal translate implementation (scaffolding): handles .str only for now
     pub fn translateTypeVar(self: *Interpreter, module: *can.ModuleEnv, compile_var: types.Var) Error!types.Var {
         const resolved = module.types.resolveVar(compile_var);
-        std.debug.print("DEBUG translateTypeVar: resolved.desc.content = {s}\n", .{@tagName(resolved.desc.content)});
 
         const key: u64 = (@as(u64, @intFromPtr(module)) << 32) | @as(u64, @intFromEnum(resolved.var_));
-        if (self.translate_cache.get(key)) |found| {
-            std.debug.print("DEBUG translateTypeVar: found in cache\n", .{});
-            return found;
-        }
+        if (self.translate_cache.get(key)) |found| return found;
 
         const out_var = blk: {
             switch (resolved.desc.content) {

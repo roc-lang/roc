@@ -118,68 +118,86 @@ fn insertLowLevelLambdas(env: *ModuleEnv, gpa: Allocator) !void {
     // try low_level_map.put("Builtin.Str.contains", .str_contains);
     // try low_level_map.put("len", .list_len);
 
-    // Track whether we modified any defs
-    var modified_any = false;
+    // Track new def indices that we create
+    var new_defs = std.ArrayList(CIR.Def.Idx).empty;
+    defer new_defs.deinit(gpa);
 
-    // Iterate through all defs looking for annotation-only defs with ellipsis bodies
-    const all_defs = env.store.sliceDefs(env.all_defs);
-    for (all_defs) |def_idx| {
-        const def = env.store.getDef(def_idx);
-        const expr = env.store.getExpr(def.expr);
+    // Iterate through all statements looking for orphaned type annotations
+    const all_stmts = env.store.sliceStatements(env.all_statements);
+    for (all_stmts) |stmt_idx| {
+        const stmt = env.store.getStatement(stmt_idx);
 
-        // Look for defs with ellipsis bodies (annotation-only definitions)
-        if (expr == .e_ellipsis) {
-            // Get the pattern to extract the identifier name
-            const pattern = env.store.getPattern(def.pattern);
-            if (pattern == .assign) {
-                const ident_text = env.getIdentText(pattern.assign.ident);
+        // Look for orphaned type annotations (s_type_anno)
+        switch (stmt) {
+            .s_type_anno => |anno| {
+                const ident_text = env.getIdentText(anno.name);
 
                 // Check if this annotation has a compiler-provided implementation
                 if (low_level_map.get(ident_text)) |low_level| {
-                    // Get the region for the def
-                    const region = env.store.getRegionAt(@enumFromInt(@intFromEnum(def_idx)));
+                    // Get the region for this statement
+                    const region = env.store.getRegionAt(@enumFromInt(@intFromEnum(stmt_idx)));
 
-                    // Create a low-level lambda expression to replace the ellipsis
-                    const new_expr = CIR.Expr{ .e_low_level_lambda = .{
+                    // Create a low-level lambda expression
+                    const expr = CIR.Expr{ .e_low_level_lambda = .{
                         .low_level = low_level,
                     } };
-                    const new_expr_idx = try env.addExpr(new_expr, region);
+                    const expr_idx = try env.addExpr(expr, region);
 
-                    // Update the def's expression
-                    const updated_def = CIR.Def{
-                        .pattern = def.pattern,
-                        .expr = new_expr_idx,
-                        .annotation = def.annotation,
-                        .kind = def.kind,
+                    // Create a pattern for the binding (identifier pattern)
+                    const pattern = CIR.Pattern{ .assign = .{
+                        .ident = anno.name,
+                    } };
+                    const pattern_idx = try env.addPattern(pattern, region);
+
+                    // Create the annotation structure
+                    const annotation_idx = try env.store.addAnnotation(
+                        CIR.Annotation{
+                            .anno = anno.anno,
+                            .where = anno.where,
+                        },
+                        region,
+                    );
+
+                    // Convert s_type_anno to s_decl with the low-level lambda as body
+                    const new_stmt = CIR.Statement{ .s_decl = .{
+                        .pattern = pattern_idx,
+                        .expr = expr_idx,
+                        .anno = annotation_idx,
+                    } };
+
+                    // Replace the statement in place
+                    try env.store.setStatementNode(stmt_idx, new_stmt);
+
+                    // Create a Def for this declaration so it gets type-checked
+                    const def = CIR.Def{
+                        .pattern = pattern_idx,
+                        .expr = expr_idx,
+                        .annotation = annotation_idx,
+                        .kind = .let,
                     };
-                    try env.store.setDefNode(def_idx, updated_def);
-
-                    // Also update the statement if it exists
-                    const all_stmts = env.store.sliceStatements(env.all_statements);
-                    for (all_stmts) |stmt_idx| {
-                        const stmt = env.store.getStatement(stmt_idx);
-                        if (stmt == .s_decl) {
-                            if (stmt.s_decl.pattern == def.pattern and stmt.s_decl.expr == def.expr) {
-                                // Found the matching statement - update it
-                                const updated_stmt = CIR.Statement{ .s_decl = .{
-                                    .pattern = def.pattern,
-                                    .expr = new_expr_idx,
-                                    .anno = stmt.s_decl.anno,
-                                } };
-                                try env.store.setStatementNode(stmt_idx, updated_stmt);
-                                break;
-                            }
-                        }
-                    }
-
-                    modified_any = true;
+                    const def_idx = try env.addDef(def, region);
+                    try new_defs.append(gpa, def_idx);
                 }
-            }
+            },
+            else => {},
         }
     }
 
-    // If we modified any defs, rebuild evaluation_order (all_defs stays the same)
-    if (modified_any) {
+    // If we created any new defs, rebuild all_defs and evaluation_order
+    if (new_defs.items.len > 0) {
+        // Get the old defs
+        const old_defs = env.store.sliceDefs(env.all_defs);
+
+        // Use scratch buffer to build new all_defs span
+        const scratch_start = env.store.scratchDefTop();
+        for (old_defs) |def_idx| {
+            try env.store.addScratchDef(def_idx);
+        }
+        for (new_defs.items) |def_idx| {
+            try env.store.addScratchDef(def_idx);
+        }
+        env.all_defs = try env.store.defSpanFrom(scratch_start);
+
         // Rebuild dependency graph and evaluation order
         var graph = try DependencyGraph.buildDependencyGraph(env, env.all_defs, gpa);
         defer graph.deinit();
