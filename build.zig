@@ -52,6 +52,75 @@ const TestsSummaryStep = struct {
     }
 };
 
+fn createAndRunBuiltinCompiler(
+    b: *std.Build,
+    roc_modules: modules.RocModules,
+    flag_enable_tracy: ?[]const u8,
+    roc_files: []const []const u8,
+) *Step.Run {
+    // Build and run the compiler
+    const builtin_compiler_exe = b.addExecutable(.{
+        .name = "builtin_compiler",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
+            .target = b.graph.host, // this runs at build time on the *host* machine!
+            .optimize = .Debug, // No need to optimize - only compiles builtin modules
+            // Note: libc linking is handled by add_tracy below (required when tracy is enabled)
+        }),
+    });
+    configureBackend(builtin_compiler_exe, b.graph.host);
+
+    // Add only the minimal modules needed for parsing/checking
+    builtin_compiler_exe.root_module.addImport("base", roc_modules.base);
+    builtin_compiler_exe.root_module.addImport("collections", roc_modules.collections);
+    builtin_compiler_exe.root_module.addImport("types", roc_modules.types);
+    builtin_compiler_exe.root_module.addImport("parse", roc_modules.parse);
+    builtin_compiler_exe.root_module.addImport("can", roc_modules.can);
+    builtin_compiler_exe.root_module.addImport("check", roc_modules.check);
+    builtin_compiler_exe.root_module.addImport("reporting", roc_modules.reporting);
+    builtin_compiler_exe.root_module.addImport("builtins", roc_modules.builtins);
+
+    // Add tracy support (required by parse/can/check modules)
+    add_tracy(b, roc_modules.build_options, builtin_compiler_exe, b.graph.host, false, flag_enable_tracy);
+
+    // Run the builtin compiler to generate .bin files in zig-out/builtins/
+    const run_builtin_compiler = b.addRunArtifact(builtin_compiler_exe);
+
+    // Add all .roc files as explicit file inputs so Zig's cache tracks them
+    for (roc_files) |roc_path| {
+        run_builtin_compiler.addFileArg(b.path(roc_path));
+    }
+
+    return run_builtin_compiler;
+}
+
+fn createTestPlatformHostLib(
+    b: *std.Build,
+    name: []const u8,
+    host_path: []const u8,
+    target: ResolvedTarget,
+    optimize: OptimizeMode,
+    roc_modules: modules.RocModules,
+) *Step.Compile {
+    const lib = b.addLibrary(.{
+        .name = name,
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(host_path),
+            .target = target,
+            .optimize = optimize,
+            .strip = optimize != .Debug,
+            .pic = true, // Enable Position Independent Code for PIE compatibility
+        }),
+    });
+    configureBackend(lib, target);
+    lib.root_module.addImport("builtins", roc_modules.builtins);
+    // Force bundle compiler-rt to resolve runtime symbols like __main
+    lib.bundle_compiler_rt = true;
+
+    return lib;
+}
+
 pub fn build(b: *std.Build) void {
     // build steps
     const run_step = b.step("run", "Build and run the roc cli");
@@ -175,39 +244,7 @@ pub fn build(b: *std.Build) void {
 
     // Regenerate .bin files if necessary
     if (should_rebuild_builtins) {
-        // Build and run the compiler
-        const builtin_compiler_exe = b.addExecutable(.{
-            .name = "builtin_compiler",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
-                .target = b.graph.host, // this runs at build time on the *host* machine!
-                .optimize = .Debug, // No need to optimize - only compiles builtin modules
-                // Note: libc linking is handled by add_tracy below (required when tracy is enabled)
-            }),
-        });
-        configureBackend(builtin_compiler_exe, b.graph.host);
-
-        // Add only the minimal modules needed for parsing/checking
-        builtin_compiler_exe.root_module.addImport("base", roc_modules.base);
-        builtin_compiler_exe.root_module.addImport("collections", roc_modules.collections);
-        builtin_compiler_exe.root_module.addImport("types", roc_modules.types);
-        builtin_compiler_exe.root_module.addImport("parse", roc_modules.parse);
-        builtin_compiler_exe.root_module.addImport("can", roc_modules.can);
-        builtin_compiler_exe.root_module.addImport("check", roc_modules.check);
-        builtin_compiler_exe.root_module.addImport("reporting", roc_modules.reporting);
-        builtin_compiler_exe.root_module.addImport("builtins", roc_modules.builtins);
-
-        // Add tracy support (required by parse/can/check modules)
-        add_tracy(b, roc_modules.build_options, builtin_compiler_exe, b.graph.host, false, flag_enable_tracy);
-
-        // Run the builtin compiler to generate .bin files in zig-out/builtins/
-        const run_builtin_compiler = b.addRunArtifact(builtin_compiler_exe);
-
-        // Add all .roc files as explicit file inputs so Zig's cache tracks them
-        for (roc_files) |roc_path| {
-            run_builtin_compiler.addFileArg(b.path(roc_path));
-        }
-
+        const run_builtin_compiler = createAndRunBuiltinCompiler(b, roc_modules, flag_enable_tracy, roc_files);
         write_compiled_builtins.step.dependOn(&run_builtin_compiler.step);
     }
 
@@ -287,35 +324,7 @@ pub fn build(b: *std.Build) void {
         return;
     };
 
-    // Always build and run the compiler for this command
-    const builtin_compiler_exe_force = b.addExecutable(.{
-        .name = "builtin_compiler",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
-            .target = b.graph.host,
-            .optimize = .Debug,
-        }),
-    });
-    configureBackend(builtin_compiler_exe_force, b.graph.host);
-
-    builtin_compiler_exe_force.root_module.addImport("base", roc_modules.base);
-    builtin_compiler_exe_force.root_module.addImport("collections", roc_modules.collections);
-    builtin_compiler_exe_force.root_module.addImport("types", roc_modules.types);
-    builtin_compiler_exe_force.root_module.addImport("parse", roc_modules.parse);
-    builtin_compiler_exe_force.root_module.addImport("can", roc_modules.can);
-    builtin_compiler_exe_force.root_module.addImport("check", roc_modules.check);
-    builtin_compiler_exe_force.root_module.addImport("reporting", roc_modules.reporting);
-    builtin_compiler_exe_force.root_module.addImport("builtins", roc_modules.builtins);
-
-    add_tracy(b, roc_modules.build_options, builtin_compiler_exe_force, b.graph.host, false, flag_enable_tracy);
-
-    const run_builtin_compiler_force = b.addRunArtifact(builtin_compiler_exe_force);
-
-    // Add all discovered .roc files as inputs
-    for (roc_files_force) |roc_path| {
-        run_builtin_compiler_force.addFileArg(b.path(roc_path));
-    }
-
+    const run_builtin_compiler_force = createAndRunBuiltinCompiler(b, roc_modules, flag_enable_tracy, roc_files_force);
     rebuild_builtins_step.dependOn(&run_builtin_compiler_force.step);
 
     // Add the compiled builtins module to roc exe and make it depend on the builtins being ready
@@ -530,6 +539,27 @@ pub fn build(b: *std.Build) void {
             run_cli_test.addArgs(run_args);
         }
         tests_summary.addRun(&run_cli_test.step);
+    }
+
+    // roc check integration tests
+    const enable_roc_check_tests = b.option(bool, "roc-check-tests", "Enable roc check integration tests") 
+    orelse true;
+    if (enable_roc_check_tests) {
+        const roc_check_test = b.addTest(.{
+            .name = "roc_check_test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/cli/test/roc_check.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+            .filters = test_filters,
+        });
+
+        const run_roc_check_test = b.addRunArtifact(roc_check_test);
+        if (run_args.len != 0) {
+            run_roc_check_test.addArgs(run_args);
+        }
+        tests_summary.addRun(&run_roc_check_test.step);
     }
 
     // Add watch tests
@@ -763,22 +793,14 @@ fn addMainExe(
     configureBackend(exe, target);
 
     // Create test platform host static library (str)
-    const test_platform_host_lib = b.addLibrary(.{
-        .name = "test_platform_str_host",
-        .linkage = .static,
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("test/str/platform/host.zig"),
-            .target = target,
-            .optimize = optimize,
-            .strip = optimize != .Debug,
-            .pic = true, // Enable Position Independent Code for PIE compatibility
-        }),
-    });
-    configureBackend(test_platform_host_lib, target);
-    test_platform_host_lib.root_module.addImport("builtins", roc_modules.builtins);
-
-    // Force bundle compiler-rt to resolve runtime symbols like __main
-    test_platform_host_lib.bundle_compiler_rt = true;
+    const test_platform_host_lib = createTestPlatformHostLib(
+        b,
+        "test_platform_str_host",
+        "test/str/platform/host.zig",
+        target,
+        optimize,
+        roc_modules,
+    );
 
     // Copy the test platform host library to the source directory
     const copy_test_host = b.addUpdateSourceFiles();
@@ -787,21 +809,14 @@ fn addMainExe(
     b.getInstallStep().dependOn(&copy_test_host.step);
 
     // Create test platform host static library (int) - native target
-    const test_platform_int_host_lib = b.addLibrary(.{
-        .name = "test_platform_int_host",
-        .linkage = .static,
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("test/int/platform/host.zig"),
-            .target = target,
-            .optimize = optimize,
-            .strip = optimize != .Debug,
-            .pic = true, // Enable Position Independent Code for PIE compatibility
-        }),
-    });
-    configureBackend(test_platform_int_host_lib, target);
-    test_platform_int_host_lib.root_module.addImport("builtins", roc_modules.builtins);
-    // Force bundle compiler-rt to resolve runtime symbols like __main
-    test_platform_int_host_lib.bundle_compiler_rt = true;
+    const test_platform_int_host_lib = createTestPlatformHostLib(
+        b,
+        "test_platform_int_host",
+        "test/int/platform/host.zig",
+        target,
+        optimize,
+        roc_modules,
+    );
 
     // Copy the int test platform host library to the source directory
     const copy_test_int_host = b.addUpdateSourceFiles();
@@ -821,20 +836,14 @@ fn addMainExe(
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
 
         // Create cross-compiled int host library
-        const cross_int_host_lib = b.addLibrary(.{
-            .name = b.fmt("test_platform_int_host_{s}", .{cross_target.name}),
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("test/int/platform/host.zig"),
-                .target = cross_resolved_target,
-                .optimize = optimize,
-                .strip = optimize != .Debug,
-                .pic = true,
-            }),
-            .linkage = .static,
-        });
-        configureBackend(cross_int_host_lib, cross_resolved_target);
-        cross_int_host_lib.root_module.addImport("builtins", roc_modules.builtins);
-        cross_int_host_lib.bundle_compiler_rt = true;
+        const cross_int_host_lib = createTestPlatformHostLib(
+            b,
+            b.fmt("test_platform_int_host_{s}", .{cross_target.name}),
+            "test/int/platform/host.zig",
+            cross_resolved_target,
+            optimize,
+            roc_modules,
+        );
 
         // Copy to target-specific directory
         const copy_cross_int_host = b.addUpdateSourceFiles();
