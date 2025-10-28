@@ -73,8 +73,9 @@ process_user! :
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-anno (name "process_user!")
-		(ty-malformed)))
+	(s-let
+		(p-assign (ident "process_user!"))
+		(e-anno-only)))
 ~~~
 # TYPES
 ~~~clojure

@@ -22,6 +22,8 @@ MALFORMED TYPE - record_builder.md:2:8:2:9
 UNRECOGNIZED SYNTAX - record_builder.md:2:9:2:10
 MALFORMED TYPE - record_builder.md:3:8:3:9
 UNRECOGNIZED SYNTAX - record_builder.md:3:9:3:10
+UNUSED VARIABLE - record_builder.md:2:5:2:9
+UNUSED VARIABLE - record_builder.md:3:5:3:9
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **<-** is not expected in an expression.
@@ -142,6 +144,30 @@ I don't recognize this syntax.
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
+**UNUSED VARIABLE**
+Variable `x` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+**record_builder.md:2:5:2:9:**
+```roc
+    x: 5,
+```
+    ^^^^
+
+
+**UNUSED VARIABLE**
+Variable `y` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
+The unused variable is declared here:
+**record_builder.md:3:5:3:9:**
+```roc
+    y: 0,
+```
+    ^^^^
+
+
 # TOKENS
 ~~~zig
 OpenCurly,UpperIdent,NoSpaceDotUpperIdent,NoSpaceDotLowerIdent,OpBackArrow,
@@ -181,12 +207,14 @@ EndOfFile,
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-type-anno (name "x")
-		(ty-malformed))
+	(s-let
+		(p-assign (ident "x"))
+		(e-anno-only))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-type-anno (name "y")
-		(ty-malformed))
+	(s-let
+		(p-assign (ident "y"))
+		(e-anno-only))
 	(e-runtime-error (tag "expr_not_canonicalized")))
 ~~~
 # TYPES
