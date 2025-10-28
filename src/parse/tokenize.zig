@@ -824,14 +824,15 @@ pub const Cursor = struct {
     /// Returns whether the chomped identifier was valid - i.e. didn't contain any non-ascii characters.
     pub fn chompIdentGeneral(self: *Cursor) bool {
         var valid = true;
+        const start_pos = self.pos;
         while (self.pos < self.buf.len) {
             const c = self.buf[self.pos];
-            if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c == '!') {
-                self.pos += 1;
-            } else if (c == '$') {
-                // Dollar sign in the middle of an identifier is not allowed
-                self.pushMessageHere(.DollarInMiddleOfIdentifier);
-                valid = false;
+            if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c == '!' or c == '$') {
+                // Allow $ as a valid identifier character
+                if (c == '$' and self.pos > start_pos) {
+                    // But warn if it's not at the start (pos > start_pos means we've moved)
+                    self.pushMessageHere(.DollarInMiddleOfIdentifier);
+                }
                 self.pos += 1;
             } else if (c >= 0x80) {
                 valid = false;
@@ -2503,10 +2504,10 @@ test "dollar sign in middle of identifier" {
         try std.testing.expect(messages.len > 0);
         try std.testing.expectEqual(Diagnostic.Tag.DollarInMiddleOfIdentifier, messages[0].tag);
 
-        // Should still tokenize as a malformed ident
+        // Should tokenize as a valid LowerIdent (but with a warning)
         const token_tags = tokenizer.output.tokens.items(.tag);
         try std.testing.expect(token_tags.len >= 2); // At least the identifier and EOF
-        try std.testing.expectEqual(Token.Tag.MalformedUnicodeIdent, token_tags[0]);
+        try std.testing.expectEqual(Token.Tag.LowerIdent, token_tags[0]);
     }
 
     // Dollar sign at the end of an identifier - foo$
