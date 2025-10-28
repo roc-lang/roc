@@ -6718,35 +6718,91 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                     },
                     else => {
                         // If the next stmt does not match this annotation,
-                        // then just add the annotation independently
+                        // create a Def with an e_anno_only body
 
-                        // TODO: Capture diagnostic that this anno doesn't
-                        // have a corresponding def
-
-                        const stmt_idx = try self.env.addStatement(Statement{
-                            .s_type_anno = .{
-                                .name = name_ident,
-                                .anno = type_anno_idx,
-                                .where = where_clauses,
+                        // Create the pattern for this def
+                        const pattern = Pattern{
+                            .assign = .{
+                                .ident = name_ident,
                             },
-                        }, region);
+                        };
+                        const pattern_idx = try self.env.addPattern(pattern, region);
+
+                        // Introduce the name to scope
+                        switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, name_ident, pattern_idx, false, true)) {
+                            .success => {},
+                            .shadowing_warning => |shadowed_pattern_idx| {
+                                const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+                                try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                                    .ident = name_ident,
+                                    .region = region,
+                                    .original_region = original_region,
+                                } });
+                            },
+                            else => {},
+                        }
+
+                        // Create the e_anno_only expression
+                        const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{} }, region);
+
+                        // Create the annotation structure
+                        const annotation = CIR.Annotation{
+                            .anno = type_anno_idx,
+                            .where = where_clauses,
+                        };
+                        const annotation_idx = try self.env.addAnnotation(annotation, region);
+
+                        // Add the decl as a statement with the e_anno_only body
+                        const stmt_idx = try self.env.addStatement(Statement{ .s_decl = .{
+                            .pattern = pattern_idx,
+                            .expr = anno_only_expr,
+                            .anno = annotation_idx,
+                        } }, region);
                         mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = null };
                     },
                 }
             } else {
                 // If the next stmt does not match this annotation,
-                // then just add the annotation independently
+                // create a Def with an e_anno_only body
 
-                // TODO: Capture diagnostic that this anno doesn't
-                // have a corresponding def
-
-                const stmt_idx = try self.env.addStatement(Statement{
-                    .s_type_anno = .{
-                        .name = name_ident,
-                        .anno = type_anno_idx,
-                        .where = where_clauses,
+                // Create the pattern for this def
+                const pattern = Pattern{
+                    .assign = .{
+                        .ident = name_ident,
                     },
-                }, region);
+                };
+                const pattern_idx = try self.env.addPattern(pattern, region);
+
+                // Introduce the name to scope
+                switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, name_ident, pattern_idx, false, true)) {
+                    .success => {},
+                    .shadowing_warning => |shadowed_pattern_idx| {
+                        const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+                        try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                            .ident = name_ident,
+                            .region = region,
+                            .original_region = original_region,
+                        } });
+                    },
+                    else => {},
+                }
+
+                // Create the e_anno_only expression
+                const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{} }, region);
+
+                // Create the annotation structure
+                const annotation = CIR.Annotation{
+                    .anno = type_anno_idx,
+                    .where = where_clauses,
+                };
+                const annotation_idx = try self.env.addAnnotation(annotation, region);
+
+                // Add the decl as a statement with the e_anno_only body
+                const stmt_idx = try self.env.addStatement(Statement{ .s_decl = .{
+                    .pattern = pattern_idx,
+                    .expr = anno_only_expr,
+                    .anno = annotation_idx,
+                } }, region);
                 mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = null };
             }
         },

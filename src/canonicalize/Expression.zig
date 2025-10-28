@@ -357,6 +357,14 @@ pub const Expr = union(enum) {
     /// launchTheNukes: |{}| ...
     /// ```
     e_ellipsis: struct {},
+    /// A standalone type annotation without a body.
+    /// This represents a type declaration that has no implementation.
+    /// During type-checking, this expression is assigned the type from its annotation.
+    ///
+    /// ```roc
+    /// foo : {} -> {}
+    /// ```
+    e_anno_only: struct {},
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
@@ -972,6 +980,14 @@ pub const Expr = union(enum) {
             .e_ellipsis => |_| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-not-implemented");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .e_anno_only => |_| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-anno-only");
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
