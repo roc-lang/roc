@@ -3864,4 +3864,3 @@ fn generatePackageDocs(
         std.debug.print("Warning: failed to generate index for {s}: {}\n", .{ module_path, err });
     };
 }
-

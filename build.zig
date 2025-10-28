@@ -542,8 +542,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // roc check integration tests
-    const enable_roc_check_tests = b.option(bool, "roc-check-tests", "Enable roc check integration tests") 
-    orelse true;
+    const enable_roc_check_tests = b.option(bool, "roc-check-tests", "Enable roc check integration tests") orelse true;
     if (enable_roc_check_tests) {
         const roc_check_test = b.addTest(.{
             .name = "roc_check_test",
