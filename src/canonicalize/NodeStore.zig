@@ -2913,8 +2913,8 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             node.data_1 = @bitCast(r.name);
             node.data_2 = @bitCast(r.suggested_name);
         },
-        .type_var_ending_in_underscore => |r| {
-            node.tag = .diag_type_var_ending_in_underscore;
+        .type_var_starting_with_dollar => |r| {
+            node.tag = .diag_type_var_starting_with_dollar;
             region = r.region;
             node.data_1 = @bitCast(r.name);
             node.data_2 = @bitCast(r.suggested_name);
@@ -3228,7 +3228,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .suggested_name = @bitCast(node.data_2),
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_type_var_ending_in_underscore => return CIR.Diagnostic{ .type_var_ending_in_underscore = .{
+        .diag_type_var_starting_with_dollar => return CIR.Diagnostic{ .type_var_starting_with_dollar = .{
             .name = @bitCast(node.data_1),
             .suggested_name = @bitCast(node.data_2),
             .region = store.getRegionAt(node_idx),

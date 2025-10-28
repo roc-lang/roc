@@ -1451,6 +1451,38 @@ pub const Tokenizer = struct {
                     }
                 },
 
+                '$' => {
+                    const next = self.cursor.peekAt(1);
+                    if (next) |n| {
+                        if (n >= 'a' and n <= 'z') {
+                            // Dollar sign followed by lowercase letter - reusable identifier
+                            self.cursor.pos += 1;
+                            const tag = self.cursor.chompIdentLower();
+                            if (tag == .LowerIdent or tag == .MalformedUnicodeIdent) {
+                                try self.pushTokenInternedHere(gpa, tag, start, start);
+                            } else {
+                                try self.pushTokenNormalHere(gpa, tag, start);
+                            }
+                        } else if (n >= 'A' and n <= 'Z') {
+                            // Dollar sign followed by uppercase letter - reusable identifier
+                            var tag: Token.Tag = .UpperIdent;
+                            self.cursor.pos += 1;
+                            if (!self.cursor.chompIdentGeneral()) {
+                                tag = .MalformedUnicodeIdent;
+                            }
+                            try self.pushTokenInternedHere(gpa, tag, start, start);
+                        } else {
+                            // Dollar sign not followed by a letter - invalid
+                            self.cursor.pos += 1;
+                            try self.pushTokenNormalHere(gpa, .MalformedUnknownToken, start);
+                        }
+                    } else {
+                        // Dollar sign at end of file
+                        self.cursor.pos += 1;
+                        try self.pushTokenNormalHere(gpa, .MalformedUnknownToken, start);
+                    }
+                },
+
                 // Numbers starting with 0-9
                 '0'...'9' => {
                     const tag = self.cursor.chompNumber();
@@ -2339,6 +2371,15 @@ test "tokenizer" {
             .StringPart,
         },
     );
+
+    // Test dollar sign prefix for reusable identifiers
+    try testTokenization(gpa, "$foo", &[_]Token.Tag{.LowerIdent});
+    try testTokenization(gpa, "$Foo", &[_]Token.Tag{.UpperIdent});
+    try testTokenization(gpa, "$foo123", &[_]Token.Tag{.LowerIdent});
+    try testTokenization(gpa, "$", &[_]Token.Tag{.MalformedUnknownToken});
+    try testTokenization(gpa, "$123", &[_]Token.Tag{ .MalformedUnknownToken, .Int });
+    try testTokenization(gpa, "$ ", &[_]Token.Tag{.MalformedUnknownToken});
+    try testTokenization(gpa, "$foo $bar", &[_]Token.Tag{ .LowerIdent, .LowerIdent });
 }
 
 test "tokenizer with invalid UTF-8" {

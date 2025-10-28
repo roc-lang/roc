@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Comprehensive test of type variable underscore conventions
+description=Comprehensive test of type variable underscore and dollar sign conventions
 type=file
 ~~~
 # SOURCE
@@ -11,12 +11,12 @@ app [main] { pf: platform "../basic-cli/platform.roc" }
 single_use : List(elem) -> Str
 single_use = |x| "hello"
 
-# Test 2: TYPE VAR ENDING IN UNDERSCORE - variables should never end with underscore
-ending_underscore : List(elem_) -> elem_
-ending_underscore = |list| "default"
+# Test 2: TYPE VAR STARTING WITH DOLLAR - variables should never start with dollar sign (reusable markers)
+starting_dollar : List($elem) -> $elem
+starting_dollar = |list| "default"
 
-# Test 3: COMBINATION - single-use ending in underscore (both errors)
-combo_single : List(bad_) -> Str
+# Test 3: COMBINATION - single-use starting with dollar (both errors)
+combo_single : List($bad) -> Str
 combo_single = |x| "combo"
 
 # Test 4: VALID CASES - these should not generate warnings
@@ -30,11 +30,11 @@ main = |x| "done"
 ~~~
 # EXPECTED
 UNUSED VARIABLE - type_var_underscore_conventions.md:5:15:5:16
-UNUSED VARIABLE - type_var_underscore_conventions.md:9:22:9:26
+UNUSED VARIABLE - type_var_underscore_conventions.md:9:20:9:24
 UNUSED VARIABLE - type_var_underscore_conventions.md:13:17:13:18
 UNUSED VARIABLE - type_var_underscore_conventions.md:17:17:17:18
 UNUSED VARIABLE - type_var_underscore_conventions.md:22:9:22:10
-TYPE MISMATCH - type_var_underscore_conventions.md:9:28:9:37
+TYPE MISMATCH - type_var_underscore_conventions.md:9:26:9:35
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `x` is not used anywhere in your code.
@@ -53,11 +53,11 @@ Variable `list` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
 The unused variable is declared here:
-**type_var_underscore_conventions.md:9:22:9:26:**
+**type_var_underscore_conventions.md:9:20:9:24:**
 ```roc
-ending_underscore = |list| "default"
+starting_dollar = |list| "default"
 ```
-                     ^^^^
+                   ^^^^
 
 
 **UNUSED VARIABLE**
@@ -98,17 +98,17 @@ main = |x| "done"
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**type_var_underscore_conventions.md:9:28:9:37:**
+**type_var_underscore_conventions.md:9:26:9:35:**
 ```roc
-ending_underscore = |list| "default"
+starting_dollar = |list| "default"
 ```
-                           ^^^^^^^^^
+                         ^^^^^^^^^
 
 It has the type:
     _Str_
 
 But the type annotation says it should have the type:
-    _elem__
+    _$elem_
 
 # TOKENS
 ~~~zig
@@ -154,14 +154,14 @@ EndOfFile,
 					(p-ident (raw "x")))
 				(e-string
 					(e-string-part (raw "hello")))))
-		(s-type-anno (name "ending_underscore")
+		(s-type-anno (name "starting_dollar")
 			(ty-fn
 				(ty-apply
 					(ty (name "List"))
-					(ty-var (raw "elem_")))
-				(ty-var (raw "elem_"))))
+					(ty-var (raw "$elem")))
+				(ty-var (raw "$elem"))))
 		(s-decl
-			(p-ident (raw "ending_underscore"))
+			(p-ident (raw "starting_dollar"))
 			(e-lambda
 				(args
 					(p-ident (raw "list")))
@@ -171,7 +171,7 @@ EndOfFile,
 			(ty-fn
 				(ty-apply
 					(ty (name "List"))
-					(ty-var (raw "bad_")))
+					(ty-var (raw "$bad")))
 				(ty (name "Str"))))
 		(s-decl
 			(p-ident (raw "combo_single"))
@@ -234,7 +234,7 @@ NO CHANGE
 					(ty-rigid-var (name "elem")))
 				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
-		(p-assign (ident "ending_underscore"))
+		(p-assign (ident "starting_dollar"))
 		(e-lambda
 			(args
 				(p-assign (ident "list")))
@@ -243,8 +243,8 @@ NO CHANGE
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
-					(ty-rigid-var (name "elem_")))
-				(ty-rigid-var-lookup (ty-rigid-var (name "elem_"))))))
+					(ty-rigid-var (name "$elem")))
+				(ty-rigid-var-lookup (ty-rigid-var (name "$elem"))))))
 	(d-let
 		(p-assign (ident "combo_single"))
 		(e-lambda
@@ -255,7 +255,7 @@ NO CHANGE
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
-					(ty-rigid-var (name "bad_")))
+					(ty-rigid-var (name "$bad")))
 				(ty-lookup (name "Str") (external-module "Str")))))
 	(d-let
 		(p-assign (ident "valid_single"))
@@ -296,15 +296,15 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "List(elem) -> Str"))
-		(patt (type "List(elem_) -> Error"))
-		(patt (type "List(bad_) -> Str"))
+		(patt (type "List($elem) -> Error"))
+		(patt (type "List($bad) -> Str"))
 		(patt (type "List(_elem) -> Str"))
 		(patt (type "elem -> List(elem)"))
 		(patt (type "_arg -> Str")))
 	(expressions
 		(expr (type "List(elem) -> Str"))
-		(expr (type "List(elem_) -> Error"))
-		(expr (type "List(bad_) -> Str"))
+		(expr (type "List($elem) -> Error"))
+		(expr (type "List($bad) -> Str"))
 		(expr (type "List(_elem) -> Str"))
 		(expr (type "elem -> List(elem)"))
 		(expr (type "_arg -> Str"))))
