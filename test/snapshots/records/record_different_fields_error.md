@@ -15,6 +15,7 @@ type=expr
 }
 ~~~
 # EXPECTED
+DOLLAR SIGN IN MIDDLE OF IDENTIFIER - :0:0:0:0
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_error.md:2:20:2:21
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:2:21:2:39
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:2:39:2:40
@@ -27,9 +28,8 @@ UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:4:15:4:16
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:4:25:4:26
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:5:15:5:16
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:5:24:5:25
-UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_error.md:6:20:6:21
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:21:6:27
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:27:6:28
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:5:6:18
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:18:6:19
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:28:6:29
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:10:7:17
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:17:7:18
@@ -48,10 +48,8 @@ UNDEFINED VARIABLE - record_different_fields_error.md:5:5:5:10
 UNDEFINED VARIABLE - record_different_fields_error.md:5:11:5:15
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:5:15:5:16
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:5:24:5:25
-UNDEFINED VARIABLE - record_different_fields_error.md:6:5:6:10
-MALFORMED TYPE - record_different_fields_error.md:6:20:6:21
-UNRECOGNIZED SYNTAX - record_different_fields_error.md:6:21:6:27
-UNRECOGNIZED SYNTAX - record_different_fields_error.md:6:27:6:28
+UNRECOGNIZED SYNTAX - record_different_fields_error.md:6:5:6:18
+UNRECOGNIZED SYNTAX - record_different_fields_error.md:6:18:6:19
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:6:28:6:29
 UNDEFINED VARIABLE - record_different_fields_error.md:7:5:7:10
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:7:10:7:17
@@ -60,8 +58,14 @@ UNRECOGNIZED SYNTAX - record_different_fields_error.md:7:30:7:31
 UNUSED VALUE - record_different_fields_error.md:4:5:4:15
 UNUSED VALUE - record_different_fields_error.md:4:17:4:25
 UNUSED VALUE - record_different_fields_error.md:5:17:5:24
+UNUSED VALUE - record_different_fields_error.md:6:20:6:28
 UNUSED VALUE - record_different_fields_error.md:7:19:7:30
 # PROBLEMS
+**DOLLAR SIGN IN MIDDLE OF IDENTIFIER**
+Dollar sign ($) can only appear at the start of an identifier to mark it as reusable. It cannot appear in the middle or at the end.
+
+
+
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
 The token **"** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
@@ -194,37 +198,26 @@ Expressions can be identifiers, literals, function calls, or operators.
                        ^
 
 
-**UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **"** is not expected in a type annotation.
-Type annotations should contain types like _Str_, _Num a_, or _List U64_.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **field$special** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
-**record_different_fields_error.md:6:20:6:21:**
+**record_different_fields_error.md:6:5:6:18:**
 ```roc
     field$special: "dollar",
 ```
-                   ^
+    ^^^^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **dollar** is not expected in an expression.
+The token **:** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
-**record_different_fields_error.md:6:21:6:27:**
+**record_different_fields_error.md:6:18:6:19:**
 ```roc
     field$special: "dollar",
 ```
-                    ^^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **"** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_error.md:6:27:6:28:**
-```roc
-    field$special: "dollar",
-```
-                          ^
+                 ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -423,46 +416,25 @@ I don't recognize this syntax.
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
-**UNDEFINED VARIABLE**
-Nothing is named `field` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**record_different_fields_error.md:6:5:6:10:**
-```roc
-    field$special: "dollar",
-```
-    ^^^^^
-
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**record_different_fields_error.md:6:20:6:21:**
-```roc
-    field$special: "dollar",
-```
-                   ^
-
-
 **UNRECOGNIZED SYNTAX**
 I don't recognize this syntax.
 
-**record_different_fields_error.md:6:21:6:27:**
+**record_different_fields_error.md:6:5:6:18:**
 ```roc
     field$special: "dollar",
 ```
-                    ^^^^^^
+    ^^^^^^^^^^^^^
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
 **UNRECOGNIZED SYNTAX**
 I don't recognize this syntax.
 
-**record_different_fields_error.md:6:27:6:28:**
+**record_different_fields_error.md:6:18:6:19:**
 ```roc
     field$special: "dollar",
 ```
-                          ^
+                 ^
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -556,6 +528,17 @@ It has the type:
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
+**record_different_fields_error.md:6:20:6:28:**
+```roc
+    field$special: "dollar",
+```
+                   ^^^^^^^^
+
+It has the type:
+    _Str_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
 **record_different_fields_error.md:7:19:7:30:**
 ```roc
     field@symbol: "at symbol",
@@ -572,7 +555,7 @@ NamedUnderscore,OpColon,StringStart,StringPart,StringEnd,Comma,
 LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
 UpperIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
 LowerIdent,OpUnaryMinus,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
-LowerIdent,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
+MalformedUnicodeIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
 LowerIdent,OpaqueName,OpColon,StringStart,StringPart,StringEnd,Comma,
 CloseCurly,
 EndOfFile,
@@ -603,11 +586,10 @@ EndOfFile,
 		(e-string
 			(e-string-part (raw "kebab")))
 		(e-malformed (reason "expr_unexpected_token"))
-		(e-ident (raw "field"))
-		(s-type-anno (name "$special")
-			(ty-malformed (tag "ty_anno_unexpected_token")))
 		(e-malformed (reason "expr_unexpected_token"))
 		(e-malformed (reason "expr_unexpected_token"))
+		(e-string
+			(e-string-part (raw "dollar")))
 		(e-malformed (reason "expr_unexpected_token"))
 		(e-ident (raw "field"))
 		(e-malformed (reason "expr_unexpected_token"))
@@ -630,9 +612,8 @@ EndOfFile,
 	-case
 		"kebab"
 	
-	field
-	$special : 
-			
+			"dollar"
+	
 	field
 			"at symbol"
 	
@@ -679,13 +660,12 @@ EndOfFile,
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
-		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-type-anno (name "$special")
-		(ty-malformed))
-	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
+	(s-expr
+		(e-string
+			(e-literal (string "dollar"))))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr

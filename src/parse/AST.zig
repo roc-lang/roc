@@ -127,6 +127,7 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
         .UnclosedString => "UNCLOSED STRING",
         .NonPrintableUnicodeInStrLiteral => "NON-PRINTABLE UNICODE IN STRING-LIKE LITERAL",
         .InvalidUtf8InSource => "INVALID UTF-8",
+        .DollarInMiddleOfIdentifier => "DOLLAR SIGN IN MIDDLE OF IDENTIFIER",
     };
 
     const body = switch (diagnostic.tag) {
@@ -139,6 +140,7 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
         .UnclosedString => "This string is missing a closing quote.",
         .NonPrintableUnicodeInStrLiteral => "Non-printable Unicode characters are not allowed in string-like literals.",
         .InvalidUtf8InSource => "Invalid UTF-8 encoding found in source code. Roc source files must be valid UTF-8.",
+        .DollarInMiddleOfIdentifier => "Dollar sign ($) can only appear at the start of an identifier to mark it as reusable. It cannot appear in the middle or at the end.",
     };
 
     var report = reporting.Report.init(allocator, title, .runtime_error);
