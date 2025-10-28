@@ -2898,10 +2898,33 @@ fn checkFileWithBuildEnv(
     }
 
     // Build the file (works for both app and module files)
-    build_env.build(filepath) catch {
+    build_env.build(filepath) catch |err| {
         // Even on error, drain reports to show what went wrong
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
         defer build_env.gpa.free(drained);
+
+        if (drained.len == 0) {
+            // There is a problem but no reports to show
+            // Probably we are missing a report somewhere
+            var report = reporting.Report.init(allocs.gpa, "UNHANDLED ERROR", .fatal);
+            try report.document.addText("An error that was not handled occurred while processing the file ");
+            try report.document.addAnnotated(filepath, .path);
+            try report.document.addLineBreak();
+            try report.addErrorMessage(@errorName(err));
+            try report.document.addText("Probably the compiler is missing a report for this specific error.");
+            var report_slice = try allocs.gpa.alloc(reporting.Report, 1);
+            report_slice[0] = report;
+            var reports = try allocs.gpa.alloc(DrainedReport, 1);
+            reports[0] = .{
+                .file_path = try allocs.gpa.dupe(u8, filepath),
+                .reports = report_slice,
+            };
+            return CheckResult{
+                .reports = reports,
+                .error_count = 1,
+                .warning_count = 0,
+            };
+        }
 
         // Count errors and warnings
         var error_count: u32 = 0;
