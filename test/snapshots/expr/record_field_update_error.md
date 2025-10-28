@@ -13,6 +13,7 @@ UNEXPECTED TOKEN IN TYPE ANNOTATION - record_field_update_error.md:1:17:1:19
 UNDEFINED VARIABLE - record_field_update_error.md:1:3:1:9
 UNRECOGNIZED SYNTAX - record_field_update_error.md:1:10:1:11
 MALFORMED TYPE - record_field_update_error.md:1:17:1:19
+UNUSED VARIABLE - record_field_update_error.md:1:12:1:19
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **&** is not expected in an expression.
@@ -68,6 +69,18 @@ This type annotation is malformed or contains invalid syntax.
                 ^^
 
 
+**UNUSED VARIABLE**
+Variable `age` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_age` to suppress this warning.
+The unused variable is declared here:
+**record_field_update_error.md:1:12:1:19:**
+```roc
+{ person & age: 31 }
+```
+           ^^^^^^^
+
+
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpAmpersand,LowerIdent,OpColon,Int,CloseCurly,
@@ -96,8 +109,9 @@ EndOfFile,
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-type-anno (name "age")
-		(ty-malformed))
+	(s-let
+		(p-assign (ident "age"))
+		(e-anno-only))
 	(e-empty_record))
 ~~~
 # TYPES

@@ -57,6 +57,8 @@ UNDEFINED VARIABLE - record_different_fields_error.md:7:5:7:10
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:7:10:7:17
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:7:17:7:18
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:7:30:7:31
+UNUSED VARIABLE - record_different_fields_error.md:3:5:3:14
+UNUSED VARIABLE - record_different_fields_error.md:6:10:6:21
 UNUSED VALUE - record_different_fields_error.md:4:5:4:15
 UNUSED VALUE - record_different_fields_error.md:4:17:4:25
 UNUSED VALUE - record_different_fields_error.md:5:17:5:24
@@ -521,6 +523,30 @@ I don't recognize this syntax.
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
+**UNUSED VARIABLE**
+Variable `field_` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_field_` to suppress this warning.
+The unused variable is declared here:
+**record_different_fields_error.md:3:5:3:14:**
+```roc
+    field_: "trailing underscore",
+```
+    ^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `$special` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_$special` to suppress this warning.
+The unused variable is declared here:
+**record_different_fields_error.md:6:10:6:21:**
+```roc
+    field$special: "dollar",
+```
+         ^^^^^^^^^^^
+
+
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
 **record_different_fields_error.md:4:5:4:15:**
@@ -641,16 +667,18 @@ EndOfFile,
 # CANONICALIZE
 ~~~clojure
 (e-block
-	(s-type-anno (name "_privateField")
-		(ty-malformed))
+	(s-let
+		(p-assign (ident "_privateField"))
+		(e-anno-only))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-type-anno (name "field_")
-		(ty-malformed))
+	(s-let
+		(p-assign (ident "field_"))
+		(e-anno-only))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
@@ -680,8 +708,9 @@ EndOfFile,
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-type-anno (name "$special")
-		(ty-malformed))
+	(s-let
+		(p-assign (ident "$special"))
+		(e-anno-only))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr

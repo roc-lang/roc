@@ -2976,6 +2976,21 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
         .e_ellipsis => {
             try self.updateVar(expr_var, .{ .flex = Flex.init() }, rank);
         },
+        .e_anno_only => {
+            // For annotation-only expressions, the type comes from the annotation.
+            // This case should only occur when the expression has an annotation (which is
+            // enforced during canonicalization), so the expected type should be set.
+            // The type will be unified with the expected type in the code below.
+            switch (expected) {
+                .no_expectation => {
+                    // This shouldn't happen since we always create e_anno_only with an annotation
+                    try self.updateVar(expr_var, .err, rank);
+                },
+                .expected => {
+                    // The expr_var will be unified with the annotation var below
+                },
+            }
+        },
         .e_runtime_error => {
             try self.updateVar(expr_var, .err, rank);
         },
