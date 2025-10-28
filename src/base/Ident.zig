@@ -84,7 +84,7 @@ pub const Attributes = packed struct(u3) {
         return .{
             .effectful = std.mem.endsWith(u8, text, "!"),
             .ignored = std.mem.startsWith(u8, text, "_"),
-            .reassignable = false,
+            .reassignable = std.mem.startsWith(u8, text, "$"),
         };
     }
 };
@@ -317,6 +317,14 @@ test "from_bytes creates ignored identifier" {
     try std.testing.expect(result.attributes.effectful == false);
     try std.testing.expect(result.attributes.ignored == true);
     try std.testing.expect(result.attributes.reassignable == false);
+}
+
+test "from_bytes creates reassignable identifier" {
+    const result = try Ident.from_bytes("$reusable");
+    try std.testing.expectEqualStrings("$reusable", result.raw_text);
+    try std.testing.expect(result.attributes.effectful == false);
+    try std.testing.expect(result.attributes.ignored == false);
+    try std.testing.expect(result.attributes.reassignable == true);
 }
 
 test "Ident.Store empty CompactWriter roundtrip" {

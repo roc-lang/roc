@@ -130,7 +130,7 @@ pub const CanonicalizedExpr = struct {
 const TypeVarProblemKind = enum {
     unused_type_var,
     type_var_marked_unused,
-    type_var_ending_in_underscore,
+    type_var_starting_with_dollar,
 };
 
 const TypeVarProblem = struct {
@@ -5320,9 +5320,9 @@ fn scopeIntroduceVar(
 }
 
 fn collectTypeVarProblems(ident: Ident.Idx, is_single_use: bool, ast_anno: AST.TypeAnno.Idx, scratch: *base.Scratch(TypeVarProblem)) std.mem.Allocator.Error!void {
-    // Warn for type variables with trailing underscores
+    // Warn for type variables starting with dollar sign (reusable markers)
     if (ident.attributes.reassignable) {
-        try scratch.append(.{ .ident = ident, .problem = .type_var_ending_in_underscore, .ast_anno = ast_anno });
+        try scratch.append(.{ .ident = ident, .problem = .type_var_starting_with_dollar, .ast_anno = ast_anno });
     }
 
     // Should start with underscore but doesn't, or should not start with underscore but does.
@@ -5338,11 +5338,11 @@ fn reportTypeVarProblems(self: *Self, problems: []const TypeVarProblem) std.mem.
         const name_text = self.env.getIdent(problem.ident);
 
         switch (problem.problem) {
-            .type_var_ending_in_underscore => {
-                const suggested_name_text = name_text[0 .. name_text.len - 1]; // Remove the trailing underscore
+            .type_var_starting_with_dollar => {
+                const suggested_name_text = name_text[1..]; // Remove the leading dollar sign
                 const suggested_ident = self.env.insertIdent(base.Ident.for_text(suggested_name_text), Region.zero());
 
-                self.env.pushDiagnostic(Diagnostic{ .type_var_ending_in_underscore = .{
+                self.env.pushDiagnostic(Diagnostic{ .type_var_starting_with_dollar = .{
                     .name = problem.ident,
                     .suggested_name = suggested_ident,
                     .region = region,
@@ -5410,11 +5410,11 @@ fn processCollectedTypeVars(self: *Self) std.mem.Allocator.Error!void {
         const name_text = self.env.getIdent(problem.ident);
 
         switch (problem.problem) {
-            .type_var_ending_in_underscore => {
-                const suggested_name_text = name_text[0 .. name_text.len - 1]; // Remove the trailing underscore
+            .type_var_starting_with_dollar => {
+                const suggested_name_text = name_text[1..]; // Remove the leading dollar sign
                 const suggested_ident = self.env.insertIdent(base.Ident.for_text(suggested_name_text), Region.zero());
 
-                self.env.pushDiagnostic(Diagnostic{ .type_var_ending_in_underscore = .{
+                self.env.pushDiagnostic(Diagnostic{ .type_var_starting_with_dollar = .{
                     .name = problem.ident,
                     .suggested_name = suggested_ident,
                     .region = Region.zero(),
