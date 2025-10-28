@@ -15,7 +15,7 @@ type=expr
 }
 ~~~
 # EXPECTED
-DOLLAR SIGN IN MIDDLE OF IDENTIFIER - :0:0:0:0
+STRAY DOLLAR SIGN - :0:0:0:0
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_error.md:2:20:2:21
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:2:21:2:39
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:2:39:2:40
@@ -55,14 +55,15 @@ UNDEFINED VARIABLE - record_different_fields_error.md:7:5:7:10
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:7:10:7:17
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:7:17:7:18
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:7:30:7:31
+UNUSED VARIABLE - record_different_fields_error.md:3:5:3:14
 UNUSED VALUE - record_different_fields_error.md:4:5:4:15
 UNUSED VALUE - record_different_fields_error.md:4:17:4:25
 UNUSED VALUE - record_different_fields_error.md:5:17:5:24
 UNUSED VALUE - record_different_fields_error.md:6:20:6:28
 UNUSED VALUE - record_different_fields_error.md:7:19:7:30
 # PROBLEMS
-**DOLLAR SIGN IN MIDDLE OF IDENTIFIER**
-Dollar sign ($) can only appear at the start of an identifier to mark it as reusable. It cannot appear in the middle or at the end.
+**STRAY DOLLAR SIGN**
+Dollar sign ($) is only allowed at the very beginning of a name, not in the middle or at the end.
 
 
 
@@ -493,6 +494,18 @@ I don't recognize this syntax.
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
+**UNUSED VARIABLE**
+Variable `field_` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_field_` to suppress this warning.
+The unused variable is declared here:
+**record_different_fields_error.md:3:5:3:14:**
+```roc
+    field_: "trailing underscore",
+```
+    ^^^^^^^^^
+
+
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
 **record_different_fields_error.md:4:5:4:15:**
@@ -601,37 +614,39 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 {
-	_privateField : 
-			
-	field_ : 
-			
+	_privateField :
+
+	field_ :
+
 	PascalCase
 		"pascal"
-	
+
 	kebab
 	-case
 		"kebab"
-	
+
 			"dollar"
-	
+
 	field
 			"at symbol"
-	
+
 }
 ~~~
 # CANONICALIZE
 ~~~clojure
 (e-block
-	(s-type-anno (name "_privateField")
-		(ty-malformed))
+	(s-let
+		(p-assign (ident "_privateField"))
+		(e-anno-only))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-type-anno (name "field_")
-		(ty-malformed))
+	(s-let
+		(p-assign (ident "field_"))
+		(e-anno-only))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
