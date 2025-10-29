@@ -1,5 +1,4 @@
-//! Test that verifies error reports are properly written to stderr
-//! This prevents regressions where stderr buffering causes errors to be lost
+//! `roc check` tests that use the actual roc CLI binary.
 
 const std = @import("std");
 
