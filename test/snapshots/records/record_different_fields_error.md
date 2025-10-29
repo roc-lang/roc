@@ -27,7 +27,6 @@ UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:4:15:4:16
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:4:25:4:26
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:5:15:5:16
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:5:24:5:25
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:10:6:11
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_error.md:6:20:6:21
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:21:6:27
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:27:6:28
@@ -50,7 +49,6 @@ UNDEFINED VARIABLE - record_different_fields_error.md:5:11:5:15
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:5:15:5:16
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:5:24:5:25
 UNDEFINED VARIABLE - record_different_fields_error.md:6:5:6:10
-UNRECOGNIZED SYNTAX - record_different_fields_error.md:6:10:6:11
 MALFORMED TYPE - record_different_fields_error.md:6:20:6:21
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:6:21:6:27
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:6:27:6:28
@@ -59,6 +57,8 @@ UNDEFINED VARIABLE - record_different_fields_error.md:7:5:7:10
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:7:10:7:17
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:7:17:7:18
 UNRECOGNIZED SYNTAX - record_different_fields_error.md:7:30:7:31
+UNUSED VARIABLE - record_different_fields_error.md:3:5:3:14
+UNUSED VARIABLE - record_different_fields_error.md:6:10:6:21
 UNUSED VALUE - record_different_fields_error.md:4:5:4:15
 UNUSED VALUE - record_different_fields_error.md:4:17:4:25
 UNUSED VALUE - record_different_fields_error.md:5:17:5:24
@@ -194,17 +194,6 @@ Expressions can be identifiers, literals, function calls, or operators.
     kebab-case: "kebab",
 ```
                        ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **$** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_error.md:6:10:6:11:**
-```roc
-    field$special: "dollar",
-```
-         ^
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -447,17 +436,6 @@ Is there an `import` or `exposing` missing up-top?
     ^^^^^
 
 
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**record_different_fields_error.md:6:10:6:11:**
-```roc
-    field$special: "dollar",
-```
-         ^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
@@ -545,6 +523,30 @@ I don't recognize this syntax.
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
+**UNUSED VARIABLE**
+Variable `field_` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_field_` to suppress this warning.
+The unused variable is declared here:
+**record_different_fields_error.md:3:5:3:14:**
+```roc
+    field_: "trailing underscore",
+```
+    ^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable `$special` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_$special` to suppress this warning.
+The unused variable is declared here:
+**record_different_fields_error.md:6:10:6:21:**
+```roc
+    field$special: "dollar",
+```
+         ^^^^^^^^^^^
+
+
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
 **record_different_fields_error.md:4:5:4:15:**
@@ -596,7 +598,7 @@ NamedUnderscore,OpColon,StringStart,StringPart,StringEnd,Comma,
 LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
 UpperIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
 LowerIdent,OpUnaryMinus,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
-LowerIdent,MalformedUnknownToken,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
+LowerIdent,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
 LowerIdent,OpaqueName,OpColon,StringStart,StringPart,StringEnd,Comma,
 CloseCurly,
 EndOfFile,
@@ -628,8 +630,7 @@ EndOfFile,
 			(e-string-part (raw "kebab")))
 		(e-malformed (reason "expr_unexpected_token"))
 		(e-ident (raw "field"))
-		(e-malformed (reason "expr_unexpected_token"))
-		(s-type-anno (name "special")
+		(s-type-anno (name "$special")
 			(ty-malformed (tag "ty_anno_unexpected_token")))
 		(e-malformed (reason "expr_unexpected_token"))
 		(e-malformed (reason "expr_unexpected_token"))
@@ -656,7 +657,7 @@ EndOfFile,
 		"kebab"
 	
 	field
-		special : 
+	$special : 
 			
 	field
 			"at symbol"
@@ -666,16 +667,18 @@ EndOfFile,
 # CANONICALIZE
 ~~~clojure
 (e-block
-	(s-type-anno (name "_privateField")
-		(ty-malformed))
+	(s-let
+		(p-assign (ident "_privateField"))
+		(e-anno-only))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-type-anno (name "field_")
-		(ty-malformed))
+	(s-let
+		(p-assign (ident "field_"))
+		(e-anno-only))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
@@ -705,10 +708,9 @@ EndOfFile,
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-type-anno (name "special")
-		(ty-malformed))
+	(s-let
+		(p-assign (ident "$special"))
+		(e-anno-only))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr

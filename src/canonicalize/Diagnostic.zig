@@ -235,7 +235,7 @@ pub const Diagnostic = union(enum) {
         suggested_name: Ident.Idx,
         region: Region,
     },
-    type_var_ending_in_underscore: struct {
+    type_var_starting_with_dollar: struct {
         name: Ident.Idx,
         suggested_name: Ident.Idx,
         region: Region,
@@ -302,7 +302,7 @@ pub const Diagnostic = union(enum) {
             .f64_pattern_literal => |d| d.region,
             .unused_type_var_name => |d| d.region,
             .type_var_marked_unused => |d| d.region,
-            .type_var_ending_in_underscore => |d| d.region,
+            .type_var_starting_with_dollar => |d| d.region,
             .underscore_in_type_declaration => |d| d.region,
         };
     }
