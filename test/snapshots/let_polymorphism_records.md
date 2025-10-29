@@ -45,6 +45,7 @@ main = |_| {
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_records.md:19:50:19:51
 UNRECOGNIZED SYNTAX - let_polymorphism_records.md:19:50:19:51
+UNUSED VARIABLE - let_polymorphism_records.md:19:52:19:67
 UNUSED VARIABLE - let_polymorphism_records.md:19:27:19:36
 UNUSED VALUE - let_polymorphism_records.md:19:40:19:49
 # PROBLEMS
@@ -69,6 +70,18 @@ update_data = |container, new_value| { container & data: new_value }
                                                  ^
 
 This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNUSED VARIABLE**
+Variable `data` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_data` to suppress this warning.
+The unused variable is declared here:
+**let_polymorphism_records.md:19:52:19:67:**
+```roc
+update_data = |container, new_value| { container & data: new_value }
+```
+                                                   ^^^^^^^^^^^^^^^
+
 
 **UNUSED VARIABLE**
 Variable `new_value` is not used anywhere in your code.
@@ -353,8 +366,9 @@ main = |_| {
 						(p-assign (ident "container"))))
 				(s-expr
 					(e-runtime-error (tag "expr_not_canonicalized")))
-				(s-type-anno (name "data")
-					(ty-rigid-var (name "new_value")))
+				(s-let
+					(p-assign (ident "data"))
+					(e-anno-only))
 				(e-empty_record))))
 	(d-let
 		(p-assign (ident "updated_int"))

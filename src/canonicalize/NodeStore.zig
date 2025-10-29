@@ -130,7 +130,7 @@ pub fn deinit(store: *NodeStore) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 57;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 33;
+pub const MODULEENV_EXPR_NODE_COUNT = 34;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 14;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -627,6 +627,9 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_ellipsis => {
             return CIR.Expr{ .e_ellipsis = .{} };
+        },
+        .expr_anno_only => {
+            return CIR.Expr{ .e_anno_only = .{} };
         },
         .expr_expect => {
             return CIR.Expr{ .e_expect = .{
@@ -1478,6 +1481,9 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_ellipsis => |_| {
             node.tag = .expr_ellipsis;
+        },
+        .e_anno_only => |_| {
+            node.tag = .expr_anno_only;
         },
         .e_match => |e| {
             node.tag = .expr_match;
@@ -2913,8 +2919,8 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             node.data_1 = @bitCast(r.name);
             node.data_2 = @bitCast(r.suggested_name);
         },
-        .type_var_ending_in_underscore => |r| {
-            node.tag = .diag_type_var_ending_in_underscore;
+        .type_var_starting_with_dollar => |r| {
+            node.tag = .diag_type_var_starting_with_dollar;
             region = r.region;
             node.data_1 = @bitCast(r.name);
             node.data_2 = @bitCast(r.suggested_name);
@@ -3228,7 +3234,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .suggested_name = @bitCast(node.data_2),
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_type_var_ending_in_underscore => return CIR.Diagnostic{ .type_var_ending_in_underscore = .{
+        .diag_type_var_starting_with_dollar => return CIR.Diagnostic{ .type_var_starting_with_dollar = .{
             .name = @bitCast(node.data_1),
             .suggested_name = @bitCast(node.data_2),
             .region = store.getRegionAt(node_idx),
