@@ -541,24 +541,24 @@ pub fn build(b: *std.Build) void {
         tests_summary.addRun(&run_cli_test.step);
     }
 
-    // roc check integration tests
-    const enable_roc_check_tests = b.option(bool, "roc-check-tests", "Enable roc check integration tests") orelse true;
-    if (enable_roc_check_tests) {
-        const roc_check_test = b.addTest(.{
-            .name = "roc_check_test",
+    // roc subcommands (check, help, version...) integration tests
+    const enable_roc_other_subcommands_tests = b.option(bool, "roc-other-subcommands-tests", "Enable roc other subcommands integration tests") orelse true;
+    if (enable_roc_other_subcommands_tests) {
+        const roc_other_subcommands_test = b.addTest(.{
+            .name = "roc_subcommands_test",
             .root_module = b.createModule(.{
-                .root_source_file = b.path("src/cli/test/roc_check.zig"),
+                .root_source_file = b.path("src/cli/test/roc_subcommands.zig"),
                 .target = target,
                 .optimize = optimize,
             }),
             .filters = test_filters,
         });
 
-        const run_roc_check_test = b.addRunArtifact(roc_check_test);
+        const run_roc_other_subcommands_test = b.addRunArtifact(roc_other_subcommands_test);
         if (run_args.len != 0) {
-            run_roc_check_test.addArgs(run_args);
+            run_roc_other_subcommands_test.addArgs(run_args);
         }
-        tests_summary.addRun(&run_roc_check_test.step);
+        tests_summary.addRun(&run_roc_other_subcommands_test.step);
     }
 
     // Add watch tests
