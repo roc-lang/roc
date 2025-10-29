@@ -2,6 +2,8 @@
 
 const std = @import("std");
 
+/// Result of executing a Roc command during testing.
+/// Contains the captured output streams and process termination status.
 pub const RocResult = struct {
     stdout: []u8,
     stderr: []u8,
