@@ -158,7 +158,7 @@ It has the type:
     _[InvalidHex(Str), Err([InvalidHex(Str)]_others)][Ok(Color)]_others2_
 
 But the type annotation says it should have the type:
-    _Builtin.Result(Color, [InvalidHex(Str)])_
+    _Result(Color, [InvalidHex(Str)])_
 
 **TYPE MISMATCH**
 The first argument being passed to this function has the wrong type:

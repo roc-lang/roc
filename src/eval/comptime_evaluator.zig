@@ -435,6 +435,7 @@ pub const ComptimeEvaluator = struct {
                             try self.interpreter.bindings.append(.{
                                 .pattern_idx = def.pattern,
                                 .value = value,
+                                .expr_idx = def.expr,
                             });
                         }
                     },

@@ -533,18 +533,22 @@ const Unifier = struct {
                     }
                 };
 
-                const merged_constraints = try self.unifyStaticDispatchConstraints(a_flex.constraints, b_flex.constraints, .union_all);
+                const merged_constraints = try self.unifyStaticDispatchConstraints(a_flex.constraints, b_flex.constraints);
                 self.merge(vars, Content{ .flex = .{
                     .name = mb_ident,
                     .constraints = merged_constraints,
                 } });
             },
             .rigid => |b_rigid| {
-                const merged_constraints = try self.unifyStaticDispatchConstraints(a_flex.constraints, b_rigid.constraints, .a_subset_b);
-                self.merge(vars, Content{ .rigid = .{
-                    .name = b_rigid.name,
-                    .constraints = merged_constraints,
-                } });
+                if (a_flex.constraints.len() > 0) {
+                    // Record that we need to check constraints later
+                    _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
+                        .var_ = vars.b.var_, // Since the vars are merge, we arbitrary choose b
+                        .constraints = a_flex.constraints,
+                    }) catch return Error.AllocatorError;
+                }
+
+                self.merge(vars, .{ .rigid = b_rigid });
             },
             .alias => |b_alias| {
                 if (a_flex.constraints.len() == 0) {
@@ -579,11 +583,15 @@ const Unifier = struct {
 
         switch (b_content) {
             .flex => |b_flex| {
-                const merged_constraints = try self.unifyStaticDispatchConstraints(a_rigid.constraints, b_flex.constraints, .b_subset_a);
-                self.merge(vars, Content{ .rigid = .{
-                    .name = a_rigid.name,
-                    .constraints = merged_constraints,
-                } });
+                if (b_flex.constraints.len() > 0) {
+                    // Record that we need to check constraints later
+                    _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
+                        .var_ = vars.b.var_, // Since the vars are merge, we arbitrary choose b
+                        .constraints = b_flex.constraints,
+                    }) catch return Error.AllocatorError;
+                }
+
+                self.merge(vars, .{ .rigid = a_rigid });
             },
             .rigid => return error.TypeMismatch,
             .alias => return error.TypeMismatch,
@@ -2897,53 +2905,25 @@ const Unifier = struct {
 
     // constraints //
 
-    const ConstraintMergeStrategy = enum {
-        /// Take union of all constraints (flex + flex)
-        union_all,
-        /// Require a ⊆ b, return b's constraints (flex + rigid)
-        a_subset_b,
-        /// Require b ⊆ a, return a's constraints (rigid + flex)
-        b_subset_a,
-    };
-
     fn unifyStaticDispatchConstraints(
         self: *Self,
         a_constraints: StaticDispatchConstraint.SafeList.Range,
         b_constraints: StaticDispatchConstraint.SafeList.Range,
-        strategy: ConstraintMergeStrategy,
     ) Error!StaticDispatchConstraint.SafeList.Range {
         const a_len = a_constraints.len();
         const b_len = b_constraints.len();
 
         // Early exits for empty ranges
         if (a_len == 0 and b_len == 0) {
-            return StaticDispatchConstraint.SafeList.Range.empty();
-        }
-        if (a_len == 0) return if (strategy == .b_subset_a) a_constraints else b_constraints;
-        if (b_len == 0) return if (strategy == .a_subset_b) b_constraints else a_constraints;
-
-        // Subset validation
-        switch (strategy) {
-            .a_subset_b => if (a_len > b_len) return error.TypeMismatch,
-            .b_subset_a => if (b_len > a_len) return error.TypeMismatch,
-            .union_all => {},
+            return .empty();
+        } else if (a_len == 0 and b_len > 0) {
+            return b_constraints;
+        } else if (a_len > 0 and b_len == 0) {
+            return a_constraints;
         }
 
         // Partition constraints
         const partitioned = self.partitionStaticDispatchConstraints(a_constraints, b_constraints) catch return Error.AllocatorError;
-
-        // Check subset requirements
-        switch (strategy) {
-            .a_subset_b => if (partitioned.only_in_a.len() > 0) {
-                // TODO: Throw custom error message
-                return error.TypeMismatch;
-            },
-            .b_subset_a => if (partitioned.only_in_b.len() > 0) {
-                // TODO: Throw custom error message
-                return error.TypeMismatch;
-            },
-            .union_all => {},
-        }
 
         // Unify shared constraints
         if (partitioned.in_both.len() > 0) {
@@ -2953,45 +2933,24 @@ const Unifier = struct {
             }
         }
 
-        // Build result based on strategy
         const top: u32 = @intCast(self.types_store.static_dispatch_constraints.len());
 
-        const capacity = partitioned.in_both.len() + switch (strategy) {
-            .union_all => partitioned.only_in_a.len() + partitioned.only_in_b.len(),
-            .a_subset_b => partitioned.only_in_b.len(),
-            .b_subset_a => partitioned.only_in_a.len(),
-        };
-
+        // Ensure we have enough memory for the new contiguous list
+        const capacity = partitioned.in_both.len() + partitioned.only_in_a.len() + partitioned.only_in_b.len();
         self.types_store.static_dispatch_constraints.items.ensureUnusedCapacity(
             self.types_store.gpa,
             capacity,
         ) catch return Error.AllocatorError;
 
-        // Always append shared constraints (using b's version)
         for (self.scratch.in_both_static_dispatch_constraints.sliceRange(partitioned.in_both)) |two_constraints| {
+            // Here, we append the constraint's b, but since a & b, it doesn't actually matter
             self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(two_constraints.b);
         }
-
-        // Append unique constraints based on strategy
-        switch (strategy) {
-            .union_all => {
-                for (self.scratch.only_in_a_static_dispatch_constraints.sliceRange(partitioned.only_in_a)) |only_a| {
-                    self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(only_a);
-                }
-                for (self.scratch.only_in_b_static_dispatch_constraints.sliceRange(partitioned.only_in_b)) |only_b| {
-                    self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(only_b);
-                }
-            },
-            .a_subset_b => {
-                for (self.scratch.only_in_b_static_dispatch_constraints.sliceRange(partitioned.only_in_b)) |only_b| {
-                    self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(only_b);
-                }
-            },
-            .b_subset_a => {
-                for (self.scratch.only_in_a_static_dispatch_constraints.sliceRange(partitioned.only_in_a)) |only_a| {
-                    self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(only_a);
-                }
-            },
+        for (self.scratch.only_in_a_static_dispatch_constraints.sliceRange(partitioned.only_in_a)) |only_a| {
+            self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(only_a);
+        }
+        for (self.scratch.only_in_b_static_dispatch_constraints.sliceRange(partitioned.only_in_b)) |only_b| {
+            self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(only_b);
         }
 
         return self.types_store.static_dispatch_constraints.rangeToEnd(top);

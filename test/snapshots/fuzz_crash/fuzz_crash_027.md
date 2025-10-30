@@ -964,7 +964,7 @@ It has the type:
     _[Stdoline!(Error)][Err(_d), Ok({  })]_
 
 But the type annotation says it should have the type:
-    _Builtin.Result({  }, _d)_
+    _Result({  }, _d)_
 
 # TOKENS
 ~~~zig

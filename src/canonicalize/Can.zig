@@ -131,7 +131,7 @@ pub const CanonicalizedExpr = struct {
 const TypeVarProblemKind = enum {
     unused_type_var,
     type_var_marked_unused,
-    type_var_ending_in_underscore,
+    type_var_starting_with_dollar,
 };
 
 const TypeVarProblem = struct {
@@ -5387,9 +5387,9 @@ fn scopeIntroduceVar(
 }
 
 fn collectTypeVarProblems(ident: Ident.Idx, is_single_use: bool, ast_anno: AST.TypeAnno.Idx, scratch: *base.Scratch(TypeVarProblem)) std.mem.Allocator.Error!void {
-    // Warn for type variables with trailing underscores
+    // Warn for type variables starting with dollar sign (reusable markers)
     if (ident.attributes.reassignable) {
-        try scratch.append(.{ .ident = ident, .problem = .type_var_ending_in_underscore, .ast_anno = ast_anno });
+        try scratch.append(.{ .ident = ident, .problem = .type_var_starting_with_dollar, .ast_anno = ast_anno });
     }
 
     // Should start with underscore but doesn't, or should not start with underscore but does.
@@ -5405,11 +5405,11 @@ fn reportTypeVarProblems(self: *Self, problems: []const TypeVarProblem) std.mem.
         const name_text = self.env.getIdent(problem.ident);
 
         switch (problem.problem) {
-            .type_var_ending_in_underscore => {
-                const suggested_name_text = name_text[0 .. name_text.len - 1]; // Remove the trailing underscore
+            .type_var_starting_with_dollar => {
+                const suggested_name_text = name_text[1..]; // Remove the leading dollar sign
                 const suggested_ident = self.env.insertIdent(base.Ident.for_text(suggested_name_text), Region.zero());
 
-                self.env.pushDiagnostic(Diagnostic{ .type_var_ending_in_underscore = .{
+                self.env.pushDiagnostic(Diagnostic{ .type_var_starting_with_dollar = .{
                     .name = problem.ident,
                     .suggested_name = suggested_ident,
                     .region = region,
@@ -5477,11 +5477,11 @@ fn processCollectedTypeVars(self: *Self) std.mem.Allocator.Error!void {
         const name_text = self.env.getIdent(problem.ident);
 
         switch (problem.problem) {
-            .type_var_ending_in_underscore => {
-                const suggested_name_text = name_text[0 .. name_text.len - 1]; // Remove the trailing underscore
+            .type_var_starting_with_dollar => {
+                const suggested_name_text = name_text[1..]; // Remove the leading dollar sign
                 const suggested_ident = self.env.insertIdent(base.Ident.for_text(suggested_name_text), Region.zero());
 
-                self.env.pushDiagnostic(Diagnostic{ .type_var_ending_in_underscore = .{
+                self.env.pushDiagnostic(Diagnostic{ .type_var_starting_with_dollar = .{
                     .name = problem.ident,
                     .suggested_name = suggested_ident,
                     .region = Region.zero(),
@@ -6796,35 +6796,91 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                     },
                     else => {
                         // If the next stmt does not match this annotation,
-                        // then just add the annotation independently
+                        // create a Def with an e_anno_only body
 
-                        // TODO: Capture diagnostic that this anno doesn't
-                        // have a corresponding def
-
-                        const stmt_idx = try self.env.addStatement(Statement{
-                            .s_type_anno = .{
-                                .name = name_ident,
-                                .anno = type_anno_idx,
-                                .where = where_clauses,
+                        // Create the pattern for this def
+                        const pattern = Pattern{
+                            .assign = .{
+                                .ident = name_ident,
                             },
-                        }, region);
+                        };
+                        const pattern_idx = try self.env.addPattern(pattern, region);
+
+                        // Introduce the name to scope
+                        switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, name_ident, pattern_idx, false, true)) {
+                            .success => {},
+                            .shadowing_warning => |shadowed_pattern_idx| {
+                                const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+                                try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                                    .ident = name_ident,
+                                    .region = region,
+                                    .original_region = original_region,
+                                } });
+                            },
+                            else => {},
+                        }
+
+                        // Create the e_anno_only expression
+                        const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{} }, region);
+
+                        // Create the annotation structure
+                        const annotation = CIR.Annotation{
+                            .anno = type_anno_idx,
+                            .where = where_clauses,
+                        };
+                        const annotation_idx = try self.env.addAnnotation(annotation, region);
+
+                        // Add the decl as a statement with the e_anno_only body
+                        const stmt_idx = try self.env.addStatement(Statement{ .s_decl = .{
+                            .pattern = pattern_idx,
+                            .expr = anno_only_expr,
+                            .anno = annotation_idx,
+                        } }, region);
                         mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = null };
                     },
                 }
             } else {
                 // If the next stmt does not match this annotation,
-                // then just add the annotation independently
+                // create a Def with an e_anno_only body
 
-                // TODO: Capture diagnostic that this anno doesn't
-                // have a corresponding def
-
-                const stmt_idx = try self.env.addStatement(Statement{
-                    .s_type_anno = .{
-                        .name = name_ident,
-                        .anno = type_anno_idx,
-                        .where = where_clauses,
+                // Create the pattern for this def
+                const pattern = Pattern{
+                    .assign = .{
+                        .ident = name_ident,
                     },
-                }, region);
+                };
+                const pattern_idx = try self.env.addPattern(pattern, region);
+
+                // Introduce the name to scope
+                switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, name_ident, pattern_idx, false, true)) {
+                    .success => {},
+                    .shadowing_warning => |shadowed_pattern_idx| {
+                        const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+                        try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                            .ident = name_ident,
+                            .region = region,
+                            .original_region = original_region,
+                        } });
+                    },
+                    else => {},
+                }
+
+                // Create the e_anno_only expression
+                const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{} }, region);
+
+                // Create the annotation structure
+                const annotation = CIR.Annotation{
+                    .anno = type_anno_idx,
+                    .where = where_clauses,
+                };
+                const annotation_idx = try self.env.addAnnotation(annotation, region);
+
+                // Add the decl as a statement with the e_anno_only body
+                const stmt_idx = try self.env.addStatement(Statement{ .s_decl = .{
+                    .pattern = pattern_idx,
+                    .expr = anno_only_expr,
+                    .anno = annotation_idx,
+                } }, region);
                 mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = null };
             }
         },

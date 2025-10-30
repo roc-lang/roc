@@ -712,7 +712,7 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
-        .type_var_ending_in_underscore = .{
+        .type_var_starting_with_dollar = .{
             .name = rand_ident_idx(),
             .suggested_name = rand_ident_idx(),
             .region = rand_region(),

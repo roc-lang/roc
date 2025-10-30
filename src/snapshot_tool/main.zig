@@ -513,6 +513,7 @@ fn generateAllReports(
             &solver.snapshots,
             snapshot_path,
             empty_modules,
+            &solver.import_mapping,
         );
         defer report_builder.deinit();
 

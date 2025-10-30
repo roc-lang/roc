@@ -853,7 +853,7 @@ pub const PackageEnv = struct {
 
         // Build reports from problems
         const check_diag_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        var rb = ReportBuilder.init(self.gpa, env, env, &checker.snapshots, st.path, imported_envs.items);
+        var rb = ReportBuilder.init(self.gpa, env, env, &checker.snapshots, st.path, imported_envs.items, &checker.import_mapping);
         defer rb.deinit();
         for (checker.problems.problems.items) |prob| {
             const rep = rb.build(prob) catch continue;

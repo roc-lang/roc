@@ -1194,6 +1194,23 @@ test "check type - static dispatch - concrete - indirection 2" {
     );
 }
 
+test "check type - static dispatch - fail if not in type signature" {
+    const source =
+        \\module []
+        \\
+        \\main : a -> a
+        \\main = |a| {
+        \\  _val = a.method()
+        \\  a
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .fail,
+        "MISSING METHOD",
+    );
+}
+
 // helpers - module //
 
 const ModuleExpectation = union(enum) {

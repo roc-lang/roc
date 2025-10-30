@@ -104,7 +104,7 @@ deepNested : Maybe(Result(List(Dict(Str, a)), _b)) -> a
 
 
 **TOO MANY ARGS**
-The type _Builtin.Dict_ expects  argument, but got  instead.
+The type _Dict_ expects  argument, but got  instead.
 **type_app_complex_nested.md:18:44:18:63:**
 ```roc
 ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
@@ -114,7 +114,7 @@ ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
 
 
 **TOO MANY ARGS**
-The type _Builtin.Dict_ expects  argument, but got  instead.
+The type _Dict_ expects  argument, but got  instead.
 **type_app_complex_nested.md:4:41:4:61:**
 ```roc
 processComplex : Result(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)

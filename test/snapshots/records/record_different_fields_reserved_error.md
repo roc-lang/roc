@@ -49,6 +49,7 @@ UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:5:7:7
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:7:7:8
 DOES NOT EXIST - record_different_fields_reserved_error.md:7:9:7:19
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:19:7:20
+UNUSED VARIABLE - record_different_fields_reserved_error.md:3:5:3:12
 UNUSED VALUE - record_different_fields_reserved_error.md:4:13:4:29
 UNUSED VALUE - record_different_fields_reserved_error.md:5:13:5:26
 # PROBLEMS
@@ -424,6 +425,18 @@ I don't recognize this syntax.
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
+**UNUSED VARIABLE**
+Variable `when` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_when` to suppress this warning.
+The unused variable is declared here:
+**record_different_fields_reserved_error.md:3:5:3:12:**
+```roc
+    when: "pattern match",
+```
+    ^^^^^^^
+
+
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
 **record_different_fields_reserved_error.md:4:13:4:29:**
@@ -509,8 +522,9 @@ EndOfFile,
 (e-block
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-type-anno (name "when")
-		(ty-malformed))
+	(s-let
+		(p-assign (ident "when"))
+		(e-anno-only))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
