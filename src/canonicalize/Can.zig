@@ -2068,38 +2068,6 @@ fn introduceItemsAliased(
     const exposed_items_slice = self.env.store.sliceExposedItems(exposed_items_span);
     const current_scope = self.currentScope();
 
-    // Check for conflicts with auto-imported types BEFORE checking if module exists
-    // This ensures we report DUPLICATE DEFINITION even for non-existent modules
-    for (exposed_items_slice) |exposed_item_idx| {
-        const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
-        const local_ident = exposed_item.alias orelse exposed_item.name;
-        const local_name_text = self.env.getIdent(local_ident);
-        const is_type = local_name_text.len > 0 and local_name_text[0] >= 'A' and local_name_text[0] <= 'Z';
-
-        // If it's a type, check if it already exists in type_bindings (e.g., from auto-import)
-        if (is_type) {
-            if (current_scope.type_bindings.get(local_ident)) |existing_binding| {
-                switch (existing_binding) {
-                    .external_nominal => |ext| {
-                        // This type is already in scope (likely auto-imported)
-                        // Emit a DUPLICATE DEFINITION error
-                        try self.env.pushDiagnostic(Diagnostic{
-                            .shadowing_warning = .{
-                                .ident = local_ident,
-                                .region = import_region,
-                                .original_region = ext.origin_region,
-                            },
-                        });
-                        // Don't return - continue processing other items and let module-not-found error also be reported
-                    },
-                    else => {
-                        // Other types of bindings - no conflict
-                    },
-                }
-            }
-        }
-    }
-
     if (self.module_envs) |envs_map| {
         const module_entry = envs_map.get(module_name) orelse return;
         const module_env = module_entry.env;
@@ -2112,7 +2080,7 @@ fn introduceItemsAliased(
                         .module_name = module_name,
                         .original_name = main_type_ident,
                     };
-                    try self.scopeIntroduceExposedItem(module_alias, item_info, import_region);
+                    try self.scopeIntroduceExposedItem(module_alias, item_info);
 
                     // Get the correct target_node_idx using statement_idx from module_envs
                     const target_node_idx = blk: {
@@ -2184,7 +2152,7 @@ fn introduceItemsAliased(
                 .module_name = module_name,
                 .original_name = exposed_item.name,
             };
-            try self.scopeIntroduceExposedItem(item_name, item_info, import_region);
+            try self.scopeIntroduceExposedItem(item_name, item_info);
         }
     } else {
         // No module_envs provided, introduce all items without validation
@@ -2195,7 +2163,7 @@ fn introduceItemsAliased(
                 .module_name = module_name,
                 .original_name = exposed_item.name,
             };
-            try self.scopeIntroduceExposedItem(item_name, item_info, import_region);
+            try self.scopeIntroduceExposedItem(item_name, item_info);
         }
     }
 }
@@ -2213,38 +2181,6 @@ fn introduceItemsUnaliased(
 ) std.mem.Allocator.Error!void {
     const exposed_items_slice = self.env.store.sliceExposedItems(exposed_items_span);
     const current_scope = self.currentScope();
-
-    // Check for conflicts with auto-imported types BEFORE checking if module exists
-    // This ensures we report DUPLICATE DEFINITION even for non-existent modules
-    for (exposed_items_slice) |exposed_item_idx| {
-        const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
-        const local_ident = exposed_item.alias orelse exposed_item.name;
-        const local_name_text = self.env.getIdent(local_ident);
-        const is_type = local_name_text.len > 0 and local_name_text[0] >= 'A' and local_name_text[0] <= 'Z';
-
-        // If it's a type, check if it already exists in type_bindings (e.g., from auto-import)
-        if (is_type) {
-            if (current_scope.type_bindings.get(local_ident)) |existing_binding| {
-                switch (existing_binding) {
-                    .external_nominal => |ext| {
-                        // This type is already in scope (likely auto-imported)
-                        // Emit a DUPLICATE DEFINITION error
-                        try self.env.pushDiagnostic(Diagnostic{
-                            .shadowing_warning = .{
-                                .ident = local_ident,
-                                .region = import_region,
-                                .original_region = ext.origin_region,
-                            },
-                        });
-                        // Don't return - continue processing other items and let module-not-found error also be reported
-                    },
-                    else => {
-                        // Other types of bindings - no conflict
-                    },
-                }
-            }
-        }
-    }
 
     if (self.module_envs) |envs_map| {
         const module_entry = envs_map.get(module_name) orelse return;
@@ -2298,7 +2234,7 @@ fn introduceItemsUnaliased(
                     .module_name = module_name,
                     .original_name = exposed_item.name,
                 };
-                try self.scopeIntroduceExposedItem(local_ident, item_info, import_region);
+                try self.scopeIntroduceExposedItem(local_ident, item_info);
 
                 if (is_type_name) {
                     try self.setExternalTypeBinding(
@@ -2337,7 +2273,7 @@ fn introduceItemsUnaliased(
                 .module_name = module_name,
                 .original_name = exposed_item.name,
             };
-            try self.scopeIntroduceExposedItem(local_ident, item_info, import_region);
+            try self.scopeIntroduceExposedItem(local_ident, item_info);
 
             if (local_name_text.len > 0 and local_name_text[0] >= 'A' and local_name_text[0] <= 'Z') {
                 try self.setExternalTypeBinding(
@@ -7910,38 +7846,10 @@ fn scopeLookupExposedItem(self: *const Self, item_name: Ident.Idx) ?Scope.Expose
 }
 
 /// Introduce an exposed item into the current scope
-pub fn scopeIntroduceExposedItem(self: *Self, item_name: Ident.Idx, item_info: Scope.ExposedItemInfo, region: Region) std.mem.Allocator.Error!void {
+pub fn scopeIntroduceExposedItem(self: *Self, item_name: Ident.Idx, item_info: Scope.ExposedItemInfo) std.mem.Allocator.Error!void {
     const gpa = self.env.gpa;
 
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-
-    // Check if this is a type name (starts with uppercase letter)
-    const name_text = self.env.getIdent(item_name);
-    const is_type = name_text.len > 0 and name_text[0] >= 'A' and name_text[0] <= 'Z';
-
-    // If it's a type, check if it already exists in type_bindings (e.g., from auto-import)
-    if (is_type) {
-        if (current_scope.type_bindings.get(item_name)) |existing_binding| {
-            // Check if it's from an auto-imported type (external_nominal from Builtin)
-            switch (existing_binding) {
-                .external_nominal => |ext| {
-                    // This type is already in scope (likely auto-imported)
-                    // Emit a DUPLICATE DEFINITION error
-                    try self.env.pushDiagnostic(Diagnostic{
-                        .shadowing_warning = .{
-                            .ident = item_name,
-                            .region = region,
-                            .original_region = ext.origin_region,
-                        },
-                    });
-                    return; // Don't add this type to scope
-                },
-                else => {
-                    // Other types of bindings - fall through to normal handling
-                },
-            }
-        }
-    }
 
     // Simplified introduction without parent lookup for now
     const result = try current_scope.introduceExposedItem(gpa, item_name, item_info, null);
