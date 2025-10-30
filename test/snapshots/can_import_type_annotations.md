@@ -46,6 +46,7 @@ combineResults = |result1, result2|
 # EXPECTED
 MODULE NOT FOUND - can_import_type_annotations.md:1:1:1:56
 MODULE NOT FOUND - can_import_type_annotations.md:2:1:2:17
+DUPLICATE DEFINITION - can_import_type_annotations.md:3:1:3:38
 MODULE NOT FOUND - can_import_type_annotations.md:3:1:3:38
 UNDECLARED TYPE - can_import_type_annotations.md:5:18:5:25
 UNDECLARED TYPE - can_import_type_annotations.md:5:29:5:37
@@ -79,6 +80,24 @@ You're attempting to use this module here:
 import json.Json
 ```
 ^^^^^^^^^^^^^^^^
+
+
+**DUPLICATE DEFINITION**
+The name `Result` is being redeclared in this scope.
+
+The redeclaration is here:
+**can_import_type_annotations.md:3:1:3:38:**
+```roc
+import utils.Result exposing [Result]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+But `Result` was already defined here:
+**can_import_type_annotations.md:1:1:1:1:**
+```roc
+import http.Client as Http exposing [Request, Response]
+```
+^
 
 
 **MODULE NOT FOUND**
