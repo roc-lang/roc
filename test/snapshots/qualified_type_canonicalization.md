@@ -58,16 +58,16 @@ MODULE NOT FOUND - qualified_type_canonicalization.md:10:1:10:40
 MODULE NOT FOUND - qualified_type_canonicalization.md:11:1:11:32
 UNDECLARED TYPE - qualified_type_canonicalization.md:15:19:15:24
 MODULE NOT IMPORTED - qualified_type_canonicalization.md:22:23:22:44
-UNDEFINED VARIABLE - qualified_type_canonicalization.md:23:23:23:32
+DOES NOT EXIST - qualified_type_canonicalization.md:23:23:23:32
 MISSING NESTED TYPE - qualified_type_canonicalization.md:26:14:26:27
 UNDECLARED TYPE - qualified_type_canonicalization.md:31:16:31:21
 UNUSED VARIABLE - qualified_type_canonicalization.md:35:17:35:22
 MISSING NESTED TYPE - qualified_type_canonicalization.md:39:13:39:26
 MODULE NOT IMPORTED - qualified_type_canonicalization.md:39:55:39:76
 UNDECLARED TYPE - qualified_type_canonicalization.md:42:9:42:15
-UNDEFINED VARIABLE - qualified_type_canonicalization.md:42:27:42:42
+DOES NOT EXIST - qualified_type_canonicalization.md:42:27:42:42
 UNDECLARED TYPE - qualified_type_canonicalization.md:43:9:43:15
-UNDEFINED VARIABLE - qualified_type_canonicalization.md:43:28:43:41
+DOES NOT EXIST - qualified_type_canonicalization.md:43:28:43:41
 UNUSED VARIABLE - qualified_type_canonicalization.md:43:20:43:23
 # PROBLEMS
 **PARSE ERROR**
@@ -159,9 +159,8 @@ multiLevelQualified : ModuleA.ModuleB.TypeC
                       ^^^^^^^^^^^^^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `new` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`TypeC.new` does not exist.
 
 **qualified_type_canonicalization.md:23:23:23:32:**
 ```roc
@@ -237,9 +236,8 @@ This type is referenced here:
         ^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `fromColor` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`TypeC.fromColor` does not exist.
 
 **qualified_type_canonicalization.md:42:27:42:42:**
 ```roc
@@ -259,9 +257,8 @@ This type is referenced here:
         ^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `default` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`TypeC.default` does not exist.
 
 **qualified_type_canonicalization.md:43:28:43:41:**
 ```roc
@@ -471,7 +468,7 @@ transform = |result|
 			(ty-lookup (name "DataType") (external-module "ExternalModule"))))
 	(d-let
 		(p-assign (ident "multiLevelQualified"))
-		(e-runtime-error (tag "ident_not_in_scope"))
+		(e-runtime-error (tag "qualified_ident_does_not_exist"))
 		(annotation
 			(ty-malformed)))
 	(d-let
@@ -524,7 +521,7 @@ transform = |result|
 										(p-runtime-error (tag "undeclared_type"))))
 								(value
 									(e-call
-										(e-runtime-error (tag "ident_not_in_scope"))
+										(e-runtime-error (tag "qualified_ident_does_not_exist"))
 										(e-lookup-local
 											(p-assign (ident "rgb"))))))
 							(branch
@@ -532,7 +529,7 @@ transform = |result|
 									(pattern (degenerate false)
 										(p-runtime-error (tag "undeclared_type"))))
 								(value
-									(e-runtime-error (tag "ident_not_in_scope")))))))))
+									(e-runtime-error (tag "qualified_ident_does_not_exist")))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)

@@ -78,13 +78,13 @@ UNDECLARED TYPE - can_import_exposing_types.md:20:15:20:21
 UNDECLARED TYPE - can_import_exposing_types.md:20:28:20:33
 UNDECLARED TYPE - can_import_exposing_types.md:20:50:20:55
 UNDECLARED TYPE - can_import_exposing_types.md:20:58:20:63
-UNDEFINED VARIABLE - can_import_exposing_types.md:22:5:22:16
+DOES NOT EXIST - can_import_exposing_types.md:22:5:22:16
 UNDEFINED VARIABLE - can_import_exposing_types.md:24:13:24:30
 UNDECLARED TYPE - can_import_exposing_types.md:35:16:35:22
 UNDEFINED VARIABLE - can_import_exposing_types.md:36:25:36:40
 UNDECLARED TYPE - can_import_exposing_types.md:39:18:39:26
 UNDEFINED VARIABLE - can_import_exposing_types.md:42:23:42:42
-UNDEFINED VARIABLE - can_import_exposing_types.md:43:23:43:37
+DOES NOT EXIST - can_import_exposing_types.md:43:23:43:37
 UNDECLARED TYPE - can_import_exposing_types.md:47:25:47:30
 UNDECLARED TYPE - can_import_exposing_types.md:47:32:47:37
 UNDECLARED TYPE - can_import_exposing_types.md:47:40:47:46
@@ -308,9 +308,8 @@ processData : Config, List(Value) -> Result(List(Value), Error)
                                                          ^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `mapTry` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`List.mapTry` does not exist.
 
 **can_import_exposing_types.md:22:5:22:16:**
 ```roc
@@ -374,9 +373,8 @@ Is there an `import` or `exposing` missing up-top?
                       ^^^^^^^^^^^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `toString` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Error.toString` does not exist.
 
 **can_import_exposing_types.md:43:23:43:37:**
 ```roc
@@ -800,7 +798,7 @@ combineResults = |jsonResult, httpStatus|
 				(p-assign (ident "config"))
 				(p-assign (ident "values")))
 			(e-call
-				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-runtime-error (tag "qualified_ident_does_not_exist"))
 				(e-lookup-local
 					(p-assign (ident "values")))
 				(e-closure
@@ -869,7 +867,7 @@ combineResults = |jsonResult, httpStatus|
 										(p-applied-tag)))
 								(value
 									(e-call
-										(e-runtime-error (tag "ident_not_in_scope"))
+										(e-runtime-error (tag "qualified_ident_does_not_exist"))
 										(e-lookup-local
 											(p-assign (ident "error")))))))))))
 		(annotation

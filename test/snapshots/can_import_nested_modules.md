@@ -35,13 +35,13 @@ MODULE NOT FOUND - can_import_nested_modules.md:1:1:1:26
 MODULE NOT FOUND - can_import_nested_modules.md:2:1:2:36
 MODULE NOT FOUND - can_import_nested_modules.md:3:1:3:46
 MODULE NOT IMPORTED - can_import_nested_modules.md:6:15:6:30
-UNDEFINED VARIABLE - can_import_nested_modules.md:7:26:7:41
+DOES NOT EXIST - can_import_nested_modules.md:7:26:7:41
 UNDEFINED VARIABLE - can_import_nested_modules.md:11:29:11:43
 MODULE NOT IMPORTED - can_import_nested_modules.md:14:15:14:37
 MODULE NOT IMPORTED - can_import_nested_modules.md:14:58:14:77
-UNDEFINED VARIABLE - can_import_nested_modules.md:16:5:16:37
+DOES NOT EXIST - can_import_nested_modules.md:16:5:16:37
 UNDEFINED VARIABLE - can_import_nested_modules.md:20:23:20:30
-UNDEFINED VARIABLE - can_import_nested_modules.md:20:37:20:58
+DOES NOT EXIST - can_import_nested_modules.md:20:37:20:58
 UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 # PROBLEMS
 **MODULE NOT FOUND**
@@ -88,9 +88,8 @@ parseConfig : Config.Settings -> Str
               ^^^^^^^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `toString` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Config.toString` does not exist.
 
 **can_import_nested_modules.md:7:26:7:41:**
 ```roc
@@ -132,9 +131,8 @@ processData : Config.Parser.Advanced, Str -> Result(Str, Config.Parser.Error)
                                                          ^^^^^^^^^^^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `parseWith` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Config.Parser.Advanced.parseWith` does not exist.
 
 **can_import_nested_modules.md:16:5:16:37:**
 ```roc
@@ -154,9 +152,8 @@ formatOutput = |text| padLeft(text, Config.defaultPadding)
                       ^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `defaultPadding` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Config.defaultPadding` does not exist.
 
 **can_import_nested_modules.md:20:37:20:58:**
 ```roc
@@ -317,7 +314,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(args
 				(p-assign (ident "settings")))
 			(e-call
-				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-runtime-error (tag "qualified_ident_does_not_exist"))
 				(e-lookup-local
 					(p-assign (ident "settings")))))
 		(annotation
@@ -348,7 +345,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(p-assign (ident "advancedConfig"))
 				(p-assign (ident "input")))
 			(e-call
-				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-runtime-error (tag "qualified_ident_does_not_exist"))
 				(e-lookup-local
 					(p-assign (ident "advancedConfig")))
 				(e-lookup-local
@@ -369,7 +366,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local
 					(p-assign (ident "text")))
-				(e-runtime-error (tag "ident_not_in_scope"))))
+				(e-runtime-error (tag "qualified_ident_does_not_exist"))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))

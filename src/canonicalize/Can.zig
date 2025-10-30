@@ -2682,8 +2682,15 @@ pub fn canonicalizeExpr(
                             break :blk null;
                         } orelse {
                             // Not a module alias and not an auto-imported module
-                            // Continue to normal identifier lookup
-                            break :blk_qualified;
+                            // This is a qualified identifier with an invalid qualifier
+                            // Report the proper "DOES NOT EXIST" error for the full qualified name
+                            return CanonicalizedExpr{
+                                .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .qualified_ident_does_not_exist = .{
+                                    .ident = qualified_ident,
+                                    .region = region,
+                                } }),
+                                .free_vars = null,
+                            };
                         };
 
                         {

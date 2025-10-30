@@ -16,18 +16,18 @@ match events {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - complex_list_tags.md:1:7:1:13
-UNDEFINED VARIABLE - complex_list_tags.md:3:42:3:51
-UNDEFINED VARIABLE - complex_list_tags.md:3:59:3:68
-UNDEFINED VARIABLE - complex_list_tags.md:4:59:4:68
-UNDEFINED VARIABLE - complex_list_tags.md:4:69:4:77
-UNDEFINED VARIABLE - complex_list_tags.md:5:62:5:71
-UNDEFINED VARIABLE - complex_list_tags.md:5:79:5:88
-UNDEFINED VARIABLE - complex_list_tags.md:5:101:5:110
-UNDEFINED VARIABLE - complex_list_tags.md:5:119:5:128
+DOES NOT EXIST - complex_list_tags.md:3:42:3:51
+DOES NOT EXIST - complex_list_tags.md:3:59:3:68
+DOES NOT EXIST - complex_list_tags.md:4:59:4:68
+DOES NOT EXIST - complex_list_tags.md:4:69:4:77
+DOES NOT EXIST - complex_list_tags.md:5:62:5:71
+DOES NOT EXIST - complex_list_tags.md:5:79:5:88
+DOES NOT EXIST - complex_list_tags.md:5:101:5:110
+DOES NOT EXIST - complex_list_tags.md:5:119:5:128
 UNUSED VARIABLE - complex_list_tags.md:1:1:1:1
-UNDEFINED VARIABLE - complex_list_tags.md:6:65:6:74
-UNDEFINED VARIABLE - complex_list_tags.md:6:100:6:109
-UNDEFINED VARIABLE - complex_list_tags.md:6:116:6:125
+DOES NOT EXIST - complex_list_tags.md:6:65:6:74
+DOES NOT EXIST - complex_list_tags.md:6:100:6:109
+DOES NOT EXIST - complex_list_tags.md:6:116:6:125
 UNUSED VARIABLE - complex_list_tags.md:1:1:1:1
 # PROBLEMS
 **UNDEFINED VARIABLE**
@@ -41,9 +41,8 @@ match events {
       ^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `toStr` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Num.toStr` does not exist.
 
 **complex_list_tags.md:3:42:3:51:**
 ```roc
@@ -52,9 +51,8 @@ Is there an `import` or `exposing` missing up-top?
                                          ^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `toStr` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Num.toStr` does not exist.
 
 **complex_list_tags.md:3:59:3:68:**
 ```roc
@@ -63,9 +61,8 @@ Is there an `import` or `exposing` missing up-top?
                                                           ^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `toStr` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Num.toStr` does not exist.
 
 **complex_list_tags.md:4:59:4:68:**
 ```roc
@@ -74,9 +71,8 @@ Is there an `import` or `exposing` missing up-top?
                                                           ^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `len` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`List.len` does not exist.
 
 **complex_list_tags.md:4:69:4:77:**
 ```roc
@@ -85,9 +81,8 @@ Is there an `import` or `exposing` missing up-top?
                                                                     ^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `toStr` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Num.toStr` does not exist.
 
 **complex_list_tags.md:5:62:5:71:**
 ```roc
@@ -96,9 +91,8 @@ Is there an `import` or `exposing` missing up-top?
                                                              ^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `toStr` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Num.toStr` does not exist.
 
 **complex_list_tags.md:5:79:5:88:**
 ```roc
@@ -107,9 +101,8 @@ Is there an `import` or `exposing` missing up-top?
                                                                               ^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `toStr` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Num.toStr` does not exist.
 
 **complex_list_tags.md:5:101:5:110:**
 ```roc
@@ -118,9 +111,8 @@ Is there an `import` or `exposing` missing up-top?
                                                                                                     ^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `toStr` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Num.toStr` does not exist.
 
 **complex_list_tags.md:5:119:5:128:**
 ```roc
@@ -141,9 +133,8 @@ match events {
 ^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `toStr` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Num.toStr` does not exist.
 
 **complex_list_tags.md:6:65:6:74:**
 ```roc
@@ -152,9 +143,8 @@ Is there an `import` or `exposing` missing up-top?
                                                                 ^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `toStr` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Num.toStr` does not exist.
 
 **complex_list_tags.md:6:100:6:109:**
 ```roc
@@ -163,9 +153,8 @@ Is there an `import` or `exposing` missing up-top?
                                                                                                    ^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `toStr` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Num.toStr` does not exist.
 
 **complex_list_tags.md:6:116:6:125:**
 ```roc
@@ -327,12 +316,12 @@ match events {
 					(e-string
 						(e-literal (string "single click at ("))
 						(e-call
-							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-runtime-error (tag "qualified_ident_does_not_exist"))
 							(e-lookup-local
 								(p-assign (ident "x"))))
 						(e-literal (string ", "))
 						(e-call
-							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-runtime-error (tag "qualified_ident_does_not_exist"))
 							(e-lookup-local
 								(p-assign (ident "y"))))
 						(e-literal (string ")")))))
@@ -351,9 +340,9 @@ match events {
 							(p-assign (ident "key")))
 						(e-literal (string " pressed, "))
 						(e-call
-							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-runtime-error (tag "qualified_ident_does_not_exist"))
 							(e-call
-								(e-runtime-error (tag "ident_not_in_scope"))
+								(e-runtime-error (tag "qualified_ident_does_not_exist"))
 								(e-lookup-local
 									(p-assign (ident "rest")))))
 						(e-literal (string " more events")))))
@@ -370,22 +359,22 @@ match events {
 					(e-string
 						(e-literal (string "moved "))
 						(e-call
-							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-runtime-error (tag "qualified_ident_does_not_exist"))
 							(e-lookup-local
 								(p-assign (ident "dx"))))
 						(e-literal (string ","))
 						(e-call
-							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-runtime-error (tag "qualified_ident_does_not_exist"))
 							(e-lookup-local
 								(p-assign (ident "dy"))))
 						(e-literal (string " then "))
 						(e-call
-							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-runtime-error (tag "qualified_ident_does_not_exist"))
 							(e-lookup-local
 								(p-assign (ident "dx2"))))
 						(e-literal (string ","))
 						(e-call
-							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-runtime-error (tag "qualified_ident_does_not_exist"))
 							(e-lookup-local
 								(p-assign (ident "dy2"))))
 						(e-literal (string "")))))
@@ -402,17 +391,17 @@ match events {
 					(e-string
 						(e-literal (string "scroll "))
 						(e-call
-							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-runtime-error (tag "qualified_ident_does_not_exist"))
 							(e-lookup-local
 								(p-assign (ident "amount"))))
 						(e-literal (string " then click at "))
 						(e-call
-							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-runtime-error (tag "qualified_ident_does_not_exist"))
 							(e-lookup-local
 								(p-assign (ident "x"))))
 						(e-literal (string ","))
 						(e-call
-							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-runtime-error (tag "qualified_ident_does_not_exist"))
 							(e-lookup-local
 								(p-assign (ident "y"))))
 						(e-literal (string "")))))

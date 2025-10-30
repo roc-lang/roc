@@ -24,7 +24,7 @@ main! = |_| {}
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - type_var_namespace.md:11:31:11:33
-UNDEFINED VARIABLE - type_var_namespace.md:11:14:11:24
+DOES NOT EXIST - type_var_namespace.md:11:14:11:24
 UNRECOGNIZED SYNTAX - type_var_namespace.md:11:31:11:33
 DOES NOT EXIST - type_var_namespace.md:11:34:11:52
 # PROBLEMS
@@ -39,9 +39,8 @@ Expressions can be identifiers, literals, function calls, or operators.
                               ^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `first` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`List.first` does not exist.
 
 **type_var_namespace.md:11:14:11:24:**
 ```roc
@@ -169,7 +168,7 @@ main! = |_| {}
 				(s-let
 					(p-assign (ident "result"))
 					(e-call
-						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-runtime-error (tag "qualified_ident_does_not_exist"))
 						(e-lookup-local
 							(p-assign (ident "list")))))
 				(s-expr

@@ -29,7 +29,7 @@ PARSE ERROR - multi_qualified_import.md:12:36:12:37
 PARSE ERROR - multi_qualified_import.md:12:37:12:38
 MODULE NOT FOUND - multi_qualified_import.md:1:1:1:41
 UNDECLARED TYPE - multi_qualified_import.md:3:16:3:23
-UNDEFINED VARIABLE - multi_qualified_import.md:4:16:4:45
+DOES NOT EXIST - multi_qualified_import.md:4:16:4:45
 MODULE NOT IMPORTED - multi_qualified_import.md:7:11:7:33
 UNUSED VARIABLE - multi_qualified_import.md:8:12:8:19
 MODULE NOT IMPORTED - multi_qualified_import.md:11:8:11:34
@@ -145,9 +145,8 @@ json_encoder : Encoder
                ^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `defaultEncoder` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Json.Core.Utf8.defaultEncoder` does not exist.
 
 **multi_qualified_import.md:4:16:4:45:**
 ```roc
@@ -270,7 +269,7 @@ data = json
 (can-ir
 	(d-let
 		(p-assign (ident "json_encoder"))
-		(e-runtime-error (tag "ident_not_in_scope"))
+		(e-runtime-error (tag "qualified_ident_does_not_exist"))
 		(annotation
 			(ty-malformed)))
 	(d-let
