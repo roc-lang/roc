@@ -1699,7 +1699,7 @@ fn importAliased(
     const alias = try self.resolveModuleAlias(alias_tok, module_name) orelse return null;
 
     // 3. Add to scope: alias -> module_name mapping
-    try self.scopeIntroduceModuleAlias(alias, module_name);
+    try self.scopeIntroduceModuleAlias(alias, module_name, import_region, exposed_items_span);
 
     // 4. Process type imports from this module
     try self.processTypeImports(module_name, alias);
@@ -1763,7 +1763,7 @@ fn importWithAlias(
     );
 
     // 2. Add to scope: alias -> module_name mapping
-    try self.scopeIntroduceModuleAlias(alias, module_name);
+    try self.scopeIntroduceModuleAlias(alias, module_name, import_region, exposed_items_span);
 
     // 3. Process type imports from this module
     try self.processTypeImports(module_name, alias);
@@ -7831,10 +7831,61 @@ fn scopeLookupModule(self: *const Self, alias_name: Ident.Idx) ?Ident.Idx {
 }
 
 /// Introduce a module alias into scope
-fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Ident.Idx) std.mem.Allocator.Error!void {
+fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Ident.Idx, import_region: Region, exposed_items_span: CIR.ExposedItem.Span) std.mem.Allocator.Error!void {
     const gpa = self.env.gpa;
 
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+
+    // Check if this alias conflicts with an existing type binding (e.g., auto-imported type)
+    const has_type_conflict = blk: {
+        if (current_scope.type_bindings.get(alias_name)) |_| {
+            break :blk true;
+        }
+
+        // Also check if it's a primitive builtin type (Str, List, Box, etc.)
+        const alias_text = self.env.getIdent(alias_name);
+        if (TypeAnno.Builtin.fromBytes(alias_text)) |_| {
+            break :blk true;
+        }
+
+        break :blk false;
+    };
+
+    if (has_type_conflict) {
+        // Check if any exposed items have the same name as the alias
+        // If so, skip the error here and let introduceItemsAliased handle it
+        const exposed_items_slice = self.env.store.sliceExposedItems(exposed_items_span);
+        for (exposed_items_slice) |exposed_item_idx| {
+            const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
+            const local_ident = exposed_item.alias orelse exposed_item.name;
+
+            if (local_ident.idx == alias_name.idx) {
+                // The alias has the same name as an exposed item, so skip reporting
+                // the error here - it will be reported by introduceItemsAliased
+                return;
+            }
+        }
+
+        // Get the original region if there's a type binding
+        const original_region = if (current_scope.type_bindings.get(alias_name)) |existing_binding|
+            switch (existing_binding) {
+                .external_nominal => |ext| ext.origin_region,
+                else => Region.zero(),
+            }
+        else
+            Region.zero();
+
+        try self.env.pushDiagnostic(Diagnostic{
+            .shadowing_warning = .{
+                .ident = alias_name,
+                .region = import_region,
+                .original_region = original_region,
+            },
+        });
+
+        // Don't add the duplicate binding
+        return;
+    }
 
     // Simplified introduction without parent lookup for now
     const result = try current_scope.introduceModuleAlias(gpa, alias_name, module_name, null);
@@ -7846,8 +7897,8 @@ fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Id
             try self.env.pushDiagnostic(Diagnostic{
                 .shadowing_warning = .{
                     .ident = alias_name,
-                    .region = Region.zero(), // TODO: get proper region
-                    .original_region = Region.zero(), // TODO: get proper region
+                    .region = import_region,
+                    .original_region = Region.zero(),
                 },
             });
             _ = shadowed_module; // Suppress unused variable warning
@@ -7858,8 +7909,8 @@ fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Id
             try self.env.pushDiagnostic(Diagnostic{
                 .shadowing_warning = .{
                     .ident = alias_name,
-                    .region = Region.zero(), // TODO: get proper region
-                    .original_region = Region.zero(), // TODO: get proper region
+                    .region = import_region,
+                    .original_region = Region.zero(),
                 },
             });
             _ = existing_module; // Suppress unused variable warning
