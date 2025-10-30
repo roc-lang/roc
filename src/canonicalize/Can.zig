@@ -332,6 +332,27 @@ pub fn setupAutoImportedBuiltinTypes(
                 });
             }
         }
+
+        // Also add primitive builtin types (Str, List, Box) to type_bindings
+        // so we can detect conflicts with O(1) HashMap lookup instead of string scanning
+
+        const primitive_builtins = [_][]const u8{ "Str", "List", "Box" };
+        for (primitive_builtins) |type_name_text| {
+            const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
+
+            // Add a minimal type binding to detect conflicts
+            // These primitives don't have module entries, so we use a marker binding
+            try current_scope.type_bindings.put(gpa, type_ident, Scope.TypeBinding{
+                .external_nominal = .{
+                    .module_ident = type_ident,
+                    .original_ident = type_ident,
+                    .target_node_idx = null,
+                    .import_idx = @enumFromInt(0), // Dummy import index for primitives
+                    .origin_region = zero_region,
+                    .module_not_found = false,
+                },
+            });
+        }
     }
 }
 
@@ -7836,22 +7857,9 @@ fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Id
 
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
-    // Check if this alias conflicts with an existing type binding (e.g., auto-imported type)
-    const has_type_conflict = blk: {
-        if (current_scope.type_bindings.get(alias_name)) |_| {
-            break :blk true;
-        }
-
-        // Also check if it's a primitive builtin type (Str, List, Box, etc.)
-        const alias_text = self.env.getIdent(alias_name);
-        if (TypeAnno.Builtin.fromBytes(alias_text)) |_| {
-            break :blk true;
-        }
-
-        break :blk false;
-    };
-
-    if (has_type_conflict) {
+    // Check if this alias conflicts with an existing type binding (e.g., auto-imported type or primitive builtin)
+    // Primitive builtins (Str, List, Box) are now added to type_bindings in setupAutoImportedBuiltinTypes
+    if (current_scope.type_bindings.get(alias_name)) |existing_binding| {
         // Check if any exposed items have the same name as the alias
         // If so, skip the error here and let introduceItemsAliased handle it
         const exposed_items_slice = self.env.store.sliceExposedItems(exposed_items_span);
@@ -7866,14 +7874,11 @@ fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Id
             }
         }
 
-        // Get the original region if there's a type binding
-        const original_region = if (current_scope.type_bindings.get(alias_name)) |existing_binding|
-            switch (existing_binding) {
-                .external_nominal => |ext| ext.origin_region,
-                else => Region.zero(),
-            }
-        else
-            Region.zero();
+        // Get the original region from the existing binding
+        const original_region = switch (existing_binding) {
+            .external_nominal => |ext| ext.origin_region,
+            else => Region.zero(),
+        };
 
         try self.env.pushDiagnostic(Diagnostic{
             .shadowing_warning = .{
