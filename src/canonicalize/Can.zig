@@ -2069,7 +2069,31 @@ fn introduceItemsAliased(
     const current_scope = self.currentScope();
 
     if (self.module_envs) |envs_map| {
-        const module_entry = envs_map.get(module_name) orelse return;
+        const module_entry = envs_map.get(module_name) orelse {
+            // Module not found, but still check for duplicate type names with auto-imports
+            // This ensures we report DUPLICATE DEFINITION even for non-existent modules
+            for (exposed_items_slice) |exposed_item_idx| {
+                const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
+                const local_ident = exposed_item.alias orelse exposed_item.name;
+
+                // Check if this conflicts with an existing type binding (e.g., auto-imported type)
+                if (current_scope.type_bindings.get(local_ident)) |existing_binding| {
+                    const original_region = switch (existing_binding) {
+                        .external_nominal => |ext| ext.origin_region,
+                        else => Region.zero(),
+                    };
+
+                    try self.env.pushDiagnostic(Diagnostic{
+                        .shadowing_warning = .{
+                            .ident = local_ident,
+                            .region = import_region,
+                            .original_region = original_region,
+                        },
+                    });
+                }
+            }
+            return;
+        };
         const module_env = module_entry.env;
 
         // Auto-expose the module's main type for type modules
@@ -2183,7 +2207,31 @@ fn introduceItemsUnaliased(
     const current_scope = self.currentScope();
 
     if (self.module_envs) |envs_map| {
-        const module_entry = envs_map.get(module_name) orelse return;
+        const module_entry = envs_map.get(module_name) orelse {
+            // Module not found, but still check for duplicate type names with auto-imports
+            // This ensures we report DUPLICATE DEFINITION even for non-existent modules
+            for (exposed_items_slice) |exposed_item_idx| {
+                const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
+                const local_ident = exposed_item.alias orelse exposed_item.name;
+
+                // Check if this conflicts with an existing type binding (e.g., auto-imported type)
+                if (current_scope.type_bindings.get(local_ident)) |existing_binding| {
+                    const original_region = switch (existing_binding) {
+                        .external_nominal => |ext| ext.origin_region,
+                        else => Region.zero(),
+                    };
+
+                    try self.env.pushDiagnostic(Diagnostic{
+                        .shadowing_warning = .{
+                            .ident = local_ident,
+                            .region = import_region,
+                            .original_region = original_region,
+                        },
+                    });
+                }
+            }
+            return;
+        };
         const module_env = module_entry.env;
 
         // No auto-expose of main type - only process explicitly exposed items
@@ -7906,6 +7954,27 @@ fn setExternalTypeBinding(
     origin_region: Region,
     module_found_status: ModuleFoundStatus,
 ) !void {
+    // Check if type already exists in this scope (mirrors Scope.introduceTypeDecl logic)
+    if (scope.type_bindings.get(local_ident)) |existing_binding| {
+        // Extract the original region from the existing binding for the diagnostic
+        const original_region = switch (existing_binding) {
+            .local_nominal, .local_alias, .associated_nominal => Region.zero(),
+            .external_nominal => |ext| ext.origin_region,
+        };
+
+        // Report duplicate definition error
+        try self.env.pushDiagnostic(Diagnostic{
+            .shadowing_warning = .{
+                .ident = local_ident,
+                .region = origin_region,
+                .original_region = original_region,
+            },
+        });
+
+        // Don't add the duplicate binding
+        return;
+    }
+
     try scope.type_bindings.put(self.env.gpa, local_ident, Scope.TypeBinding{
         .external_nominal = .{
             .module_ident = module_ident,

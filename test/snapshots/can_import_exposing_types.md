@@ -64,6 +64,7 @@ UNDECLARED TYPE - can_import_exposing_types.md:30:18:30:24
 UNDECLARED TYPE - can_import_exposing_types.md:31:23:31:31
 MODULE NOT FOUND - can_import_exposing_types.md:1:1:1:49
 MODULE NOT FOUND - can_import_exposing_types.md:2:1:2:64
+DUPLICATE DEFINITION - can_import_exposing_types.md:3:1:3:38
 MODULE NOT FOUND - can_import_exposing_types.md:3:1:3:38
 UNDECLARED TYPE - can_import_exposing_types.md:6:27:6:32
 UNDECLARED TYPE - can_import_exposing_types.md:6:34:6:39
@@ -144,6 +145,24 @@ You're attempting to use this module here:
 import http.Client as Http exposing [Request, Response, Status]
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**DUPLICATE DEFINITION**
+The name `Result` is being redeclared in this scope.
+
+The redeclaration is here:
+**can_import_exposing_types.md:3:1:3:38:**
+```roc
+import utils.Result exposing [Result]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+But `Result` was already defined here:
+**can_import_exposing_types.md:1:1:1:1:**
+```roc
+import json.Json exposing [Value, Error, Config]
+```
+^
 
 
 **MODULE NOT FOUND**
