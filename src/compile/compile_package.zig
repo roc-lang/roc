@@ -574,7 +574,7 @@ pub const PackageEnv = struct {
 
         // Convert parse diagnostics to reports
         for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
-            const report = try parse_ast.tokenizeDiagnosticToReport(diagnostic, self.gpa);
+            const report = try parse_ast.tokenizeDiagnosticToReport(diagnostic, self.gpa, st.path);
             try st.reports.append(self.gpa, report);
         }
         for (parse_ast.parse_diagnostics.items) |diagnostic| {

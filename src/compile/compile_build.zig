@@ -770,7 +770,7 @@ pub const BuildEnv = struct {
             const module_name = file_abs;
 
             for (ast.tokenize_diagnostics.items) |diagnostic| {
-                const report = try ast.tokenizeDiagnosticToReport(diagnostic, self.gpa);
+                const report = try ast.tokenizeDiagnosticToReport(diagnostic, self.gpa, file_abs);
                 self.sink.emitReport(pkg_name, module_name, report);
             }
             for (ast.parse_diagnostics.items) |diagnostic| {

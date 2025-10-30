@@ -15,7 +15,7 @@ type=expr
 }
 ~~~
 # EXPECTED
-STRAY DOLLAR SIGN - :0:0:0:0
+STRAY DOLLAR SIGN - record_different_fields_error.md:6:10:6:11
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_error.md:2:20:2:21
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:2:21:2:39
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:2:39:2:40
@@ -67,6 +67,11 @@ UNUSED VALUE - record_different_fields_error.md:7:19:7:30
 **STRAY DOLLAR SIGN**
 Dollar sign ($) is only allowed at the very beginning of a name, not in the middle or at the end.
 
+**record_different_fields_error.md:6:10:6:11:**
+```roc
+    field$special: "dollar",
+```
+         ^
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**

@@ -9,7 +9,7 @@ platform"
 requires{}{n:0[import S	exposing[
 ~~~
 # EXPECTED
-UNCLOSED STRING - :0:0:0:0
+UNCLOSED STRING - fuzz_crash_061.md:1:9:1:10
 UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_061.md:2:14:2:15
 PARSE ERROR - fuzz_crash_061.md:2:11:2:12
 PARSE ERROR - fuzz_crash_061.md:2:16:2:22
@@ -17,6 +17,7 @@ PARSE ERROR - fuzz_crash_061.md:2:16:2:22
 **UNCLOSED STRING**
 This string is missing a closing quote.
 
+**fuzz_crash_061.md:1:9:1:10:**
 ```roc
 platform"
 ```

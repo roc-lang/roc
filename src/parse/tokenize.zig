@@ -831,7 +831,8 @@ pub const Cursor = struct {
                 // Allow $ as a valid identifier character
                 if (c == '$' and self.pos > start_pos) {
                     // But warn if it's not at the start (pos > start_pos means we've moved)
-                    self.pushMessageHere(.DollarInMiddleOfIdentifier);
+                    // Use pushMessage to specify the exact location of the $ character
+                    self.pushMessage(.DollarInMiddleOfIdentifier, self.pos, self.pos + 1);
                 }
                 self.pos += 1;
             } else if (c >= 0x80) {

@@ -116,7 +116,7 @@ pub fn deinit(self: *AST, gpa: std.mem.Allocator) void {
 }
 
 /// Convert a tokenize diagnostic to a Report for rendering
-pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, allocator: std.mem.Allocator) !reporting.Report {
+pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, allocator: std.mem.Allocator, filename: ?[]const u8) !reporting.Report {
     const title = switch (diagnostic.tag) {
         .MisplacedCarriageReturn => "MISPLACED CARRIAGE RETURN",
         .AsciiControl => "ASCII CONTROL CHARACTER",
@@ -172,7 +172,7 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            null, // No filename available for tokenize diagnostics
+            filename,
             self.env.source,
             env.line_starts.items.items,
         );

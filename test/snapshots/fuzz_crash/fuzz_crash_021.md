@@ -10,7 +10,7 @@ Fli/main.roc" }
 Pair(a, b+ : (
 ~~~
 # EXPECTED
-UNCLOSED STRING - :0:0:0:0
+UNCLOSED STRING - fuzz_crash_021.md:1:13:1:16
 PARSE ERROR - fuzz_crash_021.md:1:4:1:5
 PARSE ERROR - fuzz_crash_021.md:1:5:1:9
 PARSE ERROR - fuzz_crash_021.md:1:9:1:13
@@ -25,6 +25,7 @@ TYPE MODULE MISSING MATCHING TYPE - fuzz_crash_021.md:1:1:3:15
 **UNCLOSED STRING**
 This string is missing a closing quote.
 
+**fuzz_crash_021.md:1:13:1:16:**
 ```roc
 Fli/main.roc" }
 ```

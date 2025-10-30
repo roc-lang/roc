@@ -479,7 +479,7 @@ fn generateAllReports(
 
     // Generate tokenize reports
     for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
-        const report = parse_ast.tokenizeDiagnosticToReport(diagnostic, allocator) catch |err| {
+        const report = parse_ast.tokenizeDiagnosticToReport(diagnostic, allocator, snapshot_path) catch |err| {
             std.debug.panic("Failed to create tokenize report for snapshot {s}: {s}", .{ snapshot_path, @errorName(err) });
         };
         try reports.append(report);
