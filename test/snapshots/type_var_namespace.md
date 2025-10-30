@@ -42,6 +42,9 @@ Expressions can be identifiers, literals, function calls, or operators.
 **DOES NOT EXIST**
 `List.first` does not exist.
 
+`List` is in scope, but it has no associated `first`.
+
+It's referenced here:
 **type_var_namespace.md:11:14:11:24:**
 ```roc
     result = List.first(list) |> Result.withDefault(elem)
@@ -168,7 +171,7 @@ main! = |_| {}
 				(s-let
 					(p-assign (ident "result"))
 					(e-call
-						(e-runtime-error (tag "qualified_ident_does_not_exist"))
+						(e-runtime-error (tag "nested_value_not_found"))
 						(e-lookup-local
 							(p-assign (ident "list")))))
 				(s-expr

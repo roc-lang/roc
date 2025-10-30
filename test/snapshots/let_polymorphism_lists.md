@@ -151,6 +151,9 @@ This might be a syntax error, an unsupported language feature, or a typo.
 **DOES NOT EXIST**
 `List.len` does not exist.
 
+`List` is in scope, but it has no associated `len`.
+
+It's referenced here:
 **let_polymorphism_lists.md:25:12:25:20:**
 ```roc
     len1 = List.len(all_int_list)
@@ -161,6 +164,9 @@ This might be a syntax error, an unsupported language feature, or a typo.
 **DOES NOT EXIST**
 `List.len` does not exist.
 
+`List` is in scope, but it has no associated `len`.
+
+It's referenced here:
 **let_polymorphism_lists.md:26:12:26:20:**
 ```roc
     len2 = List.len(all_str_list)
@@ -171,6 +177,9 @@ This might be a syntax error, an unsupported language feature, or a typo.
 **DOES NOT EXIST**
 `List.len` does not exist.
 
+`List` is in scope, but it has no associated `len`.
+
+It's referenced here:
 **let_polymorphism_lists.md:27:12:27:20:**
 ```roc
     len3 = List.len(all_float_list)
@@ -404,19 +413,19 @@ main = |_| {
 					(s-let
 						(p-assign (ident "len1"))
 						(e-call
-							(e-runtime-error (tag "qualified_ident_does_not_exist"))
+							(e-runtime-error (tag "nested_value_not_found"))
 							(e-lookup-local
 								(p-assign (ident "all_int_list")))))
 					(s-let
 						(p-assign (ident "len2"))
 						(e-call
-							(e-runtime-error (tag "qualified_ident_does_not_exist"))
+							(e-runtime-error (tag "nested_value_not_found"))
 							(e-lookup-local
 								(p-assign (ident "all_str_list")))))
 					(s-let
 						(p-assign (ident "len3"))
 						(e-call
-							(e-runtime-error (tag "qualified_ident_does_not_exist"))
+							(e-runtime-error (tag "nested_value_not_found"))
 							(e-lookup-local
 								(p-assign (ident "all_float_list")))))
 					(e-binop (op "add")

@@ -74,6 +74,9 @@ match events {
 **DOES NOT EXIST**
 `List.len` does not exist.
 
+`List` is in scope, but it has no associated `len`.
+
+It's referenced here:
 **complex_list_tags.md:4:69:4:77:**
 ```roc
     [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr(List.len(rest))} more events"
@@ -342,7 +345,7 @@ match events {
 						(e-call
 							(e-runtime-error (tag "qualified_ident_does_not_exist"))
 							(e-call
-								(e-runtime-error (tag "qualified_ident_does_not_exist"))
+								(e-runtime-error (tag "nested_value_not_found"))
 								(e-lookup-local
 									(p-assign (ident "rest")))))
 						(e-literal (string " more events")))))

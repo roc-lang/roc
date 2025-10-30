@@ -2683,12 +2683,23 @@ pub fn canonicalizeExpr(
                         } orelse {
                             // Not a module alias and not an auto-imported module
                             // This is a qualified identifier with an invalid qualifier
-                            // Report the proper "DOES NOT EXIST" error for the full qualified name
-                            return CanonicalizedExpr{
-                                .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .qualified_ident_does_not_exist = .{
+
+                            // Check if the qualifier is in scope as a type/value
+                            // If so, provide a more helpful error message
+                            const diagnostic = if (self.scopeLookupTypeBinding(module_alias) != null)
+                                Diagnostic{ .nested_value_not_found = .{
+                                    .parent_name = module_alias,
+                                    .nested_name = ident,
+                                    .region = region,
+                                } }
+                            else
+                                Diagnostic{ .qualified_ident_does_not_exist = .{
                                     .ident = qualified_ident,
                                     .region = region,
-                                } }),
+                                } };
+
+                            return CanonicalizedExpr{
+                                .idx = try self.env.pushMalformed(Expr.Idx, diagnostic),
                                 .free_vars = null,
                             };
                         };
