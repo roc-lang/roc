@@ -484,6 +484,7 @@ pub const Diagnostic = struct {
         UnclosedString,
         NonPrintableUnicodeInStrLiteral,
         InvalidUtf8InSource,
+        DollarInMiddleOfIdentifier,
     };
 };
 
@@ -823,9 +824,16 @@ pub const Cursor = struct {
     /// Returns whether the chomped identifier was valid - i.e. didn't contain any non-ascii characters.
     pub fn chompIdentGeneral(self: *Cursor) bool {
         var valid = true;
+        const start_pos = self.pos;
         while (self.pos < self.buf.len) {
             const c = self.buf[self.pos];
-            if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c == '!') {
+            if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c == '!' or c == '$') {
+                // Allow $ as a valid identifier character
+                if (c == '$' and self.pos > start_pos) {
+                    // But warn if it's not at the start (pos > start_pos means we've moved)
+                    // Use pushMessage to specify the exact location of the $ character
+                    self.pushMessage(.DollarInMiddleOfIdentifier, self.pos, self.pos + 1);
+                }
                 self.pos += 1;
             } else if (c >= 0x80) {
                 valid = false;
@@ -2474,5 +2482,91 @@ test "non-printable characters in string literal" {
 
         const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
         try std.testing.expect(messages.len == 0);
+    }
+}
+
+test "dollar sign in middle of identifier" {
+    const gpa = std.testing.allocator;
+
+    // Dollar sign in the middle of an identifier - foo$bar
+    {
+        const source = "foo$bar";
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, source, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        // Should have reported DollarInMiddleOfIdentifier
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
+        try std.testing.expect(messages.len > 0);
+        try std.testing.expectEqual(Diagnostic.Tag.DollarInMiddleOfIdentifier, messages[0].tag);
+
+        // Should tokenize as a valid LowerIdent (but with a warning)
+        const token_tags = tokenizer.output.tokens.items(.tag);
+        try std.testing.expect(token_tags.len >= 2); // At least the identifier and EOF
+        try std.testing.expectEqual(Token.Tag.LowerIdent, token_tags[0]);
+    }
+
+    // Dollar sign at the end of an identifier - foo$
+    {
+        const source = "foo$";
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, source, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        // Should have reported DollarInMiddleOfIdentifier
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
+        try std.testing.expect(messages.len > 0);
+        try std.testing.expectEqual(Diagnostic.Tag.DollarInMiddleOfIdentifier, messages[0].tag);
+    }
+
+    // Multiple dollar signs in identifier - foo$bar$baz
+    {
+        const source = "foo$bar$baz";
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, source, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        // Should have reported multiple DollarInMiddleOfIdentifier warnings
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
+        try std.testing.expect(messages.len >= 2);
+        try std.testing.expectEqual(Diagnostic.Tag.DollarInMiddleOfIdentifier, messages[0].tag);
+        try std.testing.expectEqual(Diagnostic.Tag.DollarInMiddleOfIdentifier, messages[1].tag);
+    }
+
+    // Dollar at the start is OK - no warning
+    {
+        const source = "$foo";
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, source, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        // Should NOT have any warnings
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
+        try std.testing.expect(messages.len == 0);
+
+        // Should tokenize as a valid LowerIdent
+        const token_tags = tokenizer.output.tokens.items(.tag);
+        try std.testing.expect(token_tags.len >= 2);
+        try std.testing.expectEqual(Token.Tag.LowerIdent, token_tags[0]);
     }
 }

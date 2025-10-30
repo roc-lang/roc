@@ -28,12 +28,12 @@ y = 'u
 '\
 ~~~
 # EXPECTED
-INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
-INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
-INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
-INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
-INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
-INVALID ESCAPE SEQUENCE - :0:0:0:0
+INVALID UNICODE ESCAPE SEQUENCE - unicode_single_quotes.md:5:6:5:8
+INVALID UNICODE ESCAPE SEQUENCE - unicode_single_quotes.md:6:6:6:8
+INVALID UNICODE ESCAPE SEQUENCE - unicode_single_quotes.md:7:6:7:9
+INVALID UNICODE ESCAPE SEQUENCE - unicode_single_quotes.md:8:6:8:10
+INVALID UNICODE ESCAPE SEQUENCE - unicode_single_quotes.md:10:6:10:11
+INVALID ESCAPE SEQUENCE - unicode_single_quotes.md:21:2:22:1
 UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:5:5:5:9
 UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:6:5:6:10
 UNEXPECTED TOKEN IN EXPRESSION - unicode_single_quotes.md:7:5:7:10
@@ -57,6 +57,7 @@ UNRECOGNIZED SYNTAX - unicode_single_quotes.md:18:5:18:7
 **INVALID UNICODE ESCAPE SEQUENCE**
 This Unicode escape sequence is not valid.
 
+**unicode_single_quotes.md:5:6:5:8:**
 ```roc
     '\u',
 ```
@@ -66,6 +67,7 @@ This Unicode escape sequence is not valid.
 **INVALID UNICODE ESCAPE SEQUENCE**
 This Unicode escape sequence is not valid.
 
+**unicode_single_quotes.md:6:6:6:8:**
 ```roc
     '\u)',
 ```
@@ -75,6 +77,7 @@ This Unicode escape sequence is not valid.
 **INVALID UNICODE ESCAPE SEQUENCE**
 This Unicode escape sequence is not valid.
 
+**unicode_single_quotes.md:7:6:7:9:**
 ```roc
     '\u(',
 ```
@@ -84,6 +87,7 @@ This Unicode escape sequence is not valid.
 **INVALID UNICODE ESCAPE SEQUENCE**
 This Unicode escape sequence is not valid.
 
+**unicode_single_quotes.md:8:6:8:10:**
 ```roc
     '\u()',
 ```
@@ -93,6 +97,7 @@ This Unicode escape sequence is not valid.
 **INVALID UNICODE ESCAPE SEQUENCE**
 This Unicode escape sequence is not valid.
 
+**unicode_single_quotes.md:10:6:10:11:**
 ```roc
     '\u(K)',
 ```
@@ -102,6 +107,7 @@ This Unicode escape sequence is not valid.
 **INVALID ESCAPE SEQUENCE**
 This escape sequence is not recognized.
 
+**unicode_single_quotes.md:21:2:22:1:**
 ```roc
 '\
 
