@@ -988,8 +988,6 @@ test "check type - expect not bool" {
 
 test "check type - crash" {
     const source =
-        \\module []
-        \\
         \\y : U64
         \\y = {
         \\  crash "bug"
@@ -1011,8 +1009,6 @@ test "check type - crash" {
 
 test "check type - debug" {
     const source =
-        \\module []
-        \\
         \\y : U64
         \\y = {
         \\  debug 2
@@ -1034,8 +1030,6 @@ test "check type - debug" {
 
 test "check type - for" {
     const source =
-        \\module []
-        \\
         \\main = {
         \\  var result = 0
         \\  for x in [1, 2, 3] {
@@ -1053,8 +1047,6 @@ test "check type - for" {
 
 test "check type - for mismatch" {
     const source =
-        \\module []
-        \\
         \\main = {
         \\  var result = 0
         \\  for x in ["a", "b", "c"] {
@@ -1074,8 +1066,6 @@ test "check type - for mismatch" {
 
 test "check type - static dispatch - polymorphic - annotation" {
     const source =
-        \\module []
-        \\
         \\main : a -> Str where [a.to_str : a -> Str]
         \\main = |a| a.to_str()
     ;
@@ -1088,8 +1078,6 @@ test "check type - static dispatch - polymorphic - annotation" {
 
 test "check type - static dispatch - polymorphic - no annotation" {
     const source =
-        \\module []
-        \\
         \\main = |x| x.to_str()
     ;
     try checkTypesModule(
@@ -1101,8 +1089,6 @@ test "check type - static dispatch - polymorphic - no annotation" {
 
 test "check type - static dispatch - concrete - annotation" {
     const source =
-        \\module []
-        \\
         \\Test := [Val(Str)].{
         \\  to_str : Test -> Str
         \\  to_str = |Test.Val(s)| s
@@ -1135,8 +1121,6 @@ test "check type - static dispatch - concrete - no annotation" {
 
 test "check type - static dispatch - concrete - wrong method name" {
     const source =
-        \\module []
-        \\
         \\Test := [Val(Str)].{
         \\  to_str = |Test.Val(s)| s
         \\}
@@ -1152,8 +1136,6 @@ test "check type - static dispatch - concrete - wrong method name" {
 
 test "check type - static dispatch - concrete - args" {
     const source =
-        \\module []
-        \\
         \\Test := [Val(U8)].{
         \\  add = |Test.Val(a), b| Test.Val(a + b)
         \\}
@@ -1169,8 +1151,6 @@ test "check type - static dispatch - concrete - args" {
 
 test "check type - static dispatch - concrete - wrong args" {
     const source =
-        \\module []
-        \\
         \\Test := [Val(U8)].{
         \\  add = |Test.Val(a), b| Test.Val(a + b)
         \\}
@@ -1186,8 +1166,6 @@ test "check type - static dispatch - concrete - wrong args" {
 
 test "check type - static dispatch - concrete - indirection 1" {
     const source =
-        \\module []
-        \\
         \\Test := [Val(Str)].{
         \\  to_str = |Test.Val(s)| s
         \\  to_str2 = |test| test.to_str()
@@ -1202,8 +1180,6 @@ test "check type - static dispatch - concrete - indirection 1" {
 
 test "check type - static dispatch - concrete - indirection 2" {
     const source =
-        \\module []
-        \\
         \\Test := [Val(Str)].{
         \\  to_str = |Test.Val(s)| s
         \\  to_str2 = |test| test.to_str()

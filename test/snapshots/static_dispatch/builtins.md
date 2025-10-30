@@ -8,11 +8,10 @@ type=file
 main! = |_| True.not()
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - builtins.md:1:13:1:21
+DOES NOT EXIST - builtins.md:1:13:1:21
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `not` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`True.not` does not exist.
 
 **builtins.md:1:13:1:21:**
 ```roc
@@ -52,7 +51,7 @@ NO CHANGE
 			(args
 				(p-underscore))
 			(e-call
-				(e-runtime-error (tag "ident_not_in_scope"))))))
+				(e-runtime-error (tag "qualified_ident_does_not_exist"))))))
 ~~~
 # TYPES
 ~~~clojure

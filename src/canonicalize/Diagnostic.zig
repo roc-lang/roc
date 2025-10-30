@@ -127,6 +127,16 @@ pub const Diagnostic = union(enum) {
         module_name: Ident.Idx,
         region: Region,
     },
+    nested_type_not_found: struct {
+        parent_name: Ident.Idx,
+        nested_name: Ident.Idx,
+        region: Region,
+    },
+    nested_value_not_found: struct {
+        parent_name: Ident.Idx,
+        nested_name: Ident.Idx,
+        region: Region,
+    },
     too_many_exports: struct {
         count: u32,
         region: Region,
@@ -276,6 +286,8 @@ pub const Diagnostic = union(enum) {
             .type_not_exposed => |d| d.region,
             .type_from_missing_module => |d| d.region,
             .module_not_imported => |d| d.region,
+            .nested_type_not_found => |d| d.region,
+            .nested_value_not_found => |d| d.region,
             .too_many_exports => |d| d.region,
             .undeclared_type => |d| d.region,
             .undeclared_type_var => |d| d.region,

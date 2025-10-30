@@ -314,7 +314,7 @@ main! = |_| {
 		(ty-header (name "Person"))
 		(ty-record
 			(field (field "name")
-				(ty-lookup (name "Str") (external-module "Str")))
+				(ty-lookup (name "Str") (builtin)))
 			(field (field "age")
 				(ty-lookup (name "U64") (builtin)))))
 	(s-alias-decl
@@ -329,9 +329,9 @@ main! = |_| {
 		(ty-header (name "ApiResponse")
 			(ty-args
 				(ty-rigid-var (name "data"))))
-		(ty-apply (name "Result") (external-module "Result")
+		(ty-apply (name "Result") (builtin)
 			(ty-rigid-var-lookup (ty-rigid-var (name "data")))
-			(ty-lookup (name "Str") (external-module "Str"))))
+			(ty-lookup (name "Str") (builtin))))
 	(s-alias-decl
 		(ty-header (name "Color"))
 		(ty-tag-union
@@ -355,7 +355,7 @@ main! = |_| {
 					(field (field "size")
 						(ty-lookup (name "U64") (builtin)))
 					(field (field "created")
-						(ty-lookup (name "Str") (external-module "Str"))))))))
+						(ty-lookup (name "Str") (builtin))))))))
 ~~~
 # TYPES
 ~~~clojure

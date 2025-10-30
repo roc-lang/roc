@@ -278,7 +278,7 @@ transform = |_, b| b
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
 					(ty-underscore))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "get_data"))
 		(e-lambda
@@ -326,10 +326,10 @@ transform = |_, b| b
 										(p-assign (ident "msg"))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-apply (name "Result") (builtin)
 					(ty-underscore)
-					(ty-lookup (name "Str") (external-module "Str")))
-				(ty-lookup (name "Str") (external-module "Str")))))
+					(ty-lookup (name "Str") (builtin)))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "map"))
 		(e-lambda

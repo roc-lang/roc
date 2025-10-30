@@ -244,12 +244,12 @@ NO CHANGE
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))
-				(ty-lookup (name "Str") (external-module "Str")))
+				(ty-lookup (name "Str") (builtin)))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "get_value")
 					(args
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-					(ty-lookup (name "Str") (external-module "Str"))))))
+					(ty-lookup (name "Str") (builtin))))))
 	(d-let
 		(p-assign (ident "modify"))
 		(e-lambda
@@ -268,8 +268,8 @@ NO CHANGE
 				(ty-rigid-var (name "a"))
 				(ty-parens
 					(ty-fn (effectful false)
-						(ty-lookup (name "Str") (external-module "Str"))
-						(ty-lookup (name "Str") (external-module "Str"))))
+						(ty-lookup (name "Str") (builtin))
+						(ty-lookup (name "Str") (builtin))))
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
 			(where
 				(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "transform")
@@ -277,8 +277,8 @@ NO CHANGE
 						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 						(ty-parens
 							(ty-fn (effectful false)
-								(ty-lookup (name "Str") (external-module "Str"))
-								(ty-lookup (name "Str") (external-module "Str")))))
+								(ty-lookup (name "Str") (builtin))
+								(ty-lookup (name "Str") (builtin)))))
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
 		(p-assign (ident "container"))
@@ -306,7 +306,7 @@ NO CHANGE
 					(p-assign (ident "myContainer"))))
 			(args))
 		(annotation
-			(ty-lookup (name "Str") (external-module "Str"))))
+			(ty-lookup (name "Str") (builtin))))
 	(d-let
 		(p-assign (ident "result1"))
 		(e-call
@@ -315,7 +315,7 @@ NO CHANGE
 			(e-lookup-local
 				(p-assign (ident "container"))))
 		(annotation
-			(ty-lookup (name "Str") (external-module "Str"))))
+			(ty-lookup (name "Str") (builtin))))
 	(d-let
 		(p-assign (ident "result2"))
 		(e-call
@@ -348,9 +348,9 @@ NO CHANGE
 						(p-assign (ident "result2"))))))
 		(annotation
 			(ty-tuple
-				(ty-lookup (name "Str") (external-module "Str"))
-				(ty-lookup (name "Str") (external-module "Str"))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "Container.get_value"))
 		(e-closure
@@ -365,7 +365,7 @@ NO CHANGE
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Container") (local))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "Container.transform"))
 		(e-closure
@@ -389,14 +389,14 @@ NO CHANGE
 				(ty-lookup (name "Container") (local))
 				(ty-parens
 					(ty-fn (effectful false)
-						(ty-lookup (name "Str") (external-module "Str"))
-						(ty-lookup (name "Str") (external-module "Str"))))
+						(ty-lookup (name "Str") (builtin))
+						(ty-lookup (name "Str") (builtin))))
 				(ty-lookup (name "Container") (local)))))
 	(s-nominal-decl
 		(ty-header (name "Container"))
 		(ty-tag-union
 			(ty-tag-name (name "Box")
-				(ty-lookup (name "Str") (external-module "Str"))))))
+				(ty-lookup (name "Str") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure

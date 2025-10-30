@@ -294,15 +294,15 @@ Complex : {
 		(ty-lookup (name "U64") (builtin)))
 	(s-alias-decl
 		(ty-header (name "MyString"))
-		(ty-lookup (name "Str") (external-module "Str")))
+		(ty-lookup (name "Str") (builtin)))
 	(s-alias-decl
 		(ty-header (name "MyBool"))
-		(ty-lookup (name "Bool") (external-module "Bool")))
+		(ty-lookup (name "Bool") (builtin)))
 	(s-alias-decl
 		(ty-header (name "Person"))
 		(ty-record
 			(field (field "name")
-				(ty-lookup (name "Str") (external-module "Str")))
+				(ty-lookup (name "Str") (builtin)))
 			(field (field "age")
 				(ty-lookup (name "U64") (builtin)))))
 	(s-alias-decl
@@ -337,8 +337,8 @@ Complex : {
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(s-alias-decl
 		(ty-header (name "MyResult"))
-		(ty-apply (name "Result") (external-module "Result")
-			(ty-lookup (name "Str") (external-module "Str"))
+		(ty-apply (name "Result") (builtin)
+			(ty-lookup (name "Str") (builtin))
 			(ty-lookup (name "U64") (builtin))))
 	(s-alias-decl
 		(ty-header (name "Person"))
@@ -349,11 +349,11 @@ Complex : {
 	(s-alias-decl
 		(ty-header (name "MyList"))
 		(ty-apply (name "List") (builtin)
-			(ty-lookup (name "Str") (external-module "Str"))))
+			(ty-lookup (name "Str") (builtin))))
 	(s-alias-decl
 		(ty-header (name "MyDict"))
-		(ty-apply (name "Dict") (external-module "Dict")
-			(ty-lookup (name "Str") (external-module "Str"))
+		(ty-apply (name "Dict") (builtin)
+			(ty-lookup (name "Str") (builtin))
 			(ty-lookup (name "U64") (builtin))))
 	(s-alias-decl
 		(ty-header (name "Complex"))
@@ -361,9 +361,9 @@ Complex : {
 			(field (field "person")
 				(ty-lookup (name "Person") (local)))
 			(field (field "result")
-				(ty-apply (name "Result") (external-module "Result")
-					(ty-lookup (name "Bool") (external-module "Bool"))
-					(ty-lookup (name "Str") (external-module "Str"))))
+				(ty-apply (name "Result") (builtin)
+					(ty-lookup (name "Bool") (builtin))
+					(ty-lookup (name "Str") (builtin))))
 			(field (field "tree")
 				(ty-apply (name "Tree") (local)
 					(ty-lookup (name "U64") (builtin)))))))

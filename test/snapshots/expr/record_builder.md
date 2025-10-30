@@ -16,7 +16,7 @@ UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder.md:2:8:2:9
 UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:2:9:2:10
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder.md:3:8:3:9
 UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:3:9:3:10
-UNDEFINED VARIABLE - record_builder.md:1:3:1:14
+DOES NOT EXIST - record_builder.md:1:3:1:14
 UNRECOGNIZED SYNTAX - record_builder.md:1:15:1:17
 MALFORMED TYPE - record_builder.md:2:8:2:9
 UNRECOGNIZED SYNTAX - record_builder.md:2:9:2:10
@@ -80,9 +80,8 @@ Expressions can be identifiers, literals, function calls, or operators.
         ^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `baz` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Foo.Bar.baz` does not exist.
 
 **record_builder.md:1:3:1:14:**
 ```roc
@@ -204,7 +203,7 @@ EndOfFile,
 ~~~clojure
 (e-block
 	(s-expr
-		(e-runtime-error (tag "ident_not_in_scope")))
+		(e-runtime-error (tag "qualified_ident_does_not_exist")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-let

@@ -997,6 +997,88 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .nested_type_not_found => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "MISSING NESTED TYPE", .runtime_error);
+
+            const parent_bytes = self.getIdent(data.parent_name);
+            const parent_name = try report.addOwnedString(parent_bytes);
+
+            const nested_bytes = self.getIdent(data.nested_name);
+            const nested_name = try report.addOwnedString(nested_bytes);
+
+            try report.document.addInlineCode(parent_name);
+            try report.document.addReflowingText(" is in scope, but it doesn't have a nested type ");
+
+            if (std.mem.eql(u8, parent_bytes, nested_bytes)) {
+                // Say "also named" if the parent and nested types are equal, e.g. `Foo.Foo` - when
+                // this happens it can be kind of a confusing message if the message just says
+                // "Foo is in scope, but it doesn't have a nested type named Foo" compared to
+                // "Foo is in scope, but it doesn't have a nested type that's also named Foo"
+                try report.document.addReflowingText("that's also ");
+            }
+
+            try report.document.addReflowingText("named ");
+            try report.document.addInlineCode(nested_name);
+            try report.document.addReflowingText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("It's referenced here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .nested_value_not_found => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "DOES NOT EXIST", .runtime_error);
+
+            const parent_bytes = self.getIdent(data.parent_name);
+            const parent_name = try report.addOwnedString(parent_bytes);
+
+            const nested_bytes = self.getIdent(data.nested_name);
+            const nested_name = try report.addOwnedString(nested_bytes);
+
+            // First line: "Foo.bar does not exist."
+            const full_name = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ parent_bytes, nested_bytes });
+            defer allocator.free(full_name);
+            const owned_full_name = try report.addOwnedString(full_name);
+            try report.document.addInlineCode(owned_full_name);
+            try report.document.addReflowingText(" does not exist.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            // Second line: "Foo is in scope, but it has no associated bar."
+            try report.document.addInlineCode(parent_name);
+            try report.document.addReflowingText(" is in scope, but it has no associated ");
+            try report.document.addInlineCode(nested_name);
+            try report.document.addReflowingText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("It's referenced here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .where_clause_not_allowed_in_type_decl => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
@@ -1347,26 +1429,32 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
-        else => {
-            // For unhandled diagnostics, create a generic report
-            const diagnostic_name = @tagName(diagnostic);
+        .ident_already_in_scope => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const ident_name = self.getIdent(data.ident);
 
-            var report = Report.init(allocator, "COMPILER DIAGNOSTIC", .runtime_error);
-            try report.addHeader("Compiler Diagnostic");
-            const message = try std.fmt.allocPrint(allocator, "Diagnostic type '{s}' is not yet handled in report generation.", .{diagnostic_name});
-            defer allocator.free(message);
-            const owned_message = try report.addOwnedString(message);
-            try report.document.addText(owned_message);
+            var report = Report.init(allocator, "SHADOWING", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.document.addReflowingText("The name ");
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" is already defined in this scope.");
             try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Choose a different name for this identifier.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
 
-            // Add location info even without specific region
-            const location_msg = try std.fmt.allocPrint(allocator, "**{s}:0:0:0:0**", .{filename});
-            defer allocator.free(location_msg);
-            const owned_location = try report.addOwnedString(location_msg);
-            try report.document.addText(owned_location);
-
-            return report;
+            break :blk report;
         },
+        else => unreachable, // All diagnostics must have explicit handlers
     };
 }
 
@@ -1506,6 +1594,19 @@ pub fn setExposedNodeIndexById(self: *Self, ident_idx: Ident.Idx, node_idx: u16)
 /// Retrieves the node index associated with an exposed identifier, if any.
 pub fn getExposedNodeIndexById(self: *const Self, ident_idx: Ident.Idx) ?u16 {
     return self.common.getNodeIndexById(self.gpa, ident_idx);
+}
+
+/// Get the exposed node index for a type given its statement index.
+/// This is used for auto-imported builtin types where we have the statement index pre-computed.
+/// For auto-imported types, the statement index IS the node/var index directly.
+pub fn getExposedNodeIndexByStatementIdx(self: *const Self, stmt_idx: CIR.Statement.Idx) ?u16 {
+    _ = self; // Not needed for this simplified implementation
+
+    // For auto-imported builtin types (Bool, Result, etc.), the statement index
+    // IS the node/var index. This is because type declarations get type variables
+    // indexed by their statement index, not by their position in arrays.
+    const node_idx: u16 = @intCast(@intFromEnum(stmt_idx));
+    return node_idx;
 }
 
 /// Ensures that the exposed items are sorted by identifier index.
@@ -2065,6 +2166,7 @@ pub fn getLineStartsAll(self: *const Self) []const u32 {
 }
 
 /// Initialize a TypeWriter with an immutable ModuleEnv reference.
+/// The TypeWriter will build its own import mapping for auto-imported builtin types.
 pub fn initTypeWriter(self: *Self) std.mem.Allocator.Error!TypeWriter {
     return TypeWriter.initFromParts(self.gpa, &self.types, self.getIdentStore());
 }

@@ -126,7 +126,15 @@ pub const TypeAnno = union(enum) {
                         std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
                         const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
                         const module_name = ir.common.strings.get(string_lit_idx);
-                        try tree.pushStringPair("external-module", module_name);
+                        // Special case: Builtin module is an implementation detail, print as (builtin)
+                        if (std.mem.eql(u8, module_name, "Builtin")) {
+                            const field_begin = tree.beginNode();
+                            try tree.pushStaticAtom("builtin");
+                            const field_attrs = tree.beginNode();
+                            try tree.endNode(field_begin, field_attrs);
+                        } else {
+                            try tree.pushStringPair("external-module", module_name);
+                        }
                     },
                 }
 
@@ -187,7 +195,15 @@ pub const TypeAnno = union(enum) {
                         std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
                         const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
                         const module_name = ir.common.strings.get(string_lit_idx);
-                        try tree.pushStringPair("external-module", module_name);
+                        // Special case: Builtin module is an implementation detail, print as (builtin)
+                        if (std.mem.eql(u8, module_name, "Builtin")) {
+                            const field_begin = tree.beginNode();
+                            try tree.pushStaticAtom("builtin");
+                            const field_attrs = tree.beginNode();
+                            try tree.endNode(field_begin, field_attrs);
+                        } else {
+                            try tree.pushStringPair("external-module", module_name);
+                        }
                     },
                 }
 
@@ -406,7 +422,9 @@ pub const TypeAnno = union(enum) {
 
         /// Convert a type name string to the corresponding builtin type
         pub fn fromBytes(bytes: []const u8) ?@This() {
+            if (std.mem.eql(u8, bytes, "Str")) return .str;
             if (std.mem.eql(u8, bytes, "List")) return .list;
+            if (std.mem.eql(u8, bytes, "Box")) return .box;
             if (std.mem.eql(u8, bytes, "Num")) return .num;
             if (std.mem.eql(u8, bytes, "Frac")) return .frac;
             if (std.mem.eql(u8, bytes, "Int")) return .int;

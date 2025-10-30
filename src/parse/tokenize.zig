@@ -370,6 +370,7 @@ pub const Token = struct {
         .{ "as", .KwAs },
         .{ "crash", .KwCrash },
         .{ "dbg", .KwDbg },
+        .{ "debug", .KwDebug },
         .{ "else", .KwElse },
         .{ "expect", .KwExpect },
         .{ "exposes", .KwExposes },

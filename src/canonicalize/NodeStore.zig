@@ -128,7 +128,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 57;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 59;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 34;
 /// Count of the statement nodes in the ModuleEnv
@@ -2848,6 +2848,18 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             region = r.region;
             node.data_1 = @as(u32, @bitCast(r.module_name));
         },
+        .nested_type_not_found => |r| {
+            node.tag = .diag_nested_type_not_found;
+            region = r.region;
+            node.data_1 = @as(u32, @bitCast(r.parent_name));
+            node.data_2 = @as(u32, @bitCast(r.nested_name));
+        },
+        .nested_value_not_found => |r| {
+            node.tag = .diag_nested_value_not_found;
+            region = r.region;
+            node.data_1 = @as(u32, @bitCast(r.parent_name));
+            node.data_2 = @as(u32, @bitCast(r.nested_name));
+        },
         .too_many_exports => |r| {
             node.tag = .diag_too_many_exports;
             region = r.region;
@@ -3102,6 +3114,16 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         } },
         .diag_module_not_imported => return CIR.Diagnostic{ .module_not_imported = .{
             .module_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_nested_type_not_found => return CIR.Diagnostic{ .nested_type_not_found = .{
+            .parent_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
+            .nested_name = @as(base.Ident.Idx, @bitCast(node.data_2)),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_nested_value_not_found => return CIR.Diagnostic{ .nested_value_not_found = .{
+            .parent_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
+            .nested_name = @as(base.Ident.Idx, @bitCast(node.data_2)),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_too_many_exports => return CIR.Diagnostic{ .too_many_exports = .{

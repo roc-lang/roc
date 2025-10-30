@@ -1098,7 +1098,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
             } });
             return statement_idx;
         },
-        .KwDbg => {
+        .KwDbg, .KwDebug => {
             const start = self.pos;
             self.advance();
             const expr = try self.parseExpr();
@@ -2126,7 +2126,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                 .branches = branches,
             } });
         },
-        .KwDbg => {
+        .KwDbg, .KwDebug => {
             self.advance();
             const e = try self.parseExpr();
             expr = try self.store.addExpr(.{ .dbg = .{

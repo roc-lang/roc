@@ -133,7 +133,7 @@ nested = { bar: A, count: 1 }
 			(args
 				(e-tag (name "A"))))
 		(annotation
-			(ty-apply (name "Result") (external-module "Result")
+			(ty-apply (name "Result") (builtin)
 				(ty-lookup (name "Foo.Bar") (local))
 				(ty-lookup (name "Foo.Error") (local)))))
 	(d-let

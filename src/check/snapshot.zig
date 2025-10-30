@@ -583,6 +583,7 @@ pub const SnapshotWriter = struct {
     buf: std.array_list.Managed(u8),
     snapshots: *const Store,
     idents: *const Ident.Store,
+    import_mapping: *const @import("types").import_mapping.ImportMapping,
     current_module_name: ?[]const u8,
     can_ir: ?*const ModuleEnv,
     other_modules: ?[]const *const ModuleEnv,
@@ -595,11 +596,12 @@ pub const SnapshotWriter = struct {
 
     const FlexVarNameRange = struct { start: usize, end: usize };
 
-    pub fn init(gpa: std.mem.Allocator, snapshots: *const Store, idents: *const Ident.Store) Self {
+    pub fn init(gpa: std.mem.Allocator, snapshots: *const Store, idents: *const Ident.Store, import_mapping: *const @import("types").import_mapping.ImportMapping) Self {
         return .{
             .buf = std.array_list.Managed(u8).init(gpa),
             .snapshots = snapshots,
             .idents = idents,
+            .import_mapping = import_mapping,
             .current_module_name = null,
             .can_ir = null,
             .other_modules = null,
@@ -852,7 +854,8 @@ pub const SnapshotWriter = struct {
 
     /// Write an alias type
     fn writeAlias(self: *Self, alias: SnapshotAlias, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        _ = try self.buf.writer().write(self.idents.getText(alias.ident.ident_idx));
+        const display_idx = if (self.import_mapping.get(alias.ident.ident_idx)) |mapped_idx| mapped_idx else alias.ident.ident_idx;
+        _ = try self.buf.writer().write(self.idents.getText(display_idx));
 
         const vars = self.snapshots.sliceVars(alias.vars);
         if (vars.len > 0) {
@@ -935,7 +938,8 @@ pub const SnapshotWriter = struct {
 
     /// Write a nominal type
     pub fn writeNominalType(self: *Self, nominal_type: SnapshotNominalType, root_idx: SnapshotContentIdx) Allocator.Error!void {
-        _ = try self.buf.writer().write(self.idents.getText(nominal_type.ident.ident_idx));
+        const display_idx = if (self.import_mapping.get(nominal_type.ident.ident_idx)) |mapped_idx| mapped_idx else nominal_type.ident.ident_idx;
+        _ = try self.buf.writer().write(self.idents.getText(display_idx));
 
         // The 1st var is the nominal type's backing var, so we skip it
         var vars = self.snapshots.sliceVars(nominal_type.vars);

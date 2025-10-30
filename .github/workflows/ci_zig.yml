@@ -163,6 +163,11 @@ jobs:
             echo ""
             echo "OOPS! It looks like the snapshots in 'test/snapshots' have changed.";
             echo "Please run 'zig build snapshot' locally, review the updates, and commit the changes.";
+            echo ""
+            echo "NOTE: If snapshots pass locally but fail in CI, you may need to merge origin/main";
+            echo "into your branch first, then regenerate snapshots. CI tests your branch merged with";
+            echo "main, so new snapshots from main can cause diffs when regenerated with your changes.";
+            echo ""
             echo "Here's what changed:";
             echo ""
             git diff test/snapshots;

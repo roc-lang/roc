@@ -589,15 +589,14 @@ pub const PackageEnv = struct {
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(self.gpa);
         defer module_envs_map.deinit();
 
-        // Add Bool, Result, and Str to the map
-        const bool_ident = try env.common.insertIdent(self.gpa, base.Ident.for_text("Bool"));
-        try module_envs_map.put(bool_ident, .{ .env = self.builtin_modules.bool_module.env });
-
-        const result_ident = try env.common.insertIdent(self.gpa, base.Ident.for_text("Result"));
-        try module_envs_map.put(result_ident, .{ .env = self.builtin_modules.result_module.env });
-
-        const str_ident = try env.common.insertIdent(self.gpa, base.Ident.for_text("Str"));
-        try module_envs_map.put(str_ident, .{ .env = self.builtin_modules.str_module.env });
+        // Populate module_envs with Bool, Result, Dict, Set using shared function
+        // This ensures production and tests use identical logic
+        try Can.populateModuleEnvs(
+            &module_envs_map,
+            env,
+            self.builtin_modules.builtin_module.env,
+            self.builtin_modules.builtin_indices,
+        );
 
         var czer = try Can.init(env, &parse_ast, &module_envs_map);
         try czer.canonicalizeFile();
@@ -781,7 +780,20 @@ pub const PackageEnv = struct {
             .box = try env.insertIdent(base.Ident.for_text("Box")),
             .bool_stmt = builtin_indices.bool_type,
             .result_stmt = builtin_indices.result_type,
+            .builtin_module = self.builtin_modules.builtin_module.env,
         };
+
+        // Create module_envs map for auto-importing builtin types
+        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(self.gpa);
+        defer module_envs_map.deinit();
+
+        // Populate module_envs with Bool, Result, Dict, Set using shared function
+        try Can.populateModuleEnvs(
+            &module_envs_map,
+            env,
+            self.builtin_modules.builtin_module.env,
+            builtin_indices,
+        );
 
         // Build other_modules array according to env.imports order
         const import_count = env.imports.imports.items.items.len;
@@ -816,7 +828,7 @@ pub const PackageEnv = struct {
             &env.types,
             env,
             imported_envs.items,
-            null, // TODO: Propagate other module envs map from Can
+            &module_envs_map,
             &env.store.regions,
             module_common_idents,
         );
@@ -830,24 +842,18 @@ pub const PackageEnv = struct {
         }
 
         // After type checking, evaluate top-level declarations at compile time
-        // Load builtin modules required by the interpreter (reuse builtin_indices from above)
-        const bool_source = compiled_builtins.bool_source;
-        const result_source = compiled_builtins.result_source;
-        const str_source = compiled_builtins.str_source;
-        var bool_module = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.bool_bin, "Bool", bool_source);
-        defer bool_module.deinit();
-        var result_module = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.result_bin, "Result", result_source);
-        defer result_module.deinit();
-        var str_module = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.str_bin, "Str", str_source);
-        defer str_module.deinit();
+        // Load builtin module required by the interpreter (reuse builtin_indices from above)
+        const builtin_source = compiled_builtins.builtin_source;
+        var builtin_module = try builtin_loading.loadCompiledModule(self.gpa, compiled_builtins.builtin_bin, "Builtin", builtin_source);
+        defer builtin_module.deinit();
 
-        const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+        const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
         var comptime_evaluator = try eval.ComptimeEvaluator.init(self.gpa, env, imported_envs.items, &checker.problems, builtin_types_for_eval);
         _ = try comptime_evaluator.evalAll();
 
         // Build reports from problems
         const check_diag_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        var rb = ReportBuilder.init(self.gpa, env, env, &checker.snapshots, st.path, imported_envs.items);
+        var rb = ReportBuilder.init(self.gpa, env, env, &checker.snapshots, st.path, imported_envs.items, &checker.import_mapping);
         defer rb.deinit();
         for (checker.problems.problems.items) |prob| {
             const rep = rb.build(prob) catch continue;

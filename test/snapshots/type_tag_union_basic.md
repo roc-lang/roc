@@ -173,9 +173,9 @@ main! = |_| {}
 			(ty-fn (effectful false)
 				(ty-tag-union
 					(ty-tag-name (name "Some")
-						(ty-lookup (name "Str") (external-module "Str")))
+						(ty-lookup (name "Str") (builtin)))
 					(ty-tag-name (name "None")))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "is_ok_ret_unqualified_bool"))
 		(e-lambda
@@ -206,7 +206,7 @@ main! = |_| {}
 						(ty-rigid-var (name "_ok")))
 					(ty-tag-name (name "Err2")
 						(ty-rigid-var (name "_err"))))
-				(ty-lookup (name "Bool") (external-module "Bool")))))
+				(ty-lookup (name "Bool") (builtin)))))
 	(d-let
 		(p-assign (ident "is_ok_ret_bool"))
 		(e-lambda
@@ -224,7 +224,7 @@ main! = |_| {}
 									(p-applied-tag)))
 							(value
 								(e-nominal-external
-									(external-module "Bool")
+									(builtin)
 									(e-tag (name "True")))))
 						(branch
 							(patterns
@@ -232,7 +232,7 @@ main! = |_| {}
 									(p-applied-tag)))
 							(value
 								(e-nominal-external
-									(external-module "Bool")
+									(builtin)
 									(e-tag (name "False")))))))))
 		(annotation
 			(ty-fn (effectful false)
@@ -241,7 +241,7 @@ main! = |_| {}
 						(ty-rigid-var (name "_ok2")))
 					(ty-tag-name (name "Err2")
 						(ty-rigid-var (name "_err2"))))
-				(ty-lookup (name "Bool") (external-module "Bool")))))
+				(ty-lookup (name "Bool") (builtin)))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda

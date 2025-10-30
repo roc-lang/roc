@@ -64,7 +64,7 @@ UNDECLARED TYPE - can_import_exposing_types.md:30:18:30:24
 UNDECLARED TYPE - can_import_exposing_types.md:31:23:31:31
 MODULE NOT FOUND - can_import_exposing_types.md:1:1:1:49
 MODULE NOT FOUND - can_import_exposing_types.md:2:1:2:64
-DUPLICATE DEFINITION - can_import_exposing_types.md:1:1:1:1
+DUPLICATE DEFINITION - can_import_exposing_types.md:3:1:3:38
 MODULE NOT FOUND - can_import_exposing_types.md:3:1:3:38
 UNDECLARED TYPE - can_import_exposing_types.md:6:27:6:32
 UNDECLARED TYPE - can_import_exposing_types.md:6:34:6:39
@@ -78,13 +78,13 @@ UNDECLARED TYPE - can_import_exposing_types.md:20:15:20:21
 UNDECLARED TYPE - can_import_exposing_types.md:20:28:20:33
 UNDECLARED TYPE - can_import_exposing_types.md:20:50:20:55
 UNDECLARED TYPE - can_import_exposing_types.md:20:58:20:63
-UNDEFINED VARIABLE - can_import_exposing_types.md:22:5:22:16
+DOES NOT EXIST - can_import_exposing_types.md:22:5:22:16
 UNDEFINED VARIABLE - can_import_exposing_types.md:24:13:24:30
 UNDECLARED TYPE - can_import_exposing_types.md:35:16:35:22
 UNDEFINED VARIABLE - can_import_exposing_types.md:36:25:36:40
 UNDECLARED TYPE - can_import_exposing_types.md:39:18:39:26
 UNDEFINED VARIABLE - can_import_exposing_types.md:42:23:42:42
-UNDEFINED VARIABLE - can_import_exposing_types.md:43:23:43:37
+DOES NOT EXIST - can_import_exposing_types.md:43:23:43:37
 UNDECLARED TYPE - can_import_exposing_types.md:47:25:47:30
 UNDECLARED TYPE - can_import_exposing_types.md:47:32:47:37
 UNDECLARED TYPE - can_import_exposing_types.md:47:40:47:46
@@ -151,11 +151,11 @@ import http.Client as Http exposing [Request, Response, Status]
 The name `Result` is being redeclared in this scope.
 
 The redeclaration is here:
-**can_import_exposing_types.md:1:1:1:1:**
+**can_import_exposing_types.md:3:1:3:38:**
 ```roc
-import json.Json exposing [Value, Error, Config]
+import utils.Result exposing [Result]
 ```
-^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 But `Result` was already defined here:
 **can_import_exposing_types.md:1:1:1:1:**
@@ -308,10 +308,12 @@ processData : Config, List(Value) -> Result(List(Value), Error)
                                                          ^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `mapTry` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`List.mapTry` does not exist.
 
+`List` is in scope, but it has no associated `mapTry`.
+
+It's referenced here:
 **can_import_exposing_types.md:22:5:22:16:**
 ```roc
     List.mapTry(
@@ -374,9 +376,8 @@ Is there an `import` or `exposing` missing up-top?
                       ^^^^^^^^^^^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `toString` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Error.toString` does not exist.
 
 **can_import_exposing_types.md:43:23:43:37:**
 ```roc
@@ -743,8 +744,8 @@ combineResults = |jsonResult, httpStatus|
 					(p-assign (ident "input")))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Str") (external-module "Str"))
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-lookup (name "Str") (builtin))
+				(ty-apply (name "Result") (builtin)
 					(ty-malformed)
 					(ty-malformed)))))
 	(d-let
@@ -800,7 +801,7 @@ combineResults = |jsonResult, httpStatus|
 				(p-assign (ident "config"))
 				(p-assign (ident "values")))
 			(e-call
-				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-runtime-error (tag "nested_value_not_found"))
 				(e-lookup-local
 					(p-assign (ident "values")))
 				(e-closure
@@ -820,7 +821,7 @@ combineResults = |jsonResult, httpStatus|
 				(ty-malformed)
 				(ty-apply (name "List") (builtin)
 					(ty-malformed))
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-apply (name "Result") (builtin)
 					(ty-apply (name "List") (builtin)
 						(ty-malformed))
 					(ty-malformed)))))
@@ -869,13 +870,13 @@ combineResults = |jsonResult, httpStatus|
 										(p-applied-tag)))
 								(value
 									(e-call
-										(e-runtime-error (tag "ident_not_in_scope"))
+										(e-runtime-error (tag "qualified_ident_does_not_exist"))
 										(e-lookup-local
 											(p-assign (ident "error")))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "combineResults"))
 		(e-closure
@@ -920,11 +921,11 @@ combineResults = |jsonResult, httpStatus|
 												(p-assign (ident "error"))))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-apply (name "Result") (builtin)
 					(ty-malformed)
 					(ty-malformed))
 				(ty-malformed)
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-apply (name "Result") (builtin)
 					(ty-malformed)
 					(ty-malformed)))))
 	(s-alias-decl

@@ -1377,21 +1377,21 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         .box = try env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = builtin_modules.builtin_indices.bool_type,
         .result_stmt = builtin_modules.builtin_indices.result_type,
+        .builtin_module = builtin_modules.builtin_module.env,
     };
 
     // Create module_envs map for auto-importing builtin types
     var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
     defer module_envs_map.deinit();
 
-    // Add Bool, Result, and Str to the map
-    const bool_ident = try env.common.insertIdent(allocs.gpa, base.Ident.for_text("Bool"));
-    try module_envs_map.put(bool_ident, .{ .env = builtin_modules.bool_module.env });
-
-    const result_ident = try env.common.insertIdent(allocs.gpa, base.Ident.for_text("Result"));
-    try module_envs_map.put(result_ident, .{ .env = builtin_modules.result_module.env });
-
-    const str_ident = try env.common.insertIdent(allocs.gpa, base.Ident.for_text("Str"));
-    try module_envs_map.put(str_ident, .{ .env = builtin_modules.str_module.env });
+    // Populate module_envs with Bool, Result, Dict, Set using shared function
+    // This ensures production and tests use identical logic
+    try Can.populateModuleEnvs(
+        &module_envs_map,
+        &env,
+        builtin_modules.builtin_module.env,
+        builtin_modules.builtin_indices,
+    );
 
     // Create canonicalizer with module_envs
     var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map);
@@ -1424,8 +1424,8 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         def_indices_ptr[i] = @intFromEnum(def_idx);
     }
 
-    // Type check the module - pass builtin modules as imported modules
-    const imported_envs = builtin_modules.envs();
+    // Type check the module - pass the single Builtin module as the only imported module
+    const imported_envs = [_]*const can.ModuleEnv{builtin_modules.builtin_module.env};
     var checker = try Check.init(shm_allocator, &env.types, &env, &imported_envs, &module_envs_map, &env.store.regions, common_idents);
     try checker.checkFile();
 
@@ -2419,6 +2419,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
         .box = try env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = @enumFromInt(0), // TODO: load from builtin modules
         .result_stmt = @enumFromInt(0), // TODO: load from builtin modules
+        .builtin_module = null,
     };
 
     // Parse the source code as a full module
@@ -2471,26 +2472,14 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
         try stderr.print("Failed to deserialize builtin indices: {}\n", .{err});
         return err;
     };
-    const bool_source = compiled_builtins.bool_source;
-    const result_source = compiled_builtins.result_source;
-    const str_source = compiled_builtins.str_source;
-    var bool_module = builtin_loading.loadCompiledModule(allocs.gpa, compiled_builtins.bool_bin, "Bool", bool_source) catch |err| {
-        try stderr.print("Failed to load Bool module: {}\n", .{err});
+    const builtin_source = compiled_builtins.builtin_source;
+    var builtin_module = builtin_loading.loadCompiledModule(allocs.gpa, compiled_builtins.builtin_bin, "Builtin", builtin_source) catch |err| {
+        try stderr.print("Failed to load Builtin module: {}\n", .{err});
         return err;
     };
-    defer bool_module.deinit();
-    var result_module = builtin_loading.loadCompiledModule(allocs.gpa, compiled_builtins.result_bin, "Result", result_source) catch |err| {
-        try stderr.print("Failed to load Result module: {}\n", .{err});
-        return err;
-    };
-    defer result_module.deinit();
-    var str_module = builtin_loading.loadCompiledModule(allocs.gpa, compiled_builtins.str_bin, "Str", str_source) catch |err| {
-        try stderr.print("Failed to load Str module: {}\n", .{err});
-        return err;
-    };
-    defer str_module.deinit();
+    defer builtin_module.deinit();
 
-    const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
+    const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
     var comptime_evaluator = eval.ComptimeEvaluator.init(allocs.gpa, &env, &.{}, &checker.problems, builtin_types_for_eval) catch |err| {
         try stderr.print("Failed to create compile-time evaluator: {}\n", .{err});
         return err;
@@ -2533,6 +2522,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
             &checker.snapshots,
             args.path,
             &.{},
+            &checker.import_mapping,
         );
         defer report_builder.deinit();
 
@@ -2859,7 +2849,7 @@ fn checkFileWithBuildEnvPreserved(
     for (drained, 0..) |mod, i| {
         reports[i] = .{
             .file_path = try allocs.gpa.dupe(u8, mod.abs_path),
-            .reports = mod.reports, // Transfer ownership, don't dupe
+            .reports = mod.reports, // Transfer ownership
         };
     }
 
@@ -2932,12 +2922,12 @@ fn checkFileWithBuildEnv(
         }
 
         // Convert BuildEnv drained reports to our format
-        // Note: Transfer ownership of reports directly (no dupe) since drainReports() already transferred them
+        // Note: Transfer ownership of reports since drainReports() already transferred them
         var reports = try build_env.gpa.alloc(DrainedReport, drained.len);
         for (drained, 0..) |mod, i| {
             reports[i] = .{
                 .file_path = try build_env.gpa.dupe(u8, mod.abs_path),
-                .reports = mod.reports, // Transfer ownership, don't dupe
+                .reports = mod.reports, // Transfer ownership
             };
         }
 
@@ -2970,7 +2960,7 @@ fn checkFileWithBuildEnv(
     for (drained, 0..) |mod, i| {
         reports[i] = .{
             .file_path = try allocs.gpa.dupe(u8, mod.abs_path),
-            .reports = mod.reports, // Transfer ownership, don't dupe
+            .reports = mod.reports, // Transfer ownership
         };
     }
 

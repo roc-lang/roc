@@ -46,7 +46,7 @@ combineResults = |result1, result2|
 # EXPECTED
 MODULE NOT FOUND - can_import_type_annotations.md:1:1:1:56
 MODULE NOT FOUND - can_import_type_annotations.md:2:1:2:17
-DUPLICATE DEFINITION - can_import_type_annotations.md:1:1:1:1
+DUPLICATE DEFINITION - can_import_type_annotations.md:3:1:3:38
 MODULE NOT FOUND - can_import_type_annotations.md:3:1:3:38
 UNDECLARED TYPE - can_import_type_annotations.md:5:18:5:25
 UNDECLARED TYPE - can_import_type_annotations.md:5:29:5:37
@@ -86,11 +86,11 @@ import json.Json
 The name `Result` is being redeclared in this scope.
 
 The redeclaration is here:
-**can_import_type_annotations.md:1:1:1:1:**
+**can_import_type_annotations.md:3:1:3:38:**
 ```roc
-import http.Client as Http exposing [Request, Response]
+import utils.Result exposing [Result]
 ```
-^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 But `Result` was already defined here:
 **can_import_type_annotations.md:1:1:1:1:**
@@ -479,7 +479,7 @@ combineResults = |result1, result2|
 					(p-assign (ident "input")))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Str") (external-module "Str"))
+				(ty-lookup (name "Str") (builtin))
 				(ty-lookup (name "Value") (external-module "json.Json")))))
 	(d-let
 		(p-assign (ident "handleApi"))
@@ -528,7 +528,7 @@ combineResults = |result1, result2|
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Request") (external-module "http.Client"))
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-apply (name "Result") (builtin)
 					(ty-lookup (name "Response") (external-module "http.Client"))
 					(ty-lookup (name "Error") (external-module "json.Json"))))))
 	(d-let
@@ -551,8 +551,8 @@ combineResults = |result1, result2|
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
-				(ty-lookup (name "Str") (external-module "Str"))
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-lookup (name "Str") (builtin))
+				(ty-apply (name "Result") (builtin)
 					(ty-lookup (name "Value") (external-module "json.Json"))
 					(ty-malformed)))))
 	(d-let
@@ -617,13 +617,13 @@ combineResults = |result1, result2|
 												(p-assign (ident "err"))))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-apply (name "Result") (builtin)
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "err")))
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-apply (name "Result") (builtin)
 					(ty-rigid-var (name "b"))
 					(ty-rigid-var-lookup (ty-rigid-var (name "err"))))
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-apply (name "Result") (builtin)
 					(ty-tuple
 						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))

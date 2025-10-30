@@ -14,7 +14,7 @@ match data {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - nested_patterns.md:1:7:1:11
-UNDEFINED VARIABLE - nested_patterns.md:2:57:2:65
+DOES NOT EXIST - nested_patterns.md:2:57:2:65
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `data` in this scope.
@@ -27,10 +27,12 @@ match data {
       ^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `len` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`List.len` does not exist.
 
+`List` is in scope, but it has no associated `len`.
+
+It's referenced here:
 **nested_patterns.md:2:57:2:65:**
 ```roc
     Container({ items: [First(x), .. as rest] }) => x + List.len(rest)
@@ -112,7 +114,7 @@ match data {
 						(e-lookup-local
 							(p-assign (ident "x")))
 						(e-call
-							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-runtime-error (tag "nested_value_not_found"))
 							(e-lookup-local
 								(p-assign (ident "rest")))))))
 			(branch

@@ -409,7 +409,7 @@ main = {
 								(p-assign (ident "next_val"))))))))
 		(annotation
 			(ty-tuple
-				(ty-lookup (name "Str") (external-module "Str"))
+				(ty-lookup (name "Str") (builtin))
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "Adv.to_str"))
@@ -425,7 +425,7 @@ main = {
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Adv") (local))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "Adv.to_u64"))
 		(e-closure
@@ -461,7 +461,7 @@ main = {
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Adv") (local))
-				(ty-lookup (name "Str") (external-module "Str"))
+				(ty-lookup (name "Str") (builtin))
 				(ty-lookup (name "Adv") (local)))))
 	(d-let
 		(p-assign (ident "Adv.update_u64"))
@@ -490,7 +490,7 @@ main = {
 		(ty-tag-union
 			(ty-tag-name (name "Val")
 				(ty-lookup (name "U64") (builtin))
-				(ty-lookup (name "Str") (external-module "Str"))))))
+				(ty-lookup (name "Str") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure

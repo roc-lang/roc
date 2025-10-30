@@ -266,6 +266,7 @@ pub const ReportBuilder = struct {
     source: []const u8,
     filename: []const u8,
     other_modules: []const *const ModuleEnv,
+    import_mapping: *const @import("types").import_mapping.ImportMapping,
 
     /// Init report builder
     /// Only owned field is `buf`
@@ -276,14 +277,16 @@ pub const ReportBuilder = struct {
         snapshots: *const snapshot.Store,
         filename: []const u8,
         other_modules: []const *const ModuleEnv,
+        import_mapping: *const @import("types").import_mapping.ImportMapping,
     ) Self {
         return .{
             .gpa = gpa,
-            .snapshot_writer = snapshot.SnapshotWriter.init(gpa, snapshots, module_env.getIdentStore()),
+            .snapshot_writer = snapshot.SnapshotWriter.init(gpa, snapshots, module_env.getIdentStore(), import_mapping),
             .bytes_buf = std.array_list.Managed(u8).init(gpa),
             .module_env = module_env,
             .can_ir = can_ir,
             .snapshots = snapshots,
+            .import_mapping = import_mapping,
             .source = module_env.common.source,
             .filename = filename,
             .other_modules = other_modules,
@@ -1579,7 +1582,14 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, title, .runtime_error);
         errdefer report.deinit();
 
-        const type_name = try report.addOwnedString(self.can_ir.getIdent(data.type_name));
+        // Look up display name in import mapping (handles auto-imported builtin types)
+        // If the type_name is in the mapping (e.g., "Builtin.Bool"), use the mapped display name ("Bool")
+        // Otherwise, use the identifier as-is
+        const type_name_ident = if (self.import_mapping.get(data.type_name)) |display_ident|
+            self.can_ir.getIdent(display_ident)
+        else
+            self.can_ir.getIdent(data.type_name);
+        const type_name = try report.addOwnedString(type_name_ident);
 
         self.bytes_buf.clearRetainingCapacity();
         try self.bytes_buf.writer().print("{d}", .{data.num_expected_args});

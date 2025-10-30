@@ -1,9 +1,9 @@
-//! Build-time compiler for Roc builtin modules (Bool.roc, Result.roc, Dict.roc, and Set.roc).
+//! Build-time compiler for Roc builtin module (Builtin.roc).
 //!
 //! This executable runs during `zig build` on the host machine to:
-//! 1. Parse and type-check the builtin .roc modules
-//! 2. Serialize the resulting ModuleEnvs to binary files
-//! 3. Output .bin files to zig-out/builtins/ (which get embedded in the roc binary)
+//! 1. Parse and type-check the Builtin.roc module (which contains nested Bool, Result, Str, Dict, Set types)
+//! 2. Serialize the resulting ModuleEnv to a binary file
+//! 3. Output Builtin.bin to zig-out/builtins/ (which gets embedded in the roc binary)
 
 const std = @import("std");
 const base = @import("base");
@@ -19,18 +19,18 @@ const Check = check.Check;
 const Allocator = std.mem.Allocator;
 const CIR = can.CIR;
 
-/// Indices of builtin type declarations within their respective modules.
+/// Indices of builtin type declarations within the Builtin module.
 /// These are determined at build time via string lookup and serialized to builtin_indices.bin.
 const BuiltinIndices = struct {
-    /// Statement index of Bool type declaration within Bool module
+    /// Statement index of nested Bool type declaration within Builtin module
     bool_type: CIR.Statement.Idx,
-    /// Statement index of Result type declaration within Result module
+    /// Statement index of nested Result type declaration within Builtin module
     result_type: CIR.Statement.Idx,
-    /// Statement index of Dict type declaration within Dict module
+    /// Statement index of nested Dict type declaration within Builtin module
     dict_type: CIR.Statement.Idx,
-    /// Statement index of Set type declaration within Set module
+    /// Statement index of nested Set type declaration within Builtin module
     set_type: CIR.Statement.Idx,
-    /// Statement index of Str type declaration within Str module
+    /// Statement index of nested Str type declaration within Builtin module
     str_type: CIR.Statement.Idx,
 };
 
@@ -111,126 +111,57 @@ pub fn main() !void {
 
     // Ignore command-line arguments - they're only used by Zig's build system for cache tracking
 
-    // Read the .roc source files at runtime
-    // NOTE: We must free these sources manually; CommonEnv.deinit() does not free the source.
-    const bool_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Bool.roc", 1024 * 1024);
+    // Read the Builtin.roc source file at runtime
+    // NOTE: We must free this source manually; CommonEnv.deinit() does not free the source.
+    const builtin_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Builtin.roc", 1024 * 1024);
 
-    const result_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Result.roc", 1024 * 1024);
-
-    const dict_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Dict.roc", 1024 * 1024);
-
-    const set_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Set.roc", 1024 * 1024);
-
-    const str_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Str.roc", 1024 * 1024);
-
-    // Compile Bool.roc (it's completely self-contained, doesn't use Bool or Result types)
-    const bool_env = try compileModule(
+    // Compile Builtin.roc (it's completely self-contained)
+    const builtin_env = try compileModule(
         gpa,
-        "Bool",
-        bool_roc_source,
+        "Builtin",
+        builtin_roc_source,
         &.{}, // No module dependencies
-        null, // bool_stmt not available yet
-        null, // result_stmt not available yet
+        null, // bool_stmt not available yet (will be found within Builtin)
+        null, // result_stmt not available yet (will be found within Builtin)
     );
     defer {
-        bool_env.deinit();
-        gpa.destroy(bool_env);
-        gpa.free(bool_roc_source);
+        builtin_env.deinit();
+        gpa.destroy(builtin_env);
+        gpa.free(builtin_roc_source);
     }
 
-    // Find Bool type declaration via string lookup
-    const bool_type_idx = try findTypeDeclaration(bool_env, "Bool");
+    // Find nested type declarations in Builtin module
+    // These are nested inside Builtin's record extension (Builtin := [].{...})
+    const bool_type_idx = try findTypeDeclaration(builtin_env, "Bool");
+    const result_type_idx = try findTypeDeclaration(builtin_env, "Result");
+    const dict_type_idx = try findTypeDeclaration(builtin_env, "Dict");
+    const set_type_idx = try findTypeDeclaration(builtin_env, "Set");
+    const str_type_idx = try findTypeDeclaration(builtin_env, "Str");
 
-    // Compile Result.roc (doesn't use Bool or Result types in its definition)
-    const result_env = try compileModule(
-        gpa,
-        "Result",
-        result_roc_source,
-        &.{}, // No module dependencies
-        null, // bool_stmt not needed for Result
-        null, // result_stmt not available yet
-    );
-    defer {
-        result_env.deinit();
-        gpa.destroy(result_env);
-        gpa.free(result_roc_source);
-    }
+    // Expose the nested types so they can be found by getExposedNodeIndexById
+    // For builtin types, the statement index IS the node index
+    const bool_ident = builtin_env.common.findIdent("Bool") orelse unreachable;
+    const result_ident = builtin_env.common.findIdent("Result") orelse unreachable;
+    const dict_ident = builtin_env.common.findIdent("Dict") orelse unreachable;
+    const set_ident = builtin_env.common.findIdent("Set") orelse unreachable;
+    const str_ident = builtin_env.common.findIdent("Str") orelse unreachable;
 
-    // Find Result type declaration via string lookup
-    const result_type_idx = try findTypeDeclaration(result_env, "Result");
-
-    // Compile Dict.roc (may use Result type, so we provide the indices)
-    const dict_env = try compileModule(
-        gpa,
-        "Dict",
-        dict_roc_source,
-        &.{}, // No module dependencies
-        bool_type_idx, // Provide Bool type index
-        result_type_idx, // Provide Result type index
-    );
-    defer {
-        dict_env.deinit();
-        gpa.destroy(dict_env);
-        gpa.free(dict_roc_source);
-    }
-
-    // Compile Set.roc (imports Dict, may use Result)
-    const set_env = try compileModule(
-        gpa,
-        "Set",
-        set_roc_source,
-        &[_]ModuleDep{
-            .{ .name = "Dict", .env = dict_env },
-        },
-        bool_type_idx, // Provide Bool type index
-        result_type_idx, // Provide Result type index
-    );
-    defer {
-        set_env.deinit();
-        gpa.destroy(set_env);
-        gpa.free(set_roc_source);
-    }
-
-    // Find Dict type declaration via string lookup
-    const dict_type_idx = try findTypeDeclaration(dict_env, "Dict");
-
-    // Find Set type declaration via string lookup
-    const set_type_idx = try findTypeDeclaration(set_env, "Set");
-
-    // Compile Str.roc (uses Bool type in method signatures)
-    const str_env = try compileModule(
-        gpa,
-        "Str",
-        str_roc_source,
-        &[_]ModuleDep{
-            .{ .name = "Bool", .env = bool_env },
-        },
-        bool_type_idx, // Provide Bool type index
-        result_type_idx, // Provide Result type index
-    );
-    defer {
-        str_env.deinit();
-        gpa.destroy(str_env);
-        gpa.free(str_roc_source);
-    }
-
-    // Find Str type declaration via string lookup
-    const str_type_idx = try findTypeDeclaration(str_env, "Str");
+    try builtin_env.common.setNodeIndexById(gpa, bool_ident, @intCast(@intFromEnum(bool_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, result_ident, @intCast(@intFromEnum(result_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, dict_ident, @intCast(@intFromEnum(dict_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, set_ident, @intCast(@intFromEnum(set_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, str_ident, @intCast(@intFromEnum(str_type_idx)));
 
     // Transform Str nominal types to .str primitive types
     // This must happen BEFORE serialization to ensure the .bin file contains
     // methods associated with the .str primitive, not a nominal type
-    try transformStrNominalToPrimitive(str_env);
+    try transformStrNominalToPrimitive(builtin_env);
 
     // Create output directory
     try std.fs.cwd().makePath("zig-out/builtins");
 
-    // Serialize modules
-    try serializeModuleEnv(gpa, bool_env, "zig-out/builtins/Bool.bin");
-    try serializeModuleEnv(gpa, result_env, "zig-out/builtins/Result.bin");
-    try serializeModuleEnv(gpa, dict_env, "zig-out/builtins/Dict.bin");
-    try serializeModuleEnv(gpa, set_env, "zig-out/builtins/Set.bin");
-    try serializeModuleEnv(gpa, str_env, "zig-out/builtins/Str.bin");
+    // Serialize the single Builtin module
+    try serializeModuleEnv(gpa, builtin_env, "zig-out/builtins/Builtin.bin");
 
     // Create and serialize builtin indices
     const builtin_indices = BuiltinIndices{
@@ -283,6 +214,7 @@ fn compileModule(
         .box = box_ident,
         .bool_stmt = bool_stmt_opt orelse undefined,
         .result_stmt = result_stmt_opt orelse undefined,
+        .builtin_module = null,
     };
 
     // 3. Parse
@@ -396,10 +328,16 @@ fn serializeModuleEnv(
 
 /// Find a type declaration by name in a compiled module
 /// Returns the statement index of the type declaration
+/// For builtin_compiler, types are always in all_statements (not builtin_statements)
+/// because we're compiling Builtin.roc itself, not importing from it.
 fn findTypeDeclaration(env: *const ModuleEnv, type_name: []const u8) !CIR.Statement.Idx {
-    const all_stmts = env.store.sliceStatements(env.all_statements);
+    // Construct the qualified name (e.g., "Builtin.Bool")
+    // Types in nested declarations are stored with their full qualified names
+    var qualified_name_buf: [256]u8 = undefined;
+    const qualified_name = try std.fmt.bufPrint(&qualified_name_buf, "{s}.{s}", .{ env.module_name, type_name });
 
-    // Search through all statements to find the one with matching name
+    // Search in all_statements (where Builtin.roc's own types are stored)
+    const all_stmts = env.store.sliceStatements(env.all_statements);
     for (all_stmts) |stmt_idx| {
         const stmt = env.store.getStatement(stmt_idx);
         switch (stmt) {
@@ -407,7 +345,7 @@ fn findTypeDeclaration(env: *const ModuleEnv, type_name: []const u8) !CIR.Statem
                 const header = env.store.getTypeHeader(decl.header);
                 const ident_idx = header.name;
                 const ident_text = env.getIdentText(ident_idx);
-                if (std.mem.eql(u8, ident_text, type_name)) {
+                if (std.mem.eql(u8, ident_text, qualified_name)) {
                     return stmt_idx;
                 }
             },
@@ -415,7 +353,6 @@ fn findTypeDeclaration(env: *const ModuleEnv, type_name: []const u8) !CIR.Statem
         }
     }
 
-    std.debug.print("ERROR: Could not find type declaration '{s}' in module\n", .{type_name});
     return error.TypeDeclarationNotFound;
 }
 
