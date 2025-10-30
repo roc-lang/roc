@@ -171,9 +171,9 @@ multiLevelQualified = TypeC.new
 
 
 **MISSING NESTED TYPE**
-`Result` is in scope, but it does not expose `Result`.
+`Result` is in scope, but it doesn't have a nested type that's also named `Result`.
 
-You're attempting to reference it here:
+It's referenced here:
 **qualified_type_canonicalization.md:26:14:26:27:**
 ```roc
 resultType : Result.Result(I32, Str)
@@ -205,9 +205,9 @@ processColor = |color|
 
 
 **MISSING NESTED TYPE**
-`Result` is in scope, but it does not expose `Result`.
+`Result` is in scope, but it doesn't have a nested type that's also named `Result`.
 
-You're attempting to reference it here:
+It's referenced here:
 **qualified_type_canonicalization.md:39:13:39:26:**
 ```roc
 transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC

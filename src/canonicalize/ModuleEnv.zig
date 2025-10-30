@@ -1009,13 +1009,23 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const nested_name = try report.addOwnedString(nested_bytes);
 
             try report.document.addInlineCode(parent_name);
-            try report.document.addReflowingText(" is in scope, but it does not expose ");
+            try report.document.addReflowingText(" is in scope, but it doesn't have a nested type ");
+
+            if (std.mem.eql(u8, parent_bytes, nested_bytes)) {
+                // Say "also named" if the parent and nested types are equal, e.g. `Foo.Foo` - when
+                // this happens it can be kind of a confusing message if the message just says
+                // "Foo is in scope, but it doesn't have a nested type named Foo" compared to
+                // "Foo is in scope, but it doesn't have a nested type that's also named Foo"
+                try report.document.addReflowingText("that's also ");
+            }
+
+            try report.document.addReflowingText("named ");
             try report.document.addInlineCode(nested_name);
             try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
-            try report.document.addReflowingText("You're attempting to reference it here:");
+            try report.document.addReflowingText("It's referenced here:");
             try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
