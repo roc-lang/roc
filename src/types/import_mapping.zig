@@ -1,3 +1,6 @@
+//! Provides import mapping functionality for type display names in error messages.
+//! Maps fully-qualified type identifiers to their display names (e.g., "Builtin.Bool" to "Bool").
+
 const std = @import("std");
 const base = @import("base");
 const Ident = base.Ident;
