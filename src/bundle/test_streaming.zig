@@ -162,17 +162,8 @@ test "streaming read with hash mismatch" {
     );
     defer reader.deinit();
 
-    var buffer: [1024]u8 = undefined;
-    while (true) {
-        const n = reader.read(&buffer) catch |err| {
-            try std.testing.expectEqual(err, error.HashMismatch);
-            return;
-        };
-        if (n == 0) break;
-    }
-
-    // Should have gotten hash mismatch error
-    try std.testing.expect(false);
+    // verifyComplete discards remaining data and checks hash
+    try std.testing.expectEqual(error.HashMismatch, reader.verifyComplete());
 }
 
 test "different compression levels" {
@@ -218,22 +209,71 @@ test "different compression levels" {
         );
         defer reader.deinit();
 
-        var decompressed = std.ArrayList(u8).empty;
-        defer decompressed.deinit(allocator);
+        var decompressed_writer: std.Io.Writer.Allocating = .init(allocator);
+        defer decompressed_writer.deinit();
 
-        var buffer: [1024]u8 = undefined;
-        while (true) {
-            const n = try reader.read(&buffer);
-            if (n == 0) break;
-            try decompressed.appendSlice(allocator, buffer[0..n]);
-        }
+        _ = try reader.interface.streamRemaining(&decompressed_writer.writer);
 
-        try std.testing.expectEqualStrings(test_data, decompressed.items);
+        try std.testing.expectEqualStrings(test_data, decompressed_writer.written());
     }
 
     // Higher compression levels should generally produce smaller output
     // (though not always guaranteed for small data)
     try std.testing.expect(sizes[0] >= sizes[3] or sizes[0] - sizes[3] < 10);
+}
+
+test "large data roundtrip" {
+    const allocator = std.testing.allocator;
+
+    // Generate test data larger than the buffer sizes
+    const large_size = 1024 * 1024;
+    const large_data = try allocator.alloc(u8, large_size);
+    defer allocator.free(large_data);
+    for (large_data, 0..) |*b, i| {
+        b.* = @intCast(i % 256);
+    }
+
+    // Compress
+    var compressed_writer: std.Io.Writer.Allocating = .init(allocator);
+    defer compressed_writer.deinit();
+
+    var allocator_copy = allocator;
+    var writer = try streaming_writer.CompressingHashWriter.init(
+        &allocator_copy,
+        TEST_COMPRESSION_LEVEL,
+        &compressed_writer.writer,
+        bundle.allocForZstd,
+        bundle.freeForZstd,
+    );
+    defer writer.deinit();
+
+    try writer.interface.writeAll(large_data);
+    try writer.finish();
+    try writer.interface.flush();
+
+    const hash = writer.getHash();
+    const compressed_list = compressed_writer.written();
+
+    // Decompress
+    var stream = std.Io.Reader.fixed(compressed_list);
+    var reader = try streaming_reader.DecompressingHashReader.init(
+        &allocator_copy,
+        &stream,
+        hash,
+        bundle.allocForZstd,
+        bundle.freeForZstd,
+    );
+    defer reader.deinit();
+
+    var decompressed_writer: std.Io.Writer.Allocating = .init(allocator);
+    defer decompressed_writer.deinit();
+
+    const size_written = try reader.interface.streamRemaining(&decompressed_writer.writer);
+    try reader.verifyComplete();
+    try std.testing.expectEqual(large_size, size_written);
+    try decompressed_writer.writer.flush();
+
+    try std.testing.expectEqualSlices(u8, large_data, decompressed_writer.written());
 }
 
 test "large file streaming extraction" {
@@ -280,8 +320,7 @@ test "large file streaming extraction" {
     defer allocator.free(filename);
 
     // Just verify we successfully bundled a large file
-    var bundle_list = bundle_writer.toArrayList();
-    defer bundle_list.deinit(allocator);
-    try std.testing.expect(bundle_list.items.len > 512); // Should include header and compressed data
+    const bundle_list = bundle_writer.written();
+    try std.testing.expect(bundle_list.len > 512); // Should include header and compressed data
     // Note: Full round-trip testing with unbundle is done in integration tests
 }

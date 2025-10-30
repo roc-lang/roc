@@ -20,13 +20,13 @@ x = (
 "\
 ~~~
 # EXPECTED
-INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
-INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
-INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
-INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
-INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
-INVALID ESCAPE SEQUENCE - :0:0:0:0
-UNCLOSED STRING - :0:0:0:0
+INVALID UNICODE ESCAPE SEQUENCE - string.md:4:3:4:5
+INVALID UNICODE ESCAPE SEQUENCE - string.md:5:3:5:5
+INVALID UNICODE ESCAPE SEQUENCE - string.md:6:3:6:6
+INVALID UNICODE ESCAPE SEQUENCE - string.md:7:3:7:7
+INVALID UNICODE ESCAPE SEQUENCE - string.md:8:3:8:8
+INVALID ESCAPE SEQUENCE - string.md:13:2:14:1
+UNCLOSED STRING - string.md:13:1:13:3
 PARSE ERROR - string.md:13:1:13:2
 PARSE ERROR - string.md:13:2:13:3
 PARSE ERROR - string.md:13:3:13:3
@@ -34,6 +34,7 @@ PARSE ERROR - string.md:13:3:13:3
 **INVALID UNICODE ESCAPE SEQUENCE**
 This Unicode escape sequence is not valid.
 
+**string.md:4:3:4:5:**
 ```roc
 	"\u",
 ```
@@ -43,6 +44,7 @@ This Unicode escape sequence is not valid.
 **INVALID UNICODE ESCAPE SEQUENCE**
 This Unicode escape sequence is not valid.
 
+**string.md:5:3:5:5:**
 ```roc
 	"\u)",
 ```
@@ -52,6 +54,7 @@ This Unicode escape sequence is not valid.
 **INVALID UNICODE ESCAPE SEQUENCE**
 This Unicode escape sequence is not valid.
 
+**string.md:6:3:6:6:**
 ```roc
 	"\u(",
 ```
@@ -61,6 +64,7 @@ This Unicode escape sequence is not valid.
 **INVALID UNICODE ESCAPE SEQUENCE**
 This Unicode escape sequence is not valid.
 
+**string.md:7:3:7:7:**
 ```roc
 	"\u()",
 ```
@@ -70,6 +74,7 @@ This Unicode escape sequence is not valid.
 **INVALID UNICODE ESCAPE SEQUENCE**
 This Unicode escape sequence is not valid.
 
+**string.md:8:3:8:8:**
 ```roc
 	"\u(K)",
 ```
@@ -79,6 +84,7 @@ This Unicode escape sequence is not valid.
 **INVALID ESCAPE SEQUENCE**
 This escape sequence is not recognized.
 
+**string.md:13:2:14:1:**
 ```roc
 "\
 
@@ -88,6 +94,7 @@ This escape sequence is not recognized.
 **UNCLOSED STRING**
 This string is missing a closing quote.
 
+**string.md:13:1:13:3:**
 ```roc
 "\
 ```

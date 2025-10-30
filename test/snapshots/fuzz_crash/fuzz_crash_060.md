@@ -9,7 +9,7 @@ type=snippet
 }
 ~~~
 # EXPECTED
-UNCLOSED STRING - :0:0:0:0
+UNCLOSED STRING - fuzz_crash_060.md:1:2:1:3
 PARSE ERROR - fuzz_crash_060.md:1:1:1:2
 PARSE ERROR - fuzz_crash_060.md:1:2:1:3
 PARSE ERROR - fuzz_crash_060.md:1:3:1:3
@@ -19,6 +19,7 @@ PARSE ERROR - fuzz_crash_060.md:2:1:2:2
 **UNCLOSED STRING**
 This string is missing a closing quote.
 
+**fuzz_crash_060.md:1:2:1:3:**
 ```roc
 0"
 ```

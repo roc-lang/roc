@@ -116,7 +116,7 @@ pub fn deinit(self: *AST, gpa: std.mem.Allocator) void {
 }
 
 /// Convert a tokenize diagnostic to a Report for rendering
-pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, allocator: std.mem.Allocator) !reporting.Report {
+pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, allocator: std.mem.Allocator, filename: ?[]const u8) !reporting.Report {
     const title = switch (diagnostic.tag) {
         .MisplacedCarriageReturn => "MISPLACED CARRIAGE RETURN",
         .AsciiControl => "ASCII CONTROL CHARACTER",
@@ -127,6 +127,7 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
         .UnclosedString => "UNCLOSED STRING",
         .NonPrintableUnicodeInStrLiteral => "NON-PRINTABLE UNICODE IN STRING-LIKE LITERAL",
         .InvalidUtf8InSource => "INVALID UTF-8",
+        .DollarInMiddleOfIdentifier => "STRAY DOLLAR SIGN",
     };
 
     const body = switch (diagnostic.tag) {
@@ -139,6 +140,7 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
         .UnclosedString => "This string is missing a closing quote.",
         .NonPrintableUnicodeInStrLiteral => "Non-printable Unicode characters are not allowed in string-like literals.",
         .InvalidUtf8InSource => "Invalid UTF-8 encoding found in source code. Roc source files must be valid UTF-8.",
+        .DollarInMiddleOfIdentifier => "Dollar sign ($) is only allowed at the very beginning of a name, not in the middle or at the end.",
     };
 
     var report = reporting.Report.init(allocator, title, .runtime_error);
@@ -170,7 +172,7 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
-            null, // No filename available for tokenize diagnostics
+            filename,
             self.env.source,
             env.line_starts.items.items,
         );

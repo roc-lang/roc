@@ -167,7 +167,7 @@ expect {
 ~~~
 # EXPECTED
 LEADING ZERO - :0:0:0:0
-UNCLOSED STRING - :0:0:0:0
+UNCLOSED STRING - fuzz_crash_027.md:118:8:118:22
 PARSE ERROR - fuzz_crash_027.md:40:5:40:6
 PARSE ERROR - fuzz_crash_027.md:40:7:40:8
 PARSE ERROR - fuzz_crash_027.md:40:9:40:10
@@ -239,6 +239,7 @@ Numbers cannot have leading zeros.
 **UNCLOSED STRING**
 This string is missing a closing quote.
 
+**fuzz_crash_027.md:118:8:118:22:**
 ```roc
 	crash "Unreachtement
 ```

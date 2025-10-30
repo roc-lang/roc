@@ -544,7 +544,7 @@ fn assertNoParseProblems(self: *TestEnv) !void {
         defer report_buf.deinit();
 
         for (self.parse_ast.tokenize_diagnostics.items) |tok_diag| {
-            var report = try self.parse_ast.tokenizeDiagnosticToReport(tok_diag, self.gpa);
+            var report = try self.parse_ast.tokenizeDiagnosticToReport(tok_diag, self.gpa, null);
             defer report.deinit();
 
             try renderReportToMarkdownBuffer(&report_buf, &report);
