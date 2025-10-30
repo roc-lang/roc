@@ -5932,7 +5932,17 @@ fn canonicalizeTypeAnnoBasicType(
 
         // Check if this is a module alias
         const module_name = self.scopeLookupModule(module_alias) orelse {
-            // Module is not in current scope
+            // Module is not in current scope - but check if it's a type name first
+            if (self.scopeLookupTypeBinding(module_alias)) |_| {
+                // This is in scope as a type/value, but doesn't expose the nested type being requested
+                return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .nested_type_not_found = .{
+                    .parent_name = module_alias,
+                    .nested_name = type_name_ident,
+                    .region = region,
+                } });
+            }
+
+            // Not a module and not a type - module not imported
             return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .module_not_imported = .{
                 .module_name = module_alias,
                 .region = region,

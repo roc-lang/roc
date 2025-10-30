@@ -784,6 +784,14 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .nested_type_not_found = .{
+            .parent_name = rand_ident_idx(),
+            .nested_name = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .too_many_exports = .{
             .count = rand.random().int(u32),
             .region = rand_region(),

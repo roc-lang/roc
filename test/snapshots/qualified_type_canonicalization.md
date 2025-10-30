@@ -59,10 +59,10 @@ MODULE NOT FOUND - qualified_type_canonicalization.md:11:1:11:32
 UNDECLARED TYPE - qualified_type_canonicalization.md:15:19:15:24
 MODULE NOT IMPORTED - qualified_type_canonicalization.md:22:23:22:44
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:23:23:23:32
-MODULE NOT IMPORTED - qualified_type_canonicalization.md:26:14:26:27
+MISSING NESTED TYPE - qualified_type_canonicalization.md:26:14:26:27
 UNDECLARED TYPE - qualified_type_canonicalization.md:31:16:31:21
 UNUSED VARIABLE - qualified_type_canonicalization.md:35:17:35:22
-MODULE NOT IMPORTED - qualified_type_canonicalization.md:39:13:39:26
+MISSING NESTED TYPE - qualified_type_canonicalization.md:39:13:39:26
 MODULE NOT IMPORTED - qualified_type_canonicalization.md:39:55:39:76
 UNDECLARED TYPE - qualified_type_canonicalization.md:42:9:42:15
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:42:27:42:42
@@ -170,10 +170,10 @@ multiLevelQualified = TypeC.new
                       ^^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `Result` imported into this Roc file.
+**MISSING NESTED TYPE**
+`Result` is in scope, but it does not expose `Result`.
 
-You're attempting to use this module here:
+You're attempting to reference it here:
 **qualified_type_canonicalization.md:26:14:26:27:**
 ```roc
 resultType : Result.Result(I32, Str)
@@ -204,10 +204,10 @@ processColor = |color|
                 ^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `Result` imported into this Roc file.
+**MISSING NESTED TYPE**
+`Result` is in scope, but it does not expose `Result`.
 
-You're attempting to use this module here:
+You're attempting to reference it here:
 **qualified_type_canonicalization.md:39:13:39:26:**
 ```roc
 transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC

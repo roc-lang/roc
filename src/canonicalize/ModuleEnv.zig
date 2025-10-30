@@ -997,6 +997,37 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .nested_type_not_found => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "MISSING NESTED TYPE", .runtime_error);
+
+            const parent_bytes = self.getIdent(data.parent_name);
+            const parent_name = try report.addOwnedString(parent_bytes);
+
+            const nested_bytes = self.getIdent(data.nested_name);
+            const nested_name = try report.addOwnedString(nested_bytes);
+
+            try report.document.addInlineCode(parent_name);
+            try report.document.addReflowingText(" is in scope, but it does not expose ");
+            try report.document.addInlineCode(nested_name);
+            try report.document.addReflowingText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("You're attempting to reference it here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .where_clause_not_allowed_in_type_decl => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
