@@ -15,6 +15,7 @@ main! = |_| {}
 # EXPECTED
 PARSE ERROR - type_function_simple.md:3:26:3:28
 PARSE ERROR - type_function_simple.md:3:29:3:31
+DUPLICATE DEFINITION - type_function_simple.md:4:1:4:6
 # PROBLEMS
 **PARSE ERROR**
 Function types with multiple arrows need parentheses.
@@ -39,6 +40,24 @@ This is an unexpected parsing error. Please check your syntax.
 apply : (_a -> _b) -> _a -> _b
 ```
                             ^^
+
+
+**DUPLICATE DEFINITION**
+The name `apply` is being redeclared in this scope.
+
+The redeclaration is here:
+**type_function_simple.md:4:1:4:6:**
+```roc
+apply = |fn, x| fn(x)
+```
+^^^^^
+
+But `apply` was already defined here:
+**type_function_simple.md:3:1:3:25:**
+```roc
+apply : (_a -> _b) -> _a -> _b
+```
+^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -103,6 +122,16 @@ main! = |_| {}
 (can-ir
 	(d-let
 		(p-assign (ident "apply"))
+		(e-anno-only)
+		(annotation
+			(ty-fn (effectful false)
+				(ty-parens
+					(ty-fn (effectful false)
+						(ty-rigid-var (name "_a"))
+						(ty-rigid-var (name "_b"))))
+				(ty-rigid-var-lookup (ty-rigid-var (name "_a"))))))
+	(d-let
+		(p-assign (ident "apply"))
 		(e-lambda
 			(args
 				(p-assign (ident "fn"))
@@ -117,22 +146,17 @@ main! = |_| {}
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-empty_record)))
-	(s-type-anno (name "apply")
-		(ty-fn (effectful false)
-			(ty-parens
-				(ty-fn (effectful false)
-					(ty-rigid-var (name "_a"))
-					(ty-rigid-var (name "_b"))))
-			(ty-rigid-var-lookup (ty-rigid-var (name "_a"))))))
+			(e-empty_record))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
+		(patt (type "Error"))
 		(patt (type "a -> b, a -> b"))
 		(patt (type "_arg -> {}")))
 	(expressions
+		(expr (type "Error"))
 		(expr (type "a -> b, a -> b"))
 		(expr (type "_arg -> {}"))))
 ~~~

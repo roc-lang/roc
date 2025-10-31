@@ -15,6 +15,7 @@ main! = |_| {}
 # EXPECTED
 PARSE ERROR - type_function_effectful.md:3:31:3:33
 PARSE ERROR - type_function_effectful.md:3:34:3:36
+DUPLICATE DEFINITION - type_function_effectful.md:4:1:4:11
 # PROBLEMS
 **PARSE ERROR**
 Function types with multiple arrows need parentheses.
@@ -39,6 +40,24 @@ This is an unexpected parsing error. Please check your syntax.
 runEffect! : (_a => _b) -> _a => _b
 ```
                                  ^^
+
+
+**DUPLICATE DEFINITION**
+The name `runEffect!` is being redeclared in this scope.
+
+The redeclaration is here:
+**type_function_effectful.md:4:1:4:11:**
+```roc
+runEffect! = |fn!, x| fn!(x)
+```
+^^^^^^^^^^
+
+But `runEffect!` was already defined here:
+**type_function_effectful.md:3:1:3:30:**
+```roc
+runEffect! : (_a => _b) -> _a => _b
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -103,6 +122,16 @@ main! = |_| {}
 (can-ir
 	(d-let
 		(p-assign (ident "runEffect!"))
+		(e-anno-only)
+		(annotation
+			(ty-fn (effectful false)
+				(ty-parens
+					(ty-fn (effectful true)
+						(ty-rigid-var (name "_a"))
+						(ty-rigid-var (name "_b"))))
+				(ty-rigid-var-lookup (ty-rigid-var (name "_a"))))))
+	(d-let
+		(p-assign (ident "runEffect!"))
 		(e-lambda
 			(args
 				(p-assign (ident "fn!"))
@@ -117,22 +146,17 @@ main! = |_| {}
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-empty_record)))
-	(s-type-anno (name "runEffect!")
-		(ty-fn (effectful false)
-			(ty-parens
-				(ty-fn (effectful true)
-					(ty-rigid-var (name "_a"))
-					(ty-rigid-var (name "_b"))))
-			(ty-rigid-var-lookup (ty-rigid-var (name "_a"))))))
+			(e-empty_record))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
+		(patt (type "Error"))
 		(patt (type "a -> b, a -> b"))
 		(patt (type "_arg -> {}")))
 	(expressions
+		(expr (type "Error"))
 		(expr (type "a -> b, a -> b"))
 		(expr (type "_arg -> {}"))))
 ~~~

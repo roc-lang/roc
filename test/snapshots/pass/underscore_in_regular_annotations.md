@@ -39,6 +39,7 @@ transform = |_, b| b
 PARSE ERROR - underscore_in_regular_annotations.md:28:22:28:24
 PARSE ERROR - underscore_in_regular_annotations.md:28:25:28:27
 UNUSED VARIABLE - underscore_in_regular_annotations.md:9:12:9:16
+DUPLICATE DEFINITION - underscore_in_regular_annotations.md:29:1:29:10
 # PROBLEMS
 **PARSE ERROR**
 Function types with multiple arrows need parentheses.
@@ -75,6 +76,24 @@ The unused variable is declared here:
 process = |list| "processed"
 ```
            ^^^^
+
+
+**DUPLICATE DEFINITION**
+The name `transform` is being redeclared in this scope.
+
+The redeclaration is here:
+**underscore_in_regular_annotations.md:29:1:29:10:**
+```roc
+transform = |_, b| b
+```
+^^^^^^^^^
+
+But `transform` was already defined here:
+**underscore_in_regular_annotations.md:28:1:28:21:**
+```roc
+transform : _a -> _b -> _b
+```
+^^^^^^^^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -349,16 +368,19 @@ transform = |_, b| b
 					(ty-rigid-var-lookup (ty-rigid-var (name "b")))))))
 	(d-let
 		(p-assign (ident "transform"))
+		(e-anno-only)
+		(annotation
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "_a"))
+				(ty-rigid-var (name "_b")))))
+	(d-let
+		(p-assign (ident "transform"))
 		(e-lambda
 			(args
 				(p-underscore)
 				(p-assign (ident "b")))
 			(e-lookup-local
-				(p-assign (ident "b")))))
-	(s-type-anno (name "transform")
-		(ty-fn (effectful false)
-			(ty-rigid-var (name "_a"))
-			(ty-rigid-var (name "_b")))))
+				(p-assign (ident "b"))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -368,15 +390,17 @@ transform = |_, b| b
 		(patt (type "a -> a"))
 		(patt (type "List(_elem) -> Str"))
 		(patt (type "{ field: _field2, other: Num(Int(Unsigned32)) } -> Num(Int(Unsigned32))"))
-		(patt (type "Builtin.Try(_c, Str) -> Str"))
+		(patt (type "Try(_c, Str) -> Str"))
 		(patt (type "a -> b, List(a) -> List(b)"))
+		(patt (type "Error"))
 		(patt (type "_arg, c -> c")))
 	(expressions
 		(expr (type "_arg -> _ret"))
 		(expr (type "a -> a"))
 		(expr (type "List(_elem) -> Str"))
 		(expr (type "{ field: _field2, other: Num(Int(Unsigned32)) } -> Num(Int(Unsigned32))"))
-		(expr (type "Builtin.Try(_c, Str) -> Str"))
+		(expr (type "Try(_c, Str) -> Str"))
 		(expr (type "a -> b, List(a) -> List(b)"))
+		(expr (type "Error"))
 		(expr (type "_arg, c -> c"))))
 ~~~

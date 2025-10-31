@@ -288,12 +288,17 @@ modu :
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-anno (name "modu")
-		(ty-malformed)))
+	(d-let
+		(p-assign (ident "modu"))
+		(e-anno-only)
+		(annotation
+			(ty-malformed))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs)
-	(expressions))
+	(defs
+		(patt (type "Error")))
+	(expressions
+		(expr (type "Error"))))
 ~~~

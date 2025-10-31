@@ -84,12 +84,17 @@ b : S
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-anno (name "b")
-		(ty-malformed)))
+	(d-let
+		(p-assign (ident "b"))
+		(e-anno-only)
+		(annotation
+			(ty-malformed))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs)
-	(expressions))
+	(defs
+		(patt (type "Error")))
+	(expressions
+		(expr (type "Error"))))
 ~~~

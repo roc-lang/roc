@@ -664,6 +664,7 @@ fn processAssociatedItemsSecondPass(
                                         const decl_text = self.env.getIdent(decl_ident);
                                         const qualified_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
 
+
                                         // Canonicalize with the qualified name and type annotation
                                         const def_idx = try self.canonicalizeAssociatedDeclWithAnno(
                                             decl,
@@ -676,6 +677,7 @@ fn processAssociatedItemsSecondPass(
                                         // Register this associated item by its qualified name
                                         const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                                         try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+                                    } else {
                                     }
                                 }
                             }
@@ -690,6 +692,7 @@ fn processAssociatedItemsSecondPass(
                             const parent_text = self.env.getIdent(parent_name);
                             const name_text = self.env.getIdent(name_ident);
                             const qualified_idx = try self.env.insertQualifiedIdent(parent_text, name_text);
+
 
                             // Create anno-only def with the qualified name
                             const def_idx = try self.createAnnoOnlyDef(qualified_idx, type_anno_idx, where_clauses, region);
@@ -1096,6 +1099,13 @@ pub fn canonicalizeFile(
                                 // and let the next iteration handle the decl normally
                                 const def_idx = try self.createAnnoOnlyDef(name_ident, type_anno_idx, where_clauses, region);
                                 try self.env.store.addScratchDef(def_idx);
+
+                                // If this identifier should be exposed, register it
+                                const ident_text = self.env.getIdent(name_ident);
+                                if (self.exposed_ident_texts.contains(ident_text)) {
+                                    const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                                    try self.env.setExposedNodeIndexById(name_ident, def_idx_u16);
+                                }
                             }
                         },
                         else => {
@@ -1103,6 +1113,13 @@ pub fn canonicalizeFile(
                             // create a Def with an e_anno_only body
                             const def_idx = try self.createAnnoOnlyDef(name_ident, type_anno_idx, where_clauses, region);
                             try self.env.store.addScratchDef(def_idx);
+
+                            // If this identifier should be exposed, register it
+                            const ident_text = self.env.getIdent(name_ident);
+                            if (self.exposed_ident_texts.contains(ident_text)) {
+                                const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                                try self.env.setExposedNodeIndexById(name_ident, def_idx_u16);
+                            }
                         },
                     }
                 }
@@ -1374,8 +1391,11 @@ fn canonicalizeStmtDecl(self: *Self, decl: AST.Statement.Decl, mb_last_anno: ?Ty
         const token_region = self.parse_ir.tokens.resolve(@intCast(pattern.ident.ident_tok));
         const ident_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
 
-        // If this identifier is exposed, add it to exposed_items
-        if (self.exposed_ident_texts.contains(ident_text)) {
+        // Top-level associated items (identifiers ending with '!') are automatically exposed
+        const is_associated_item = ident_text.len > 0 and ident_text[ident_text.len - 1] == '!';
+
+        // If this identifier is exposed (or is an associated item), add it to exposed_items
+        if (self.exposed_ident_texts.contains(ident_text) or is_associated_item) {
             // Get the interned identifier - it should already exist from parsing
             const ident = base.Ident.for_text(ident_text);
             const idx = try self.env.insertIdent(ident);

@@ -107,32 +107,57 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-anno (name "foo")
-		(ty-lookup (name "U64") (builtin)))
-	(s-type-anno (name "bar")
-		(ty-malformed))
-	(s-type-anno (name "baz")
-		(ty-tuple
-			(ty-rigid-var (name "_a"))
-			(ty-rigid-var (name "_b"))
-			(ty-rigid-var (name "_c"))))
-	(s-type-anno (name "add_one")
-		(ty-parens
+	(d-let
+		(p-assign (ident "foo"))
+		(e-anno-only)
+		(annotation
+			(ty-lookup (name "U64") (builtin))))
+	(d-let
+		(p-assign (ident "bar"))
+		(e-anno-only)
+		(annotation
+			(ty-malformed)))
+	(d-let
+		(p-assign (ident "baz"))
+		(e-anno-only)
+		(annotation
+			(ty-tuple
+				(ty-rigid-var (name "_a"))
+				(ty-rigid-var (name "_b"))
+				(ty-rigid-var (name "_c")))))
+	(d-let
+		(p-assign (ident "add_one"))
+		(e-anno-only)
+		(annotation
+			(ty-parens
+				(ty-fn (effectful false)
+					(ty-lookup (name "U8") (builtin))
+					(ty-lookup (name "U16") (builtin))
+					(ty-lookup (name "U32") (builtin))))))
+	(d-let
+		(p-assign (ident "main!"))
+		(e-anno-only)
+		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "U8") (builtin))
-				(ty-lookup (name "U16") (builtin))
-				(ty-lookup (name "U32") (builtin)))))
-	(s-type-anno (name "main!")
-		(ty-fn (effectful false)
-			(ty-apply (name "List") (builtin)
-				(ty-malformed))
-			(ty-apply (name "Result") (builtin)
-				(ty-record)
-				(ty-underscore)))))
+				(ty-apply (name "List") (builtin)
+					(ty-malformed))
+				(ty-apply (name "Result") (builtin)
+					(ty-record)
+					(ty-underscore))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs)
-	(expressions))
+	(defs
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error")))
+	(expressions
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))))
 ~~~

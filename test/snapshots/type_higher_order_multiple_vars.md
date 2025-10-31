@@ -19,6 +19,7 @@ PARSE ERROR - type_higher_order_multiple_vars.md:3:40:3:42
 PARSE ERROR - type_higher_order_multiple_vars.md:3:43:3:45
 PARSE ERROR - type_higher_order_multiple_vars.md:3:46:3:48
 PARSE ERROR - type_higher_order_multiple_vars.md:3:48:3:49
+DUPLICATE DEFINITION - type_higher_order_multiple_vars.md:4:1:4:8
 # PROBLEMS
 **PARSE ERROR**
 Function types with multiple arrows need parentheses.
@@ -90,6 +91,24 @@ This is an unexpected parsing error. Please check your syntax.
 compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
 ```
                                                ^
+
+
+**DUPLICATE DEFINITION**
+The name `compose` is being redeclared in this scope.
+
+The redeclaration is here:
+**type_higher_order_multiple_vars.md:4:1:4:8:**
+```roc
+compose = |f, g| |x| f(g(x))
+```
+^^^^^^^
+
+But `compose` was already defined here:
+**type_higher_order_multiple_vars.md:3:1:3:35:**
+```roc
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -165,6 +184,19 @@ main! = |_| {}
 (can-ir
 	(d-let
 		(p-assign (ident "compose"))
+		(e-anno-only)
+		(annotation
+			(ty-fn (effectful false)
+				(ty-parens
+					(ty-fn (effectful false)
+						(ty-rigid-var (name "_b"))
+						(ty-rigid-var (name "_c"))))
+				(ty-parens
+					(ty-fn (effectful false)
+						(ty-rigid-var (name "_a"))
+						(ty-rigid-var-lookup (ty-rigid-var (name "_b"))))))))
+	(d-let
+		(p-assign (ident "compose"))
 		(e-lambda
 			(args
 				(p-assign (ident "f"))
@@ -189,25 +221,17 @@ main! = |_| {}
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-empty_record)))
-	(s-type-anno (name "compose")
-		(ty-fn (effectful false)
-			(ty-parens
-				(ty-fn (effectful false)
-					(ty-rigid-var (name "_b"))
-					(ty-rigid-var (name "_c"))))
-			(ty-parens
-				(ty-fn (effectful false)
-					(ty-rigid-var (name "_a"))
-					(ty-rigid-var-lookup (ty-rigid-var (name "_b"))))))))
+			(e-empty_record))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
+		(patt (type "Error"))
 		(patt (type "a -> b, c -> a -> c -> b"))
 		(patt (type "_arg -> {}")))
 	(expressions
+		(expr (type "Error"))
 		(expr (type "a -> b, c -> a -> c -> b"))
 		(expr (type "_arg -> {}"))))
 ~~~

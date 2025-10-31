@@ -456,12 +456,17 @@ pkg :
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-anno (name "pkg")
-		(ty-malformed)))
+	(d-let
+		(p-assign (ident "pkg"))
+		(e-anno-only)
+		(annotation
+			(ty-malformed))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs)
-	(expressions))
+	(defs
+		(patt (type "Error")))
+	(expressions
+		(expr (type "Error"))))
 ~~~

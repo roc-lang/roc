@@ -644,15 +644,15 @@ combineResults = |result1, result2|
 	(defs
 		(patt (type "Error -> Error"))
 		(patt (type "Str -> Error"))
-		(patt (type "Error -> Builtin.Try(Error, Error)"))
+		(patt (type "Error -> Try(Error, Error)"))
 		(patt (type "Error"))
 		(patt (type "Error, Str -> Error"))
-		(patt (type "Builtin.Try(a, err), Builtin.Try(b, err) -> Builtin.Try((a, b), err)")))
+		(patt (type "Try(a, err), Try(b, err) -> Try((a, b), err)")))
 	(expressions
 		(expr (type "Error -> Error"))
 		(expr (type "Str -> Error"))
-		(expr (type "Error -> Builtin.Try(Error, Error)"))
+		(expr (type "Error -> Try(Error, Error)"))
 		(expr (type "Error"))
 		(expr (type "Error, Str -> Error"))
-		(expr (type "Builtin.Try(a, err), Builtin.Try(b, err) -> Builtin.Try((a, b), err)"))))
+		(expr (type "Try(a, err), Try(b, err) -> Try((a, b), err)"))))
 ~~~
