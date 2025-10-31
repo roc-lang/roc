@@ -673,11 +673,9 @@ fn processAssociatedItemsSecondPass(
                                         );
                                         try self.env.store.addScratchDef(def_idx);
 
-                                        // Set node index for exposed associated item
-                                        if (self.env.containsExposedById(qualified_idx)) {
-                                            const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                                            try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
-                                        }
+                                        // Register this associated item by its qualified name
+                                        const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                                        try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
                                     }
                                 }
                             }
@@ -722,11 +720,9 @@ fn processAssociatedItemsSecondPass(
                         const def_idx = try self.canonicalizeAssociatedDecl(decl, qualified_idx);
                         try self.env.store.addScratchDef(def_idx);
 
-                        // Set node index for exposed associated item
-                        if (self.env.containsExposedById(qualified_idx)) {
-                            const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                            try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
-                        }
+                        // Register this associated item by its qualified name
+                        const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                        try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
                     }
                 } else {
                     // Non-identifier patterns are not supported in associated blocks
@@ -2725,14 +2721,13 @@ pub fn canonicalizeExpr(
                                         break :blk_name self.env.getIdent(fully_qualified_idx);
                                     } else field_text;
 
-                                    // Look up the name in the module - no "exposed" check needed because
-                                    // if the type is in scope, all its associated items are available
+                                    // Look up the associated item by its qualified name
                                     const qname_ident = module_env.common.findIdent(lookup_name) orelse {
                                         // Identifier not found - just return null
                                         // The error will be handled by the code below that checks target_node_idx_opt
                                         break :blk null;
                                     };
-                                    break :blk module_env.findDefByIdent(qname_ident);
+                                    break :blk module_env.getExposedNodeIndexById(qname_ident);
                                 } else {
                                     break :blk null;
                                 }

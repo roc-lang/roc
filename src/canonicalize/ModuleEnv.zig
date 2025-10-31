@@ -1596,22 +1596,6 @@ pub fn getExposedNodeIndexById(self: *const Self, ident_idx: Ident.Idx) ?u16 {
     return self.common.getNodeIndexById(self.gpa, ident_idx);
 }
 
-/// Find a def by its identifier, searching ALL defs (not just exposed ones).
-/// Returns the def index (as u16 for compatibility with node index APIs).
-pub fn findDefByIdent(self: *const Self, ident_idx: Ident.Idx) ?u16 {
-    const defs_slice = self.store.sliceDefs(self.all_defs);
-    for (defs_slice) |def_idx| {
-        const def = self.store.getDef(def_idx);
-        const pattern = self.store.getPattern(def.pattern);
-        if (pattern == .assign) {
-            if (pattern.assign.ident == ident_idx) {
-                return @intCast(@intFromEnum(def_idx));
-            }
-        }
-    }
-    return null;
-}
-
 /// Get the exposed node index for a type given its statement index.
 /// This is used for auto-imported builtin types where we have the statement index pre-computed.
 /// For auto-imported types, the statement index IS the node/var index directly.

@@ -157,6 +157,10 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !void {
                     .data_2 = @intFromEnum(expr_idx),
                     .data_3 = extra_start,
                 });
+
+                // Register this associated item by its qualified name
+                const stmt_idx_u16: u16 = @intCast(@intFromEnum(stmt_idx));
+                try env.setExposedNodeIndexById(type_anno.name, stmt_idx_u16);
             }
         }
     }
