@@ -1034,7 +1034,7 @@ test "check type - for" {
         \\  var result = 0
         \\  for x in [1, 2, 3] {
         \\    result = result + x
-        \\  } 
+        \\  }
         \\  result
         \\}
     ;
@@ -1051,7 +1051,7 @@ test "check type - for mismatch" {
         \\  var result = 0
         \\  for x in ["a", "b", "c"] {
         \\    result = result + x
-        \\  } 
+        \\  }
         \\  result
         \\}
     ;
@@ -1286,7 +1286,6 @@ fn checkTypesExpr(
 
     return test_env.assertLastDefType(expected);
 }
-
 
 // Associated items referencing each other
 

@@ -2682,13 +2682,23 @@ pub fn canonicalizeExpr(
                             const module_text = self.env.getIdent(module_name);
 
                             // Check if this module is imported in the current scope
+                            // For auto-imported nested types (Bool, Str), use the parent module name (Builtin)
+                            const lookup_module_name = if (self.module_envs) |envs_map| blk_lookup: {
+                                if (envs_map.get(module_name)) |auto_imported_type| {
+                                    break :blk_lookup auto_imported_type.env.module_name;
+                                } else {
+                                    break :blk_lookup module_text;
+                                }
+                            } else module_text;
+
                             // If not, create an auto-import
-                            const import_idx = self.scopeLookupImportedModule(module_text) orelse blk: {
+                            const import_idx = self.scopeLookupImportedModule(lookup_module_name) orelse blk: {
                                 // Check if this is an auto-imported module
                                 if (self.module_envs) |envs_map| {
-                                    if (envs_map.get(module_name)) |_| {
-                                        // Create auto-import for this module
-                                        break :blk try self.getOrCreateAutoImport(module_text);
+                                    if (envs_map.get(module_name)) |auto_imported_type| {
+                                        // For auto-imported nested types (like Bool, Str), import the parent module (Builtin)
+                                        const actual_module_name = auto_imported_type.env.module_name;
+                                        break :blk try self.getOrCreateAutoImport(actual_module_name);
                                     }
                                 }
 

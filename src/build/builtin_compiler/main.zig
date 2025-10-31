@@ -96,8 +96,22 @@ fn transformStrNominalToPrimitive(env: *ModuleEnv) !void {
 /// Replace specific e_anno_only expressions with e_low_level operations.
 /// This transforms standalone annotations into low-level builtin operations
 /// that will be recognized by the compiler backend.
-fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !void {
+/// Returns a list of new def indices created.
+fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     const gpa = env.gpa;
+    var new_def_indices = std.ArrayList(CIR.Def.Idx).empty;
+
+    // Ensure types array has entries for all existing nodes
+    // This is necessary because varFrom(node_idx) assumes type_var index == node index
+    const current_nodes = env.store.nodes.len();
+    const current_types = env.types.len();
+    if (current_types < current_nodes) {
+        // Fill the gap with fresh type variables
+        var i: u64 = current_types;
+        while (i < current_nodes) : (i += 1) {
+            _ = env.types.fresh() catch unreachable;
+        }
+    }
 
     // Build a hashmap of (qualified name -> low-level operation)
     var low_level_map = std.AutoHashMap(base.Ident.Idx, CIR.Expr.LowLevel).init(gpa);
@@ -108,10 +122,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !void {
     const str_is_empty_ident = env.common.findIdent("Builtin.Str.is_empty") orelse
         try env.insertIdent(base.Ident.for_text("Builtin.Str.is_empty"));
     try low_level_map.put(str_is_empty_ident, .str_is_empty);
-
-    const set_is_empty_ident = env.common.findIdent("Builtin.Set.is_empty") orelse
-        try env.insertIdent(base.Ident.for_text("Builtin.Set.is_empty"));
-    try low_level_map.put(set_is_empty_ident, .set_is_empty);
 
     // Iterate through all statements and replace matching s_type_anno with s_decl containing e_low_level
     const all_stmts = env.store.sliceStatements(env.all_statements);
@@ -124,43 +134,56 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !void {
                 const low_level_op = entry.value;
 
                 // Create e_low_level expression node
-                const expr_node_idx = @intFromEnum(stmt_idx); // Reuse the statement index for the expression
-                const expr_idx: CIR.Expr.Idx = @enumFromInt(expr_node_idx + 1000000); // Offset to avoid collision
-
+                // Get the actual index by checking the current length before appending
+                const expr_idx: CIR.Expr.Idx = @enumFromInt(env.store.nodes.len());
                 _ = env.store.nodes.append(gpa, .{
                     .tag = .expr_low_level,
                     .data_1 = @intFromEnum(low_level_op),
                     .data_2 = 0,
                     .data_3 = 0,
                 }) catch unreachable;
+                _ = env.store.regions.append(gpa, base.Region.zero()) catch unreachable;
+                // Create a type entry for this expression node
+                _ = env.types.fresh() catch unreachable;
 
                 // Create identifier pattern node
-                const pattern_idx: CIR.Pattern.Idx = @enumFromInt(expr_node_idx + 2000000); // Different offset
+                const pattern_idx: CIR.Pattern.Idx = @enumFromInt(env.store.nodes.len());
                 _ = env.store.nodes.append(gpa, .{
                     .tag = .pattern_identifier,
                     .data_1 = @bitCast(type_anno.name),
                     .data_2 = 0,
                     .data_3 = 0,
                 }) catch unreachable;
+                _ = env.store.regions.append(gpa, base.Region.zero()) catch unreachable;
+                // Create a type entry for this pattern node
+                _ = env.types.fresh() catch unreachable;
 
-                // Replace the s_type_anno statement node with s_decl
-                // We need to store anno in extra_data
-                const extra_start = @as(u32, @intCast(env.store.extra_data.items.items.len));
-                env.store.extra_data.items.appendSlice(gpa, &[_]u32{
-                    1, // has_anno = true
-                    @intFromEnum(type_anno.anno),
-                }) catch unreachable;
+                // Create an Annotation that wraps the TypeAnno (no where clause for builtins)
+                const annotation_idx = try env.addAnnotation(.{
+                    .anno = type_anno.anno,
+                    .where = null,
+                }, base.Region.zero());
+                // Create a type entry for this annotation node
+                _ = env.types.fresh() catch unreachable;
 
-                env.store.nodes.set(@enumFromInt(@intFromEnum(stmt_idx)), .{
-                    .tag = .statement_decl,
-                    .data_1 = @intFromEnum(pattern_idx),
-                    .data_2 = @intFromEnum(expr_idx),
-                    .data_3 = extra_start,
-                });
+                // Create a def node for this low-level operation
+                // The def will be added to the all_defs list and type-checked properly
+                const def_idx = try env.addDef(.{
+                    .pattern = pattern_idx,
+                    .expr = expr_idx,
+                    .annotation = annotation_idx,
+                    .kind = .let, // This is a let-binding, not a statement
+                }, base.Region.zero());
+                // Create a type entry for this def node
+                _ = env.types.fresh() catch unreachable;
 
                 // Register this associated item by its qualified name
-                const stmt_idx_u16: u16 = @intCast(@intFromEnum(stmt_idx));
-                try env.setExposedNodeIndexById(type_anno.name, stmt_idx_u16);
+                // Use the def index, not the old statement index
+                const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                try env.setExposedNodeIndexById(type_anno.name, def_idx_u16);
+
+                // Track this new def index
+                try new_def_indices.append(gpa, def_idx);
             }
         }
     }
@@ -185,6 +208,8 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !void {
         std.debug.print("{s}", .{missing_buf.items});
         return error.LowLevelOperationsNotFound;
     }
+
+    return new_def_indices;
 }
 
 /// Build-time compiler that compiles builtin .roc sources into serialized ModuleEnvs.
@@ -246,10 +271,7 @@ pub fn main() !void {
     try builtin_env.common.setNodeIndexById(gpa, set_ident, @intCast(@intFromEnum(set_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, str_ident, @intCast(@intFromEnum(str_type_idx)));
 
-    // Replace Str.is_empty's e_anno_only with e_low_level
-    // This transforms the standalone annotation into a low-level builtin operation
-    // This must happen BEFORE transformStrNominalToPrimitive
-    try replaceStrIsEmptyWithLowLevel(builtin_env);
+    // Note: replaceStrIsEmptyWithLowLevel() is now called inside compileModule() before type checking
 
     // Transform Str nominal types to .str primitive types
     // This must happen BEFORE serialization to ensure the .bin file contains
@@ -388,6 +410,60 @@ fn compileModule(
         return error.CanonicalizeError;
     }
 
+    // 5.5. Transform low-level operations (must happen before type checking)
+    // For the Builtin module, transform annotation-only defs into low-level operations
+    if (std.mem.eql(u8, module_name, "Builtin")) {
+        // Transform annotation-only defs and get the list of new def indices
+        var new_def_indices = try replaceStrIsEmptyWithLowLevel(module_env);
+        defer new_def_indices.deinit(gpa);
+
+        if (new_def_indices.items.len > 0) {
+            // Rebuild all_defs span to include both old and new defs
+            // First, get the old def indices from extra_data
+            const old_span = module_env.all_defs.span;
+            const old_def_count = old_span.len;
+
+            // Allocate new space in extra_data for all defs (old + new)
+            const new_span_start: u32 = @intCast(module_env.store.extra_data.len());
+
+            // Copy old def indices
+            var i: u32 = 0;
+            while (i < old_def_count) : (i += 1) {
+                const idx = @as(collections.SafeList(u32).Idx, @enumFromInt(old_span.start + i));
+                const old_def_idx = module_env.store.extra_data.get(idx).*;
+                _ = try module_env.store.extra_data.append(gpa, old_def_idx);
+            }
+
+            // Append new def indices
+            for (new_def_indices.items) |new_def_idx| {
+                _ = try module_env.store.extra_data.append(gpa, @intFromEnum(new_def_idx));
+            }
+
+            // Update all_defs to point to the new span
+            module_env.all_defs.span.start = new_span_start;
+            module_env.all_defs.span.len = old_def_count + @as(u32, @intCast(new_def_indices.items.len));
+
+            // Rebuild the dependency graph and evaluation order to include new defs
+            const DependencyGraph = @import("can").DependencyGraph;
+            var graph = try DependencyGraph.buildDependencyGraph(
+                module_env,
+                module_env.all_defs,
+                gpa,
+            );
+            defer graph.deinit();
+
+            const eval_order = try DependencyGraph.computeSCCs(&graph, gpa);
+            // Free the old evaluation order if it exists
+            if (module_env.evaluation_order) |old_order| {
+                old_order.deinit();
+                gpa.destroy(old_order);
+            }
+            const eval_order_ptr = try gpa.create(DependencyGraph.EvaluationOrder);
+            eval_order_ptr.* = eval_order;
+            module_env.evaluation_order = eval_order_ptr;
+        }
+    }
+
     // 6. Type check
     // Build the list of other modules for type checking
     var imported_envs = std.ArrayList(*const ModuleEnv).empty;
@@ -419,6 +495,7 @@ fn compileModule(
         }
         return error.TypeCheckError;
     }
+
 
     return module_env;
 }
