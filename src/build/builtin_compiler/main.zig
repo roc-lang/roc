@@ -49,12 +49,9 @@ fn transformStrNominalToPrimitive(env: *ModuleEnv) !void {
     const FlatType = types.FlatType;
 
     // Get the Str identifier in this module
-    const str_ident_opt = env.common.findIdent("Str");
-    if (str_ident_opt == null) {
-        // No Str ident found, nothing to transform
-        return;
-    }
-    const str_ident = str_ident_opt.?;
+    const str_ident = env.common.findIdent("Str") orelse {
+        @panic("Str identifier not found in Builtin module");
+    };
 
     // Iterate through all slots in the type store
     for (0..env.types.len()) |i| {
@@ -102,12 +99,9 @@ fn transformStrNominalToPrimitive(env: *ModuleEnv) !void {
 /// nominal List(a) with FlatType{ .list = element_type_var }.
 fn transformListNominalToPrimitive(env: *ModuleEnv) !void {
     // Get the List identifier in this module
-    const list_ident_opt = env.common.findIdent("List");
-    if (list_ident_opt == null) {
-        // No List ident found, nothing to transform
-        return;
-    }
-    const list_ident = list_ident_opt.?;
+    const list_ident = env.common.findIdent("List") orelse {
+        @panic("List identifier not found in Builtin module");
+    };
 
     // Iterate through all slots in the type store
     for (0..env.types.len()) |i| {
@@ -133,9 +127,7 @@ fn transformListNominalToPrimitive(env: *ModuleEnv) !void {
                             const type_args = env.types.sliceNominalArgs(nominal);
 
                             if (type_args.len != 1) {
-                                // List should have exactly 1 type parameter
-                                // If it doesn't, something is wrong - skip this one
-                                continue;
+                                @panic("List nominal type must have exactly 1 type parameter");
                             }
 
                             const element_type_var = type_args[0];
