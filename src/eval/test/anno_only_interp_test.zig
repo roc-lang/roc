@@ -108,7 +108,20 @@ test "e_anno_only - function crashes when called" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
+    // Check what defs were created
+    const defs_slice = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    std.debug.print("\nTEST: Module has {} defs after canonicalization\n", .{defs_slice.len});
+    for (defs_slice, 0..) |def_idx, i| {
+        const def = result.module_env.store.getDef(def_idx);
+        const pattern = result.module_env.store.getPattern(def.pattern);
+        if (pattern == .assign) {
+            const ident_text = result.module_env.getIdentText(pattern.assign.ident);
+            std.debug.print("  Def {}: {s}\n", .{ i, ident_text });
+        }
+    }
+
     const summary = try result.evaluator.evalAll();
+    std.debug.print("TEST: evaluated={}, crashed={}\n", .{ summary.evaluated, summary.crashed });
 
     // Should evaluate 2 declarations with 1 crash (the call to foo should crash)
     try testing.expectEqual(@as(u32, 2), summary.evaluated);

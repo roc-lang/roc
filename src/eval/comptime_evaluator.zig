@@ -27,6 +27,7 @@ const ProblemStore = check_mod.problem.Store;
 const EvalError = Interpreter.Error;
 const CrashContext = eval_mod.CrashContext;
 const BuiltinTypes = eval_mod.BuiltinTypes;
+const layout_mod = @import("layout");
 
 fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
@@ -235,8 +236,9 @@ pub const ComptimeEvaluator = struct {
         const region = self.env.store.getExprRegion(expr_idx);
 
         const expr = self.env.store.getExpr(expr_idx);
+
         const is_lambda = switch (expr) {
-            .e_lambda, .e_closure => true,
+            .e_lambda, .e_closure, .e_anno_only => true,
             else => false,
         };
 
@@ -247,6 +249,12 @@ pub const ComptimeEvaluator = struct {
                     .region = region,
                 },
             };
+        }
+
+        // Special handling for e_anno_only expressions
+        // Skip them during initial evaluation - they'll be evaluated on-demand when accessed
+        if (expr == .e_anno_only) {
+            return EvalResult{ .success = null };
         }
 
         // Reset halted flag at the start of each def - crashes only halt within a single def

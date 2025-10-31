@@ -1075,28 +1075,114 @@ pub fn canonicalizeFile(
                     const next_stmt = self.parse_ir.store.getStatement(next_stmt_id);
                     switch (next_stmt) {
                         .decl => |decl| {
-                            // If so process it and increment i again
-                            i = next_i;
-                            _ = try self.canonicalizeStmtDecl(decl, TypeAnnoIdent{
-                                .name = name_ident,
-                                .anno_idx = type_anno_idx,
-                                .where = where_clauses,
-                            });
+                            // Check if the declaration pattern matches the annotation name
+                            const ast_pattern = self.parse_ir.store.getPattern(decl.pattern);
+                            const names_match = if (ast_pattern == .ident) blk: {
+                                const pattern_ident = ast_pattern.ident;
+                                if (self.parse_ir.tokens.resolveIdentifier(pattern_ident.ident_tok)) |decl_ident| {
+                                    break :blk name_ident.idx == decl_ident.idx;
+                                }
+                                break :blk false;
+                            } else false;
+
+                            if (names_match) {
+                                // If so process it and increment i again
+                                i = next_i;
+                                _ = try self.canonicalizeStmtDecl(decl, TypeAnnoIdent{
+                                    .name = name_ident,
+                                    .anno_idx = type_anno_idx,
+                                    .where = where_clauses,
+                                });
+                            } else {
+                                // Names don't match - create an anno-only def for this annotation
+                                // and let the next iteration handle the decl normally
+
+                                // Create the pattern for this def
+                                const pattern = Pattern{
+                                    .assign = .{
+                                        .ident = name_ident,
+                                    },
+                                };
+                                const pattern_idx = try self.env.addPattern(pattern, region);
+
+                                // Introduce the name to scope
+                                switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, name_ident, pattern_idx, false, true)) {
+                                    .success => {},
+                                    .shadowing_warning => |shadowed_pattern_idx| {
+                                        const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+                                        try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                                            .ident = name_ident,
+                                            .region = region,
+                                            .original_region = original_region,
+                                        } });
+                                    },
+                                    else => {},
+                                }
+
+                                // Create the e_anno_only expression
+                                const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{} }, region);
+
+                                // Create the annotation structure
+                                const annotation = CIR.Annotation{
+                                    .anno = type_anno_idx,
+                                    .where = where_clauses,
+                                };
+                                const annotation_idx = try self.env.addAnnotation(annotation, region);
+
+                                // Add the decl as a def so it gets included in all_defs
+                                const def_idx = try self.env.addDef(.{
+                                    .pattern = pattern_idx,
+                                    .expr = anno_only_expr,
+                                    .annotation = annotation_idx,
+                                    .kind = .let,
+                                }, region);
+                                try self.env.store.addScratchDef(def_idx);
+                            }
                         },
                         else => {
                             // If the next stmt does not match this annotation,
-                            // then just add the annotation independently
+                            // create a Def with an e_anno_only body
 
-                            // TODO: Capture diagnostic that this anno doesn't
-                            // have a corresponding def
+                            // Create the pattern for this def
+                            const pattern = Pattern{
+                                .assign = .{
+                                    .ident = name_ident,
+                                },
+                            };
+                            const pattern_idx = try self.env.addPattern(pattern, region);
 
-                            const type_anno_stmt = Statement{ .s_type_anno = .{
-                                .name = name_ident,
+                            // Introduce the name to scope
+                            switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, name_ident, pattern_idx, false, true)) {
+                                .success => {},
+                                .shadowing_warning => |shadowed_pattern_idx| {
+                                    const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+                                    try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                                        .ident = name_ident,
+                                        .region = region,
+                                        .original_region = original_region,
+                                    } });
+                                },
+                                else => {},
+                            }
+
+                            // Create the e_anno_only expression
+                            const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{} }, region);
+
+                            // Create the annotation structure
+                            const annotation = CIR.Annotation{
                                 .anno = type_anno_idx,
                                 .where = where_clauses,
-                            } };
-                            const type_anno_stmt_idx = try self.env.addStatement(type_anno_stmt, region);
-                            try self.env.store.addScratchStatement(type_anno_stmt_idx);
+                            };
+                            const annotation_idx = try self.env.addAnnotation(annotation, region);
+
+                            // Add the decl as a def so it gets included in all_defs
+                            const def_idx = try self.env.addDef(.{
+                                .pattern = pattern_idx,
+                                .expr = anno_only_expr,
+                                .annotation = annotation_idx,
+                                .kind = .let,
+                            }, region);
+                            try self.env.store.addScratchDef(def_idx);
                         },
                     }
                 }
@@ -6907,13 +6993,23 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                         };
                         const annotation_idx = try self.env.addAnnotation(annotation, region);
 
-                        // Add the decl as a statement with the e_anno_only body
+                        // Add the decl as a def so it gets included in all_defs
+                        const def_idx = try self.env.addDef(.{
+                            .pattern = pattern_idx,
+                            .expr = anno_only_expr,
+                            .annotation = annotation_idx,
+                            .kind = .let,
+                        }, region);
+                        try self.env.store.addScratchDef(def_idx);
+
+                        // Create the statement
                         const stmt_idx = try self.env.addStatement(Statement{ .s_decl = .{
                             .pattern = pattern_idx,
                             .expr = anno_only_expr,
                             .anno = annotation_idx,
                         } }, region);
                         mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = null };
+                        stmts_processed = .one;
                     },
                 }
             } else {
@@ -6952,13 +7048,23 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                 };
                 const annotation_idx = try self.env.addAnnotation(annotation, region);
 
-                // Add the decl as a statement with the e_anno_only body
+                // Add the decl as a def so it gets included in all_defs
+                const def_idx = try self.env.addDef(.{
+                    .pattern = pattern_idx,
+                    .expr = anno_only_expr,
+                    .annotation = annotation_idx,
+                    .kind = .let,
+                }, region);
+                try self.env.store.addScratchDef(def_idx);
+
+                // Create the statement
                 const stmt_idx = try self.env.addStatement(Statement{ .s_decl = .{
                     .pattern = pattern_idx,
                     .expr = anno_only_expr,
                     .anno = annotation_idx,
                 } }, region);
                 mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = null };
+                stmts_processed = .one;
             }
         },
         .import => |import_stmt| {

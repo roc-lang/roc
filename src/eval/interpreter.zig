@@ -18,6 +18,7 @@ const render_helpers = @import("render_helpers.zig");
 const builtins = @import("builtins");
 const RocOps = builtins.host_abi.RocOps;
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
+const RocCrashed = builtins.host_abi.RocCrashed;
 const RocStr = builtins.str.RocStr;
 const RocDec = builtins.dec.RocDec;
 const RocList = builtins.list.RocList;
@@ -241,7 +242,7 @@ pub const Interpreter = struct {
         return try self.evalExprMinimal(expr_idx, roc_ops, null);
     }
 
-    fn registerDefValue(self: *Interpreter, expr_idx: can.CIR.Expr.Idx, value: StackValue) void {
+    pub fn registerDefValue(self: *Interpreter, expr_idx: can.CIR.Expr.Idx, value: StackValue) void {
         if (self.def_stack.items.len == 0) return;
         var top = &self.def_stack.items[self.def_stack.items.len - 1];
         if (top.expr_idx == expr_idx and top.value == null) {
@@ -1378,35 +1379,16 @@ pub const Interpreter = struct {
             },
             .e_anno_only => |_| {
                 // This represents a value that only has a type annotation, no implementation
-                const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                const rt_var = try self.translateTypeVar(self.env, ct_var);
-                const anno_layout = try self.getRuntimeLayout(rt_var);
+                // It should crash when accessed/called
 
-                if (anno_layout.tag == .closure) {
-                    // Function type: Build a closure-like value that will crash when called
-                    const value = try self.pushRaw(anno_layout, 0);
-                    self.registerDefValue(expr_idx, value);
-                    // Initialize the closure header with the e_anno_only expr itself as the body
-                    // This serves as a marker that will be detected during call evaluation
-                    if (value.ptr) |ptr| {
-                        const header: *layout.Closure = @ptrCast(@alignCast(ptr));
-                        header.* = .{
-                            .body_idx = expr_idx, // Point to self (the e_anno_only expression)
-                            .params = .{ .span = .{ .start = 0, .len = 0 } }, // No params
-                            .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
-                            .captures_layout_idx = anno_layout.data.closure.captures_layout_idx,
-                            .lambda_expr_idx = expr_idx,
-                            .source_env = self.env,
-                        };
-                    }
-                    return value;
-                } else {
-                    // Non-function type: Create a value that will be marked as annotation-only
-                    // We'll detect this during lookup and crash then
-                    const value = try self.pushRaw(anno_layout, 0);
-                    self.registerDefValue(expr_idx, value);
-                    return value;
-                }
+                // Crash immediately with a helpful message
+                const msg = "This value has only a type annotation - no implementation was provided";
+                const crashed = RocCrashed{
+                    .utf8_bytes = @ptrCast(@constCast(msg.ptr)),
+                    .len = msg.len,
+                };
+                roc_ops.roc_crashed(&crashed, roc_ops.env);
+                return error.Crash;
             },
             .e_low_level => |low_level| {
                 // This represents a low-level operation that should be implemented by the backend
@@ -1561,6 +1543,30 @@ pub const Interpreter = struct {
                 if (all.len == 0) return error.TypeMismatch;
                 const func_idx = call.func;
                 const arg_indices = all[0..];
+
+                // Check if the function is an anno-only lookup that will crash
+                // If so, skip type translation and crash immediately
+                const func_expr_for_anno_check = self.env.store.getExpr(func_idx);
+                if (func_expr_for_anno_check == .e_lookup_local) {
+                    const lookup = func_expr_for_anno_check.e_lookup_local;
+                    const all_defs = self.env.store.sliceDefs(self.env.all_defs);
+                    for (all_defs) |def_idx| {
+                        const def = self.env.store.getDef(def_idx);
+                        if (def.pattern == lookup.pattern_idx) {
+                            const def_expr = self.env.store.getExpr(def.expr);
+                            if (def_expr == .e_anno_only) {
+                                // Calling an anno-only function - crash immediately
+                                const msg = "This function has only a type annotation - no implementation was provided";
+                                const crashed = RocCrashed{
+                                    .utf8_bytes = @ptrCast(@constCast(msg.ptr)),
+                                    .len = msg.len,
+                                };
+                                roc_ops.roc_crashed(&crashed, roc_ops.env);
+                                return error.Crash;
+                            }
+                        }
+                    }
+                }
 
                 // Runtime unification for call: constrain return type from arg types
                 const func_ct_var = can.ModuleEnv.varFrom(func_idx);
@@ -1941,13 +1947,19 @@ pub const Interpreter = struct {
                     }
                 }
 
-                if (builtin.mode == .Debug) {
-                    // In debug builds, check if this pattern corresponds to a top-level def
-                    // If we find it, that means it should have been in bindings - this is a compiler bug
-                    const all_defs = self.env.store.sliceDefs(self.env.all_defs);
-                    for (all_defs) |def_idx| {
-                        const def = self.env.store.getDef(def_idx);
-                        if (def.pattern == lookup.pattern_idx) {
+                // Check if this pattern corresponds to a top-level def that wasn't evaluated yet
+                const all_defs = self.env.store.sliceDefs(self.env.all_defs);
+                for (all_defs) |def_idx| {
+                    const def = self.env.store.getDef(def_idx);
+                    if (def.pattern == lookup.pattern_idx) {
+                        const def_expr = self.env.store.getExpr(def.expr);
+                        if (def_expr == .e_anno_only) {
+                            // This is an anno-only def being accessed - evaluate it now (which will crash)
+                            return try self.evalExprMinimal(def.expr, roc_ops, null);
+                        }
+
+                        // In debug builds, panic if this def should have been in bindings but wasn't
+                        if (builtin.mode == .Debug) {
                             const pat = self.env.store.getPattern(lookup.pattern_idx);
                             const var_name = switch (pat) {
                                 .assign => |a| self.env.getIdent(a.ident),
@@ -2108,7 +2120,7 @@ pub const Interpreter = struct {
         return RocStr.fromSlice(rendered, roc_ops);
     }
 
-    fn pushRaw(self: *Interpreter, layout_val: Layout, initial_size: usize) !StackValue {
+    pub fn pushRaw(self: *Interpreter, layout_val: Layout, initial_size: usize) !StackValue {
         const size: u32 = if (initial_size == 0) self.runtime_layout_store.layoutSize(layout_val) else @intCast(initial_size);
         if (size == 0) {
             return StackValue{ .layout = layout_val, .ptr = null, .is_initialized = true };
