@@ -238,24 +238,18 @@ pub const ComptimeEvaluator = struct {
         const expr = self.env.store.getExpr(expr_idx);
 
         const is_lambda = switch (expr) {
-            .e_lambda, .e_closure, .e_anno_only => true,
-            else => false,
-        };
-
-        if (expr == .e_runtime_error) {
-            return EvalResult{
+            .e_lambda, .e_closure => true,
+            .e_runtime_error => return EvalResult{
                 .crash = .{
                     .message = "Runtime error in expression",
                     .region = region,
                 },
-            };
-        }
-
-        // Special handling for e_anno_only expressions
-        // Skip them during initial evaluation - they'll be evaluated on-demand when accessed
-        if (expr == .e_anno_only) {
-            return EvalResult{ .success = null };
-        }
+            },
+            // Nothing to evaluate at the declaration site for these;
+            // by design, they cause crashes when lookups happen on them
+            .e_anno_only => return EvalResult{ .success = null },
+            else => false,
+        };
 
         // Reset halted flag at the start of each def - crashes only halt within a single def
         self.halted = false;
