@@ -1286,3 +1286,39 @@ fn checkTypesExpr(
 
     return test_env.assertLastDefType(expected);
 }
+
+
+// Associated items referencing each other
+
+test "associated item can reference another associated item from same type" {
+    // First verify Bool basics work
+    const bool_basics =
+        \\Test := [].{}
+        \\
+        \\x : Bool
+        \\x = True
+    ;
+    try checkTypesModule(bool_basics, .{ .pass = .{ .def = "x" } }, "Bool");
+
+    // Now test calling MyBool.my_not from within an associated item
+    const source =
+        \\Test := [].{
+        \\  MyBool := [MyTrue, MyFalse].{
+        \\    my_not : MyBool -> MyBool
+        \\    my_not = |b| match b {
+        \\      MyTrue => MyFalse
+        \\      MyFalse => MyTrue
+        \\    }
+        \\
+        \\    my_eq : MyBool, MyBool -> MyBool
+        \\    my_eq = |a, b| match a {
+        \\      MyTrue => b
+        \\      MyFalse => MyBool.my_not(b)
+        \\    }
+        \\  }
+        \\}
+        \\
+        \\x = Test.MyBool.my_eq(Test.MyBool.MyTrue, Test.MyBool.MyFalse)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "x" } }, "Test.MyBool");
+}
