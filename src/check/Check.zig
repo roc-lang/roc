@@ -3688,7 +3688,6 @@ fn resolveVarFromExternal(
         // The idx of the expression in the other module
         const target_node_idx = @as(CIR.Node.Idx, @enumFromInt(node_idx));
 
-
         // Check if we've already copied this import
         const cache_key = ImportCacheKey{
             .module_idx = module_idx,
@@ -3702,22 +3701,16 @@ fn resolveVarFromExternal(
             // First time importing this type - copy it and cache the result
             const imported_var = @as(Var, @enumFromInt(@intFromEnum(target_node_idx)));
 
-            // Check if this var is in range
-            if (@intFromEnum(imported_var) >= other_module_env.types.len()) {
-                break :blk null;
-            }
+            // Every node should have a corresponding type entry
+            std.debug.assert(@intFromEnum(imported_var) < other_module_env.types.len());
 
             const new_copy = try self.copyVar(imported_var, other_module_env, null);
             try self.import_cache.put(self.gpa, cache_key, new_copy);
             break :blk new_copy;
         };
 
-        if (copied_var == null) {
-            return null;
-        }
-
         return .{
-            .local_var = copied_var.?,
+            .local_var = copied_var,
             .other_cir_node_idx = target_node_idx,
             .other_cir = other_module_env,
         };
