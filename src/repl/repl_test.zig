@@ -304,14 +304,14 @@ test "Repl - minimal interpreter integration" {
 
     // Get Bool and Result statement indices from the builtin module
     const bool_stmt_in_builtin_module = builtin_indices.bool_type;
-    const result_stmt_in_builtin_module = builtin_indices.result_type;
+    const try_stmt_in_builtin_module = builtin_indices.try_type;
 
     const common_idents: Check.CommonIdents = .{
         .module_name = try cir.insertIdent(base.Ident.for_text("test")),
         .list = try cir.insertIdent(base.Ident.for_text("List")),
         .box = try cir.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = bool_stmt_in_builtin_module,
-        .result_stmt = result_stmt_in_builtin_module,
+        .try_stmt = try_stmt_in_builtin_module,
         .builtin_module = builtin_module.env,
     };
 

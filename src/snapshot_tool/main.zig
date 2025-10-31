@@ -1208,7 +1208,7 @@ fn processSnapshotContent(
         .list = try can_ir.insertIdent(base.Ident.for_text("List")),
         .box = try can_ir.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = config.builtin_indices.bool_type,
-        .result_stmt = config.builtin_indices.result_type,
+        .try_stmt = config.builtin_indices.try_type,
         .builtin_module = config.builtin_module,
     };
 
@@ -1233,7 +1233,7 @@ fn processSnapshotContent(
         });
         try module_envs.put(result_ident, .{
             .env = builtin_env,
-            .statement_idx = config.builtin_indices.result_type,
+            .statement_idx = config.builtin_indices.try_type,
         });
         try module_envs.put(dict_ident, .{
             .env = builtin_env,

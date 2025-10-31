@@ -342,17 +342,17 @@ main = |_| "done"
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Result(a, e), a -> b -> Result(b, e)"))
+		(patt (type "Builtin.Try(a, e), a -> b -> Builtin.Try(b, e)"))
 		(patt (type "a -> a"))
 		(patt (type "a, b -> { first: a, second: b }"))
 		(patt (type "List(_a) -> Num(Int(Unsigned64))"))
-		(patt (type "a -> Result(Result(a, Str), Str)"))
+		(patt (type "a -> Builtin.Try(Builtin.Try(a, Str), Str)"))
 		(patt (type "_arg -> Str")))
 	(expressions
-		(expr (type "Result(a, e), a -> b -> Result(b, e)"))
+		(expr (type "Builtin.Try(a, e), a -> b -> Builtin.Try(b, e)"))
 		(expr (type "a -> a"))
 		(expr (type "a, b -> { first: a, second: b }"))
 		(expr (type "List(_a) -> Num(Int(Unsigned64))"))
-		(expr (type "a -> Result(Result(a, Str), Str)"))
+		(expr (type "a -> Builtin.Try(Builtin.Try(a, Str), Str)"))
 		(expr (type "_arg -> Str"))))
 ~~~

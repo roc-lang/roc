@@ -779,7 +779,7 @@ pub const PackageEnv = struct {
             .list = try env.insertIdent(base.Ident.for_text("List")),
             .box = try env.insertIdent(base.Ident.for_text("Box")),
             .bool_stmt = builtin_indices.bool_type,
-            .result_stmt = builtin_indices.result_type,
+            .try_stmt = builtin_indices.try_type,
             .builtin_module = self.builtin_modules.builtin_module.env,
         };
 

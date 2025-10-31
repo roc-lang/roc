@@ -335,14 +335,14 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
 
     // Get Bool and Result statement indices from Builtin module
     const bool_stmt_in_bool_module = builtin_indices.bool_type;
-    const result_stmt_in_result_module = builtin_indices.result_type;
+    const try_stmt_in_result_module = builtin_indices.try_type;
 
     const common_idents: Check.CommonIdents = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
         .list = try module_env.insertIdent(base.Ident.for_text("List")),
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = bool_stmt_in_bool_module,
-        .result_stmt = result_stmt_in_result_module,
+        .try_stmt = try_stmt_in_result_module,
         .builtin_module = builtin_module.env,
     };
 
@@ -360,7 +360,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     });
     try module_envs_map.put(result_ident, .{
         .env = builtin_module.env,
-        .statement_idx = builtin_indices.result_type,
+        .statement_idx = builtin_indices.try_type,
     });
     // Str does NOT get a statement_idx because it's transformed to a primitive type
     // (see transformStrNominalToPrimitive in builtin_compiler)

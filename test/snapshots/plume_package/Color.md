@@ -234,7 +234,7 @@ It has the type:
     _[InvalidHex(Str), Err([InvalidHex(Str)]_others)][Ok(Color)]_others2_
 
 But the type annotation says it should have the type:
-    _Result(Color, [InvalidHex(Str)])_
+    _Builtin.Try(Color, [InvalidHex(Str)])_
 
 **TYPE DOES NOT HAVE METHODS**
 You're trying to call the `to_frac` method on a `Num(Int(Unsigned8))`:
@@ -1278,7 +1278,7 @@ is_named_color = |str| {
 		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
 		(patt (type "Str -> Error"))
 		(patt (type "Color -> Error"))
-		(patt (type "Str -> Result(Color, [UnknownColor(Str)])"))
+		(patt (type "Str -> Builtin.Try(Color, [UnknownColor(Str)])"))
 		(patt (type "_arg -> Error")))
 	(type_decls
 		(nominal (type "Color")
@@ -1288,6 +1288,6 @@ is_named_color = |str| {
 		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
 		(expr (type "Str -> Error"))
 		(expr (type "Color -> Error"))
-		(expr (type "Str -> Result(Color, [UnknownColor(Str)])"))
+		(expr (type "Str -> Builtin.Try(Color, [UnknownColor(Str)])"))
 		(expr (type "_arg -> Error"))))
 ~~~

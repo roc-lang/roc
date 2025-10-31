@@ -960,7 +960,7 @@ combineResults = |jsonResult, httpStatus|
 		(patt (type "Error, List(Error) -> Error"))
 		(patt (type "Error -> Error"))
 		(patt (type "Error -> Error"))
-		(patt (type "Result(Error, Error), Error -> Result(Error, Error)")))
+		(patt (type "Builtin.Try(Error, Error), Error -> Builtin.Try(Error, Error)")))
 	(type_decls
 		(alias (type "ServerConfig")
 			(ty-header (name "ServerConfig"))))
@@ -970,5 +970,5 @@ combineResults = |jsonResult, httpStatus|
 		(expr (type "Error, List(Error) -> Error"))
 		(expr (type "Error -> Error"))
 		(expr (type "Error -> Error"))
-		(expr (type "Result(Error, Error), Error -> Result(Error, Error)"))))
+		(expr (type "Builtin.Try(Error, Error), Error -> Builtin.Try(Error, Error)"))))
 ~~~

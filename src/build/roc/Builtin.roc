@@ -33,20 +33,20 @@ Builtin := [].{
 		#Encoder fmt := List U8, fmt -> List U8 where fmt implements EncoderFormatting
 	}
 
-	Result(ok, err) := [Ok(ok), Err(err)].{
-		is_ok : Result(_ok, _err) -> Bool
+	Try(ok, err) := [Ok(ok), Err(err)].{
+		is_ok : Try(_ok, _err) -> Bool
 		is_ok = |res| match res {
 			Ok(_) => True
 			Err(_) => False
 		}
 
-		is_err : Result(_ok, _err) -> Bool
+		is_err : Try(_ok, _err) -> Bool
 		is_err = |res| match res {
 			Ok(_) => False
 			Err(_) => True
 		}
 
-		#eq : Result(ok, err), Result(ok, err) -> Bool
+		#eq : Try(ok, err), Try(ok, err) -> Bool
 		#	where [
 		#		ok.equals : ok, ok -> Bool,
 		#		err.equals : ok, ok -> Bool,

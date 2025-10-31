@@ -120,8 +120,8 @@ pub const CommonIdents = struct {
     box: base.Ident.Idx,
     /// Statement index of Bool type in the current module (injected from Builtin.bin)
     bool_stmt: can.CIR.Statement.Idx,
-    /// Statement index of Result type in the current module (injected from Builtin.bin)
-    result_stmt: can.CIR.Statement.Idx,
+    /// Statement index of Try type in the current module (injected from Builtin.bin)
+    try_stmt: can.CIR.Statement.Idx,
     /// Direct reference to the Builtin module env (null when compiling Builtin module itself)
     builtin_module: ?*const ModuleEnv,
 };
