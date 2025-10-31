@@ -29,7 +29,6 @@ pub fn createImportMapping(
     try addMapping(&mapping, gpa, idents, "Builtin.Str", "Str");
     try addMapping(&mapping, gpa, idents, "Builtin.Bool", "Bool");
     try addMapping(&mapping, gpa, idents, "Builtin.Try", "Try");
-    try addMapping(&mapping, gpa, idents, "Builtin.Result", "Result");
     try addMapping(&mapping, gpa, idents, "Builtin.Dict", "Dict");
     try addMapping(&mapping, gpa, idents, "Builtin.Set", "Set");
 

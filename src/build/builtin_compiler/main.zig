@@ -18,6 +18,10 @@ const Can = can.Can;
 const Check = check.Check;
 const Allocator = std.mem.Allocator;
 const CIR = can.CIR;
+const Content = types.Content;
+const Var = types.Var;
+
+const max_builtin_bytes = 1024 * 1024;
 
 /// Indices of builtin type declarations within the Builtin module.
 /// These are determined at build time via string lookup and serialized to builtin_indices.bin.
@@ -32,6 +36,8 @@ const BuiltinIndices = struct {
     set_type: CIR.Statement.Idx,
     /// Statement index of nested Str type declaration within Builtin module
     str_type: CIR.Statement.Idx,
+    /// Statement index of nested List type declaration within Builtin module
+    list_type: CIR.Statement.Idx,
 };
 
 /// Transform all Str nominal types to .str primitive types in a module.
@@ -42,22 +48,16 @@ const BuiltinIndices = struct {
 /// ensuring that the serialized .bin file contains methods associated with
 /// the .str primitive type rather than a nominal Str type.
 fn transformStrNominalToPrimitive(env: *ModuleEnv) !void {
-    const types_mod = @import("types");
-    const Content = types_mod.Content;
-    const FlatType = types_mod.FlatType;
+    const FlatType = types.FlatType;
 
     // Get the Str identifier in this module
-    const str_ident_opt = env.common.findIdent("Str");
-    if (str_ident_opt == null) {
-        // No Str ident found, nothing to transform
-        return;
-    }
-    const str_ident = str_ident_opt.?;
+    const str_ident = env.common.findIdent("Str") orelse {
+        @panic("Str identifier not found in Builtin module");
+    };
 
     // Iterate through all slots in the type store
-    var i: u32 = 0;
-    while (i < env.types.len()) : (i += 1) {
-        const var_idx = @as(types_mod.Var, @enumFromInt(i));
+    for (0..env.types.len()) |i| {
+        const var_idx = @as(Var, @enumFromInt(i));
 
         // Skip redirects, only process roots
         if (env.types.isRedirect(var_idx)) {
@@ -77,7 +77,7 @@ fn transformStrNominalToPrimitive(env: *ModuleEnv) !void {
                         if (nominal.ident.ident_idx == str_ident) {
                             // Replace with .str primitive type
                             const new_content = Content{ .structure = FlatType.str };
-                            const new_desc = types_mod.Descriptor{
+                            const new_desc = types.Descriptor{
                                 .content = new_content,
                                 .rank = desc.rank,
                                 .mark = desc.mark,
@@ -143,106 +143,40 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
 
                     // Create a dummy parameter pattern for the lambda
                     // Use the identifier "_arg" for the parameter
-                    const arg_ident = env.common.findOrCreateIdent("_arg") catch unreachable;
+                    const arg_ident = env.common.findIdent("_arg") orelse try env.common.insertIdent(gpa, base.Ident.for_text("_arg"));
                     const arg_pattern_idx = try env.addPattern(.{ .assign = .{ .ident = arg_ident } }, base.Region.zero());
 
                     // Create a pattern span containing just this one parameter
-                    const patterns_start = env.store.patterns.len();
-                    _ = try env.store.patterns.append(gpa, arg_pattern_idx);
+                    const patterns_start = env.store.scratchTop("patterns");
+                    try env.store.scratch.?.patterns.append(arg_pattern_idx);
                     const args_span = CIR.Pattern.Span{ .span = .{ .start = @intCast(patterns_start), .len = 1 } };
 
                     // Create an e_runtime_error body that crashes when the function is called
-                    const body_idx = try env.addExpr(.{ .e_runtime_error = .{} }, base.Region.zero());
+                    const error_msg_lit = try env.insertString("Low-level builtin not yet implemented in interpreter");
+                    const diagnostic_idx = try env.addDiagnostic(.{ .not_implemented = .{
+                        .feature = error_msg_lit,
+                        .region = base.Region.zero(),
+                    } });
+                    const body_idx = try env.addExpr(.{ .e_runtime_error = .{ .diagnostic = diagnostic_idx } }, base.Region.zero());
 
-                    // Replace the e_anno_only expression with e_low_level_lambda
-                    // We need to replace the expression in the existing node
-                    const new_expr = CIR.Expr{ .e_low_level_lambda = .{
+                    // Create e_low_level_lambda expression
+                    const expr_idx = try env.addExpr(.{ .e_low_level_lambda = .{
                         .op = low_level_op,
                         .args = args_span,
                         .body = body_idx,
-                    } };
+                    } }, base.Region.zero());
 
-                    // Update the expression node in place using the store's serialization logic
-                    const expr_node_idx = @intFromEnum(def.expr);
-                    var node = env.store.nodes.get(expr_node_idx);
-                    try env.store.serializeExprToNode(&node, new_expr);
-                    env.store.nodes.set(expr_node_idx, node);
+                    // Now replace the e_anno_only expression with the e_low_level_lambda
+                    // We need to modify the def's expr field to point to our new expression
+                    // CIR.Def.Idx and Node.Idx have the same underlying representation
+                    const def_node_idx = @as(@TypeOf(env.store.nodes).Idx, @enumFromInt(@intFromEnum(def_idx)));
+                    var def_node = env.store.nodes.get(def_node_idx);
+                    def_node.data_2 = @intFromEnum(expr_idx);
+                    env.store.nodes.set(def_node_idx, def_node);
 
-                    // Track this def index (it already exists and is registered)
+                    // Track this replaced def index
                     try new_def_indices.append(gpa, def_idx);
                 }
-            }
-        }
-    }
-
-    // Also check statements for any old-style s_type_anno that haven't been converted to defs
-    const all_stmts = env.store.sliceStatements(env.all_statements);
-    for (all_stmts) |stmt_idx| {
-        const stmt = env.store.getStatement(stmt_idx);
-        if (stmt == .s_type_anno) {
-            const type_anno = stmt.s_type_anno;
-            // Check if this type annotation's identifier matches a low-level operation
-            if (low_level_map.fetchRemove(type_anno.name)) |entry| {
-                const low_level_op = entry.value;
-
-                // Create a dummy parameter pattern for the lambda
-                // Use the identifier "_arg" for the parameter
-                const arg_ident = env.common.findOrCreateIdent("_arg") catch unreachable;
-                const arg_pattern_idx = try env.addPattern(.{ .assign = .{ .ident = arg_ident } }, base.Region.zero());
-
-                // Create a pattern span containing just this one parameter
-                const patterns_start = env.store.patterns.len();
-                _ = try env.store.patterns.append(gpa, arg_pattern_idx);
-                const args_span = CIR.Pattern.Span{ .span = .{ .start = @intCast(patterns_start), .len = 1 } };
-
-                // Create an e_runtime_error body that crashes when the function is called
-                const body_idx = try env.addExpr(.{ .e_runtime_error = .{} }, base.Region.zero());
-
-                // Create e_low_level_lambda expression
-                const expr_idx = try env.addExpr(.{ .e_low_level_lambda = .{
-                    .op = low_level_op,
-                    .args = args_span,
-                    .body = body_idx,
-                } }, base.Region.zero());
-
-                // Create identifier pattern node
-                const pattern_idx: CIR.Pattern.Idx = @enumFromInt(env.store.nodes.len());
-                _ = env.store.nodes.append(gpa, .{
-                    .tag = .pattern_identifier,
-                    .data_1 = @bitCast(type_anno.name),
-                    .data_2 = 0,
-                    .data_3 = 0,
-                }) catch unreachable;
-                _ = env.store.regions.append(gpa, base.Region.zero()) catch unreachable;
-                // Create a type entry for this pattern node
-                _ = env.types.fresh() catch unreachable;
-
-                // Create an Annotation that wraps the TypeAnno (no where clause for builtins)
-                const annotation_idx = try env.addAnnotation(.{
-                    .anno = type_anno.anno,
-                    .where = null,
-                }, base.Region.zero());
-                // Create a type entry for this annotation node
-                _ = env.types.fresh() catch unreachable;
-
-                // Create a def node for this low-level operation
-                // The def will be added to the all_defs list and type-checked properly
-                const def_idx = try env.addDef(.{
-                    .pattern = pattern_idx,
-                    .expr = expr_idx,
-                    .annotation = annotation_idx,
-                    .kind = .let, // This is a let-binding, not a statement
-                }, base.Region.zero());
-                // Create a type entry for this def node
-                _ = env.types.fresh() catch unreachable;
-
-                // Register this associated item by its qualified name
-                // Use the def index, not the old statement index
-                const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                try env.setExposedNodeIndexById(type_anno.name, def_idx_u16);
-
-                // Track this new def index
-                try new_def_indices.append(gpa, def_idx);
             }
         }
     }
@@ -271,12 +205,80 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     return new_def_indices;
 }
 
+/// Transform all List nominal types to .list primitive types in a module.
+/// This is similar to transformStrNominalToPrimitive but handles List's type parameter.
+///
+/// List is parameterized (List(a)), so we need to preserve the element type parameter
+/// when transforming from nominal to primitive. The transformation replaces
+/// nominal List(a) with FlatType{ .list = element_type_var }.
+fn transformListNominalToPrimitive(env: *ModuleEnv) !void {
+    // Get the List identifier in this module
+    const list_ident = env.common.findIdent("List") orelse {
+        @panic("List identifier not found in Builtin module");
+    };
+
+    // Iterate through all slots in the type store
+    for (0..env.types.len()) |i| {
+        const var_idx = @as(Var, @enumFromInt(i));
+
+        // Skip redirects, only process roots
+        if (env.types.isRedirect(var_idx)) {
+            continue;
+        }
+
+        const resolved = env.types.resolveVar(var_idx);
+        const desc = resolved.desc;
+
+        // Check if this descriptor contains a nominal type
+        switch (desc.content) {
+            .structure => |structure| {
+                switch (structure) {
+                    .nominal_type => |nominal| {
+                        // Check if this is the List nominal type
+                        if (nominal.ident.ident_idx == list_ident) {
+                            // List should have exactly 1 type parameter (the element type)
+                            // sliceNominalArgs returns only the type arguments (excludes backing var)
+                            const type_args = env.types.sliceNominalArgs(nominal);
+
+                            if (type_args.len != 1) {
+                                @panic("List nominal type must have exactly 1 type parameter");
+                            }
+
+                            const element_type_var = type_args[0];
+
+                            // Replace with .list primitive type with the element type
+                            const new_content = Content{ .structure = .{ .list = element_type_var } };
+                            const new_desc = types.Descriptor{
+                                .content = new_content,
+                                .rank = desc.rank,
+                                .mark = desc.mark,
+                            };
+                            try env.types.setVarDesc(var_idx, new_desc);
+                        }
+                    },
+                    else => {},
+                }
+            },
+            else => {},
+        }
+    }
+}
+
+fn readFileAllocPath(gpa: Allocator, path: []const u8) ![]u8 {
+    if (std.fs.path.isAbsolute(path)) {
+        var file = try std.fs.openFileAbsolute(path, .{});
+        defer file.close();
+        return try file.readToEndAlloc(gpa, max_builtin_bytes);
+    }
+    return try std.fs.cwd().readFileAlloc(gpa, path, max_builtin_bytes);
+}
+
 /// Build-time compiler that compiles builtin .roc sources into serialized ModuleEnvs.
 /// This runs during `zig build` on the host machine to generate .bin files
 /// that get embedded into the final roc executable.
 ///
-/// Note: Command-line arguments are ignored. The .roc files are read from fixed paths.
-/// The build system may pass file paths as arguments for cache tracking, but we don't use them.
+/// The build system passes the absolute path to Builtin.roc as the first argument for cache tracking;
+/// we honor that when present so the compiler works regardless of the current working directory.
 pub fn main() !void {
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
     defer {
@@ -287,11 +289,16 @@ pub fn main() !void {
     }
     const gpa = gpa_impl.allocator();
 
-    // Ignore command-line arguments - they're only used by Zig's build system for cache tracking
+    const args = try std.process.argsAlloc(gpa);
+    defer std.process.argsFree(gpa, args);
+
+    // Prefer the absolute path provided by the build system, but fall back to the
+    // project-relative path so manual runs (e.g. `zig build run`) still succeed.
+    const builtin_src_path = if (args.len >= 2) args[1] else "src/build/roc/Builtin.roc";
 
     // Read the Builtin.roc source file at runtime
     // NOTE: We must free this source manually; CommonEnv.deinit() does not free the source.
-    const builtin_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Builtin.roc", 1024 * 1024);
+    const builtin_roc_source = try readFileAllocPath(gpa, builtin_src_path);
 
     // Compile Builtin.roc (it's completely self-contained)
     const builtin_env = try compileModule(
@@ -315,6 +322,7 @@ pub fn main() !void {
     const dict_type_idx = try findTypeDeclaration(builtin_env, "Dict");
     const set_type_idx = try findTypeDeclaration(builtin_env, "Set");
     const str_type_idx = try findTypeDeclaration(builtin_env, "Str");
+    const list_type_idx = try findTypeDeclaration(builtin_env, "List");
 
     // Expose the nested types so they can be found by getExposedNodeIndexById
     // For builtin types, the statement index IS the node index
@@ -323,19 +331,22 @@ pub fn main() !void {
     const dict_ident = builtin_env.common.findIdent("Dict") orelse unreachable;
     const set_ident = builtin_env.common.findIdent("Set") orelse unreachable;
     const str_ident = builtin_env.common.findIdent("Str") orelse unreachable;
+    const list_ident = builtin_env.common.findIdent("List") orelse unreachable;
 
     try builtin_env.common.setNodeIndexById(gpa, bool_ident, @intCast(@intFromEnum(bool_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, try_ident, @intCast(@intFromEnum(try_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, dict_ident, @intCast(@intFromEnum(dict_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, set_ident, @intCast(@intFromEnum(set_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, str_ident, @intCast(@intFromEnum(str_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, list_ident, @intCast(@intFromEnum(list_type_idx)));
 
     // Note: replaceStrIsEmptyWithLowLevel() is now called inside compileModule() before type checking
 
-    // Transform Str nominal types to .str primitive types
+    // Transform nominal types to primitive types as necessary.
     // This must happen BEFORE serialization to ensure the .bin file contains
     // methods associated with the .str primitive, not a nominal type
     try transformStrNominalToPrimitive(builtin_env);
+    try transformListNominalToPrimitive(builtin_env);
 
     // Create output directory
     try std.fs.cwd().makePath("zig-out/builtins");
@@ -350,6 +361,7 @@ pub fn main() !void {
         .dict_type = dict_type_idx,
         .set_type = set_type_idx,
         .str_type = str_type_idx,
+        .list_type = list_type_idx,
     };
     try serializeBuiltinIndices(builtin_indices, "zig-out/builtins/builtin_indices.bin");
 }
