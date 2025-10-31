@@ -382,6 +382,7 @@ pub const Expr = union(enum) {
     /// Low-level builtin operations that are implemented by the compiler backend.
     pub const LowLevel = enum {
         str_is_empty,
+        set_is_empty,
     };
 
     pub const Idx = enum(u32) { _ };

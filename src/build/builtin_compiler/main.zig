@@ -93,44 +93,48 @@ fn transformStrNominalToPrimitive(env: *ModuleEnv) !void {
     }
 }
 
-/// Replace Str.is_empty's e_anno_only expression with e_low_level.
-/// This transforms the standalone annotation into a low-level builtin operation
+/// Replace specific e_anno_only expressions with e_low_level operations.
+/// This transforms standalone annotations into low-level builtin operations
 /// that will be recognized by the compiler backend.
 fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !void {
-    // Find the "is_empty" identifier
-    const is_empty_ident_opt = env.common.findIdent("is_empty");
-    if (is_empty_ident_opt == null) {
-        // No is_empty found, nothing to transform
-        return;
-    }
-    const is_empty_ident = is_empty_ident_opt.?;
+    const gpa = env.gpa;
 
-    // Iterate through all statements to find the Str.is_empty declaration
+    // Build a hashmap of (qualified name -> low-level operation)
+    var low_level_map = std.AutoHashMap(base.Ident.Idx, CIR.Expr.LowLevel).init(gpa);
+    defer low_level_map.deinit();
+
+    // Add all low-level operations to the map using full qualified names
+    // Associated items are stored as s_decl with qualified names like "Builtin.Str.is_empty"
+    if (env.common.findIdent("Builtin.Str.is_empty")) |str_is_empty_ident| {
+        try low_level_map.put(str_is_empty_ident, .str_is_empty);
+    }
+    if (env.common.findIdent("Builtin.Set.is_empty")) |set_is_empty_ident| {
+        try low_level_map.put(set_is_empty_ident, .set_is_empty);
+    }
+
+    // Iterate through all statements and replace matching e_anno_only with e_low_level
     const all_stmts = env.store.sliceStatements(env.all_statements);
     for (all_stmts) |stmt_idx| {
         const stmt = env.store.getStatement(stmt_idx);
-        switch (stmt) {
-            .s_decl => |decl| {
-                // Check if this declaration is for is_empty
-                const pattern = env.store.getPattern(decl.pattern);
-                if (pattern == .assign) {
-                    if (pattern.assign.ident == is_empty_ident) {
-                        // Found the is_empty declaration
-                        // Check if its expression is e_anno_only
-                        const expr = env.store.getExpr(decl.expr);
-                        if (expr == .e_anno_only) {
-                            // Replace with e_low_level by updating the node in the store
-                            env.store.nodes.set(@enumFromInt(@intFromEnum(decl.expr)), .{
-                                .tag = .expr_low_level,
-                                .data_1 = @intFromEnum(CIR.Expr.LowLevel.str_is_empty),
-                                .data_2 = 0,
-                                .data_3 = 0,
-                            });
-                        }
+        if (stmt == .s_decl) {
+            const decl = stmt.s_decl;
+            const pattern = env.store.getPattern(decl.pattern);
+            if (pattern == .assign) {
+                // Check if this declaration's identifier matches a low-level operation
+                if (low_level_map.get(pattern.assign.ident)) |low_level_op| {
+                    // Check if its expression is e_anno_only
+                    const expr = env.store.getExpr(decl.expr);
+                    if (expr == .e_anno_only) {
+                        // Replace with e_low_level by updating the node in the store
+                        env.store.nodes.set(@enumFromInt(@intFromEnum(decl.expr)), .{
+                            .tag = .expr_low_level,
+                            .data_1 = @intFromEnum(low_level_op),
+                            .data_2 = 0,
+                            .data_3 = 0,
+                        });
                     }
                 }
-            },
-            else => {},
+            }
         }
     }
 }

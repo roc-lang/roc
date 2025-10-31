@@ -68,5 +68,7 @@ Builtin := [].{
 
 	Dict := [EmptyDict].{}
 
-	Set := [EmptySet(Dict)].{}
+	Set := [EmptySet(Dict)].{
+		is_empty : Set(_elem) -> Bool
+	}
 }
