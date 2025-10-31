@@ -1378,50 +1378,17 @@ pub const Interpreter = struct {
                 return value;
             },
             .e_anno_only => |_| {
-                // This represents a value that only has a type annotation, no implementation
-                // It should crash when accessed/called
-
-                // Crash immediately with a helpful message
-                const msg = "This value has only a type annotation - no implementation was provided";
-                const crashed = RocCrashed{
-                    .utf8_bytes = @ptrCast(@constCast(msg.ptr)),
-                    .len = msg.len,
-                };
-                roc_ops.roc_crashed(&crashed, roc_ops.env);
+                // This represents a value that only has a type annotation, no implementation.
+                // Crash immediately when accessed or called, regardless of type.
+                self.triggerCrash("This value has no implementation. It is only a type annotation for now.", false, roc_ops);
                 return error.Crash;
             },
             .e_low_level => |low_level| {
-                // This represents a low-level operation that should be implemented by the backend
-                _ = low_level; // Will be used for specialized implementations in the future
-                const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                const rt_var = try self.translateTypeVar(self.env, ct_var);
-                const anno_layout = try self.getRuntimeLayout(rt_var);
-
-                if (anno_layout.tag == .closure) {
-                    // Function type: Build a closure-like value that will crash when called
-                    const value = try self.pushRaw(anno_layout, 0);
-                    self.registerDefValue(expr_idx, value);
-                    // Initialize the closure header with the e_low_level expr itself as the body
-                    // This serves as a marker that will be detected during call evaluation
-                    if (value.ptr) |ptr| {
-                        const header: *layout.Closure = @ptrCast(@alignCast(ptr));
-                        header.* = .{
-                            .body_idx = expr_idx, // Point to self (the e_low_level expression)
-                            .params = .{ .span = .{ .start = 0, .len = 0 } }, // No params
-                            .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
-                            .captures_layout_idx = anno_layout.data.closure.captures_layout_idx,
-                            .lambda_expr_idx = expr_idx,
-                            .source_env = self.env,
-                        };
-                    }
-                    return value;
-                } else {
-                    // Non-function type: Create a value that will be marked as low-level
-                    // We'll detect this during lookup and crash then with the op name
-                    const value = try self.pushRaw(anno_layout, 0);
-                    self.registerDefValue(expr_idx, value);
-                    return value;
-                }
+                const op_name = @tagName(low_level.op);
+                var msg_buf: [256]u8 = undefined;
+                const msg = try std.fmt.bufPrint(&msg_buf, "Low-level operation not yet implemented in interpreter: {s}", .{op_name});
+                self.triggerCrash(msg, false, roc_ops);
+                return error.Crash;
             },
             .e_closure => |cls| {
                 // Build a closure value with concrete captures. The closure references a lambda.
