@@ -7,6 +7,26 @@ Builtin := [].{
 		contains = |_str, _other| True
 	}
 
+	List := [ProvidedByCompiler].{
+		len : List(a) -> U64
+		len = |_| 0
+
+		is_empty : List(a) -> Bool
+		is_empty = |_| True
+
+		first : List(a) -> Try(a, [ListWasEmpty])
+		first = |_| Err(ListWasEmpty)
+
+		map : List(a), (a -> b) -> List(b)
+		map = |_, _| []
+
+		keep_if : List(a), (a -> Bool) -> List(a)
+		keep_if = |_, _| []
+
+		concat : List(a), List(a) -> List(a)
+		concat = |_, _| []
+	}
+
 	Bool := [True, False].{
 		not : Bool -> Bool
 		not = |bool| match bool {

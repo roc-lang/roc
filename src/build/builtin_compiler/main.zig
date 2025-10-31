@@ -32,6 +32,8 @@ const BuiltinIndices = struct {
     set_type: CIR.Statement.Idx,
     /// Statement index of nested Str type declaration within Builtin module
     str_type: CIR.Statement.Idx,
+    /// Statement index of nested List type declaration within Builtin module
+    list_type: CIR.Statement.Idx,
 };
 
 /// Transform all Str nominal types to .str primitive types in a module.
@@ -93,6 +95,74 @@ fn transformStrNominalToPrimitive(env: *ModuleEnv) !void {
     }
 }
 
+/// Transform all List nominal types to .list primitive types in a module.
+/// This is similar to transformStrNominalToPrimitive but handles List's type parameter.
+///
+/// List is parameterized (List(a)), so we need to preserve the element type parameter
+/// when transforming from nominal to primitive. The transformation replaces
+/// nominal List(a) with FlatType{ .list = element_type_var }.
+fn transformListNominalToPrimitive(env: *ModuleEnv) !void {
+    const types_mod = @import("types");
+    const Content = types_mod.Content;
+
+    // Get the List identifier in this module
+    const list_ident_opt = env.common.findIdent("List");
+    if (list_ident_opt == null) {
+        // No List ident found, nothing to transform
+        return;
+    }
+    const list_ident = list_ident_opt.?;
+
+    // Iterate through all slots in the type store
+    var i: u32 = 0;
+    while (i < env.types.len()) : (i += 1) {
+        const var_idx = @as(types_mod.Var, @enumFromInt(i));
+
+        // Skip redirects, only process roots
+        if (env.types.isRedirect(var_idx)) {
+            continue;
+        }
+
+        const resolved = env.types.resolveVar(var_idx);
+        const desc = resolved.desc;
+
+        // Check if this descriptor contains a nominal type
+        switch (desc.content) {
+            .structure => |structure| {
+                switch (structure) {
+                    .nominal_type => |nominal| {
+                        // Check if this is the List nominal type
+                        if (nominal.ident.ident_idx == list_ident) {
+                            // List should have exactly 1 type parameter (the element type)
+                            // sliceNominalArgs returns only the type arguments (excludes backing var)
+                            const type_args = env.types.sliceNominalArgs(nominal);
+
+                            if (type_args.len != 1) {
+                                // List should have exactly 1 type parameter
+                                // If it doesn't, something is wrong - skip this one
+                                continue;
+                            }
+
+                            const element_type_var = type_args[0];
+
+                            // Replace with .list primitive type with the element type
+                            const new_content = Content{ .structure = .{ .list = element_type_var } };
+                            const new_desc = types_mod.Descriptor{
+                                .content = new_content,
+                                .rank = desc.rank,
+                                .mark = desc.mark,
+                            };
+                            try env.types.setVarDesc(var_idx, new_desc);
+                        }
+                    },
+                    else => {},
+                }
+            },
+            else => {},
+        }
+    }
+}
+
 /// Build-time compiler that compiles builtin .roc sources into serialized ModuleEnvs.
 /// This runs during `zig build` on the host machine to generate .bin files
 /// that get embedded into the final roc executable.
@@ -137,6 +207,7 @@ pub fn main() !void {
     const dict_type_idx = try findTypeDeclaration(builtin_env, "Dict");
     const set_type_idx = try findTypeDeclaration(builtin_env, "Set");
     const str_type_idx = try findTypeDeclaration(builtin_env, "Str");
+    const list_type_idx = try findTypeDeclaration(builtin_env, "List");
 
     // Expose the nested types so they can be found by getExposedNodeIndexById
     // For builtin types, the statement index IS the node index
@@ -145,17 +216,24 @@ pub fn main() !void {
     const dict_ident = builtin_env.common.findIdent("Dict") orelse unreachable;
     const set_ident = builtin_env.common.findIdent("Set") orelse unreachable;
     const str_ident = builtin_env.common.findIdent("Str") orelse unreachable;
+    const list_ident = builtin_env.common.findIdent("List") orelse unreachable;
 
     try builtin_env.common.setNodeIndexById(gpa, bool_ident, @intCast(@intFromEnum(bool_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, try_ident, @intCast(@intFromEnum(try_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, dict_ident, @intCast(@intFromEnum(dict_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, set_ident, @intCast(@intFromEnum(set_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, str_ident, @intCast(@intFromEnum(str_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, list_ident, @intCast(@intFromEnum(list_type_idx)));
 
     // Transform Str nominal types to .str primitive types
     // This must happen BEFORE serialization to ensure the .bin file contains
     // methods associated with the .str primitive, not a nominal type
     try transformStrNominalToPrimitive(builtin_env);
+
+    // Transform List nominal types to .list primitive types
+    // This must happen BEFORE serialization to ensure the .bin file contains
+    // methods associated with the .list primitive, not a nominal type
+    try transformListNominalToPrimitive(builtin_env);
 
     // Create output directory
     try std.fs.cwd().makePath("zig-out/builtins");
@@ -170,6 +248,7 @@ pub fn main() !void {
         .dict_type = dict_type_idx,
         .set_type = set_type_idx,
         .str_type = str_type_idx,
+        .list_type = list_type_idx,
     };
     try serializeBuiltinIndices(builtin_indices, "zig-out/builtins/builtin_indices.bin");
 }
