@@ -155,8 +155,8 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     // then explicit imports follow in declaration order
     var imported_envs = std.ArrayList(*const ModuleEnv).empty;
     defer imported_envs.deinit(gpa);
-    try imported_envs.append(gpa, builtin_module.env);  // Builtin must be first (auto-import)
-    try imported_envs.append(gpa, imported_module);     // Then explicit imports
+    try imported_envs.append(gpa, builtin_module.env); // Builtin must be first (auto-import)
+    try imported_envs.append(gpa, imported_module); // Then explicit imports
 
     // Type check the module
     var checker = try Check.init(gpa, &module_env.types, module_env, imported_envs.items, &module_envs, &module_env.store.regions, common_idents);

@@ -91,7 +91,6 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
     };
 }
 
-
 gpa: std.mem.Allocator,
 module_env: *ModuleEnv,
 parse_ast: *parse.AST,

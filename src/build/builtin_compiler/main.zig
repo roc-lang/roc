@@ -496,7 +496,6 @@ fn compileModule(
         return error.TypeCheckError;
     }
 
-
     return module_env;
 }
 

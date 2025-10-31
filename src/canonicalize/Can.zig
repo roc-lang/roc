@@ -664,7 +664,6 @@ fn processAssociatedItemsSecondPass(
                                         const decl_text = self.env.getIdent(decl_ident);
                                         const qualified_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
 
-
                                         // Canonicalize with the qualified name and type annotation
                                         const def_idx = try self.canonicalizeAssociatedDeclWithAnno(
                                             decl,
@@ -677,8 +676,7 @@ fn processAssociatedItemsSecondPass(
                                         // Register this associated item by its qualified name
                                         const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                                         try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
-                                    } else {
-                                    }
+                                    } else {}
                                 }
                             }
                         },
@@ -692,7 +690,6 @@ fn processAssociatedItemsSecondPass(
                             const parent_text = self.env.getIdent(parent_name);
                             const name_text = self.env.getIdent(name_ident);
                             const qualified_idx = try self.env.insertQualifiedIdent(parent_text, name_text);
-
 
                             // Create anno-only def with the qualified name
                             const def_idx = try self.createAnnoOnlyDef(qualified_idx, type_anno_idx, where_clauses, region);
