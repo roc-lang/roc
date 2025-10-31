@@ -1322,3 +1322,21 @@ test "associated item can reference another associated item from same type" {
     ;
     try checkTypesModule(source, .{ .pass = .{ .def = "x" } }, "Test.MyBool");
 }
+
+test "Bool.not works as builtin associated item" {
+    const source =
+        \\Test := [].{}
+        \\
+        \\x = Bool.not(True)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "x" } }, "Bool");
+}
+
+test "Str.is_empty works as low-level builtin associated item" {
+    const source =
+        \\Test := [].{}
+        \\
+        \\x = Str.is_empty("")
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "x" } }, "Bool");
+}

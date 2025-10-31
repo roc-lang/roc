@@ -673,11 +673,10 @@ fn processAssociatedItemsSecondPass(
                                         );
                                         try self.env.store.addScratchDef(def_idx);
 
-                                        // Set node index for exposed associated item
-                                        if (self.env.containsExposedById(qualified_idx)) {
-                                            const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                                            try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
-                                        }
+                                        // Register node index for associated item
+                                        // Associated items are always available when their parent type is in scope
+                                        const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                                        try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
                                     }
                                 }
                             }
@@ -722,11 +721,10 @@ fn processAssociatedItemsSecondPass(
                         const def_idx = try self.canonicalizeAssociatedDecl(decl, qualified_idx);
                         try self.env.store.addScratchDef(def_idx);
 
-                        // Set node index for exposed associated item
-                        if (self.env.containsExposedById(qualified_idx)) {
-                            const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                            try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
-                        }
+                        // Register node index for associated item
+                        // Associated items are always available when their parent type is in scope
+                        const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                        try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
                     }
                 } else {
                     // Non-identifier patterns are not supported in associated blocks

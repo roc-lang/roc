@@ -91,22 +91,6 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
     };
 }
 
-/// Helper function to expose all top-level definitions in a module
-/// This makes them available for cross-module imports
-fn exposeAllDefs(module_env: *ModuleEnv) !void {
-    const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
-    for (defs_slice) |def_idx| {
-        const def = module_env.store.getDef(def_idx);
-
-        // Get the pattern to find the identifier
-        const pattern = module_env.store.getPattern(def.pattern);
-        if (pattern == .assign) {
-            const ident_idx = pattern.assign.ident;
-            const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-            try module_env.setExposedNodeIndexById(ident_idx, def_idx_u16);
-        }
-    }
-}
 
 gpa: std.mem.Allocator,
 module_env: *ModuleEnv,
@@ -210,9 +194,6 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
 
     try can.canonicalizeFile();
     try can.validateForChecking();
-
-    // Expose all top-level definitions so they can be imported by other modules
-    try exposeAllDefs(module_env);
 
     // Get Bool and Result statement indices from the IMPORTED modules (not copied!)
     const bool_stmt_in_bool_module = builtin_indices.bool_type;
@@ -329,9 +310,6 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
 
     try can.canonicalizeFile();
     try can.validateForChecking();
-
-    // Expose all top-level definitions so they can be imported by other modules
-    try exposeAllDefs(module_env);
 
     // Get Bool and Result statement indices from the IMPORTED modules (not copied!)
     const bool_stmt_in_bool_module = builtin_indices.bool_type;
