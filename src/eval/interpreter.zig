@@ -1954,7 +1954,9 @@ pub const Interpreter = struct {
                     if (def.pattern == lookup.pattern_idx) {
                         const def_expr = self.env.store.getExpr(def.expr);
                         if (def_expr == .e_anno_only) {
-                            // This is an anno-only def being accessed - evaluate it now (which will crash)
+                            // This is an anno-only def being accessed - evaluate it now
+                            // For functions, this creates a closure that crashes when called
+                            // For non-functions, this crashes immediately
                             return try self.evalExprMinimal(def.expr, roc_ops, null);
                         }
 

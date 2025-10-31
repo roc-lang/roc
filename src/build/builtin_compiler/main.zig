@@ -118,12 +118,50 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     defer low_level_map.deinit();
 
     // Add all low-level operations to the map using full qualified names
-    // Associated items are stored as s_decl with qualified names like "Builtin.Str.is_empty"
-    const str_is_empty_ident = env.common.findIdent("Builtin.Str.is_empty") orelse
-        try env.insertIdent(base.Ident.for_text("Builtin.Str.is_empty"));
-    try low_level_map.put(str_is_empty_ident, .str_is_empty);
+    // Associated items are stored as defs with qualified names like "Builtin.Str.is_empty"
+    // We need to find the actual ident that was created during canonicalization
+    if (env.common.findIdent("Builtin.Str.is_empty")) |str_is_empty_ident| {
+        try low_level_map.put(str_is_empty_ident, .str_is_empty);
+    }
 
-    // Iterate through all statements and replace matching s_type_anno with s_decl containing e_low_level
+    // Iterate through all defs and replace matching anno-only defs with low-level implementations
+    const all_defs = env.store.sliceDefs(env.all_defs);
+    for (all_defs) |def_idx| {
+        const def = env.store.getDef(def_idx);
+        const expr = env.store.getExpr(def.expr);
+
+        // Check if this is an anno-only def (e_anno_only expression)
+        if (expr == .e_anno_only and def.annotation != null) {
+            // Get the identifier from the pattern
+            const pattern = env.store.getPattern(def.pattern);
+            if (pattern == .assign) {
+                const ident = pattern.assign.ident;
+
+                // Check if this identifier matches a low-level operation
+                if (low_level_map.fetchRemove(ident)) |entry| {
+                    const low_level_op = entry.value;
+
+                    // Replace the e_anno_only expression with e_low_level
+                    // Modify the existing expression node in place
+                    const expr_node_idx = @intFromEnum(def.expr);
+                    const tags = env.store.nodes.field(.tag);
+                    const data_1 = env.store.nodes.field(.data_1);
+                    const data_2 = env.store.nodes.field(.data_2);
+                    const data_3 = env.store.nodes.field(.data_3);
+
+                    tags[expr_node_idx] = .expr_low_level;
+                    data_1[expr_node_idx] = @intFromEnum(low_level_op);
+                    data_2[expr_node_idx] = 0;
+                    data_3[expr_node_idx] = 0;
+
+                    // Track this def index (it already exists and is registered)
+                    try new_def_indices.append(gpa, def_idx);
+                }
+            }
+        }
+    }
+
+    // Also check statements for any old-style s_type_anno that haven't been converted to defs
     const all_stmts = env.store.sliceStatements(env.all_statements);
     for (all_stmts) |stmt_idx| {
         const stmt = env.store.getStatement(stmt_idx);
