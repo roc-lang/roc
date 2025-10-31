@@ -18,6 +18,8 @@ const Can = can.Can;
 const Check = check.Check;
 const Allocator = std.mem.Allocator;
 const CIR = can.CIR;
+const Content = types.Content;
+const Var = types.Var;
 
 /// Indices of builtin type declarations within the Builtin module.
 /// These are determined at build time via string lookup and serialized to builtin_indices.bin.
@@ -44,9 +46,7 @@ const BuiltinIndices = struct {
 /// ensuring that the serialized .bin file contains methods associated with
 /// the .str primitive type rather than a nominal Str type.
 fn transformStrNominalToPrimitive(env: *ModuleEnv) !void {
-    const types_mod = @import("types");
-    const Content = types_mod.Content;
-    const FlatType = types_mod.FlatType;
+    const FlatType = types.FlatType;
 
     // Get the Str identifier in this module
     const str_ident_opt = env.common.findIdent("Str");
@@ -57,9 +57,8 @@ fn transformStrNominalToPrimitive(env: *ModuleEnv) !void {
     const str_ident = str_ident_opt.?;
 
     // Iterate through all slots in the type store
-    var i: u32 = 0;
-    while (i < env.types.len()) : (i += 1) {
-        const var_idx = @as(types_mod.Var, @enumFromInt(i));
+    for (0..env.types.len()) |i| {
+        const var_idx = @as(Var, @enumFromInt(i));
 
         // Skip redirects, only process roots
         if (env.types.isRedirect(var_idx)) {
@@ -79,7 +78,7 @@ fn transformStrNominalToPrimitive(env: *ModuleEnv) !void {
                         if (nominal.ident.ident_idx == str_ident) {
                             // Replace with .str primitive type
                             const new_content = Content{ .structure = FlatType.str };
-                            const new_desc = types_mod.Descriptor{
+                            const new_desc = types.Descriptor{
                                 .content = new_content,
                                 .rank = desc.rank,
                                 .mark = desc.mark,
@@ -102,9 +101,6 @@ fn transformStrNominalToPrimitive(env: *ModuleEnv) !void {
 /// when transforming from nominal to primitive. The transformation replaces
 /// nominal List(a) with FlatType{ .list = element_type_var }.
 fn transformListNominalToPrimitive(env: *ModuleEnv) !void {
-    const types_mod = @import("types");
-    const Content = types_mod.Content;
-
     // Get the List identifier in this module
     const list_ident_opt = env.common.findIdent("List");
     if (list_ident_opt == null) {
@@ -114,9 +110,8 @@ fn transformListNominalToPrimitive(env: *ModuleEnv) !void {
     const list_ident = list_ident_opt.?;
 
     // Iterate through all slots in the type store
-    var i: u32 = 0;
-    while (i < env.types.len()) : (i += 1) {
-        const var_idx = @as(types_mod.Var, @enumFromInt(i));
+    for (0..env.types.len()) |i| {
+        const var_idx = @as(Var, @enumFromInt(i));
 
         // Skip redirects, only process roots
         if (env.types.isRedirect(var_idx)) {
@@ -147,7 +142,7 @@ fn transformListNominalToPrimitive(env: *ModuleEnv) !void {
 
                             // Replace with .list primitive type with the element type
                             const new_content = Content{ .structure = .{ .list = element_type_var } };
-                            const new_desc = types_mod.Descriptor{
+                            const new_desc = types.Descriptor{
                                 .content = new_content,
                                 .rank = desc.rank,
                                 .mark = desc.mark,
@@ -225,14 +220,10 @@ pub fn main() !void {
     try builtin_env.common.setNodeIndexById(gpa, str_ident, @intCast(@intFromEnum(str_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, list_ident, @intCast(@intFromEnum(list_type_idx)));
 
-    // Transform Str nominal types to .str primitive types
+    // Transform nominal types to .str primitive types as necessary.
     // This must happen BEFORE serialization to ensure the .bin file contains
     // methods associated with the .str primitive, not a nominal type
     try transformStrNominalToPrimitive(builtin_env);
-
-    // Transform List nominal types to .list primitive types
-    // This must happen BEFORE serialization to ensure the .bin file contains
-    // methods associated with the .list primitive, not a nominal type
     try transformListNominalToPrimitive(builtin_env);
 
     // Create output directory
