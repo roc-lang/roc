@@ -41,7 +41,10 @@
             echo "Some convenient command aliases:"
             echo "${aliases}" | grep -E "alias .*" -o | sed 's/alias /  /' | sort
             echo ""
-          '';
+
+            unset NIX_CFLAGS_COMPILE
+            unset NIX_LDFLAGS
+          ''; # unset to fix: Unrecognized C flag from NIX_CFLAGS_COMPILE: -fmacro-prefix-map
         };
       });
 }

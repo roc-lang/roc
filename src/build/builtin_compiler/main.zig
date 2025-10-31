@@ -19,6 +19,8 @@ const Check = check.Check;
 const Allocator = std.mem.Allocator;
 const CIR = can.CIR;
 
+const max_builtin_bytes = 1024 * 1024;
+
 /// Indices of builtin type declarations within the Builtin module.
 /// These are determined at build time via string lookup and serialized to builtin_indices.bin.
 const BuiltinIndices = struct {
@@ -93,12 +95,21 @@ fn transformStrNominalToPrimitive(env: *ModuleEnv) !void {
     }
 }
 
+fn readFileAllocPath(gpa: Allocator, path: []const u8) ![]u8 {
+    if (std.fs.path.isAbsolute(path)) {
+        var file = try std.fs.openFileAbsolute(path, .{});
+        defer file.close();
+        return try file.readToEndAlloc(gpa, max_builtin_bytes);
+    }
+    return try std.fs.cwd().readFileAlloc(gpa, path, max_builtin_bytes);
+}
+
 /// Build-time compiler that compiles builtin .roc sources into serialized ModuleEnvs.
 /// This runs during `zig build` on the host machine to generate .bin files
 /// that get embedded into the final roc executable.
 ///
-/// Note: Command-line arguments are ignored. The .roc files are read from fixed paths.
-/// The build system may pass file paths as arguments for cache tracking, but we don't use them.
+/// The build system passes the absolute path to Builtin.roc as the first argument for cache tracking;
+/// we honor that when present so the compiler works regardless of the current working directory.
 pub fn main() !void {
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
     defer {
@@ -109,11 +120,16 @@ pub fn main() !void {
     }
     const gpa = gpa_impl.allocator();
 
-    // Ignore command-line arguments - they're only used by Zig's build system for cache tracking
+    const args = try std.process.argsAlloc(gpa);
+    defer std.process.argsFree(gpa, args);
+
+    // Prefer the absolute path provided by the build system, but fall back to the
+    // project-relative path so manual runs (e.g. `zig build run`) still succeed.
+    const builtin_src_path = if (args.len >= 2) args[1] else "src/build/roc/Builtin.roc";
 
     // Read the Builtin.roc source file at runtime
     // NOTE: We must free this source manually; CommonEnv.deinit() does not free the source.
-    const builtin_roc_source = try std.fs.cwd().readFileAlloc(gpa, "src/build/roc/Builtin.roc", 1024 * 1024);
+    const builtin_roc_source = try readFileAllocPath(gpa, builtin_src_path);
 
     // Compile Builtin.roc (it's completely self-contained)
     const builtin_env = try compileModule(

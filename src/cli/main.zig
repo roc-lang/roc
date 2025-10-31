@@ -2648,7 +2648,7 @@ fn rocFormat(allocs: *Allocators, args: cli_args.FormatArgs) !void {
             try stdout.print("You can fix this with `roc format FILENAME.roc`.", .{});
             had_errors = true;
         } else {
-            try stdout.print("All formatting valid", .{});
+            try stdout.print("All formatting valid.\n", .{});
         }
         if (failure_count > 0) {
             try stdout.print("Failed to check {} files.", .{failure_count});
@@ -2671,7 +2671,7 @@ fn rocFormat(allocs: *Allocators, args: cli_args.FormatArgs) !void {
 
     try stdout.print("Took ", .{});
     try formatElapsedTime(stdout, elapsed);
-    try stdout.print(".", .{});
+    try stdout.print(".\n", .{});
 
     if (had_errors) {
         return error.FormattingFailed;
