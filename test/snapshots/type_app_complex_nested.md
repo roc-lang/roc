@@ -297,11 +297,11 @@ main! = |_| processComplex(Ok([Some(42), None]))
 								(e-empty_list)))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-apply (name "Result") (builtin)
 					(ty-apply (name "List") (builtin)
 						(ty-malformed))
-					(ty-apply (name "Dict") (external-module "Dict")
-						(ty-lookup (name "Str") (external-module "Str"))
+					(ty-apply (name "Dict") (builtin)
+						(ty-lookup (name "Str") (builtin))
 						(ty-malformed)))
 				(ty-apply (name "List") (builtin)
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
@@ -340,18 +340,18 @@ main! = |_| processComplex(Ok([Some(42), None]))
 			(ty-args
 				(ty-rigid-var (name "a"))
 				(ty-rigid-var (name "b"))))
-		(ty-apply (name "Result") (external-module "Result")
+		(ty-apply (name "Result") (builtin)
 			(ty-apply (name "List") (builtin)
 				(ty-malformed))
-			(ty-apply (name "Dict") (external-module "Dict")
-				(ty-lookup (name "Str") (external-module "Str"))
+			(ty-apply (name "Dict") (builtin)
+				(ty-lookup (name "Str") (builtin))
 				(ty-malformed)))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Result(List(Error), Error) -> List(Error)"))
+		(patt (type "Try(List(Error), Error) -> List(Error)"))
 		(patt (type "Error -> Error"))
 		(patt (type "_arg -> List(Error)")))
 	(type_decls
@@ -361,7 +361,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "b"))))))
 	(expressions
-		(expr (type "Result(List(Error), Error) -> List(Error)"))
+		(expr (type "Try(List(Error), Error) -> List(Error)"))
 		(expr (type "Error -> Error"))
 		(expr (type "_arg -> List(Error)"))))
 ~~~

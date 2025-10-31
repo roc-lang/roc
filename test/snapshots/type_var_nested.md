@@ -256,14 +256,14 @@ main = |_| "done"
 													(p-assign (ident "error")))))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-apply (name "Result") (builtin)
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "e")))
 				(ty-parens
 					(ty-fn (effectful false)
 						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 						(ty-rigid-var (name "b"))))
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-apply (name "Result") (builtin)
 					(ty-rigid-var-lookup (ty-rigid-var (name "b")))
 					(ty-rigid-var-lookup (ty-rigid-var (name "e")))))))
 	(d-let
@@ -325,11 +325,11 @@ main = |_| "done"
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))
-				(ty-apply (name "Result") (external-module "Result")
-					(ty-apply (name "Result") (external-module "Result")
+				(ty-apply (name "Result") (builtin)
+					(ty-apply (name "Result") (builtin)
 						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
-						(ty-lookup (name "Str") (external-module "Str")))
-					(ty-lookup (name "Str") (external-module "Str"))))))
+						(ty-lookup (name "Str") (builtin)))
+					(ty-lookup (name "Str") (builtin))))))
 	(d-let
 		(p-assign (ident "main"))
 		(e-lambda
@@ -342,17 +342,17 @@ main = |_| "done"
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Result(a, e), a -> b -> Result(b, e)"))
+		(patt (type "Try(a, e), a -> b -> Try(b, e)"))
 		(patt (type "a -> a"))
 		(patt (type "a, b -> { first: a, second: b }"))
 		(patt (type "List(_a) -> Num(Int(Unsigned64))"))
-		(patt (type "a -> Result(Result(a, Str), Str)"))
+		(patt (type "a -> Try(Try(a, Str), Str)"))
 		(patt (type "_arg -> Str")))
 	(expressions
-		(expr (type "Result(a, e), a -> b -> Result(b, e)"))
+		(expr (type "Try(a, e), a -> b -> Try(b, e)"))
 		(expr (type "a -> a"))
 		(expr (type "a, b -> { first: a, second: b }"))
 		(expr (type "List(_a) -> Num(Int(Unsigned64))"))
-		(expr (type "a -> Result(Result(a, Str), Str)"))
+		(expr (type "a -> Try(Try(a, Str), Str)"))
 		(expr (type "_arg -> Str"))))
 ~~~

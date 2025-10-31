@@ -93,20 +93,20 @@ NO CHANGE
 			(s-var
 				(p-assign (ident "allTrue_"))
 				(e-nominal-external
-					(external-module "Bool")
+					(builtin)
 					(e-tag (name "True"))))
 			(s-for
 				(p-assign (ident "b"))
 				(e-list
 					(elems
 						(e-nominal-external
-							(external-module "Bool")
+							(builtin)
 							(e-tag (name "True")))
 						(e-nominal-external
-							(external-module "Bool")
+							(builtin)
 							(e-tag (name "True")))
 						(e-nominal-external
-							(external-module "Bool")
+							(builtin)
 							(e-tag (name "False")))))
 				(e-block
 					(e-if
@@ -116,13 +116,13 @@ NO CHANGE
 									(e-lookup-local
 										(p-assign (ident "b")))
 									(e-nominal-external
-										(external-module "Bool")
+										(builtin)
 										(e-tag (name "False"))))
 								(e-block
 									(s-reassign
 										(p-assign (ident "allTrue_"))
 										(e-nominal-external
-											(external-module "Bool")
+											(builtin)
 											(e-tag (name "False"))))
 									(e-empty_record))))
 						(if-else
@@ -131,13 +131,13 @@ NO CHANGE
 			(e-lookup-local
 				(p-assign (ident "allTrue_"))))
 		(annotation
-			(ty-lookup (name "Bool") (external-module "Bool"))))
+			(ty-lookup (name "Bool") (builtin))))
 	(s-expect
 		(e-binop (op "eq")
 			(e-lookup-local
 				(p-assign (ident "result")))
 			(e-nominal-external
-				(external-module "Bool")
+				(builtin)
 				(e-tag (name "False"))))))
 ~~~
 # TYPES

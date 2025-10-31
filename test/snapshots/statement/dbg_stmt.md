@@ -30,7 +30,7 @@ NO CHANGE
 (can-ir
 	(s-dbg
 		(e-nominal-external
-			(external-module "Bool")
+			(builtin)
 			(e-tag (name "True")))))
 ~~~
 # TYPES

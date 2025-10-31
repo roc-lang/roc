@@ -228,7 +228,7 @@ NO CHANGE
 						(e-literal (string "world"))))))
 		(annotation
 			(ty-apply (name "Pair") (local)
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "mkPair"))
 		(e-lambda

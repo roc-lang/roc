@@ -8,6 +8,7 @@
 const std = @import("std");
 const base = @import("base");
 const types_mod = @import("types.zig");
+const import_mapping_mod = @import("import_mapping.zig");
 
 const TypesStore = @import("store.zig").Store;
 const Allocator = std.mem.Allocator;
@@ -61,11 +62,21 @@ name_counters: std.EnumMap(TypeContext, u32),
 flex_var_names_map: std.AutoHashMap(Var, FlexVarNameRange),
 flex_var_names: std.array_list.Managed(u8),
 static_dispatch_constraints: std.array_list.Managed(types_mod.StaticDispatchConstraint),
+/// Mapping from fully-qualified type identifiers to their display names based on top-level imports.
+/// This allows error messages to show "Str" instead of "Builtin.Str" for auto-imported types,
+/// "Bar" instead of "Foo.Bar" for nested imports, and aliases like "Baz" instead of "Foo".
+import_mapping: std.AutoHashMap(Ident.Idx, Ident.Idx),
 
 const FlexVarNameRange = struct { start: usize, end: usize };
 
 /// Initialize a TypeWriter with immutable types and idents references.
 pub fn initFromParts(gpa: std.mem.Allocator, types_store: *const TypesStore, idents: *const Ident.Store) std.mem.Allocator.Error!TypeWriter {
+    // Build import mapping using shared module
+    // Note: We need mutable access to insert display names into the ident store
+    const mutable_idents = @constCast(idents);
+    var import_mapping = try import_mapping_mod.createImportMapping(gpa, mutable_idents);
+    errdefer import_mapping.deinit();
+
     return .{
         .types = types_store,
         .idents = idents,
@@ -77,6 +88,7 @@ pub fn initFromParts(gpa: std.mem.Allocator, types_store: *const TypesStore, ide
         .flex_var_names_map = std.AutoHashMap(Var, FlexVarNameRange).init(gpa),
         .flex_var_names = try std.array_list.Managed(u8).initCapacity(gpa, 32),
         .static_dispatch_constraints = try std.array_list.Managed(types_mod.StaticDispatchConstraint).initCapacity(gpa, 32),
+        .import_mapping = import_mapping,
     };
 }
 
@@ -88,6 +100,7 @@ pub fn deinit(self: *TypeWriter) void {
     self.flex_var_names_map.deinit();
     self.flex_var_names.deinit();
     self.static_dispatch_constraints.deinit();
+    self.import_mapping.deinit();
 }
 
 /// Reset type writer state
@@ -365,7 +378,7 @@ fn writeVar(self: *TypeWriter, var_: Var, root_var: Var) std.mem.Allocator.Error
 
 /// Write an alias type
 fn writeAlias(self: *TypeWriter, alias: Alias, root_var: Var) std.mem.Allocator.Error!void {
-    _ = try self.buf.writer().write(self.getIdent(alias.ident.ident_idx));
+    _ = try self.buf.writer().write(self.getDisplayName(alias.ident.ident_idx));
     var args_iter = self.types.iterAliasArgs(alias);
     if (args_iter.count() > 0) {
         _ = try self.buf.writer().write("(");
@@ -454,7 +467,7 @@ fn writeTuple(self: *TypeWriter, tuple: Tuple, root_var: Var) std.mem.Allocator.
 
 /// Write a nominal type
 fn writeNominalType(self: *TypeWriter, nominal_type: NominalType, root_var: Var) std.mem.Allocator.Error!void {
-    _ = try self.buf.writer().write(self.getIdent(nominal_type.ident.ident_idx));
+    _ = try self.buf.writer().write(self.getDisplayName(nominal_type.ident.ident_idx));
 
     var args_iter = self.types.iterNominalArgs(nominal_type);
     if (args_iter.count() > 0) {
@@ -946,5 +959,16 @@ fn countVarInFlatType(self: *TypeWriter, search_var: Var, flat_type: FlatType, c
 /// Retrieves the text representation of an identifier by its index.
 /// This is used when formatting types that reference named identifiers.
 pub fn getIdent(self: *const TypeWriter, idx: Ident.Idx) []const u8 {
+    return self.idents.getText(idx);
+}
+
+/// Gets the display name for a type identifier, accounting for import mappings.
+/// If the identifier is in the import_mapping, returns the mapped name.
+/// Otherwise, returns the original identifier text.
+fn getDisplayName(self: *const TypeWriter, idx: Ident.Idx) []const u8 {
+    if (self.import_mapping.get(idx)) |display_idx| {
+        return self.idents.getText(display_idx);
+    }
+
     return self.idents.getText(idx);
 }

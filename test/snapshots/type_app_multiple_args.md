@@ -105,11 +105,11 @@ NO CHANGE
 			(e-empty_list))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "Dict") (external-module "Dict")
-					(ty-lookup (name "Str") (external-module "Str"))
+				(ty-apply (name "Dict") (builtin)
+					(ty-lookup (name "Str") (builtin))
 					(ty-lookup (name "U64") (builtin)))
 				(ty-apply (name "List") (builtin)
-					(ty-lookup (name "Str") (external-module "Str"))))))
+					(ty-lookup (name "Str") (builtin))))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-closure

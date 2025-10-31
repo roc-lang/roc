@@ -13,7 +13,7 @@ foo =
 ~~~
 # EXPECTED
 ASCII CONTROL CHARACTER - :0:0:0:0
-UNCLOSED STRING - :0:0:0:0
+UNCLOSED STRING - fuzz_crash_010.md:5:5:5:35
 PARSE ERROR - fuzz_crash_010.md:1:2:1:3
 PARSE ERROR - fuzz_crash_010.md:1:3:1:4
 PARSE ERROR - fuzz_crash_010.md:1:4:1:5
@@ -28,6 +28,7 @@ ASCII control characters are not allowed in Roc source code.
 **UNCLOSED STRING**
 This string is missing a closing quote.
 
+**fuzz_crash_010.md:5:5:5:35:**
 ```roc
     "on        (string 'onmo %')))
 ```

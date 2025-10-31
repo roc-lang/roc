@@ -29,6 +29,7 @@ test "cross-module - check type - monomorphic function passes" {
     ;
     var test_env_a = try TestEnv.init("A", source_a);
     defer test_env_a.deinit();
+    // Str is auto-imported from Builtin module, so it prints as "Str"
     try test_env_a.assertLastDefType("Str -> Str");
 
     const source_b =
@@ -37,8 +38,9 @@ test "cross-module - check type - monomorphic function passes" {
         \\main : Str
         \\main = A.main!("hello")
     ;
-    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", test_env_a.module_env);
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
+    // Str is auto-imported from Builtin module, so it prints as "Str"
     try test_env_b.assertLastDefType("Str");
 }
 
@@ -85,8 +87,9 @@ test "cross-module - check type - polymorphic function passes" {
         \\main : Str
         \\main = A.main!("hello")
     ;
-    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", test_env_a.module_env);
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
+    // Str is auto-imported from Builtin module, so it prints as "Str"
     try test_env_b.assertLastDefType("Str");
 }
 
@@ -110,7 +113,7 @@ test "cross-module - check type - polymorphic function with multiple uses passes
         \\  a + b
         \\}
     ;
-    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", test_env_a.module_env);
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
     try test_env_b.assertLastDefType("Num(Int(Unsigned64))");
 }
@@ -133,7 +136,7 @@ test "cross-module - check type - static dispatch" {
         \\
         \\main = a_val.to_str()
     ;
-    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", test_env_a.module_env);
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
     try test_env_b.assertDefType("a_val", "A");
     try test_env_b.assertDefType("main", "Str");
@@ -160,7 +163,7 @@ test "cross-module - check type - static dispatch - no annotation & indirection"
         \\main = (val1.to_str(), val1.to_str2(), val2.to_str2())
         \\
     ;
-    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", test_env_a.module_env);
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
     try test_env_b.assertDefType("val1", "A");
     try test_env_b.assertDefType("val2", "A");

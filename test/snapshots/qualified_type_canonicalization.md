@@ -58,14 +58,16 @@ MODULE NOT FOUND - qualified_type_canonicalization.md:10:1:10:40
 MODULE NOT FOUND - qualified_type_canonicalization.md:11:1:11:32
 UNDECLARED TYPE - qualified_type_canonicalization.md:15:19:15:24
 MODULE NOT IMPORTED - qualified_type_canonicalization.md:22:23:22:44
-UNDEFINED VARIABLE - qualified_type_canonicalization.md:23:23:23:32
+DOES NOT EXIST - qualified_type_canonicalization.md:23:23:23:32
+MISSING NESTED TYPE - qualified_type_canonicalization.md:26:14:26:27
 UNDECLARED TYPE - qualified_type_canonicalization.md:31:16:31:21
 UNUSED VARIABLE - qualified_type_canonicalization.md:35:17:35:22
+MISSING NESTED TYPE - qualified_type_canonicalization.md:39:13:39:26
 MODULE NOT IMPORTED - qualified_type_canonicalization.md:39:55:39:76
 UNDECLARED TYPE - qualified_type_canonicalization.md:42:9:42:15
-UNDEFINED VARIABLE - qualified_type_canonicalization.md:42:27:42:42
+DOES NOT EXIST - qualified_type_canonicalization.md:42:27:42:42
 UNDECLARED TYPE - qualified_type_canonicalization.md:43:9:43:15
-UNDEFINED VARIABLE - qualified_type_canonicalization.md:43:28:43:41
+DOES NOT EXIST - qualified_type_canonicalization.md:43:28:43:41
 UNUSED VARIABLE - qualified_type_canonicalization.md:43:20:43:23
 # PROBLEMS
 **PARSE ERROR**
@@ -157,15 +159,25 @@ multiLevelQualified : ModuleA.ModuleB.TypeC
                       ^^^^^^^^^^^^^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `new` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`TypeC.new` does not exist.
 
 **qualified_type_canonicalization.md:23:23:23:32:**
 ```roc
 multiLevelQualified = TypeC.new
 ```
                       ^^^^^^^^^
+
+
+**MISSING NESTED TYPE**
+`Result` is in scope, but it doesn't have a nested type that's also named `Result`.
+
+It's referenced here:
+**qualified_type_canonicalization.md:26:14:26:27:**
+```roc
+resultType : Result.Result(I32, Str)
+```
+             ^^^^^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -191,6 +203,17 @@ processColor = |color|
                 ^^^^^
 
 
+**MISSING NESTED TYPE**
+`Result` is in scope, but it doesn't have a nested type that's also named `Result`.
+
+It's referenced here:
+**qualified_type_canonicalization.md:39:13:39:26:**
+```roc
+transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
+```
+            ^^^^^^^^^^^^^
+
+
 **MODULE NOT IMPORTED**
 There is no module with the name `ModuleA.ModuleB` imported into this Roc file.
 
@@ -213,9 +236,8 @@ This type is referenced here:
         ^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `fromColor` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`TypeC.fromColor` does not exist.
 
 **qualified_type_canonicalization.md:42:27:42:42:**
 ```roc
@@ -235,9 +257,8 @@ This type is referenced here:
         ^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `default` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`TypeC.default` does not exist.
 
 **qualified_type_canonicalization.md:43:28:43:41:**
 ```roc
@@ -447,20 +468,18 @@ transform = |result|
 			(ty-lookup (name "DataType") (external-module "ExternalModule"))))
 	(d-let
 		(p-assign (ident "multiLevelQualified"))
-		(e-runtime-error (tag "ident_not_in_scope"))
+		(e-runtime-error (tag "qualified_ident_does_not_exist"))
 		(annotation
 			(ty-malformed)))
 	(d-let
 		(p-assign (ident "resultType"))
 		(e-nominal-external
-			(external-module "Result")
+			(builtin)
 			(e-tag (name "Ok")
 				(args
 					(e-num (value "42")))))
 		(annotation
-			(ty-apply (name "Result") (external-module "Result")
-				(ty-lookup (name "I32") (builtin))
-				(ty-lookup (name "Str") (external-module "Str")))))
+			(ty-malformed)))
 	(d-let
 		(p-assign (ident "getColor"))
 		(e-lambda
@@ -481,7 +500,7 @@ transform = |result|
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "RGB") (external-module "Color"))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "transform"))
 		(e-closure
@@ -502,7 +521,7 @@ transform = |result|
 										(p-runtime-error (tag "undeclared_type"))))
 								(value
 									(e-call
-										(e-runtime-error (tag "ident_not_in_scope"))
+										(e-runtime-error (tag "qualified_ident_does_not_exist"))
 										(e-lookup-local
 											(p-assign (ident "rgb"))))))
 							(branch
@@ -510,12 +529,10 @@ transform = |result|
 									(pattern (degenerate false)
 										(p-runtime-error (tag "undeclared_type"))))
 								(value
-									(e-runtime-error (tag "ident_not_in_scope")))))))))
+									(e-runtime-error (tag "qualified_ident_does_not_exist")))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "Result") (external-module "Result")
-					(ty-lookup (name "RGB") (external-module "Color"))
-					(ty-lookup (name "Error") (external-module "ExternalModule")))
+				(ty-malformed)
 				(ty-malformed))))
 	(s-import (module "Color")
 		(exposes))
@@ -532,16 +549,16 @@ transform = |result|
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "Error"))
-		(patt (type "Result(Num(Int(Signed32)), Str)"))
+		(patt (type "Error"))
 		(patt (type "{  } -> Error"))
 		(patt (type "Error -> Str"))
-		(patt (type "Result(Error, Error) -> Error")))
+		(patt (type "Error -> Error")))
 	(expressions
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))
-		(expr (type "Result(Num(Int(Signed32)), Str)"))
+		(expr (type "Error"))
 		(expr (type "{  } -> Error"))
 		(expr (type "Error -> Str"))
-		(expr (type "Result(Error, Error) -> Error"))))
+		(expr (type "Error -> Error"))))
 ~~~

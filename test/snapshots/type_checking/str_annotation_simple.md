@@ -42,7 +42,7 @@ NO CHANGE
 		(e-string
 			(e-literal (string "hello")))
 		(annotation
-			(ty-lookup (name "Str") (external-module "Str")))))
+			(ty-lookup (name "Str") (builtin)))))
 ~~~
 # TYPES
 ~~~clojure

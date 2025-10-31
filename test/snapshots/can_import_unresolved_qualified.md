@@ -41,6 +41,7 @@ MODULE NOT IMPORTED - can_import_unresolved_qualified.md:12:41:12:61
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:13:24:13:51
 UNUSED VARIABLE - can_import_unresolved_qualified.md:13:19:13:22
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:16:10:16:20
+DOES NOT EXIST - can_import_unresolved_qualified.md:19:10:19:31
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:22:10:22:28
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
 # PROBLEMS
@@ -142,6 +143,16 @@ Is there an `import` or `exposing` missing up-top?
 result = Json.prase("test")
 ```
          ^^^^^^^^^^
+
+
+**DOES NOT EXIST**
+`Unknown.Module.config` does not exist.
+
+**can_import_unresolved_qualified.md:19:10:19:31:**
+```roc
+config = Unknown.Module.config
+```
+         ^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -251,7 +262,7 @@ NO CHANGE
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "InvalidType") (external-module "json.Json"))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "processRequest"))
 		(e-lambda
@@ -270,8 +281,7 @@ NO CHANGE
 				(e-literal (string "test")))))
 	(d-let
 		(p-assign (ident "config"))
-		(e-lookup-local
-			(p-assign (ident "config"))))
+		(e-runtime-error (tag "qualified_ident_does_not_exist")))
 	(d-let
 		(p-assign (ident "client"))
 		(e-runtime-error (tag "ident_not_in_scope")))
@@ -291,7 +301,7 @@ NO CHANGE
 		(patt (type "Error -> Error"))
 		(patt (type "Error -> Error"))
 		(patt (type "Error"))
-		(patt (type "_a"))
+		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "Error")))
 	(expressions
@@ -299,7 +309,7 @@ NO CHANGE
 		(expr (type "Error -> Error"))
 		(expr (type "Error -> Error"))
 		(expr (type "Error"))
-		(expr (type "_a"))
+		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))))
 ~~~

@@ -68,14 +68,14 @@ foo = |a| {
 						(e-lookup-local
 							(p-assign (ident "a")))
 						(e-nominal-external
-							(external-module "Bool")
+							(builtin)
 							(e-tag (name "True")))))
 				(e-lookup-local
 					(p-assign (ident "a")))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Bool") (external-module "Bool"))
-				(ty-lookup (name "Bool") (external-module "Bool"))))))
+				(ty-lookup (name "Bool") (builtin))
+				(ty-lookup (name "Bool") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure

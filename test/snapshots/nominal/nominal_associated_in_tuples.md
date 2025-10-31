@@ -13,15 +13,15 @@ Foo := [Whatever].{
 pair : (Foo.Bar, Foo.Baz)
 pair = (X, Z)
 
-Box : a -> [Box(a)]
+Container : a -> [Container(a)]
 
-boxed : Box(Foo.Bar)
-boxed = Box(X)
+boxed : Container(Foo.Bar)
+boxed = Container(X)
 ~~~
 # EXPECTED
-UNDECLARED TYPE VARIABLE - nominal_associated_in_tuples.md:9:7:9:8
-UNDECLARED TYPE VARIABLE - nominal_associated_in_tuples.md:9:17:9:18
-TOO MANY ARGS - nominal_associated_in_tuples.md:11:9:11:21
+UNDECLARED TYPE VARIABLE - nominal_associated_in_tuples.md:9:13:9:14
+UNDECLARED TYPE VARIABLE - nominal_associated_in_tuples.md:9:29:9:30
+TOO MANY ARGS - nominal_associated_in_tuples.md:11:9:11:27
 # PROBLEMS
 **UNDECLARED TYPE VARIABLE**
 The type variable _a_ is not declared in this scope.
@@ -29,11 +29,11 @@ The type variable _a_ is not declared in this scope.
 Type variables must be introduced in a type annotation before they can be used.
 
 This type variable is referenced here:
-**nominal_associated_in_tuples.md:9:7:9:8:**
+**nominal_associated_in_tuples.md:9:13:9:14:**
 ```roc
-Box : a -> [Box(a)]
+Container : a -> [Container(a)]
 ```
-      ^
+            ^
 
 
 **UNDECLARED TYPE VARIABLE**
@@ -42,20 +42,20 @@ The type variable _a_ is not declared in this scope.
 Type variables must be introduced in a type annotation before they can be used.
 
 This type variable is referenced here:
-**nominal_associated_in_tuples.md:9:17:9:18:**
+**nominal_associated_in_tuples.md:9:29:9:30:**
 ```roc
-Box : a -> [Box(a)]
+Container : a -> [Container(a)]
 ```
-                ^
+                            ^
 
 
 **TOO MANY ARGS**
-The type _Box_ expects  argument, but got  instead.
-**nominal_associated_in_tuples.md:11:9:11:21:**
+The type _Container_ expects  argument, but got  instead.
+**nominal_associated_in_tuples.md:11:9:11:27:**
 ```roc
-boxed : Box(Foo.Bar)
+boxed : Container(Foo.Bar)
 ```
-        ^^^^^^^^^^^^
+        ^^^^^^^^^^^^^^^^^^
 
 
 
@@ -107,23 +107,23 @@ EndOfFile,
 				(e-tag (raw "X"))
 				(e-tag (raw "Z"))))
 		(s-type-decl
-			(header (name "Box")
+			(header (name "Container")
 				(args))
 			(ty-fn
 				(ty-var (raw "a"))
 				(ty-tag-union
 					(tags
 						(ty-apply
-							(ty (name "Box"))
+							(ty (name "Container"))
 							(ty-var (raw "a")))))))
 		(s-type-anno (name "boxed")
 			(ty-apply
-				(ty (name "Box"))
+				(ty (name "Container"))
 				(ty (name "Foo.Bar"))))
 		(s-decl
 			(p-ident (raw "boxed"))
 			(e-apply
-				(e-tag (raw "Box"))
+				(e-tag (raw "Container"))
 				(e-tag (raw "X"))))))
 ~~~
 # FORMATTED
@@ -136,10 +136,10 @@ Foo := [Whatever].{
 pair : (Foo.Bar, Foo.Baz)
 pair = (X, Z)
 
-Box : a -> [Box(a)]
+Container : a -> [Container(a)]
 
-boxed : Box(Foo.Bar)
-boxed = Box(X)
+boxed : Container(Foo.Bar)
+boxed = Container(X)
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -156,11 +156,11 @@ boxed = Box(X)
 				(ty-lookup (name "Foo.Baz") (local)))))
 	(d-let
 		(p-assign (ident "boxed"))
-		(e-tag (name "Box")
+		(e-tag (name "Container")
 			(args
 				(e-tag (name "X"))))
 		(annotation
-			(ty-apply (name "Box") (local)
+			(ty-apply (name "Container") (local)
 				(ty-lookup (name "Foo.Bar") (local)))))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
@@ -176,11 +176,11 @@ boxed = Box(X)
 		(ty-tag-union
 			(ty-tag-name (name "Z"))))
 	(s-alias-decl
-		(ty-header (name "Box"))
+		(ty-header (name "Container"))
 		(ty-fn (effectful false)
 			(ty-malformed)
 			(ty-tag-union
-				(ty-tag-name (name "Box")
+				(ty-tag-name (name "Container")
 					(ty-malformed))))))
 ~~~
 # TYPES
@@ -196,8 +196,8 @@ boxed = Box(X)
 			(ty-header (name "Foo.Bar")))
 		(nominal (type "Foo.Baz")
 			(ty-header (name "Foo.Baz")))
-		(alias (type "Box")
-			(ty-header (name "Box"))))
+		(alias (type "Container")
+			(ty-header (name "Container"))))
 	(expressions
 		(expr (type "(Foo.Bar, Foo.Baz)"))
 		(expr (type "Error"))))

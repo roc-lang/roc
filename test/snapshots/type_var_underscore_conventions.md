@@ -232,7 +232,7 @@ NO CHANGE
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
 					(ty-rigid-var (name "elem")))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "starting_dollar"))
 		(e-lambda
@@ -256,7 +256,7 @@ NO CHANGE
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
 					(ty-rigid-var (name "$bad")))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "valid_single"))
 		(e-lambda
@@ -268,7 +268,7 @@ NO CHANGE
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
 					(ty-rigid-var (name "_elem")))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "valid_multi"))
 		(e-lambda

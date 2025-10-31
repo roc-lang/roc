@@ -61,6 +61,8 @@ common_idents: CommonIdents,
 snapshots: SnapshotStore,
 /// type problems
 problems: ProblemStore,
+/// import mapping for auto-imported builtin types (for error display)
+import_mapping: @import("types").import_mapping.ImportMapping,
 /// reusable scratch arrays used in unification
 unify_scratch: unifier.Scratch,
 /// reusable scratch arrays used in occurs check
@@ -116,10 +118,12 @@ pub const CommonIdents = struct {
     module_name: base.Ident.Idx,
     list: base.Ident.Idx,
     box: base.Ident.Idx,
-    /// Statement index of Bool type in the current module (injected from Bool.bin)
+    /// Statement index of Bool type in the current module (injected from Builtin.bin)
     bool_stmt: can.CIR.Statement.Idx,
-    /// Statement index of Result type in the current module (injected from Result.bin)
-    result_stmt: can.CIR.Statement.Idx,
+    /// Statement index of Try type in the current module (injected from Builtin.bin)
+    try_stmt: can.CIR.Statement.Idx,
+    /// Direct reference to the Builtin module env (null when compiling Builtin module itself)
+    builtin_module: ?*const ModuleEnv,
 };
 
 /// Init type solver
@@ -133,16 +137,21 @@ pub fn init(
     regions: *Region.List,
     common_idents: CommonIdents,
 ) std.mem.Allocator.Error!Self {
+    const mutable_cir = @constCast(cir);
+    var import_mapping = try @import("types").import_mapping.createImportMapping(gpa, mutable_cir.getIdentStore());
+    errdefer import_mapping.deinit();
+
     return .{
         .gpa = gpa,
         .types = types,
-        .cir = @constCast(cir),
+        .cir = mutable_cir,
         .imported_modules = imported_modules,
         .module_envs = module_envs,
         .regions = regions,
         .common_idents = common_idents,
         .snapshots = try SnapshotStore.initCapacity(gpa, 512),
         .problems = try ProblemStore.initCapacity(gpa, 64),
+        .import_mapping = import_mapping,
         .unify_scratch = try unifier.Scratch.init(gpa),
         .occurs_scratch = try occurs.Scratch.init(gpa),
         .anno_free_vars = try base.Scratch(FreeVar).init(gpa),
@@ -169,6 +178,7 @@ pub fn init(
 pub fn deinit(self: *Self) void {
     self.problems.deinit(self.gpa);
     self.snapshots.deinit();
+    self.import_mapping.deinit();
     self.unify_scratch.deinit();
     self.occurs_scratch.deinit();
     self.anno_free_vars.deinit();
@@ -586,27 +596,15 @@ fn updateVar(self: *Self, target_var: Var, content: types_mod.Content, rank: typ
 /// other modules directly. The Bool and Result types are used in language constructs like
 /// `if` conditions and need to be available in every module's type store.
 fn copyBuiltinTypes(self: *Self) !void {
-    // Find the Bool and Result modules in imported_modules
-    var bool_module: ?*const ModuleEnv = null;
-    var result_module: ?*const ModuleEnv = null;
+    const bool_stmt_idx = self.common_idents.bool_stmt;
 
-    for (self.imported_modules) |module_env| {
-        if (std.mem.eql(u8, module_env.module_name, "Bool")) {
-            bool_module = module_env;
-        } else if (std.mem.eql(u8, module_env.module_name, "Result")) {
-            result_module = module_env;
-        }
-    }
-
-    // Copy Bool type from Bool module
-    if (bool_module) |bool_env| {
-        const bool_stmt_idx = self.common_idents.bool_stmt;
+    if (self.common_idents.builtin_module) |builtin_env| {
+        // Copy Bool type from Builtin module using the direct reference
         const bool_type_var = ModuleEnv.varFrom(bool_stmt_idx);
-        self.bool_var = try self.copyVar(bool_type_var, bool_env, Region.zero());
+        self.bool_var = try self.copyVar(bool_type_var, builtin_env, Region.zero());
     } else {
-        // If Bool module not found, use the statement from the current module
-        // This happens when Bool is loaded as a builtin statement
-        const bool_stmt_idx = self.common_idents.bool_stmt;
+        // If Builtin module reference is null, use the statement from the current module
+        // This happens when compiling the Builtin module itself
         self.bool_var = ModuleEnv.varFrom(bool_stmt_idx);
     }
 
@@ -1059,6 +1057,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, ctx: GenType
                     try self.types.setVarRedirect(anno_var, builtin_var);
                 },
                 .local => |local| {
+
                     // Check if we're in a declaration or an annotation
                     switch (ctx) {
                         .type_decl => |this_decl| {
@@ -3852,12 +3851,10 @@ fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!v
                 if (is_this_module) {
                     break :blk self.cir;
                 } else {
-                    // Ensure that we have other module envs
+                    // Get the module env from module_envs
                     std.debug.assert(self.module_envs != null);
                     const module_envs = self.module_envs.?;
-
                     const mb_original_module_env = module_envs.get(original_module_ident);
-
                     std.debug.assert(mb_original_module_env != null);
                     break :blk mb_original_module_env.?.env;
                 }

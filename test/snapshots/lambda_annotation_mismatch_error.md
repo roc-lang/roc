@@ -103,8 +103,8 @@ NO CHANGE
 				(e-num (value "42"))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Str") (external-module "Str"))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "wrong_type_function"))
 		(e-lambda

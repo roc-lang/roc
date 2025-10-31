@@ -8,12 +8,14 @@ type=expr
 List.map
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - simple_external_lookup.md:1:1:1:9
+DOES NOT EXIST - simple_external_lookup.md:1:1:1:9
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `map` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`List.map` does not exist.
 
+`List` is in scope, but it has no associated `map`.
+
+It's referenced here:
 **simple_external_lookup.md:1:1:1:9:**
 ```roc
 List.map
@@ -36,7 +38,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "ident_not_in_scope"))
+(e-runtime-error (tag "nested_value_not_found"))
 ~~~
 # TYPES
 ~~~clojure

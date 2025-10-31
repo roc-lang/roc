@@ -8,11 +8,12 @@ type=expr
 "abc\qdef"
 ~~~
 # EXPECTED
-INVALID ESCAPE SEQUENCE - :0:0:0:0
+INVALID ESCAPE SEQUENCE - weird_escape.md:1:5:1:7
 # PROBLEMS
 **INVALID ESCAPE SEQUENCE**
 This escape sequence is not recognized.
 
+**weird_escape.md:1:5:1:7:**
 ```roc
 "abc\qdef"
 ```

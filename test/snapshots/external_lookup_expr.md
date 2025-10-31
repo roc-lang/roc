@@ -8,11 +8,10 @@ type=expr
 Json.utf8
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - external_lookup_expr.md:1:1:1:10
+DOES NOT EXIST - external_lookup_expr.md:1:1:1:10
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `utf8` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Json.utf8` does not exist.
 
 **external_lookup_expr.md:1:1:1:10:**
 ```roc
@@ -36,7 +35,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "ident_not_in_scope"))
+(e-runtime-error (tag "qualified_ident_does_not_exist"))
 ~~~
 # TYPES
 ~~~clojure

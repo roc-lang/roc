@@ -80,9 +80,15 @@ is_named_color = |str|{
 # EXPECTED
 MODULE HEADER DEPRECATED - Color.md:1:1:8:2
 UNUSED VARIABLE - Color.md:30:5:30:25
+DOES NOT EXIST - Color.md:50:34:50:44
+DOES NOT EXIST - Color.md:50:52:50:62
+DOES NOT EXIST - Color.md:50:70:50:80
+DOES NOT EXIST - Color.md:51:39:51:49
+DOES NOT EXIST - Color.md:51:57:51:67
+DOES NOT EXIST - Color.md:51:75:51:85
+DOES NOT EXIST - Color.md:51:93:51:103
 DOES NOT EXIST - Color.md:68:14:68:27
 TYPE MISMATCH - Color.md:32:5:45:6
-TYPE MISMATCH - Color.md:51:104:51:105
 TYPE DOES NOT HAVE METHODS - Color.md:22:15:22:26
 TYPE DOES NOT HAVE METHODS - Color.md:29:13:29:26
 TYPE DOES NOT HAVE METHODS - Color.md:35:17:35:41
@@ -125,6 +131,76 @@ The unused variable is declared here:
 
 
 **DOES NOT EXIST**
+`Num.to_str` does not exist.
+
+**Color.md:50:34:50:44:**
+```roc
+    Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"
+```
+                                 ^^^^^^^^^^
+
+
+**DOES NOT EXIST**
+`Num.to_str` does not exist.
+
+**Color.md:50:52:50:62:**
+```roc
+    Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"
+```
+                                                   ^^^^^^^^^^
+
+
+**DOES NOT EXIST**
+`Num.to_str` does not exist.
+
+**Color.md:50:70:50:80:**
+```roc
+    Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"
+```
+                                                                     ^^^^^^^^^^
+
+
+**DOES NOT EXIST**
+`Num.to_str` does not exist.
+
+**Color.md:51:39:51:49:**
+```roc
+    Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
+```
+                                      ^^^^^^^^^^
+
+
+**DOES NOT EXIST**
+`Num.to_str` does not exist.
+
+**Color.md:51:57:51:67:**
+```roc
+    Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
+```
+                                                        ^^^^^^^^^^
+
+
+**DOES NOT EXIST**
+`Num.to_str` does not exist.
+
+**Color.md:51:75:51:85:**
+```roc
+    Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
+```
+                                                                          ^^^^^^^^^^
+
+
+**DOES NOT EXIST**
+`Num.to_str` does not exist.
+
+**Color.md:51:93:51:103:**
+```roc
+    Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
+```
+                                                                                            ^^^^^^^^^^
+
+
+**DOES NOT EXIST**
 `Set.from_list` does not exist.
 
 **Color.md:68:14:68:27:**
@@ -158,21 +234,7 @@ It has the type:
     _[InvalidHex(Str), Err([InvalidHex(Str)]_others)][Ok(Color)]_others2_
 
 But the type annotation says it should have the type:
-    _Result(Color, [InvalidHex(Str)])_
-
-**TYPE MISMATCH**
-The first argument being passed to this function has the wrong type:
-**Color.md:51:104:51:105:**
-```roc
-    Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
-```
-                                                                                                       ^
-
-This argument has the type:
-    _Num(Frac(Decimal))_
-
-But `to_str` needs the first argument to be:
-    _Num(Int(Unsigned8))_
+    _Try(Color, [InvalidHex(Str)])_
 
 **TYPE DOES NOT HAVE METHODS**
 You're trying to call the `to_frac` method on a `Num(Int(Unsigned8))`:
@@ -986,17 +1048,16 @@ is_named_color = |str| {
 															(e-literal (string "")))))))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Str") (external-module "Str"))
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-lookup (name "Str") (builtin))
+				(ty-apply (name "Result") (builtin)
 					(ty-lookup (name "Color") (local))
 					(ty-tag-union
 						(ty-tag-name (name "InvalidHex")
-							(ty-lookup (name "Str") (external-module "Str"))))))))
+							(ty-lookup (name "Str") (builtin))))))))
 	(d-let
 		(p-assign (ident "to_str"))
 		(e-closure
 			(captures
-				(capture (ident "to_str"))
 				(capture (ident "r"))
 				(capture (ident "g"))
 				(capture (ident "b"))
@@ -1024,20 +1085,17 @@ is_named_color = |str| {
 									(e-string
 										(e-literal (string "rgb("))
 										(e-call
-											(e-lookup-local
-												(p-assign (ident "to_str")))
+											(e-runtime-error (tag "qualified_ident_does_not_exist"))
 											(e-lookup-local
 												(p-assign (ident "r"))))
 										(e-literal (string ", "))
 										(e-call
-											(e-lookup-local
-												(p-assign (ident "to_str")))
+											(e-runtime-error (tag "qualified_ident_does_not_exist"))
 											(e-lookup-local
 												(p-assign (ident "g"))))
 										(e-literal (string ", "))
 										(e-call
-											(e-lookup-local
-												(p-assign (ident "to_str")))
+											(e-runtime-error (tag "qualified_ident_does_not_exist"))
 											(e-lookup-local
 												(p-assign (ident "b"))))
 										(e-literal (string ")")))))
@@ -1050,26 +1108,22 @@ is_named_color = |str| {
 									(e-string
 										(e-literal (string "rgba("))
 										(e-call
-											(e-lookup-local
-												(p-assign (ident "to_str")))
+											(e-runtime-error (tag "qualified_ident_does_not_exist"))
 											(e-lookup-local
 												(p-assign (ident "r"))))
 										(e-literal (string ", "))
 										(e-call
-											(e-lookup-local
-												(p-assign (ident "to_str")))
+											(e-runtime-error (tag "qualified_ident_does_not_exist"))
 											(e-lookup-local
 												(p-assign (ident "g"))))
 										(e-literal (string ", "))
 										(e-call
-											(e-lookup-local
-												(p-assign (ident "to_str")))
+											(e-runtime-error (tag "qualified_ident_does_not_exist"))
 											(e-lookup-local
 												(p-assign (ident "b"))))
 										(e-literal (string ", "))
 										(e-call
-											(e-lookup-local
-												(p-assign (ident "to_str")))
+											(e-runtime-error (tag "qualified_ident_does_not_exist"))
 											(e-lookup-local
 												(p-assign (ident "a"))))
 										(e-literal (string ")")))))
@@ -1092,7 +1146,7 @@ is_named_color = |str| {
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Color") (local))
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "named"))
 		(e-lambda
@@ -1125,12 +1179,12 @@ is_named_color = |str| {
 										(e-literal (string ""))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Str") (external-module "Str"))
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-lookup (name "Str") (builtin))
+				(ty-apply (name "Result") (builtin)
 					(ty-lookup (name "Color") (local))
 					(ty-tag-union
 						(ty-tag-name (name "UnknownColor")
-							(ty-lookup (name "Str") (external-module "Str"))))))))
+							(ty-lookup (name "Str") (builtin))))))))
 	(d-let
 		(p-assign (ident "is_named_color"))
 		(e-lambda
@@ -1169,9 +1223,9 @@ is_named_color = |str| {
 				(ty-lookup (name "U8") (builtin))
 				(ty-lookup (name "Dec") (builtin)))
 			(ty-tag-name (name "Named")
-				(ty-lookup (name "Str") (external-module "Str")))
+				(ty-lookup (name "Str") (builtin)))
 			(ty-tag-name (name "Hex")
-				(ty-lookup (name "Str") (external-module "Str")))))
+				(ty-lookup (name "Str") (builtin)))))
 	(s-expect
 		(e-binop (op "eq")
 			(e-dot-access (field "to_str")
@@ -1223,8 +1277,8 @@ is_named_color = |str| {
 		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
 		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
 		(patt (type "Str -> Error"))
-		(patt (type "Error -> Error"))
-		(patt (type "Str -> Result(Color, [UnknownColor(Str)])"))
+		(patt (type "Color -> Error"))
+		(patt (type "Str -> Try(Color, [UnknownColor(Str)])"))
 		(patt (type "_arg -> Error")))
 	(type_decls
 		(nominal (type "Color")
@@ -1233,7 +1287,7 @@ is_named_color = |str| {
 		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
 		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
 		(expr (type "Str -> Error"))
-		(expr (type "Error -> Error"))
-		(expr (type "Str -> Result(Color, [UnknownColor(Str)])"))
+		(expr (type "Color -> Error"))
+		(expr (type "Str -> Try(Color, [UnknownColor(Str)])"))
 		(expr (type "_arg -> Error"))))
 ~~~

@@ -8,11 +8,12 @@ type=expr
 "abc\u(zzzz)def"
 ~~~
 # EXPECTED
-INVALID UNICODE ESCAPE SEQUENCE - :0:0:0:0
+INVALID UNICODE ESCAPE SEQUENCE - unicode_not_hex.md:1:5:1:13
 # PROBLEMS
 **INVALID UNICODE ESCAPE SEQUENCE**
 This Unicode escape sequence is not valid.
 
+**unicode_not_hex.md:1:5:1:13:**
 ```roc
 "abc\u(zzzz)def"
 ```

@@ -27,6 +27,10 @@ test "nominal type origin - displays origin in snapshot writer" {
     var snapshots = try snapshot.Store.initCapacity(test_allocator, 16);
     defer snapshots.deinit();
 
+    // Create empty import mapping for test
+    var import_mapping = types_mod.import_mapping.ImportMapping.init(test_allocator);
+    defer import_mapping.deinit();
+
     // Create a nominal type snapshot with origin from a different module
     const nominal_type_backing = snapshot.SnapshotContent{ .structure = .str };
     const nominal_type_backing_idx = try snapshots.contents.append(test_allocator, nominal_type_backing);
@@ -44,6 +48,7 @@ test "nominal type origin - displays origin in snapshot writer" {
             test_allocator,
             &snapshots,
             &idents,
+            &import_mapping,
         );
         defer writer.deinit();
         writer.current_module_name = "CurrentModule";
@@ -69,6 +74,7 @@ test "nominal type origin - displays origin in snapshot writer" {
             test_allocator,
             &snapshots,
             &idents,
+            &import_mapping,
         );
         defer writer.deinit();
         writer.current_module_name = "CurrentModule";
@@ -102,6 +108,7 @@ test "nominal type origin - displays origin in snapshot writer" {
             test_allocator,
             &snapshots,
             &idents,
+            &import_mapping,
         );
         defer writer.deinit();
         writer.current_module_name = "CurrentModule";
@@ -126,6 +133,9 @@ test "nominal type origin - works with no context" {
     var snapshots = try snapshot.Store.initCapacity(test_allocator, 16);
     defer snapshots.deinit();
 
+    var import_mapping = types_mod.import_mapping.ImportMapping.init(test_allocator);
+    defer import_mapping.deinit();
+
     const nominal_type_backing = snapshot.SnapshotContent{ .structure = .str };
     const nominal_type_backing_idx = try snapshots.contents.append(test_allocator, nominal_type_backing);
     const vars_range = try snapshots.content_indexes.appendSlice(test_allocator, &.{nominal_type_backing_idx});
@@ -141,6 +151,7 @@ test "nominal type origin - works with no context" {
         test_allocator,
         &snapshots,
         &idents,
+        &import_mapping,
     );
     defer writer.deinit();
 

@@ -167,7 +167,7 @@ expect {
 ~~~
 # EXPECTED
 LEADING ZERO - :0:0:0:0
-UNCLOSED STRING - :0:0:0:0
+UNCLOSED STRING - fuzz_crash_027.md:118:8:118:22
 PARSE ERROR - fuzz_crash_027.md:40:5:40:6
 PARSE ERROR - fuzz_crash_027.md:40:7:40:8
 PARSE ERROR - fuzz_crash_027.md:40:9:40:10
@@ -215,7 +215,7 @@ UNDEFINED VARIABLE - fuzz_crash_027.md:136:3:136:7
 UNDEFINED VARIABLE - fuzz_crash_027.md:138:4:138:10
 UNDEFINED VARIABLE - fuzz_crash_027.md:141:14:141:17
 NOT IMPLEMENTED - :0:0:0:0
-UNDEFINED VARIABLE - fuzz_crash_027.md:145:4:145:13
+DOES NOT EXIST - fuzz_crash_027.md:145:4:145:13
 UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
 UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
 UNUSED VARIABLE - fuzz_crash_027.md:131:2:131:8
@@ -239,6 +239,7 @@ Numbers cannot have leading zeros.
 **UNCLOSED STRING**
 This string is missing a closing quote.
 
+**fuzz_crash_027.md:118:8:118:22:**
 ```roc
 	crash "Unreachtement
 ```
@@ -746,9 +747,8 @@ This feature is not yet implemented: canonicalize suffix_single_question express
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
-**UNDEFINED VARIABLE**
-Nothing is named `toStr` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Num.toStr` does not exist.
 
 **fuzz_crash_027.md:145:4:145:13:**
 ```roc
@@ -964,7 +964,7 @@ It has the type:
     _[Stdoline!(Error)][Err(_d), Ok({  })]_
 
 But the type annotation says it should have the type:
-    _Result({  }, _d)_
+    _Try({  }, _d)_
 
 # TOKENS
 ~~~zig
@@ -2122,7 +2122,7 @@ expect {
 							(e-string
 								(e-literal (string "How about "))
 								(e-call
-									(e-runtime-error (tag "ident_not_in_scope"))
+									(e-runtime-error (tag "qualified_ident_does_not_exist"))
 									(e-lookup-local
 										(p-assign (ident "number"))))
 								(e-literal (string " as a"))))))))
@@ -2130,7 +2130,7 @@ expect {
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
 					(ty-malformed))
-				(ty-apply (name "Result") (external-module "Result")
+				(ty-apply (name "Result") (builtin)
 					(ty-record)
 					(ty-underscore)))))
 	(d-let
