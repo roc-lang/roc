@@ -241,19 +241,19 @@ pub fn init(
 /// This function is called BEFORE Can.init() by both production and test environments
 /// to ensure they use identical module setup logic.
 ///
-/// Adds Bool, Result, Dict, and Set from the Builtin module to module_envs.
-/// Note: Str is NOT added because it's a primitive builtin type handled specially.
+/// Adds Bool, Result, Dict, Set, and Str from the Builtin module to module_envs.
 pub fn populateModuleEnvs(
     module_envs_map: *std.AutoHashMap(Ident.Idx, AutoImportedType),
     calling_module_env: *ModuleEnv,
     builtin_module_env: *const ModuleEnv,
-    builtin_indices: anytype, // Has fields: bool_type, try_type, dict_type, set_type
+    builtin_indices: anytype, // Has fields: bool_type, try_type, dict_type, set_type, str_type
 ) !void {
     const types_to_add = .{
         .{ "Bool", builtin_indices.bool_type },
         .{ "Try", builtin_indices.try_type },
         .{ "Dict", builtin_indices.dict_type },
         .{ "Set", builtin_indices.set_type },
+        .{ "Str", builtin_indices.str_type },
     };
 
     inline for (types_to_add) |type_info| {
@@ -268,7 +268,7 @@ pub fn populateModuleEnvs(
     }
 }
 
-/// Set up auto-imported builtin types (Bool, Result, Dict, Set) from the Builtin module.
+/// Set up auto-imported builtin types (Bool, Result, Dict, Set, Str) from the Builtin module.
 /// This function is shared between production and test environments to ensure consistency.
 ///
 /// These nested types in Builtin.roc need special handling:
@@ -279,14 +279,13 @@ pub fn setupAutoImportedBuiltinTypes(
     gpa: std.mem.Allocator,
     module_envs: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType),
 ) std.mem.Allocator.Error!void {
-    // Auto-import builtin types (Bool, Result, Dict, Set)
+    // Auto-import builtin types (Bool, Result, Dict, Set, Str)
     // These are nested types in Builtin module but need to be auto-imported like standalone modules
-    // Note: Str is NOT auto-imported because it's a primitive builtin type
     if (module_envs) |envs_map| {
         const zero_region = Region{ .start = Region.Position.zero(), .end = Region.Position.zero() };
         const current_scope = &self.scopes.items[0]; // Top-level scope
 
-        const builtin_types = [_][]const u8{ "Bool", "Result", "Dict", "Set" };
+        const builtin_types = [_][]const u8{ "Bool", "Result", "Dict", "Set", "Str" };
         for (builtin_types) |type_name_text| {
             const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
             if (envs_map.get(type_ident)) |type_entry| {
@@ -333,10 +332,11 @@ pub fn setupAutoImportedBuiltinTypes(
             }
         }
 
-        // Also add primitive builtin types (Str, List, Box) to type_bindings
+        // Also add primitive builtin types (List, Box) to type_bindings
         // so we can detect conflicts with O(1) HashMap lookup instead of string scanning
+        // Note: Str is NOT primitive anymore - it's auto-imported like Bool
 
-        const primitive_builtins = [_][]const u8{ "Str", "List", "Box" };
+        const primitive_builtins = [_][]const u8{ "List", "Box" };
         for (primitive_builtins) |type_name_text| {
             const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
 
