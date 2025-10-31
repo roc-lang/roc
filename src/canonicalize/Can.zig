@@ -673,10 +673,11 @@ fn processAssociatedItemsSecondPass(
                                         );
                                         try self.env.store.addScratchDef(def_idx);
 
-                                        // Register node index for associated item
-                                        // Associated items are always available when their parent type is in scope
-                                        const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                                        try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+                                        // Set node index for exposed associated item
+                                        if (self.env.containsExposedById(qualified_idx)) {
+                                            const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                                            try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+                                        }
                                     }
                                 }
                             }
@@ -721,10 +722,11 @@ fn processAssociatedItemsSecondPass(
                         const def_idx = try self.canonicalizeAssociatedDecl(decl, qualified_idx);
                         try self.env.store.addScratchDef(def_idx);
 
-                        // Register node index for associated item
-                        // Associated items are always available when their parent type is in scope
-                        const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                        try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+                        // Set node index for exposed associated item
+                        if (self.env.containsExposedById(qualified_idx)) {
+                            const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                            try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+                        }
                     }
                 } else {
                     // Non-identifier patterns are not supported in associated blocks
@@ -2712,22 +2714,25 @@ pub fn canonicalizeExpr(
                                 if (envs_map.get(module_name)) |auto_imported_type| {
                                     const module_env = auto_imported_type.env;
 
-                                    // For nested types (e.g., Bool inside Builtin), build "Bool.not"
+                                    // For nested types (e.g., Bool inside Builtin), build the full qualified name
                                     // For regular module imports (e.g., A), just use the field name directly
                                     const lookup_name: []const u8 = if (auto_imported_type.statement_idx) |_| blk_name: {
-                                        // Auto-imported nested type: build "Bool.not" (not "Builtin.Bool.not"!)
-                                        // The exposed items are stored with the nested type name, not the module name
-                                        const qualified_idx = try self.env.insertQualifiedIdent(module_text, field_text);
-                                        break :blk_name self.env.getIdent(qualified_idx);
+                                        // Auto-imported nested type: build "Builtin.Bool.not" using the module's actual name
+                                        // Associated items are stored with the full qualified parent type name
+                                        const parent_qualified_idx = try self.env.insertQualifiedIdent(module_env.module_name, module_text);
+                                        const parent_qualified_text = self.env.getIdent(parent_qualified_idx);
+                                        const fully_qualified_idx = try self.env.insertQualifiedIdent(parent_qualified_text, field_text);
+                                        break :blk_name self.env.getIdent(fully_qualified_idx);
                                     } else field_text;
 
-                                    // Look up the name in the module's exposed items
+                                    // Look up the name in the module - no "exposed" check needed because
+                                    // if the type is in scope, all its associated items are available
                                     const qname_ident = module_env.common.findIdent(lookup_name) orelse {
                                         // Identifier not found - just return null
                                         // The error will be handled by the code below that checks target_node_idx_opt
                                         break :blk null;
                                     };
-                                    break :blk module_env.getExposedNodeIndexById(qname_ident);
+                                    break :blk module_env.findDefByIdent(qname_ident);
                                 } else {
                                     break :blk null;
                                 }
