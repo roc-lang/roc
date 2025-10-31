@@ -8,7 +8,7 @@ type=file
 = "te
 ~~~
 # EXPECTED
-UNCLOSED STRING - :0:0:0:0
+UNCLOSED STRING - fuzz_crash_003.md:1:3:1:6
 PARSE ERROR - fuzz_crash_003.md:1:1:1:2
 PARSE ERROR - fuzz_crash_003.md:1:3:1:4
 PARSE ERROR - fuzz_crash_003.md:1:4:1:6
@@ -18,6 +18,7 @@ MISSING MAIN! FUNCTION - fuzz_crash_003.md:1:1:1:6
 **UNCLOSED STRING**
 This string is missing a closing quote.
 
+**fuzz_crash_003.md:1:3:1:6:**
 ```roc
 = "te
 ```

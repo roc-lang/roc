@@ -8,6 +8,7 @@
 const std = @import("std");
 const base = @import("base");
 const types_mod = @import("types.zig");
+const import_mapping_mod = @import("import_mapping.zig");
 
 const TypesStore = @import("store.zig").Store;
 const Allocator = std.mem.Allocator;
@@ -70,26 +71,11 @@ const FlexVarNameRange = struct { start: usize, end: usize };
 
 /// Initialize a TypeWriter with immutable types and idents references.
 pub fn initFromParts(gpa: std.mem.Allocator, types_store: *const TypesStore, idents: *const Ident.Store) std.mem.Allocator.Error!TypeWriter {
-    // Build import mapping for auto-imported builtin types
-    // This allows error messages to show "Str" instead of "Builtin.Str", etc.
-    var import_mapping = std.AutoHashMap(Ident.Idx, Ident.Idx).init(gpa);
+    // Build import mapping using shared module
+    // Note: We need mutable access to insert display names into the ident store
+    const mutable_idents = @constCast(idents);
+    var import_mapping = try import_mapping_mod.createImportMapping(gpa, mutable_idents);
     errdefer import_mapping.deinit();
-
-    // Helper to add a mapping if both identifiers exist
-    const tryAddMapping = struct {
-        fn call(mapping: *std.AutoHashMap(Ident.Idx, Ident.Idx), ident_store: *const Ident.Store, qualified: []const u8, display: []const u8) !void {
-            const qualified_ident = ident_store.findByString(qualified) orelse return;
-            const display_ident = ident_store.findByString(display) orelse return;
-            try mapping.put(qualified_ident, display_ident);
-        }
-    }.call;
-
-    // Map auto-imported builtin types to their user-visible names
-    try tryAddMapping(&import_mapping, idents, "Builtin.Str", "Str");
-    try tryAddMapping(&import_mapping, idents, "Builtin.Bool", "Bool");
-    try tryAddMapping(&import_mapping, idents, "Builtin.Result", "Result");
-    try tryAddMapping(&import_mapping, idents, "Builtin.Dict", "Dict");
-    try tryAddMapping(&import_mapping, idents, "Builtin.Set", "Set");
 
     return .{
         .types = types_store,
@@ -392,7 +378,7 @@ fn writeVar(self: *TypeWriter, var_: Var, root_var: Var) std.mem.Allocator.Error
 
 /// Write an alias type
 fn writeAlias(self: *TypeWriter, alias: Alias, root_var: Var) std.mem.Allocator.Error!void {
-    _ = try self.buf.writer().write(self.getIdent(alias.ident.ident_idx));
+    _ = try self.buf.writer().write(self.getDisplayName(alias.ident.ident_idx));
     var args_iter = self.types.iterAliasArgs(alias);
     if (args_iter.count() > 0) {
         _ = try self.buf.writer().write("(");

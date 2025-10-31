@@ -159,17 +159,17 @@ EndOfFile,
 			(e-num (value "2")))
 		(e-binop (op "and")
 			(e-nominal-external
-				(external-module "Builtin")
+				(builtin)
 				(e-tag (name "True")))
 			(e-nominal-external
-				(external-module "Builtin")
+				(builtin)
 				(e-tag (name "False"))))
 		(e-binop (op "or")
 			(e-nominal-external
-				(external-module "Builtin")
+				(builtin)
 				(e-tag (name "False")))
 			(e-nominal-external
-				(external-module "Builtin")
+				(builtin)
 				(e-tag (name "True"))))
 		(e-binop (op "null_coalesce")
 			(e-tag (name "None"))
@@ -177,5 +177,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(Num(_size), Num(_size2), Num(_size3), Num(_size4), Num(_size5), Bool, Bool, Bool, Bool, Bool, Bool, Num(_size6), Bool, Bool, Error)"))
+(expr (type "(Num(_size), Num(_size2), Num(_size3), Num(_size4), Num(_size5), Bool, Bool, Bool, Bool, Bool, Bool, Num(_size6), Error, Error, Error)"))
 ~~~

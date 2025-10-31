@@ -131,7 +131,7 @@ pub const CanonicalizedExpr = struct {
 const TypeVarProblemKind = enum {
     unused_type_var,
     type_var_marked_unused,
-    type_var_ending_in_underscore,
+    type_var_starting_with_dollar,
 };
 
 const TypeVarProblem = struct {
@@ -330,6 +330,27 @@ pub fn setupAutoImportedBuiltinTypes(
                     },
                 });
             }
+        }
+
+        // Also add primitive builtin types (Str, List, Box) to type_bindings
+        // so we can detect conflicts with O(1) HashMap lookup instead of string scanning
+
+        const primitive_builtins = [_][]const u8{ "Str", "List", "Box" };
+        for (primitive_builtins) |type_name_text| {
+            const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
+
+            // Add a minimal type binding to detect conflicts
+            // These primitives don't have module entries, so we use a marker binding
+            try current_scope.type_bindings.put(gpa, type_ident, Scope.TypeBinding{
+                .external_nominal = .{
+                    .module_ident = type_ident,
+                    .original_ident = type_ident,
+                    .target_node_idx = null,
+                    .import_idx = @enumFromInt(0), // Dummy import index for primitives
+                    .origin_region = zero_region,
+                    .module_not_found = false,
+                },
+            });
         }
     }
 }
@@ -1698,7 +1719,7 @@ fn importAliased(
     const alias = try self.resolveModuleAlias(alias_tok, module_name) orelse return null;
 
     // 3. Add to scope: alias -> module_name mapping
-    try self.scopeIntroduceModuleAlias(alias, module_name);
+    try self.scopeIntroduceModuleAlias(alias, module_name, import_region, exposed_items_span);
 
     // 4. Process type imports from this module
     try self.processTypeImports(module_name, alias);
@@ -1762,7 +1783,7 @@ fn importWithAlias(
     );
 
     // 2. Add to scope: alias -> module_name mapping
-    try self.scopeIntroduceModuleAlias(alias, module_name);
+    try self.scopeIntroduceModuleAlias(alias, module_name, import_region, exposed_items_span);
 
     // 3. Process type imports from this module
     try self.processTypeImports(module_name, alias);
@@ -2068,7 +2089,31 @@ fn introduceItemsAliased(
     const current_scope = self.currentScope();
 
     if (self.module_envs) |envs_map| {
-        const module_entry = envs_map.get(module_name) orelse return;
+        const module_entry = envs_map.get(module_name) orelse {
+            // Module not found, but still check for duplicate type names with auto-imports
+            // This ensures we report DUPLICATE DEFINITION even for non-existent modules
+            for (exposed_items_slice) |exposed_item_idx| {
+                const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
+                const local_ident = exposed_item.alias orelse exposed_item.name;
+
+                // Check if this conflicts with an existing type binding (e.g., auto-imported type)
+                if (current_scope.type_bindings.get(local_ident)) |existing_binding| {
+                    const original_region = switch (existing_binding) {
+                        .external_nominal => |ext| ext.origin_region,
+                        else => Region.zero(),
+                    };
+
+                    try self.env.pushDiagnostic(Diagnostic{
+                        .shadowing_warning = .{
+                            .ident = local_ident,
+                            .region = import_region,
+                            .original_region = original_region,
+                        },
+                    });
+                }
+            }
+            return;
+        };
         const module_env = module_entry.env;
 
         // Auto-expose the module's main type for type modules
@@ -2182,7 +2227,31 @@ fn introduceItemsUnaliased(
     const current_scope = self.currentScope();
 
     if (self.module_envs) |envs_map| {
-        const module_entry = envs_map.get(module_name) orelse return;
+        const module_entry = envs_map.get(module_name) orelse {
+            // Module not found, but still check for duplicate type names with auto-imports
+            // This ensures we report DUPLICATE DEFINITION even for non-existent modules
+            for (exposed_items_slice) |exposed_item_idx| {
+                const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
+                const local_ident = exposed_item.alias orelse exposed_item.name;
+
+                // Check if this conflicts with an existing type binding (e.g., auto-imported type)
+                if (current_scope.type_bindings.get(local_ident)) |existing_binding| {
+                    const original_region = switch (existing_binding) {
+                        .external_nominal => |ext| ext.origin_region,
+                        else => Region.zero(),
+                    };
+
+                    try self.env.pushDiagnostic(Diagnostic{
+                        .shadowing_warning = .{
+                            .ident = local_ident,
+                            .region = import_region,
+                            .original_region = original_region,
+                        },
+                    });
+                }
+            }
+            return;
+        };
         const module_env = module_entry.env;
 
         // No auto-expose of main type - only process explicitly exposed items
@@ -2612,8 +2681,26 @@ pub fn canonicalizeExpr(
                             break :blk null;
                         } orelse {
                             // Not a module alias and not an auto-imported module
-                            // Continue to normal identifier lookup
-                            break :blk_qualified;
+                            // This is a qualified identifier with an invalid qualifier
+
+                            // Check if the qualifier is in scope as a type/value
+                            // If so, provide a more helpful error message
+                            const diagnostic = if (self.scopeLookupTypeBinding(module_alias) != null)
+                                Diagnostic{ .nested_value_not_found = .{
+                                    .parent_name = module_alias,
+                                    .nested_name = ident,
+                                    .region = region,
+                                } }
+                            else
+                                Diagnostic{ .qualified_ident_does_not_exist = .{
+                                    .ident = qualified_ident,
+                                    .region = region,
+                                } };
+
+                            return CanonicalizedExpr{
+                                .idx = try self.env.pushMalformed(Expr.Idx, diagnostic),
+                                .free_vars = null,
+                            };
                         };
 
                         {
@@ -5431,9 +5518,9 @@ fn scopeIntroduceVar(
 }
 
 fn collectTypeVarProblems(ident: Ident.Idx, is_single_use: bool, ast_anno: AST.TypeAnno.Idx, scratch: *base.Scratch(TypeVarProblem)) std.mem.Allocator.Error!void {
-    // Warn for type variables with trailing underscores
+    // Warn for type variables starting with dollar sign (reusable markers)
     if (ident.attributes.reassignable) {
-        try scratch.append(.{ .ident = ident, .problem = .type_var_ending_in_underscore, .ast_anno = ast_anno });
+        try scratch.append(.{ .ident = ident, .problem = .type_var_starting_with_dollar, .ast_anno = ast_anno });
     }
 
     // Should start with underscore but doesn't, or should not start with underscore but does.
@@ -5449,11 +5536,11 @@ fn reportTypeVarProblems(self: *Self, problems: []const TypeVarProblem) std.mem.
         const name_text = self.env.getIdent(problem.ident);
 
         switch (problem.problem) {
-            .type_var_ending_in_underscore => {
-                const suggested_name_text = name_text[0 .. name_text.len - 1]; // Remove the trailing underscore
+            .type_var_starting_with_dollar => {
+                const suggested_name_text = name_text[1..]; // Remove the leading dollar sign
                 const suggested_ident = self.env.insertIdent(base.Ident.for_text(suggested_name_text), Region.zero());
 
-                self.env.pushDiagnostic(Diagnostic{ .type_var_ending_in_underscore = .{
+                self.env.pushDiagnostic(Diagnostic{ .type_var_starting_with_dollar = .{
                     .name = problem.ident,
                     .suggested_name = suggested_ident,
                     .region = region,
@@ -5521,11 +5608,11 @@ fn processCollectedTypeVars(self: *Self) std.mem.Allocator.Error!void {
         const name_text = self.env.getIdent(problem.ident);
 
         switch (problem.problem) {
-            .type_var_ending_in_underscore => {
-                const suggested_name_text = name_text[0 .. name_text.len - 1]; // Remove the trailing underscore
+            .type_var_starting_with_dollar => {
+                const suggested_name_text = name_text[1..]; // Remove the leading dollar sign
                 const suggested_ident = self.env.insertIdent(base.Ident.for_text(suggested_name_text), Region.zero());
 
-                self.env.pushDiagnostic(Diagnostic{ .type_var_ending_in_underscore = .{
+                self.env.pushDiagnostic(Diagnostic{ .type_var_starting_with_dollar = .{
                     .name = problem.ident,
                     .suggested_name = suggested_ident,
                     .region = Region.zero(),
@@ -5928,7 +6015,17 @@ fn canonicalizeTypeAnnoBasicType(
 
         // Check if this is a module alias
         const module_name = self.scopeLookupModule(module_alias) orelse {
-            // Module is not in current scope
+            // Module is not in current scope - but check if it's a type name first
+            if (self.scopeLookupTypeBinding(module_alias)) |_| {
+                // This is in scope as a type/value, but doesn't expose the nested type being requested
+                return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .nested_type_not_found = .{
+                    .parent_name = module_alias,
+                    .nested_name = type_name_ident,
+                    .region = region,
+                } });
+            }
+
+            // Not a module and not a type - module not imported
             return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .module_not_imported = .{
                 .module_name = module_alias,
                 .region = region,
@@ -6840,35 +6937,91 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                     },
                     else => {
                         // If the next stmt does not match this annotation,
-                        // then just add the annotation independently
+                        // create a Def with an e_anno_only body
 
-                        // TODO: Capture diagnostic that this anno doesn't
-                        // have a corresponding def
-
-                        const stmt_idx = try self.env.addStatement(Statement{
-                            .s_type_anno = .{
-                                .name = name_ident,
-                                .anno = type_anno_idx,
-                                .where = where_clauses,
+                        // Create the pattern for this def
+                        const pattern = Pattern{
+                            .assign = .{
+                                .ident = name_ident,
                             },
-                        }, region);
+                        };
+                        const pattern_idx = try self.env.addPattern(pattern, region);
+
+                        // Introduce the name to scope
+                        switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, name_ident, pattern_idx, false, true)) {
+                            .success => {},
+                            .shadowing_warning => |shadowed_pattern_idx| {
+                                const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+                                try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                                    .ident = name_ident,
+                                    .region = region,
+                                    .original_region = original_region,
+                                } });
+                            },
+                            else => {},
+                        }
+
+                        // Create the e_anno_only expression
+                        const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{} }, region);
+
+                        // Create the annotation structure
+                        const annotation = CIR.Annotation{
+                            .anno = type_anno_idx,
+                            .where = where_clauses,
+                        };
+                        const annotation_idx = try self.env.addAnnotation(annotation, region);
+
+                        // Add the decl as a statement with the e_anno_only body
+                        const stmt_idx = try self.env.addStatement(Statement{ .s_decl = .{
+                            .pattern = pattern_idx,
+                            .expr = anno_only_expr,
+                            .anno = annotation_idx,
+                        } }, region);
                         mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = null };
                     },
                 }
             } else {
                 // If the next stmt does not match this annotation,
-                // then just add the annotation independently
+                // create a Def with an e_anno_only body
 
-                // TODO: Capture diagnostic that this anno doesn't
-                // have a corresponding def
-
-                const stmt_idx = try self.env.addStatement(Statement{
-                    .s_type_anno = .{
-                        .name = name_ident,
-                        .anno = type_anno_idx,
-                        .where = where_clauses,
+                // Create the pattern for this def
+                const pattern = Pattern{
+                    .assign = .{
+                        .ident = name_ident,
                     },
-                }, region);
+                };
+                const pattern_idx = try self.env.addPattern(pattern, region);
+
+                // Introduce the name to scope
+                switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, name_ident, pattern_idx, false, true)) {
+                    .success => {},
+                    .shadowing_warning => |shadowed_pattern_idx| {
+                        const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+                        try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                            .ident = name_ident,
+                            .region = region,
+                            .original_region = original_region,
+                        } });
+                    },
+                    else => {},
+                }
+
+                // Create the e_anno_only expression
+                const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{} }, region);
+
+                // Create the annotation structure
+                const annotation = CIR.Annotation{
+                    .anno = type_anno_idx,
+                    .where = where_clauses,
+                };
+                const annotation_idx = try self.env.addAnnotation(annotation, region);
+
+                // Add the decl as a statement with the e_anno_only body
+                const stmt_idx = try self.env.addStatement(Statement{ .s_decl = .{
+                    .pattern = pattern_idx,
+                    .expr = anno_only_expr,
+                    .anno = annotation_idx,
+                } }, region);
                 mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = null };
             }
         },
@@ -7761,10 +7914,45 @@ fn scopeLookupModule(self: *const Self, alias_name: Ident.Idx) ?Ident.Idx {
 }
 
 /// Introduce a module alias into scope
-fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Ident.Idx) std.mem.Allocator.Error!void {
+fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Ident.Idx, import_region: Region, exposed_items_span: CIR.ExposedItem.Span) std.mem.Allocator.Error!void {
     const gpa = self.env.gpa;
 
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+
+    // Check if this alias conflicts with an existing type binding (e.g., auto-imported type or primitive builtin)
+    // Primitive builtins (Str, List, Box) are now added to type_bindings in setupAutoImportedBuiltinTypes
+    if (current_scope.type_bindings.get(alias_name)) |existing_binding| {
+        // Check if any exposed items have the same name as the alias
+        // If so, skip the error here and let introduceItemsAliased handle it
+        const exposed_items_slice = self.env.store.sliceExposedItems(exposed_items_span);
+        for (exposed_items_slice) |exposed_item_idx| {
+            const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
+            const local_ident = exposed_item.alias orelse exposed_item.name;
+
+            if (local_ident.idx == alias_name.idx) {
+                // The alias has the same name as an exposed item, so skip reporting
+                // the error here - it will be reported by introduceItemsAliased
+                return;
+            }
+        }
+
+        // Get the original region from the existing binding
+        const original_region = switch (existing_binding) {
+            .external_nominal => |ext| ext.origin_region,
+            else => Region.zero(),
+        };
+
+        try self.env.pushDiagnostic(Diagnostic{
+            .shadowing_warning = .{
+                .ident = alias_name,
+                .region = import_region,
+                .original_region = original_region,
+            },
+        });
+
+        // Don't add the duplicate binding
+        return;
+    }
 
     // Simplified introduction without parent lookup for now
     const result = try current_scope.introduceModuleAlias(gpa, alias_name, module_name, null);
@@ -7776,8 +7964,8 @@ fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Id
             try self.env.pushDiagnostic(Diagnostic{
                 .shadowing_warning = .{
                     .ident = alias_name,
-                    .region = Region.zero(), // TODO: get proper region
-                    .original_region = Region.zero(), // TODO: get proper region
+                    .region = import_region,
+                    .original_region = Region.zero(),
                 },
             });
             _ = shadowed_module; // Suppress unused variable warning
@@ -7788,8 +7976,8 @@ fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Id
             try self.env.pushDiagnostic(Diagnostic{
                 .shadowing_warning = .{
                     .ident = alias_name,
-                    .region = Region.zero(), // TODO: get proper region
-                    .original_region = Region.zero(), // TODO: get proper region
+                    .region = import_region,
+                    .original_region = Region.zero(),
                 },
             });
             _ = existing_module; // Suppress unused variable warning
@@ -7894,6 +8082,27 @@ fn setExternalTypeBinding(
     origin_region: Region,
     module_found_status: ModuleFoundStatus,
 ) !void {
+    // Check if type already exists in this scope (mirrors Scope.introduceTypeDecl logic)
+    if (scope.type_bindings.get(local_ident)) |existing_binding| {
+        // Extract the original region from the existing binding for the diagnostic
+        const original_region = switch (existing_binding) {
+            .local_nominal, .local_alias, .associated_nominal => Region.zero(),
+            .external_nominal => |ext| ext.origin_region,
+        };
+
+        // Report duplicate definition error
+        try self.env.pushDiagnostic(Diagnostic{
+            .shadowing_warning = .{
+                .ident = local_ident,
+                .region = origin_region,
+                .original_region = original_region,
+            },
+        });
+
+        // Don't add the duplicate binding
+        return;
+    }
+
     try scope.type_bindings.put(self.env.gpa, local_ident, Scope.TypeBinding{
         .external_nominal = .{
             .module_ident = module_ident,

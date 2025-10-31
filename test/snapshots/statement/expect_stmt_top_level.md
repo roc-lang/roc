@@ -42,21 +42,21 @@ NO CHANGE
 	(d-let
 		(p-assign (ident "foo"))
 		(e-nominal-external
-			(external-module "Builtin")
+			(builtin)
 			(e-tag (name "True"))))
 	(s-expect
 		(e-binop (op "ne")
 			(e-lookup-local
 				(p-assign (ident "foo")))
 			(e-nominal-external
-				(external-module "Builtin")
+				(builtin)
 				(e-tag (name "False"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Bool")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "Bool"))))
+		(expr (type "Error"))))
 ~~~

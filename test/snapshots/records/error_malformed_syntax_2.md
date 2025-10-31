@@ -12,6 +12,7 @@ UNEXPECTED TOKEN IN TYPE ANNOTATION - error_malformed_syntax_2.md:1:8:1:10
 UNEXPECTED TOKEN IN EXPRESSION - error_malformed_syntax_2.md:1:10:1:11
 MALFORMED TYPE - error_malformed_syntax_2.md:1:8:1:10
 UNRECOGNIZED SYNTAX - error_malformed_syntax_2.md:1:10:1:11
+UNUSED VARIABLE - error_malformed_syntax_2.md:1:3:1:10
 UNUSED VARIABLE - error_malformed_syntax_2.md:1:12:1:16
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -58,6 +59,18 @@ I don't recognize this syntax.
 This might be a syntax error, an unsupported language feature, or a typo.
 
 **UNUSED VARIABLE**
+Variable `age` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_age` to suppress this warning.
+The unused variable is declared here:
+**error_malformed_syntax_2.md:1:3:1:10:**
+```roc
+{ age: 42, name = "Alice" }
+```
+  ^^^^^^^
+
+
+**UNUSED VARIABLE**
 Variable `name` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_name` to suppress this warning.
@@ -96,8 +109,9 @@ EndOfFile,
 # CANONICALIZE
 ~~~clojure
 (e-block
-	(s-type-anno (name "age")
-		(ty-malformed))
+	(s-let
+		(p-assign (ident "age"))
+		(e-anno-only))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-let

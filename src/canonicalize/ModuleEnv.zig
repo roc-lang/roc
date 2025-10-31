@@ -997,6 +997,88 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .nested_type_not_found => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "MISSING NESTED TYPE", .runtime_error);
+
+            const parent_bytes = self.getIdent(data.parent_name);
+            const parent_name = try report.addOwnedString(parent_bytes);
+
+            const nested_bytes = self.getIdent(data.nested_name);
+            const nested_name = try report.addOwnedString(nested_bytes);
+
+            try report.document.addInlineCode(parent_name);
+            try report.document.addReflowingText(" is in scope, but it doesn't have a nested type ");
+
+            if (std.mem.eql(u8, parent_bytes, nested_bytes)) {
+                // Say "also named" if the parent and nested types are equal, e.g. `Foo.Foo` - when
+                // this happens it can be kind of a confusing message if the message just says
+                // "Foo is in scope, but it doesn't have a nested type named Foo" compared to
+                // "Foo is in scope, but it doesn't have a nested type that's also named Foo"
+                try report.document.addReflowingText("that's also ");
+            }
+
+            try report.document.addReflowingText("named ");
+            try report.document.addInlineCode(nested_name);
+            try report.document.addReflowingText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("It's referenced here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .nested_value_not_found => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "DOES NOT EXIST", .runtime_error);
+
+            const parent_bytes = self.getIdent(data.parent_name);
+            const parent_name = try report.addOwnedString(parent_bytes);
+
+            const nested_bytes = self.getIdent(data.nested_name);
+            const nested_name = try report.addOwnedString(nested_bytes);
+
+            // First line: "Foo.bar does not exist."
+            const full_name = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ parent_bytes, nested_bytes });
+            defer allocator.free(full_name);
+            const owned_full_name = try report.addOwnedString(full_name);
+            try report.document.addInlineCode(owned_full_name);
+            try report.document.addReflowingText(" does not exist.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            // Second line: "Foo is in scope, but it has no associated bar."
+            try report.document.addInlineCode(parent_name);
+            try report.document.addReflowingText(" is in scope, but it has no associated ");
+            try report.document.addInlineCode(nested_name);
+            try report.document.addReflowingText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("It's referenced here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .where_clause_not_allowed_in_type_decl => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 

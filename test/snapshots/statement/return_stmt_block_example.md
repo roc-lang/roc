@@ -141,7 +141,7 @@ foo = |num| {
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))
-				(ty-apply (name "Result") (external-module "Builtin")
+				(ty-apply (name "Result") (builtin)
 					(ty-lookup (name "Str") (builtin))
 					(ty-tag-union
 						(ty-tag-name (name "TooBig"))))))))
@@ -150,7 +150,7 @@ foo = |num| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Unsigned64)) -> Result(Error, [TooBig])")))
+		(patt (type "Num(Int(Unsigned64)) -> Error")))
 	(expressions
-		(expr (type "Num(Int(Unsigned64)) -> Result(Error, [TooBig])"))))
+		(expr (type "Num(Int(Unsigned64)) -> Error"))))
 ~~~

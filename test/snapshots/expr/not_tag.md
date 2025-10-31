@@ -22,7 +22,7 @@ It has the type:
     _[C(Num(_size))][False, True]_
 
 But I expected it to be:
-    _Builtin.Bool_
+    _Bool_
 
 # TOKENS
 ~~~zig

@@ -72,7 +72,7 @@ NO CHANGE
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
 					(ty-lookup (name "U8") (builtin)))
-				(ty-apply (name "Result") (external-module "Builtin")
+				(ty-apply (name "Result") (builtin)
 					(ty-rigid-var (name "a"))
 					(ty-tag-union
 						(ty-tag-name (name "DecodeErr")))))
@@ -81,7 +81,7 @@ NO CHANGE
 					(args
 						(ty-apply (name "List") (builtin)
 							(ty-lookup (name "U8") (builtin))))
-					(ty-apply (name "Result") (external-module "Builtin")
+					(ty-apply (name "Result") (builtin)
 						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 						(ty-tag-union
 							(ty-tag-name (name "DecodeErr")))))))))
@@ -90,7 +90,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(Num(Int(Unsigned8))) -> Result(a, [DecodeErr]) where [List(Num(Int(Unsigned8))).decode : List(Num(Int(Unsigned8))) -> Result(a, [DecodeErr])]")))
+		(patt (type "List(Num(Int(Unsigned8))) -> Error")))
 	(expressions
-		(expr (type "List(Num(Int(Unsigned8))) -> Result(a, [DecodeErr]) where [List(Num(Int(Unsigned8))).decode : List(Num(Int(Unsigned8))) -> Result(a, [DecodeErr])]"))))
+		(expr (type "List(Num(Int(Unsigned8))) -> Error"))))
 ~~~

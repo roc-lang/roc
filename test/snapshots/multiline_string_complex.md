@@ -83,7 +83,7 @@ It has the type:
     _Str_
 
 But I expected it to be:
-    _Builtin.Bool_
+    _Bool_
 
 # TOKENS
 ~~~zig

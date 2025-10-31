@@ -751,7 +751,33 @@ pub const BuildEnv = struct {
         // Read source
         const file_abs = try std.fs.path.resolve(self.gpa, &.{file_path});
         defer self.gpa.free(file_abs);
-        const src = try std.fs.cwd().readFileAlloc(self.gpa, file_abs, std.math.maxInt(usize));
+        const src = std.fs.cwd().readFileAlloc(self.gpa, file_abs, std.math.maxInt(usize)) catch |err| {
+            const report = blk: switch (err) {
+                error.FileNotFound => {
+                    var report = Report.init(self.gpa, "FILE NOT FOUND", .fatal);
+                    try report.document.addText("I could not find the file ");
+                    try report.document.addAnnotated(file_abs, .path);
+                    try report.document.addLineBreak();
+                    try report.document.addText("Make sure the file exists and you do not have any typos in its name or path.");
+                    break :blk report;
+                },
+
+                else => {
+                    var report = Report.init(self.gpa, "COULD NOT READ FILE", .fatal);
+                    try report.document.addText("I could not read the file ");
+                    try report.document.addAnnotated(file_abs, .path);
+                    try report.document.addLineBreak();
+                    try report.document.addText("I did get the following error: ");
+                    try report.addErrorMessage(@errorName(err));
+                    try report.document.addText("Make sure the file can be read.");
+                    break :blk report;
+                },
+            };
+            self.sink.emitReport("main", file_abs, report);
+            try self.sink.buildOrder(&[_][]const u8{"main"}, &[_][]const u8{file_abs}, &[_]u32{0});
+            self.sink.tryEmit();
+            return err;
+        };
         defer self.gpa.free(src);
 
         var env = try ModuleEnv.init(self.gpa, src);
@@ -770,7 +796,7 @@ pub const BuildEnv = struct {
             const module_name = file_abs;
 
             for (ast.tokenize_diagnostics.items) |diagnostic| {
-                const report = try ast.tokenizeDiagnosticToReport(diagnostic, self.gpa);
+                const report = try ast.tokenizeDiagnosticToReport(diagnostic, self.gpa, file_abs);
                 self.sink.emitReport(pkg_name, module_name, report);
             }
             for (ast.parse_diagnostics.items) |diagnostic| {

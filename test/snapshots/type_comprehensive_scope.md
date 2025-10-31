@@ -107,16 +107,6 @@ BadType : SomeUndeclaredType
           ^^^^^^^^^^^^^^^^^^
 
 
-**TOO MANY ARGS**
-The type _Builtin.Dict_ expects  argument, but got  instead.
-**type_comprehensive_scope.md:29:10:29:24:**
-```roc
-MyDict : Dict(Str, U64)
-```
-         ^^^^^^^^^^^^^^
-
-
-
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,UpperIdent,
@@ -297,7 +287,7 @@ Complex : {
 		(ty-lookup (name "Str") (builtin)))
 	(s-alias-decl
 		(ty-header (name "MyBool"))
-		(ty-lookup (name "Bool") (external-module "Builtin")))
+		(ty-lookup (name "Bool") (builtin)))
 	(s-alias-decl
 		(ty-header (name "Person"))
 		(ty-record
@@ -337,7 +327,7 @@ Complex : {
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(s-alias-decl
 		(ty-header (name "MyResult"))
-		(ty-apply (name "Result") (external-module "Builtin")
+		(ty-apply (name "Result") (builtin)
 			(ty-lookup (name "Str") (builtin))
 			(ty-lookup (name "U64") (builtin))))
 	(s-alias-decl
@@ -352,7 +342,7 @@ Complex : {
 			(ty-lookup (name "Str") (builtin))))
 	(s-alias-decl
 		(ty-header (name "MyDict"))
-		(ty-apply (name "Dict") (external-module "Builtin")
+		(ty-apply (name "Dict") (builtin)
 			(ty-lookup (name "Str") (builtin))
 			(ty-lookup (name "U64") (builtin))))
 	(s-alias-decl
@@ -361,8 +351,8 @@ Complex : {
 			(field (field "person")
 				(ty-lookup (name "Person") (local)))
 			(field (field "result")
-				(ty-apply (name "Result") (external-module "Builtin")
-					(ty-lookup (name "Bool") (external-module "Builtin"))
+				(ty-apply (name "Result") (builtin)
+					(ty-lookup (name "Bool") (builtin))
 					(ty-lookup (name "Str") (builtin))))
 			(field (field "tree")
 				(ty-apply (name "Tree") (local)

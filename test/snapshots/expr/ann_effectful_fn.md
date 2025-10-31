@@ -13,9 +13,28 @@ type=expr
 }
 ~~~
 # EXPECTED
+DUPLICATE DEFINITION - ann_effectful_fn.md:3:5:3:19
 UNUSED VALUE - ann_effectful_fn.md:2:35:2:39
 UNUSED VALUE - ann_effectful_fn.md:2:40:2:53
 # PROBLEMS
+**DUPLICATE DEFINITION**
+The name `launchTheNukes` is being redeclared in this scope.
+
+The redeclaration is here:
+**ann_effectful_fn.md:3:5:3:19:**
+```roc
+    launchTheNukes = |{}| ...
+```
+    ^^^^^^^^^^^^^^
+
+But `launchTheNukes` was already defined here:
+**ann_effectful_fn.md:2:5:2:34:**
+```roc
+    launchTheNukes : {} => Result Bool LaunchNukeErr
+```
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
 **ann_effectful_fn.md:2:35:2:39:**
@@ -81,10 +100,9 @@ EndOfFile,
 # CANONICALIZE
 ~~~clojure
 (e-block
-	(s-type-anno (name "launchTheNukes")
-		(ty-fn (effectful true)
-			(ty-record)
-			(ty-lookup (name "Result") (external-module "Builtin"))))
+	(s-let
+		(p-assign (ident "launchTheNukes"))
+		(e-anno-only))
 	(s-expr
 		(e-tag (name "Bool")))
 	(s-expr

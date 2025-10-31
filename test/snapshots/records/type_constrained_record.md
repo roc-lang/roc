@@ -67,14 +67,9 @@ process_user! : { name : Str, age :  } => Str
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-anno (name "process_user!")
-		(ty-fn (effectful true)
-			(ty-record
-				(field (field "name")
-					(ty-lookup (name "Str") (builtin)))
-				(field (field "age")
-					(ty-malformed)))
-			(ty-lookup (name "Str") (builtin)))))
+	(s-let
+		(p-assign (ident "process_user!"))
+		(e-anno-only)))
 ~~~
 # TYPES
 ~~~clojure

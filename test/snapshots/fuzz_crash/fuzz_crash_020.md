@@ -986,7 +986,7 @@ This expression produces a value, but it's not being used:
 	^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _Builtin.Bool_
+    _Bool_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:

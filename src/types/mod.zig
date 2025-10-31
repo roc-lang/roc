@@ -11,6 +11,7 @@ pub const types = @import("types.zig");
 pub const store = @import("store.zig");
 pub const instantiate = @import("instantiate.zig");
 pub const generalize = @import("generalize.zig");
+pub const import_mapping = @import("import_mapping.zig");
 
 pub const TypeWriter = @import("TypeWriter.zig");
 

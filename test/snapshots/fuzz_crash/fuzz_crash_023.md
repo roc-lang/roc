@@ -265,7 +265,7 @@ UNDEFINED VARIABLE - fuzz_crash_023.md:188:22:188:25
 NOT IMPLEMENTED - :0:0:0:0
 NOT IMPLEMENTED - :0:0:0:0
 UNDEFINED VARIABLE - fuzz_crash_023.md:191:2:191:14
-UNDEFINED VARIABLE - fuzz_crash_023.md:193:4:193:13
+DOES NOT EXIST - fuzz_crash_023.md:193:4:193:13
 UNUSED VARIABLE - fuzz_crash_023.md:164:2:164:18
 UNUSED VARIABLE - fuzz_crash_023.md:165:2:165:14
 UNUSED VARIABLE - fuzz_crash_023.md:178:2:178:8
@@ -800,9 +800,8 @@ Is there an `import` or `exposing` missing up-top?
 	^^^^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `toStr` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DOES NOT EXIST**
+`Num.toStr` does not exist.
 
 **fuzz_crash_023.md:193:4:193:13:**
 ```roc
@@ -2401,7 +2400,7 @@ expect {
 						(e-string
 							(e-literal (string "How about "))
 							(e-call
-								(e-runtime-error (tag "ident_not_in_scope"))
+								(e-runtime-error (tag "qualified_ident_does_not_exist"))
 								(e-lookup-local
 									(p-assign (ident "number"))))
 							(e-literal (string " as a string?")))))))
@@ -2409,7 +2408,7 @@ expect {
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
 					(ty-malformed))
-				(ty-apply (name "Result") (external-module "Builtin")
+				(ty-apply (name "Result") (builtin)
 					(ty-record)
 					(ty-underscore)))))
 	(d-let

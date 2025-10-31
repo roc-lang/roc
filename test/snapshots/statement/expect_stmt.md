@@ -30,7 +30,7 @@ NO CHANGE
 (can-ir
 	(s-expect
 		(e-nominal-external
-			(external-module "Builtin")
+			(builtin)
 			(e-tag (name "True")))))
 ~~~
 # TYPES

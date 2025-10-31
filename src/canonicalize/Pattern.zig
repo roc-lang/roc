@@ -356,7 +356,15 @@ pub const Pattern = union(enum) {
                 std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
                 const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
                 const module_name = ir.common.strings.get(string_lit_idx);
-                try tree.pushStringPair("external-module", module_name);
+                // Special case: Builtin module is an implementation detail, print as (builtin)
+                if (std.mem.eql(u8, module_name, "Builtin")) {
+                    const field_begin = tree.beginNode();
+                    try tree.pushStaticAtom("builtin");
+                    const field_attrs = tree.beginNode();
+                    try tree.endNode(field_begin, field_attrs);
+                } else {
+                    try tree.pushStringPair("external-module", module_name);
+                }
 
                 const attrs = tree.beginNode();
                 try ir.store.getPattern(n.backing_pattern).pushToSExprTree(ir, tree, n.backing_pattern);

@@ -128,7 +128,7 @@ isOk = |result| match result {
 									(p-applied-tag)))
 							(value
 								(e-nominal-external
-									(external-module "Builtin")
+									(builtin)
 									(e-tag (name "True")))))
 						(branch
 							(patterns
@@ -136,14 +136,14 @@ isOk = |result| match result {
 									(p-applied-tag)))
 							(value
 								(e-nominal-external
-									(external-module "Builtin")
+									(builtin)
 									(e-tag (name "False")))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "MyResult") (local)
 					(ty-rigid-var (name "ok"))
 					(ty-rigid-var (name "err")))
-				(ty-lookup (name "Bool") (external-module "Builtin")))))
+				(ty-lookup (name "Bool") (builtin)))))
 	(s-nominal-decl
 		(ty-header (name "MyResult")
 			(ty-args
@@ -160,7 +160,7 @@ isOk = |result| match result {
 (inferred-types
 	(defs
 		(patt (type "MyResult(Str, Num(Int(Signed32)))"))
-		(patt (type "MyResult(ok, err) -> Bool")))
+		(patt (type "MyResult(ok, err) -> Error")))
 	(type_decls
 		(nominal (type "MyResult(ok, err)")
 			(ty-header (name "MyResult")
@@ -169,5 +169,5 @@ isOk = |result| match result {
 					(ty-rigid-var (name "err"))))))
 	(expressions
 		(expr (type "MyResult(Str, Num(Int(Signed32)))"))
-		(expr (type "MyResult(ok, err) -> Bool"))))
+		(expr (type "MyResult(ok, err) -> Error"))))
 ~~~

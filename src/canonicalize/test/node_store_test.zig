@@ -368,6 +368,14 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(gpa, CIR.Expr{
+        .e_low_level_lambda = .{
+            .low_level = .str_is_empty,
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_anno_only = .{},
+    });
+    try expressions.append(gpa, CIR.Expr{
         .e_ellipsis = .{},
     });
 
@@ -712,7 +720,7 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
-        .type_var_ending_in_underscore = .{
+        .type_var_starting_with_dollar = .{
             .name = rand_ident_idx(),
             .suggested_name = rand_ident_idx(),
             .region = rand_region(),
@@ -779,6 +787,22 @@ test "NodeStore round trip - Diagnostics" {
     try diagnostics.append(gpa, CIR.Diagnostic{
         .module_not_imported = .{
             .module_name = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .nested_type_not_found = .{
+            .parent_name = rand_ident_idx(),
+            .nested_name = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .nested_value_not_found = .{
+            .parent_name = rand_ident_idx(),
+            .nested_name = rand_ident_idx(),
             .region = rand_region(),
         },
     });

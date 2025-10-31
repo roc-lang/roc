@@ -13,7 +13,7 @@ foo =
     "onmo %
 ~~~
 # EXPECTED
-UNCLOSED STRING - :0:0:0:0
+UNCLOSED STRING - fuzz_crash_009.md:6:5:6:12
 PARSE ERROR - fuzz_crash_009.md:1:2:1:3
 PARSE ERROR - fuzz_crash_009.md:1:3:1:4
 PARSE ERROR - fuzz_crash_009.md:1:4:1:5
@@ -24,6 +24,7 @@ MISSING MAIN! FUNCTION - fuzz_crash_009.md:1:2:6:12
 **UNCLOSED STRING**
 This string is missing a closing quote.
 
+**fuzz_crash_009.md:6:5:6:12:**
 ```roc
     "onmo %
 ```

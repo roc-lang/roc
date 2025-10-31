@@ -514,6 +514,7 @@ pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) !void {
         &self.checker.snapshots,
         "test",
         &.{},
+        &self.checker.import_mapping,
     );
     defer report_builder.deinit();
 
@@ -543,7 +544,7 @@ fn assertNoParseProblems(self: *TestEnv) !void {
         defer report_buf.deinit();
 
         for (self.parse_ast.tokenize_diagnostics.items) |tok_diag| {
-            var report = try self.parse_ast.tokenizeDiagnosticToReport(tok_diag, self.gpa);
+            var report = try self.parse_ast.tokenizeDiagnosticToReport(tok_diag, self.gpa, null);
             defer report.deinit();
 
             try renderReportToMarkdownBuffer(&report_buf, &report);
@@ -583,7 +584,7 @@ fn assertNoCanProblems(self: *TestEnv) !void {
 }
 
 fn assertNoTypeProblems(self: *TestEnv) !void {
-    var report_builder = problem_mod.ReportBuilder.init(self.gpa, self.module_env, self.module_env, &self.checker.snapshots, "test", &.{});
+    var report_builder = problem_mod.ReportBuilder.init(self.gpa, self.module_env, self.module_env, &self.checker.snapshots, "test", &.{}, &self.checker.import_mapping);
     defer report_builder.deinit();
 
     var report_buf = try std.array_list.Managed(u8).initCapacity(self.gpa, 256);

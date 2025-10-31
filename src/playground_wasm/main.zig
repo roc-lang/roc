@@ -885,7 +885,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     // Collect tokenize diagnostics with additional error handling
     for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
-        const report = parse_ast.tokenizeDiagnosticToReport(diagnostic, allocator) catch {
+        const report = parse_ast.tokenizeDiagnosticToReport(diagnostic, allocator, null) catch {
             // Log the error and continue processing other diagnostics
             // This prevents crashes on malformed diagnostics or empty input
             continue;
@@ -1070,6 +1070,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
             &solver.snapshots,
             "main.roc",
             &.{}, // other_modules - empty for playground
+            &solver.import_mapping,
         );
         defer report_builder.deinit();
 

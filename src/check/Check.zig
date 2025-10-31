@@ -61,6 +61,8 @@ common_idents: CommonIdents,
 snapshots: SnapshotStore,
 /// type problems
 problems: ProblemStore,
+/// import mapping for auto-imported builtin types (for error display)
+import_mapping: @import("types").import_mapping.ImportMapping,
 /// reusable scratch arrays used in unification
 unify_scratch: unifier.Scratch,
 /// reusable scratch arrays used in occurs check
@@ -99,6 +101,8 @@ bool_var: Var,
 deferred_static_dispatch_constraints: DeferredConstraintCheck.SafeList,
 /// Used when looking up static dispatch functions
 static_dispatch_method_name_buf: std.ArrayList(u8),
+/// Map representation of Ident -> Var, used in checking static dispatch constraints
+ident_to_var_map: std.AutoHashMap(Ident.Idx, Var),
 
 /// A map of rigid variables that we build up during a branch of type checking
 const FreeVar = struct { ident: base.Ident.Idx, var_: Var };
@@ -133,16 +137,21 @@ pub fn init(
     regions: *Region.List,
     common_idents: CommonIdents,
 ) std.mem.Allocator.Error!Self {
+    const mutable_cir = @constCast(cir);
+    var import_mapping = try @import("types").import_mapping.createImportMapping(gpa, mutable_cir.getIdentStore());
+    errdefer import_mapping.deinit();
+
     return .{
         .gpa = gpa,
         .types = types,
-        .cir = @constCast(cir),
+        .cir = mutable_cir,
         .imported_modules = imported_modules,
         .module_envs = module_envs,
         .regions = regions,
         .common_idents = common_idents,
         .snapshots = try SnapshotStore.initCapacity(gpa, 512),
         .problems = try ProblemStore.initCapacity(gpa, 64),
+        .import_mapping = import_mapping,
         .unify_scratch = try unifier.Scratch.init(gpa),
         .occurs_scratch = try occurs.Scratch.init(gpa),
         .anno_free_vars = try base.Scratch(FreeVar).init(gpa),
@@ -161,6 +170,7 @@ pub fn init(
         .bool_var = undefined, // Will be initialized in copyBuiltinTypes()
         .deferred_static_dispatch_constraints = try DeferredConstraintCheck.SafeList.initCapacity(gpa, 128),
         .static_dispatch_method_name_buf = try std.ArrayList(u8).initCapacity(gpa, 32),
+        .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
     };
 }
 
@@ -168,6 +178,7 @@ pub fn init(
 pub fn deinit(self: *Self) void {
     self.problems.deinit(self.gpa);
     self.snapshots.deinit();
+    self.import_mapping.deinit();
     self.unify_scratch.deinit();
     self.occurs_scratch.deinit();
     self.anno_free_vars.deinit();
@@ -185,6 +196,7 @@ pub fn deinit(self: *Self) void {
     self.constraint_origins.deinit();
     self.deferred_static_dispatch_constraints.deinit(self.gpa);
     self.static_dispatch_method_name_buf.deinit(self.gpa);
+    self.ident_to_var_map.deinit();
 }
 
 /// Assert that type vars and regions in sync
@@ -915,9 +927,7 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx) std.m
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    std.debug.print("DEBUG generateAnnotationType: annotation_idx={}\n", .{@intFromEnum(annotation_idx)});
     const annotation = self.cir.store.getAnnotation(annotation_idx);
-    std.debug.print("DEBUG generateAnnotationType: annotation.anno={}\n", .{@intFromEnum(annotation.anno)});
 
     // Reset seen type annos
     self.seen_annos.clearRetainingCapacity();
@@ -935,13 +945,10 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx) std.m
     }
 
     // Then, generate the type for the annotation
-    std.debug.print("DEBUG generateAnnotationType: calling generateAnnoTypeInPlace\n", .{});
     try self.generateAnnoTypeInPlace(annotation.anno, .annotation);
-    std.debug.print("DEBUG generateAnnotationType: generateAnnoTypeInPlace succeeded\n", .{});
 
     // Redirect the root annotation to inner annotation
     _ = try self.types.setVarRedirect(ModuleEnv.varFrom(annotation_idx), ModuleEnv.varFrom(annotation.anno));
-    std.debug.print("DEBUG generateAnnotationType: redirect set\n", .{});
 }
 
 /// Given a where clause, generate static dispatch constraints and add to scratch_static_dispatch_constraints
@@ -2980,6 +2987,21 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
         .e_ellipsis => {
             try self.updateVar(expr_var, .{ .flex = Flex.init() }, rank);
         },
+        .e_anno_only => {
+            // For annotation-only expressions, the type comes from the annotation.
+            // This case should only occur when the expression has an annotation (which is
+            // enforced during canonicalization), so the expected type should be set.
+            // The type will be unified with the expected type in the code below.
+            switch (expected) {
+                .no_expectation => {
+                    // This shouldn't happen since we always create e_anno_only with an annotation
+                    try self.updateVar(expr_var, .err, rank);
+                },
+                .expected => {
+                    // The expr_var will be unified with the annotation var below
+                },
+            }
+        },
         .e_runtime_error => {
             try self.updateVar(expr_var, .err, rank);
         },
@@ -3012,7 +3034,6 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, rank
 
         switch (stmt) {
             .s_decl => |decl_stmt| {
-                std.debug.print("DEBUG checkStatement s_decl: pattern={}, expr={}, anno={?}\n", .{ @intFromEnum(decl_stmt.pattern), @intFromEnum(decl_stmt.expr), if (decl_stmt.anno) |a| @intFromEnum(a) else null });
                 // Check the pattern
                 try self.checkPattern(decl_stmt.pattern, rank, .no_expectation);
                 const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
@@ -3020,7 +3041,6 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, rank
                 // Check the annotation, if it exists
                 const expectation = blk: {
                     if (decl_stmt.anno) |annotation_idx| {
-                        std.debug.print("DEBUG checkStatement s_decl: has annotation, calling generateAnnotationType\n", .{});
                         // Generate the annotation type var in-place
                         try self.generateAnnotationType(annotation_idx);
                         const annotation_var = ModuleEnv.varFrom(annotation_idx);
@@ -3679,18 +3699,20 @@ fn resolveVarFromExternal(
 
         const copied_var = if (self.import_cache.get(cache_key)) |cached_var| blk_cached: {
             // Reuse the previously copied type.
-            std.debug.print("DEBUG resolveVarFromExternal: using cached var {}\n", .{@intFromEnum(cached_var)});
             break :blk_cached cached_var;
         } else blk: {
             // First time importing this type - copy it and cache the result
             // The target_node_idx can be a Statement.Idx (for nested declarations) or a Def.Idx
             // We need to extract the annotation to get the type variable
             const imported_var: Var = blk_anno: {
-                // Try treating it as a Statement.Idx first
-                const stmt_idx: CIR.Statement.Idx = @enumFromInt(@intFromEnum(target_node_idx));
-                const stmt = other_module_env.store.getStatement(stmt_idx);
-                if (stmt == .s_decl) {
-                    std.debug.print("DEBUG resolveVarFromExternal: target is s_decl, extracting annotation\n", .{});
+                // Check what type of node this is by inspecting the tag
+                const target_node: CIR.Node.Idx = @enumFromInt(@intFromEnum(target_node_idx));
+                const node = other_module_env.store.nodes.get(target_node);
+
+                // Check if it's a statement (statement_decl specifically)
+                if (node.tag == .statement_decl) {
+                    const stmt_idx: CIR.Statement.Idx = @enumFromInt(@intFromEnum(target_node_idx));
+                    const stmt = other_module_env.store.getStatement(stmt_idx);
                     if (stmt.s_decl.anno) |anno_idx| {
                         break :blk_anno @as(Var, @enumFromInt(@intFromEnum(anno_idx)));
                     } else {
@@ -3698,14 +3720,11 @@ fn resolveVarFromExternal(
                         break :blk_anno @as(Var, @enumFromInt(@intFromEnum(stmt.s_decl.expr)));
                     }
                 } else {
-                    // Assume it's a Def.Idx or direct type var
-                    std.debug.print("DEBUG resolveVarFromExternal: target is not s_decl, using node_idx directly\n", .{});
+                    // It's a Def.Idx, Expr.Idx, or direct type var - use node_idx directly
                     break :blk_anno @as(Var, @enumFromInt(@intFromEnum(target_node_idx)));
                 }
             };
-            std.debug.print("DEBUG resolveVarFromExternal: first import, calling copyVar with imported_var={}\n", .{@intFromEnum(imported_var)});
             const new_copy = try self.copyVar(imported_var, other_module_env, null);
-            std.debug.print("DEBUG resolveVarFromExternal: copyVar returned new_copy={}\n", .{@intFromEnum(new_copy)});
             try self.import_cache.put(self.gpa, cache_key, new_copy);
             break :blk new_copy;
         };
@@ -3722,13 +3741,6 @@ fn resolveVarFromExternal(
 
 /// Instantiate a variable, writing su
 fn copyVar(self: *Self, other_module_var: Var, other_module_env: *const ModuleEnv, mb_region: ?Region) std.mem.Allocator.Error!Var {
-    std.debug.print("=== COPYVAR START var={} ===\n", .{@intFromEnum(other_module_var)});
-    std.debug.print("DEBUG copyVar: copying var {} from module {s}\n", .{ @intFromEnum(other_module_var), other_module_env.module_name });
-
-    // Check what the source type looks like
-    const resolved_source = other_module_env.types.resolveVar(other_module_var);
-    std.debug.print("DEBUG copyVar: source var resolved to {}, content = {s}\n", .{ @intFromEnum(resolved_source.var_), @tagName(resolved_source.desc.content) });
-
     // First, reset state
     self.var_map.clearRetainingCapacity();
 
@@ -3742,10 +3754,6 @@ fn copyVar(self: *Self, other_module_var: Var, other_module_env: *const ModuleEn
         self.cir.getIdentStore(),
         self.gpa,
     );
-
-    // Check what the copied type looks like
-    const resolved_copied = self.types.resolveVar(copied_var);
-    std.debug.print("DEBUG copyVar: copied to var {}, content = {s}\n", .{ @intFromEnum(copied_var), @tagName(resolved_copied.desc.content) });
 
     const region = if (mb_region) |region| region else base.Region.zero();
 
@@ -3794,22 +3802,70 @@ fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!v
         const dispatcher_content = dispatcher_resolved.desc.content;
 
         if (dispatcher_content == .err) {
+
             // If the root type is an error, then skip constraint checking
-            // Iterate over the constraints
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
             for (constraints) |constraint| {
+                try self.markConstraintFunctionAsError(constraint);
+            }
+            try self.updateVar(deferred_constraint.var_, .err, Rank.generalized);
+        } else if (dispatcher_content == .rigid) {
+            // Get the rigid variable and the constraints it has defined
+            const rigid = dispatcher_content.rigid;
+            const rigid_constraints = self.types.sliceStaticDispatchConstraints(rigid.constraints);
+
+            // Get the deferred constraints to validate against
+            const deferred_constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
+
+            // First, special case if this rigid has no constraints
+            if (deferred_constraints.len > 0 and rigid_constraints.len == 0) {
+                const constraint = deferred_constraints[0];
+                try self.reportConstraintError(
+                    deferred_constraint.var_,
+                    constraint,
+                    .{ .missing_method = .rigid },
+                );
+                continue;
+            }
+
+            // Build a map of constraints the rigid has
+            self.ident_to_var_map.clearRetainingCapacity();
+            try self.ident_to_var_map.ensureUnusedCapacity(@intCast(rigid_constraints.len));
+            for (rigid_constraints) |rigid_constraint| {
+                self.ident_to_var_map.putAssumeCapacity(rigid_constraint.fn_name, rigid_constraint.fn_var);
+            }
+
+            // Iterate over the constraints
+            for (deferred_constraints) |constraint| {
                 // Extract the function and return type from the constraint
                 const resolved_constraint = self.types.resolveVar(constraint.fn_var);
                 const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
                 std.debug.assert(mb_resolved_func != null);
                 const resolved_func = mb_resolved_func.?;
 
-                // Set it to be an error
-                try self.updateVar(resolved_func.ret, .err, Rank.generalized);
+                // Then, lookup the inferred constraint in the actual list of rigid constraints
+                if (self.ident_to_var_map.get(constraint.fn_name)) |rigid_var| {
+                    // Unify the actual function var against the inferred var
+                    //
+                    // TODO: For better error messages, we should check if these
+                    // types are functions, unify each arg, etc. This should look
+                    // similar to e_call
+                    const result = try self.unify(rigid_var, constraint.fn_var, Rank.generalized);
+                    if (result.isProblem()) {
+                        try self.updateVar(deferred_constraint.var_, .err, Rank.generalized);
+                        try self.updateVar(resolved_func.ret, .err, Rank.generalized);
+                    }
+                } else {
+                    try self.reportConstraintError(
+                        deferred_constraint.var_,
+                        constraint,
+                        .{ .missing_method = .nominal },
+                    );
+                    continue;
+                }
             }
-        } else if (dispatcher_content == .rigid or dispatcher_content == .flex) {
-            // If the root type is an flex or rigid, then we there's nothing to check
-            // since the type is not concrete
+        } else if (dispatcher_content == .flex) {
+            // If the root type is aa flex, then we there's nothing to check
             continue;
         } else if (dispatcher_content == .structure and dispatcher_content.structure == .nominal_type) {
             // TODO: Internal types like Str, Result, List, etc are not
@@ -3865,36 +3921,24 @@ fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!v
 
                 // Get the ident of this method in the original env
                 const ident_in_original_env = original_env.getIdentStoreConst().findByString(qualified_name_bytes) orelse {
-                    const snapshot = try self.snapshots.deepCopyVar(self.types, deferred_constraint.var_);
-                    _ = try self.problems.appendProblem(self.cir.gpa, .{ .static_dispach = .{
-                        .dispatcher_does_not_impl_method = .{
-                            .dispatcher_var = deferred_constraint.var_,
-                            .dispatcher_snapshot = snapshot,
-                            .fn_var = constraint.fn_var,
-                            .method_name = constraint.fn_name,
-                        },
-                    } });
-                    try self.updateVar(resolved_func.ret, .err, Rank.generalized);
+                    try self.reportConstraintError(
+                        deferred_constraint.var_,
+                        constraint,
+                        .{ .missing_method = .nominal },
+                    );
                     continue;
                 };
 
                 // Get the def index in the original env
                 const node_idx_in_original_env = original_env.getExposedNodeIndexById(ident_in_original_env) orelse {
-                    // This can happen if somehow, the original module has
-                    // an ident that matches the method/type, but it doesn't
-                    // actually have/expose the method. This should be
-                    // impossible, but we handle it gracefully
-
-                    const snapshot = try self.snapshots.deepCopyVar(self.types, deferred_constraint.var_);
-                    _ = try self.problems.appendProblem(self.cir.gpa, .{ .static_dispach = .{
-                        .dispatcher_does_not_impl_method = .{
-                            .dispatcher_var = deferred_constraint.var_,
-                            .dispatcher_snapshot = snapshot,
-                            .fn_var = constraint.fn_var,
-                            .method_name = constraint.fn_name,
-                        },
-                    } });
-                    try self.updateVar(resolved_func.ret, .err, Rank.generalized);
+                    // This can happen if the original module has an ident that
+                    // matches the method/type, but it doesn't actually have
+                    // that method.
+                    try self.reportConstraintError(
+                        deferred_constraint.var_,
+                        constraint,
+                        .{ .missing_method = .nominal },
+                    );
                     continue;
                 };
                 const def_idx: Var = @enumFromInt(@as(u32, @intCast(node_idx_in_original_env)));
@@ -3912,6 +3956,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!v
                 // similar to e_call
                 const result = try self.unify(real_method_var, constraint.fn_var, Rank.generalized);
                 if (result.isProblem()) {
+                    try self.updateVar(deferred_constraint.var_, .err, Rank.generalized);
                     try self.updateVar(resolved_func.ret, .err, Rank.generalized);
                 }
             }
@@ -3920,27 +3965,11 @@ fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!v
 
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
             if (constraints.len > 0) {
-                const constraint = constraints[0];
-
-                // Snapshot the constraint and add a problem
-                const snapshot = try self.snapshots.deepCopyVar(self.types, deferred_constraint.var_);
-                _ = try self.problems.appendProblem(self.cir.gpa, .{ .static_dispach = .{
-                    .dispatcher_not_nominal = .{
-                        .dispatcher_var = deferred_constraint.var_,
-                        .dispatcher_snapshot = snapshot,
-                        .fn_var = constraint.fn_var,
-                        .method_name = constraint.fn_name,
-                    },
-                } });
-
-                // Extract the function and return type from the constraint
-                const resolved_constraint = self.types.resolveVar(constraint.fn_var);
-                const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
-                std.debug.assert(mb_resolved_func != null);
-                const resolved_func = mb_resolved_func.?;
-
-                // Set it to be an error
-                try self.updateVar(resolved_func.ret, .err, Rank.generalized);
+                try self.reportConstraintError(
+                    deferred_constraint.var_,
+                    constraints[0],
+                    .not_nominal,
+                );
             } else {
                 // It should be impossible to have a deferred constraint check
                 // that has no constraints.
@@ -3948,4 +3977,48 @@ fn checkDeferredStaticDispatchConstraints(self: *Self) std.mem.Allocator.Error!v
             }
         }
     }
+}
+
+/// Mark a constraint function's return type as error
+fn markConstraintFunctionAsError(self: *Self, constraint: StaticDispatchConstraint) !void {
+    const resolved_constraint = self.types.resolveVar(constraint.fn_var);
+    const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
+    std.debug.assert(mb_resolved_func != null);
+    const resolved_func = mb_resolved_func.?;
+    try self.updateVar(resolved_func.ret, .err, Rank.generalized);
+}
+
+/// Report a constraint validation error
+fn reportConstraintError(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    kind: union(enum) {
+        missing_method: problem.DispatcherDoesNotImplMethod.DispatcherType,
+        not_nominal,
+    },
+) !void {
+    const snapshot = try self.snapshots.deepCopyVar(self.types, dispatcher_var);
+    const constraint_problem = switch (kind) {
+        .missing_method => |dispatcher_type| problem.Problem{ .static_dispach = .{
+            .dispatcher_does_not_impl_method = .{
+                .dispatcher_var = dispatcher_var,
+                .dispatcher_snapshot = snapshot,
+                .dispatcher_type = dispatcher_type,
+                .fn_var = constraint.fn_var,
+                .method_name = constraint.fn_name,
+            },
+        } },
+        .not_nominal => problem.Problem{ .static_dispach = .{
+            .dispatcher_not_nominal = .{
+                .dispatcher_var = dispatcher_var,
+                .dispatcher_snapshot = snapshot,
+                .fn_var = constraint.fn_var,
+                .method_name = constraint.fn_name,
+            },
+        } },
+    };
+    _ = try self.problems.appendProblem(self.cir.gpa, constraint_problem);
+
+    try self.markConstraintFunctionAsError(constraint);
 }

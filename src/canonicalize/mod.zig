@@ -29,6 +29,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("Statement.zig"));
     std.testing.refAllDecls(@import("TypeAnnotation.zig"));
 
+    std.testing.refAllDecls(@import("test/anno_only_test.zig"));
     std.testing.refAllDecls(@import("test/bool_test.zig"));
     std.testing.refAllDecls(@import("test/exposed_shadowing_test.zig"));
     std.testing.refAllDecls(@import("test/frac_test.zig"));

@@ -374,6 +374,14 @@ pub const Expr = union(enum) {
     /// launchTheNukes: |{}| ...
     /// ```
     e_ellipsis: struct {},
+    /// A standalone type annotation without a body.
+    /// This represents a type declaration that has no implementation.
+    /// During type-checking, this expression is assigned the type from its annotation.
+    ///
+    /// ```roc
+    /// foo : {} -> {}
+    /// ```
+    e_anno_only: struct {},
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
@@ -675,7 +683,15 @@ pub const Expr = union(enum) {
                 std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
                 const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
                 const module_name = ir.common.strings.get(string_lit_idx);
-                try tree.pushStringPair("external-module", module_name);
+                // Special case: Builtin module is an implementation detail, print as (builtin)
+                if (std.mem.eql(u8, module_name, "Builtin")) {
+                    const field_begin = tree.beginNode();
+                    try tree.pushStaticAtom("builtin");
+                    const field_attrs = tree.beginNode();
+                    try tree.endNode(field_begin, field_attrs);
+                } else {
+                    try tree.pushStringPair("external-module", module_name);
+                }
 
                 try tree.endNode(begin, attrs);
             },
@@ -846,7 +862,15 @@ pub const Expr = union(enum) {
                 std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
                 const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
                 const module_name = ir.common.strings.get(string_lit_idx);
-                try tree.pushStringPair("external-module", module_name);
+                // Special case: Builtin module is an implementation detail, print as (builtin)
+                if (std.mem.eql(u8, module_name, "Builtin")) {
+                    const field_begin = tree.beginNode();
+                    try tree.pushStaticAtom("builtin");
+                    const field_attrs = tree.beginNode();
+                    try tree.endNode(field_begin, field_attrs);
+                } else {
+                    try tree.pushStringPair("external-module", module_name);
+                }
 
                 try ir.store.getExpr(e.backing_expr).pushToSExprTree(ir, tree, e.backing_expr);
 
@@ -1002,6 +1026,14 @@ pub const Expr = union(enum) {
             .e_ellipsis => |_| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-not-implemented");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .e_anno_only => |_| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-anno-only");
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();

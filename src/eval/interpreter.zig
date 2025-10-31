@@ -98,7 +98,7 @@ pub const Interpreter = struct {
             return std.mem.eql(types.Var, a.args_ptr[0..a.args_len], b.args_ptr[0..b.args_len]);
         }
     };
-    const Binding = struct { pattern_idx: can.CIR.Pattern.Idx, value: StackValue };
+    const Binding = struct { pattern_idx: can.CIR.Pattern.Idx, value: StackValue, expr_idx: can.CIR.Expr.Idx };
     const DefInProgress = struct {
         pattern_idx: can.CIR.Pattern.Idx,
         expr_idx: can.CIR.Expr.Idx,
@@ -156,8 +156,6 @@ pub const Interpreter = struct {
 
         var next_id: u32 = 1; // Start at 1, reserve 0 for current module
 
-        std.debug.print("DEBUG Interpreter.init: other_envs.len={}\n", .{other_envs.len});
-        std.debug.print("DEBUG Interpreter.init: env.imports.imports.items.items.len={}\n", .{env.imports.imports.items.items.len});
         if (other_envs.len > 0) {
             try module_envs.ensureTotalCapacity(allocator, @intCast(other_envs.len));
             try module_ids.ensureTotalCapacity(allocator, @intCast(other_envs.len));
@@ -165,16 +163,13 @@ pub const Interpreter = struct {
 
             // Match imports in order with other_envs
             const import_count = @min(env.imports.imports.items.items.len, other_envs.len);
-            std.debug.print("DEBUG Interpreter.init: import_count={}\n", .{import_count});
             for (0..import_count) |i| {
                 const module_env = other_envs[i];
                 const str_idx = env.imports.imports.items.items[i];
                 const import_name = env.common.getString(str_idx);
-                std.debug.print("DEBUG Interpreter.init: import[{}] name={s}\n", .{ i, import_name });
 
                 // Find or create the Ident.Idx for this import name
                 const ident_idx = env.common.findIdent(import_name) orelse {
-                    std.debug.print("DEBUG Interpreter.init: findIdent returned null for {s}\n", .{import_name});
                     continue;
                 };
 
@@ -183,7 +178,6 @@ pub const Interpreter = struct {
                 module_ids.putAssumeCapacity(ident_idx, next_id);
                 // Import.Idx 0 is reserved for current module, so actual imports start at 1
                 const import_idx: can.CIR.Import.Idx = @enumFromInt(i + 1);
-                std.debug.print("DEBUG Interpreter.init: storing import_idx={} for {s}\n", .{ @intFromEnum(import_idx), import_name });
                 import_envs.putAssumeCapacity(import_idx, module_env);
 
                 next_id += 1;
@@ -325,7 +319,7 @@ pub const Interpreter = struct {
                 while (j < params.len) : (j += 1) {
                     const sorted_idx = args_accessor.findElementIndexByOriginal(j) orelse j;
                     const arg_value = try args_accessor.getElement(sorted_idx);
-                    const matched = try self.patternMatchesBind(params[j], arg_value, param_rt_vars[j], roc_ops, &temp_binds);
+                    const matched = try self.patternMatchesBind(params[j], arg_value, param_rt_vars[j], roc_ops, &temp_binds, @enumFromInt(0));
                     if (!matched) return error.TypeMismatch;
                 }
             }
@@ -362,10 +356,8 @@ pub const Interpreter = struct {
     ) Error!StackValue {
         const expr = self.env.store.getExpr(expr_idx);
         if (std.mem.eql(u8, self.env.module_name, "test")) {
-            std.debug.print("DEBUG interp test eval: expr type = {s}\n", .{@tagName(expr)});
         }
         if (expr == .e_lookup_external) {
-            std.debug.print("DEBUG evalExprMinimal: about to handle e_lookup_external\n", .{});
         }
         switch (expr) {
             .e_block => |blk| {
@@ -417,7 +409,7 @@ pub const Interpreter = struct {
                                     .source_env = self_interp.env,
                                 };
                             }
-                            try self_interp.bindings.append(.{ .pattern_idx = patt_idx, .value = ph });
+                            try self_interp.bindings.append(.{ .pattern_idx = patt_idx, .value = ph, .expr_idx = rhs_expr });
                         }
                     };
                     switch (stmt) {
@@ -457,7 +449,7 @@ pub const Interpreter = struct {
                             const val = try self.evalExprMinimal(d.expr, roc_ops, expr_rt_var);
                             defer val.decref(&self.runtime_layout_store, roc_ops);
 
-                            if (!try self.patternMatchesBind(d.pattern, val, expr_rt_var, roc_ops, &temp_binds)) {
+                            if (!try self.patternMatchesBind(d.pattern, val, expr_rt_var, roc_ops, &temp_binds, d.expr)) {
                                 return error.TypeMismatch;
                             }
 
@@ -478,7 +470,7 @@ pub const Interpreter = struct {
                             const val = try self.evalExprMinimal(v.expr, roc_ops, expr_rt_var);
                             defer val.decref(&self.runtime_layout_store, roc_ops);
 
-                            if (!try self.patternMatchesBind(v.pattern_idx, val, expr_rt_var, roc_ops, &temp_binds)) {
+                            if (!try self.patternMatchesBind(v.pattern_idx, val, expr_rt_var, roc_ops, &temp_binds, v.expr)) {
                                 return error.TypeMismatch;
                             }
 
@@ -573,7 +565,7 @@ pub const Interpreter = struct {
                                     temp_binds.deinit();
                                 }
 
-                                if (!try self.patternMatchesBind(for_stmt.patt, elem_value, patt_rt_var, roc_ops, &temp_binds)) {
+                                if (!try self.patternMatchesBind(for_stmt.patt, elem_value, patt_rt_var, roc_ops, &temp_binds, @enumFromInt(0))) {
                                     elem_value.decref(&self.runtime_layout_store, roc_ops);
                                     return error.TypeMismatch;
                                 }
@@ -1309,7 +1301,7 @@ pub const Interpreter = struct {
 
                     for (patterns) |bp_idx| {
                         self.trimBindingList(&temp_binds, 0, roc_ops);
-                        if (!try self.patternMatchesBind(self.env.store.getMatchBranchPattern(bp_idx).pattern, scrutinee, scrutinee_rt_var, roc_ops, &temp_binds)) {
+                        if (!try self.patternMatchesBind(self.env.store.getMatchBranchPattern(bp_idx).pattern, scrutinee, scrutinee_rt_var, roc_ops, &temp_binds, @enumFromInt(0))) {
                             self.trimBindingList(&temp_binds, 0, roc_ops);
                             continue;
                         }
@@ -1390,6 +1382,38 @@ pub const Interpreter = struct {
                     };
                 }
                 return value;
+            },
+            .e_anno_only => |_| {
+                // This represents a value that only has a type annotation, no implementation
+                const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const rt_var = try self.translateTypeVar(self.env, ct_var);
+                const anno_layout = try self.getRuntimeLayout(rt_var);
+
+                if (anno_layout.tag == .closure) {
+                    // Function type: Build a closure-like value that will crash when called
+                    const value = try self.pushRaw(anno_layout, 0);
+                    self.registerDefValue(expr_idx, value);
+                    // Initialize the closure header with the e_anno_only expr itself as the body
+                    // This serves as a marker that will be detected during call evaluation
+                    if (value.ptr) |ptr| {
+                        const header: *layout.Closure = @ptrCast(@alignCast(ptr));
+                        header.* = .{
+                            .body_idx = expr_idx, // Point to self (the e_anno_only expression)
+                            .params = .{ .span = .{ .start = 0, .len = 0 } }, // No params
+                            .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
+                            .captures_layout_idx = anno_layout.data.closure.captures_layout_idx,
+                            .lambda_expr_idx = expr_idx,
+                            .source_env = self.env,
+                        };
+                    }
+                    return value;
+                } else {
+                    // Non-function type: Create a value that will be marked as annotation-only
+                    // We'll detect this during lookup and crash then
+                    const value = try self.pushRaw(anno_layout, 0);
+                    self.registerDefValue(expr_idx, value);
+                    return value;
+                }
             },
             .e_closure => |cls| {
                 // Build a closure value with concrete captures. The closure references a lambda.
@@ -1507,26 +1531,17 @@ pub const Interpreter = struct {
                 return value;
             },
             .e_call => |call| {
-                std.debug.print("DEBUG interp e_call: starting\n", .{});
                 const all = self.env.store.sliceExpr(call.args);
-                std.debug.print("DEBUG interp e_call: num args = {}\n", .{all.len});
                 if (all.len == 0) return error.TypeMismatch;
                 const func_idx = call.func;
-                std.debug.print("DEBUG interp e_call: func_idx = {}\n", .{@intFromEnum(func_idx)});
                 const arg_indices = all[0..];
                 const func_expr = self.env.store.getExpr(func_idx);
-                std.debug.print("DEBUG interp e_call: func expr type = {s}\n", .{@tagName(func_expr)});
 
                 // Runtime unification for call: constrain return type from arg types
                 const func_ct_var = can.ModuleEnv.varFrom(func_idx);
-                std.debug.print("DEBUG interp e_call: func_ct_var = {}\n", .{@intFromEnum(func_ct_var)});
-                const resolved = self.env.types.resolveVar(func_ct_var);
-                std.debug.print("DEBUG interp e_call: resolved var = {}, content = {s}\n", .{ @intFromEnum(resolved.var_), @tagName(resolved.desc.content) });
                 const func_rt_var = self.translateTypeVar(self.env, func_ct_var) catch |err| {
-                    std.debug.print("DEBUG interp e_call: translateTypeVar failed with error = {}\n", .{err});
                     return err;
                 };
-                std.debug.print("DEBUG interp e_call: func_rt_var = {}\n", .{@intFromEnum(func_rt_var)});
                 var arg_rt_buf = try self.allocator.alloc(types.Var, arg_indices.len);
                 defer self.allocator.free(arg_rt_buf);
                 var i: usize = 0;
@@ -1534,9 +1549,7 @@ pub const Interpreter = struct {
                     const arg_ct_var = can.ModuleEnv.varFrom(arg_indices[i]);
                     arg_rt_buf[i] = try self.translateTypeVar(self.env, arg_ct_var);
                 }
-                std.debug.print("DEBUG interp e_call: about to call prepareCallWithFuncVar\n", .{});
                 const poly_entry = try self.prepareCallWithFuncVar(0, @intCast(@intFromEnum(func_idx)), func_rt_var, arg_rt_buf);
-                std.debug.print("DEBUG interp e_call: prepareCallWithFuncVar succeeded\n", .{});
                 // Unify this call expression's return var with the function's constrained return var
                 const call_ret_ct_var = can.ModuleEnv.varFrom(expr_idx);
                 const call_ret_rt_var = try self.translateTypeVar(self.env, call_ret_ct_var);
@@ -1552,9 +1565,7 @@ pub const Interpreter = struct {
                     false,
                 );
 
-                std.debug.print("DEBUG interp e_call: about to evaluate func\n", .{});
                 const func_val = try self.evalExprMinimal(func_idx, roc_ops, null);
-                std.debug.print("DEBUG interp e_call: func_val layout = {any}\n", .{func_val.layout.tag});
 
                 var arg_values = try self.allocator.alloc(StackValue, arg_indices.len);
                 defer self.allocator.free(arg_values);
@@ -1567,34 +1578,25 @@ pub const Interpreter = struct {
                     const header: *const layout.Closure = @ptrCast(@alignCast(func_val.ptr.?));
 
                     // Check if this is a low-level lambda (body_idx == 0 is our special marker)
-                    std.debug.print("DEBUG interp e_call: header.body_idx={}\n", .{@intFromEnum(header.body_idx)});
                     if (@intFromEnum(header.body_idx) == 0) {
-                        std.debug.print("DEBUG interp e_call: this is a low-level lambda!\n", .{});
                         // This is a low-level lambda - decode the variant and execute it
                         const low_level: @import("base").LowLevelLambda = @enumFromInt(@intFromEnum(header.captures_pattern_idx));
-                        std.debug.print("DEBUG interp e_call: low_level={s}\n", .{@tagName(low_level)});
 
                         switch (low_level) {
                             .str_is_empty => {
-                                std.debug.print("DEBUG interp e_call: executing str_is_empty\n", .{});
                                 // Str.is_empty : Str -> Bool
-                                std.debug.print("DEBUG interp e_call: arg_values.len={}\n", .{arg_values.len});
                                 if (arg_values.len != 1) return error.TypeMismatch;
 
                                 const str_arg = arg_values[0];
-                                std.debug.print("DEBUG interp e_call: str_arg.layout.tag={s}\n", .{@tagName(str_arg.layout.tag)});
                                 // Str is a scalar type
                                 if (str_arg.layout.tag != .scalar) return error.TypeMismatch;
                                 if (str_arg.ptr == null) return error.ZeroSizedType;
 
                                 const roc_str_ptr: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
                                 const is_empty = roc_str_ptr.isEmpty();
-                                std.debug.print("DEBUG interp e_call: is_empty={}\n", .{is_empty});
 
                                 // Return a Bool value - use call_ret_rt_var which is the expected return type
-                                std.debug.print("DEBUG interp e_call: about to makeBoolValue with call_ret_rt_var={}\n", .{@intFromEnum(call_ret_rt_var)});
                                 const result = try self.makeBoolValue(call_ret_rt_var, is_empty);
-                                std.debug.print("DEBUG interp e_call: makeBoolValue succeeded!\n", .{});
                                 return result;
                             },
                         }
@@ -1609,6 +1611,13 @@ pub const Interpreter = struct {
                         self.bindings.shrinkRetainingCapacity(saved_bindings_len);
                     }
 
+                    // Check if this is an annotation-only function (body points to e_anno_only)
+                    const body_expr = self.env.store.getExpr(header.body_idx);
+                    if (body_expr == .e_anno_only) {
+                        self.triggerCrash("This function has no implementation. It is only a type annotation for now.", false, roc_ops);
+                        return error.Crash;
+                    }
+
                     const params = self.env.store.slicePatterns(header.params);
                     if (params.len != arg_indices.len) return error.TypeMismatch;
                     // Provide closure context for capture lookup during body eval
@@ -1616,7 +1625,7 @@ pub const Interpreter = struct {
                     defer _ = self.active_closures.pop();
                     var bind_count: usize = 0;
                     while (bind_count < params.len) : (bind_count += 1) {
-                        try self.bindings.append(.{ .pattern_idx = params[bind_count], .value = arg_values[bind_count] });
+                        try self.bindings.append(.{ .pattern_idx = params[bind_count], .value = arg_values[bind_count], .expr_idx = @enumFromInt(0) });
                     }
                     defer {
                         var k = params.len;
@@ -1637,7 +1646,7 @@ pub const Interpreter = struct {
                     if (params.len != arg_indices.len) return error.TypeMismatch;
                     var bind_count: usize = 0;
                     while (bind_count < params.len) : (bind_count += 1) {
-                        try self.bindings.append(.{ .pattern_idx = params[bind_count], .value = arg_values[bind_count] });
+                        try self.bindings.append(.{ .pattern_idx = params[bind_count], .value = arg_values[bind_count], .expr_idx = @enumFromInt(0) });
                     }
                     defer {
                         var k = params.len;
@@ -1859,7 +1868,7 @@ pub const Interpreter = struct {
 
                 var bind_count: usize = 0;
                 while (bind_count < params.len) : (bind_count += 1) {
-                    try self.bindings.append(.{ .pattern_idx = params[bind_count], .value = all_args[bind_count] });
+                    try self.bindings.append(.{ .pattern_idx = params[bind_count], .value = all_args[bind_count], .expr_idx = @enumFromInt(0) });
                 }
                 defer {
                     var k = params.len;
@@ -1880,6 +1889,17 @@ pub const Interpreter = struct {
                     i -= 1;
                     const b = self.bindings.items[i];
                     if (b.pattern_idx == lookup.pattern_idx) {
+                        // Check if this binding came from an e_anno_only expression
+                        // Skip check for expr_idx == 0 (sentinel for non-def bindings like parameters)
+                        const expr_idx_int: u32 = @intFromEnum(b.expr_idx);
+                        if (expr_idx_int != 0) {
+                            const binding_expr = self.env.store.getExpr(b.expr_idx);
+                            if (binding_expr == .e_anno_only and b.value.layout.tag != .closure) {
+                                // This is a non-function annotation-only value being looked up
+                                self.triggerCrash("This value has no implementation. It is only a type annotation for now.", false, roc_ops);
+                                return error.Crash;
+                            }
+                        }
                         return try self.pushCopy(b.value, roc_ops);
                     }
                 }
@@ -1929,15 +1949,10 @@ pub const Interpreter = struct {
                 return error.NotImplemented;
             },
             .e_lookup_external => |lookup| {
-                std.debug.print("DEBUG interp e_lookup_external: START\n", .{});
-                std.debug.print("DEBUG interp e_lookup_external: module_idx={}, target_node_idx={}\n", .{ @intFromEnum(lookup.module_idx), lookup.target_node_idx });
                 // Cross-module reference - look up in imported module
-                std.debug.print("DEBUG interp e_lookup_external: looking up module in import_envs\n", .{});
                 const other_env = self.import_envs.get(lookup.module_idx) orelse {
-                    std.debug.print("DEBUG interp e_lookup_external: module not found\n", .{});
                     return error.NotImplemented;
                 };
-                std.debug.print("DEBUG interp e_lookup_external: module found\n", .{});
 
                 // The target_node_idx can be either a Statement.Idx or a Def.Idx
                 // Try statement first (for nested declarations like Str.is_empty)
@@ -1945,19 +1960,14 @@ pub const Interpreter = struct {
                     const stmt_idx: can.CIR.Statement.Idx = @enumFromInt(lookup.target_node_idx);
                     const stmt = other_env.store.getStatement(stmt_idx);
                     if (stmt == .s_decl) {
-                        std.debug.print("DEBUG interp e_lookup_external: found s_decl, using its expr\n", .{});
                         break :blk stmt.s_decl.expr;
                     } else {
                         // Fall back to treating it as a Def.Idx
-                        std.debug.print("DEBUG interp e_lookup_external: not s_decl ({s}), trying as def\n", .{@tagName(stmt)});
                         const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
                         const target_def = other_env.store.getDef(target_def_idx);
                         break :blk target_def.expr;
                     }
                 };
-
-                const target_expr = other_env.store.getExpr(target_expr_idx);
-                std.debug.print("DEBUG interp e_lookup_external: target expr type = {s}\n", .{@tagName(target_expr)});
 
                 // Save both env and bindings state
                 const saved_env = self.env;
@@ -2048,15 +2058,11 @@ pub const Interpreter = struct {
                 return error.Crash;
             },
             .e_low_level_lambda => |ll| {
-                std.debug.print("DEBUG interp e_low_level_lambda: low_level={s}\n", .{@tagName(ll.low_level)});
                 // Build a special closure value that represents the low-level builtin
                 // When called, we'll switch on the low_level enum and execute the builtin
                 const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                std.debug.print("DEBUG interp e_low_level_lambda: ct_var={}\n", .{@intFromEnum(ct_var)});
                 const rt_var = try self.translateTypeVar(self.env, ct_var);
-                std.debug.print("DEBUG interp e_low_level_lambda: rt_var={}\n", .{@intFromEnum(rt_var)});
                 const closure_layout = try self.getRuntimeLayout(rt_var);
-                std.debug.print("DEBUG interp e_low_level_lambda: closure_layout.tag={s}\n", .{@tagName(closure_layout.tag)});
 
                 // Expect a closure layout from type-to-layout translation
                 if (closure_layout.tag != .closure) return error.NotImplemented;
@@ -3152,11 +3158,8 @@ pub const Interpreter = struct {
     }
 
     fn makeBoolValue(self: *Interpreter, target_rt_var: types.Var, truthy: bool) !StackValue {
-        std.debug.print("DEBUG makeBoolValue: target_rt_var={}\n", .{@intFromEnum(target_rt_var)});
         const layout_val = try self.getRuntimeLayout(target_rt_var);
-        std.debug.print("DEBUG makeBoolValue: layout_val.tag={s}\n", .{@tagName(layout_val.tag)});
         const is_bool = self.isBoolLayout(layout_val);
-        std.debug.print("DEBUG makeBoolValue: isBoolLayout={}\n", .{is_bool});
         if (!is_bool) return error.NotImplemented;
         try self.prepareBoolIndices(target_rt_var);
         const chosen_index: u8 = if (truthy) self.bool_true_index else self.bool_false_index;
@@ -3407,24 +3410,25 @@ pub const Interpreter = struct {
         value_rt_var: types.Var,
         roc_ops: *RocOps,
         out_binds: *std.array_list.AlignedManaged(Binding, null),
+        expr_idx: can.CIR.Expr.Idx,
     ) !bool {
         const pat = self.env.store.getPattern(pattern_idx);
         switch (pat) {
             .assign => |_| {
                 // Bind entire value to this pattern
                 const copied = try self.pushCopy(value, roc_ops);
-                try out_binds.append(.{ .pattern_idx = pattern_idx, .value = copied });
+                try out_binds.append(.{ .pattern_idx = pattern_idx, .value = copied, .expr_idx = expr_idx });
                 return true;
             },
             .as => |as_pat| {
                 const before = out_binds.items.len;
-                if (!try self.patternMatchesBind(as_pat.pattern, value, value_rt_var, roc_ops, out_binds)) {
+                if (!try self.patternMatchesBind(as_pat.pattern, value, value_rt_var, roc_ops, out_binds, expr_idx)) {
                     self.trimBindingList(out_binds, before, roc_ops);
                     return false;
                 }
 
                 const alias_value = try self.pushCopy(value, roc_ops);
-                try out_binds.append(.{ .pattern_idx = pattern_idx, .value = alias_value });
+                try out_binds.append(.{ .pattern_idx = pattern_idx, .value = alias_value, .expr_idx = expr_idx });
                 return true;
             },
             .underscore => return true,
@@ -3441,11 +3445,11 @@ pub const Interpreter = struct {
             },
             .nominal => |n| {
                 const underlying = self.resolveBaseVar(value_rt_var);
-                return try self.patternMatchesBind(n.backing_pattern, value, underlying.var_, roc_ops, out_binds);
+                return try self.patternMatchesBind(n.backing_pattern, value, underlying.var_, roc_ops, out_binds, expr_idx);
             },
             .nominal_external => |n| {
                 const underlying = self.resolveBaseVar(value_rt_var);
-                return try self.patternMatchesBind(n.backing_pattern, value, underlying.var_, roc_ops, out_binds);
+                return try self.patternMatchesBind(n.backing_pattern, value, underlying.var_, roc_ops, out_binds, expr_idx);
             },
             .tuple => |tuple_pat| {
                 if (value.layout.tag != .tuple) return false;
@@ -3464,7 +3468,7 @@ pub const Interpreter = struct {
                     if (sorted_idx >= accessor.getElementCount()) return false;
                     const elem_value = try accessor.getElement(sorted_idx);
                     const before = out_binds.items.len;
-                    const matched = try self.patternMatchesBind(pat_ids[idx], elem_value, elem_vars[idx], roc_ops, out_binds);
+                    const matched = try self.patternMatchesBind(pat_ids[idx], elem_value, elem_vars[idx], roc_ops, out_binds, expr_idx);
                     if (!matched) {
                         self.trimBindingList(out_binds, before, roc_ops);
                         return false;
@@ -3500,7 +3504,7 @@ pub const Interpreter = struct {
                     while (idx < prefix_len) : (idx += 1) {
                         const elem_value = try accessor.getElement(idx);
                         const before = out_binds.items.len;
-                        const matched = try self.patternMatchesBind(non_rest_patterns[idx], elem_value, elem_rt_var, roc_ops, out_binds);
+                        const matched = try self.patternMatchesBind(non_rest_patterns[idx], elem_value, elem_rt_var, roc_ops, out_binds, expr_idx);
                         if (!matched) {
                             self.trimBindingList(out_binds, before, roc_ops);
                             return false;
@@ -3513,7 +3517,7 @@ pub const Interpreter = struct {
                         const element_idx = total_len - suffix_len + suffix_idx;
                         const elem_value = try accessor.getElement(element_idx);
                         const before = out_binds.items.len;
-                        const matched = try self.patternMatchesBind(suffix_pattern_idx, elem_value, elem_rt_var, roc_ops, out_binds);
+                        const matched = try self.patternMatchesBind(suffix_pattern_idx, elem_value, elem_rt_var, roc_ops, out_binds, expr_idx);
                         if (!matched) {
                             self.trimBindingList(out_binds, before, roc_ops);
                             return false;
@@ -3525,7 +3529,7 @@ pub const Interpreter = struct {
                         const rest_value = try self.makeListSliceValue(list_layout, elem_layout, accessor.list, prefix_len, rest_len);
                         defer rest_value.decref(&self.runtime_layout_store, roc_ops);
                         const before = out_binds.items.len;
-                        if (!try self.patternMatchesBind(rest_pat_idx, rest_value, value_rt_var, roc_ops, out_binds)) {
+                        if (!try self.patternMatchesBind(rest_pat_idx, rest_value, value_rt_var, roc_ops, out_binds, expr_idx)) {
                             self.trimBindingList(out_binds, before, roc_ops);
                             return false;
                         }
@@ -3538,7 +3542,7 @@ pub const Interpreter = struct {
                     while (idx < non_rest_patterns.len) : (idx += 1) {
                         const elem_value = try accessor.getElement(idx);
                         const before = out_binds.items.len;
-                        const matched = try self.patternMatchesBind(non_rest_patterns[idx], elem_value, elem_rt_var, roc_ops, out_binds);
+                        const matched = try self.patternMatchesBind(non_rest_patterns[idx], elem_value, elem_rt_var, roc_ops, out_binds, expr_idx);
                         if (!matched) {
                             self.trimBindingList(out_binds, before, roc_ops);
                             return false;
@@ -3567,7 +3571,7 @@ pub const Interpreter = struct {
                     };
 
                     const before = out_binds.items.len;
-                    if (!try self.patternMatchesBind(inner_pattern_idx, field_value, field_var, roc_ops, out_binds)) {
+                    if (!try self.patternMatchesBind(inner_pattern_idx, field_value, field_var, roc_ops, out_binds, expr_idx)) {
                         self.trimBindingList(out_binds, before, roc_ops);
                         return false;
                     }
@@ -3613,7 +3617,7 @@ pub const Interpreter = struct {
                 };
 
                 if (arg_patterns.len == 1) {
-                    if (!try self.patternMatchesBind(arg_patterns[0], payload_value, arg_vars[0], roc_ops, out_binds)) {
+                    if (!try self.patternMatchesBind(arg_patterns[0], payload_value, arg_vars[0], roc_ops, out_binds, expr_idx)) {
                         self.trimBindingList(out_binds, start_len, roc_ops);
                         return false;
                     }
@@ -3639,7 +3643,7 @@ pub const Interpreter = struct {
                         return false;
                     }
                     const elem_val = try payload_tuple.getElement(sorted_idx);
-                    if (!try self.patternMatchesBind(arg_patterns[j], elem_val, arg_vars[j], roc_ops, out_binds)) {
+                    if (!try self.patternMatchesBind(arg_patterns[j], elem_val, arg_vars[j], roc_ops, out_binds, expr_idx)) {
                         self.trimBindingList(out_binds, start_len, roc_ops);
                         return false;
                     }
