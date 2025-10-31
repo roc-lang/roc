@@ -105,37 +105,81 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !void {
 
     // Add all low-level operations to the map using full qualified names
     // Associated items are stored as s_decl with qualified names like "Builtin.Str.is_empty"
-    if (env.common.findIdent("Builtin.Str.is_empty")) |str_is_empty_ident| {
-        try low_level_map.put(str_is_empty_ident, .str_is_empty);
-    }
-    if (env.common.findIdent("Builtin.Set.is_empty")) |set_is_empty_ident| {
-        try low_level_map.put(set_is_empty_ident, .set_is_empty);
-    }
+    const str_is_empty_ident = env.common.findIdent("Builtin.Str.is_empty") orelse
+        try env.insertIdent(base.Ident.for_text("Builtin.Str.is_empty"));
+    try low_level_map.put(str_is_empty_ident, .str_is_empty);
 
-    // Iterate through all statements and replace matching e_anno_only with e_low_level
+    const set_is_empty_ident = env.common.findIdent("Builtin.Set.is_empty") orelse
+        try env.insertIdent(base.Ident.for_text("Builtin.Set.is_empty"));
+    try low_level_map.put(set_is_empty_ident, .set_is_empty);
+
+    // Iterate through all statements and replace matching s_type_anno with s_decl containing e_low_level
     const all_stmts = env.store.sliceStatements(env.all_statements);
     for (all_stmts) |stmt_idx| {
         const stmt = env.store.getStatement(stmt_idx);
-        if (stmt == .s_decl) {
-            const decl = stmt.s_decl;
-            const pattern = env.store.getPattern(decl.pattern);
-            if (pattern == .assign) {
-                // Check if this declaration's identifier matches a low-level operation
-                if (low_level_map.get(pattern.assign.ident)) |low_level_op| {
-                    // Check if its expression is e_anno_only
-                    const expr = env.store.getExpr(decl.expr);
-                    if (expr == .e_anno_only) {
-                        // Replace with e_low_level by updating the node in the store
-                        env.store.nodes.set(@enumFromInt(@intFromEnum(decl.expr)), .{
-                            .tag = .expr_low_level,
-                            .data_1 = @intFromEnum(low_level_op),
-                            .data_2 = 0,
-                            .data_3 = 0,
-                        });
-                    }
-                }
+        if (stmt == .s_type_anno) {
+            const type_anno = stmt.s_type_anno;
+            // Check if this type annotation's identifier matches a low-level operation
+            if (low_level_map.fetchRemove(type_anno.name)) |entry| {
+                const low_level_op = entry.value;
+
+                // Create e_low_level expression node
+                const expr_node_idx = @intFromEnum(stmt_idx); // Reuse the statement index for the expression
+                const expr_idx: CIR.Expr.Idx = @enumFromInt(expr_node_idx + 1000000); // Offset to avoid collision
+
+                _ = env.store.nodes.append(gpa, .{
+                    .tag = .expr_low_level,
+                    .data_1 = @intFromEnum(low_level_op),
+                    .data_2 = 0,
+                    .data_3 = 0,
+                }) catch unreachable;
+
+                // Create identifier pattern node
+                const pattern_idx: CIR.Pattern.Idx = @enumFromInt(expr_node_idx + 2000000); // Different offset
+                _ = env.store.nodes.append(gpa, .{
+                    .tag = .pattern_identifier,
+                    .data_1 = @bitCast(type_anno.name),
+                    .data_2 = 0,
+                    .data_3 = 0,
+                }) catch unreachable;
+
+                // Replace the s_type_anno statement node with s_decl
+                // We need to store anno in extra_data
+                const extra_start = @as(u32, @intCast(env.store.extra_data.items.items.len));
+                env.store.extra_data.items.appendSlice(gpa, &[_]u32{
+                    1, // has_anno = true
+                    @intFromEnum(type_anno.anno),
+                }) catch unreachable;
+
+                env.store.nodes.set(@enumFromInt(@intFromEnum(stmt_idx)), .{
+                    .tag = .statement_decl,
+                    .data_1 = @intFromEnum(pattern_idx),
+                    .data_2 = @intFromEnum(expr_idx),
+                    .data_3 = extra_start,
+                });
             }
         }
+    }
+
+    // Verify all low-level operations were found in the builtins
+    if (low_level_map.count() > 0) {
+        var missing_buf = try std.ArrayList(u8).initCapacity(gpa, 512);
+        defer missing_buf.deinit(gpa);
+        const writer = missing_buf.writer(gpa);
+
+        try writer.writeAll("\n\nError: The following low-level operations were not found in Builtin.roc:\n");
+        var iter = low_level_map.iterator();
+        while (iter.next()) |entry| {
+            const ident_text = env.getIdentText(entry.key_ptr.*);
+            const op_name = @tagName(entry.value_ptr.*);
+            try writer.print("  - {s} (mapped to .{s})\n", .{ ident_text, op_name });
+        }
+        try writer.writeAll("\nEither:\n");
+        try writer.writeAll("  1. Remove the obsolete entry from the low_level_map in builtin_compiler/main.zig, OR\n");
+        try writer.writeAll("  2. Add a standalone type annotation to Builtin.roc for it to match\n\n");
+
+        std.debug.print("{s}", .{missing_buf.items});
+        return error.LowLevelOperationsNotFound;
     }
 }
 
@@ -198,14 +242,15 @@ pub fn main() !void {
     try builtin_env.common.setNodeIndexById(gpa, set_ident, @intCast(@intFromEnum(set_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, str_ident, @intCast(@intFromEnum(str_type_idx)));
 
+    // Replace Str.is_empty's e_anno_only with e_low_level
+    // This transforms the standalone annotation into a low-level builtin operation
+    // This must happen BEFORE transformStrNominalToPrimitive
+    try replaceStrIsEmptyWithLowLevel(builtin_env);
+
     // Transform Str nominal types to .str primitive types
     // This must happen BEFORE serialization to ensure the .bin file contains
     // methods associated with the .str primitive, not a nominal type
     try transformStrNominalToPrimitive(builtin_env);
-
-    // Replace Str.is_empty's e_anno_only with e_low_level
-    // This transforms the standalone annotation into a low-level builtin operation
-    try replaceStrIsEmptyWithLowLevel(builtin_env);
 
     // Create output directory
     try std.fs.cwd().makePath("zig-out/builtins");
@@ -314,6 +359,30 @@ fn compileModule(
 
     try can_result.canonicalizeFile();
     try can_result.validateForChecking();
+
+    // Check for canonicalization errors
+    const can_diagnostics = try module_env.getDiagnostics();
+    defer gpa.free(can_diagnostics);
+    if (can_diagnostics.len > 0) {
+        std.debug.print("Canonicalization errors in {s}:\n", .{module_name});
+        for (can_diagnostics) |diag| {
+            switch (diag) {
+                .undeclared_type => |d| {
+                    const type_name = module_env.getIdentText(d.name);
+                    std.debug.print("  - Undeclared type: {s}\n", .{type_name});
+                },
+                .nested_value_not_found => |d| {
+                    const parent = module_env.getIdentText(d.parent_name);
+                    const nested = module_env.getIdentText(d.nested_name);
+                    std.debug.print("  - Nested value not found: {s}.{s}\n", .{ parent, nested });
+                },
+                else => {
+                    std.debug.print("  - Diagnostic: {any}\n", .{diag});
+                },
+            }
+        }
+        return error.CanonicalizeError;
+    }
 
     // 6. Type check
     // Build the list of other modules for type checking
