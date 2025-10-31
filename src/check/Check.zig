@@ -2990,8 +2990,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                 },
             }
         },
-        .e_low_level => {
-            // For low-level expressions, the type comes from the annotation.
+        .e_low_level_lambda => |ll| {
+            // For low-level lambda expressions, treat like a lambda with a crash body.
+            // Check the body (which will be e_runtime_error or similar)
+            does_fx = try self.checkExpr(ll.body, rank, .no_expectation) or does_fx;
+
+            // The lambda's type comes from the annotation.
             // Like e_anno_only, this should always have an annotation.
             // The type will be unified with the expected type in the code below.
             switch (expected) {

@@ -93,8 +93,8 @@ fn transformStrNominalToPrimitive(env: *ModuleEnv) !void {
     }
 }
 
-/// Replace specific e_anno_only expressions with e_low_level operations.
-/// This transforms standalone annotations into low-level builtin operations
+/// Replace specific e_anno_only expressions with e_low_level_lambda operations.
+/// This transforms standalone annotations into low-level builtin lambda operations
 /// that will be recognized by the compiler backend.
 /// Returns a list of new def indices created.
 fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
@@ -141,18 +141,32 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                 if (low_level_map.fetchRemove(ident)) |entry| {
                     const low_level_op = entry.value;
 
-                    // Replace the e_anno_only expression with e_low_level
-                    // Modify the existing expression node in place
-                    const expr_node_idx = @intFromEnum(def.expr);
-                    const tags = env.store.nodes.field(.tag);
-                    const data_1 = env.store.nodes.field(.data_1);
-                    const data_2 = env.store.nodes.field(.data_2);
-                    const data_3 = env.store.nodes.field(.data_3);
+                    // Create a dummy parameter pattern for the lambda
+                    // Use the identifier "_arg" for the parameter
+                    const arg_ident = env.common.findOrCreateIdent("_arg") catch unreachable;
+                    const arg_pattern_idx = try env.addPattern(.{ .assign = .{ .ident = arg_ident } }, base.Region.zero());
 
-                    tags[expr_node_idx] = .expr_low_level;
-                    data_1[expr_node_idx] = @intFromEnum(low_level_op);
-                    data_2[expr_node_idx] = 0;
-                    data_3[expr_node_idx] = 0;
+                    // Create a pattern span containing just this one parameter
+                    const patterns_start = env.store.patterns.len();
+                    _ = try env.store.patterns.append(gpa, arg_pattern_idx);
+                    const args_span = CIR.Pattern.Span{ .span = .{ .start = @intCast(patterns_start), .len = 1 } };
+
+                    // Create an e_runtime_error body that crashes when the function is called
+                    const body_idx = try env.addExpr(.{ .e_runtime_error = .{} }, base.Region.zero());
+
+                    // Replace the e_anno_only expression with e_low_level_lambda
+                    // We need to replace the expression in the existing node
+                    const new_expr = CIR.Expr{ .e_low_level_lambda = .{
+                        .op = low_level_op,
+                        .args = args_span,
+                        .body = body_idx,
+                    } };
+
+                    // Update the expression node in place using the store's serialization logic
+                    const expr_node_idx = @intFromEnum(def.expr);
+                    var node = env.store.nodes.get(expr_node_idx);
+                    try env.store.serializeExprToNode(&node, new_expr);
+                    env.store.nodes.set(expr_node_idx, node);
 
                     // Track this def index (it already exists and is registered)
                     try new_def_indices.append(gpa, def_idx);
@@ -171,18 +185,25 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
             if (low_level_map.fetchRemove(type_anno.name)) |entry| {
                 const low_level_op = entry.value;
 
-                // Create e_low_level expression node
-                // Get the actual index by checking the current length before appending
-                const expr_idx: CIR.Expr.Idx = @enumFromInt(env.store.nodes.len());
-                _ = env.store.nodes.append(gpa, .{
-                    .tag = .expr_low_level,
-                    .data_1 = @intFromEnum(low_level_op),
-                    .data_2 = 0,
-                    .data_3 = 0,
-                }) catch unreachable;
-                _ = env.store.regions.append(gpa, base.Region.zero()) catch unreachable;
-                // Create a type entry for this expression node
-                _ = env.types.fresh() catch unreachable;
+                // Create a dummy parameter pattern for the lambda
+                // Use the identifier "_arg" for the parameter
+                const arg_ident = env.common.findOrCreateIdent("_arg") catch unreachable;
+                const arg_pattern_idx = try env.addPattern(.{ .assign = .{ .ident = arg_ident } }, base.Region.zero());
+
+                // Create a pattern span containing just this one parameter
+                const patterns_start = env.store.patterns.len();
+                _ = try env.store.patterns.append(gpa, arg_pattern_idx);
+                const args_span = CIR.Pattern.Span{ .span = .{ .start = @intCast(patterns_start), .len = 1 } };
+
+                // Create an e_runtime_error body that crashes when the function is called
+                const body_idx = try env.addExpr(.{ .e_runtime_error = .{} }, base.Region.zero());
+
+                // Create e_low_level_lambda expression
+                const expr_idx = try env.addExpr(.{ .e_low_level_lambda = .{
+                    .op = low_level_op,
+                    .args = args_span,
+                    .body = body_idx,
+                } }, base.Region.zero());
 
                 // Create identifier pattern node
                 const pattern_idx: CIR.Pattern.Idx = @enumFromInt(env.store.nodes.len());

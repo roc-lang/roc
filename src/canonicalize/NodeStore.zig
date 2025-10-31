@@ -632,8 +632,20 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{ .e_anno_only = .{} };
         },
         .expr_low_level => {
+            // Retrieve low-level lambda data from extra_data
             const op: CIR.Expr.LowLevel = @enumFromInt(node.data_1);
-            return CIR.Expr{ .e_low_level = .{ .op = op } };
+            const extra_start = node.data_2;
+            const extra_data = store.extra_data.items.items[extra_start..];
+
+            const args_start = extra_data[0];
+            const args_len = extra_data[1];
+            const body_idx = extra_data[2];
+
+            return CIR.Expr{ .e_low_level_lambda = .{
+                .op = op,
+                .args = .{ .span = .{ .start = args_start, .len = args_len } },
+                .body = @enumFromInt(body_idx),
+            } };
         },
         .expr_expect => {
             return CIR.Expr{ .e_expect = .{
@@ -1489,9 +1501,21 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_anno_only => |_| {
             node.tag = .expr_anno_only;
         },
-        .e_low_level => |low_level| {
+        .e_low_level_lambda => |low_level| {
             node.tag = .expr_low_level;
             node.data_1 = @intFromEnum(low_level.op);
+
+            // Store low-level lambda data in extra_data
+            const extra_data_start = store.extra_data.len();
+
+            // Store args span start
+            _ = try store.extra_data.append(store.gpa, low_level.args.span.start);
+            // Store args span length
+            _ = try store.extra_data.append(store.gpa, low_level.args.span.len);
+            // Store body index
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(low_level.body));
+
+            node.data_2 = @intCast(extra_data_start);
         },
         .e_match => |e| {
             node.tag = .expr_match;

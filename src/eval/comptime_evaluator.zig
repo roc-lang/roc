@@ -238,7 +238,7 @@ pub const ComptimeEvaluator = struct {
         const expr = self.env.store.getExpr(expr_idx);
 
         const is_lambda = switch (expr) {
-            .e_lambda, .e_closure => true,
+            .e_lambda, .e_closure, .e_low_level_lambda => true,
             .e_runtime_error => return EvalResult{
                 .crash = .{
                     .message = "Runtime error in expression",
