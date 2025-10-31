@@ -481,14 +481,14 @@ pub const Repl = struct {
         // Get Bool and Result statement indices from the IMPORTED modules (not copied!)
         // These refer to the actual statements in the Bool/Result modules
         const bool_stmt_in_bool_module = self.builtin_indices.bool_type;
-        const result_stmt_in_result_module = self.builtin_indices.result_type;
+        const try_stmt_in_result_module = self.builtin_indices.try_type;
 
         const module_common_idents: Check.CommonIdents = .{
             .module_name = try module_env.insertIdent(base.Ident.for_text("repl")),
             .list = try module_env.insertIdent(base.Ident.for_text("List")),
             .box = try module_env.insertIdent(base.Ident.for_text("Box")),
             .bool_stmt = bool_stmt_in_bool_module,
-            .result_stmt = result_stmt_in_result_module,
+            .try_stmt = try_stmt_in_result_module,
             .builtin_module = self.builtin_module.env,
         };
 
@@ -509,7 +509,7 @@ pub const Repl = struct {
         });
         try module_envs_map.put(result_ident, .{
             .env = self.builtin_module.env,
-            .statement_idx = self.builtin_indices.result_type,
+            .statement_idx = self.builtin_indices.try_type,
         });
         // Str is added without statement_idx because it's a primitive builtin type
         try module_envs_map.put(str_ident, .{

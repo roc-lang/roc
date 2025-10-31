@@ -1,4 +1,4 @@
-//! Centralized loading and management of builtin modules (Bool, Result, Str, etc.)
+//! Centralized loading and management of builtin modules (Bool, Try, Str, etc.)
 //!
 //! This struct consolidates all builtin module loading into a single place,
 //! using the actual .roc source files (embedded at compile time) rather than
@@ -34,7 +34,7 @@ pub const BuiltinModules = struct {
     pub fn modules(self: *const BuiltinModules) [3]ModuleInfo {
         return .{
             .{ .name = "Bool", .module = &self.builtin_module },
-            .{ .name = "Result", .module = &self.builtin_module },
+            .{ .name = "Try", .module = &self.builtin_module },
             .{ .name = "Str", .module = &self.builtin_module },
         };
     }

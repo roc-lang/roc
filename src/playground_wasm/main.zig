@@ -245,7 +245,7 @@ const ReplErrorStage = enum {
 /// Structured REPL result
 const ReplStepResult = struct {
     output: []const u8,
-    result_type: ReplResultType,
+    try_type: ReplResultType,
     error_stage: ?ReplErrorStage = null,
     error_details: ?[]const u8 = null,
     compiler_available: bool = true,
@@ -720,7 +720,7 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
                 const error_msg = @errorName(err);
                 const step_result = ReplStepResult{
                     .output = error_msg,
-                    .result_type = .@"error",
+                    .try_type = .@"error",
                     .error_stage = .runtime,
                     .error_details = error_msg,
                 };
@@ -735,7 +735,7 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
 
                 const step_result = ReplStepResult{
                     .output = result,
-                    .result_type = .@"error",
+                    .try_type = .@"error",
                     .error_stage = .evaluation,
                     .error_details = crash_details,
                 };
@@ -973,10 +973,10 @@ fn compileSource(source: []const u8) !CompilerStageData {
     // Use builtin_indices directly - these are the correct statement indices
     logDebug("compileSource: Getting builtin statement indices\n", .{});
     const bool_stmt_in_builtin_module = builtin_indices.bool_type;
-    const result_stmt_in_builtin_module = builtin_indices.result_type;
+    const try_stmt_in_builtin_module = builtin_indices.try_type;
 
     logDebug("compileSource: Using Bool statement from Builtin module, idx={}\n", .{@intFromEnum(bool_stmt_in_builtin_module)});
-    logDebug("compileSource: Using Result statement from Builtin module, idx={}\n", .{@intFromEnum(result_stmt_in_builtin_module)});
+    logDebug("compileSource: Using Result statement from Builtin module, idx={}\n", .{@intFromEnum(try_stmt_in_builtin_module)});
     logDebug("compileSource: Builtin injection complete\n", .{});
 
     // Store bool_stmt and builtin_types in result for later use (e.g., in test runner)
@@ -988,7 +988,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
         .list = try module_env.insertIdent(base.Ident.for_text("List")),
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = bool_stmt_in_builtin_module,
-        .result_stmt = result_stmt_in_builtin_module,
+        .try_stmt = try_stmt_in_builtin_module,
         .builtin_module = builtin_module.env,
     };
 
@@ -1283,42 +1283,42 @@ fn parseReplResult(result: []const u8) ReplStepResult {
     if (std.mem.startsWith(u8, result, "Parse error:")) {
         return ReplStepResult{
             .output = result,
-            .result_type = .@"error",
+            .try_type = .@"error",
             .error_stage = .parse,
             .error_details = if (result.len > 13) result[13..] else null,
         };
     } else if (std.mem.indexOf(u8, result, "Canonicalize") != null) {
         return ReplStepResult{
             .output = result,
-            .result_type = .@"error",
+            .try_type = .@"error",
             .error_stage = .canonicalize,
             .error_details = extractErrorDetails(result),
         };
     } else if (std.mem.indexOf(u8, result, "Type check") != null) {
         return ReplStepResult{
             .output = result,
-            .result_type = .@"error",
+            .try_type = .@"error",
             .error_stage = .typecheck,
             .error_details = extractErrorDetails(result),
         };
     } else if (std.mem.indexOf(u8, result, "Layout") != null) {
         return ReplStepResult{
             .output = result,
-            .result_type = .@"error",
+            .try_type = .@"error",
             .error_stage = .layout,
             .error_details = extractErrorDetails(result),
         };
     } else if (std.mem.startsWith(u8, result, "Evaluation error:")) {
         return ReplStepResult{
             .output = result,
-            .result_type = .@"error",
+            .try_type = .@"error",
             .error_stage = .evaluation,
             .error_details = if (result.len > 17) result[17..] else null,
         };
     } else if (std.mem.indexOf(u8, result, "Interpreter") != null) {
         return ReplStepResult{
             .output = result,
-            .result_type = .@"error",
+            .try_type = .@"error",
             .error_stage = .interpreter,
             .error_details = extractErrorDetails(result),
         };
@@ -1326,13 +1326,13 @@ fn parseReplResult(result: []const u8) ReplStepResult {
         // Definition success
         return ReplStepResult{
             .output = result,
-            .result_type = .definition,
+            .try_type = .definition,
         };
     } else {
         // Expression result
         return ReplStepResult{
             .output = result,
-            .result_type = .expression,
+            .try_type = .expression,
         };
     }
 }
@@ -1360,7 +1360,7 @@ fn writeReplStepResultJson(response_buffer: []u8, result: ReplStepResult) Respon
 
     // Type field (using enum's jsonStringify)
     try w.writeAll(",\"type\":");
-    try result.result_type.jsonStringify(w);
+    try result.try_type.jsonStringify(w);
 
     // Error-specific fields
     if (result.error_stage) |stage| {

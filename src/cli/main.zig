@@ -1376,7 +1376,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         .list = try env.insertIdent(base.Ident.for_text("List")),
         .box = try env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = builtin_modules.builtin_indices.bool_type,
-        .result_stmt = builtin_modules.builtin_indices.result_type,
+        .try_stmt = builtin_modules.builtin_indices.try_type,
         .builtin_module = builtin_modules.builtin_module.env,
     };
 
@@ -2418,7 +2418,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
         .list = try env.insertIdent(base.Ident.for_text("List")),
         .box = try env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = @enumFromInt(0), // TODO: load from builtin modules
-        .result_stmt = @enumFromInt(0), // TODO: load from builtin modules
+        .try_stmt = @enumFromInt(0), // TODO: load from builtin modules
         .builtin_module = null,
     };
 
