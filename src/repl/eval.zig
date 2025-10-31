@@ -13,100 +13,14 @@ const builtins = @import("builtins");
 const eval_mod = @import("eval");
 const CrashContext = eval_mod.CrashContext;
 const BuiltinTypes = eval_mod.BuiltinTypes;
+const builtin_loading = eval_mod.builtin_loading;
 const collections = @import("collections");
 
 const AST = parse.AST;
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const RocOps = builtins.host_abi.RocOps;
-
-/// Wrapper for a loaded compiled builtin module that tracks the buffer
-const LoadedModule = struct {
-    env: *ModuleEnv,
-    buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
-    gpa: std.mem.Allocator,
-
-    fn deinit(self: *LoadedModule) void {
-        // IMPORTANT: When a module is deserialized from a buffer, most internal structures
-        // (common, types, external_decls, store, imports.items) contain pointers INTO the buffer,
-        // not separately allocated memory. However, the imports HASHMAP IS separately
-        // allocated during deserialization and MUST be freed.
-        //
-        // Memory to free:
-        // 1. The imports hashmap only (allocated during deserialization at CIR.zig:648)
-        // 2. The buffer itself (which contains all the deserialized data)
-        // 3. The env struct itself (which was allocated with create())
-
-        // Free ONLY the imports hashmap (allocated during deserialization at CIR.zig:648)
-        // Do NOT call full deinit on imports store as the items list points into the buffer!
-        self.env.imports.map.deinit(self.gpa);
-
-        // Free the buffer (all other data structures point into this buffer)
-        self.gpa.free(self.buffer);
-
-        // Free the env struct itself
-        self.gpa.destroy(self.env);
-    }
-};
-
-/// Deserialize BuiltinIndices from the binary data generated at build time
-fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !can.CIR.BuiltinIndices {
-    // Copy embedded data to properly aligned memory
-    const alignment = @alignOf(can.CIR.BuiltinIndices);
-    const buffer = try gpa.alignedAlloc(u8, @enumFromInt(alignment), bin_data.len);
-    defer gpa.free(buffer);
-
-    @memcpy(buffer, bin_data);
-
-    // Cast to the structure
-    const indices_ptr = @as(*const can.CIR.BuiltinIndices, @ptrCast(buffer.ptr));
-    return indices_ptr.*;
-}
-
-/// Load a compiled ModuleEnv from embedded binary data
-fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) !LoadedModule {
-    // Copy the embedded data to properly aligned memory
-    // CompactWriter requires specific alignment for serialization
-    const CompactWriter = collections.CompactWriter;
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
-    @memcpy(buffer, bin_data);
-
-    // Cast to the serialized structure
-    const serialized_ptr = @as(
-        *ModuleEnv.Serialized,
-        @ptrCast(@alignCast(buffer.ptr)),
-    );
-
-    const env = try gpa.create(ModuleEnv);
-    errdefer gpa.destroy(env);
-
-    // Deserialize
-    const base_ptr = @intFromPtr(buffer.ptr);
-
-    env.* = ModuleEnv{
-        .gpa = gpa,
-        .common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), source).*,
-        .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*, // Pass gpa to types deserialize
-        .module_kind = serialized_ptr.module_kind,
-        .all_defs = serialized_ptr.all_defs,
-        .all_statements = serialized_ptr.all_statements,
-        .exports = serialized_ptr.exports,
-        .builtin_statements = serialized_ptr.builtin_statements,
-        .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
-        .imports = (try serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa)).*,
-        .module_name = module_name,
-        .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
-        .diagnostics = serialized_ptr.diagnostics,
-        .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
-        .evaluation_order = null,
-    };
-
-    return LoadedModule{
-        .env = env,
-        .buffer = buffer,
-        .gpa = gpa,
-    };
-}
+const LoadedModule = builtin_loading.LoadedModule;
 
 /// REPL state that tracks past definitions and evaluates expressions
 pub const Repl = struct {
@@ -136,11 +50,11 @@ pub const Repl = struct {
         const compiled_builtins = @import("compiled_builtins");
 
         // Load builtin indices once at startup (generated at build time)
-        const builtin_indices = try deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
+        const builtin_indices = try builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
 
         // Load Builtin module once at startup
         const builtin_source = compiled_builtins.builtin_source;
-        var builtin_module = try loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", builtin_source);
+        var builtin_module = try builtin_loading.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", builtin_source);
         errdefer builtin_module.deinit();
 
         return Repl{
