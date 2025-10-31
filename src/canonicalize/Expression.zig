@@ -366,6 +366,24 @@ pub const Expr = union(enum) {
     /// ```
     e_anno_only: struct {},
 
+    /// A low-level builtin operation.
+    /// This represents a function/value that will be implemented by the compiler backend.
+    /// Like e_anno_only, it has no Roc implementation, but unlike e_anno_only,
+    /// it's expected to be implemented by the backend rather than being an error.
+    ///
+    /// ```roc
+    /// # Str.is_empty is a low-level operation
+    /// is_empty : Str -> Bool
+    /// ```
+    e_low_level: struct {
+        op: LowLevel,
+    },
+
+    /// Low-level builtin operations that are implemented by the compiler backend.
+    pub const LowLevel = enum {
+        str_is_empty,
+    };
+
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
@@ -1004,6 +1022,17 @@ pub const Expr = union(enum) {
             .e_anno_only => |_| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-anno-only");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .e_low_level => |low_level| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-low-level");
+                const op_name = try std.fmt.allocPrint(ir.gpa, "{s}", .{@tagName(low_level.op)});
+                defer ir.gpa.free(op_name);
+                try tree.pushStringPair("op", op_name);
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();

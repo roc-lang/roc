@@ -93,6 +93,48 @@ fn transformStrNominalToPrimitive(env: *ModuleEnv) !void {
     }
 }
 
+/// Replace Str.is_empty's e_anno_only expression with e_low_level.
+/// This transforms the standalone annotation into a low-level builtin operation
+/// that will be recognized by the compiler backend.
+fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !void {
+    // Find the "is_empty" identifier
+    const is_empty_ident_opt = env.common.findIdent("is_empty");
+    if (is_empty_ident_opt == null) {
+        // No is_empty found, nothing to transform
+        return;
+    }
+    const is_empty_ident = is_empty_ident_opt.?;
+
+    // Iterate through all statements to find the Str.is_empty declaration
+    const all_stmts = env.store.sliceStatements(env.all_statements);
+    for (all_stmts) |stmt_idx| {
+        const stmt = env.store.getStatement(stmt_idx);
+        switch (stmt) {
+            .s_decl => |decl| {
+                // Check if this declaration is for is_empty
+                const pattern = env.store.getPattern(decl.pattern);
+                if (pattern == .assign) {
+                    if (pattern.assign.ident == is_empty_ident) {
+                        // Found the is_empty declaration
+                        // Check if its expression is e_anno_only
+                        const expr = env.store.getExpr(decl.expr);
+                        if (expr == .e_anno_only) {
+                            // Replace with e_low_level by updating the node in the store
+                            env.store.nodes.set(@enumFromInt(@intFromEnum(decl.expr)), .{
+                                .tag = .expr_low_level,
+                                .data_1 = @intFromEnum(CIR.Expr.LowLevel.str_is_empty),
+                                .data_2 = 0,
+                                .data_3 = 0,
+                            });
+                        }
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+}
+
 /// Build-time compiler that compiles builtin .roc sources into serialized ModuleEnvs.
 /// This runs during `zig build` on the host machine to generate .bin files
 /// that get embedded into the final roc executable.
@@ -156,6 +198,10 @@ pub fn main() !void {
     // This must happen BEFORE serialization to ensure the .bin file contains
     // methods associated with the .str primitive, not a nominal type
     try transformStrNominalToPrimitive(builtin_env);
+
+    // Replace Str.is_empty's e_anno_only with e_low_level
+    // This transforms the standalone annotation into a low-level builtin operation
+    try replaceStrIsEmptyWithLowLevel(builtin_env);
 
     // Create output directory
     try std.fs.cwd().makePath("zig-out/builtins");

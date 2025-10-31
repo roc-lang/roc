@@ -2990,6 +2990,17 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                 },
             }
         },
+        .e_low_level => {
+            // For low-level expressions, the type comes from the annotation.
+            // Like e_anno_only, this should always have an annotation.
+            // The type will be unified with the expected type in the code below.
+            switch (expected) {
+                .no_expectation => unreachable,
+                .expected => {
+                    // The expr_var will be unified with the annotation var below
+                },
+            }
+        },
         .e_runtime_error => {
             try self.updateVar(expr_var, .err, rank);
         },
