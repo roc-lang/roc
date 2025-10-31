@@ -1,6 +1,6 @@
 package
 	[
 		Bool,
-		Result,
+		Try,
 	]
 	{}

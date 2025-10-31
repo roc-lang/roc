@@ -32,8 +32,8 @@ pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 pub const BuiltinIndices = struct {
     /// Statement index of nested Bool type declaration within Builtin module
     bool_type: Statement.Idx,
-    /// Statement index of nested Result type declaration within Builtin module
-    result_type: Statement.Idx,
+    /// Statement index of nested Try type declaration within Builtin module
+    try_type: Statement.Idx,
     /// Statement index of nested Dict type declaration within Builtin module
     dict_type: Statement.Idx,
     /// Statement index of nested Set type declaration within Builtin module

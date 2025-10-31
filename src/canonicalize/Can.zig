@@ -247,11 +247,11 @@ pub fn populateModuleEnvs(
     module_envs_map: *std.AutoHashMap(Ident.Idx, AutoImportedType),
     calling_module_env: *ModuleEnv,
     builtin_module_env: *const ModuleEnv,
-    builtin_indices: anytype, // Has fields: bool_type, result_type, dict_type, set_type
+    builtin_indices: anytype, // Has fields: bool_type, try_type, dict_type, set_type
 ) !void {
     const types_to_add = .{
         .{ "Bool", builtin_indices.bool_type },
-        .{ "Result", builtin_indices.result_type },
+        .{ "Try", builtin_indices.try_type },
         .{ "Dict", builtin_indices.dict_type },
         .{ "Set", builtin_indices.set_type },
     };

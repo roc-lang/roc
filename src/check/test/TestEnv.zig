@@ -216,14 +216,14 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
 
     // Get Bool and Result statement indices from the IMPORTED modules (not copied!)
     const bool_stmt_in_bool_module = builtin_indices.bool_type;
-    const result_stmt_in_result_module = builtin_indices.result_type;
+    const try_stmt_in_result_module = builtin_indices.try_type;
 
     const module_common_idents: Check.CommonIdents = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
         .list = try module_env.insertIdent(base.Ident.for_text("List")),
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = bool_stmt_in_bool_module,
-        .result_stmt = result_stmt_in_result_module,
+        .try_stmt = try_stmt_in_result_module,
         .builtin_module = other_test_env.builtin_module.env,
     };
 
@@ -335,14 +335,14 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
 
     // Get Bool and Result statement indices from the IMPORTED modules (not copied!)
     const bool_stmt_in_bool_module = builtin_indices.bool_type;
-    const result_stmt_in_result_module = builtin_indices.result_type;
+    const try_stmt_in_result_module = builtin_indices.try_type;
 
     const module_common_idents: Check.CommonIdents = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
         .list = try module_env.insertIdent(base.Ident.for_text("List")),
         .box = try module_env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = bool_stmt_in_bool_module,
-        .result_stmt = result_stmt_in_result_module,
+        .try_stmt = try_stmt_in_result_module,
         .builtin_module = builtin_module.env,
     };
 

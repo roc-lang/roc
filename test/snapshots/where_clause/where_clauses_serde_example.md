@@ -90,7 +90,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(Num(Int(Unsigned8))) -> Result(a, [DecodeErr]) where [List(Num(Int(Unsigned8))).decode : List(Num(Int(Unsigned8))) -> Result(a, [DecodeErr])]")))
+		(patt (type "List(Num(Int(Unsigned8))) -> Try(a, [DecodeErr]) where [List(Num(Int(Unsigned8))).decode : List(Num(Int(Unsigned8))) -> Try(a, [DecodeErr])]")))
 	(expressions
-		(expr (type "List(Num(Int(Unsigned8))) -> Result(a, [DecodeErr]) where [List(Num(Int(Unsigned8))).decode : List(Num(Int(Unsigned8))) -> Result(a, [DecodeErr])]"))))
+		(expr (type "List(Num(Int(Unsigned8))) -> Try(a, [DecodeErr]) where [List(Num(Int(Unsigned8))).decode : List(Num(Int(Unsigned8))) -> Try(a, [DecodeErr])]"))))
 ~~~
