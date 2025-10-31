@@ -217,7 +217,7 @@ jobs:
         run: |
           git clean -fdx
           git reset --hard HEAD
-          nix develop ./src/flake.nix -c zig build && zig build snapshot && zig build test
+          nix develop ./src/ -c zig build && zig build snapshot && zig build test
 
   zig-cross-compile:
     needs: check-once
