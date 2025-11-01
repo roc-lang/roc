@@ -152,7 +152,15 @@ main! = |_| {}
 								(e-lookup-local
 									(p-assign (ident "x")))
 								(e-lookup-local
-									(p-assign (ident "y"))))))))))
+									(p-assign (ident "y")))))))))
+		(annotation
+			(ty-fn (effectful false)
+				(ty-parens
+					(ty-fn (effectful false)
+						(ty-rigid-var (name "_a"))
+						(ty-rigid-var (name "_b"))
+						(ty-rigid-var (name "_c"))))
+				(ty-malformed))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda
@@ -164,9 +172,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a, b -> c -> a -> b -> c"))
+		(patt (type "_a, _b -> _c -> Error"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "a, b -> c -> a -> b -> c"))
+		(expr (type "_a, _b -> _c -> Error"))
 		(expr (type "_arg -> {}"))))
 ~~~
