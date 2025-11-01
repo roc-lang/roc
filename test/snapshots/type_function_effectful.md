@@ -41,20 +41,6 @@ runEffect! : (_a => _b) -> _a => _b
                                  ^^
 
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_function_effectful.md:4:14:4:29:**
-```roc
-runEffect! = |fn!, x| fn!(x)
-```
-             ^^^^^^^^^^^^^^^
-
-It has the type:
-    _a -> _a, a -> _a_
-
-But the type annotation says it should have the type:
-    __a => _b -> _a_
-
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -125,14 +111,7 @@ main! = |_| {}
 				(e-lookup-local
 					(p-assign (ident "fn!")))
 				(e-lookup-local
-					(p-assign (ident "x")))))
-		(annotation
-			(ty-fn (effectful false)
-				(ty-parens
-					(ty-fn (effectful true)
-						(ty-rigid-var (name "_a"))
-						(ty-rigid-var (name "_b"))))
-				(ty-rigid-var-lookup (ty-rigid-var (name "_a"))))))
+					(p-assign (ident "x"))))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda
@@ -144,9 +123,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
+		(patt (type "a -> b, a -> b"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "Error"))
+		(expr (type "a -> b, a -> b"))
 		(expr (type "_arg -> {}"))))
 ~~~

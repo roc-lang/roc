@@ -1608,7 +1608,7 @@ pub const Interpreter = struct {
                     const lambda_expr = self.env.store.getExpr(header.lambda_expr_idx);
                     if (lambda_expr == .e_low_level_lambda) {
                         const low_level = lambda_expr.e_low_level_lambda;
-                        const result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops);
+                        const result = try self.callLowLevelBuiltin(low_level.op, arg_values, call_ret_rt_var, roc_ops);
 
                         // Decref all args
                         for (arg_values) |arg| {
@@ -1872,8 +1872,12 @@ pub const Interpreter = struct {
                 if (lambda_expr == .e_low_level_lambda) {
                     const low_level = lambda_expr.e_low_level_lambda;
 
+                    // Get the return type from the original expression
+                    const ret_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    const ret_rt_var = try self.translateTypeVar(saved_env, ret_ct_var);
+
                     // Dispatch to actual low-level builtin implementation
-                    const result = try self.callLowLevelBuiltin(low_level.op, all_args, roc_ops);
+                    const result = try self.callLowLevelBuiltin(low_level.op, all_args, ret_rt_var, roc_ops);
 
                     // Decref all args
                     for (all_args) |arg| {
@@ -2150,26 +2154,23 @@ pub const Interpreter = struct {
         return dest;
     }
 
-    fn callLowLevelBuiltin(self: *Interpreter, op: can.CIR.Expr.LowLevel, args: []StackValue, roc_ops: *RocOps) !StackValue {
+    fn callLowLevelBuiltin(self: *Interpreter, op: can.CIR.Expr.LowLevel, args: []StackValue, ret_rt_var: types.Var, roc_ops: *RocOps) !StackValue {
         switch (op) {
             .str_is_empty => {
                 // Str.is_empty : Str -> Bool
                 if (args.len != 1) return error.TypeMismatch;
 
                 const str_arg = args[0];
-                if (str_arg.ptr == null) return error.TypeMismatch;
+                // Note: empty strings have a valid pointer (small string or heap allocated), never null
+                const roc_str: *const RocStr = if (str_arg.ptr) |ptr|
+                    @as(*const RocStr, @ptrCast(@alignCast(ptr)))
+                else
+                    return error.TypeMismatch;
 
-                const roc_str: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
                 const result = builtins.str.isEmpty(roc_str.*);
 
-                // Create a boolean value
-                const bool_layout = Layout{ .tag = .scalar, .data = .{ .scalar = .{ .tag = .bool, .data = .{ .bool = {} } } } };
-                const bool_value = try self.pushRaw(bool_layout, 0);
-                if (bool_value.ptr) |ptr| {
-                    const bool_ptr: *bool = @ptrCast(@alignCast(ptr));
-                    bool_ptr.* = result;
-                }
-                return bool_value;
+                // Create a boolean value using the proper boolean representation
+                return try self.makeBoolValue(ret_rt_var, result);
             },
             .set_is_empty => {
                 // TODO: implement Set.is_empty
