@@ -1339,3 +1339,71 @@ test "Str.is_empty works as low-level builtin associated item" {
     ;
     try checkTypesModule(source, .{ .pass = .{ .def = "x" } }, "Bool");
 }
+
+test "associated item: type annotation followed by body should not create duplicate definition" {
+    const source =
+        \\Test := [].{
+        \\  apply : (a -> b), a -> b
+        \\  apply = |fn, x| fn(x)
+        \\}
+        \\
+        \\result = Test.apply(|n| n, 42)
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // Should have NO errors - the type annotation should be associated with the body
+    const can_diagnostics = try test_env.module_env.getDiagnostics();
+    defer test_env.gpa.free(can_diagnostics);
+    const type_problems = test_env.checker.problems.problems.items;
+
+    try testing.expectEqual(@as(usize, 0), can_diagnostics.len);
+    try testing.expectEqual(@as(usize, 0), type_problems.len);
+
+    // Verify the types
+    try test_env.assertDefType("Test.apply", "a -> b, a -> b");
+    try test_env.assertDefType("result", "Num(_size)");
+}
+
+test "top-level: type annotation followed by body should not create duplicate definition - REGRESSION TEST" {
+    // This reproduces the bug seen in test/snapshots/pass/underscore_in_regular_annotations.md
+    // and test/snapshots/type_function_simple.md where a type annotation followed by its body
+    // creates TWO defs:
+    // 1. A def with e-anno-only for the annotation
+    // 2. A def with the actual lambda body
+    // This causes a DUPLICATE DEFINITION error
+    //
+    // NOTE: Using EXACT code from the snapshot that shows the bug!
+    const source =
+        \\app [main!] { pf: platform "platform.roc" }
+        \\
+        \\apply : (_a -> _b) -> _a -> _b
+        \\apply = |fn, x| fn(x)
+        \\
+        \\main! = |_| {}
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // Check for canonicalization problems - should be specifically DUPLICATE DEFINITION
+    const can_diagnostics = try test_env.module_env.getDiagnostics();
+    defer test_env.gpa.free(can_diagnostics);
+
+    var duplicate_def_found = false;
+    for (can_diagnostics) |diagnostic| {
+        var report = try test_env.module_env.diagnosticToReport(diagnostic, test_env.gpa, test_env.module_env.module_name);
+        defer report.deinit();
+
+        if (std.mem.indexOf(u8, report.title, "DUPLICATE DEFINITION") != null) {
+            duplicate_def_found = true;
+            break;
+        }
+    }
+
+    // The bug causes a DUPLICATE DEFINITION error - this test should FAIL when bug is present
+    if (duplicate_def_found) {
+        return error.TestUnexpectedResult;
+    }
+}

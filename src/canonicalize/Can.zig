@@ -1066,11 +1066,20 @@ pub fn canonicalizeFile(
                     break :blk try self.env.store.whereClauseSpanFrom(where_start);
                 } else null;
 
-                // Now, check the next stmt to see if it matches this anno
-                const next_i = i + 1;
-                if (next_i < ast_stmt_idxs.len) {
+                // Now, check the next non-malformed stmt to see if it matches this anno
+                // We need to skip malformed statements that might appear between the annotation and declaration
+                var next_i = i + 1;
+                while (next_i < ast_stmt_idxs.len) {
                     const next_stmt_id = ast_stmt_idxs[next_i];
                     const next_stmt = self.parse_ir.store.getStatement(next_stmt_id);
+
+                    // Skip malformed statements
+                    if (next_stmt == .malformed) {
+                        next_i += 1;
+                        continue;
+                    }
+
+                    // Found a non-malformed statement
                     switch (next_stmt) {
                         .decl => |decl| {
                             // Check if the declaration pattern matches the annotation name
@@ -1084,7 +1093,7 @@ pub fn canonicalizeFile(
                             } else false;
 
                             if (names_match) {
-                                // If so process it and increment i again
+                                // If so process it and increment i to skip past this decl
                                 i = next_i;
                                 _ = try self.canonicalizeStmtDecl(decl, TypeAnnoIdent{
                                     .name = name_ident,
@@ -1106,7 +1115,7 @@ pub fn canonicalizeFile(
                             }
                         },
                         else => {
-                            // If the next stmt does not match this annotation,
+                            // If the next non-malformed stmt is not a decl,
                             // create a Def with an e_anno_only body
                             const def_idx = try self.createAnnoOnlyDef(name_ident, type_anno_idx, where_clauses, region);
                             try self.env.store.addScratchDef(def_idx);
@@ -1119,6 +1128,7 @@ pub fn canonicalizeFile(
                             }
                         },
                     }
+                    break;
                 }
             },
             .malformed => |malformed| {

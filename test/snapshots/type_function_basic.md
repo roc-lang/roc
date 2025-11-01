@@ -15,7 +15,7 @@ main! = |_| {}
 # EXPECTED
 PARSE ERROR - type_function_basic.md:3:26:3:28
 PARSE ERROR - type_function_basic.md:3:29:3:31
-DUPLICATE DEFINITION - type_function_basic.md:4:1:4:6
+TYPE MISMATCH - type_function_basic.md:4:9:4:22
 # PROBLEMS
 **PARSE ERROR**
 Function types with multiple arrows need parentheses.
@@ -42,23 +42,19 @@ apply : (_a -> _b) -> _a -> _b
                             ^^
 
 
-**DUPLICATE DEFINITION**
-The name `apply` is being redeclared in this scope.
-
-The redeclaration is here:
-**type_function_basic.md:4:1:4:6:**
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_function_basic.md:4:9:4:22:**
 ```roc
 apply = |fn, x| fn(x)
 ```
-^^^^^
+        ^^^^^^^^^^^^^
 
-But `apply` was already defined here:
-**type_function_basic.md:3:1:3:25:**
-```roc
-apply : (_a -> _b) -> _a -> _b
-```
-^^^^^^^^^^^^^^^^^^^^^^^^
+It has the type:
+    _a -> _a, a -> _a_
 
+But the type annotation says it should have the type:
+    __a -> _b -> _a_
 
 # TOKENS
 ~~~zig
@@ -122,16 +118,6 @@ main! = |_| {}
 (can-ir
 	(d-let
 		(p-assign (ident "apply"))
-		(e-anno-only)
-		(annotation
-			(ty-fn (effectful false)
-				(ty-parens
-					(ty-fn (effectful false)
-						(ty-rigid-var (name "_a"))
-						(ty-rigid-var (name "_b"))))
-				(ty-rigid-var-lookup (ty-rigid-var (name "_a"))))))
-	(d-let
-		(p-assign (ident "apply"))
 		(e-lambda
 			(args
 				(p-assign (ident "fn"))
@@ -140,7 +126,14 @@ main! = |_| {}
 				(e-lookup-local
 					(p-assign (ident "fn")))
 				(e-lookup-local
-					(p-assign (ident "x"))))))
+					(p-assign (ident "x")))))
+		(annotation
+			(ty-fn (effectful false)
+				(ty-parens
+					(ty-fn (effectful false)
+						(ty-rigid-var (name "_a"))
+						(ty-rigid-var (name "_b"))))
+				(ty-rigid-var-lookup (ty-rigid-var (name "_a"))))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda
@@ -153,10 +146,8 @@ main! = |_| {}
 (inferred-types
 	(defs
 		(patt (type "Error"))
-		(patt (type "a -> b, a -> b"))
 		(patt (type "_arg -> {}")))
 	(expressions
 		(expr (type "Error"))
-		(expr (type "a -> b, a -> b"))
 		(expr (type "_arg -> {}"))))
 ~~~

@@ -19,7 +19,7 @@ PARSE ERROR - type_higher_order_multiple_vars.md:3:40:3:42
 PARSE ERROR - type_higher_order_multiple_vars.md:3:43:3:45
 PARSE ERROR - type_higher_order_multiple_vars.md:3:46:3:48
 PARSE ERROR - type_higher_order_multiple_vars.md:3:48:3:49
-DUPLICATE DEFINITION - type_higher_order_multiple_vars.md:4:1:4:8
+TYPE MISMATCH - type_higher_order_multiple_vars.md:4:11:4:29
 # PROBLEMS
 **PARSE ERROR**
 Function types with multiple arrows need parentheses.
@@ -93,23 +93,19 @@ compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
                                                ^
 
 
-**DUPLICATE DEFINITION**
-The name `compose` is being redeclared in this scope.
-
-The redeclaration is here:
-**type_higher_order_multiple_vars.md:4:1:4:8:**
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_higher_order_multiple_vars.md:4:11:4:29:**
 ```roc
 compose = |f, g| |x| f(g(x))
 ```
-^^^^^^^
+          ^^^^^^^^^^^^^^^^^^
 
-But `compose` was already defined here:
-**type_higher_order_multiple_vars.md:3:1:3:35:**
-```roc
-compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+It has the type:
+    _a -> _b, _a -> a -> _a -> _b_
 
+But the type annotation says it should have the type:
+    __b -> _c -> _a -> _b_
 
 # TOKENS
 ~~~zig
@@ -184,19 +180,6 @@ main! = |_| {}
 (can-ir
 	(d-let
 		(p-assign (ident "compose"))
-		(e-anno-only)
-		(annotation
-			(ty-fn (effectful false)
-				(ty-parens
-					(ty-fn (effectful false)
-						(ty-rigid-var (name "_b"))
-						(ty-rigid-var (name "_c"))))
-				(ty-parens
-					(ty-fn (effectful false)
-						(ty-rigid-var (name "_a"))
-						(ty-rigid-var-lookup (ty-rigid-var (name "_b"))))))))
-	(d-let
-		(p-assign (ident "compose"))
 		(e-lambda
 			(args
 				(p-assign (ident "f"))
@@ -215,7 +198,17 @@ main! = |_| {}
 							(e-lookup-local
 								(p-assign (ident "g")))
 							(e-lookup-local
-								(p-assign (ident "x")))))))))
+								(p-assign (ident "x"))))))))
+		(annotation
+			(ty-fn (effectful false)
+				(ty-parens
+					(ty-fn (effectful false)
+						(ty-rigid-var (name "_b"))
+						(ty-rigid-var (name "_c"))))
+				(ty-parens
+					(ty-fn (effectful false)
+						(ty-rigid-var (name "_a"))
+						(ty-rigid-var-lookup (ty-rigid-var (name "_b"))))))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda
@@ -228,10 +221,8 @@ main! = |_| {}
 (inferred-types
 	(defs
 		(patt (type "Error"))
-		(patt (type "a -> b, c -> a -> c -> b"))
 		(patt (type "_arg -> {}")))
 	(expressions
 		(expr (type "Error"))
-		(expr (type "a -> b, c -> a -> c -> b"))
 		(expr (type "_arg -> {}"))))
 ~~~

@@ -17,7 +17,6 @@ PARSE ERROR - type_function_multi_arg.md:3:27:3:28
 PARSE ERROR - type_function_multi_arg.md:3:40:3:42
 PARSE ERROR - type_function_multi_arg.md:3:42:3:43
 MALFORMED TYPE - type_function_multi_arg.md:3:27:3:39
-DUPLICATE DEFINITION - type_function_multi_arg.md:4:1:4:6
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_ty_anno_close_round`
@@ -60,24 +59,6 @@ This type annotation is malformed or contains invalid syntax.
 curry : (_a, _b -> _c) -> (_a -> _b -> _c)
 ```
                           ^^^^^^^^^^^^
-
-
-**DUPLICATE DEFINITION**
-The name `curry` is being redeclared in this scope.
-
-The redeclaration is here:
-**type_function_multi_arg.md:4:1:4:6:**
-```roc
-curry = |fn| |x| |y| fn(x, y)
-```
-^^^^^
-
-But `curry` was already defined here:
-**type_function_multi_arg.md:3:1:3:39:**
-```roc
-curry : (_a, _b -> _c) -> (_a -> _b -> _c)
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -149,17 +130,6 @@ main! = |_| {}
 (can-ir
 	(d-let
 		(p-assign (ident "curry"))
-		(e-anno-only)
-		(annotation
-			(ty-fn (effectful false)
-				(ty-parens
-					(ty-fn (effectful false)
-						(ty-rigid-var (name "_a"))
-						(ty-rigid-var (name "_b"))
-						(ty-rigid-var (name "_c"))))
-				(ty-malformed))))
-	(d-let
-		(p-assign (ident "curry"))
 		(e-lambda
 			(args
 				(p-assign (ident "fn")))
@@ -182,7 +152,15 @@ main! = |_| {}
 								(e-lookup-local
 									(p-assign (ident "x")))
 								(e-lookup-local
-									(p-assign (ident "y"))))))))))
+									(p-assign (ident "y")))))))))
+		(annotation
+			(ty-fn (effectful false)
+				(ty-parens
+					(ty-fn (effectful false)
+						(ty-rigid-var (name "_a"))
+						(ty-rigid-var (name "_b"))
+						(ty-rigid-var (name "_c"))))
+				(ty-malformed))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda
@@ -194,11 +172,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
-		(patt (type "a, b -> c -> a -> b -> c"))
+		(patt (type "_a, _b -> _c -> Error"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "Error"))
-		(expr (type "a, b -> c -> a -> b -> c"))
+		(expr (type "_a, _b -> _c -> Error"))
 		(expr (type "_arg -> {}"))))
 ~~~
