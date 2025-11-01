@@ -162,7 +162,6 @@ UNDEFINED VARIABLE - fuzz_crash_019.md:78:9:78:14
 UNDEFINED VARIABLE - fuzz_crash_019.md:80:3:80:6
 CRASH EXPECTS STRING - fuzz_crash_019.md:86:3:86:11
 UNDEFINED VARIABLE - fuzz_crash_019.md:87:11:87:12
-UNDEFINED VARIABLE - fuzz_crash_019.md:89:3:89:6
 UNDEFINED VARIABLE - fuzz_crash_019.md:92:11:92:15
 UNDEFINED VARIABLE - fuzz_crash_019.md:93:2:93:7
 UNDEFINED VARIABLE - fuzz_crash_019.md:94:3:94:6
@@ -582,17 +581,6 @@ Is there an `import` or `exposing` missing up-top?
 	i= "H, ${d}"
 ```
 	         ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `one` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**fuzz_crash_019.md:89:3:89:6:**
-```roc
-		one(er, 		),	456, # two
-```
-		^^^
 
 
 **UNDEFINED VARIABLE**
@@ -1614,6 +1602,11 @@ expect {
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign (ident "line"))
+		(e-anno-only)
+		(annotation
+			(ty-tuple)))
+	(d-let
 		(p-assign (ident "ane"))
 		(e-lambda
 			(args
@@ -1626,6 +1619,11 @@ expect {
 						(e-num (value "2"))))
 				(if-else
 					(e-num (value "5"))))))
+	(d-let
+		(p-assign (ident "one"))
+		(e-anno-only)
+		(annotation
+			(ty-malformed)))
 	(d-let
 		(p-assign (ident "add"))
 		(e-lambda
@@ -1758,10 +1756,16 @@ expect {
 							(value
 								(e-num (value "12")))))))))
 	(d-let
+		(p-assign (ident "main!"))
+		(e-anno-only)
+		(annotation
+			(ty-malformed)))
+	(d-let
 		(p-assign (ident "ma"))
 		(e-closure
 			(captures
-				(capture (ident "me")))
+				(capture (ident "me"))
+				(capture (ident "one")))
 			(e-lambda
 				(args
 					(p-underscore))
@@ -1801,7 +1805,8 @@ expect {
 						(e-list
 							(elems
 								(e-call
-									(e-runtime-error (tag "ident_not_in_scope"))
+									(e-lookup-local
+										(p-assign (ident "one")))
 									(e-lookup-local
 										(p-assign (ident "er"))))
 								(e-num (value "456"))
@@ -1919,8 +1924,18 @@ expect {
 									(e-runtime-error (tag "ident_not_in_scope")))
 								(e-literal (string " ")))))))))
 	(d-let
+		(p-assign (ident "y"))
+		(e-anno-only)
+		(annotation
+			(ty-record)))
+	(d-let
 		(p-assign (ident "e"))
 		(e-empty_record))
+	(d-let
+		(p-assign (ident "t"))
+		(e-anno-only)
+		(annotation
+			(ty-malformed)))
 	(s-alias-decl
 		(ty-header (name "Map")
 			(ty-args
@@ -1976,12 +1991,8 @@ expect {
 		(exposes))
 	(s-import (module "Ba")
 		(exposes))
-	(s-type-anno (name "line")
-		(ty-tuple))
 	(s-expect
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-type-anno (name "t")
-		(ty-malformed))
 	(s-expect
 		(e-block
 			(s-expr
@@ -1996,11 +2007,16 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
+		(patt (type "Error"))
 		(patt (type "Bool -> Num(_size)"))
+		(patt (type "Error"))
 		(patt (type "Bool -> Error"))
 		(patt (type "[Blue]_others, [Tb]_others2 -> Error"))
+		(patt (type "Error"))
 		(patt (type "_arg -> [Stdo!(Error)]_others"))
-		(patt (type "{}")))
+		(patt (type "Error"))
+		(patt (type "{}"))
+		(patt (type "Error")))
 	(type_decls
 		(alias (type "Map(a, b)")
 			(ty-header (name "Map")
@@ -2028,9 +2044,14 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
+		(expr (type "Error"))
 		(expr (type "Bool -> Num(_size)"))
+		(expr (type "Error"))
 		(expr (type "Bool -> Error"))
 		(expr (type "[Blue]_others, [Tb]_others2 -> Error"))
+		(expr (type "Error"))
 		(expr (type "_arg -> [Stdo!(Error)]_others"))
-		(expr (type "{}"))))
+		(expr (type "Error"))
+		(expr (type "{}"))
+		(expr (type "Error"))))
 ~~~

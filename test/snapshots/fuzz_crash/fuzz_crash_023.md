@@ -2416,6 +2416,11 @@ expect {
 		(e-empty_record)
 		(annotation
 			(ty-record)))
+	(d-let
+		(p-assign (ident "tuple"))
+		(e-anno-only)
+		(annotation
+			(ty-malformed)))
 	(s-alias-decl
 		(ty-header (name "Map")
 			(ty-args
@@ -2528,8 +2533,6 @@ expect {
 		(e-binop (op "eq")
 			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-num (value "1"))))
-	(s-type-anno (name "tuple")
-		(ty-malformed))
 	(s-expect
 		(e-block
 			(s-let
@@ -2552,7 +2555,8 @@ expect {
 		(patt (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(patt (type "[Red][Blue, Green]_others, _arg -> Error"))
 		(patt (type "List(Error) -> Error"))
-		(patt (type "{}")))
+		(patt (type "{}"))
+		(patt (type "Error")))
 	(type_decls
 		(alias (type "Map(a, b)")
 			(ty-header (name "Map")
@@ -2597,5 +2601,6 @@ expect {
 		(expr (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(expr (type "[Red][Blue, Green]_others, _arg -> Error"))
 		(expr (type "List(Error) -> Error"))
-		(expr (type "{}"))))
+		(expr (type "{}"))
+		(expr (type "Error"))))
 ~~~

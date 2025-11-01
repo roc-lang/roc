@@ -42,7 +42,6 @@ main = {
 # EXPECTED
 MODULE NOT FOUND - can_import_comprehensive.md:1:1:1:17
 MODULE NOT FOUND - can_import_comprehensive.md:2:1:2:48
-DUPLICATE DEFINITION - can_import_comprehensive.md:3:1:3:27
 MODULE NOT FOUND - can_import_comprehensive.md:3:1:3:27
 UNDEFINED VARIABLE - can_import_comprehensive.md:6:14:6:22
 UNDEFINED VARIABLE - can_import_comprehensive.md:7:14:7:23
@@ -73,24 +72,6 @@ You're attempting to use this module here:
 import http.Client as Http exposing [get, post]
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**DUPLICATE DEFINITION**
-The name `Str` is being redeclared in this scope.
-
-The redeclaration is here:
-**can_import_comprehensive.md:3:1:3:27:**
-```roc
-import utils.String as Str
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-But `Str` was already defined here:
-**can_import_comprehensive.md:1:1:1:1:**
-```roc
-import json.Json
-```
-^
 
 
 **MODULE NOT FOUND**

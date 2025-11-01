@@ -138,12 +138,9 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
     defer module_envs.deinit();
 
-    // Create temporary ident store for module name lookup
-    var temp_idents = try base.Ident.Store.initCapacity(gpa, 16);
-    defer temp_idents.deinit(gpa);
-
-    // Convert import name to Ident.Idx and add to module_envs
-    const import_ident = try temp_idents.insert(gpa, base.Ident.for_text(import_name));
+    // Convert import name to Ident.Idx using the MODULE's ident store (not a temporary one!)
+    // This is important because the canonicalizer will look up identifiers in this same store
+    const import_ident = try module_env.insertIdent(base.Ident.for_text(import_name));
     try module_envs.put(import_ident, .{ .env = imported_module });
 
     // Create canonicalizer with imports
@@ -154,10 +151,12 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     try czer.canonicalizeFile();
 
     // Set up other_envs for type checking (include Builtin module)
+    // IMPORTANT: Order matters! Builtin is auto-imported first (Import.Idx 0),
+    // then explicit imports follow in declaration order
     var imported_envs = std.ArrayList(*const ModuleEnv).empty;
     defer imported_envs.deinit(gpa);
-    try imported_envs.append(gpa, imported_module);
-    try imported_envs.append(gpa, builtin_module.env);
+    try imported_envs.append(gpa, builtin_module.env); // Builtin must be first (auto-import)
+    try imported_envs.append(gpa, imported_module); // Then explicit imports
 
     // Type check the module
     var checker = try Check.init(gpa, &module_env.types, module_env, imported_envs.items, &module_envs, &module_env.store.regions, common_idents);

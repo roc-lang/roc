@@ -53,9 +53,7 @@ nums : List
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(s-type-anno (name "nums")
-		(ty-lookup (name "List") (builtin))))
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure

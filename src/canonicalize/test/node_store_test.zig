@@ -370,6 +370,9 @@ test "NodeStore round trip - Expressions" {
     try expressions.append(gpa, CIR.Expr{
         .e_ellipsis = .{},
     });
+    try expressions.append(gpa, CIR.Expr{
+        .e_anno_only = .{},
+    });
 
     for (expressions.items, 0..) |expr, i| {
         const region = from_raw_offsets(@intCast(i * 100), @intCast(i * 100 + 50));

@@ -366,6 +366,28 @@ pub const Expr = union(enum) {
     /// ```
     e_anno_only: struct {},
 
+    /// A low-level builtin operation.
+    /// This represents a lambda/function that will be implemented by the compiler backend.
+    /// Like e_anno_only, it has no Roc implementation, but unlike e_anno_only,
+    /// it's expected to be implemented by the backend rather than being an error.
+    /// It behaves like e_lambda in that it has parameters and a body (which crashes when evaluated).
+    ///
+    /// ```roc
+    /// # Str.is_empty is a low-level operation
+    /// is_empty : Str -> Bool
+    /// ```
+    e_low_level_lambda: struct {
+        op: LowLevel,
+        args: CIR.Pattern.Span,
+        body: Expr.Idx,
+    },
+
+    /// Low-level builtin operations that are implemented by the compiler backend.
+    pub const LowLevel = enum {
+        str_is_empty,
+        set_is_empty,
+    };
+
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
@@ -1007,6 +1029,28 @@ pub const Expr = union(enum) {
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .e_low_level_lambda => |low_level| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-low-level-lambda");
+                const op_name = try std.fmt.allocPrint(ir.gpa, "{s}", .{@tagName(low_level.op)});
+                defer ir.gpa.free(op_name);
+                try tree.pushStringPair("op", op_name);
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                const args_begin = tree.beginNode();
+                try tree.pushStaticAtom("args");
+                const args_attrs = tree.beginNode();
+                for (ir.store.slicePatterns(low_level.args)) |arg_idx| {
+                    try ir.store.getPattern(arg_idx).pushToSExprTree(ir, tree, arg_idx);
+                }
+                try tree.endNode(args_begin, args_attrs);
+
+                try ir.store.getExpr(low_level.body).pushToSExprTree(ir, tree, low_level.body);
+
                 try tree.endNode(begin, attrs);
             },
             .e_crash => |e| {

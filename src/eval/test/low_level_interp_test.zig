@@ -1,8 +1,8 @@
-//! Tests for e_anno_only expression evaluation in the interpreter
+//! Tests for e_low_level_lambda expression evaluation in the interpreter
 //!
-//! These tests verify that standalone type annotations (which don't have implementations)
-//! are handled correctly by the interpreter - they crash immediately when accessed or called,
-//! regardless of whether they are function types or value types.
+//! These tests verify that low-level operations (like Str.is_empty) that are defined
+//! as type annotations transformed into e_low_level_lambda nodes dispatch to their
+//! actual builtin implementations when called.
 
 const std = @import("std");
 const parse = @import("parse");
@@ -99,10 +99,9 @@ fn cleanupEvalModule(result: anytype) void {
     builtin_module_mut.deinit();
 }
 
-test "e_anno_only - function crashes when called directly" {
+test "e_low_level_lambda - Str.is_empty returns True for empty string" {
     const src =
-        \\foo : Str -> Str
-        \\x = foo("test")
+        \\x = Str.is_empty("")
     ;
 
     var result = try parseCheckAndEvalModule(src);
@@ -110,75 +109,23 @@ test "e_anno_only - function crashes when called directly" {
 
     const summary = try result.evaluator.evalAll();
 
-    // Should evaluate 2 declarations with 1 crash (the call to foo should crash)
-    try testing.expectEqual(@as(u32, 2), summary.evaluated);
-    try testing.expectEqual(@as(u32, 1), summary.crashed);
-}
-
-test "e_anno_only - non-function crashes when accessed" {
-    const src =
-        \\bar : Str
-        \\x = bar
-    ;
-
-    var result = try parseCheckAndEvalModule(src);
-    defer cleanupEvalModule(&result);
-
-    const summary = try result.evaluator.evalAll();
-
-    // Should evaluate 2 declarations with 1 crash (accessing bar should crash)
-    try testing.expectEqual(@as(u32, 2), summary.evaluated);
-    try testing.expectEqual(@as(u32, 1), summary.crashed);
-}
-
-test "e_anno_only - function only crashes when called (True branch)" {
-    const src =
-        \\foo : Str -> Str
-        \\x = if True {
-        \\    foo("test")
-        \\} else {
-        \\    "not called"
-        \\}
-    ;
-
-    var result = try parseCheckAndEvalModule(src);
-    defer cleanupEvalModule(&result);
-
-    const summary = try result.evaluator.evalAll();
-
-    // Should evaluate 2 declarations with 1 crash (foo is called in True branch)
-    try testing.expectEqual(@as(u32, 2), summary.evaluated);
-    try testing.expectEqual(@as(u32, 1), summary.crashed);
-}
-
-test "e_anno_only - function only crashes when called (False branch)" {
-    const src =
-        \\foo : Str -> Str
-        \\x = if False {
-        \\    foo("test")
-        \\} else {
-        \\    "not called"
-        \\}
-    ;
-
-    var result = try parseCheckAndEvalModule(src);
-    defer cleanupEvalModule(&result);
-
-    const summary = try result.evaluator.evalAll();
-
-    // Should evaluate 2 declarations with 0 crashes (foo is NOT called in False branch)
-    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    // Should evaluate 1 declaration with 0 crashes (Str.is_empty actually works)
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify the result is True
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    const def = result.module_env.store.getDef(defs[0]);
+    const expr = result.module_env.store.getExpr(def.expr);
+
+    try testing.expect(expr == .e_zero_argument_tag);
+    const tag_name = result.module_env.getIdent(expr.e_zero_argument_tag.ident);
+    try testing.expectEqualStrings("True", tag_name);
 }
 
-test "e_anno_only - value only crashes when accessed (True branch)" {
+test "e_low_level_lambda - Str.is_empty returns False for non-empty string" {
     const src =
-        \\bar : Str
-        \\x = if True {
-        \\    bar
-        \\} else {
-        \\    "not accessed"
-        \\}
+        \\x = Str.is_empty("hello")
     ;
 
     var result = try parseCheckAndEvalModule(src);
@@ -186,27 +133,44 @@ test "e_anno_only - value only crashes when accessed (True branch)" {
 
     const summary = try result.evaluator.evalAll();
 
-    // Should evaluate 2 declarations with 1 crash (bar is accessed in True branch)
-    try testing.expectEqual(@as(u32, 2), summary.evaluated);
-    try testing.expectEqual(@as(u32, 1), summary.crashed);
-}
-
-test "e_anno_only - value only crashes when accessed (False branch)" {
-    const src =
-        \\bar : Str
-        \\x = if False {
-        \\    bar
-        \\} else {
-        \\    "not accessed"
-        \\}
-    ;
-
-    var result = try parseCheckAndEvalModule(src);
-    defer cleanupEvalModule(&result);
-
-    const summary = try result.evaluator.evalAll();
-
-    // Should evaluate 2 declarations with 0 crashes (bar is NOT accessed in False branch)
-    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    // Should evaluate 1 declaration with 0 crashes (Str.is_empty actually works)
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify the result is False
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    const def = result.module_env.store.getDef(defs[0]);
+    const expr = result.module_env.store.getExpr(def.expr);
+
+    try testing.expect(expr == .e_zero_argument_tag);
+    const tag_name = result.module_env.getIdent(expr.e_zero_argument_tag.ident);
+    try testing.expectEqualStrings("False", tag_name);
+}
+
+test "e_low_level_lambda - Str.is_empty in conditional" {
+    const src =
+        \\x = if True {
+        \\    Str.is_empty("")
+        \\} else {
+        \\    False
+        \\}
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 1 declaration with 0 crashes (Str.is_empty actually works)
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify the result is True (True branch taken, Str.is_empty("") returns True)
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    const def = result.module_env.store.getDef(defs[0]);
+    const expr = result.module_env.store.getExpr(def.expr);
+
+    try testing.expect(expr == .e_zero_argument_tag);
+    const tag_name = result.module_env.getIdent(expr.e_zero_argument_tag.ident);
+    try testing.expectEqualStrings("True", tag_name);
 }

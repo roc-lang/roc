@@ -93,6 +93,118 @@ fn transformStrNominalToPrimitive(env: *ModuleEnv) !void {
     }
 }
 
+/// Replace specific e_anno_only expressions with e_low_level_lambda operations.
+/// This transforms standalone annotations into low-level builtin lambda operations
+/// that will be recognized by the compiler backend.
+/// Returns a list of new def indices created.
+fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
+    const gpa = env.gpa;
+    var new_def_indices = std.ArrayList(CIR.Def.Idx).empty;
+
+    // Ensure types array has entries for all existing nodes
+    // This is necessary because varFrom(node_idx) assumes type_var index == node index
+    const current_nodes = env.store.nodes.len();
+    const current_types = env.types.len();
+    if (current_types < current_nodes) {
+        // Fill the gap with fresh type variables
+        var i: u64 = current_types;
+        while (i < current_nodes) : (i += 1) {
+            _ = env.types.fresh() catch unreachable;
+        }
+    }
+
+    // Build a hashmap of (qualified name -> low-level operation)
+    var low_level_map = std.AutoHashMap(base.Ident.Idx, CIR.Expr.LowLevel).init(gpa);
+    defer low_level_map.deinit();
+
+    // Add all low-level operations to the map using full qualified names
+    // Associated items are stored as defs with qualified names like "Builtin.Str.is_empty"
+    // We need to find the actual ident that was created during canonicalization
+    if (env.common.findIdent("Builtin.Str.is_empty")) |str_is_empty_ident| {
+        try low_level_map.put(str_is_empty_ident, .str_is_empty);
+    }
+
+    // Iterate through all defs and replace matching anno-only defs with low-level implementations
+    const all_defs = env.store.sliceDefs(env.all_defs);
+    for (all_defs) |def_idx| {
+        const def = env.store.getDef(def_idx);
+        const expr = env.store.getExpr(def.expr);
+
+        // Check if this is an anno-only def (e_anno_only expression)
+        if (expr == .e_anno_only and def.annotation != null) {
+            // Get the identifier from the pattern
+            const pattern = env.store.getPattern(def.pattern);
+            if (pattern == .assign) {
+                const ident = pattern.assign.ident;
+
+                // Check if this identifier matches a low-level operation
+                if (low_level_map.fetchRemove(ident)) |entry| {
+                    const low_level_op = entry.value;
+
+                    // Create a dummy parameter pattern for the lambda
+                    // Use the identifier "_arg" for the parameter
+                    const arg_ident = env.common.findIdent("_arg") orelse try env.common.insertIdent(gpa, base.Ident.for_text("_arg"));
+                    const arg_pattern_idx = try env.addPattern(.{ .assign = .{ .ident = arg_ident } }, base.Region.zero());
+
+                    // Create a pattern span containing just this one parameter
+                    const patterns_start = env.store.scratchTop("patterns");
+                    try env.store.scratch.?.patterns.append(arg_pattern_idx);
+                    const args_span = CIR.Pattern.Span{ .span = .{ .start = @intCast(patterns_start), .len = 1 } };
+
+                    // Create an e_runtime_error body that crashes when the function is called
+                    const error_msg_lit = try env.insertString("Low-level builtin not yet implemented in interpreter");
+                    const diagnostic_idx = try env.addDiagnostic(.{ .not_implemented = .{
+                        .feature = error_msg_lit,
+                        .region = base.Region.zero(),
+                    } });
+                    const body_idx = try env.addExpr(.{ .e_runtime_error = .{ .diagnostic = diagnostic_idx } }, base.Region.zero());
+
+                    // Create e_low_level_lambda expression
+                    const expr_idx = try env.addExpr(.{ .e_low_level_lambda = .{
+                        .op = low_level_op,
+                        .args = args_span,
+                        .body = body_idx,
+                    } }, base.Region.zero());
+
+                    // Now replace the e_anno_only expression with the e_low_level_lambda
+                    // We need to modify the def's expr field to point to our new expression
+                    // CIR.Def.Idx and Node.Idx have the same underlying representation
+                    const def_node_idx = @as(@TypeOf(env.store.nodes).Idx, @enumFromInt(@intFromEnum(def_idx)));
+                    var def_node = env.store.nodes.get(def_node_idx);
+                    def_node.data_2 = @intFromEnum(expr_idx);
+                    env.store.nodes.set(def_node_idx, def_node);
+
+                    // Track this replaced def index
+                    try new_def_indices.append(gpa, def_idx);
+                }
+            }
+        }
+    }
+
+    // Verify all low-level operations were found in the builtins
+    if (low_level_map.count() > 0) {
+        var missing_buf = try std.ArrayList(u8).initCapacity(gpa, 512);
+        defer missing_buf.deinit(gpa);
+        const writer = missing_buf.writer(gpa);
+
+        try writer.writeAll("\n\nError: The following low-level operations were not found in Builtin.roc:\n");
+        var iter = low_level_map.iterator();
+        while (iter.next()) |entry| {
+            const ident_text = env.getIdentText(entry.key_ptr.*);
+            const op_name = @tagName(entry.value_ptr.*);
+            try writer.print("  - {s} (mapped to .{s})\n", .{ ident_text, op_name });
+        }
+        try writer.writeAll("\nEither:\n");
+        try writer.writeAll("  1. Remove the obsolete entry from the low_level_map in builtin_compiler/main.zig, OR\n");
+        try writer.writeAll("  2. Add a standalone type annotation to Builtin.roc for it to match\n\n");
+
+        std.debug.print("{s}", .{missing_buf.items});
+        return error.LowLevelOperationsNotFound;
+    }
+
+    return new_def_indices;
+}
+
 /// Transform all List nominal types to .list primitive types in a module.
 /// This is similar to transformStrNominalToPrimitive but handles List's type parameter.
 ///
@@ -342,6 +454,84 @@ fn compileModule(
 
     try can_result.canonicalizeFile();
     try can_result.validateForChecking();
+
+    // Check for canonicalization errors
+    const can_diagnostics = try module_env.getDiagnostics();
+    defer gpa.free(can_diagnostics);
+    if (can_diagnostics.len > 0) {
+        std.debug.print("Canonicalization errors in {s}:\n", .{module_name});
+        for (can_diagnostics) |diag| {
+            switch (diag) {
+                .undeclared_type => |d| {
+                    const type_name = module_env.getIdentText(d.name);
+                    std.debug.print("  - Undeclared type: {s}\n", .{type_name});
+                },
+                .nested_value_not_found => |d| {
+                    const parent = module_env.getIdentText(d.parent_name);
+                    const nested = module_env.getIdentText(d.nested_name);
+                    std.debug.print("  - Nested value not found: {s}.{s}\n", .{ parent, nested });
+                },
+                else => {
+                    std.debug.print("  - Diagnostic: {any}\n", .{diag});
+                },
+            }
+        }
+        return error.CanonicalizeError;
+    }
+
+    // 5.5. Transform low-level operations (must happen before type checking)
+    // For the Builtin module, transform annotation-only defs into low-level operations
+    if (std.mem.eql(u8, module_name, "Builtin")) {
+        // Transform annotation-only defs and get the list of new def indices
+        var new_def_indices = try replaceStrIsEmptyWithLowLevel(module_env);
+        defer new_def_indices.deinit(gpa);
+
+        if (new_def_indices.items.len > 0) {
+            // Rebuild all_defs span to include both old and new defs
+            // First, get the old def indices from extra_data
+            const old_span = module_env.all_defs.span;
+            const old_def_count = old_span.len;
+
+            // Allocate new space in extra_data for all defs (old + new)
+            const new_span_start: u32 = @intCast(module_env.store.extra_data.len());
+
+            // Copy old def indices
+            var i: u32 = 0;
+            while (i < old_def_count) : (i += 1) {
+                const idx = @as(collections.SafeList(u32).Idx, @enumFromInt(old_span.start + i));
+                const old_def_idx = module_env.store.extra_data.get(idx).*;
+                _ = try module_env.store.extra_data.append(gpa, old_def_idx);
+            }
+
+            // Append new def indices
+            for (new_def_indices.items) |new_def_idx| {
+                _ = try module_env.store.extra_data.append(gpa, @intFromEnum(new_def_idx));
+            }
+
+            // Update all_defs to point to the new span
+            module_env.all_defs.span.start = new_span_start;
+            module_env.all_defs.span.len = old_def_count + @as(u32, @intCast(new_def_indices.items.len));
+
+            // Rebuild the dependency graph and evaluation order to include new defs
+            const DependencyGraph = @import("can").DependencyGraph;
+            var graph = try DependencyGraph.buildDependencyGraph(
+                module_env,
+                module_env.all_defs,
+                gpa,
+            );
+            defer graph.deinit();
+
+            const eval_order = try DependencyGraph.computeSCCs(&graph, gpa);
+            // Free the old evaluation order if it exists
+            if (module_env.evaluation_order) |old_order| {
+                old_order.deinit();
+                gpa.destroy(old_order);
+            }
+            const eval_order_ptr = try gpa.create(DependencyGraph.EvaluationOrder);
+            eval_order_ptr.* = eval_order;
+            module_env.evaluation_order = eval_order_ptr;
+        }
+    }
 
     // 6. Type check
     // Build the list of other modules for type checking

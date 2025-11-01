@@ -17,7 +17,6 @@ PARSE ERROR - inline_ingested_file.md:1:19:1:20
 PARSE ERROR - inline_ingested_file.md:1:21:1:23
 MODULE NOT FOUND - inline_ingested_file.md:2:1:2:12
 UNDEFINED VARIABLE - inline_ingested_file.md:4:7:4:17
-UNDEFINED VARIABLE - inline_ingested_file.md:4:18:4:22
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `incomplete_import`
@@ -85,17 +84,6 @@ foo = Json.parse(data)
       ^^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `data` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**inline_ingested_file.md:4:18:4:22:**
-```roc
-foo = Json.parse(data)
-```
-                 ^^^^
-
-
 # TOKENS
 ~~~zig
 KwImport,StringStart,StringPart,StringEnd,KwAs,LowerIdent,OpColon,UpperIdent,
@@ -132,12 +120,16 @@ foo = Json.parse(data)
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign (ident "data"))
+		(e-anno-only)
+		(annotation
+			(ty-lookup (name "Str") (builtin))))
+	(d-let
 		(p-assign (ident "foo"))
 		(e-call
 			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-runtime-error (tag "ident_not_in_scope"))))
-	(s-type-anno (name "data")
-		(ty-lookup (name "Str") (builtin)))
+			(e-lookup-local
+				(p-assign (ident "data")))))
 	(s-import (module "Json")
 		(exposes)))
 ~~~
@@ -145,7 +137,9 @@ foo = Json.parse(data)
 ~~~clojure
 (inferred-types
 	(defs
+		(patt (type "Error"))
 		(patt (type "Error")))
 	(expressions
+		(expr (type "Error"))
 		(expr (type "Error"))))
 ~~~

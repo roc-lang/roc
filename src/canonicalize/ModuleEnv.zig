@@ -2176,6 +2176,30 @@ pub fn insertIdent(self: *Self, ident: Ident) std.mem.Allocator.Error!Ident.Idx 
     return try self.common.insertIdent(self.gpa, ident);
 }
 
+/// Creates and inserts a qualified identifier (e.g., "Foo.bar") into the common environment.
+/// This handles the full lifecycle: building the qualified name, creating the Ident,
+/// inserting it into the store, and cleaning up any temporary allocations.
+/// All memory management is handled internally with no caller obligations.
+pub fn insertQualifiedIdent(
+    self: *Self,
+    parent: []const u8,
+    child: []const u8,
+) std.mem.Allocator.Error!Ident.Idx {
+    const total_len = parent.len + 1 + child.len; // parent + '.' + child
+
+    if (total_len <= 256) {
+        // Use stack buffer for small identifiers
+        var buf: [256]u8 = undefined;
+        const qualified = std.fmt.bufPrint(&buf, "{s}.{s}", .{ parent, child }) catch unreachable;
+        return try self.insertIdent(Ident.for_text(qualified));
+    } else {
+        // Use heap allocation for large identifiers
+        const qualified = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ parent, child });
+        defer self.gpa.free(qualified);
+        return try self.insertIdent(Ident.for_text(qualified));
+    }
+}
+
 /// Returns the line start positions for source code position mapping.
 /// Each element represents the byte offset where a new line begins.
 pub fn getLineStarts(self: *const Self) []const u32 {
