@@ -1068,13 +1068,17 @@ pub fn canonicalizeFile(
 
                 // Now, check the next non-malformed stmt to see if it matches this anno
                 // We need to skip malformed statements that might appear between the annotation and declaration
+                // If we encounter malformed statements, it means the annotation itself had parse errors,
+                // so we should not attach it to the declaration to avoid confusing type errors
                 var next_i = i + 1;
+                var skipped_malformed = false;
                 while (next_i < ast_stmt_idxs.len) {
                     const next_stmt_id = ast_stmt_idxs[next_i];
                     const next_stmt = self.parse_ir.store.getStatement(next_stmt_id);
 
                     // Skip malformed statements
                     if (next_stmt == .malformed) {
+                        skipped_malformed = true;
                         next_i += 1;
                         continue;
                     }
@@ -1093,9 +1097,10 @@ pub fn canonicalizeFile(
                             } else false;
 
                             if (names_match) {
-                                // If so process it and increment i to skip past this decl
                                 i = next_i;
-                                _ = try self.canonicalizeStmtDecl(decl, TypeAnnoIdent{
+                                // If we skipped malformed statements, the annotation had parse errors;
+                                // don't attach it (to avoid confusing type mismatch errors).
+                                _ = try self.canonicalizeStmtDecl(decl, if (skipped_malformed) null else TypeAnnoIdent{
                                     .name = name_ident,
                                     .anno_idx = type_anno_idx,
                                     .where = where_clauses,

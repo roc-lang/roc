@@ -39,7 +39,6 @@ transform = |_, b| b
 PARSE ERROR - underscore_in_regular_annotations.md:28:22:28:24
 PARSE ERROR - underscore_in_regular_annotations.md:28:25:28:27
 UNUSED VARIABLE - underscore_in_regular_annotations.md:9:12:9:16
-TYPE MISMATCH - underscore_in_regular_annotations.md:29:13:29:21
 # PROBLEMS
 **PARSE ERROR**
 Function types with multiple arrows need parentheses.
@@ -77,20 +76,6 @@ process = |list| "processed"
 ```
            ^^^^
 
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**underscore_in_regular_annotations.md:29:13:29:21:**
-```roc
-transform = |_, b| b
-```
-            ^^^^^^^^
-
-It has the type:
-    __arg, _b -> _b_
-
-But the type annotation says it should have the type:
-    __a -> _b_
 
 # TOKENS
 ~~~zig
@@ -369,11 +354,7 @@ transform = |_, b| b
 				(p-underscore)
 				(p-assign (ident "b")))
 			(e-lookup-local
-				(p-assign (ident "b"))))
-		(annotation
-			(ty-fn (effectful false)
-				(ty-rigid-var (name "_a"))
-				(ty-rigid-var (name "_b"))))))
+				(p-assign (ident "b"))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -385,7 +366,7 @@ transform = |_, b| b
 		(patt (type "{ field: _field2, other: Num(Int(Unsigned32)) } -> Num(Int(Unsigned32))"))
 		(patt (type "Try(_c, Str) -> Str"))
 		(patt (type "a -> b, List(a) -> List(b)"))
-		(patt (type "Error")))
+		(patt (type "_arg, c -> c")))
 	(expressions
 		(expr (type "_arg -> _ret"))
 		(expr (type "a -> a"))
@@ -393,5 +374,5 @@ transform = |_, b| b
 		(expr (type "{ field: _field2, other: Num(Int(Unsigned32)) } -> Num(Int(Unsigned32))"))
 		(expr (type "Try(_c, Str) -> Str"))
 		(expr (type "a -> b, List(a) -> List(b)"))
-		(expr (type "Error"))))
+		(expr (type "_arg, c -> c"))))
 ~~~
