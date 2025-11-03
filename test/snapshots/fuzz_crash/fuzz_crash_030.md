@@ -24,7 +24,7 @@ ar,
 ~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_030.md:8:5:8:6
-PARSE ERROR - fuzz_crash_030.md:12:8:12:9
+EXPECTED CLOSING BRACE - fuzz_crash_030.md:12:8:12:9
 PARSE ERROR - fuzz_crash_030.md:12:9:12:12
 PARSE ERROR - fuzz_crash_030.md:12:12:12:13
 PARSE ERROR - fuzz_crash_030.md:12:13:12:14
@@ -47,9 +47,9 @@ This is an unexpected parsing error. Please check your syntax.
 		  ^
 
 
-**PARSE ERROR**
-A parsing error occurred: `expected_packages_close_curly`
-This is an unexpected parsing error. Please check your syntax.
+**EXPECTED CLOSING BRACE**
+Platform headers must have a `packages` section that lists package dependencies.
+For example:     packages { base: "../base/main.roc" }
 
 **fuzz_crash_030.md:12:8:12:9:**
 ```roc
