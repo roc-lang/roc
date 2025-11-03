@@ -120,48 +120,25 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     // Add all low-level operations to the map using full qualified names
     // Associated items are stored as defs with qualified names like "Builtin.Str.is_empty"
     // We need to find the actual ident that was created during canonicalization
-    std.debug.print("[builtin_compiler] Looking for ident 'Builtin.Str.is_empty'\n", .{});
     if (env.common.findIdent("Builtin.Str.is_empty")) |str_is_empty_ident| {
-        std.debug.print("[builtin_compiler] Found ident {}, adding to low_level_map\n", .{str_is_empty_ident});
         try low_level_map.put(str_is_empty_ident, .str_is_empty);
-    } else {
-        std.debug.print("[builtin_compiler] ERROR: Could not find ident 'Builtin.Str.is_empty'\n", .{});
     }
 
     // Iterate through all defs and replace matching anno-only defs with low-level implementations
     const all_defs = env.store.sliceDefs(env.all_defs);
-    std.debug.print("[builtin_compiler] Iterating through {d} defs\n", .{all_defs.len});
-
-    // Debug: check what def 174 is
-    if (all_defs.len > 174) {
-        const def_174_idx: CIR.Def.Idx = @enumFromInt(174);
-        const def_174 = env.store.getDef(def_174_idx);
-        const expr_174 = env.store.getExpr(def_174.expr);
-        const pattern_174 = env.store.getPattern(def_174.pattern);
-        if (pattern_174 == .assign) {
-            const ident_174_text = env.common.getIdent(pattern_174.assign.ident);
-            std.debug.print("[builtin_compiler] DEBUG: def 174 is '{s}', expr type: {s}\n", .{ ident_174_text, @tagName(expr_174) });
-        }
-    }
-
-    var anno_only_count: usize = 0;
     for (all_defs) |def_idx| {
         const def = env.store.getDef(def_idx);
         const expr = env.store.getExpr(def.expr);
 
         // Check if this is an anno-only def (e_anno_only expression)
         if (expr == .e_anno_only and def.annotation != null) {
-            anno_only_count += 1;
             // Get the identifier from the pattern
             const pattern = env.store.getPattern(def.pattern);
             if (pattern == .assign) {
                 const ident = pattern.assign.ident;
-                const ident_text = env.common.getIdent(ident);
-                std.debug.print("[builtin_compiler] Found anno_only def #{d}: '{s}'\n", .{ anno_only_count, ident_text });
 
                 // Check if this identifier matches a low-level operation
                 if (low_level_map.fetchRemove(ident)) |entry| {
-                    std.debug.print("[builtin_compiler] MATCHED! Replacing def_idx={d} with low_level_lambda\n", .{@intFromEnum(def_idx)});
                     const low_level_op = entry.value;
 
                     // Create a dummy parameter pattern for the lambda
@@ -191,21 +168,11 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
 
                     // Now replace the e_anno_only expression with the e_low_level_lambda
                     // We need to modify the def's expr field to point to our new expression
-                    // The expr is stored in extra_data[1] (not in data_2!)
+                    // CIR.Def.Idx and Node.Idx have the same underlying representation
                     const def_node_idx = @as(@TypeOf(env.store.nodes).Idx, @enumFromInt(@intFromEnum(def_idx)));
-                    const def_node = env.store.nodes.get(def_node_idx);
-                    const extra_start = def_node.data_1;
-                    // extra_data layout for def: [0] = pattern, [1] = expr, [2] = annotation_opt, [3] = kind
-                    const old_expr_idx = env.store.extra_data.items.items[extra_start + 1];
-                    std.debug.print("[builtin_compiler] Before: extra_data[{d}+1] = {d}\n", .{ extra_start, old_expr_idx });
-                    env.store.extra_data.items.items[extra_start + 1] = @intFromEnum(expr_idx);
-                    const new_expr_idx = env.store.extra_data.items.items[extra_start + 1];
-                    std.debug.print("[builtin_compiler] After: extra_data[{d}+1] = {d}\n", .{ extra_start, new_expr_idx });
-
-                    // Verify by reading back
-                    const verify_def = env.store.getDef(def_idx);
-                    const verify_expr = env.store.getExpr(verify_def.expr);
-                    std.debug.print("[builtin_compiler] Verification: def.expr type is now: {s}\n", .{@tagName(verify_expr)});
+                    var def_node = env.store.nodes.get(def_node_idx);
+                    def_node.data_2 = @intFromEnum(expr_idx);
+                    env.store.nodes.set(def_node_idx, def_node);
 
                     // Track this replaced def index
                     try new_def_indices.append(gpa, def_idx);
@@ -512,10 +479,9 @@ fn compileModule(
         return error.CanonicalizeError;
     }
 
-    // 5.5. Transform low-level operations (must happen after canonicalization)
+    // 5.5. Transform low-level operations (must happen before type checking)
     // For the Builtin module, transform annotation-only defs into low-level operations
     if (std.mem.eql(u8, module_name, "Builtin")) {
-        std.debug.print("[builtin_compiler] AFTER canonicalization, module has {d} defs\n", .{module_env.all_defs.span.len});
         // Transform annotation-only defs and get the list of new def indices
         var new_def_indices = try replaceStrIsEmptyWithLowLevel(module_env);
         defer new_def_indices.deinit(gpa);
@@ -597,22 +563,6 @@ fn compileModule(
             std.debug.print("  - Problem: {any}\n", .{prob});
         }
         return error.TypeCheckError;
-    }
-
-    if (std.mem.eql(u8, module_name, "Builtin")) {
-        std.debug.print("[builtin_compiler] AFTER type checking, module has {d} defs\n", .{module_env.all_defs.span.len});
-        // Check def 174 if it exists
-        const all_defs_after = module_env.store.sliceDefs(module_env.all_defs);
-        if (all_defs_after.len > 174) {
-            const def_174_idx: CIR.Def.Idx = @enumFromInt(174);
-            const def_174 = module_env.store.getDef(def_174_idx);
-            const expr_174 = module_env.store.getExpr(def_174.expr);
-            const pattern_174 = module_env.store.getPattern(def_174.pattern);
-            if (pattern_174 == .assign) {
-                const ident_174_text = module_env.common.getIdent(pattern_174.assign.ident);
-                std.debug.print("[builtin_compiler] def 174 is '{s}', expr type: {s}\n", .{ ident_174_text, @tagName(expr_174) });
-            }
-        }
     }
 
     return module_env;

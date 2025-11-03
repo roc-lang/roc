@@ -1576,9 +1576,7 @@ pub const Interpreter = struct {
                     false,
                 );
 
-                const func_val = self.evalExprMinimal(func_idx, roc_ops, null) catch |err| {
-                    return err;
-                };
+                const func_val = try self.evalExprMinimal(func_idx, roc_ops, null);
 
                 var arg_values = try self.allocator.alloc(StackValue, arg_indices.len);
                 defer self.allocator.free(arg_values);
@@ -1602,7 +1600,7 @@ pub const Interpreter = struct {
                     // Check if this is an annotation-only function (body points to e_anno_only)
                     const body_expr = self.env.store.getExpr(header.body_idx);
                     if (body_expr == .e_anno_only) {
-                        self.triggerCrash("This function has only a type annotation for now.", false, roc_ops);
+                        self.triggerCrash("This function has no implementation. It is only a type annotation for now.", false, roc_ops);
                         return error.Crash;
                     }
 
@@ -1796,26 +1794,10 @@ pub const Interpreter = struct {
 
                 // Find the nominal type's origin module from the receiver type
                 const receiver_resolved = self.runtime_types.resolveVar(receiver_rt_var);
-
-                // Special case for primitive Str type - treat it as if it's the Builtin module's Str nominal
-                const NominalInfo = struct {
-                    origin: base_pkg.Ident.Idx,
-                    ident: base_pkg.Ident.Idx,
-                };
-                const nominal_info: NominalInfo = blk: {
+                const nominal_info = blk: {
                     switch (receiver_resolved.desc.content) {
                         .structure => |s| switch (s) {
-                            .str => {
-                                // Str primitive - look up method in Builtin module
-                                // Find "Builtin" in the current module's ident store (should exist due to synthetic import)
-                                const builtin_origin_ident = self.env.common.findIdent("Builtin") orelse return error.MethodNotFound;
-                                const str_ident = self.env.common.findIdent("Str") orelse return error.MethodNotFound;
-                                break :blk NominalInfo{
-                                    .origin = builtin_origin_ident,
-                                    .ident = str_ident,
-                                };
-                            },
-                            .nominal_type => |nom| break :blk NominalInfo{
+                            .nominal_type => |nom| break :blk .{
                                 .origin = nom.origin_module,
                                 .ident = nom.ident.ident_idx,
                             },
@@ -1998,30 +1980,13 @@ pub const Interpreter = struct {
             },
             .e_lookup_external => |lookup| {
                 // Cross-module reference - look up in imported module
-                std.debug.print("e_lookup_external: module_idx={d}, target_node_idx={d}\n", .{
-                    @intFromEnum(lookup.module_idx),
-                    lookup.target_node_idx,
-                });
                 const other_env = self.import_envs.get(lookup.module_idx) orelse {
-                    std.debug.print("  module not found in import_envs!\n", .{});
                     return error.NotImplemented;
                 };
-                std.debug.print("  found module: {s}, total defs: {d}\n", .{other_env.module_name, other_env.all_defs.span.len});
-
-                // Check what "Builtin.Str.is_empty" maps to in this module
-                if (std.mem.eql(u8, other_env.module_name, "Builtin")) {
-                    if (other_env.common.findIdent("Builtin.Str.is_empty")) |ident| {
-                        const mapped_idx = other_env.getExposedNodeIndexById(ident);
-                        std.debug.print("  'Builtin.Str.is_empty' maps to node_idx: {?d}\n", .{mapped_idx});
-                    }
-                }
 
                 // The target_node_idx is a Def.Idx in the other module
                 const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
                 const target_def = other_env.store.getDef(target_def_idx);
-                const target_expr = other_env.store.getExpr(target_def.expr);
-
-                std.debug.print("  def_idx={d}, expr type: {s}\n", .{lookup.target_node_idx, @tagName(target_expr)});
 
                 // Save both env and bindings state
                 const saved_env = self.env;
@@ -2190,7 +2155,6 @@ pub const Interpreter = struct {
     }
 
     fn callLowLevelBuiltin(self: *Interpreter, op: can.CIR.Expr.LowLevel, args: []StackValue, ret_rt_var: types.Var, roc_ops: *RocOps) !StackValue {
-        std.debug.print("callLowLevelBuiltin: op={s}, args.len={d}\n", .{ @tagName(op), args.len });
         switch (op) {
             .str_is_empty => {
                 // Str.is_empty : Str -> Bool

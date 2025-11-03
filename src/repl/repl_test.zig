@@ -380,52 +380,32 @@ test "Repl - Str.is_empty should work - REGRESSION TEST" {
 }
 
 // REGRESSION TEST: anno_only_crash snapshot behavior
-test "Repl - standalone annotation creates e_anno_only def - REGRESSION TEST" {
+test "Repl - standalone annotation should crash, then call should fail - REGRESSION TEST" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
     var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
     defer repl.deinit();
 
-    // Enter a standalone type annotation
-    const result = try repl.step("foo : Str -> Str");
-    defer std.testing.allocator.free(result);
+    // Line 1: foo : Str -> Str
+    const result1 = try repl.step("foo : Str -> Str");
+    defer std.testing.allocator.free(result1);
 
-    // Should accept it without crashing - standalone annotations are valid
-    // The REPL should have created a definition for 'foo' with e_anno_only as the body
-
-    // Get the last module env to inspect what was created
-    const module_env = repl.getLastModuleEnv() orelse {
-        std.debug.print("\nNo module env was created\n", .{});
-        return error.TestUnexpectedResult;
-    };
-
-    // Should have one definition for 'foo'
-    const defs = module_env.store.sliceDefs(module_env.all_defs);
-    const stmts = module_env.store.sliceStatements(module_env.all_statements);
-    std.debug.print("\nGot {d} defs and {d} stmts\n", .{ defs.len, stmts.len });
-    if (defs.len != 1) {
-        std.debug.print("Expected 1 def, got {d}\n", .{defs.len});
-        for (stmts) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
-            std.debug.print("Statement type: {s}\n", .{@tagName(stmt)});
-        }
+    // Should crash with "Crash: runtime error"
+    if (std.mem.indexOf(u8, result1, "Crash") == null) {
+        std.debug.print("\nexpected crash, got: {s}\n", .{result1});
         return error.TestUnexpectedResult;
     }
+    try testing.expect(std.mem.indexOf(u8, result1, "runtime error") != null);
 
-    std.debug.print("Getting def at index {d}\n", .{@intFromEnum(defs[0])});
-    const def = module_env.store.getDef(defs[0]);
-    const expr = module_env.store.getExpr(def.expr);
+    // Line 2: foo("test")
+    const result2 = try repl.step("foo(\"test\")");
+    defer std.testing.allocator.free(result2);
 
-    // The body should be e_anno_only
-    if (expr != .e_anno_only) {
-        std.debug.print("\nExpected e_anno_only, got {s}\n", .{@tagName(expr)});
+    // Should return a canonicalization error since foo only has a type annotation, no definition
+    if (std.mem.indexOf(u8, result2, "Canonicalize expr error") == null) {
+        std.debug.print("\nexpected Canonicalize expr error, got: {s}\n", .{result2});
         return error.TestUnexpectedResult;
     }
-
-    // The def should also have a type annotation
-    if (def.annotation == null) {
-        std.debug.print("\nExpected annotation to be present\n", .{});
-        return error.TestUnexpectedResult;
-    }
+    try testing.expect(std.mem.indexOf(u8, result2, "expression returned null for apply") != null);
 }

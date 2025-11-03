@@ -9,7 +9,7 @@ type=repl
 » foo("test")
 ~~~
 # OUTPUT
-
+Crash: runtime error
 ---
 Canonicalize expr error: expression returned null for apply
 # PROBLEMS

@@ -318,10 +318,6 @@ pub fn setupAutoImportedBuiltinTypes(
                 else
                     null;
 
-                // Add module alias to scope so Str.is_empty works
-                // Use the type name itself as both alias and module name
-                _ = try current_scope.introduceModuleAlias(gpa, type_ident, type_ident, null);
-
                 // Add type binding to scope
                 try current_scope.type_bindings.put(gpa, type_ident, Scope.TypeBinding{
                     .external_nominal = .{
@@ -2808,13 +2804,7 @@ pub fn canonicalizeExpr(
                             const field_text = self.env.getIdent(ident);
 
                             const target_node_idx_opt: ?u16 = if (self.module_envs) |envs_map| blk: {
-                                if (std.mem.eql(u8, field_text, "is_empty")) {
-                                    std.debug.print("[Can line 2811 #{d}] Entered blk, module_name='{s}'\n", .{ @intFromPtr(self), module_text });
-                                }
                                 if (envs_map.get(module_name)) |auto_imported_type| {
-                                    if (std.mem.eql(u8, field_text, "is_empty")) {
-                                        std.debug.print("[Can line 2813 #{d}] envs_map.get returned auto_imported_type, statement_idx={?d}\n", .{ @intFromPtr(self), auto_imported_type.statement_idx });
-                                    }
                                     const module_env = auto_imported_type.env;
 
                                     // For nested types (e.g., Bool inside Builtin), build the full qualified name
@@ -2826,39 +2816,19 @@ pub fn canonicalizeExpr(
                                         const parent_qualified_text = self.env.getIdent(parent_qualified_idx);
                                         const fully_qualified_idx = try self.env.insertQualifiedIdent(parent_qualified_text, field_text);
                                         break :blk_name self.env.getIdent(fully_qualified_idx);
-                                    } else blk_else: {
-                                        if (std.mem.eql(u8, field_text, "is_empty")) {
-                                            std.debug.print("[Can line 2825 #{d}] statement_idx is null, using unqualified field_text='{s}'\n", .{ @intFromPtr(self), field_text });
-                                        }
-                                        break :blk_else field_text;
-                                    };
+                                    } else field_text;
 
                                     // Look up the associated item by its qualified name
-                                    if (std.mem.eql(u8, field_text, "is_empty")) {
-                                        std.debug.print("[Can line 2831 #{d}] field_text='is_empty', module_text='{s}', lookup_name='{s}'\n", .{ @intFromPtr(self), module_text, lookup_name });
-                                    }
                                     const qname_ident = module_env.common.findIdent(lookup_name) orelse {
                                         // Identifier not found - just return null
                                         // The error will be handled by the code below that checks target_node_idx_opt
                                         break :blk null;
                                     };
-                                    const found_node_idx = module_env.getExposedNodeIndexById(qname_ident);
-                                    if (std.mem.eql(u8, field_text, "is_empty")) {
-                                        std.debug.print("[Can line 2838 #{d}] getExposedNodeIndexById returned: {?d}\n", .{ @intFromPtr(self), found_node_idx });
-                                    }
-                                    break :blk found_node_idx;
+                                    break :blk module_env.getExposedNodeIndexById(qname_ident);
                                 } else {
-                                    if (std.mem.eql(u8, field_text, "is_empty")) {
-                                        std.debug.print("[Can line 2845 #{d}] envs_map.get(module_name) returned null for module_name='{s}'\n", .{ @intFromPtr(self), module_text });
-                                    }
                                     break :blk null;
                                 }
-                            } else blk_envs_null: {
-                                if (std.mem.eql(u8, field_text, "is_empty")) {
-                                    std.debug.print("[Can line 2850 #{d}] self.module_envs is null\n", .{@intFromPtr(self)});
-                                }
-                                break :blk_envs_null null;
-                            };
+                            } else null;
 
                             const target_node_idx = target_node_idx_opt orelse {
                                 // The identifier doesn't exist in the module or isn't exposed
@@ -2884,15 +2854,7 @@ pub fn canonicalizeExpr(
                                 };
                             };
 
-                            // Debug: check value right after unwrapping
-                            if (target_node_idx > 100) {
-                                std.debug.print("[Can line 2860 #{d}] target_node_idx after unwrap = {d}, target_node_idx_opt was {?d}\n", .{ @intFromPtr(self), target_node_idx, target_node_idx_opt });
-                            }
-
                             // Create the e_lookup_external expression with Import.Idx
-                            if (target_node_idx > 100) {
-                                std.debug.print("[Can line 2862 #{d}] WARNING: Creating e_lookup_external with suspiciously large target_node_idx={d}\n", .{ @intFromPtr(self), target_node_idx });
-                            }
                             const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
                                 .module_idx = import_idx,
                                 .target_node_idx = target_node_idx,
@@ -2962,9 +2924,6 @@ pub fn canonicalizeExpr(
                             // If we didn't find a valid node index, check if we should report an error
                             if (target_node_idx_opt) |target_node_idx| {
                                 // Create the e_lookup_external expression with Import.Idx
-                                if (target_node_idx > 100) {
-                                    std.debug.print("[Can line 2934] WARNING: Creating e_lookup_external with suspiciously large target_node_idx={d}\n", .{target_node_idx});
-                                }
                                 const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
                                     .module_idx = import_idx,
                                     .target_node_idx = target_node_idx,
@@ -5722,7 +5681,7 @@ const TypeAnnoCtx = struct {
     }
 };
 
-pub fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx_type: TypeAnnoCtx.TypeAnnoCtxType) std.mem.Allocator.Error!TypeAnno.Idx {
+fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx_type: TypeAnnoCtx.TypeAnnoCtxType) std.mem.Allocator.Error!TypeAnno.Idx {
     var ctx = TypeAnnoCtx.init(type_anno_ctx_type);
     return canonicalizeTypeAnnoHelp(self, anno_idx, &ctx);
 }
@@ -8588,9 +8547,6 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     const target_node_idx = target_node_idx_opt orelse return null;
 
     // Create the e_lookup_external expression with Import.Idx
-    if (target_node_idx > 100) {
-        std.debug.print("[Can line 8557] WARNING: Creating e_lookup_external with suspiciously large target_node_idx={d}\n", .{target_node_idx});
-    }
     const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
         .module_idx = import_idx,
         .target_node_idx = target_node_idx,

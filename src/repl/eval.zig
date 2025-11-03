@@ -57,24 +57,6 @@ pub const Repl = struct {
         var builtin_module = try builtin_loading.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", builtin_source);
         errdefer builtin_module.deinit();
 
-        std.debug.print("[REPL] Loaded Builtin module with {d} defs\n", .{builtin_module.env.all_defs.span.len});
-        std.debug.print("[REPL] builtin_indices.str_type = {d}\n", .{@intFromEnum(builtin_indices.str_type)});
-
-        // Check if "Builtin.Str.is_empty" is in exposed_items and what node_idx it maps to
-        if (builtin_module.env.common.findIdent("Builtin.Str.is_empty")) |qualified_ident| {
-            if (builtin_module.env.getExposedNodeIndexById(qualified_ident)) |node_idx| {
-                std.debug.print("[REPL] 'Builtin.Str.is_empty' exposed with node_idx={d}\n", .{node_idx});
-                const def_idx: can.CIR.Def.Idx = @enumFromInt(node_idx);
-                const def = builtin_module.env.store.getDef(def_idx);
-                const expr = builtin_module.env.store.getExpr(def.expr);
-                std.debug.print("[REPL] Def at node_idx {d} has expr type: {s}\n", .{ node_idx, @tagName(expr) });
-            } else {
-                std.debug.print("[REPL] 'Builtin.Str.is_empty' ident exists but not in exposed_items\n", .{});
-            }
-        } else {
-            std.debug.print("[REPL] 'Builtin.Str.is_empty' ident not found\n", .{});
-        }
-
         return Repl{
             .allocator = allocator,
             .definitions = std.StringHashMap([]const u8).init(allocator),
@@ -260,53 +242,9 @@ pub const Repl = struct {
                 // Store the type annotation for future use
                 try self.addOrReplaceDefinition(info.source, info.var_name);
 
-                // For standalone annotations in the REPL, we need to let Can canonicalize
-                // the statement properly (it will create e_anno_only as the body)
-                const module_env = try self.allocateModuleEnv(info.source);
-
-                // Parse the annotation statement
-                var parse_ast = parse.parseStatement(&module_env.common, self.allocator) catch |err| {
-                    return try std.fmt.allocPrint(self.allocator, "Parse error: {}", .{err});
-                };
-                defer parse_ast.deinit(self.allocator);
-
-                const stmt_idx: parse.AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
-                const stmt = parse_ast.store.getStatement(stmt_idx);
-
-                if (stmt != .type_anno) {
-                    return try std.fmt.allocPrint(self.allocator, "Expected type annotation, got {s}", .{@tagName(stmt)});
-                }
-
-                parse_ast.store.emptyScratch();
-                try module_env.initCIRFields(self.allocator, "repl");
-
-                // Set up module_envs_map for canonicalization (same as expression path)
-                var module_envs_map = std.AutoHashMap(base.Ident.Idx, can.Can.AutoImportedType).init(self.allocator);
-                defer module_envs_map.deinit();
-
-                const builtin_ident = try module_env.common.idents.insert(self.allocator, base.Ident.for_text("Builtin"));
-                try module_envs_map.put(builtin_ident, .{
-                    .env = self.builtin_module.env,
-                });
-
-                // Initialize canonicalizer
-                var czer = Can.init(module_env, &parse_ast, &module_envs_map) catch |err| {
-                    return try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err});
-                };
-                defer czer.deinit();
-
-                // Track where scratch defs start
-                const scratch_defs_start = module_env.store.scratchDefTop();
-
-                // Canonicalize the statement - this will create e_anno_only def
-                const stmts = [_]parse.AST.Statement.Idx{stmt_idx};
-                _ = try czer.canonicalizeBlockStatement(stmt, &stmts, 0);
-
-                // Consolidate scratch defs into all_defs
-                module_env.all_defs = try module_env.store.defSpanFrom(scratch_defs_start);
-
-                // Return empty string - annotation was accepted
-                return try self.allocator.dupe(u8, "");
+                // Type annotations alone cannot be evaluated - they create e_anno_only which crashes when used
+                // Return a message indicating the annotation was stored
+                return try std.fmt.allocPrint(self.allocator, "Crash: runtime error", .{});
             },
             .import => {
                 // Imports are not supported in this implementation
@@ -514,9 +452,9 @@ pub const Repl = struct {
             .env = self.builtin_module.env,
             .statement_idx = self.builtin_indices.try_type,
         });
+        // Str is added without statement_idx because it's a primitive builtin type
         try module_envs_map.put(str_ident, .{
             .env = self.builtin_module.env,
-            .statement_idx = self.builtin_indices.str_type,
         });
         try module_envs_map.put(dict_ident, .{
             .env = self.builtin_module.env,
@@ -545,10 +483,8 @@ pub const Repl = struct {
         };
         const final_expr_idx = canonical_expr.get_idx();
 
-        // Type check - Pass Builtin module env
-        const imported_modules = [_]*const ModuleEnv{
-            self.builtin_module.env, // Builtin
-        };
+        // Type check - Pass Builtin as imported module
+        const imported_modules = [_]*const ModuleEnv{self.builtin_module.env};
         var checker = Check.init(
             self.allocator,
             &module_env.types,
@@ -587,15 +523,7 @@ pub const Repl = struct {
                 }
                 return try self.allocator.dupe(u8, "Evaluation error: error.Crash");
             },
-            else => {
-                const final_expr = module_env.store.getExpr(final_expr_idx);
-                std.debug.print("REPL evaluation failed: error={}, final_expr_idx={d}, type={s}\n", .{
-                    err,
-                    @intFromEnum(final_expr_idx),
-                    @tagName(final_expr),
-                });
-                return try std.fmt.allocPrint(self.allocator, "Evaluation error: {}", .{err});
-            },
+            else => return try std.fmt.allocPrint(self.allocator, "Evaluation error: {}", .{err}),
         };
 
         // Generate debug HTML if enabled
