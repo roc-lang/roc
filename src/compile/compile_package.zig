@@ -119,9 +119,12 @@ const ModuleState = struct {
         self.imports.deinit(gpa);
         self.external_imports.deinit(gpa);
         self.dependents.deinit(gpa);
-        // NOTE: Do NOT deinit reports here! Ownership has been transferred to OrderedSink
-        // when reports were emitted via sink.emitFn. The OrderedSink is responsible for
-        // deinitiating the reports after they've been drained and rendered.
+        // If reports were emitted, they've been cleared via clearRetainingCapacity() and ownership
+        // transferred to OrderedSink. If not emitted (e.g., module failed before .Done), we must
+        // deinit them here to avoid leaks.
+        for (self.reports.items) |*report| {
+            report.deinit();
+        }
         self.reports.deinit(gpa);
         gpa.free(self.path);
     }
@@ -1000,6 +1003,9 @@ pub const PackageEnv = struct {
             if (st.phase != .Done) break; // can't emit beyond an unfinished module in order
             // Emit all reports for this module
             for (st.reports.items) |rep| self.sink.emitFn(self.sink.ctx, st.name, rep);
+            // Clear reports to transfer ownership - reports are shallow-copied when passed to emitFn,
+            // so OrderedSink now owns the heap allocations. We must not free them here.
+            st.reports.clearRetainingCapacity();
             // Mark emitted
             self.emitted.set(id);
         }
