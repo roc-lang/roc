@@ -402,10 +402,10 @@ test "Repl - standalone annotation should crash, then call should fail - REGRESS
     const result2 = try repl.step("foo(\"test\")");
     defer std.testing.allocator.free(result2);
 
-    // Should return a canonicalization error since foo only has a type annotation, no definition
-    if (std.mem.indexOf(u8, result2, "Canonicalize expr error") == null) {
-        std.debug.print("\nexpected Canonicalize expr error, got: {s}\n", .{result2});
+    // Should return "Evaluation error: error.TypeMismatch"
+    if (std.mem.indexOf(u8, result2, "TypeMismatch") == null) {
+        std.debug.print("\nexpected TypeMismatch, got: {s}\n", .{result2});
         return error.TestUnexpectedResult;
     }
-    try testing.expect(std.mem.indexOf(u8, result2, "expression returned null for apply") != null);
+    try testing.expect(std.mem.indexOf(u8, result2, "Evaluation error") != null);
 }

@@ -239,12 +239,15 @@ pub const Repl = struct {
                 return try std.fmt.allocPrint(self.allocator, "assigned `{s}`", .{info.var_name});
             },
             .type_annotation => |info| {
-                // Store the type annotation for future use
+                // For type annotations:
+                // 1. Store them as definitions for future use
                 try self.addOrReplaceDefinition(info.source, info.var_name);
 
-                // Type annotations alone cannot be evaluated - they create e_anno_only which crashes when used
-                // Return a message indicating the annotation was stored
-                return try std.fmt.allocPrint(self.allocator, "Crash: runtime error", .{});
+                // 2. Evaluate the full source (including all definitions + this annotation)
+                //    This will create an e_anno_only which will crash when evaluated
+                const full_source = try self.buildFullSource(input);
+                defer self.allocator.free(full_source);
+                return try self.evaluateSource(full_source);
             },
             .import => {
                 // Imports are not supported in this implementation

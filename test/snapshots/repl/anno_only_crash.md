@@ -11,6 +11,6 @@ type=repl
 # OUTPUT
 Crash: runtime error
 ---
-Canonicalize expr error: expression returned null for apply
+Evaluation error: error.TypeMismatch
 # PROBLEMS
 NIL
