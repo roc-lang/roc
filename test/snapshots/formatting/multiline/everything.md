@@ -680,6 +680,16 @@ h = |x, y| {
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign (ident "g"))
+		(e-anno-only)
+		(annotation
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "e"))
+				(ty-rigid-var-lookup (ty-rigid-var (name "e"))))
+			(where
+				(alias (ty-rigid-var-lookup (ty-rigid-var (name "e"))) (name "A"))
+				(alias (ty-rigid-var-lookup (ty-rigid-var (name "e"))) (name "B")))))
+	(d-let
 		(p-assign (ident "h"))
 		(e-closure
 			(captures
@@ -830,6 +840,7 @@ h = |x, y| {
 ~~~clojure
 (inferred-types
 	(defs
+		(patt (type "Error"))
 		(patt (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j, [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j -> c")))
 	(type_decls
 		(alias (type "A(a)")
@@ -855,5 +866,6 @@ h = |x, y| {
 		(alias (type "F")
 			(ty-header (name "F"))))
 	(expressions
+		(expr (type "Error"))
 		(expr (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j, [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j -> c"))))
 ~~~

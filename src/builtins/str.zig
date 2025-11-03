@@ -352,6 +352,10 @@ pub const RocStr = extern struct {
         return slice.*;
     }
 
+    pub fn is_empty(self: RocStr) bool {
+        return self.len() == 0;
+    }
+
     pub fn len(self: RocStr) usize {
         if (self.isSmallStr()) {
             return self.asArray()[@sizeOf(RocStr) - 1] ^ 0b1000_0000;

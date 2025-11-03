@@ -27,6 +27,7 @@ const ProblemStore = check_mod.problem.Store;
 const EvalError = Interpreter.Error;
 const CrashContext = eval_mod.CrashContext;
 const BuiltinTypes = eval_mod.BuiltinTypes;
+const layout_mod = @import("layout");
 
 fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
@@ -235,19 +236,20 @@ pub const ComptimeEvaluator = struct {
         const region = self.env.store.getExprRegion(expr_idx);
 
         const expr = self.env.store.getExpr(expr_idx);
-        const is_lambda = switch (expr) {
-            .e_lambda, .e_closure => true,
-            else => false,
-        };
 
-        if (expr == .e_runtime_error) {
-            return EvalResult{
+        const is_lambda = switch (expr) {
+            .e_lambda, .e_closure, .e_low_level_lambda => true,
+            .e_runtime_error => return EvalResult{
                 .crash = .{
                     .message = "Runtime error in expression",
                     .region = region,
                 },
-            };
-        }
+            },
+            // Nothing to evaluate at the declaration site for these;
+            // by design, they cause crashes when lookups happen on them
+            .e_anno_only => return EvalResult{ .success = null },
+            else => false,
+        };
 
         // Reset halted flag at the start of each def - crashes only halt within a single def
         self.halted = false;

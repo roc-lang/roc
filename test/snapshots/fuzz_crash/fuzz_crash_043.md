@@ -102,9 +102,7 @@ o :
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(s-type-anno (name "o")
-		(ty-malformed)))
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure

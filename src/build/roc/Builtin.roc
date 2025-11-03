@@ -1,7 +1,6 @@
 Builtin := [].{
 	Str := [ProvidedByCompiler].{
 		is_empty : Str -> Bool
-		is_empty = |_str| False
 
 		contains : Str, Str -> Bool
 		contains = |_str, _other| True
@@ -89,5 +88,10 @@ Builtin := [].{
 
 	Dict := [EmptyDict].{}
 
-	Set := [EmptySet(Dict)].{}
+	Set(elem) := [].{
+		is_empty : Set(elem) -> Bool
+
+		is_eq : Set(elem), Set(elem) -> Bool
+		is_eq = |_a, _b| Bool.False
+	}
 }

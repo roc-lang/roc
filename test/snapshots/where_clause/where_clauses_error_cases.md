@@ -177,22 +177,32 @@ broken_fn3 : a -> b
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-anno (name "broken_fn1")
-		(ty-fn (effectful false)
-			(ty-rigid-var (name "a"))
-			(ty-rigid-var (name "b")))
-		(where
-			(malformed)))
-	(s-type-anno (name "broken_fn2")
-		(ty-fn (effectful false)
-			(ty-rigid-var (name "a"))
-			(ty-rigid-var (name "b")))
-		(where
-			(malformed))))
+	(d-let
+		(p-assign (ident "broken_fn1"))
+		(e-anno-only)
+		(annotation
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "a"))
+				(ty-rigid-var (name "b")))
+			(where
+				(malformed))))
+	(d-let
+		(p-assign (ident "broken_fn2"))
+		(e-anno-only)
+		(annotation
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "a"))
+				(ty-rigid-var (name "b")))
+			(where
+				(malformed)))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs)
-	(expressions))
+	(defs
+		(patt (type "Error"))
+		(patt (type "Error")))
+	(expressions
+		(expr (type "Error"))
+		(expr (type "Error"))))
 ~~~

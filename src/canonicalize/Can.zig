@@ -241,19 +241,19 @@ pub fn init(
 /// This function is called BEFORE Can.init() by both production and test environments
 /// to ensure they use identical module setup logic.
 ///
-/// Adds Bool, Result, Dict, and Set from the Builtin module to module_envs.
-/// Note: Str is NOT added because it's a primitive builtin type handled specially.
+/// Adds Bool, Result, Dict, Set, and Str from the Builtin module to module_envs.
 pub fn populateModuleEnvs(
     module_envs_map: *std.AutoHashMap(Ident.Idx, AutoImportedType),
     calling_module_env: *ModuleEnv,
     builtin_module_env: *const ModuleEnv,
-    builtin_indices: anytype, // Has fields: bool_type, try_type, dict_type, set_type
+    builtin_indices: anytype, // Has fields: bool_type, try_type, dict_type, set_type, str_type, list_type
 ) !void {
     const types_to_add = .{
         .{ "Bool", builtin_indices.bool_type },
         .{ "Try", builtin_indices.try_type },
         .{ "Dict", builtin_indices.dict_type },
         .{ "Set", builtin_indices.set_type },
+        .{ "Str", builtin_indices.str_type },
     };
 
     inline for (types_to_add) |type_info| {
@@ -268,7 +268,7 @@ pub fn populateModuleEnvs(
     }
 }
 
-/// Set up auto-imported builtin types (Bool, Result, Dict, Set) from the Builtin module.
+/// Set up auto-imported builtin types (Bool, Result, Dict, Set, Str) from the Builtin module.
 /// This function is shared between production and test environments to ensure consistency.
 ///
 /// These nested types in Builtin.roc need special handling:
@@ -279,14 +279,13 @@ pub fn setupAutoImportedBuiltinTypes(
     gpa: std.mem.Allocator,
     module_envs: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType),
 ) std.mem.Allocator.Error!void {
-    // Auto-import builtin types (Bool, Result, Dict, Set)
+    // Auto-import builtin types (Bool, Result, Dict, Set, Str)
     // These are nested types in Builtin module but need to be auto-imported like standalone modules
-    // Note: Str is NOT auto-imported because it's a primitive builtin type
     if (module_envs) |envs_map| {
         const zero_region = Region{ .start = Region.Position.zero(), .end = Region.Position.zero() };
         const current_scope = &self.scopes.items[0]; // Top-level scope
 
-        const builtin_types = [_][]const u8{ "Bool", "Result", "Dict", "Set" };
+        const builtin_types = [_][]const u8{ "Bool", "Result", "Dict", "Set", "Str" };
         for (builtin_types) |type_name_text| {
             const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
             if (envs_map.get(type_ident)) |type_entry| {
@@ -333,10 +332,11 @@ pub fn setupAutoImportedBuiltinTypes(
             }
         }
 
-        // Also add primitive builtin types (Str, List, Box) to type_bindings
+        // Also add primitive builtin types (List, Box) to type_bindings
         // so we can detect conflicts with O(1) HashMap lookup instead of string scanning
+        // Note: Str is NOT primitive anymore - it's auto-imported like Bool
 
-        const primitive_builtins = [_][]const u8{ "Str", "List", "Box" };
+        const primitive_builtins = [_][]const u8{ "List", "Box" };
         for (primitive_builtins) |type_name_text| {
             const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
 
@@ -402,15 +402,7 @@ fn processTypeDeclFirstPass(
     const qualified_name_idx = if (parent_name) |parent_idx| blk: {
         const parent_text = self.env.getIdent(parent_idx);
         const type_text = self.env.getIdent(type_header.name);
-        const qualified_name_str = try std.fmt.allocPrint(
-            self.env.gpa,
-            "{s}.{s}",
-            .{ parent_text, type_text },
-        );
-        defer self.env.gpa.free(qualified_name_str);
-
-        const qualified_ident = base.Ident.for_text(qualified_name_str);
-        break :blk try self.env.insertIdent(qualified_ident);
+        break :blk try self.env.insertQualifiedIdent(parent_text, type_text);
     } else type_header.name;
 
     // Create a new header with the qualified name if needed
@@ -611,14 +603,7 @@ fn processAssociatedItemsSecondPass(
                     // Build qualified name for nested type
                     const parent_text = self.env.getIdent(parent_name);
                     const type_text = self.env.getIdent(type_ident);
-                    const qualified_name_str = try std.fmt.allocPrint(
-                        self.env.gpa,
-                        "{s}.{s}",
-                        .{ parent_text, type_text },
-                    );
-                    defer self.env.gpa.free(qualified_name_str);
-                    const qualified_ident = base.Ident.for_text(qualified_name_str);
-                    const qualified_idx = try self.env.insertIdent(qualified_ident);
+                    const qualified_idx = try self.env.insertQualifiedIdent(parent_text, type_text);
 
                     try self.processAssociatedItemsSecondPass(qualified_idx, assoc.statements);
                 }
@@ -677,14 +662,7 @@ fn processAssociatedItemsSecondPass(
                                         // Build qualified name (e.g., "Foo.bar")
                                         const parent_text = self.env.getIdent(parent_name);
                                         const decl_text = self.env.getIdent(decl_ident);
-                                        const qualified_name_str = try std.fmt.allocPrint(
-                                            self.env.gpa,
-                                            "{s}.{s}",
-                                            .{ parent_text, decl_text },
-                                        );
-                                        defer self.env.gpa.free(qualified_name_str);
-                                        const qualified_ident = base.Ident.for_text(qualified_name_str);
-                                        const qualified_idx = try self.env.insertIdent(qualified_ident);
+                                        const qualified_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
 
                                         // Canonicalize with the qualified name and type annotation
                                         const def_idx = try self.canonicalizeAssociatedDeclWithAnno(
@@ -695,43 +673,32 @@ fn processAssociatedItemsSecondPass(
                                         );
                                         try self.env.store.addScratchDef(def_idx);
 
-                                        // Set node index for exposed associated item
-                                        if (self.env.containsExposedById(qualified_idx)) {
-                                            const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                                            try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
-                                        }
-                                    }
+                                        // Register this associated item by its qualified name
+                                        const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                                        try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+                                    } else {}
                                 }
                             }
                         },
                         else => {
                             // If the next stmt does not match this annotation,
-                            // then just add the annotation independently
-
-                            // TODO: Capture diagnostic that this anno doesn't
-                            // have a corresponding def
+                            // create an anno-only def for the associated item
 
                             const region = self.parse_ir.tokenizedRegionToRegion(ta.region);
 
-                            // Build qualified name for the annotation
+                            // Build qualified name for the annotation (e.g., "Str.isEmpty")
                             const parent_text = self.env.getIdent(parent_name);
                             const name_text = self.env.getIdent(name_ident);
-                            const qualified_name_str = try std.fmt.allocPrint(
-                                self.env.gpa,
-                                "{s}.{s}",
-                                .{ parent_text, name_text },
-                            );
-                            defer self.env.gpa.free(qualified_name_str);
-                            const qualified_ident = base.Ident.for_text(qualified_name_str);
-                            const qualified_idx = try self.env.insertIdent(qualified_ident);
+                            const qualified_idx = try self.env.insertQualifiedIdent(parent_text, name_text);
 
-                            const type_anno_stmt = Statement{ .s_type_anno = .{
-                                .name = qualified_idx,
-                                .anno = type_anno_idx,
-                                .where = where_clauses,
-                            } };
-                            const type_anno_stmt_idx = try self.env.addStatement(type_anno_stmt, region);
-                            try self.env.store.addScratchStatement(type_anno_stmt_idx);
+                            // Create anno-only def with the qualified name
+                            const def_idx = try self.createAnnoOnlyDef(qualified_idx, type_anno_idx, where_clauses, region);
+
+                            // Register this associated item by its qualified name
+                            const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                            try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+
+                            try self.env.store.addScratchDef(def_idx);
                         },
                     }
                 }
@@ -745,24 +712,15 @@ fn processAssociatedItemsSecondPass(
                         // Build qualified name (e.g., "Foo.bar")
                         const parent_text = self.env.getIdent(parent_name);
                         const decl_text = self.env.getIdent(decl_ident);
-                        const qualified_name_str = try std.fmt.allocPrint(
-                            self.env.gpa,
-                            "{s}.{s}",
-                            .{ parent_text, decl_text },
-                        );
-                        defer self.env.gpa.free(qualified_name_str);
-                        const qualified_ident = base.Ident.for_text(qualified_name_str);
-                        const qualified_idx = try self.env.insertIdent(qualified_ident);
+                        const qualified_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
 
                         // Canonicalize with the qualified name
                         const def_idx = try self.canonicalizeAssociatedDecl(decl, qualified_idx);
                         try self.env.store.addScratchDef(def_idx);
 
-                        // Set node index for exposed associated item
-                        if (self.env.containsExposedById(qualified_idx)) {
-                            const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
-                            try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
-                        }
+                        // Register this associated item by its qualified name
+                        const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                        try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
                     }
                 } else {
                     // Non-identifier patterns are not supported in associated blocks
@@ -818,15 +776,7 @@ fn processAssociatedItemsFirstPass(
                         // Build qualified name (e.g., "Foo.Bar.baz")
                         const parent_text = self.env.getIdent(parent_name);
                         const decl_text = self.env.getIdent(decl_ident);
-                        const qualified_name_str = try std.fmt.allocPrint(
-                            self.env.gpa,
-                            "{s}.{s}",
-                            .{ parent_text, decl_text },
-                        );
-                        defer self.env.gpa.free(qualified_name_str);
-
-                        const qualified_ident = base.Ident.for_text(qualified_name_str);
-                        const qualified_idx = try self.env.insertIdent(qualified_ident);
+                        const qualified_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
 
                         // Create placeholder pattern with qualified name
                         const region = self.parse_ir.tokenizedRegionToRegion(decl.region);
@@ -1116,37 +1066,74 @@ pub fn canonicalizeFile(
                     break :blk try self.env.store.whereClauseSpanFrom(where_start);
                 } else null;
 
-                // Now, check the next stmt to see if it matches this anno
-                const next_i = i + 1;
-                if (next_i < ast_stmt_idxs.len) {
+                // Now, check the next non-malformed stmt to see if it matches this anno
+                // We need to skip malformed statements that might appear between the annotation and declaration
+                // If we encounter malformed statements, it means the annotation itself had parse errors,
+                // so we should not attach it to the declaration to avoid confusing type errors
+                var next_i = i + 1;
+                var skipped_malformed = false;
+                while (next_i < ast_stmt_idxs.len) {
                     const next_stmt_id = ast_stmt_idxs[next_i];
                     const next_stmt = self.parse_ir.store.getStatement(next_stmt_id);
+
+                    // Skip malformed statements
+                    if (next_stmt == .malformed) {
+                        skipped_malformed = true;
+                        next_i += 1;
+                        continue;
+                    }
+
+                    // Found a non-malformed statement
                     switch (next_stmt) {
                         .decl => |decl| {
-                            // If so process it and increment i again
-                            i = next_i;
-                            _ = try self.canonicalizeStmtDecl(decl, TypeAnnoIdent{
-                                .name = name_ident,
-                                .anno_idx = type_anno_idx,
-                                .where = where_clauses,
-                            });
+                            // Check if the declaration pattern matches the annotation name
+                            const ast_pattern = self.parse_ir.store.getPattern(decl.pattern);
+                            const names_match = if (ast_pattern == .ident) blk: {
+                                const pattern_ident = ast_pattern.ident;
+                                if (self.parse_ir.tokens.resolveIdentifier(pattern_ident.ident_tok)) |decl_ident| {
+                                    break :blk name_ident.idx == decl_ident.idx;
+                                }
+                                break :blk false;
+                            } else false;
+
+                            if (names_match) {
+                                i = next_i;
+                                // If we skipped malformed statements, the annotation had parse errors;
+                                // don't attach it (to avoid confusing type mismatch errors).
+                                _ = try self.canonicalizeStmtDecl(decl, if (skipped_malformed) null else TypeAnnoIdent{
+                                    .name = name_ident,
+                                    .anno_idx = type_anno_idx,
+                                    .where = where_clauses,
+                                });
+                            } else {
+                                // Names don't match - create an anno-only def for this annotation
+                                // and let the next iteration handle the decl normally
+                                const def_idx = try self.createAnnoOnlyDef(name_ident, type_anno_idx, where_clauses, region);
+                                try self.env.store.addScratchDef(def_idx);
+
+                                // If this identifier should be exposed, register it
+                                const ident_text = self.env.getIdent(name_ident);
+                                if (self.exposed_ident_texts.contains(ident_text)) {
+                                    const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                                    try self.env.setExposedNodeIndexById(name_ident, def_idx_u16);
+                                }
+                            }
                         },
                         else => {
-                            // If the next stmt does not match this annotation,
-                            // then just add the annotation independently
+                            // If the next non-malformed stmt is not a decl,
+                            // create a Def with an e_anno_only body
+                            const def_idx = try self.createAnnoOnlyDef(name_ident, type_anno_idx, where_clauses, region);
+                            try self.env.store.addScratchDef(def_idx);
 
-                            // TODO: Capture diagnostic that this anno doesn't
-                            // have a corresponding def
-
-                            const type_anno_stmt = Statement{ .s_type_anno = .{
-                                .name = name_ident,
-                                .anno = type_anno_idx,
-                                .where = where_clauses,
-                            } };
-                            const type_anno_stmt_idx = try self.env.addStatement(type_anno_stmt, region);
-                            try self.env.store.addScratchStatement(type_anno_stmt_idx);
+                            // If this identifier should be exposed, register it
+                            const ident_text = self.env.getIdent(name_ident);
+                            if (self.exposed_ident_texts.contains(ident_text)) {
+                                const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                                try self.env.setExposedNodeIndexById(name_ident, def_idx_u16);
+                            }
                         },
                     }
+                    break;
                 }
             },
             .malformed => |malformed| {
@@ -1181,18 +1168,47 @@ pub fn canonicalizeFile(
                                 // Build qualified name
                                 const parent_text = self.env.getIdent(type_ident);
                                 const type_text = self.env.getIdent(unqualified_ident);
-                                const qualified_name_str = try std.fmt.allocPrint(
-                                    self.env.gpa,
-                                    "{s}.{s}",
-                                    .{ parent_text, type_text },
-                                );
-                                defer self.env.gpa.free(qualified_name_str);
-                                const qualified_ident_idx = try self.env.insertIdent(base.Ident.for_text(qualified_name_str));
+                                const qualified_ident_idx = try self.env.insertQualifiedIdent(parent_text, type_text);
 
                                 // Look up and alias
                                 if (self.scopeLookupTypeDecl(qualified_ident_idx)) |qualified_type_decl_idx| {
                                     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
                                     try current_scope.introduceTypeAlias(self.env.gpa, unqualified_ident, qualified_type_decl_idx);
+                                }
+
+                                // Also re-introduce associated items of this nested type
+                                // so that both `my_not` and `MyBool.my_not` work within the associated block
+                                if (nested_type_decl.associated) |nested_assoc| {
+                                    for (self.parse_ir.store.statementSlice(nested_assoc.statements)) |nested_assoc_stmt_idx| {
+                                        const nested_assoc_stmt = self.parse_ir.store.getStatement(nested_assoc_stmt_idx);
+                                        if (nested_assoc_stmt == .decl) {
+                                            const nested_decl = nested_assoc_stmt.decl;
+                                            const nested_pattern = self.parse_ir.store.getPattern(nested_decl.pattern);
+                                            if (nested_pattern == .ident) {
+                                                const nested_pattern_ident_tok = nested_pattern.ident.ident_tok;
+                                                if (self.parse_ir.tokens.resolveIdentifier(nested_pattern_ident_tok)) |nested_decl_ident| {
+                                                    // Build fully qualified name (e.g., "Test.MyBool.my_not")
+                                                    const qualified_text = self.env.getIdent(qualified_ident_idx);
+                                                    const nested_decl_text = self.env.getIdent(nested_decl_ident);
+                                                    const full_qualified_ident_idx = try self.env.insertQualifiedIdent(qualified_text, nested_decl_text);
+
+                                                    // Look up the fully qualified pattern
+                                                    switch (self.scopeLookup(.ident, full_qualified_ident_idx)) {
+                                                        .found => |pattern_idx| {
+                                                            const scope = &self.scopes.items[self.scopes.items.len - 1];
+                                                            // Add unqualified name (e.g., "my_not")
+                                                            try scope.idents.put(self.env.gpa, nested_decl_ident, pattern_idx);
+                                                            // Also add name qualified with nested type (e.g., "MyBool.my_not")
+                                                            const nested_decl_text2 = self.env.getIdent(nested_decl_ident);
+                                                            const nested_qualified_ident_idx = try self.env.insertQualifiedIdent(type_text, nested_decl_text2);
+                                                            try scope.idents.put(self.env.gpa, nested_qualified_ident_idx, pattern_idx);
+                                                        },
+                                                        .not_found => {},
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             },
                             .decl => |decl| {
@@ -1203,19 +1219,16 @@ pub fn canonicalizeFile(
                                         // Build qualified name
                                         const parent_text = self.env.getIdent(type_ident);
                                         const decl_text = self.env.getIdent(decl_ident);
-                                        const qualified_name_str = try std.fmt.allocPrint(
-                                            self.env.gpa,
-                                            "{s}.{s}",
-                                            .{ parent_text, decl_text },
-                                        );
-                                        defer self.env.gpa.free(qualified_name_str);
-                                        const qualified_ident_idx = try self.env.insertIdent(base.Ident.for_text(qualified_name_str));
+                                        const qualified_ident_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
 
                                         // Look up the qualified pattern
                                         switch (self.scopeLookup(.ident, qualified_ident_idx)) {
                                             .found => |pattern_idx| {
                                                 const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                                                // Add both unqualified and qualified names to the current scope
+                                                // This allows both `my_not` and `MyBool.my_not` to work inside the associated block
                                                 try current_scope.idents.put(self.env.gpa, decl_ident, pattern_idx);
+                                                try current_scope.idents.put(self.env.gpa, qualified_ident_idx, pattern_idx);
                                             },
                                             .not_found => {},
                                         }
@@ -1311,6 +1324,55 @@ pub fn validateForExecution(self: *Self) std.mem.Allocator.Error!void {
     }
 }
 
+/// Creates an annotation-only def for a standalone type annotation with no implementation
+fn createAnnoOnlyDef(
+    self: *Self,
+    ident: base.Ident.Idx,
+    type_anno_idx: TypeAnno.Idx,
+    where_clauses: ?WhereClause.Span,
+    region: Region,
+) std.mem.Allocator.Error!CIR.Def.Idx {
+    // Create the pattern for this def
+    const pattern = Pattern{
+        .assign = .{
+            .ident = ident,
+        },
+    };
+    const pattern_idx = try self.env.addPattern(pattern, region);
+
+    // Introduce the name to scope
+    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident, pattern_idx, false, true)) {
+        .success => {},
+        .shadowing_warning => |shadowed_pattern_idx| {
+            const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+            try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                .ident = ident,
+                .region = region,
+                .original_region = original_region,
+            } });
+        },
+        else => {},
+    }
+
+    // Create the e_anno_only expression
+    const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{} }, region);
+
+    // Create the annotation structure
+    const annotation = CIR.Annotation{
+        .anno = type_anno_idx,
+        .where = where_clauses,
+    };
+    const annotation_idx = try self.env.addAnnotation(annotation, region);
+
+    // Create and return the def
+    return try self.env.addDef(.{
+        .pattern = pattern_idx,
+        .expr = anno_only_expr,
+        .annotation = annotation_idx,
+        .kind = .let,
+    }, region);
+}
+
 fn canonicalizeStmtDecl(self: *Self, decl: AST.Statement.Decl, mb_last_anno: ?TypeAnnoIdent) std.mem.Allocator.Error!void {
     // Check if this declaration matches the last type annotation
     var mb_validated_anno: ?Annotation.Idx = null;
@@ -1341,8 +1403,11 @@ fn canonicalizeStmtDecl(self: *Self, decl: AST.Statement.Decl, mb_last_anno: ?Ty
         const token_region = self.parse_ir.tokens.resolve(@intCast(pattern.ident.ident_tok));
         const ident_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
 
-        // If this identifier is exposed, add it to exposed_items
-        if (self.exposed_ident_texts.contains(ident_text)) {
+        // Top-level associated items (identifiers ending with '!') are automatically exposed
+        const is_associated_item = ident_text.len > 0 and ident_text[ident_text.len - 1] == '!';
+
+        // If this identifier is exposed (or is an associated item), add it to exposed_items
+        if (self.exposed_ident_texts.contains(ident_text) or is_associated_item) {
             // Get the interned identifier - it should already exist from parsing
             const ident = base.Ident.for_text(ident_text);
             const idx = try self.env.insertIdent(ident);
@@ -1986,12 +2051,7 @@ fn createQualifiedName(
     const module_text = self.env.getIdent(module_name);
     const field_text = self.env.getIdent(field_name);
 
-    // Allocate space for "module.field" - this case still needs allocation since we're combining
-    // module name from import with field name from usage site
-    const qualified_text = try std.fmt.allocPrint(self.env.gpa, "{s}.{s}", .{ module_text, field_text });
-    defer self.env.gpa.free(qualified_text);
-
-    return try self.env.insertIdent(base.Ident.for_text(qualified_text), Region.zero());
+    return try self.env.insertQualifiedIdent(module_text, field_text);
 }
 
 /// Create an external declaration for a qualified name
@@ -2709,13 +2769,23 @@ pub fn canonicalizeExpr(
                             const module_text = self.env.getIdent(module_name);
 
                             // Check if this module is imported in the current scope
+                            // For auto-imported nested types (Bool, Str), use the parent module name (Builtin)
+                            const lookup_module_name = if (self.module_envs) |envs_map| blk_lookup: {
+                                if (envs_map.get(module_name)) |auto_imported_type| {
+                                    break :blk_lookup auto_imported_type.env.module_name;
+                                } else {
+                                    break :blk_lookup module_text;
+                                }
+                            } else module_text;
+
                             // If not, create an auto-import
-                            const import_idx = self.scopeLookupImportedModule(module_text) orelse blk: {
+                            const import_idx = self.scopeLookupImportedModule(lookup_module_name) orelse blk: {
                                 // Check if this is an auto-imported module
                                 if (self.module_envs) |envs_map| {
-                                    if (envs_map.get(module_name)) |_| {
-                                        // Create auto-import for this module
-                                        break :blk try self.getOrCreateAutoImport(module_text);
+                                    if (envs_map.get(module_name)) |auto_imported_type| {
+                                        // For auto-imported nested types (like Bool, Str), import the parent module (Builtin)
+                                        const actual_module_name = auto_imported_type.env.module_name;
+                                        break :blk try self.getOrCreateAutoImport(actual_module_name);
                                     }
                                 }
 
@@ -2737,21 +2807,18 @@ pub fn canonicalizeExpr(
                                 if (envs_map.get(module_name)) |auto_imported_type| {
                                     const module_env = auto_imported_type.env;
 
-                                    // For nested types (e.g., Bool inside Builtin), build "Bool.not"
+                                    // For nested types (e.g., Bool inside Builtin), build the full qualified name
                                     // For regular module imports (e.g., A), just use the field name directly
                                     const lookup_name: []const u8 = if (auto_imported_type.statement_idx) |_| blk_name: {
-                                        // Auto-imported nested type: build "Bool.not" (not "Builtin.Bool.not"!)
-                                        // The exposed items are stored with the nested type name, not the module name
-                                        const qualified_name = try std.fmt.allocPrint(
-                                            self.env.gpa,
-                                            "{s}.{s}",
-                                            .{ module_text, field_text },
-                                        );
-                                        break :blk_name qualified_name;
+                                        // Auto-imported nested type: build "Builtin.Bool.not" using the module's actual name
+                                        // Associated items are stored with the full qualified parent type name
+                                        const parent_qualified_idx = try self.env.insertQualifiedIdent(module_env.module_name, module_text);
+                                        const parent_qualified_text = self.env.getIdent(parent_qualified_idx);
+                                        const fully_qualified_idx = try self.env.insertQualifiedIdent(parent_qualified_text, field_text);
+                                        break :blk_name self.env.getIdent(fully_qualified_idx);
                                     } else field_text;
-                                    defer if (auto_imported_type.statement_idx != null) self.env.gpa.free(lookup_name);
 
-                                    // Look up the name in the module's exposed items
+                                    // Look up the associated item by its qualified name
                                     const qname_ident = module_env.common.findIdent(lookup_name) orelse {
                                         // Identifier not found - just return null
                                         // The error will be handled by the code below that checks target_node_idx_opt
@@ -6927,13 +6994,23 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                         };
                         const annotation_idx = try self.env.addAnnotation(annotation, region);
 
-                        // Add the decl as a statement with the e_anno_only body
+                        // Add the decl as a def so it gets included in all_defs
+                        const def_idx = try self.env.addDef(.{
+                            .pattern = pattern_idx,
+                            .expr = anno_only_expr,
+                            .annotation = annotation_idx,
+                            .kind = .let,
+                        }, region);
+                        try self.env.store.addScratchDef(def_idx);
+
+                        // Create the statement
                         const stmt_idx = try self.env.addStatement(Statement{ .s_decl = .{
                             .pattern = pattern_idx,
                             .expr = anno_only_expr,
                             .anno = annotation_idx,
                         } }, region);
                         mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = null };
+                        stmts_processed = .one;
                     },
                 }
             } else {
@@ -6972,13 +7049,23 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                 };
                 const annotation_idx = try self.env.addAnnotation(annotation, region);
 
-                // Add the decl as a statement with the e_anno_only body
+                // Add the decl as a def so it gets included in all_defs
+                const def_idx = try self.env.addDef(.{
+                    .pattern = pattern_idx,
+                    .expr = anno_only_expr,
+                    .annotation = annotation_idx,
+                    .kind = .let,
+                }, region);
+                try self.env.store.addScratchDef(def_idx);
+
+                // Create the statement
                 const stmt_idx = try self.env.addStatement(Statement{ .s_decl = .{
                     .pattern = pattern_idx,
                     .expr = anno_only_expr,
                     .anno = annotation_idx,
                 } }, region);
                 mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = null };
+                stmts_processed = .one;
             }
         },
         .import => |import_stmt| {
@@ -8668,14 +8755,7 @@ fn exposeAssociatedItems(self: *Self, parent_name: Ident.Idx, type_decl: anytype
                     // Build qualified name (e.g., "Foo.Bar")
                     const parent_text = self.env.getIdent(parent_name);
                     const nested_text = self.env.getIdent(nested_ident);
-                    const qualified_name_str = try std.fmt.allocPrint(
-                        self.env.gpa,
-                        "{s}.{s}",
-                        .{ parent_text, nested_text },
-                    );
-                    defer self.env.gpa.free(qualified_name_str);
-                    const qualified_ident = base.Ident.for_text(qualified_name_str);
-                    const qualified_idx = try self.env.insertIdent(qualified_ident);
+                    const qualified_idx = try self.env.insertQualifiedIdent(parent_text, nested_text);
 
                     // Expose the nested type
                     try self.env.addExposedById(qualified_idx);
@@ -8692,14 +8772,7 @@ fn exposeAssociatedItems(self: *Self, parent_name: Ident.Idx, type_decl: anytype
                             // Build qualified name (e.g., "Foo.stuff")
                             const parent_text = self.env.getIdent(parent_name);
                             const decl_text = self.env.getIdent(decl_ident);
-                            const qualified_name_str = try std.fmt.allocPrint(
-                                self.env.gpa,
-                                "{s}.{s}",
-                                .{ parent_text, decl_text },
-                            );
-                            defer self.env.gpa.free(qualified_name_str);
-                            const qualified_ident = base.Ident.for_text(qualified_name_str);
-                            const qualified_idx = try self.env.insertIdent(qualified_ident);
+                            const qualified_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
 
                             // Expose the declaration
                             try self.env.addExposedById(qualified_idx);

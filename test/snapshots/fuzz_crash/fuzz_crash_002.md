@@ -287,9 +287,7 @@ modu :
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(s-type-anno (name "modu")
-		(ty-malformed)))
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure

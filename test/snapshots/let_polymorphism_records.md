@@ -355,6 +355,11 @@ main = |_| {
 			(e-lookup-local
 				(p-assign (ident "my_empty_list")))))
 	(d-let
+		(p-assign (ident "data"))
+		(e-anno-only)
+		(annotation
+			(ty-rigid-var (name "new_value"))))
+	(d-let
 		(p-assign (ident "update_data"))
 		(e-lambda
 			(args
@@ -453,6 +458,7 @@ main = |_| {
 		(patt (type "{ count: Num(_size), data: Num(Frac(_size2)) }"))
 		(patt (type "{ count: Num(_size), data: Str }"))
 		(patt (type "{ count: Num(_size), data: List(_elem) }"))
+		(patt (type "new_value"))
 		(patt (type "_arg, _arg2 -> {}"))
 		(patt (type "{}"))
 		(patt (type "{}"))
@@ -471,6 +477,7 @@ main = |_| {
 		(expr (type "{ count: Num(_size), data: Num(Frac(_size2)) }"))
 		(expr (type "{ count: Num(_size), data: Str }"))
 		(expr (type "{ count: Num(_size), data: List(_elem) }"))
+		(expr (type "new_value"))
 		(expr (type "_arg, _arg2 -> {}"))
 		(expr (type "{}"))
 		(expr (type "{}"))

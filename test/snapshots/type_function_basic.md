@@ -117,14 +117,7 @@ main! = |_| {}
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-empty_record)))
-	(s-type-anno (name "apply")
-		(ty-fn (effectful false)
-			(ty-parens
-				(ty-fn (effectful false)
-					(ty-rigid-var (name "_a"))
-					(ty-rigid-var (name "_b"))))
-			(ty-rigid-var-lookup (ty-rigid-var (name "_a"))))))
+			(e-empty_record))))
 ~~~
 # TYPES
 ~~~clojure

@@ -2990,6 +2990,21 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                 },
             }
         },
+        .e_low_level_lambda => |ll| {
+            // For low-level lambda expressions, treat like a lambda with a crash body.
+            // Check the body (which will be e_runtime_error or similar)
+            does_fx = try self.checkExpr(ll.body, rank, .no_expectation) or does_fx;
+
+            // The lambda's type comes from the annotation.
+            // Like e_anno_only, this should always have an annotation.
+            // The type will be unified with the expected type in the code below.
+            switch (expected) {
+                .no_expectation => unreachable,
+                .expected => {
+                    // The expr_var will be unified with the annotation var below
+                },
+            }
+        },
         .e_runtime_error => {
             try self.updateVar(expr_var, .err, rank);
         },
@@ -3689,6 +3704,10 @@ fn resolveVarFromExternal(
         else blk: {
             // First time importing this type - copy it and cache the result
             const imported_var = @as(Var, @enumFromInt(@intFromEnum(target_node_idx)));
+
+            // Every node should have a corresponding type entry
+            std.debug.assert(@intFromEnum(imported_var) < other_module_env.types.len());
+
             const new_copy = try self.copyVar(imported_var, other_module_env, null);
             try self.import_cache.put(self.gpa, cache_key, new_copy);
             break :blk new_copy;
@@ -3709,7 +3728,7 @@ fn copyVar(self: *Self, other_module_var: Var, other_module_env: *const ModuleEn
     // First, reset state
     self.var_map.clearRetainingCapacity();
 
-    // Then, copy the var from the dest type store into this type store
+    // Copy the var from the dest type store into this type store
     const copied_var = try copy_import.copyVar(
         &other_module_env.*.types,
         self.types,

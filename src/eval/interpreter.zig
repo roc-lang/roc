@@ -18,6 +18,7 @@ const render_helpers = @import("render_helpers.zig");
 const builtins = @import("builtins");
 const RocOps = builtins.host_abi.RocOps;
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
+const RocCrashed = builtins.host_abi.RocCrashed;
 const RocStr = builtins.str.RocStr;
 const RocDec = builtins.dec.RocDec;
 const RocList = builtins.list.RocList;
@@ -241,7 +242,7 @@ pub const Interpreter = struct {
         return try self.evalExprMinimal(expr_idx, roc_ops, null);
     }
 
-    fn registerDefValue(self: *Interpreter, expr_idx: can.CIR.Expr.Idx, value: StackValue) void {
+    pub fn registerDefValue(self: *Interpreter, expr_idx: can.CIR.Expr.Idx, value: StackValue) void {
         if (self.def_stack.items.len == 0) return;
         var top = &self.def_stack.items[self.def_stack.items.len - 1];
         if (top.expr_idx == expr_idx and top.value == null) {
@@ -1377,36 +1378,32 @@ pub const Interpreter = struct {
                 return value;
             },
             .e_anno_only => |_| {
-                // This represents a value that only has a type annotation, no implementation
+                // This represents a value that only has a type annotation, no implementation.
+                // Crash immediately when accessed or called, regardless of type.
+                self.triggerCrash("This value has no implementation. It is only a type annotation for now.", false, roc_ops);
+                return error.Crash;
+            },
+            .e_low_level_lambda => |lam| {
+                // Treat like e_lambda - build a closure that will crash when called
+                // (since the body will be e_runtime_error or will crash)
                 const ct_var = can.ModuleEnv.varFrom(expr_idx);
                 const rt_var = try self.translateTypeVar(self.env, ct_var);
-                const anno_layout = try self.getRuntimeLayout(rt_var);
+                const closure_layout = try self.getRuntimeLayout(rt_var);
+                const value = try self.pushRaw(closure_layout, 0);
+                self.registerDefValue(expr_idx, value);
 
-                if (anno_layout.tag == .closure) {
-                    // Function type: Build a closure-like value that will crash when called
-                    const value = try self.pushRaw(anno_layout, 0);
-                    self.registerDefValue(expr_idx, value);
-                    // Initialize the closure header with the e_anno_only expr itself as the body
-                    // This serves as a marker that will be detected during call evaluation
-                    if (value.ptr) |ptr| {
-                        const header: *layout.Closure = @ptrCast(@alignCast(ptr));
-                        header.* = .{
-                            .body_idx = expr_idx, // Point to self (the e_anno_only expression)
-                            .params = .{ .span = .{ .start = 0, .len = 0 } }, // No params
-                            .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
-                            .captures_layout_idx = anno_layout.data.closure.captures_layout_idx,
-                            .lambda_expr_idx = expr_idx,
-                            .source_env = self.env,
-                        };
-                    }
-                    return value;
-                } else {
-                    // Non-function type: Create a value that will be marked as annotation-only
-                    // We'll detect this during lookup and crash then
-                    const value = try self.pushRaw(anno_layout, 0);
-                    self.registerDefValue(expr_idx, value);
-                    return value;
+                if (value.ptr) |ptr| {
+                    const header: *layout.Closure = @ptrCast(@alignCast(ptr));
+                    header.* = .{
+                        .body_idx = lam.body,
+                        .params = lam.args,
+                        .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
+                        .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
+                        .lambda_expr_idx = expr_idx,
+                        .source_env = self.env,
+                    };
                 }
+                return value;
             },
             .e_closure => |cls| {
                 // Build a closure value with concrete captures. The closure references a lambda.
@@ -1529,6 +1526,30 @@ pub const Interpreter = struct {
                 const func_idx = call.func;
                 const arg_indices = all[0..];
 
+                // Check if the function is an anno-only lookup that will crash
+                // If so, skip type translation and crash immediately
+                const func_expr_for_anno_check = self.env.store.getExpr(func_idx);
+                if (func_expr_for_anno_check == .e_lookup_local) {
+                    const lookup = func_expr_for_anno_check.e_lookup_local;
+                    const all_defs = self.env.store.sliceDefs(self.env.all_defs);
+                    for (all_defs) |def_idx| {
+                        const def = self.env.store.getDef(def_idx);
+                        if (def.pattern == lookup.pattern_idx) {
+                            const def_expr = self.env.store.getExpr(def.expr);
+                            if (def_expr == .e_anno_only) {
+                                // Calling an anno-only function - crash immediately
+                                const msg = "This function has only a type annotation - no implementation was provided";
+                                const crashed = RocCrashed{
+                                    .utf8_bytes = @ptrCast(@constCast(msg.ptr)),
+                                    .len = msg.len,
+                                };
+                                roc_ops.roc_crashed(&crashed, roc_ops.env);
+                                return error.Crash;
+                            }
+                        }
+                    }
+                }
+
                 // Runtime unification for call: constrain return type from arg types
                 const func_ct_var = can.ModuleEnv.varFrom(func_idx);
                 const func_rt_var = try self.translateTypeVar(self.env, func_ct_var);
@@ -1581,6 +1602,20 @@ pub const Interpreter = struct {
                     if (body_expr == .e_anno_only) {
                         self.triggerCrash("This function has no implementation. It is only a type annotation for now.", false, roc_ops);
                         return error.Crash;
+                    }
+
+                    // Check if this is a low-level lambda - if so, dispatch to builtin implementation
+                    const lambda_expr = self.env.store.getExpr(header.lambda_expr_idx);
+                    if (lambda_expr == .e_low_level_lambda) {
+                        const low_level = lambda_expr.e_low_level_lambda;
+                        const result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops);
+
+                        // Decref all args
+                        for (arg_values) |arg| {
+                            arg.decref(&self.runtime_layout_store, roc_ops);
+                        }
+
+                        return result;
                     }
 
                     const params = self.env.store.slicePatterns(header.params);
@@ -1832,6 +1867,22 @@ pub const Interpreter = struct {
                 try self.active_closures.append(method_func);
                 defer _ = self.active_closures.pop();
 
+                // Check if this is a low-level lambda - if so, dispatch to builtin implementation
+                const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
+                if (lambda_expr == .e_low_level_lambda) {
+                    const low_level = lambda_expr.e_low_level_lambda;
+
+                    // Dispatch to actual low-level builtin implementation
+                    const result = try self.callLowLevelBuiltin(low_level.op, all_args, roc_ops);
+
+                    // Decref all args
+                    for (all_args) |arg| {
+                        arg.decref(&self.runtime_layout_store, roc_ops);
+                    }
+
+                    return result;
+                }
+
                 var bind_count: usize = 0;
                 while (bind_count < params.len) : (bind_count += 1) {
                     try self.bindings.append(.{ .pattern_idx = params[bind_count], .value = all_args[bind_count], .expr_idx = @enumFromInt(0) });
@@ -1865,6 +1916,7 @@ pub const Interpreter = struct {
                                 self.triggerCrash("This value has no implementation. It is only a type annotation for now.", false, roc_ops);
                                 return error.Crash;
                             }
+                            // e_low_level_lambda is always a closure, so no special check needed
                         }
                         return try self.pushCopy(b.value, roc_ops);
                     }
@@ -1892,13 +1944,21 @@ pub const Interpreter = struct {
                     }
                 }
 
-                if (builtin.mode == .Debug) {
-                    // In debug builds, check if this pattern corresponds to a top-level def
-                    // If we find it, that means it should have been in bindings - this is a compiler bug
-                    const all_defs = self.env.store.sliceDefs(self.env.all_defs);
-                    for (all_defs) |def_idx| {
-                        const def = self.env.store.getDef(def_idx);
-                        if (def.pattern == lookup.pattern_idx) {
+                // Check if this pattern corresponds to a top-level def that wasn't evaluated yet
+                const all_defs = self.env.store.sliceDefs(self.env.all_defs);
+                for (all_defs) |def_idx| {
+                    const def = self.env.store.getDef(def_idx);
+                    if (def.pattern == lookup.pattern_idx) {
+                        const def_expr = self.env.store.getExpr(def.expr);
+                        if (def_expr == .e_anno_only) {
+                            // This is an anno-only def being accessed - evaluate it now
+                            // For functions, this creates a closure that crashes when called
+                            // For non-functions, this crashes immediately
+                            return try self.evalExprMinimal(def.expr, roc_ops, null);
+                        }
+
+                        // In debug builds, panic if this def should have been in bindings but wasn't
+                        if (builtin.mode == .Debug) {
                             const pat = self.env.store.getPattern(lookup.pattern_idx);
                             const var_name = switch (pat) {
                                 .assign => |a| self.env.getIdent(a.ident),
@@ -2059,7 +2119,7 @@ pub const Interpreter = struct {
         return RocStr.fromSlice(rendered, roc_ops);
     }
 
-    fn pushRaw(self: *Interpreter, layout_val: Layout, initial_size: usize) !StackValue {
+    pub fn pushRaw(self: *Interpreter, layout_val: Layout, initial_size: usize) !StackValue {
         const size: u32 = if (initial_size == 0) self.runtime_layout_store.layoutSize(layout_val) else @intCast(initial_size);
         if (size == 0) {
             return StackValue{ .layout = layout_val, .ptr = null, .is_initialized = true };
@@ -2088,6 +2148,35 @@ pub const Interpreter = struct {
             try src.copyToPtr(&self.runtime_layout_store, ptr.?, roc_ops);
         }
         return dest;
+    }
+
+    fn callLowLevelBuiltin(self: *Interpreter, op: can.CIR.Expr.LowLevel, args: []StackValue, roc_ops: *RocOps) !StackValue {
+        switch (op) {
+            .str_is_empty => {
+                // Str.is_empty : Str -> Bool
+                if (args.len != 1) return error.TypeMismatch;
+
+                const str_arg = args[0];
+                if (str_arg.ptr == null) return error.TypeMismatch;
+
+                const roc_str: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+                const result = builtins.str.isEmpty(roc_str.*);
+
+                // Create a boolean value
+                const bool_layout = Layout{ .tag = .scalar, .data = .{ .scalar = .{ .tag = .bool, .data = .{ .bool = {} } } } };
+                const bool_value = try self.pushRaw(bool_layout, 0);
+                if (bool_value.ptr) |ptr| {
+                    const bool_ptr: *bool = @ptrCast(@alignCast(ptr));
+                    bool_ptr.* = result;
+                }
+                return bool_value;
+            },
+            .set_is_empty => {
+                // TODO: implement Set.is_empty
+                self.triggerCrash("Set.is_empty not yet implemented", false, roc_ops);
+                return error.Crash;
+            },
+        }
     }
 
     fn triggerCrash(self: *Interpreter, message: []const u8, owned: bool, roc_ops: *RocOps) void {

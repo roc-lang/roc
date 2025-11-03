@@ -241,6 +241,10 @@ fn collectExprDependencies(
         // Literals have no dependencies
         .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_ellipsis, .e_anno_only => {},
 
+        .e_low_level_lambda => |ll| {
+            try collectExprDependencies(cir, ll.body, dependencies, allocator);
+        },
+
         // External lookups reference other modules - skip for now
         .e_lookup_external => {},
 

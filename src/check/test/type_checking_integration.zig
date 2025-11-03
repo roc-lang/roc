@@ -1034,7 +1034,7 @@ test "check type - for" {
         \\  var result = 0
         \\  for x in [1, 2, 3] {
         \\    result = result + x
-        \\  } 
+        \\  }
         \\  result
         \\}
     ;
@@ -1051,7 +1051,7 @@ test "check type - for mismatch" {
         \\  var result = 0
         \\  for x in ["a", "b", "c"] {
         \\    result = result + x
-        \\  } 
+        \\  }
         \\  result
         \\}
     ;
@@ -1285,4 +1285,125 @@ fn checkTypesExpr(
     }
 
     return test_env.assertLastDefType(expected);
+}
+
+// Associated items referencing each other
+
+test "associated item can reference another associated item from same type" {
+    // First verify Bool basics work
+    const bool_basics =
+        \\Test := [].{}
+        \\
+        \\x : Bool
+        \\x = True
+    ;
+    try checkTypesModule(bool_basics, .{ .pass = .{ .def = "x" } }, "Bool");
+
+    // Now test calling MyBool.my_not from within an associated item
+    const source =
+        \\Test := [].{
+        \\  MyBool := [MyTrue, MyFalse].{
+        \\    my_not : MyBool -> MyBool
+        \\    my_not = |b| match b {
+        \\      MyTrue => MyFalse
+        \\      MyFalse => MyTrue
+        \\    }
+        \\
+        \\    my_eq : MyBool, MyBool -> MyBool
+        \\    my_eq = |a, b| match a {
+        \\      MyTrue => b
+        \\      MyFalse => MyBool.my_not(b)
+        \\    }
+        \\  }
+        \\}
+        \\
+        \\x = Test.MyBool.my_eq(Test.MyBool.MyTrue, Test.MyBool.MyFalse)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "x" } }, "Test.MyBool");
+}
+
+test "Bool.not works as builtin associated item" {
+    const source =
+        \\Test := [].{}
+        \\
+        \\x = Bool.not(True)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "x" } }, "Bool");
+}
+
+test "Str.is_empty works as low-level builtin associated item" {
+    const source =
+        \\Test := [].{}
+        \\
+        \\x = Str.is_empty("")
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "x" } }, "Bool");
+}
+
+test "associated item: type annotation followed by body should not create duplicate definition" {
+    const source =
+        \\Test := [].{
+        \\  apply : (a -> b), a -> b
+        \\  apply = |fn, x| fn(x)
+        \\}
+        \\
+        \\result = Test.apply(|n| n, 42)
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // Should have NO errors - the type annotation should be associated with the body
+    const can_diagnostics = try test_env.module_env.getDiagnostics();
+    defer test_env.gpa.free(can_diagnostics);
+    const type_problems = test_env.checker.problems.problems.items;
+
+    try testing.expectEqual(@as(usize, 0), can_diagnostics.len);
+    try testing.expectEqual(@as(usize, 0), type_problems.len);
+
+    // Verify the types
+    try test_env.assertDefType("Test.apply", "a -> b, a -> b");
+    try test_env.assertDefType("result", "Num(_size)");
+}
+
+test "top-level: type annotation followed by body should not create duplicate definition - REGRESSION TEST" {
+    // This reproduces the bug seen in test/snapshots/pass/underscore_in_regular_annotations.md
+    // and test/snapshots/type_function_simple.md where a type annotation followed by its body
+    // creates TWO defs:
+    // 1. A def with e-anno-only for the annotation
+    // 2. A def with the actual lambda body
+    // This causes a DUPLICATE DEFINITION error
+    //
+    // NOTE: Using EXACT code from the snapshot that shows the bug!
+    const source =
+        \\app [main!] { pf: platform "platform.roc" }
+        \\
+        \\apply : (_a -> _b) -> _a -> _b
+        \\apply = |fn, x| fn(x)
+        \\
+        \\main! = |_| {}
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // Check for canonicalization problems - should be specifically DUPLICATE DEFINITION
+    const can_diagnostics = try test_env.module_env.getDiagnostics();
+    defer test_env.gpa.free(can_diagnostics);
+
+    var duplicate_def_found = false;
+    for (can_diagnostics) |diagnostic| {
+        var report = try test_env.module_env.diagnosticToReport(diagnostic, test_env.gpa, test_env.module_env.module_name);
+        defer report.deinit();
+
+        if (std.mem.indexOf(u8, report.title, "DUPLICATE DEFINITION") != null) {
+            duplicate_def_found = true;
+            break;
+        }
+    }
+
+    // The bug causes a DUPLICATE DEFINITION error - this test should FAIL when bug is present
+    if (duplicate_def_found) {
+        return error.TestUnexpectedResult;
+    }
 }

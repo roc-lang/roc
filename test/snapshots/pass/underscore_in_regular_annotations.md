@@ -354,11 +354,7 @@ transform = |_, b| b
 				(p-underscore)
 				(p-assign (ident "b")))
 			(e-lookup-local
-				(p-assign (ident "b")))))
-	(s-type-anno (name "transform")
-		(ty-fn (effectful false)
-			(ty-rigid-var (name "_a"))
-			(ty-rigid-var (name "_b")))))
+				(p-assign (ident "b"))))))
 ~~~
 # TYPES
 ~~~clojure

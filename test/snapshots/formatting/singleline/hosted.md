@@ -67,14 +67,19 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-anno (name "a!")
-		(ty-fn (effectful true)
-			(ty-lookup (name "Str") (builtin))
-			(ty-lookup (name "Str") (builtin)))))
+	(d-let
+		(p-assign (ident "a!"))
+		(e-anno-only)
+		(annotation
+			(ty-fn (effectful true)
+				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs)
-	(expressions))
+	(defs
+		(patt (type "Error")))
+	(expressions
+		(expr (type "Error"))))
 ~~~
