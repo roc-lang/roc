@@ -238,17 +238,6 @@ pub const Repl = struct {
                 // Return descriptive output for assignments
                 return try std.fmt.allocPrint(self.allocator, "assigned `{s}`", .{info.var_name});
             },
-            .type_annotation => |info| {
-                // For type annotations:
-                // 1. Store them as definitions for future use
-                try self.addOrReplaceDefinition(info.source, info.var_name);
-
-                // 2. Evaluate the full source (including all definitions + this annotation)
-                //    This will create an e_anno_only which will crash when evaluated
-                const full_source = try self.buildFullSource(input);
-                defer self.allocator.free(full_source);
-                return try self.evaluateSource(full_source);
-            },
             .import => {
                 // Imports are not supported in this implementation
                 return try self.allocator.dupe(u8, "Imports not yet supported");
@@ -273,10 +262,6 @@ pub const Repl = struct {
 
     const ParseResult = union(enum) {
         assignment: struct {
-            source: []const u8, // Borrowed from input
-            var_name: []const u8, // Borrowed from input
-        },
-        type_annotation: struct {
             source: []const u8, // Borrowed from input
             var_name: []const u8, // Borrowed from input
         },
@@ -319,16 +304,6 @@ pub const Repl = struct {
                             } };
                         }
                         return ParseResult.expression;
-                    },
-                    .type_anno => |ta| {
-                        // Extract the identifier name from the type annotation
-                        // Get the text directly from the source (borrowed from input)
-                        const token_region = ast.tokens.resolve(ta.name);
-                        const ident_name = module_env.common.source[token_region.start.offset..token_region.end.offset];
-                        return ParseResult{ .type_annotation = .{
-                            .source = input,
-                            .var_name = ident_name,
-                        } };
                     },
                     .import => return ParseResult.import,
                     .type_decl => return ParseResult.type_decl,
@@ -474,10 +449,8 @@ pub const Repl = struct {
         // Since we're always parsing as expressions now, handle them the same way
         const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
 
-        const ast_expr = parse_ast.store.getExpr(expr_idx);
         const canonical_expr = try czer.canonicalizeExpr(expr_idx) orelse {
-            const expr_type_name = @tagName(ast_expr);
-            return try std.fmt.allocPrint(self.allocator, "Canonicalize expr error: expression returned null for {s}", .{expr_type_name});
+            return try self.allocator.dupe(u8, "Canonicalize expr error: expression returned null");
         };
         const final_expr_idx = canonical_expr.get_idx();
 
