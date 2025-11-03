@@ -92,6 +92,20 @@ compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
                                                ^
 
 
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_higher_order_multiple_vars.md:4:11:4:29:**
+```roc
+compose = |f, g| |x| f(g(x))
+```
+          ^^^^^^^^^^^^^^^^^^
+
+It has the type:
+    _a -> _b, _a -> a -> _a -> _b_
+
+But the type annotation says it should have the type:
+    __b -> _c -> _a -> _b_
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -183,7 +197,17 @@ main! = |_| {}
 							(e-lookup-local
 								(p-assign (ident "g")))
 							(e-lookup-local
-								(p-assign (ident "x")))))))))
+								(p-assign (ident "x"))))))))
+		(annotation
+			(ty-fn (effectful false)
+				(ty-parens
+					(ty-fn (effectful false)
+						(ty-rigid-var (name "_b"))
+						(ty-rigid-var (name "_c"))))
+				(ty-parens
+					(ty-fn (effectful false)
+						(ty-rigid-var (name "_a"))
+						(ty-rigid-var-lookup (ty-rigid-var (name "_b"))))))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-lambda
@@ -195,9 +219,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> b, c -> a -> c -> b"))
+		(patt (type "Error"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "a -> b, c -> a -> c -> b"))
+		(expr (type "Error"))
 		(expr (type "_arg -> {}"))))
 ~~~

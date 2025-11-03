@@ -436,17 +436,12 @@ pub const Repl = struct {
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, can.Can.AutoImportedType).init(self.allocator);
         defer module_envs_map.deinit();
 
-        const builtin_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Builtin"));
         const bool_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Bool"));
         const result_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Result"));
         const str_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Str"));
         const dict_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Dict"));
         const set_ident = try cir.common.idents.insert(self.allocator, base.Ident.for_text("Set"));
 
-        // Add Builtin module itself to enable direct Builtin.* lookups
-        try module_envs_map.put(builtin_ident, .{
-            .env = self.builtin_module.env,
-        });
         try module_envs_map.put(bool_ident, .{
             .env = self.builtin_module.env,
             .statement_idx = self.builtin_indices.bool_type,
