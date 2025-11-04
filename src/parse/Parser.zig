@@ -466,7 +466,7 @@ pub fn parsePlatformHeader(self: *Parser) Error!AST.Header.Idx {
     self.expect(.KwPackages) catch {
         return try self.pushMalformed(
             AST.Header.Idx,
-            .expected_imports,
+            .expected_packages,
             self.pos,
         );
     };

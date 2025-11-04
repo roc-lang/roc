@@ -236,7 +236,9 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .expected_exposes => "EXPECTED EXPOSES",
         .expected_exposes_close_square => "EXPECTED CLOSING BRACKET",
         .expected_exposes_open_square => "EXPECTED OPENING BRACKET",
-        .expected_imports => "EXPECTED IMPORTS",
+        .expected_packages => "EXPECTED PACKAGES",
+        .expected_packages_close_curly => "EXPECTED CLOSING BRACE",
+        .expected_packages_open_curly => "EXPECTED OPENING BRACE",
         .pattern_unexpected_token => "UNEXPECTED TOKEN IN PATTERN",
         .pattern_list_rest_old_syntax => "BAD LIST REST PATTERN SYNTAX",
         .pattern_unexpected_eof => "UNEXPECTED END OF FILE IN PATTERN",
@@ -304,11 +306,13 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addText("For example: ");
             try report.document.addCodeBlock("module [main, add, subtract]");
         },
-        .expected_imports => {
-            try report.document.addReflowingText("Import statements must specify what is being imported.");
+        .expected_packages, .expected_packages_close_curly, .expected_packages_open_curly => {
+            try report.document.addReflowingText("Platform headers must have a ");
+            try report.document.addKeyword("packages");
+            try report.document.addReflowingText(" section that lists package dependencies.");
             try report.document.addLineBreak();
             try report.document.addText("For example: ");
-            try report.document.addCodeBlock("import pf.Stdout exposing [line!]");
+            try report.document.addCodeBlock("packages { base: \"../base/main.roc\" }");
         },
         .pattern_unexpected_token => {
             const token_text = if (diagnostic.region.start != diagnostic.region.end)
@@ -586,7 +590,6 @@ pub const Diagnostic = struct {
         expected_exposes,
         expected_exposes_close_square,
         expected_exposes_open_square,
-        expected_imports,
         expected_package_or_platform_name,
         expected_package_or_platform_colon,
         expected_package_or_platform_string,
@@ -1498,7 +1501,6 @@ pub const Header = union(enum) {
         region: TokenizedRegion,
     },
     platform: struct {
-        // TODO: complete this
         name: Token.Idx,
         requires_rigids: Collection.Idx,
         requires_signatures: TypeAnno.Idx,
