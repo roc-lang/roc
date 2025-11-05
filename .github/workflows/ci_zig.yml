@@ -249,6 +249,16 @@ jobs:
           git clean -fdx
           git reset --hard HEAD
           nix develop ./src/ -c zig build && zig build snapshot && zig build test
+    
+      - name: Test Nix package                                                                                          
+        if: ${{ runner.os == 'Linux' || (runner.os == 'macOS' && runner.arch != 'X64') }}        
+        uses: ./.github/actions/flaky-retry                       
+        with:
+          command: |                                                                                                          
+            nix build ./src#roc                                                                                          
+            result/bin/roc check src/PROFILING/bench_repeated_check.roc          
+          error_string_contains: TemporaryNameServerFailure
+          retry_count: 3     
 
   zig-cross-compile:
     needs: check-once
