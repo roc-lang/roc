@@ -1485,126 +1485,126 @@ test "check type - comprehensive - annotations with inferred types" {
     );
 }
 
-// test "check type - comprehensive: polymorphism + lambdas + dispatch + annotations" {
-//     const source =
-//         \\main! = |_| {}
-//         \\
-//         \\# Define a polymorphic container with static dispatch
-//         \\Container(a) := [Empty, Value(a)].{
-//         \\  # Method with annotation
-//         \\  map : Container(a), (a -> b) -> Container(b)
-//         \\  map = |container, f| {
-//         \\    match container {
-//         \\      Value(val) => Value(f(val))
-//         \\      Empty => Empty
-//         \\    }
-//         \\  }
-//         \\
-//         \\  # Method without annotation (inferred)
-//         \\  get_or = |container, default| {
-//         \\    match container {
-//         \\      Value(val) => val
-//         \\      Empty => default
-//         \\    }
-//         \\  }
-//         \\
-//         \\  # Chained method dispatch
-//         \\  flat_map : Container(a), (a -> Container(b)) -> Container(b)
-//         \\  flat_map = |container, f| {
-//         \\    match container {
-//         \\      Value(val) => f(val)
-//         \\      Empty => Empty
-//         \\    }
-//         \\  }
-//         \\}
-//         \\
-//         \\# First layer: polymorphic helper with annotation
-//         \\compose : (b -> c), (a -> b), a -> c
-//         \\compose = |g, f, x| g(f(x))
-//         \\
-//         \\# Second layer: inferred polymorphic function using compose
-//         \\transform_twice = |f, x| {
-//         \\  first = compose(f, f, x)
-//         \\  second = compose(f, f, first)
-//         \\  second
-//         \\}
-//         \\
-//         \\# Third layer: curried function (multiple lambda layers)
-//         \\make_processor : (a -> b) -> ((b -> c) -> (a -> c))
-//         \\make_processor = |f1| |f2| |x| {
-//         \\  step1 = f1(x)
-//         \\  step2 = f2(step1)
-//         \\  step2
-//         \\}
-//         \\
-//         \\# Fourth layer: polymorphic function using static dispatch
-//         \\process_with_method : a, c -> d where [a.map : a, (b -> c) -> d]
-//         \\process_with_method = |container, value| {
-//         \\  # Multiple nested lambdas with let-polymorphism
-//         \\  id = |x| x
-//         \\
-//         \\  result = container.map(|_| id(value))
-//         \\  result
-//         \\}
-//         \\
-//         \\# Fifth layer: combine everything
-//         \\main = {
-//         \\  # Let-polymorphism layer 1
-//         \\  # TODO INLINE ANNOS
-//         \\  # id : a -> a
-//         \\  id = |x| x
-//         \\
-//         \\  # Let-polymorphism layer 2 with nested lambdas
-//         \\  _apply_to_container = |f| |container| |default| {
-//         \\    mapped = container.map(f)
-//         \\    mapped.get_or(default)
-//         \\  }
-//         \\
-//         \\  # Create containers
-//         \\  num_container = Container.Value(100)
-//         \\  str_container = Container.Value("hello")
-//         \\  _empty_container = Container.Empty
-//         \\
-//         \\  # Use id polymorphically on different types
-//         \\  id_num = id(42)
-//         \\  id_str = id("world")
-//         \\  id_bool = id(Bool.True)
-//         \\
-//         \\  # Multiple layers of curried application
-//         \\  add_ten = |x| x + 10
-//         \\  processor = make_processor(add_ten)(add_ten)
-//         \\  processed = processor(5)
-//         \\
-//         \\  # Static dispatch with polymorphic methods
-//         \\  num_result = num_container.map(|x| x + 1)
-//         \\  _str_result = str_container.map(|s| s)
-//         \\
-//         \\  # Chain method calls with static dispatch
-//         \\  chained = num_container
-//         \\    .map(|x| x + 1)
-//         \\    .flat_map(|x| Container.Value(x + 2))
-//         \\    .get_or(0)
-//         \\
-//         \\  # Use transform_twice with let-polymorphism
-//         \\  double_fn = |x| x + x
-//         \\  transformed = transform_twice(double_fn, 3)
-//         \\
-//         \\  # Final result combining all techniques
-//         \\  {
-//         \\    id_results: (id_num, id_str, id_bool),
-//         \\    processed: processed,
-//         \\    chained: chained,
-//         \\    transformed: transformed,
-//         \\    final: num_result.get_or(0),
-//         \\  }
-//         \\}
-//     ;
-//     try checkTypesModule(
-//         source,
-//         .{ .pass = .{ .def = "main" } },
-//         "{ id_results: (Num(_size), Str, Bool), processed: Num(_size), chained: Num(_size), transformed: Num(_size), final: Num(_size) }",
-//     );
-// }
+test "check type - comprehensive: polymorphism + lambdas + dispatch + annotations" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\# Define a polymorphic container with static dispatch
+        \\Container(a) := [Empty, Value(a)].{
+        \\  # Method with annotation
+        \\  map : Container(a), (a -> b) -> Container(b)
+        \\  map = |container, f| {
+        \\    match container {
+        \\      Value(val) => Value(f(val))
+        \\      Empty => Empty
+        \\    }
+        \\  }
+        \\
+        \\  # Method without annotation (inferred)
+        \\  get_or = |container, default| {
+        \\    match container {
+        \\      Value(val) => val
+        \\      Empty => default
+        \\    }
+        \\  }
+        \\
+        \\  # Chained method dispatch
+        \\  flat_map : Container(a), (a -> Container(b)) -> Container(b)
+        \\  flat_map = |container, f| {
+        \\    match container {
+        \\      Value(val) => f(val)
+        \\      Empty => Empty
+        \\    }
+        \\  }
+        \\}
+        \\
+        \\# First layer: polymorphic helper with annotation
+        \\compose : (b -> c), (a -> b), a -> c
+        \\compose = |g, f, x| g(f(x))
+        \\
+        \\# Second layer: inferred polymorphic function using compose
+        \\transform_twice = |f, x| {
+        \\  first = compose(f, f, x)
+        \\  second = compose(f, f, first)
+        \\  second
+        \\}
+        \\
+        \\# Third layer: curried function (multiple lambda layers)
+        \\make_processor : (a -> b) -> ((b -> c) -> (a -> c))
+        \\make_processor = |f1| |f2| |x| {
+        \\  step1 = f1(x)
+        \\  step2 = f2(step1)
+        \\  step2
+        \\}
+        \\
+        \\# Fourth layer: polymorphic function using static dispatch
+        \\process_with_method : a, c -> d where [a.map : a, (b -> c) -> d]
+        \\process_with_method = |container, value| {
+        \\  # Multiple nested lambdas with let-polymorphism
+        \\  id = |x| x
+        \\
+        \\  result = container.map(|_| id(value))
+        \\  result
+        \\}
+        \\
+        \\# Fifth layer: combine everything
+        \\main = {
+        \\  # Let-polymorphism layer 1
+        \\  # TODO INLINE ANNOS
+        \\  # id : a -> a
+        \\  id = |x| x
+        \\
+        \\  # Let-polymorphism layer 2 with nested lambdas
+        \\  _apply_to_container = |f| |container| |default| {
+        \\    mapped = container.map(f)
+        \\    mapped.get_or(default)
+        \\  }
+        \\
+        \\  # Create containers
+        \\  num_container = Container.Value(100)
+        \\  str_container = Container.Value("hello")
+        \\  _empty_container = Container.Empty
+        \\
+        \\  # Use id polymorphically on different types
+        \\  id_num = id(42)
+        \\  id_str = id("world")
+        \\  id_bool = id(Bool.True)
+        \\
+        \\  # Multiple layers of curried application
+        \\  add_ten = |x| x + 10
+        \\  processor = make_processor(add_ten)(add_ten)
+        \\  processed = processor(5)
+        \\
+        \\  # Static dispatch with polymorphic methods
+        \\  num_result = num_container.map(|x| x + 1)
+        \\  _str_result = str_container.map(|s| s)
+        \\
+        \\  # Chain method calls with static dispatch
+        \\  chained = num_container
+        \\    .map(|x| x + 1)
+        \\    .flat_map(|x| Container.Value(x + 2))
+        \\    .get_or(0)
+        \\
+        \\  # Use transform_twice with let-polymorphism
+        \\  double_fn = |x| x + x
+        \\  transformed = transform_twice(double_fn, 3)
+        \\
+        \\  # Final result combining all techniques
+        \\  {
+        \\    id_results: (id_num, id_str, id_bool),
+        \\    processed: processed,
+        \\    chained: chained,
+        \\    transformed: transformed,
+        \\    final: num_result.get_or(0),
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "main" } },
+        "{ chained: Num(_size), final: Num(_size2), id_results: (Num(_size3), Str, Bool), processed: Num(_size4), transformed: Num(_size5) }",
+    );
+}
 
 // helpers - module //
 
