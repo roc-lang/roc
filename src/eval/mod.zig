@@ -41,4 +41,6 @@ test "eval tests" {
     std.testing.refAllDecls(@import("test/interpreter_style_test.zig"));
     std.testing.refAllDecls(@import("test/interpreter_polymorphism_test.zig"));
     std.testing.refAllDecls(@import("test/anno_only_interp_test.zig"));
+    std.testing.refAllDecls(@import("test/low_level_interp_test.zig"));
+    std.testing.refAllDecls(@import("test/stack_test.zig"));
 }

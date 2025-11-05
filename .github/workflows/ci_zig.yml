@@ -68,6 +68,10 @@ jobs:
         run: |
           zig build test-serialization-sizes
 
+      - name: Check Test Wiring
+        run: |
+          ./ci/check_test_wiring.sh
+
   zig-tests:
     needs: check-once
     runs-on: ${{ matrix.os }}
