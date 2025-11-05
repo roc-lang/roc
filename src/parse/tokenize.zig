@@ -1465,13 +1465,12 @@ pub const Tokenizer = struct {
                     if (next) |n| {
                         if (n >= 'a' and n <= 'z') {
                             // Dollar sign followed by lowercase letter - reusable identifier
+                            var tag: Token.Tag = .LowerIdent;
                             self.cursor.pos += 1;
-                            const tag = self.cursor.chompIdentLower();
-                            if (tag == .LowerIdent or tag == .MalformedUnicodeIdent) {
-                                try self.pushTokenInternedHere(gpa, tag, start, start);
-                            } else {
-                                try self.pushTokenNormalHere(gpa, tag, start);
+                            if (!self.cursor.chompIdentGeneral()) {
+                                tag = .MalformedUnicodeIdent;
                             }
+                            try self.pushTokenInternedHere(gpa, tag, start, start);
                         } else if (n >= 'A' and n <= 'Z') {
                             // Dollar sign followed by uppercase letter - reusable identifier
                             var tag: Token.Tag = .UpperIdent;
