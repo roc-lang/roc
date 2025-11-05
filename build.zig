@@ -598,6 +598,41 @@ pub fn build(b: *std.Build) void {
     const is_native = target.query.isNativeCpu() and target.query.isNativeOs() and (target.query.isNativeAbi() or target.result.abi.isMusl());
     const is_windows = target.result.os.tag == .windows;
 
+    // fx platform effectful functions test - only run on native builds
+    if (is_native) {
+        // Create fx test platform host static library
+        const test_platform_fx_host_lib = createTestPlatformHostLib(
+            b,
+            "test_platform_fx_host",
+            "test/fx/platform/host.zig",
+            target,
+            optimize,
+            roc_modules,
+        );
+
+        // Copy the fx test platform host library to the source directory
+        const copy_test_fx_host = b.addUpdateSourceFiles();
+        const test_fx_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
+        copy_test_fx_host.addCopyFileToSource(test_platform_fx_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/fx/platform", test_fx_host_filename }));
+        b.getInstallStep().dependOn(&copy_test_fx_host.step);
+
+        const fx_platform_test = b.addTest(.{
+            .name = "fx_platform_test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/cli/test/fx_platform_test.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+            .filters = test_filters,
+        });
+
+        const run_fx_platform_test = b.addRunArtifact(fx_platform_test);
+        if (run_args.len != 0) {
+            run_fx_platform_test.addArgs(run_args);
+        }
+        tests_summary.addRun(&run_fx_platform_test.step);
+    }
+
     var build_afl = false;
     if (!is_native) {
         std.log.warn("Cross compilation does not support fuzzing (Only building repro executables)", .{});
