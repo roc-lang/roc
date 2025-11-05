@@ -688,7 +688,7 @@ pub const Cursor = struct {
     /// Returns either the original token hypothesis, or a malformed token tag.
     pub fn chompNumberSuffix(self: *Cursor, hypothesis: Token.Tag) Token.Tag {
         if (self.peek()) |c| {
-            const is_ident_char = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c >= 0x80;
+            const is_ident_char = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c == '$' or c >= 0x80;
             if (!is_ident_char) {
                 return hypothesis;
             }
