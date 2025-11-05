@@ -598,8 +598,8 @@ pub fn build(b: *std.Build) void {
     const is_native = target.query.isNativeCpu() and target.query.isNativeOs() and (target.query.isNativeAbi() or target.result.abi.isMusl());
     const is_windows = target.result.os.tag == .windows;
 
-    // fx platform effectful functions test - only run on native builds
-    if (is_native) {
+    // fx platform effectful functions test - only run when not cross-compiling
+    if (target.query.isNativeCpu() and target.query.isNativeOs() and target.query.isNativeAbi()) {
         // Create fx test platform host static library
         const test_platform_fx_host_lib = createTestPlatformHostLib(
             b,

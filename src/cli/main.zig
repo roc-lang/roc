@@ -2166,63 +2166,77 @@ fn rocBuild(allocs: *Allocators, args: cli_args.BuildArgs) !void {
         },
     }
 
-    // Only support int test platform for cross-compilation
-    // Check if path contains "int" directory using cross-platform path handling
-    const path_contains_int = blk: {
-        var iter = std.fs.path.componentIterator(args.path) catch break :blk false;
+    // Check if we're actually cross-compiling
+    const is_cross_compiling = host_target != target;
+
+    // Get platform paths from the app file
+    const platform_paths = if (is_cross_compiling) blk: {
+        // Only support int test platform for cross-compilation
+        // Check if path contains "int" directory using cross-platform path handling
+        var iter = std.fs.path.componentIterator(args.path) catch {
+            std.log.err("roc build cross-compilation currently only supports the int test platform", .{});
+            std.log.err("Your app path: {s}", .{args.path});
+            return error.UnsupportedPlatform;
+        };
         while (iter.next()) |component| {
             if (std.mem.eql(u8, component.name, "int")) {
-                break :blk true;
+                const platform_dir = try std.fs.path.join(allocs.arena, &.{ "test", "int", "platform" });
+                const host_lib_filename = if (target.toOsTag() == .windows) "host.lib" else "libhost.a";
+                const host_lib_path = try std.fs.path.join(allocs.arena, &.{ platform_dir, host_lib_filename });
+                const platform_source_path = try std.fs.path.join(allocs.arena, &.{ platform_dir, "main.roc" });
+                break :blk PlatformPaths{
+                    .host_lib_path = host_lib_path,
+                    .platform_source_path = platform_source_path,
+                };
             }
         }
-        break :blk false;
-    };
-
-    const platform_type = if (path_contains_int)
-        "int"
-    else {
         std.log.err("roc build cross-compilation currently only supports the int test platform", .{});
         std.log.err("Your app path: {s}", .{args.path});
         std.log.err("For str platform and other platforms, please use regular 'roc' command", .{});
         return error.UnsupportedPlatform;
-    };
-
-    std.log.info("Detected platform type: {s}", .{platform_type});
-
-    // Get platform directory path
-    const platform_dir = if (std.mem.eql(u8, platform_type, "int"))
-        try std.fs.path.join(allocs.arena, &.{ "test", "int", "platform" })
-    else
-        try std.fs.path.join(allocs.arena, &.{ "test", "str", "platform" });
-
-    // Check that platform exists
-    std.fs.cwd().access(platform_dir, .{}) catch |err| {
-        std.log.err("Platform directory not found: {s} ({})", .{ platform_dir, err });
+    } else resolvePlatformPaths(allocs, args.path) catch |err| {
+        std.log.err("Failed to resolve platform paths for {s}: {}", .{ args.path, err });
         return err;
     };
 
-    // Get target-specific host library path
-    // Use target OS to determine library filename, not host OS
-    const host_lib_filename = if (target.toOsTag() == .windows) "host.lib" else "libhost.a";
-    const host_lib_path = blk: {
+    const platform_dir = std.fs.path.dirname(platform_paths.host_lib_path) orelse {
+        std.log.err("Invalid platform host library path", .{});
+        return error.InvalidPlatform;
+    };
+
+    // For cross-compilation, try target-specific host library
+    const host_lib_path = if (is_cross_compiling) blk: {
+        const host_lib_filename = if (target.toOsTag() == .windows) "host.lib" else "libhost.a";
         // Try target-specific host library first
         const target_specific_path = try std.fs.path.join(allocs.arena, &.{ platform_dir, "targets", @tagName(target), host_lib_filename });
         std.fs.cwd().access(target_specific_path, .{}) catch {
             // Fallback to generic host library
             std.log.warn("Target-specific host library not found, falling back to generic: {s}", .{target_specific_path});
-            break :blk try std.fs.path.join(allocs.arena, &.{ platform_dir, host_lib_filename });
+            break :blk platform_paths.host_lib_path;
         };
         break :blk target_specific_path;
-    };
+    } else platform_paths.host_lib_path;
 
     std.fs.cwd().access(host_lib_path, .{}) catch |err| {
         std.log.err("Host library not found: {s} ({})", .{ host_lib_path, err });
         return err;
     };
 
-    // Get expected entrypoints for this platform
-    const entrypoints = try app_stub.getTestPlatformEntrypoints(allocs.gpa, platform_type);
-    defer allocs.gpa.free(entrypoints);
+    // Get expected entrypoints by parsing the platform's main.roc file
+    const platform_source_path = platform_paths.platform_source_path orelse {
+        std.log.err("Platform source file not found for: {s}", .{args.path});
+        return error.NoPlatformFound;
+    };
+    var entrypoints_list = std.array_list.Managed([]const u8).init(allocs.arena);
+    defer entrypoints_list.deinit();
+
+    try extractEntrypointsFromPlatform(allocs, platform_source_path, &entrypoints_list);
+
+    // Convert to PlatformEntrypoint array for generateAppStubObject
+    const entrypoints = try allocs.arena.alloc(app_stub.PlatformEntrypoint, entrypoints_list.items.len);
+    for (entrypoints_list.items, 0..) |name, i| {
+        entrypoints[i] = app_stub.PlatformEntrypoint{ .name = name };
+    }
 
     std.log.info("Expected entrypoints: {}", .{entrypoints.len});
     for (entrypoints, 0..) |ep, i| {
@@ -2271,9 +2285,6 @@ fn rocBuild(allocs: *Allocators, args: cli_args.BuildArgs) !void {
         try platform_files_post.append(libc);
     } else if (target.isDynamic()) {
         // For dynamic linking with glibc, generate stub library for cross-compilation
-        // Check if we're doing actual cross-compilation
-        const is_cross_compiling = host_target != target;
-
         if (is_cross_compiling) {
             // For cross-compilation, use pre-built vendored stubs from the platform targets folder
             const target_name = switch (target) {
