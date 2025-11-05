@@ -74,6 +74,8 @@ anno_free_vars: base.Scratch(FreeVar),
 decl_free_vars: base.Scratch(FreeVar),
 /// annos we've already seen when generation a type from an annotation
 seen_annos: std.AutoHashMap(CIR.TypeAnno.Idx, Var),
+/// A pool of solver envs
+env_pool: EnvPool,
 /// wrapper around generalization, contains some internal state used to do it's work
 generalizer: Generalizer,
 /// A map from one var to another. Used in instantiation and var copying
@@ -158,6 +160,7 @@ pub fn init(
         .anno_free_vars = try base.Scratch(FreeVar).init(gpa),
         .decl_free_vars = try base.Scratch(FreeVar).init(gpa),
         .seen_annos = std.AutoHashMap(CIR.TypeAnno.Idx, Var).init(gpa),
+        .env_pool = try EnvPool.init(gpa),
         .generalizer = try Generalizer.init(gpa, types),
         .var_map = std.AutoHashMap(Var, Var).init(gpa),
         .rigid_var_substitutions = std.AutoHashMapUnmanaged(Ident.Idx, Var){},
@@ -184,6 +187,7 @@ pub fn deinit(self: *Self) void {
     self.anno_free_vars.deinit();
     self.decl_free_vars.deinit();
     self.seen_annos.deinit();
+    self.env_pool.deinit();
     self.generalizer.deinit(self.gpa);
     self.var_map.deinit();
     self.rigid_var_substitutions.deinit(self.gpa);
@@ -285,6 +289,13 @@ const Env = struct {
     fn deinit(self: *Env, gpa: std.mem.Allocator) void {
         self.var_pool.deinit();
         self.deferred_static_dispatch_constraints.deinit(gpa);
+    }
+
+    /// Resets internal state of env and set rank to generalized
+    fn reset(self: *Env) void {
+        self.var_pool.current_rank = .generalized;
+        self.var_pool.clearRetainingCapacity();
+        self.deferred_static_dispatch_constraints.items.clearRetainingCapacity();
     }
 
     fn rank(self: *const Env) Rank {
@@ -635,8 +646,12 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     try ensureTypeStoreIsFilled(self);
 
     // Create a solver env
-    var env = try Env.init(self.gpa, .generalized);
-    defer env.deinit(self.gpa);
+    var env = try self.env_pool.acquire(.generalized);
+    defer self.env_pool.release(env);
+
+    // TODO: Generating type from type stmts writes types into the env, but i
+    // don't think it _needs_ to. We reset before solving each def. We may be able
+    // to save some perf by not passing `env` into the type stmt functions
 
     // Copy builtin types (Bool, Result) into this module's type store
     try self.copyBuiltinTypes();
@@ -685,35 +700,15 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
         try self.top_level_ptrns.put(def.pattern, .not_processed);
     }
 
-    // Type-check definitions in SCC (Strongly Connected Components) order
-    // This ensures that definitions are checked in dependency order,
-    // and handles mutually recursive definitions correctly.
-    // NOTE: This includes both top-level defs AND associated items (e.g. TypeName.item_name)
-    // evaluation_order must be set by canonicalization before calling checkFile()
-    const eval_order = self.cir.evaluation_order.?;
-
-    // Iterate through SCCs in topologically sorted order
-    for (eval_order.sccs) |scc| {
-        if (scc.is_recursive) {
-            // TODO: Implement proper recursive type-checking for mutually recursive definitions
-            // For now, we check each def in the cycle independently, which may produce
-            // less precise error messages for recursive definitions.
-            // The old Rust compiler used IllegalCycleMark to handle this - see:
-            // crates/compiler/can/src/def.rs for reference implementation
-
-            // Check each def in the recursive group
-            for (scc.defs) |def_idx| {
-                try self.checkDef(def_idx, &env);
-            }
-        } else {
-            // Non-recursive SCC - check the def(s) normally
-            // Note: A non-recursive SCC might still have multiple defs if they form
-            // a connected component but with no back edges
-            for (scc.defs) |def_idx| {
-                try self.checkDef(def_idx, &env);
-            }
-        }
+    // Then, iterate over defs again, inferring types
+    for (defs_slice) |def_idx| {
+        env.reset();
+        try self.checkDef(def_idx, &env);
     }
+
+    // Note that we can't use SCCs to determine the order to resolve defs
+    // because anonmyous static dispatch makes function order not knowable
+    // before type inference
 }
 
 // repl //
@@ -726,8 +721,8 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     try self.copyBuiltinTypes();
 
     // Create a solver env
-    var env = try Env.init(self.gpa, .generalized);
-    defer env.deinit(self.gpa);
+    var env = try self.env_pool.acquire(.generalized);
+    defer self.env_pool.release(env);
 
     // First, iterate over the statements, generating types for each type declaration
     const stms_slice = self.cir.store.sliceStatements(self.cir.builtin_statements);
@@ -3985,9 +3980,8 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                     if (mb_processing_status == .processing) {
                         // TODO: Handle recursive defs
                     } else if (mb_processing_status == .not_processed) {
-                        // If we haven't, check that def first
-                        var sub_env = try Env.init(self.gpa, Rank.generalized);
-                        defer sub_env.deinit(self.gpa);
+                        var sub_env = try self.env_pool.acquire(.generalized);
+                        defer self.env_pool.release(sub_env);
 
                         try self.checkDef(def_idx, &sub_env);
                     }
@@ -4078,3 +4072,64 @@ fn reportConstraintError(
 
     try self.markConstraintFunctionAsError(constraint, env);
 }
+
+/// Pool for reusing Env instances to avoid repeated allocations
+const EnvPool = struct {
+    available: std.ArrayList(Env),
+    gpa: Allocator,
+
+    fn init(gpa: Allocator) std.mem.Allocator.Error!EnvPool {
+        var pool = try std.ArrayList(Env).initCapacity(gpa, 8);
+        for (0..8) |_| {
+            pool.appendAssumeCapacity(try Env.init(gpa, .generalized));
+        }
+        return .{
+            .available = pool,
+            .gpa = gpa,
+        };
+    }
+
+    fn deinit(self: *EnvPool) void {
+        for (self.available.items) |*env| {
+            env.deinit(self.gpa);
+        }
+        self.available.deinit(self.gpa);
+    }
+
+    /// Acquire an Env from the pool, or create a new one if none available
+    fn acquire(self: *EnvPool, at: Rank) std.mem.Allocator.Error!Env {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
+        if (self.available.pop()) |env| {
+            // Reset the env for reuse
+            var reused_env = env;
+            reused_env.reset();
+            return reused_env;
+        } else {
+            // Otherwise init a new one and ensure there's room to put it back
+            // into the pool when we're done using it
+            try self.available.ensureUnusedCapacity(self.gpa, 1);
+            return try Env.init(self.gpa, at);
+        }
+    }
+
+    /// Return an Env to the pool for reuse.
+    /// If the pool cannot fit it, then deinit the env
+    ///
+    /// * If we aquire an existing env from the pool, there should be a slot
+    ///   availble to return it
+    /// * If we init a new env when we aquire, the aquire func should expand the
+    ///   pool so we have room to return it
+    fn release(self: *EnvPool, env: Env) void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
+        var releasable_env = env;
+        releasable_env.reset();
+        self.available.append(self.gpa, releasable_env) catch {
+            // If we can't add to the pool, just deinit this env
+            releasable_env.deinit(self.gpa);
+        };
+    }
+};
