@@ -187,7 +187,7 @@ test "edge case: positive 0" {
     try testing.expectEqual(true, reqs.frac_requirements.fits_in_dec);
 }
 
-test "infer hexadecimal literals as unbound integer" {
+test "infer hexadecimal literals as unbound num" {
     const test_cases = [_]struct {
         source: []const u8,
         expected_sign_needed: bool,
@@ -229,22 +229,16 @@ test "infer hexadecimal literals as unbound integer" {
 
         try testing.expect(typ == .structure);
         try testing.expect(typ.structure == .num);
-        try testing.expect(typ.structure.num == .num_poly);
+        try testing.expect(typ.structure.num == .num_unbound);
 
-        const int_typ = test_env.module_env.types.resolveVar(typ.structure.num.num_poly).desc.content;
+        const reqs = typ.structure.num.num_unbound;
 
-        try testing.expect(int_typ == .structure);
-        try testing.expect(int_typ.structure == .num);
-        try testing.expect(int_typ.structure.num == .int_unbound);
-
-        const reqs = int_typ.structure.num.int_unbound;
-
-        try testing.expectEqual(tc.expected_sign_needed, reqs.sign_needed);
-        try testing.expectEqual(tc.expected_bits_needed.toBits(), reqs.bits_needed);
+        try testing.expectEqual(tc.expected_sign_needed, reqs.int_requirements.sign_needed);
+        try testing.expectEqual(tc.expected_bits_needed.toBits(), reqs.int_requirements.bits_needed);
     }
 }
 
-test "infer binary literals as unbound integer" {
+test "infer binary literals as unbound num" {
     const test_cases = [_]struct {
         source: []const u8,
         expected_sign_needed: bool,
@@ -281,22 +275,16 @@ test "infer binary literals as unbound integer" {
 
         try testing.expect(typ == .structure);
         try testing.expect(typ.structure == .num);
-        try testing.expect(typ.structure.num == .num_poly);
+        try testing.expect(typ.structure.num == .num_unbound);
 
-        const int_typ = test_env.module_env.types.resolveVar(typ.structure.num.num_poly).desc.content;
+        const reqs = typ.structure.num.num_unbound;
 
-        try testing.expect(int_typ == .structure);
-        try testing.expect(int_typ.structure == .num);
-        try testing.expect(int_typ.structure.num == .int_unbound);
-
-        const reqs = int_typ.structure.num.int_unbound;
-
-        try testing.expectEqual(tc.expected_sign_needed, reqs.sign_needed);
-        try testing.expectEqual(tc.expected_bits_needed.toBits(), reqs.bits_needed);
+        try testing.expectEqual(tc.expected_sign_needed, reqs.int_requirements.sign_needed);
+        try testing.expectEqual(tc.expected_bits_needed.toBits(), reqs.int_requirements.bits_needed);
     }
 }
 
-test "infer octal literals as unbound integer" {
+test "infer octal literals as unbound num" {
     const test_cases = [_]struct {
         source: []const u8,
         expected_sign_needed: bool,
@@ -333,17 +321,11 @@ test "infer octal literals as unbound integer" {
 
         try testing.expect(typ == .structure);
         try testing.expect(typ.structure == .num);
-        try testing.expect(typ.structure.num == .num_poly);
+        try testing.expect(typ.structure.num == .num_unbound);
 
-        const int_typ = test_env.module_env.types.resolveVar(typ.structure.num.num_poly).desc.content;
+        const reqs = typ.structure.num.num_unbound;
 
-        try testing.expect(int_typ == .structure);
-        try testing.expect(int_typ.structure == .num);
-        try testing.expect(int_typ.structure.num == .int_unbound);
-
-        const reqs = int_typ.structure.num.int_unbound;
-
-        try testing.expectEqual(tc.expected_sign_needed, reqs.sign_needed);
-        try testing.expectEqual(tc.expected_bits_needed.toBits(), reqs.bits_needed);
+        try testing.expectEqual(tc.expected_sign_needed, reqs.int_requirements.sign_needed);
+        try testing.expectEqual(tc.expected_bits_needed.toBits(), reqs.int_requirements.bits_needed);
     }
 }
