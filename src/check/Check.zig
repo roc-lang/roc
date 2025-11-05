@@ -2945,10 +2945,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             does_fx = try self.checkExpr(dot_access.receiver, env, .no_expectation) or does_fx;
             const receiver_var = ModuleEnv.varFrom(dot_access.receiver);
 
-            // TODO: DELETE
-            var tw = try self.cir.initTypeWriter();
-            defer tw.deinit();
-
             if (dot_access.args) |dispatch_args| {
                 // If this dot access has args, then it's static dispatch
 
@@ -3109,10 +3105,6 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
         const stmt_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(stmt_idx));
 
         try self.setVarRank(stmt_var, env);
-
-        // TODO: DELETE
-        var tw = try self.cir.initTypeWriter();
-        defer tw.deinit();
 
         switch (stmt) {
             .s_decl => |decl_stmt| {
@@ -3829,10 +3821,6 @@ fn copyVar(self: *Self, other_module_var: Var, other_module_env: *const ModuleEn
 /// Initially, we only have to check constraint for `Test.to_str2`. But when we
 /// process that, we then have to check `Test.to_str`.
 fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    // TODO: DELETE
-    var tw = try self.cir.initTypeWriter();
-    defer tw.deinit();
-
     var deferred_constraint_len = env.deferred_static_dispatch_constraints.items.items.len;
     var deferred_constraint_index: usize = 0;
     while (deferred_constraint_index < deferred_constraint_len) : ({

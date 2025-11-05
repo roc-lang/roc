@@ -1461,6 +1461,60 @@ test "check type - comprehensive - static dispatch with multiple methods" {
     );
 }
 
+test "check type - comprehensive - static dispatch with multiple methods 2" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Container(a) := [Empty, Value(a)].{
+        \\  mapAdd5 = |container| {
+        \\    container
+        \\      .mapAdd4()
+        \\      .mapAdd1()
+        \\  }
+        \\
+        \\  mapAdd4 = |container| {
+        \\    container
+        \\      .mapAdd2()
+        \\      .mapAdd2()
+        \\  }
+        \\
+        \\  mapAdd3 = |container| {
+        \\    container
+        \\      .mapAdd2()
+        \\      .mapAdd1()
+        \\  }
+        \\
+        \\  mapAdd2 = |container| {
+        \\    container
+        \\      .mapAdd1()
+        \\      .mapAdd1()
+        \\  }
+        \\
+        \\  mapAdd1 = |container| {
+        \\    container.map(|val| val + 1)
+        \\  }
+        \\
+        \\  map : Container(a), (a -> b) -> Container(b)
+        \\  map = |container, f| {
+        \\    match container {
+        \\      Value(val) => Value(f(val))
+        \\      Empty => Empty
+        \\    }
+        \\  }
+        \\}
+        \\
+        \\func = {
+        \\  num_container = Container.Value(100)
+        \\  num_container.mapAdd5()
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "func" } },
+        "Container(Num(_size))",
+    );
+}
+
 test "check type - comprehensive - annotations with inferred types" {
     const source =
         \\main! = |_| {}
