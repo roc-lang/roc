@@ -102,10 +102,13 @@ static_dispatch_method_name_buf: std.ArrayList(u8),
 /// Map representation of Ident -> Var, used in checking static dispatch constraints
 ident_to_var_map: std.AutoHashMap(Ident.Idx, Var),
 /// Map representation all top level patterns, and if we've processed them yet
-top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, HasProcessed),
+top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, DefProcessed),
 
 /// A map of rigid variables that we build up during a branch of type checking
 const FreeVar = struct { ident: base.Ident.Idx, var_: Var };
+
+/// A def + processing data
+const DefProcessed = struct { def_idx: CIR.Def.Idx, status: HasProcessed };
 
 /// Indicates if something has been processed or not
 const HasProcessed = enum { processed, processing, not_processed };
@@ -173,7 +176,7 @@ pub fn init(
         .bool_var = undefined, // Will be initialized in copyBuiltinTypes()
         .static_dispatch_method_name_buf = try std.ArrayList(u8).initCapacity(gpa, 32),
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
-        .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, HasProcessed).init(gpa),
+        .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
     };
 }
 
@@ -609,8 +612,10 @@ fn setVarRank(self: *Self, target_var: Var, env: *Env) std.mem.Allocator.Error!v
         self.types.setDescRank(resolved.desc_idx, env.rank());
         try env.var_pool.addVarToRank(target_var, env.rank());
     } else {
-        // TODO: Is this a bug?
-        // std.debug.panic("INVALID SET VAR RANK\n", .{});
+        if (builtin.mode == .Debug) {
+            std.debug.panic("trying to set rank of var {}, but var is a redirect", .{@intFromEnum(target_var)});
+        }
+        try self.unifyWith(target_var, .err, env);
     }
 }
 
@@ -697,7 +702,7 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     const defs_slice = self.cir.store.sliceDefs(self.cir.all_defs);
     for (defs_slice) |def_idx| {
         const def = self.cir.store.getDef(def_idx);
-        try self.top_level_ptrns.put(def.pattern, .not_processed);
+        try self.top_level_ptrns.put(def.pattern, .{ .def_idx = def_idx, .status = .not_processed });
     }
 
     // Then, iterate over defs again, inferring types
@@ -762,12 +767,15 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     const ptrn_var = ModuleEnv.varFrom(def.pattern);
     const expr_var = ModuleEnv.varFrom(def.expr);
 
-    if (self.top_level_ptrns.get(def.pattern) == .processed) {
-        // If we've already processed this def, return immediately
-        return;
+    if (self.top_level_ptrns.get(def.pattern)) |processing_def| {
+        if (processing_def.status == .processed) {
+            // If we've already processed this def, return immediately
+            return;
+        }
     }
 
-    try self.top_level_ptrns.put(def.pattern, .processing);
+    // Make as processing
+    try self.top_level_ptrns.put(def.pattern, .{ .def_idx = def_idx, .status = .processing });
 
     {
         try env.var_pool.pushRank();
@@ -820,7 +828,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     }
 
     // Mark as processed
-    try self.top_level_ptrns.put(def.pattern, .processed);
+    try self.top_level_ptrns.put(def.pattern, .{ .def_idx = def_idx, .status = .processed });
 }
 
 // create types for type decls //
@@ -2519,6 +2527,22 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const pat_var = ModuleEnv.varFrom(lookup.pattern_idx);
             const resolved_pat = self.types.resolveVar(pat_var).desc;
 
+            const mb_processing_def = self.top_level_ptrns.get(lookup.pattern_idx);
+            if (mb_processing_def) |processing_def| {
+                switch (processing_def.status) {
+                    .not_processed => {
+                        var sub_env = try self.env_pool.acquire(.generalized);
+                        defer self.env_pool.release(sub_env);
+
+                        try self.checkDef(processing_def.def_idx, &sub_env);
+                    },
+                    .processing => {
+                        // TODO: Handle recursive defs
+                    },
+                    .processed => {},
+                }
+            }
+
             if (resolved_pat.rank == Rank.generalized) {
                 const instantiated = try self.instantiateVar(pat_var, env, .use_last_var);
                 _ = try self.unify(expr_var, instantiated, env);
@@ -3161,8 +3185,11 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 _ = try self.unify(stmt_var, var_expr, env);
             },
             .s_reassign => |reassign| {
-                // Check the pattern
-                try self.checkPattern(reassign.pattern_idx, env, .no_expectation);
+                // We don't need to check the pattern here since it was already
+                // checked when this var was created.
+                //
+                // try self.checkPattern(reassign.pattern_idx, env, .no_expectation);
+
                 const reassign_pattern_var: Var = ModuleEnv.varFrom(reassign.pattern_idx);
 
                 does_fx = try self.checkExpr(reassign.expr, env, .no_expectation) or does_fx;
@@ -3976,14 +4003,21 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 if (is_this_module) {
                     // Check if we've processed this def already.
                     const def = original_env.store.getDef(def_idx);
-                    const mb_processing_status = self.top_level_ptrns.get(def.pattern);
-                    if (mb_processing_status == .processing) {
-                        // TODO: Handle recursive defs
-                    } else if (mb_processing_status == .not_processed) {
-                        var sub_env = try self.env_pool.acquire(.generalized);
-                        defer self.env_pool.release(sub_env);
+                    const mb_processing_def = self.top_level_ptrns.get(def.pattern);
+                    if (mb_processing_def) |processing_def| {
+                        std.debug.assert(processing_def.def_idx == def_idx);
+                        switch (processing_def.status) {
+                            .not_processed => {
+                                var sub_env = try self.env_pool.acquire(.generalized);
+                                defer self.env_pool.release(sub_env);
 
-                        try self.checkDef(def_idx, &sub_env);
+                                try self.checkDef(def_idx, &sub_env);
+                            },
+                            .processing => {
+                                // TODO: Handle recursive defs
+                            },
+                            .processed => {},
+                        }
                     }
                 }
 

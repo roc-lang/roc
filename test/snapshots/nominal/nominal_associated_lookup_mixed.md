@@ -14,13 +14,26 @@ Foo := [Whatever].{
     transform = |x| x
 }
 
+result2 : Foo.Bar
+result2 = result
+
 result : Foo.Bar
 result = Foo.transform(Foo.defaultBar)
 ~~~
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named `result` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**nominal_associated_lookup_mixed.md:11:11:11:17:**
+```roc
+result2 = result
+```
+          ^^^^^^
+
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -29,6 +42,8 @@ LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,
 LowerIdent,OpColon,UpperIdent,NoSpaceDotUpperIdent,OpArrow,UpperIdent,NoSpaceDotUpperIdent,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,
 CloseCurly,
+LowerIdent,OpColon,UpperIdent,NoSpaceDotUpperIdent,
+LowerIdent,OpAssign,LowerIdent,
 LowerIdent,OpColon,UpperIdent,NoSpaceDotUpperIdent,
 LowerIdent,OpAssign,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,UpperIdent,NoSpaceDotLowerIdent,CloseRound,
 EndOfFile,
@@ -66,6 +81,11 @@ EndOfFile,
 						(args
 							(p-ident (raw "x")))
 						(e-ident (raw "x"))))))
+		(s-type-anno (name "result2")
+			(ty (name "Foo.Bar")))
+		(s-decl
+			(p-ident (raw "result2"))
+			(e-ident (raw "result")))
 		(s-type-anno (name "result")
 			(ty (name "Foo.Bar")))
 		(s-decl
@@ -82,6 +102,9 @@ Foo := [Whatever].{
 	transform : Foo.Bar -> Foo.Bar
 	transform = |x| x
 }
+
+result2 : Foo.Bar
+result2 = result
 
 result : Foo.Bar
 result = Foo.transform(Foo.defaultBar)
@@ -104,6 +127,11 @@ result = Foo.transform(Foo.defaultBar)
 			(ty-fn (effectful false)
 				(ty-lookup (name "Foo.Bar") (local))
 				(ty-lookup (name "Foo.Bar") (local)))))
+	(d-let
+		(p-assign (ident "result2"))
+		(e-runtime-error (tag "ident_not_in_scope"))
+		(annotation
+			(ty-lookup (name "Foo.Bar") (local))))
 	(d-let
 		(p-assign (ident "result"))
 		(e-call
@@ -130,6 +158,7 @@ result = Foo.transform(Foo.defaultBar)
 	(defs
 		(patt (type "Foo.Bar"))
 		(patt (type "Foo.Bar -> Foo.Bar"))
+		(patt (type "Error"))
 		(patt (type "Foo.Bar")))
 	(type_decls
 		(nominal (type "Foo")
@@ -139,5 +168,6 @@ result = Foo.transform(Foo.defaultBar)
 	(expressions
 		(expr (type "Foo.Bar"))
 		(expr (type "Foo.Bar -> Foo.Bar"))
+		(expr (type "Error"))
 		(expr (type "Foo.Bar"))))
 ~~~

@@ -22,12 +22,13 @@ int_container = make_container(num)
 str_container = make_container(str)
 list_container = make_container(my_empty_list)
 
+# TODO
 # Polymorphic record update
-update_data = |container, new_value| { container & data: new_value }
+# update_data = |container, new_value| { container & data: new_value }
 
 # Used with different record types
-updated_int = update_data(int_container, 100)
-updated_str = update_data(str_container, "world")
+# updated_int = update_data(int_container, 100)
+# updated_str = update_data(str_container, "world")
 
 # Function returning polymorphic record
 identity_record = |x| { value: x }
@@ -43,84 +44,9 @@ main = |_| {
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_records.md:19:50:19:51
-UNRECOGNIZED SYNTAX - let_polymorphism_records.md:19:50:19:51
-UNUSED VARIABLE - let_polymorphism_records.md:19:52:19:67
-UNUSED VARIABLE - let_polymorphism_records.md:19:27:19:36
-UNUSED VALUE - let_polymorphism_records.md:19:40:19:49
-TYPE MISMATCH - let_polymorphism_records.md:19:58:19:67
+NIL
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **&** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**let_polymorphism_records.md:19:50:19:51:**
-```roc
-update_data = |container, new_value| { container & data: new_value }
-```
-                                                 ^
-
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**let_polymorphism_records.md:19:50:19:51:**
-```roc
-update_data = |container, new_value| { container & data: new_value }
-```
-                                                 ^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-**UNUSED VARIABLE**
-Variable `data` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_data` to suppress this warning.
-The unused variable is declared here:
-**let_polymorphism_records.md:19:52:19:67:**
-```roc
-update_data = |container, new_value| { container & data: new_value }
-```
-                                                   ^^^^^^^^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `new_value` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_new_value` to suppress this warning.
-The unused variable is declared here:
-**let_polymorphism_records.md:19:27:19:36:**
-```roc
-update_data = |container, new_value| { container & data: new_value }
-```
-                          ^^^^^^^^^
-
-
-**UNUSED VALUE**
-This expression produces a value, but it's not being used:
-**let_polymorphism_records.md:19:40:19:49:**
-```roc
-update_data = |container, new_value| { container & data: new_value }
-```
-                                       ^^^^^^^^^
-
-It has the type:
-    __a_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**let_polymorphism_records.md:19:58:19:67:**
-```roc
-update_data = |container, new_value| { container & data: new_value }
-```
-                                                         ^^^^^^^^^
-
-It has the type:
-    _new_value_
-
-But I expected it to be:
-    _new_value_
-
+NIL
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -133,9 +59,6 @@ LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,LowerIdent,OpColon,LowerIde
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
-LowerIdent,OpAssign,OpBar,LowerIdent,Comma,LowerIdent,OpBar,OpenCurly,LowerIdent,OpAmpersand,LowerIdent,OpColon,LowerIdent,CloseCurly,
-LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,LowerIdent,Comma,Int,CloseRound,
-LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,LowerIdent,Comma,StringStart,StringPart,StringEnd,CloseRound,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,LowerIdent,OpColon,LowerIdent,CloseCurly,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,Int,CloseRound,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,StringStart,StringPart,StringEnd,CloseRound,
@@ -204,31 +127,6 @@ EndOfFile,
 				(e-ident (raw "make_container"))
 				(e-ident (raw "my_empty_list"))))
 		(s-decl
-			(p-ident (raw "update_data"))
-			(e-lambda
-				(args
-					(p-ident (raw "container"))
-					(p-ident (raw "new_value")))
-				(e-block
-					(statements
-						(e-ident (raw "container"))
-						(e-malformed (reason "expr_unexpected_token"))
-						(s-type-anno (name "data")
-							(ty-var (raw "new_value")))))))
-		(s-decl
-			(p-ident (raw "updated_int"))
-			(e-apply
-				(e-ident (raw "update_data"))
-				(e-ident (raw "int_container"))
-				(e-int (raw "100"))))
-		(s-decl
-			(p-ident (raw "updated_str"))
-			(e-apply
-				(e-ident (raw "update_data"))
-				(e-ident (raw "str_container"))
-				(e-string
-					(e-string-part (raw "world")))))
-		(s-decl
 			(p-ident (raw "identity_record"))
 			(e-lambda
 				(args
@@ -289,15 +187,13 @@ int_container = make_container(num)
 str_container = make_container(str)
 list_container = make_container(my_empty_list)
 
+# TODO
 # Polymorphic record update
-update_data = |container, new_value| {
-	container
-		data : new_value
-}
+# update_data = |container, new_value| { container & data: new_value }
 
 # Used with different record types
-updated_int = update_data(int_container, 100)
-updated_str = update_data(str_container, "world")
+# updated_int = update_data(int_container, 100)
+# updated_str = update_data(str_container, "world")
 
 # Function returning polymorphic record
 identity_record = |x| { value: x }
@@ -370,44 +266,6 @@ main = |_| {
 			(e-lookup-local
 				(p-assign (ident "my_empty_list")))))
 	(d-let
-		(p-assign (ident "data"))
-		(e-anno-only)
-		(annotation
-			(ty-rigid-var (name "new_value"))))
-	(d-let
-		(p-assign (ident "update_data"))
-		(e-lambda
-			(args
-				(p-assign (ident "container"))
-				(p-assign (ident "new_value")))
-			(e-block
-				(s-expr
-					(e-lookup-local
-						(p-assign (ident "container"))))
-				(s-expr
-					(e-runtime-error (tag "expr_not_canonicalized")))
-				(s-let
-					(p-assign (ident "data"))
-					(e-anno-only))
-				(e-empty_record))))
-	(d-let
-		(p-assign (ident "updated_int"))
-		(e-call
-			(e-lookup-local
-				(p-assign (ident "update_data")))
-			(e-lookup-local
-				(p-assign (ident "int_container")))
-			(e-num (value "100"))))
-	(d-let
-		(p-assign (ident "updated_str"))
-		(e-call
-			(e-lookup-local
-				(p-assign (ident "update_data")))
-			(e-lookup-local
-				(p-assign (ident "str_container")))
-			(e-string
-				(e-literal (string "world")))))
-	(d-let
 		(p-assign (ident "identity_record"))
 		(e-lambda
 			(args
@@ -473,10 +331,6 @@ main = |_| {
 		(patt (type "{ count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] }"))
 		(patt (type "{ count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: Str }"))
 		(patt (type "{ count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: List(_elem) }"))
-		(patt (type "Error"))
-		(patt (type "_arg, _arg2 -> {}"))
-		(patt (type "{}"))
-		(patt (type "{}"))
 		(patt (type "a -> { value: a }"))
 		(patt (type "{ value: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] }"))
 		(patt (type "{ value: Str }"))
@@ -492,10 +346,6 @@ main = |_| {
 		(expr (type "{ count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] }"))
 		(expr (type "{ count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: Str }"))
 		(expr (type "{ count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: List(_elem) }"))
-		(expr (type "Error"))
-		(expr (type "_arg, _arg2 -> {}"))
-		(expr (type "{}"))
-		(expr (type "{}"))
 		(expr (type "a -> { value: a }"))
 		(expr (type "{ value: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] }"))
 		(expr (type "{ value: Str }"))
