@@ -33,17 +33,8 @@ Builtin := [].{
 			Bool.False => Bool.True
 		}
 
-		eq : Bool, Bool -> Bool
-		eq = |a, b| match a {
-			Bool.True => b
-			Bool.False => Bool.not(b)
-		}
-
-		ne : Bool, Bool -> Bool
-		ne = |a, b| match a {
-			Bool.True => Bool.not(b)
-			Bool.False => b
-		}
+		is_eq : Bool, Bool -> Bool
+		is_ne : Bool, Bool -> Bool
 
 		#encoder : Bool -> Encoder(fmt, [])
 		#	where [fmt implements EncoderFormatting]
@@ -221,6 +212,7 @@ Builtin := [].{
 			is_negative : Dec -> Bool
 			is_positive : Dec -> Bool
 			is_eq : Dec, Dec -> Bool
+			is_ne : Dec, Dec -> Bool
 			is_gt : Dec, Dec -> Bool
 			is_gte : Dec, Dec -> Bool
 			is_lt : Dec, Dec -> Bool
