@@ -260,6 +260,52 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         }
     }
 
+    // Numeric arithmetic operations (all numeric types have plus, minus, times, div_by, rem_by)
+    for (numeric_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        // plus
+        const plus = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.plus", .{num_type});
+        if (env.common.findIdent(plus)) |ident| {
+            try low_level_map.put(ident, .num_plus);
+        }
+
+        // minus
+        const minus = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.minus", .{num_type});
+        if (env.common.findIdent(minus)) |ident| {
+            try low_level_map.put(ident, .num_minus);
+        }
+
+        // times
+        const times = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.times", .{num_type});
+        if (env.common.findIdent(times)) |ident| {
+            try low_level_map.put(ident, .num_times);
+        }
+
+        // div_by
+        const div_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.div_by", .{num_type});
+        if (env.common.findIdent(div_by)) |ident| {
+            try low_level_map.put(ident, .num_div_by);
+        }
+
+        // rem_by
+        const rem_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.rem_by", .{num_type});
+        if (env.common.findIdent(rem_by)) |ident| {
+            try low_level_map.put(ident, .num_rem_by);
+        }
+    }
+
+    // Numeric negate operation (signed types only)
+    for (signed_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        // negate
+        const negate = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.negate", .{num_type});
+        if (env.common.findIdent(negate)) |ident| {
+            try low_level_map.put(ident, .num_negate);
+        }
+    }
+
     // Iterate through all defs and replace matching anno-only defs with low-level implementations
     const all_defs = env.store.sliceDefs(env.all_defs);
     for (all_defs) |def_idx| {

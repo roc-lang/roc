@@ -407,6 +407,14 @@ pub const Expr = union(enum) {
         num_is_lt,          // All numeric types
         num_is_lte,         // All numeric types
 
+        // Numeric arithmetic operations
+        num_negate,         // Signed types only: I8, I16, I32, I64, I128, Dec, F32, F64
+        num_plus,           // All numeric types
+        num_minus,          // All numeric types
+        num_times,          // All numeric types
+        num_div_by,         // All numeric types
+        num_rem_by,         // All numeric types
+
         // Numeric parsing operations
         num_from_int_digits,    // Parse List(U8) -> Try(num, [OutOfRange])
         num_from_dec_digits,    // Parse (List(U8), List(U8)) -> Try(num, [OutOfRange])

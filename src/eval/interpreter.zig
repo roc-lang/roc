@@ -631,7 +631,7 @@ pub const Interpreter = struct {
                     const lhs = try self.evalExprMinimal(binop.lhs, roc_ops, lhs_rt_var);
                     const rhs = try self.evalExprMinimal(binop.rhs, roc_ops, rhs_rt_var);
 
-                    return try self.evalArithmeticBinop(binop.op, expr_idx, lhs, rhs, lhs_rt_var, rhs_rt_var);
+                    return try self.evalArithmeticBinop(binop.op, expr_idx, lhs, rhs, lhs_rt_var, rhs_rt_var, roc_ops);
                 } else if (binop.op == .eq or binop.op == .ne or binop.op == .lt or binop.op == .le or binop.op == .gt or binop.op == .ge) {
                     // Comparison operators - evaluate both sides and compare
                     const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
@@ -2006,54 +2006,9 @@ pub const Interpreter = struct {
                 const operand = try self.evalExprMinimal(unary.expr, roc_ops, operand_rt_var);
                 defer operand.decref(&self.runtime_layout_store, roc_ops);
 
-                const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
-                const result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
-                const result_layout = try self.getRuntimeLayout(result_rt_var);
-                if (result_layout.tag != .scalar) return error.TypeMismatch;
-
-                return switch (result_layout.data.scalar.tag) {
-                    .int => {
-                        if (!(operand.layout.tag == .scalar and operand.layout.data.scalar.tag == .int)) {
-                            return error.TypeMismatch;
-                        }
-                        const value = operand.asI128();
-                        var out = try self.pushRaw(result_layout, 0);
-                        out.is_initialized = false;
-                        out.setInt(-value);
-                        out.is_initialized = true;
-                        return out;
-                    },
-                    .frac => switch (result_layout.data.scalar.data.frac) {
-                        .dec => {
-                            const operand_dec = try self.stackValueToDecimal(operand);
-                            const out = try self.pushRaw(result_layout, 0);
-                            if (out.ptr) |ptr| {
-                                const dest: *RocDec = @ptrCast(@alignCast(ptr));
-                                dest.* = RocDec{ .num = -operand_dec.num };
-                            }
-                            return out;
-                        },
-                        .f32 => {
-                            const operand_float = try self.stackValueToFloat(f32, operand);
-                            const out = try self.pushRaw(result_layout, 0);
-                            if (out.ptr) |ptr| {
-                                const dest: *f32 = @ptrCast(@alignCast(ptr));
-                                dest.* = -operand_float;
-                            }
-                            return out;
-                        },
-                        .f64 => {
-                            const operand_float = try self.stackValueToFloat(f64, operand);
-                            const out = try self.pushRaw(result_layout, 0);
-                            if (out.ptr) |ptr| {
-                                const dest: *f64 = @ptrCast(@alignCast(ptr));
-                                dest.* = -operand_float;
-                            }
-                            return out;
-                        },
-                    },
-                    else => error.TypeMismatch,
-                };
+                // Use the num_negate low-level operation
+                var args = [_]StackValue{operand};
+                return try self.callLowLevelBuiltin(.num_negate, args[0..], roc_ops);
             },
             .e_unary_not => |unary| {
                 const operand_ct_var = can.ModuleEnv.varFrom(unary.expr);
@@ -2309,6 +2264,141 @@ pub const Interpreter = struct {
                 return try self.makeSimpleBoolValue(result);
             },
 
+            // Numeric arithmetic operations
+            .num_negate => {
+                // num.negate : num -> num (signed types only)
+                if (args.len != 1) return error.TypeMismatch;
+                const num_val = try self.extractNumericValue(args[0]);
+                const result_layout = args[0].layout;
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                switch (num_val) {
+                    .int => |i| out.setInt(-i),
+                    .f32 => |f| out.setF32(-f),
+                    .f64 => |f| out.setF64(-f),
+                    .dec => |d| out.setDec(RocDec{ .num = -d.num }),
+                }
+                out.is_initialized = true;
+                return out;
+            },
+            .num_plus => {
+                if (args.len != 2) return error.TypeMismatch;
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result_layout = args[0].layout;
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                switch (lhs) {
+                    .int => |l| out.setInt(l + rhs.int),
+                    .f32 => |l| out.setF32(l + rhs.f32),
+                    .f64 => |l| out.setF64(l + rhs.f64),
+                    .dec => |l| out.setDec(RocDec{ .num = l.num + rhs.dec.num }),
+                }
+                out.is_initialized = true;
+                return out;
+            },
+            .num_minus => {
+                if (args.len != 2) return error.TypeMismatch;
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result_layout = args[0].layout;
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                switch (lhs) {
+                    .int => |l| out.setInt(l - rhs.int),
+                    .f32 => |l| out.setF32(l - rhs.f32),
+                    .f64 => |l| out.setF64(l - rhs.f64),
+                    .dec => |l| out.setDec(RocDec{ .num = l.num - rhs.dec.num }),
+                }
+                out.is_initialized = true;
+                return out;
+            },
+            .num_times => {
+                if (args.len != 2) return error.TypeMismatch;
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result_layout = args[0].layout;
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                switch (lhs) {
+                    .int => |l| out.setInt(l * rhs.int),
+                    .f32 => |l| out.setF32(l * rhs.f32),
+                    .f64 => |l| out.setF64(l * rhs.f64),
+                    .dec => |l| out.setDec(RocDec{ .num = @divTrunc(l.num * rhs.dec.num, RocDec.one_point_zero_i128) }),
+                }
+                out.is_initialized = true;
+                return out;
+            },
+            .num_div_by => {
+                if (args.len != 2) return error.TypeMismatch;
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result_layout = args[0].layout;
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                switch (lhs) {
+                    .int => |l| {
+                        if (rhs.int == 0) return error.DivisionByZero;
+                        out.setInt(@divTrunc(l, rhs.int));
+                    },
+                    .f32 => |l| {
+                        if (rhs.f32 == 0) return error.DivisionByZero;
+                        out.setF32(l / rhs.f32);
+                    },
+                    .f64 => |l| {
+                        if (rhs.f64 == 0) return error.DivisionByZero;
+                        out.setF64(l / rhs.f64);
+                    },
+                    .dec => |l| {
+                        if (rhs.dec.num == 0) return error.DivisionByZero;
+                        const scaled_lhs = l.num * RocDec.one_point_zero_i128;
+                        out.setDec(RocDec{ .num = @divTrunc(scaled_lhs, rhs.dec.num) });
+                    },
+                }
+                out.is_initialized = true;
+                return out;
+            },
+            .num_rem_by => {
+                if (args.len != 2) return error.TypeMismatch;
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result_layout = args[0].layout;
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                switch (lhs) {
+                    .int => |l| {
+                        if (rhs.int == 0) return error.DivisionByZero;
+                        out.setInt(@rem(l, rhs.int));
+                    },
+                    .f32 => |l| {
+                        if (rhs.f32 == 0) return error.DivisionByZero;
+                        out.setF32(@rem(l, rhs.f32));
+                    },
+                    .f64 => |l| {
+                        if (rhs.f64 == 0) return error.DivisionByZero;
+                        out.setF64(@rem(l, rhs.f64));
+                    },
+                    .dec => |l| {
+                        if (rhs.dec.num == 0) return error.DivisionByZero;
+                        out.setDec(RocDec{ .num = @rem(l.num, rhs.dec.num) });
+                    },
+                }
+                out.is_initialized = true;
+                return out;
+            },
+
             // Numeric parsing operations
             .num_from_int_digits => {
                 // num.from_int_digits : List(U8) -> Try(num, [OutOfRange])
@@ -2488,6 +2578,7 @@ pub const Interpreter = struct {
         rhs: StackValue,
         lhs_rt_var: types.Var,
         rhs_rt_var: types.Var,
+        roc_ops: *RocOps,
     ) !StackValue {
         const result_ct_var = can.ModuleEnv.varFrom(expr_idx);
         const result_rt_var = try self.translateTypeVar(self.env, result_ct_var);
@@ -2496,15 +2587,20 @@ pub const Interpreter = struct {
         result_layout = try self.adjustNumericResultLayout(result_rt_var, result_layout, lhs, lhs_rt_var, rhs, rhs_rt_var);
 
         if (result_layout.tag != .scalar) return error.TypeMismatch;
-        return switch (result_layout.data.scalar.tag) {
-            .int => try self.evalIntBinop(op, result_layout, lhs, rhs),
-            .frac => switch (result_layout.data.scalar.data.frac) {
-                .dec => try self.evalDecBinop(op, result_layout, lhs, rhs),
-                .f32 => try self.evalFloatBinop(f32, op, result_layout, lhs, rhs),
-                .f64 => try self.evalFloatBinop(f64, op, result_layout, lhs, rhs),
-            },
-            else => error.TypeMismatch,
+
+        // Map binary operator to low-level operation
+        const low_level_op: can.CIR.Expr.LowLevel = switch (op) {
+            .add => .num_plus,
+            .sub => .num_minus,
+            .mul => .num_times,
+            .div, .div_trunc => .num_div_by,
+            .rem => .num_rem_by,
+            else => return error.NotImplemented,
         };
+
+        // Call the low-level builtin with both arguments
+        var args = [_]StackValue{ lhs, rhs };
+        return try self.callLowLevelBuiltin(low_level_op, args[0..], roc_ops);
     }
 
     fn evalIntBinop(
