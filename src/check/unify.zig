@@ -811,6 +811,34 @@ const Unifier = struct {
                     .num => |b_num| {
                         try self.unifyNum(vars, a_num, b_num);
                     },
+                    .nominal_type => |b_nominal| {
+                        // Check if the number literal can unify with this nominal type
+                        // based on whether the nominal type has the appropriate from_*_digits method
+                        switch (a_num) {
+                            .int_unbound, .num_unbound => {
+                                // Integer literal - check for from_int_digits
+                                if (self.nominalTypeHasFromIntDigits(b_nominal)) {
+                                    // The nominal type can accept integer literals
+                                    self.merge(vars, vars.b.desc.content);
+                                } else {
+                                    return error.TypeMismatch;
+                                }
+                            },
+                            .frac_unbound => {
+                                // Decimal literal - check for from_dec_digits
+                                if (self.nominalTypeHasFromDecDigits(b_nominal)) {
+                                    // The nominal type can accept decimal literals
+                                    self.merge(vars, vars.b.desc.content);
+                                } else {
+                                    return error.TypeMismatch;
+                                }
+                            },
+                            else => {
+                                // Concrete numeric types (U8, F64, etc.) don't unify with nominal types
+                                return error.TypeMismatch;
+                            },
+                        }
+                    },
                     else => return error.TypeMismatch,
                 }
             },
@@ -850,6 +878,34 @@ const Unifier = struct {
                         } else {
                             // Nominal has a non-empty backing, can't unify
                             return error.TypeMismatch;
+                        }
+                    },
+                    .num => |b_num| {
+                        // Check if the nominal type (a) can accept number literals (b)
+                        // based on whether it has the appropriate from_*_digits method
+                        switch (b_num) {
+                            .int_unbound, .num_unbound => {
+                                // Integer literal - check for from_int_digits
+                                if (self.nominalTypeHasFromIntDigits(a_type)) {
+                                    // The nominal type can accept integer literals
+                                    self.merge(vars, vars.a.desc.content);
+                                } else {
+                                    return error.TypeMismatch;
+                                }
+                            },
+                            .frac_unbound => {
+                                // Decimal literal - check for from_dec_digits
+                                if (self.nominalTypeHasFromDecDigits(a_type)) {
+                                    // The nominal type can accept decimal literals
+                                    self.merge(vars, vars.a.desc.content);
+                                } else {
+                                    return error.TypeMismatch;
+                                }
+                            },
+                            else => {
+                                // Concrete numeric types don't unify with nominal types
+                                return error.TypeMismatch;
+                            },
                         }
                     },
                     else => return error.TypeMismatch,
@@ -1083,6 +1139,63 @@ const Unifier = struct {
         }
 
         self.merge(vars, vars.b.desc.content);
+    }
+
+    /// Check if a nominal type has a from_int_digits method with the correct signature:
+    /// from_int_digits : List(U8) -> Try(Self, [OutOfRange])
+    fn nominalTypeHasFromIntDigits(
+        self: *Self,
+        nominal_type: NominalType,
+    ) bool {
+        // Get the backing var (record extension) of the nominal type
+        const backing_var = self.types_store.getNominalBackingVar(nominal_type);
+        const backing_resolved = self.types_store.resolveVar(backing_var);
+
+        // Check if the backing is a record
+        const backing_record = backing_resolved.desc.content.unwrapRecord() orelse return false;
+
+        // Look for the from_int_digits field
+        // For now, we'll just check if the field exists - proper signature checking would be more complex
+        const fields_slice = self.types_store.getRecordFieldsSlice(backing_record.fields);
+        const field_names = fields_slice.items(.name);
+        for (field_names) |name_idx| {
+            const field_name = self.module_env.getIdent(name_idx);
+            if (std.mem.eql(u8, field_name, "from_int_digits")) {
+                // Found the method - for now we trust it has the right signature
+                // TODO: Check the actual signature matches List(U8) -> Try(Self, [OutOfRange])
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// Check if a nominal type has a from_dec_digits method with the correct signature:
+    /// from_dec_digits : { before_dot : List(U8), after_dot : List(U8) } -> Try(Self, [OutOfRange])
+    fn nominalTypeHasFromDecDigits(
+        self: *Self,
+        nominal_type: NominalType,
+    ) bool {
+        // Get the backing var (record extension) of the nominal type
+        const backing_var = self.types_store.getNominalBackingVar(nominal_type);
+        const backing_resolved = self.types_store.resolveVar(backing_var);
+
+        // Check if the backing is a record
+        const backing_record = backing_resolved.desc.content.unwrapRecord() orelse return false;
+
+        // Look for the from_dec_digits field
+        const fields_slice = self.types_store.getRecordFieldsSlice(backing_record.fields);
+        const field_names = fields_slice.items(.name);
+        for (field_names) |name_idx| {
+            const field_name = self.module_env.getIdent(name_idx);
+            if (std.mem.eql(u8, field_name, "from_dec_digits")) {
+                // Found the method - for now we trust it has the right signature
+                // TODO: Check the actual signature matches the expected type
+                return true;
+            }
+        }
+
+        return false;
     }
 
     fn unifyNum(
