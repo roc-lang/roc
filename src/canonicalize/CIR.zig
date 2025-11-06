@@ -40,6 +40,32 @@ pub const BuiltinIndices = struct {
     set_type: Statement.Idx,
     /// Statement index of nested Str type declaration within Builtin module
     str_type: Statement.Idx,
+    /// Statement index of nested U8 type declaration within Builtin module
+    u8_type: Statement.Idx,
+    /// Statement index of nested I8 type declaration within Builtin module
+    i8_type: Statement.Idx,
+    /// Statement index of nested U16 type declaration within Builtin module
+    u16_type: Statement.Idx,
+    /// Statement index of nested I16 type declaration within Builtin module
+    i16_type: Statement.Idx,
+    /// Statement index of nested U32 type declaration within Builtin module
+    u32_type: Statement.Idx,
+    /// Statement index of nested I32 type declaration within Builtin module
+    i32_type: Statement.Idx,
+    /// Statement index of nested U64 type declaration within Builtin module
+    u64_type: Statement.Idx,
+    /// Statement index of nested I64 type declaration within Builtin module
+    i64_type: Statement.Idx,
+    /// Statement index of nested U128 type declaration within Builtin module
+    u128_type: Statement.Idx,
+    /// Statement index of nested I128 type declaration within Builtin module
+    i128_type: Statement.Idx,
+    /// Statement index of nested Dec type declaration within Builtin module
+    dec_type: Statement.Idx,
+    /// Statement index of nested F32 type declaration within Builtin module
+    f32_type: Statement.Idx,
+    /// Statement index of nested F64 type declaration within Builtin module
+    f64_type: Statement.Idx,
 };
 
 // Type definitions for module compilation
