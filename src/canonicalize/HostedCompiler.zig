@@ -3,13 +3,13 @@ const base = @import("base");
 const ModuleEnv = @import("ModuleEnv.zig");
 const CIR = @import("CIR.zig");
 
-/// Replace all e_anno_only expressions in a hosted module with e_hosted_lambda operations.
+/// Replace all e_anno_only expressions in a Type Module with e_hosted_lambda operations (in-place).
 /// This transforms standalone annotations into hosted lambda operations that will be
 /// provided by the host application at runtime.
-/// Returns a list of new def indices created.
+/// Returns a list of def indices that were modified.
 pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     const gpa = env.gpa;
-    var new_def_indices = std.ArrayList(CIR.Def.Idx).empty;
+    var modified_def_indices = std.ArrayList(CIR.Def.Idx).empty;
 
     // Ensure types array has entries for all existing nodes
     // This is necessary because varFrom(node_idx) assumes type_var index == node index
@@ -69,11 +69,11 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                 def_node.data_2 = @intFromEnum(expr_idx);
                 env.store.nodes.set(def_node_idx, def_node);
 
-                // Track this replaced def index
-                try new_def_indices.append(gpa, def_idx);
+                // Track this modified def index
+                try modified_def_indices.append(gpa, def_idx);
             }
         }
     }
 
-    return new_def_indices;
+    return modified_def_indices;
 }

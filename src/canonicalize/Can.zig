@@ -1256,29 +1256,12 @@ pub fn canonicalizeFile(
     self.env.all_defs = try self.env.store.defSpanFrom(scratch_defs_start);
     self.env.all_statements = try self.env.store.statementSpanFrom(scratch_statements_start);
 
-    // For Type Modules, transform annotation-only defs into hosted lambdas
+    // For Type Modules, transform annotation-only defs into hosted lambdas (in-place)
     // This allows platforms to import these modules and use the hosted functions
     if (self.env.module_kind == .type_module) {
-        var new_def_indices = try HostedCompiler.replaceAnnoOnlyWithHosted(self.env);
-        defer new_def_indices.deinit(self.env.gpa);
-
-        if (new_def_indices.items.len > 0) {
-            // Rebuild all_defs span to include both old and new defs
-            const old_defs = self.env.store.sliceDefs(self.env.all_defs);
-            const defs_start = self.env.store.scratchTop("defs");
-
-            // Add all old defs
-            for (old_defs) |def_idx| {
-                try self.env.store.scratch.?.defs.append(def_idx);
-            }
-
-            // Add all new defs
-            for (new_def_indices.items) |def_idx| {
-                try self.env.store.scratch.?.defs.append(def_idx);
-            }
-
-            self.env.all_defs = try self.env.store.defSpanFrom(defs_start);
-        }
+        var modified_def_indices = try HostedCompiler.replaceAnnoOnlyWithHosted(self.env);
+        defer modified_def_indices.deinit(self.env.gpa);
+        // Note: The transformation is done in-place, so all_defs span remains valid
     }
 
     // Create the span of exported defs by finding definitions that correspond to exposed items
