@@ -83,9 +83,12 @@ test "ModuleEnv.Serialized roundtrip" {
     // Now manually construct the ModuleEnv using the deserialized CommonEnv
     const env = @as(*ModuleEnv, @ptrCast(@alignCast(deserialized_ptr)));
 
+    // Deserialize common env first so we can look up identifiers
+    const common = deserialized_ptr.common.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), source).*;
+
     env.* = ModuleEnv{
         .gpa = gpa,
-        .common = deserialized_ptr.common.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), source).*,
+        .common = common,
         .types = deserialized_ptr.types.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa).*,
         .module_kind = deserialized_ptr.module_kind,
         .all_defs = deserialized_ptr.all_defs,
@@ -99,11 +102,11 @@ test "ModuleEnv.Serialized roundtrip" {
         .diagnostics = deserialized_ptr.diagnostics,
         .store = deserialized_ptr.store.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), deser_alloc).*,
         .evaluation_order = null,
-        .from_int_digits_ident = env.common.findIdent(Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
-        .from_dec_digits_ident = env.common.findIdent(Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
-        .try_ident = env.common.findIdent("Try") orelse unreachable,
-        .out_of_range_ident = env.common.findIdent("OutOfRange") orelse unreachable,
-        .builtin_module_ident = env.common.findIdent("Builtin") orelse unreachable,
+        .from_int_digits_ident = common.findIdent(Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
+        .from_dec_digits_ident = common.findIdent(Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
+        .try_ident = common.findIdent("Try") orelse unreachable,
+        .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
+        .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
     };
 
     // Verify the data was preserved

@@ -69,5 +69,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ active: Error, age: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], balance: Num(num where [num.from_dec_digits : { before_dot : List(U8), after_dot : List(U8) } -> Try(num, [OutOfRange])]), name: Str, scores: List(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]) }"))
+(expr (type "{ active: Error, age: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], balance: Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])]), name: Str, scores: List(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]) }"))
 ~~~
