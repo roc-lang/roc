@@ -149,6 +149,116 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.Str.is_empty")) |str_is_empty_ident| {
         try low_level_map.put(str_is_empty_ident, .str_is_empty);
     }
+    if (env.common.findIdent("Builtin.Set.is_empty")) |set_is_empty_ident| {
+        try low_level_map.put(set_is_empty_ident, .set_is_empty);
+    }
+
+    // Bool operations
+    if (env.common.findIdent("Builtin.Bool.is_eq")) |bool_is_eq_ident| {
+        try low_level_map.put(bool_is_eq_ident, .bool_is_eq);
+    }
+    if (env.common.findIdent("Builtin.Bool.is_ne")) |bool_is_ne_ident| {
+        try low_level_map.put(bool_is_ne_ident, .bool_is_ne);
+    }
+
+    // Numeric type checking operations (all numeric types)
+    const numeric_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
+    for (numeric_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        // is_zero (all types)
+        const is_zero = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_zero", .{num_type});
+        if (env.common.findIdent(is_zero)) |ident| {
+            try low_level_map.put(ident, .num_is_zero);
+        }
+    }
+
+    // Numeric sign checking operations (signed types only)
+    const signed_types = [_][]const u8{ "I8", "I16", "I32", "I64", "I128", "Dec", "F32", "F64" };
+    for (signed_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        // is_negative
+        const is_negative = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_negative", .{num_type});
+        if (env.common.findIdent(is_negative)) |ident| {
+            try low_level_map.put(ident, .num_is_negative);
+        }
+
+        // is_positive
+        const is_positive = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_positive", .{num_type});
+        if (env.common.findIdent(is_positive)) |ident| {
+            try low_level_map.put(ident, .num_is_positive);
+        }
+    }
+
+    // Numeric equality operations (integer types + Dec only, NOT F32/F64)
+    const eq_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec" };
+    for (eq_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        // is_eq
+        const is_eq = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_eq", .{num_type});
+        if (env.common.findIdent(is_eq)) |ident| {
+            try low_level_map.put(ident, .num_is_eq);
+        }
+    }
+
+    // Numeric inequality operation (Dec only)
+    if (env.common.findIdent("Builtin.Num.Dec.is_ne")) |ident| {
+        try low_level_map.put(ident, .num_is_ne);
+    }
+
+    // Numeric comparison operations (all numeric types)
+    for (numeric_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        // is_gt
+        const is_gt = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_gt", .{num_type});
+        if (env.common.findIdent(is_gt)) |ident| {
+            try low_level_map.put(ident, .num_is_gt);
+        }
+
+        // is_gte
+        const is_gte = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_gte", .{num_type});
+        if (env.common.findIdent(is_gte)) |ident| {
+            try low_level_map.put(ident, .num_is_gte);
+        }
+
+        // is_lt
+        const is_lt = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_lt", .{num_type});
+        if (env.common.findIdent(is_lt)) |ident| {
+            try low_level_map.put(ident, .num_is_lt);
+        }
+
+        // is_lte
+        const is_lte = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_lte", .{num_type});
+        if (env.common.findIdent(is_lte)) |ident| {
+            try low_level_map.put(ident, .num_is_lte);
+        }
+    }
+
+    // Numeric parsing operations (all numeric types have from_int_digits)
+    for (numeric_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        // from_int_digits
+        const from_int_digits = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.from_int_digits", .{num_type});
+        if (env.common.findIdent(from_int_digits)) |ident| {
+            try low_level_map.put(ident, .num_from_int_digits);
+        }
+    }
+
+    // from_dec_digits (Dec, F32, F64 only)
+    const dec_types = [_][]const u8{ "Dec", "F32", "F64" };
+    for (dec_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        // from_dec_digits
+        const from_dec_digits = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.from_dec_digits", .{num_type});
+        if (env.common.findIdent(from_dec_digits)) |ident| {
+            try low_level_map.put(ident, .num_from_dec_digits);
+        }
+    }
 
     // Iterate through all defs and replace matching anno-only defs with low-level implementations
     const all_defs = env.store.sliceDefs(env.all_defs);
