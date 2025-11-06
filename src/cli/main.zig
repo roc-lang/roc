@@ -735,8 +735,7 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
             return err;
         };
 
-        // Platforms should provide their own CRT files and libraries in a targets/ directory
-        // For now, rely on system defaults
+        // Platforms provide their own CRT files and libraries in a targets/ directory
         const platform_files_pre: []const []const u8 = &.{};
         const platform_files_post: []const []const u8 = &.{};
         const target_abi: ?linker.TargetAbi = if (builtin.target.os.tag == .linux) .gnu else null;
