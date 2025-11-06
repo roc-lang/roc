@@ -227,9 +227,7 @@ Builtin := [].{
 			is_lte : Dec, Dec -> Bool
 
 			from_int_digits : List(U8) -> Try(Dec, [OutOfRange])
-			from_dec_digits :
-				{ before_dot : List(U8), after_dot : List(U8) }
-				-> Try(Dec, [OutOfRange])
+			from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange])
 		}
 
 		F32 := [].{
@@ -242,9 +240,7 @@ Builtin := [].{
 			is_lte : F32, F32 -> Bool
 
 			from_int_digits : List(U8) -> Try(F32, [OutOfRange])
-			from_dec_digits :
-				{ before_dot : List(U8), after_dot : List(U8) }
-				-> Try(F32, [OutOfRange])
+			from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange])
 		}
 
 		F64 := [].{
@@ -257,9 +253,7 @@ Builtin := [].{
 			is_lte : F64, F64 -> Bool
 
 			from_int_digits : List(U8) -> Try(F64, [OutOfRange])
-			from_dec_digits :
-				{ before_dot : List(U8), after_dot : List(U8) }
-				-> Try(F64, [OutOfRange])
+			from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange])
 		}
 	}
 }
