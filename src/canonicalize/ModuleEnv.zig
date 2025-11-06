@@ -79,6 +79,14 @@ store: NodeStore,
 /// Set after canonicalization completes. Must not be accessed before then.
 evaluation_order: ?*DependencyGraph.EvaluationOrder,
 
+// Cached well-known identifiers for type checking
+// (These are interned once during init to avoid repeated string comparisons during type checking)
+
+/// Interned identifier for "from_int_digits" - used for numeric literal type checking
+from_int_digits_ident: Ident.Idx,
+/// Interned identifier for "from_dec_digits" - used for decimal literal type checking
+from_dec_digits_ident: Ident.Idx,
+
 /// Relocate all pointers in the ModuleEnv by the given offset.
 /// This is used when loading a ModuleEnv from shared memory at a different address.
 pub fn relocate(self: *Self, offset: isize) void {
@@ -123,9 +131,15 @@ pub fn initModuleEnvFields(self: *Self, gpa: std.mem.Allocator, module_name: []c
 pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!Self {
     // TODO: maybe wire in smarter default based on the initial input text size.
 
+    var common = try CommonEnv.init(gpa, source);
+
+    // Intern well-known identifiers once during initialization for fast type checking
+    const from_int_digits_ident = try common.insertIdent(gpa, Ident.for_text("from_int_digits"));
+    const from_dec_digits_ident = try common.insertIdent(gpa, Ident.for_text("from_dec_digits"));
+
     return Self{
         .gpa = gpa,
-        .common = try CommonEnv.init(gpa, source),
+        .common = common,
         .types = try TypeStore.initCapacity(gpa, 2048, 512),
         .module_kind = .deprecated_module, // Set during canonicalization
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
@@ -139,6 +153,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
         .store = try NodeStore.initCapacity(gpa, 10_000), // Default node store capacity
         .evaluation_order = null, // Will be set after canonicalization completes
+        .from_int_digits_ident = from_int_digits_ident,
+        .from_dec_digits_ident = from_dec_digits_ident,
     };
 }
 
@@ -1565,6 +1581,9 @@ pub const Serialized = struct {
             .diagnostics = self.diagnostics,
             .store = self.store.deserialize(offset, gpa).*,
             .evaluation_order = null, // Not serialized, will be recomputed if needed
+            // Well-known identifiers for type checking - look them up in the deserialized common env
+            .from_int_digits_ident = env.common.findIdent("from_int_digits") orelse unreachable,
+            .from_dec_digits_ident = env.common.findIdent("from_dec_digits") orelse unreachable,
         };
 
         return env;

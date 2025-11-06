@@ -1154,13 +1154,15 @@ const Unifier = struct {
         // Check if the backing is a record
         const backing_record = backing_resolved.desc.content.unwrapRecord() orelse return false;
 
-        // Look for the from_int_digits field
-        // For now, we'll just check if the field exists - proper signature checking would be more complex
+        // Use the pre-interned identifier from ModuleEnv for fast integer comparison
+        // This identifier was interned once during ModuleEnv.init(), no string operations here!
+        const from_int_digits_ident = self.module_env.from_int_digits_ident;
+
+        // Look for the from_int_digits field using fast integer comparison
         const fields_slice = self.types_store.getRecordFieldsSlice(backing_record.fields);
         const field_names = fields_slice.items(.name);
         for (field_names) |name_idx| {
-            const field_name = self.module_env.getIdent(name_idx);
-            if (std.mem.eql(u8, field_name, "from_int_digits")) {
+            if (name_idx == from_int_digits_ident) {
                 // Found the method - for now we trust it has the right signature
                 // TODO: Check the actual signature matches List(U8) -> Try(Self, [OutOfRange])
                 return true;
@@ -1183,12 +1185,15 @@ const Unifier = struct {
         // Check if the backing is a record
         const backing_record = backing_resolved.desc.content.unwrapRecord() orelse return false;
 
-        // Look for the from_dec_digits field
+        // Use the pre-interned identifier from ModuleEnv for fast integer comparison
+        // This identifier was interned once during ModuleEnv.init(), no string operations here!
+        const from_dec_digits_ident = self.module_env.from_dec_digits_ident;
+
+        // Look for the from_dec_digits field using fast integer comparison
         const fields_slice = self.types_store.getRecordFieldsSlice(backing_record.fields);
         const field_names = fields_slice.items(.name);
         for (field_names) |name_idx| {
-            const field_name = self.module_env.getIdent(name_idx);
-            if (std.mem.eql(u8, field_name, "from_dec_digits")) {
+            if (name_idx == from_dec_digits_ident) {
                 // Found the method - for now we trust it has the right signature
                 // TODO: Check the actual signature matches the expected type
                 return true;

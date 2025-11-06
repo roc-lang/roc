@@ -74,6 +74,10 @@ pub fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_n
         .diagnostics = serialized_ptr.diagnostics,
         .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
         .evaluation_order = null,
+        // Well-known identifiers for type checking - look them up in the deserialized common env
+        // These must exist in the Builtin module which defines them
+        .from_int_digits_ident = env.common.findIdent("from_int_digits") orelse unreachable,
+        .from_dec_digits_ident = env.common.findIdent("from_dec_digits") orelse unreachable,
     };
 
     return LoadedModule{

@@ -99,6 +99,8 @@ test "ModuleEnv.Serialized roundtrip" {
         .diagnostics = deserialized_ptr.diagnostics,
         .store = deserialized_ptr.store.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), deser_alloc).*,
         .evaluation_order = null,
+        .from_int_digits_ident = env.common.findIdent("from_int_digits") orelse unreachable,
+        .from_dec_digits_ident = env.common.findIdent("from_dec_digits") orelse unreachable,
     };
 
     // Verify the data was preserved
