@@ -2275,16 +2275,8 @@ pub const Expr = union(enum) {
         token: Token.Idx,
         region: TokenizedRegion,
     },
-    string: struct {
-        token: Token.Idx,
-        region: TokenizedRegion,
-        parts: Expr.Span,
-    },
-    multiline_string: struct {
-        token: Token.Idx,
-        region: TokenizedRegion,
-        parts: Expr.Span,
-    },
+    string: StringLike,
+    multiline_string: StringLike,
     list: struct {
         items: Expr.Span,
         region: TokenizedRegion,
@@ -2352,6 +2344,12 @@ pub const Expr = union(enum) {
         reason: Diagnostic.Tag,
         region: TokenizedRegion,
     },
+
+    pub const StringLike = struct {
+        token: Token.Idx,
+        region: TokenizedRegion,
+        parts: Expr.Span,
+    };
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };

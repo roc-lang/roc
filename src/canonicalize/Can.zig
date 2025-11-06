@@ -251,7 +251,7 @@ pub fn populateModuleEnvs(
     module_envs_map: *std.AutoHashMap(Ident.Idx, AutoImportedType),
     calling_module_env: *ModuleEnv,
     builtin_module_env: *const ModuleEnv,
-    builtin_indices: anytype, // Has fields: bool_type, try_type, dict_type, set_type, str_type, and numeric types
+    builtin_indices: CIR.BuiltinIndices, // Has fields: bool_type, try_type, dict_type, set_type, str_type, and numeric types
 ) !void {
     const types_to_add = .{
         .{ "Bool", builtin_indices.bool_type },
@@ -369,7 +369,7 @@ const Self = @This();
 /// If parent_name is provided, creates a qualified name (e.g., "Foo.Bar")
 fn processTypeDeclFirstPass(
     self: *Self,
-    type_decl: anytype,
+    type_decl: std.meta.fieldInfo(AST.Statement, .type_decl).type,
     parent_name: ?Ident.Idx,
     defer_associated_blocks: bool,
 ) std.mem.Allocator.Error!void {
@@ -2957,7 +2957,7 @@ fn parseSingleQuoteCodepoint(
 
 fn canonicalizeStringLike(
     self: *Self,
-    e: anytype,
+    e: AST.Expr.StringLike,
     is_multiline: bool,
 ) std.mem.Allocator.Error!CanonicalizedExpr {
     // Get all the string parts
@@ -9375,7 +9375,7 @@ fn findMatchingTypeIdent(self: *Self) ?Ident.Idx {
 
 /// Expose all associated items of a type declaration (recursively for nested types)
 /// This is used for type modules where all associated items are implicitly exposed
-fn exposeAssociatedItems(self: *Self, parent_name: Ident.Idx, type_decl: anytype) std.mem.Allocator.Error!void {
+fn exposeAssociatedItems(self: *Self, parent_name: Ident.Idx, type_decl: std.meta.fieldInfo(AST.Statement, .type_decl).type) std.mem.Allocator.Error!void {
     if (type_decl.associated) |assoc| {
         for (self.parse_ir.store.statementSlice(assoc.statements)) |assoc_stmt_idx| {
             const assoc_stmt = self.parse_ir.store.getStatement(assoc_stmt_idx);
