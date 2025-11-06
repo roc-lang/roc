@@ -2357,15 +2357,28 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             std.mem.sort(types_mod.RecordField, record_fields_scratch, self.cir.getIdentStore(), comptime types_mod.RecordField.sortByNameAsc);
             const record_fields_range = try self.types.appendRecordFields(record_fields_scratch);
 
-            try self.unifyWith(expr_var, .{ .structure = .{
-                .record_unbound = record_fields_range,
-            } }, env);
+            // Check if this is a record update
+            if (e.ext) |record_being_updated_expr| {
+                // Create an unbound record with the provided fields
+                const ext_var = try self.fresh(env, expr_region);
+                try self.unifyWith(expr_var, .{ .structure = .{
+                    .record = .{
+                        .fields = record_fields_range,
+                        .ext = ext_var,
+                    },
+                } }, env);
 
-            // Process the ext if it exists
-            if (e.ext) |ext_expr| {
-                does_fx = try self.checkExpr(ext_expr, env, .no_expectation) or does_fx;
-                const ext_var = ModuleEnv.varFrom(ext_expr);
-                _ = try self.unify(expr_var, ext_var, env);
+                does_fx = try self.checkExpr(record_being_updated_expr, env, .no_expectation) or does_fx;
+                const record_being_updated_var = ModuleEnv.varFrom(record_being_updated_expr);
+
+                _ = try self.unify(record_being_updated_var, expr_var, env);
+            } else {
+                // Create an unbound record with the provided fields
+                const ext_var = try self.freshFromContent(.{ .structure = .empty_record }, env, expr_region);
+                try self.unifyWith(expr_var, .{ .structure = .{ .record = .{
+                    .fields = record_fields_range,
+                    .ext = ext_var,
+                } } }, env);
             }
         },
         .e_empty_record => {

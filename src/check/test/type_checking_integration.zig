@@ -159,7 +159,7 @@ test "check type - tag" {
     const source =
         \\MyTag
     ;
-    try checkTypesExpr(source, .pass, "[MyTag]_others");
+    try checkTypesExpr(source, .pass, "[MyTag]");
 }
 
 test "check type - tag - args" {
@@ -804,27 +804,44 @@ test "check type - record - access - not a record" {
 
 // record update
 
-test "check type - record - update" {
+test "check type - record - update 1" {
     const source =
         \\update_data = |container, new_value| { ..container, data: new_value }
     ;
-    try checkTypesModule(source, .{ .pass = .{ .def = "update_data" } }, "a, b -> { data: b, ..a }");
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "update_data" } },
+        "{ ..a, data: b }, b -> { ..a, data: b }",
+    );
 }
 
 test "check type - record - update 2" {
     const source =
-        \\update_data = |container, new_value| { ..container, data: new_value }
+        \\set_data = |container, new_value| { ..container, data: new_value }
         \\
-        \\updated1 = update_data({ data: 10 }, 100)
-        \\updated2 = update_data({ data: 10, other: "hello" }, 100)
-        \\updated3 = update_data({ data: "hello", other: 20 }, "world")
+        \\updated1 = set_data({ data: 10 }, 100) # Updates field
+        \\updated2 = set_data({ data: 10, other: "hello" }, 100) # Updates with extra fields
+        \\updated3 = set_data({ data: "hello" }, "world") # Polymorphic
         \\
         \\final = (updated1, updated2, updated3)
     ;
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "final" } },
-        "({ data: Num(_size) }, { data: Num(_size2), other: Str }, { data: Str, other: Num(_size3) })",
+        "({ data: Num(_size) }, { data: Num(_size2), other: Str }, { data: Str })",
+    );
+}
+
+test "check type - record - update fail" {
+    const source =
+        \\set_data = |container, new_value| { ..container, data: new_value }
+        \\
+        \\updated = set_data({ data: "hello" }, 10)
+    ;
+    try checkTypesModule(
+        source,
+        .fail,
+        "TYPE MISMATCH",
     );
 }
 

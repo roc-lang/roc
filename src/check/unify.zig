@@ -2540,6 +2540,9 @@ const Unifier = struct {
             record_fields,
         ) catch return Error.AllocatorError;
 
+        // TODO: Below if we run into a record with the same field, then we
+        // prefer the leftmost field. But we should probably unify the dups
+
         // then recursiv
         var ext = record_ext;
         while (true) {
@@ -2561,20 +2564,43 @@ const Unifier = struct {
                         .structure => |flat_type| {
                             switch (flat_type) {
                                 .record => |ext_record| {
-                                    const next_range = self.scratch.copyGatherFieldsFromMultiList(
-                                        &self.types_store.record_fields,
-                                        ext_record.fields,
-                                    ) catch return Error.AllocatorError;
-                                    range.count += next_range.count;
+                                    const next_fields = self.types_store.record_fields.sliceRange(ext_record.fields);
+                                    const already_gathered = self.scratch.gathered_fields.sliceRange(range);
+
+                                    for (next_fields.items(.name), next_fields.items(.var_)) |name, var_| {
+                                        // Check if field name already exists (O(n) but fields are small)
+                                        const already_exists = for (already_gathered) |existing| {
+                                            if (existing.name == name) break true;
+                                        } else false;
+
+                                        // Only append if NOT already present (Map.union left-bias)
+                                        if (!already_exists) {
+                                            _ = self.scratch.gathered_fields.append(
+                                                self.scratch.gpa,
+                                                RecordField{ .name = name, .var_ = var_ },
+                                            ) catch return Error.AllocatorError;
+                                            range.count += 1;
+                                        }
+                                    }
                                     ext = .{ .ext = ext_record.ext };
                                 },
                                 .record_unbound => |fields| {
-                                    const next_range = self.scratch.copyGatherFieldsFromMultiList(
-                                        &self.types_store.record_fields,
-                                        fields,
-                                    ) catch return Error.AllocatorError;
-                                    range.count += next_range.count;
-                                    // record_unbound has no extension, so we're done
+                                    const next_fields = self.types_store.record_fields.sliceRange(fields);
+                                    const already_gathered = self.scratch.gathered_fields.sliceRange(range);
+
+                                    for (next_fields.items(.name), next_fields.items(.var_)) |name, var_| {
+                                        const already_exists = for (already_gathered) |existing| {
+                                            if (existing.name == name) break true;
+                                        } else false;
+
+                                        if (!already_exists) {
+                                            _ = self.scratch.gathered_fields.append(
+                                                self.scratch.gpa,
+                                                RecordField{ .name = name, .var_ = var_ },
+                                            ) catch return Error.AllocatorError;
+                                            range.count += 1;
+                                        }
+                                    }
                                     return .{ .ext = ext, .range = range };
                                 },
                                 .empty_record => {

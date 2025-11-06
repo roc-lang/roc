@@ -223,6 +223,21 @@ pub const Content = union(enum) {
             else => return null,
         }
     }
+
+    /// Unwrap a function (pure, eff, or unbound) and return it
+    pub fn unwrapFuncFull(content: Self) ?struct { func: Func, ext: enum { unbound, pure, effectful } } {
+        switch (content) {
+            .structure => |flat_type| {
+                switch (flat_type) {
+                    .fn_pure => |func| return .{ .func = func, .ext = .pure },
+                    .fn_effectful => |func| return .{ .func = func, .ext = .effectful },
+                    .fn_unbound => |func| return .{ .func = func, .ext = .unbound },
+                    else => return null,
+                }
+            },
+            else => return null,
+        }
+    }
 };
 
 // flex //
@@ -993,4 +1008,15 @@ pub const TwoStaticDispatchConstraints = struct {
 
     /// A safe multi list of tag union fields
     pub const SafeMultiList = MkSafeMultiList(@This());
+};
+
+/// Polarity of a type, or roughly, what side of an arrow it appears on.
+pub const Polarity = enum {
+    /// A type that appears in negative/input position
+    neg,
+    /// A type that appears in positive/output position
+    pos,
+
+    pub const lhs = Polarity.neg;
+    pub const rhs = Polarity.pos;
 };

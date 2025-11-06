@@ -1224,7 +1224,7 @@ main = {
 		(patt (type "(a -> a), a -> a"))
 		(patt (type "(a -> b) -> ((b -> c) -> (a -> c))"))
 		(patt (type "a, c -> d where [a.map : a, (b -> c) -> d]"))
-		(patt (type "{ chained: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], final: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], id_results: (num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], Str, [True]_others), processed: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], transformed: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] }")))
+		(patt (type "{ chained: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], final: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], id_results: (num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], Str, [True]), processed: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], transformed: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] }")))
 	(type_decls
 		(nominal (type "Container(a)")
 			(ty-header (name "Container")
@@ -1238,5 +1238,5 @@ main = {
 		(expr (type "(a -> a), a -> a"))
 		(expr (type "(a -> b) -> ((b -> c) -> (a -> c))"))
 		(expr (type "a, c -> d where [a.map : a, (b -> c) -> d]"))
-		(expr (type "{ chained: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], final: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], id_results: (num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], Str, [True]_others), processed: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], transformed: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] }"))))
+		(expr (type "{ chained: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], final: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], id_results: (num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], Str, [True]), processed: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], transformed: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] }"))))
 ~~~

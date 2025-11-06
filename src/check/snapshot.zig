@@ -592,6 +592,7 @@ pub const SnapshotWriter = struct {
     flex_var_names_map: std.AutoHashMap(Var, FlexVarNameRange),
     flex_var_names: std.array_list.Managed(u8),
     static_dispatch_constraints: std.array_list.Managed(SnapshotStaticDispatchConstraint),
+    scratch_record_fields: std.array_list.Managed(SnapshotRecordField),
     count_seen_idxs: std.array_list.Managed(SnapshotContentIdx),
 
     const FlexVarNameRange = struct { start: usize, end: usize };
@@ -610,6 +611,7 @@ pub const SnapshotWriter = struct {
             .flex_var_names_map = std.AutoHashMap(Var, FlexVarNameRange).init(gpa),
             .flex_var_names = std.array_list.Managed(u8).init(gpa),
             .static_dispatch_constraints = std.array_list.Managed(SnapshotStaticDispatchConstraint).init(gpa),
+            .scratch_record_fields = std.array_list.Managed(SnapshotRecordField).init(gpa),
             .count_seen_idxs = std.array_list.Managed(SnapshotContentIdx).init(gpa),
         };
     }
@@ -634,6 +636,7 @@ pub const SnapshotWriter = struct {
             .flex_var_names_map = std.AutoHashMap(Var, FlexVarNameRange).init(gpa),
             .flex_var_names = std.array_list.Managed(u8).init(gpa),
             .static_dispatch_constraints = std.array_list.Managed(SnapshotStaticDispatchConstraint).init(gpa),
+            .scratch_record_fields = std.array_list.Managed(SnapshotRecordField).init(gpa),
             .count_seen_idxs = try std.array_list.Managed(SnapshotContentIdx).init(gpa),
         };
     }
@@ -643,6 +646,7 @@ pub const SnapshotWriter = struct {
         self.flex_var_names_map.deinit();
         self.flex_var_names.deinit();
         self.static_dispatch_constraints.deinit();
+        self.scratch_record_fields.deinit();
         self.count_seen_idxs.deinit();
     }
 
@@ -653,6 +657,7 @@ pub const SnapshotWriter = struct {
         self.flex_var_names_map.clearRetainingCapacity();
         self.flex_var_names.clearRetainingCapacity();
         self.static_dispatch_constraints.clearRetainingCapacity();
+        self.scratch_record_fields.clearRetainingCapacity();
         self.count_seen_idxs.clearRetainingCapacity();
     }
 
@@ -1013,41 +1018,109 @@ pub const SnapshotWriter = struct {
 
     /// Write a record type
     fn writeRecord(self: *Self, record: SnapshotRecord, root_idx: SnapshotContentIdx) Allocator.Error!void {
+        const ext = try self.gatherRecordFields(record.fields, record.ext);
+        const gathered_fields = self.scratch_record_fields.items;
+        const num_fields = gathered_fields.len;
+
+        // TODO: Sort gathered fields alphabetically
+
         _ = try self.buf.writer().write("{ ");
 
-        const fields_slice = self.snapshots.record_fields.sliceRange(record.fields);
+        switch (ext) {
+            .flex => |flex| {
+                if (flex.payload.name) |ident_idx| {
+                    _ = try self.buf.writer().write("..");
+                    _ = try self.buf.writer().write(self.idents.getText(ident_idx));
+                    if (num_fields > 0) _ = try self.buf.writer().write(", ");
+                } else if (flex.payload.constraints.len() > 0 or try self.countOccurrences(flex.payload.var_, root_idx) > 1) {
+                    _ = try self.buf.writer().write("..");
+                    try self.writeFlexVarName(flex.payload.var_, flex.idx, .RecordExtension, root_idx);
+                    if (num_fields > 0) _ = try self.buf.writer().write(", ");
+                }
 
-        if (fields_slice.len > 0) {
-            // Write first field
-            _ = try self.buf.writer().write(self.idents.getText(fields_slice.items(.name)[0]));
-            _ = try self.buf.writer().write(": ");
-            try self.writeWithContext(fields_slice.items(.content)[0], .RecordFieldContent, root_idx);
+                // Since don't recurse above, we must capture the static dispatch
+                // constraints directly
+                for (self.snapshots.sliceStaticDispatchConstraints(flex.payload.constraints)) |constraint| {
+                    try self.appendStaticDispatchConstraint(constraint);
+                }
+            },
+            .rigid => |rigid| {
+                _ = try self.buf.writer().write("..");
+                _ = try self.buf.writer().write(self.idents.getText(rigid.name));
+                if (num_fields > 0) _ = try self.buf.writer().write(", ");
 
-            // Write remaining fields
-            for (fields_slice.items(.name)[1..], fields_slice.items(.content)[1..]) |name, content| {
-                _ = try self.buf.writer().write(", ");
-                _ = try self.buf.writer().write(self.idents.getText(name));
-                _ = try self.buf.writer().write(": ");
-                try self.writeWithContext(content, .RecordFieldContent, root_idx);
-            }
+                // Since don't recurse above, we must capture the static dispatch
+                // constraints directly
+                for (self.snapshots.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                    try self.appendStaticDispatchConstraint(constraint);
+                }
+            },
+            .unbound, .invalid => {},
         }
 
-        // Show extension variable if it's not empty
-        switch (self.snapshots.contents.get(record.ext).*) {
-            .structure => |flat_type| switch (flat_type) {
-                .empty_record => {}, // Don't show empty extension
-                else => {
-                    if (fields_slice.len > 0) _ = try self.buf.writer().write(", ");
-                    try self.writeWithContext(record.ext, .RecordExtension, root_idx);
-                },
-            },
-            else => {
-                if (fields_slice.len > 0) _ = try self.buf.writer().write(", ");
-                try self.writeWithContext(record.ext, .RecordExtension, root_idx);
-            },
+        for (gathered_fields, 0..) |field, i| {
+            _ = try self.buf.writer().write(self.idents.getText(field.name));
+            _ = try self.buf.writer().write(": ");
+            try self.writeWithContext(field.content, .RecordFieldContent, root_idx);
+
+            if (i != gathered_fields.len - 1) _ = try self.buf.writer().write(", ");
         }
 
         _ = try self.buf.writer().write(" }");
+    }
+
+    /// Recursively unwrap all record fields
+    fn gatherRecordFields(self: *Self, fields: SnapshotRecordFieldSafeList.Range, ext_var: SnapshotContentIdx) std.mem.Allocator.Error!union(enum) {
+        flex: struct { idx: SnapshotContentIdx, payload: SnapshotFlex },
+        rigid: SnapshotRigid,
+        unbound,
+        invalid,
+    } {
+        self.scratch_record_fields.clearRetainingCapacity();
+
+        const slice = self.snapshots.sliceRecordFields(fields);
+        try self.scratch_record_fields.ensureUnusedCapacity(fields.len());
+        for (slice.items(.name), slice.items(.content)) |name, content| {
+            self.scratch_record_fields.appendAssumeCapacity(.{ .name = name, .content = content });
+        }
+
+        var ext = ext_var;
+        while (true) {
+            const resolved = self.snapshots.contents.get(ext);
+            switch (resolved.*) {
+                .flex => |flex| {
+                    return .{ .flex = .{ .idx = ext, .payload = flex } };
+                },
+                .rigid => |rigid| {
+                    return .{ .rigid = rigid };
+                },
+                .alias => |alias| {
+                    ext = alias.backing;
+                },
+                .structure => |flat_type| {
+                    switch (flat_type) {
+                        .record => |ext_record| {
+                            const ext_slice = self.snapshots.sliceRecordFields(ext_record.fields);
+                            try self.scratch_record_fields.ensureUnusedCapacity(ext_record.fields.len());
+                            for (ext_slice.items(.name), ext_slice.items(.content)) |name, content| {
+                                self.scratch_record_fields.appendAssumeCapacity(.{ .name = name, .content = content });
+                            }
+                            ext = ext_record.ext;
+                        },
+                        .record_unbound => |ext_fields| {
+                            const ext_slice = self.snapshots.sliceRecordFields(ext_fields);
+                            try self.scratch_record_fields.ensureUnusedCapacity(ext_fields.len());
+                            for (ext_slice.items(.name), ext_slice.items(.content)) |name, content| {
+                                self.scratch_record_fields.appendAssumeCapacity(.{ .name = name, .content = content });
+                            }
+                            return .unbound;
+                        },
+                        else => return .invalid,
+                    }
+                },
+                else => return .invalid,
+            }
+        }
     }
 
     /// Write record fields without extension

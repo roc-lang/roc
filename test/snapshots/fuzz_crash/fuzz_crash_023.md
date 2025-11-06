@@ -2574,7 +2574,7 @@ expect {
 	(defs
 		(patt (type "Bool -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
 		(patt (type "Error -> Num(Int(Unsigned64))"))
-		(patt (type "[Red][Blue, Green]_others, _arg -> Error"))
+		(patt (type "[Red][Blue, Green], _arg -> Error"))
 		(patt (type "Error"))
 		(patt (type "List(Error) -> Error"))
 		(patt (type "{}"))
@@ -2621,7 +2621,7 @@ expect {
 	(expressions
 		(expr (type "Bool -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
 		(expr (type "Error -> Num(Int(Unsigned64))"))
-		(expr (type "[Red][Blue, Green]_others, _arg -> Error"))
+		(expr (type "[Red][Blue, Green], _arg -> Error"))
 		(expr (type "Error"))
 		(expr (type "List(Error) -> Error"))
 		(expr (type "{}"))

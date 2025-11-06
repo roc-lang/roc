@@ -76,8 +76,8 @@ updated = {
 (inferred-types
 	(defs
 		(patt (type "{ age: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], name: Str }"))
-		(patt (type "{ age: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], name: Str, .._others }")))
+		(patt (type "{ age: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], name: Str }")))
 	(expressions
 		(expr (type "{ age: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], name: Str }"))
-		(expr (type "{ age: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], name: Str, .._others }"))))
+		(expr (type "{ age: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], name: Str }"))))
 ~~~
