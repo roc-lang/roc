@@ -3080,7 +3080,7 @@ pub const SnapshotOps = struct {
                 .roc_dbg = snapshotRocDbg,
                 .roc_expect_failed = snapshotRocExpectFailed,
                 .roc_crashed = snapshotRocCrashed,
-                .host_fns = undefined, // Not used in snapshots
+                .hosted_fns = .{ .count = 0, .fns = undefined }, // Not used in snapshots
             },
         };
     }

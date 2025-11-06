@@ -1405,6 +1405,27 @@ pub const Interpreter = struct {
                 }
                 return value;
             },
+            .e_hosted_lambda => |hosted| {
+                // Build a closure for a hosted function that will dispatch to the host via RocOps
+                const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const rt_var = try self.translateTypeVar(self.env, ct_var);
+                const closure_layout = try self.getRuntimeLayout(rt_var);
+                const value = try self.pushRaw(closure_layout, 0);
+                self.registerDefValue(expr_idx, value);
+
+                if (value.ptr) |ptr| {
+                    const header: *layout.Closure = @ptrCast(@alignCast(ptr));
+                    header.* = .{
+                        .body_idx = hosted.body,
+                        .params = hosted.args,
+                        .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
+                        .captures_layout_idx = closure_layout.data.closure.captures_layout_idx,
+                        .lambda_expr_idx = expr_idx,
+                        .source_env = self.env,
+                    };
+                }
+                return value;
+            },
             .e_closure => |cls| {
                 // Build a closure value with concrete captures. The closure references a lambda.
                 const lam_expr = self.env.store.getExpr(cls.lambda_idx);
@@ -1609,6 +1630,19 @@ pub const Interpreter = struct {
                     if (lambda_expr == .e_low_level_lambda) {
                         const low_level = lambda_expr.e_low_level_lambda;
                         const result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops);
+
+                        // Decref all args
+                        for (arg_values) |arg| {
+                            arg.decref(&self.runtime_layout_store, roc_ops);
+                        }
+
+                        return result;
+                    }
+
+                    // Check if this is a hosted lambda - if so, dispatch to host function via RocOps
+                    if (lambda_expr == .e_hosted_lambda) {
+                        const hosted = lambda_expr.e_hosted_lambda;
+                        const result = try self.callHostedFunction(hosted.index, arg_values, roc_ops, call_ret_rt_var);
 
                         // Decref all args
                         for (arg_values) |arg| {
@@ -2177,6 +2211,54 @@ pub const Interpreter = struct {
                 return error.Crash;
             },
         }
+    }
+
+    /// Call a hosted function via RocOps.hosted_fns array
+    /// This marshals arguments to the host, invokes the function pointer, and marshals the result back
+    fn callHostedFunction(
+        self: *Interpreter,
+        hosted_fn_index: u32,
+        args: []StackValue,
+        roc_ops: *RocOps,
+        return_rt_var: types.Var,
+    ) !StackValue {
+        // Validate index is within bounds
+        if (hosted_fn_index >= roc_ops.hosted_fns.count) {
+            self.triggerCrash("Hosted function index out of bounds", false, roc_ops);
+            return error.Crash;
+        }
+
+        // Get the hosted function pointer from RocOps
+        const hosted_fn = roc_ops.hosted_fns.fns[hosted_fn_index];
+
+        // Allocate space for the return value
+        const return_layout = try self.getRuntimeLayout(return_rt_var);
+        const result_value = try self.pushRaw(return_layout, 0);
+
+        // Marshal arguments into a contiguous struct matching the RocCall ABI
+        // For now, we support single-argument functions (like put_stdout! : Str => {})
+        if (args.len == 1) {
+            // Single argument case - pass directly as args_ptr
+            const arg_ptr = if (args[0].ptr) |p| p else blk: {
+                // Zero-sized type - pass stack address
+                break :blk @as(*anyopaque, @ptrFromInt(@intFromPtr(&args[0])));
+            };
+
+            const ret_ptr = if (result_value.ptr) |p| p else blk: {
+                // Zero-sized return - pass stack address
+                break :blk @as(*anyopaque, @ptrFromInt(@intFromPtr(&result_value)));
+            };
+
+            // Invoke the hosted function following RocCall ABI: (ops, ret_ptr, args_ptr)
+            hosted_fn(roc_ops, ret_ptr, arg_ptr);
+        } else {
+            // Multi-argument case - pack arguments into a struct
+            // TODO: implement multi-argument marshalling
+            self.triggerCrash("Multi-argument hosted functions not yet implemented in interpreter", false, roc_ops);
+            return error.Crash;
+        }
+
+        return result_value;
     }
 
     fn triggerCrash(self: *Interpreter, message: []const u8, owned: bool, roc_ops: *RocOps) void {

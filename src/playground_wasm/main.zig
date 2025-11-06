@@ -385,7 +385,7 @@ fn createWasmRocOps(crash_ctx: *CrashContext) !*RocOps {
         .roc_dbg = wasmRocDbg,
         .roc_expect_failed = wasmRocExpectFailed,
         .roc_crashed = wasmRocCrashed,
-        .host_fns = undefined, // Not used in playground
+        .hosted_fns = .{ .count = 0, .fns = undefined }, // Not used in playground
     };
     return roc_ops;
 }

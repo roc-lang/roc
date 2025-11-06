@@ -32,6 +32,17 @@ pub const RocCall = fn (
 ///
 /// This is used in both calls from actual hosts as well as evaluation of constants
 /// inside the Roc compiler itself.
+/// Function pointer type for hosted functions provided by the platform.
+/// All hosted functions follow the RocCall ABI: (ops, ret_ptr, args_ptr).
+pub const HostedFn = *const fn (*RocOps, *anyopaque, *anyopaque) callconv(.c) void;
+
+/// Array of hosted function pointers provided by the platform.
+/// These are sorted alphabetically by function name during canonicalization.
+pub const HostedFunctions = extern struct {
+    count: u32,
+    fns: [*]HostedFn,
+};
+
 pub const RocOps = extern struct {
     /// The host provides this pointer, and Roc passes it to each of the following
     /// function pointers as a second argument. This lets the host do things like use
@@ -51,10 +62,9 @@ pub const RocOps = extern struct {
     /// Called when the Roc program crashes, e.g. due to integer overflow.
     /// The host should handle this gracefully and stop execution of the Roc program.
     roc_crashed: *const fn (*const RocCrashed, *anyopaque) callconv(.c) void,
-    /// At the end of this struct, the host must include all the functions
-    /// it wants to provide to the Roc program for the Roc program to call
-    /// (e.g. I/O operations and such).
-    host_fns: *anyopaque,
+    /// Hosted functions provided by the platform (sorted alphabetically by name).
+    /// These are effectful operations like I/O that the platform provides to Type Modules.
+    hosted_fns: HostedFunctions,
 
     /// Helper function to crash the Roc program, returns control to the host.
     pub fn crash(self: *RocOps, msg: []const u8) void {

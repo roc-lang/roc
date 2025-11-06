@@ -57,6 +57,7 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                 // Create e_hosted_lambda expression
                 const expr_idx = try env.addExpr(.{ .e_hosted_lambda = .{
                     .symbol_name = ident,
+                    .index = 0,  // Placeholder; will be assigned during sorting pass
                     .args = args_span,
                     .body = body_idx,
                 } }, base.Region.zero());
@@ -76,4 +77,68 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     }
 
     return modified_def_indices;
+}
+
+/// Information about a hosted function for sorting and indexing
+pub const HostedFunctionInfo = struct {
+    symbol_name: base.Ident.Idx,
+    expr_idx: CIR.Expr.Idx,
+    name_text: []const u8,  // For sorting
+};
+
+/// Collect all hosted functions from the module (transitively through imports)
+/// and sort them alphabetically by name (with `!` stripped).
+pub fn collectAndSortHostedFunctions(env: *ModuleEnv) !std.ArrayList(HostedFunctionInfo) {
+    var hosted_fns = std.ArrayList(HostedFunctionInfo).empty;
+
+    // Iterate through all defs to find e_hosted_lambda expressions
+    const all_defs = env.store.sliceDefs(env.all_defs);
+    for (all_defs) |def_idx| {
+        const def = env.store.getDef(def_idx);
+        const expr = env.store.getExpr(def.expr);
+
+        if (expr == .e_hosted_lambda) {
+            const hosted = expr.e_hosted_lambda;
+            const name_text = env.getIdent(hosted.symbol_name);
+
+            // Strip the `!` suffix for sorting (e.g., "put_stdout!" -> "put_stdout")
+            const stripped_name = if (std.mem.endsWith(u8, name_text, "!"))
+                name_text[0 .. name_text.len - 1]
+            else
+                name_text;
+
+            try hosted_fns.append(env.gpa, .{
+                .symbol_name = hosted.symbol_name,
+                .expr_idx = def.expr,
+                .name_text = stripped_name,
+            });
+        }
+    }
+
+    // Sort alphabetically by stripped name
+    const SortContext = struct {
+        pub fn lessThan(_: void, a: HostedFunctionInfo, b: HostedFunctionInfo) bool {
+            return std.mem.order(u8, a.name_text, b.name_text) == .lt;
+        }
+    };
+    std.mem.sort(HostedFunctionInfo, hosted_fns.items, {}, SortContext.lessThan);
+
+    return hosted_fns;
+}
+
+/// Assign indices to e_hosted_lambda expressions based on sorted order
+pub fn assignHostedIndices(env: *ModuleEnv, sorted_fns: []const HostedFunctionInfo) !void {
+    for (sorted_fns, 0..) |fn_info, index| {
+        // Get the expression node (Expr.Idx and Node.Idx have same underlying representation)
+        const expr_node_idx = @as(@TypeOf(env.store.nodes).Idx, @enumFromInt(@intFromEnum(fn_info.expr_idx)));
+        var expr_node = env.store.nodes.get(expr_node_idx);
+
+        // For e_hosted_lambda nodes:
+        // data_1 = symbol_name (Ident.Idx via @bitCast)
+        // data_2 = index (u32) <- We set this here
+        // data_3 = extra_data pointer (for args and body)
+        expr_node.data_2 = @intCast(index);
+
+        env.store.nodes.set(expr_node_idx, expr_node);
+    }
 }

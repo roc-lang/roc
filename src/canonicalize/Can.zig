@@ -1261,6 +1261,13 @@ pub fn canonicalizeFile(
     if (self.env.module_kind == .type_module) {
         var modified_def_indices = try HostedCompiler.replaceAnnoOnlyWithHosted(self.env);
         defer modified_def_indices.deinit(self.env.gpa);
+
+        // If we transformed any annotation-only defs, collect and sort them to assign indices
+        if (modified_def_indices.items.len > 0) {
+            var sorted_fns = try HostedCompiler.collectAndSortHostedFunctions(self.env);
+            defer sorted_fns.deinit(self.env.gpa);
+            try HostedCompiler.assignHostedIndices(self.env, sorted_fns.items);
+        }
         // Note: The transformation is done in-place, so all_defs span remains valid
     }
 

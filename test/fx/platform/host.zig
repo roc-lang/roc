@@ -145,21 +145,42 @@ const RocStr = extern struct {
     }
 };
 
-/// Host-provided effectful function: write to stdout
-pub export fn roc_fx_putStdout(msg: *RocStr) callconv(.c) void {
-    var stdout_buffer: [4096]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
-    stdout_writer.interface.print("{s}\n", .{msg.asSlice()}) catch unreachable;
-    stdout_writer.interface.flush() catch unreachable;
+/// Hosted function: put_stderr! (index 0 - sorted alphabetically)
+/// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
+/// Returns {} and takes Str as argument
+fn hostedPutStderr(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
+    _ = ops;
+    _ = ret_ptr; // Return value is {} which is zero-sized
+
+    // Arguments struct for single Str parameter
+    const Args = extern struct { str: RocStr };
+    const args: *Args = @ptrCast(@alignCast(args_ptr));
+
+    const message = args.str.asSlice();
+    std.fs.File.stderr().deprecatedWriter().print("{s}\n", .{message}) catch unreachable;
 }
 
-/// Host-provided effectful function: write to stderr
-pub export fn roc_fx_putStderr(msg: *RocStr) callconv(.c) void {
-    var stderr_buffer: [4096]u8 = undefined;
-    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
-    stderr_writer.interface.print("{s}\n", .{msg.asSlice()}) catch unreachable;
-    stderr_writer.interface.flush() catch unreachable;
+/// Hosted function: put_stdout! (index 1 - sorted alphabetically)
+/// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
+/// Returns {} and takes Str as argument
+fn hostedPutStdout(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
+    _ = ops;
+    _ = ret_ptr; // Return value is {} which is zero-sized
+
+    // Arguments struct for single Str parameter
+    const Args = extern struct { str: RocStr };
+    const args: *Args = @ptrCast(@alignCast(args_ptr));
+
+    const message = args.str.asSlice();
+    std.fs.File.stdout().deprecatedWriter().print("{s}\n", .{message}) catch unreachable;
 }
+
+/// Array of hosted function pointers, sorted alphabetically by name
+/// These correspond to the hosted functions defined in Host.roc Type Module
+const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{
+    hostedPutStderr, // put_stderr! (index 0)
+    hostedPutStdout, // put_stdout! (index 1)
+};
 
 /// Platform host entrypoint
 fn platform_main() !void {
@@ -177,7 +198,10 @@ fn platform_main() !void {
         .roc_dbg = rocDbgFn,
         .roc_expect_failed = rocExpectFailedFn,
         .roc_crashed = rocCrashedFn,
-        .host_fns = undefined, // Host functions provided via roc_fx_* exports
+        .hosted_fns = .{
+            .count = hosted_function_ptrs.len,
+            .fns = @constCast(&hosted_function_ptrs),
+        },
     };
 
     // Call the app's main! entrypoint

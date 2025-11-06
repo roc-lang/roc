@@ -648,9 +648,10 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             } };
         },
         .expr_hosted => {
-            // Retrieve hosted lambda data from extra_data
+            // Retrieve hosted lambda data
             const symbol_name: base.Ident.Idx = @bitCast(node.data_1);
-            const extra_start = node.data_2;
+            const index = node.data_2;
+            const extra_start = node.data_3;
             const extra_data = store.extra_data.items.items[extra_start..];
 
             const args_start = extra_data[0];
@@ -659,6 +660,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 
             return CIR.Expr{ .e_hosted_lambda = .{
                 .symbol_name = symbol_name,
+                .index = index,
                 .args = .{ .span = .{ .start = args_start, .len = args_len } },
                 .body = @enumFromInt(body_idx),
             } };
@@ -1536,18 +1538,15 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_hosted_lambda => |hosted| {
             node.tag = .expr_hosted;
             node.data_1 = @bitCast(hosted.symbol_name);
+            node.data_2 = hosted.index;
 
-            // Store hosted lambda data in extra_data
+            // Store args and body in extra_data
             const extra_data_start = store.extra_data.len();
-
-            // Store args span start
             _ = try store.extra_data.append(store.gpa, hosted.args.span.start);
-            // Store args span length
             _ = try store.extra_data.append(store.gpa, hosted.args.span.len);
-            // Store body index
             _ = try store.extra_data.append(store.gpa, @intFromEnum(hosted.body));
 
-            node.data_2 = @intCast(extra_data_start);
+            node.data_3 = @intCast(extra_data_start);
         },
         .e_match => |e| {
             node.tag = .expr_match;
