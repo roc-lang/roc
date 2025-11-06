@@ -149,14 +149,18 @@ const RocStr = extern struct {
 
 /// Host-provided effectful function: write to stdout
 pub export fn roc_fx_putStdout(msg: *RocStr) callconv(.c) void {
-    const stdout = std.fs.File.stdout().deprecatedWriter();
-    stdout.print("{s}\n", .{msg.asSlice()}) catch unreachable;
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    stdout_writer.interface.print("{s}\n", .{msg.asSlice()}) catch unreachable;
+    stdout_writer.interface.flush() catch unreachable;
 }
 
 /// Host-provided effectful function: write to stderr
 pub export fn roc_fx_putStderr(msg: *RocStr) callconv(.c) void {
-    const stderr = std.fs.File.stderr().deprecatedWriter();
-    stderr.print("{s}\n", .{msg.asSlice()}) catch unreachable;
+    var stderr_buffer: [4096]u8 = undefined;
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+    stderr_writer.interface.print("{s}\n", .{msg.asSlice()}) catch unreachable;
+    stderr_writer.interface.flush() catch unreachable;
 }
 
 /// Platform host entrypoint
@@ -166,8 +170,13 @@ fn platform_main() !void {
     };
     defer host_env.arena.deinit();
 
-    const stdout = std.fs.File.stdout().deprecatedWriter();
-    const stderr = std.fs.File.stderr().deprecatedWriter();
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    const stdout = &stdout_writer.interface;
+
+    var stderr_buffer: [4096]u8 = undefined;
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+    const stderr = &stderr_writer.interface;
 
     // Create the RocOps struct
     var roc_ops = builtins.host_abi.RocOps{
@@ -216,4 +225,8 @@ fn platform_main() !void {
             .stderr => try stderr.print("{s}\n", .{msg.text}),
         }
     }
+
+    // Flush the output buffers
+    try stdout.flush();
+    try stderr.flush();
 }
