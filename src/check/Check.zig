@@ -594,21 +594,40 @@ fn freshBool(self: *Self, env: *Env, new_region: Region) Allocator.Error!Var {
 ///
 /// This should primarily be use to set CIR node vars that were initially filled with placeholders
 fn unifyWith(self: *Self, target_var: Var, content: types_mod.Content, env: *Env) std.mem.Allocator.Error!void {
-    const fresh_var = try self.freshFromContent(content, env, self.getRegionAt(target_var));
-    if (builtin.mode == .Debug) {
-        const target_var_rank = self.types.resolveVar(target_var).desc.rank;
-        const fresh_var_rank = self.types.resolveVar(fresh_var).desc.rank;
-        if (@intFromEnum(target_var_rank) > @intFromEnum(fresh_var_rank)) {
-            std.debug.panic("trying unifyWith unexpcted ranks {} & {}", .{ @intFromEnum(target_var_rank), @intFromEnum(fresh_var_rank) });
+    const resolved_target = self.types.resolveVar(target_var);
+    if (resolved_target.is_root and resolved_target.desc.rank == env.rank() and resolved_target.desc.content == .flex) {
+        // The vast majority of the time, we call unify with on a placeholder
+        // CIR var. In this case, we can safely override the type descriptor
+        // directly, saving a typeslot and unifcation run
+        var desc = resolved_target.desc;
+        desc.content = content;
+        try self.types.setVarDesc(target_var, desc);
+    } else {
+        var tw = try self.cir.initTypeWriter();
+        defer tw.deinit();
+
+        std.debug.print("CANNOT OPTIMIZE {} {s} {}\n", .{
+            resolved_target.var_,
+            try tw.writeGet(resolved_target.var_),
+            .{ resolved_target.is_root, resolved_target.desc.rank, env.rank() },
+        });
+
+        const fresh_var = try self.freshFromContent(content, env, self.getRegionAt(target_var));
+        if (builtin.mode == .Debug) {
+            const target_var_rank = self.types.resolveVar(target_var).desc.rank;
+            const fresh_var_rank = self.types.resolveVar(fresh_var).desc.rank;
+            if (@intFromEnum(target_var_rank) > @intFromEnum(fresh_var_rank)) {
+                std.debug.panic("trying unifyWith unexpcted ranks {} & {}", .{ @intFromEnum(target_var_rank), @intFromEnum(fresh_var_rank) });
+            }
         }
+        _ = try self.unify(target_var, fresh_var, env);
     }
-    _ = try self.unify(target_var, fresh_var, env);
 }
 
 /// Give a var, ensure it's not a redirect and set it's rank
 fn setVarRank(self: *Self, target_var: Var, env: *Env) std.mem.Allocator.Error!void {
-    if (!self.types.isRedirect(target_var)) {
-        const resolved = self.types.resolveVar(target_var);
+    const resolved = self.types.resolveVar(target_var);
+    if (resolved.is_root) {
         self.types.setDescRank(resolved.desc_idx, env.rank());
         try env.var_pool.addVarToRank(target_var, env.rank());
     } else {
@@ -2136,7 +2155,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     const expr_var = ModuleEnv.varFrom(expr_idx);
     const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx));
 
-    try self.setVarRank(expr_var, env);
+    // Set the rank of the expr var, if it is not a lambda
+    //
+    // Lambdas push a new rank, so the var must be added to _that_ rank
+    if (expr != .e_lambda) {
+        try self.setVarRank(expr_var, env);
+    }
 
     var does_fx = false; // Does this expression potentially perform any side effects?
 
@@ -2634,6 +2658,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 try env.var_pool.pushRank();
                 defer env.var_pool.popRank();
 
+                // IMPORTANT: expr_var must be added to the new rank, not the
+                // outer rank
+                try self.setVarRank(expr_var, env);
+
                 // Check the argument patterns
                 // This must happen *before* checking against the expected type so
                 // all the pattern types are inferred
@@ -2691,6 +2719,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                         });
 
                                         // Stop execution
+                                        std.debug.print("ashtasht\n", .{});
                                         _ = try self.unifyWith(expr_var, .err, env);
                                         break :for_blk;
                                     }
@@ -3868,6 +3897,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             for (constraints) |constraint| {
                 try self.markConstraintFunctionAsError(constraint, env);
             }
+            std.debug.print("AAA\n", .{});
             try self.unifyWith(deferred_constraint.var_, .err, env);
         } else if (dispatcher_content == .rigid) {
             // Get the rigid variable and the constraints it has defined
@@ -3913,6 +3943,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                     // similar to e_call
                     const result = try self.unify(rigid_var, constraint.fn_var, env);
                     if (result.isProblem()) {
+                        std.debug.print("BBBB\n", .{});
                         try self.unifyWith(deferred_constraint.var_, .err, env);
                         try self.unifyWith(resolved_func.ret, .err, env);
                     }
@@ -4044,6 +4075,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 const result = try self.unify(real_method_var, constraint.fn_var, env);
 
                 if (result.isProblem()) {
+                    std.debug.print("CCCC\n", .{});
                     try self.unifyWith(deferred_constraint.var_, .err, env);
                     try self.unifyWith(resolved_func.ret, .err, env);
                 }
@@ -4077,6 +4109,7 @@ fn markConstraintFunctionAsError(self: *Self, constraint: StaticDispatchConstrai
     const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
     std.debug.assert(mb_resolved_func != null);
     const resolved_func = mb_resolved_func.?;
+    std.debug.print("DDDD\n", .{});
     try self.unifyWith(resolved_func.ret, .err, env);
 }
 

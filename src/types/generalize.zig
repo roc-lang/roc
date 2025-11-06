@@ -189,8 +189,8 @@ pub const Generalizer = struct {
         // lowered during adjustment because they reference outer-scope variables.
         for (self.tmp_var_pool.sliceExceptCurrentRank()) |vars_at_rank| {
             for (vars_at_rank.items) |var_| {
-                if (!self.store.isRedirect(var_)) {
-                    const resolved = self.store.resolveVar(var_);
+                const resolved = self.store.resolveVar(var_);
+                if (resolved.is_root) {
                     try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
                 }
             }
@@ -199,8 +199,8 @@ pub const Generalizer = struct {
         // Process variables still at rank_to_generalize after adjustment.
         // These either escaped (rank lowered) or can be generalized (rank unchanged).
         for (self.tmp_var_pool.ranks.items[rank_to_generalize_int].items) |rank_var| {
-            if (!self.store.isRedirect(rank_var)) {
-                const resolved = self.store.resolveVar(rank_var);
+            const resolved = self.store.resolveVar(rank_var);
+            if (resolved.is_root) {
                 if (@intFromEnum(resolved.desc.rank) < rank_to_generalize_int) {
                     // Rank was lowered during adjustment - variable escaped
                     try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
@@ -495,6 +495,23 @@ pub const VarPool = struct {
         if (@intFromEnum(self.current_rank) > 0) {
             self.ranks.items[@intFromEnum(self.current_rank)].clearRetainingCapacity();
             self.current_rank = self.current_rank.prev();
+        }
+    }
+
+    /// Remove a var from the specified rank
+    ///
+    /// This removal reorders the vars at that rank, but var order is not important
+    pub fn removeVarFromRank(self: *Self, variable: Var, rank: Rank) void {
+        if (builtin.mode == .Debug) {
+            if (@intFromEnum(rank) > @intFromEnum(self.current_rank)) {
+                std.debug.panic("trying to remove var at rank {}, but current rank is {}", .{ @intFromEnum(rank), @intFromEnum(self.current_rank) });
+            }
+        }
+        for (self.ranks.items[@intFromEnum(rank)].items, 0..) |cur_var, i| {
+            if (cur_var == variable) {
+                _ = self.ranks.items[@intFromEnum(rank)].swapRemove(i);
+                return;
+            }
         }
     }
 

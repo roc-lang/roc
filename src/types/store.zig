@@ -34,7 +34,12 @@ const StaticDispatchConstraint = types.StaticDispatchConstraint;
 const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
 
 /// A variable & its descriptor info
-pub const ResolvedVarDesc = struct { var_: Var, desc_idx: DescStore.Idx, desc: Desc };
+pub const ResolvedVarDesc = struct {
+    var_: Var,
+    is_root: bool,
+    desc_idx: DescStore.Idx,
+    desc: Desc,
+};
 
 /// Two variables & descs
 pub const ResolvedVarDescs = struct { a: ResolvedVarDesc, b: ResolvedVarDesc };
@@ -174,14 +179,6 @@ pub const Store = struct {
         const desc_idx = try self.descs.insert(self.gpa, desc);
         const slot_idx = try self.slots.insert(self.gpa, .{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
-    }
-
-    /// Check if a variable is a rediret
-    pub fn isRedirect(self: *const Self, var_: Var) bool {
-        switch (self.slots.get(Self.varToSlotIdx(var_))) {
-            .redirect => return true,
-            .root => return false,
-        }
     }
 
     /// Create a new variable with the provided content assuming there is capacity
@@ -621,36 +618,27 @@ pub const Store = struct {
         var redirected_slot_idx = Self.varToSlotIdx(initial_var);
         var redirected_slot: Slot = self.slots.get(redirected_slot_idx);
 
+        var is_root = true;
+
         while (true) {
             switch (redirected_slot) {
                 .redirect => |next_redirect_var| {
                     redirected_slot_idx = Self.varToSlotIdx(next_redirect_var);
                     redirected_slot = self.slots.get(redirected_slot_idx);
+
+                    is_root = false;
                 },
                 .root => |desc_idx| {
                     const redirected_root_var = Self.slotIdxToVar(redirected_slot_idx);
                     const desc = self.descs.get(desc_idx);
                     return .{
                         .var_ = redirected_root_var,
+                        .is_root = is_root,
                         .desc_idx = desc_idx,
                         .desc = desc,
                     };
                 },
             }
-        }
-        const redirected_root_var = Self.slotIdxToVar(redirected_slot_idx);
-
-        // TODO: refactor to remove panic?
-        switch (redirected_slot) {
-            .redirect => |_| @panic("redirected slot was still redirect after following chain"),
-            .root => |desc_idx| {
-                const desc = self.descs.get(desc_idx);
-                return .{
-                    .var_ = redirected_root_var,
-                    .desc_idx = desc_idx,
-                    .desc = desc,
-                };
-            },
         }
     }
 
