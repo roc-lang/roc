@@ -130,7 +130,7 @@ pub fn deinit(store: *NodeStore) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 59;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 35;
+pub const MODULEENV_EXPR_NODE_COUNT = 36;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 14;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -643,6 +643,22 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 
             return CIR.Expr{ .e_low_level_lambda = .{
                 .op = op,
+                .args = .{ .span = .{ .start = args_start, .len = args_len } },
+                .body = @enumFromInt(body_idx),
+            } };
+        },
+        .expr_hosted => {
+            // Retrieve hosted lambda data from extra_data
+            const symbol_name: base.Ident.Idx = @bitCast(node.data_1);
+            const extra_start = node.data_2;
+            const extra_data = store.extra_data.items.items[extra_start..];
+
+            const args_start = extra_data[0];
+            const args_len = extra_data[1];
+            const body_idx = extra_data[2];
+
+            return CIR.Expr{ .e_hosted_lambda = .{
+                .symbol_name = symbol_name,
                 .args = .{ .span = .{ .start = args_start, .len = args_len } },
                 .body = @enumFromInt(body_idx),
             } };
@@ -1514,6 +1530,22 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             _ = try store.extra_data.append(store.gpa, low_level.args.span.len);
             // Store body index
             _ = try store.extra_data.append(store.gpa, @intFromEnum(low_level.body));
+
+            node.data_2 = @intCast(extra_data_start);
+        },
+        .e_hosted_lambda => |hosted| {
+            node.tag = .expr_hosted;
+            node.data_1 = @bitCast(hosted.symbol_name);
+
+            // Store hosted lambda data in extra_data
+            const extra_data_start = store.extra_data.len();
+
+            // Store args span start
+            _ = try store.extra_data.append(store.gpa, hosted.args.span.start);
+            // Store args span length
+            _ = try store.extra_data.append(store.gpa, hosted.args.span.len);
+            // Store body index
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(hosted.body));
 
             node.data_2 = @intCast(extra_data_start);
         },

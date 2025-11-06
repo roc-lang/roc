@@ -3005,6 +3005,21 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                 },
             }
         },
+        .e_hosted_lambda => |hosted| {
+            // For hosted lambda expressions, treat like a lambda with a crash body.
+            // Check the body (which will be e_runtime_error or similar)
+            does_fx = try self.checkExpr(hosted.body, rank, .no_expectation) or does_fx;
+
+            // The lambda's type comes from the annotation.
+            // Like e_anno_only and e_low_level_lambda, this should always have an annotation.
+            // The type will be unified with the expected type in the code below.
+            switch (expected) {
+                .no_expectation => unreachable,
+                .expected => {
+                    // The expr_var will be unified with the annotation var below
+                },
+            }
+        },
         .e_runtime_error => {
             try self.updateVar(expr_var, .err, rank);
         },

@@ -245,6 +245,10 @@ fn collectExprDependencies(
             try collectExprDependencies(cir, ll.body, dependencies, allocator);
         },
 
+        .e_hosted_lambda => |hosted| {
+            try collectExprDependencies(cir, hosted.body, dependencies, allocator);
+        },
+
         // External lookups reference other modules - skip for now
         .e_lookup_external => {},
 

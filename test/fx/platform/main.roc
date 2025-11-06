@@ -1,19 +1,8 @@
 platform ""
-    requires {} {
-        main! : () => {},
-        putStdout! : Str => {},
-        putStderr! : Str => {}
-    }
+    requires {} { main! : () => {} }
     exposes []
     packages {}
-    provides {
-        main_for_host: "main_for_host",
-        putStdout: "putStdout",
-        putStderr: "putStderr"
-    }
+    provides { main_for_host! }
 
 main_for_host! : () => {}
-main_for_host! = || main!()
-
-putStdout! : Str => {}
-putStderr! : Str => {}
+main_for_host! = |_| main!()

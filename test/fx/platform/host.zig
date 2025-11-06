@@ -61,8 +61,6 @@ fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaqu
 // External symbols provided by the Roc runtime object file
 // Follows RocCall ABI: ops, ret_ptr, then argument pointers
 extern fn roc__main_for_host(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
-extern fn roc__putStdout(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
-extern fn roc__putStderr(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
 
 // OS-specific entry point handling
 comptime {
@@ -170,14 +168,6 @@ fn platform_main() !void {
     };
     defer host_env.arena.deinit();
 
-    var stdout_buffer: [4096]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
-    const stdout = &stdout_writer.interface;
-
-    var stderr_buffer: [4096]u8 = undefined;
-    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
-    const stderr = &stderr_writer.interface;
-
     // Create the RocOps struct
     var roc_ops = builtins.host_abi.RocOps{
         .env = @as(*anyopaque, @ptrCast(&host_env)),
@@ -191,42 +181,7 @@ fn platform_main() !void {
     };
 
     // Call the app's main! entrypoint
-    // This demonstrates platform-app integration: the platform requires and calls main!
-    // The app implements main! which calls other effectful functions
-    // Those functions are also provided by the app (as stubs), demonstrating composition
     var unit_result: [0]u8 = undefined; // Result is {} which is zero-sized
     var unit_arg: [0]u8 = undefined; // Argument is () which is zero-sized
     roc__main_for_host(&roc_ops, @as(*anyopaque, @ptrCast(&unit_result)), @as(*anyopaque, @ptrCast(&unit_arg)));
-
-    // Verify the app's effectful functions work by calling them directly
-    // This tests that the calling convention and type signatures are correct
-    const messages = [_]struct {
-        text: []const u8,
-        func: *const fn (*builtins.host_abi.RocOps, *anyopaque, ?*anyopaque) callconv(.c) void,
-        stream: enum { stdout, stderr },
-    }{
-        .{ .text = "Hello from stdout!", .func = roc__putStdout, .stream = .stdout },
-        .{ .text = "Error from stderr!", .func = roc__putStderr, .stream = .stderr },
-        .{ .text = "Line 1 to stdout", .func = roc__putStdout, .stream = .stdout },
-        .{ .text = "Line 2 to stderr", .func = roc__putStderr, .stream = .stderr },
-        .{ .text = "Line 3 to stdout", .func = roc__putStdout, .stream = .stdout },
-    };
-
-    for (messages) |msg| {
-        var roc_str = RocStr.fromSlice(msg.text, &roc_ops);
-        var result: [0]u8 = undefined;
-        msg.func(&roc_ops, @as(*anyopaque, @ptrCast(&result)), @as(*anyopaque, @ptrCast(&roc_str)));
-
-        // The Roc function returned successfully, now perform the actual I/O
-        // In a full implementation with platform modules, the Roc code would call
-        // host-provided functions (via import pf.Stdout) to perform I/O directly
-        switch (msg.stream) {
-            .stdout => try stdout.print("{s}\n", .{msg.text}),
-            .stderr => try stderr.print("{s}\n", .{msg.text}),
-        }
-    }
-
-    // Flush the output buffers
-    try stdout.flush();
-    try stderr.flush();
 }

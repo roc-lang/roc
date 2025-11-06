@@ -382,6 +382,17 @@ pub const Expr = union(enum) {
         body: Expr.Idx,
     },
 
+    /// A hosted lambda that will be provided by the host application at runtime.
+    /// ```roc
+    /// # In a hosted module:
+    /// putStdout! : Str => {}
+    /// ```
+    e_hosted_lambda: struct {
+        symbol_name: base.Ident.Idx,
+        args: CIR.Pattern.Span,
+        body: Expr.Idx,
+    },
+
     /// Low-level builtin operations that are implemented by the compiler backend.
     pub const LowLevel = enum {
         str_is_empty,
@@ -1050,6 +1061,27 @@ pub const Expr = union(enum) {
                 try tree.endNode(args_begin, args_attrs);
 
                 try ir.store.getExpr(low_level.body).pushToSExprTree(ir, tree, low_level.body);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_hosted_lambda => |hosted| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-hosted-lambda");
+                const symbol_name = ir.common.getIdent(hosted.symbol_name);
+                try tree.pushStringPair("symbol", symbol_name);
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                const args_begin = tree.beginNode();
+                try tree.pushStaticAtom("args");
+                const args_attrs = tree.beginNode();
+                for (ir.store.slicePatterns(hosted.args)) |arg_idx| {
+                    try ir.store.getPattern(arg_idx).pushToSExprTree(ir, tree, arg_idx);
+                }
+                try tree.endNode(args_begin, args_attrs);
+
+                try ir.store.getExpr(hosted.body).pushToSExprTree(ir, tree, hosted.body);
 
                 try tree.endNode(begin, attrs);
             },
