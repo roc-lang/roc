@@ -134,8 +134,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     var common = try CommonEnv.init(gpa, source);
 
     // Intern well-known identifiers once during initialization for fast type checking
-    const from_int_digits_ident = try common.insertIdent(gpa, Ident.for_text("from_int_digits"));
-    const from_dec_digits_ident = try common.insertIdent(gpa, Ident.for_text("from_dec_digits"));
+    const from_int_digits_ident = try common.insertIdent(gpa, Ident.for_text(Ident.FROM_INT_DIGITS_METHOD_NAME));
+    const from_dec_digits_ident = try common.insertIdent(gpa, Ident.for_text(Ident.FROM_DEC_DIGITS_METHOD_NAME));
 
     return Self{
         .gpa = gpa,
@@ -1582,8 +1582,8 @@ pub const Serialized = struct {
             .store = self.store.deserialize(offset, gpa).*,
             .evaluation_order = null, // Not serialized, will be recomputed if needed
             // Well-known identifiers for type checking - look them up in the deserialized common env
-            .from_int_digits_ident = env.common.findIdent("from_int_digits") orelse unreachable,
-            .from_dec_digits_ident = env.common.findIdent("from_dec_digits") orelse unreachable,
+            .from_int_digits_ident = env.common.findIdent(Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
+            .from_dec_digits_ident = env.common.findIdent(Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
         };
 
         return env;

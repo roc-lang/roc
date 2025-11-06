@@ -16,6 +16,10 @@ const CompactWriter = collections.CompactWriter;
 
 const Ident = @This();
 
+/// Well-known identifier names used by the type system
+pub const FROM_INT_DIGITS_METHOD_NAME = "from_int_digits";
+pub const FROM_DEC_DIGITS_METHOD_NAME = "from_dec_digits";
+
 /// The original text of the identifier.
 raw_text: []const u8,
 
