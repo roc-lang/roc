@@ -259,6 +259,28 @@ test "check type - def - nested lambda" {
     try checkTypesModule(source, .{ .pass = .last_def }, "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
 }
 
+test "check type - def - forward ref" {
+    const source =
+        \\run = id1("howdy")
+        \\
+        \\id1 : x -> x
+        \\id1 = |x| id2(x)
+        \\
+        \\id2 : x -> x
+        \\id2 = |x| id3(x)
+        \\
+        \\id3 : x -> x
+        \\id3 = |x| id4(x)
+        \\
+        \\id4 : x -> x
+        \\id4 = |x| x
+        \\
+        \\id5 : x -> x
+        \\id5 = |x| x
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "run" } }, "Str");
+}
+
 test "check type - def - nested lambda with wrong annotation" {
     return error.SkipZigTest;
 

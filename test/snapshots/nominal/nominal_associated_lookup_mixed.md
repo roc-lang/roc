@@ -23,17 +23,7 @@ result = Foo.transform(Foo.defaultBar)
 # EXPECTED
 NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `result` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**nominal_associated_lookup_mixed.md:11:11:11:17:**
-```roc
-result2 = result
-```
-          ^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -129,7 +119,8 @@ result = Foo.transform(Foo.defaultBar)
 				(ty-lookup (name "Foo.Bar") (local)))))
 	(d-let
 		(p-assign (ident "result2"))
-		(e-runtime-error (tag "ident_not_in_scope"))
+		(e-lookup-local
+			(p-assign (ident "result")))
 		(annotation
 			(ty-lookup (name "Foo.Bar") (local))))
 	(d-let
@@ -158,7 +149,7 @@ result = Foo.transform(Foo.defaultBar)
 	(defs
 		(patt (type "Foo.Bar"))
 		(patt (type "Foo.Bar -> Foo.Bar"))
-		(patt (type "Error"))
+		(patt (type "Foo.Bar"))
 		(patt (type "Foo.Bar")))
 	(type_decls
 		(nominal (type "Foo")
@@ -168,6 +159,6 @@ result = Foo.transform(Foo.defaultBar)
 	(expressions
 		(expr (type "Foo.Bar"))
 		(expr (type "Foo.Bar -> Foo.Bar"))
-		(expr (type "Error"))
+		(expr (type "Foo.Bar"))
 		(expr (type "Foo.Bar"))))
 ~~~

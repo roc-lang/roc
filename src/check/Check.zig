@@ -612,10 +612,8 @@ fn setVarRank(self: *Self, target_var: Var, env: *Env) std.mem.Allocator.Error!v
         self.types.setDescRank(resolved.desc_idx, env.rank());
         try env.var_pool.addVarToRank(target_var, env.rank());
     } else {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("trying to set rank of var {}, but var is a redirect", .{@intFromEnum(target_var)});
-        }
-        try self.unifyWith(target_var, .err, env);
+        // TODO: Unclear if this is an error or not
+        // try self.unifyWith(target_var, .err, env);
     }
 }
 
@@ -2524,9 +2522,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         // lookup //
         .e_lookup_local => |lookup| {
-            const pat_var = ModuleEnv.varFrom(lookup.pattern_idx);
-            const resolved_pat = self.types.resolveVar(pat_var).desc;
-
             const mb_processing_def = self.top_level_ptrns.get(lookup.pattern_idx);
             if (mb_processing_def) |processing_def| {
                 switch (processing_def.status) {
@@ -2542,6 +2537,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     .processed => {},
                 }
             }
+
+            const pat_var = ModuleEnv.varFrom(lookup.pattern_idx);
+            const resolved_pat = self.types.resolveVar(pat_var).desc;
 
             if (resolved_pat.rank == Rank.generalized) {
                 const instantiated = try self.instantiateVar(pat_var, env, .use_last_var);

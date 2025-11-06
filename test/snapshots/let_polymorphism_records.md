@@ -24,7 +24,7 @@ list_container = make_container(my_empty_list)
 
 # TODO
 # Polymorphic record update
-# update_data = |container, new_value| { container & data: new_value }
+update_data = |container, new_value| { ..container, data: new_value }
 
 # Used with different record types
 # updated_int = update_data(int_container, 100)
@@ -44,7 +44,11 @@ main = |_| {
 }
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - let_polymorphism_records.md:20:50:20:51
+UNRECOGNIZED SYNTAX - let_polymorphism_records.md:20:50:20:51
+UNUSED VARIABLE - let_polymorphism_records.md:20:52:20:67
+UNUSED VARIABLE - let_polymorphism_records.md:20:27:20:36
+UNUSED VALUE - let_polymorphism_records.md:20:40:20:49
 # PROBLEMS
 NIL
 # TOKENS
@@ -59,6 +63,7 @@ LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,LowerIdent,OpColon,LowerIde
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
+LowerIdent,OpAssign,OpBar,LowerIdent,Comma,LowerIdent,OpBar,OpenCurly,DoubleDot,LowerIdent,Comma,LowerIdent,OpColon,LowerIdent,CloseCurly,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,LowerIdent,OpColon,LowerIdent,CloseCurly,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,Int,CloseRound,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,StringStart,StringPart,StringEnd,CloseRound,
@@ -127,6 +132,17 @@ EndOfFile,
 				(e-ident (raw "make_container"))
 				(e-ident (raw "my_empty_list"))))
 		(s-decl
+			(p-ident (raw "update_data"))
+			(e-lambda
+				(args
+					(p-ident (raw "container"))
+					(p-ident (raw "new_value")))
+				(e-record
+					(ext
+						(e-ident (raw "container")))
+					(field (field "data")
+						(e-ident (raw "new_value"))))))
+		(s-decl
 			(p-ident (raw "identity_record"))
 			(e-lambda
 				(args
@@ -189,7 +205,7 @@ list_container = make_container(my_empty_list)
 
 # TODO
 # Polymorphic record update
-# update_data = |container, new_value| { container & data: new_value }
+update_data = |container, new_value| { ..container, data: new_value }
 
 # Used with different record types
 # updated_int = update_data(int_container, 100)
@@ -266,6 +282,20 @@ main = |_| {
 			(e-lookup-local
 				(p-assign (ident "my_empty_list")))))
 	(d-let
+		(p-assign (ident "update_data"))
+		(e-lambda
+			(args
+				(p-assign (ident "container"))
+				(p-assign (ident "new_value")))
+			(e-record
+				(ext
+					(e-lookup-local
+						(p-assign (ident "container"))))
+				(fields
+					(field (name "data")
+						(e-lookup-local
+							(p-assign (ident "new_value"))))))))
+	(d-let
 		(p-assign (ident "identity_record"))
 		(e-lambda
 			(args
@@ -331,6 +361,7 @@ main = |_| {
 		(patt (type "{ count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] }"))
 		(patt (type "{ count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: Str }"))
 		(patt (type "{ count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: List(_elem) }"))
+		(patt (type "a, b -> { data: b }"))
 		(patt (type "a -> { value: a }"))
 		(patt (type "{ value: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] }"))
 		(patt (type "{ value: Str }"))
@@ -346,6 +377,7 @@ main = |_| {
 		(expr (type "{ count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] }"))
 		(expr (type "{ count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: Str }"))
 		(expr (type "{ count: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], data: List(_elem) }"))
+		(expr (type "a, b -> { data: b }"))
 		(expr (type "a -> { value: a }"))
 		(expr (type "{ value: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] }"))
 		(expr (type "{ value: Str }"))

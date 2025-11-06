@@ -11,7 +11,7 @@ app [main!] { pf: platform "../basic-cli/main.roc" }
 a = 42
 
 # This should get type 'b -> b' since 'a' is taken
-identity = |x| x
+identity = |xx| xx
 
 # Use more names to test the sequence
 b = "hello"
@@ -20,7 +20,7 @@ d = True
 e = False
 
 # This should get type 'f -> f' since a,b,c,d,e are taken
-anotherIdentity = |y| y
+anotherIdentity = |yy| yy
 
 # Test with a function that has multiple type variables
 # Should get types like 'f, g -> (f, g)' or similar
@@ -180,8 +180,8 @@ EndOfFile,
 			(p-ident (raw "identity"))
 			(e-lambda
 				(args
-					(p-ident (raw "x")))
-				(e-ident (raw "x"))))
+					(p-ident (raw "xx")))
+				(e-ident (raw "xx"))))
 		(s-decl
 			(p-ident (raw "b"))
 			(e-string
@@ -199,8 +199,8 @@ EndOfFile,
 			(p-ident (raw "anotherIdentity"))
 			(e-lambda
 				(args
-					(p-ident (raw "y")))
-				(e-ident (raw "y"))))
+					(p-ident (raw "yy")))
+				(e-ident (raw "yy"))))
 		(s-decl
 			(p-ident (raw "combine"))
 			(e-lambda
@@ -337,7 +337,7 @@ app [main!] { pf: platform "../basic-cli/main.roc" }
 a = 42
 
 # This should get type 'b -> b' since 'a' is taken
-identity = |x| x
+identity = |xx| xx
 
 # Use more names to test the sequence
 b = "hello"
@@ -346,7 +346,7 @@ d = True
 e = False
 
 # This should get type 'f -> f' since a,b,c,d,e are taken
-anotherIdentity = |y| y
+anotherIdentity = |yy| yy
 
 # Test with a function that has multiple type variables
 # Should get types like 'f, g -> (f, g)' or similar
@@ -407,9 +407,9 @@ main! = |_| {
 		(p-assign (ident "identity"))
 		(e-lambda
 			(args
-				(p-assign (ident "x")))
+				(p-assign (ident "xx")))
 			(e-lookup-local
-				(p-assign (ident "x")))))
+				(p-assign (ident "xx")))))
 	(d-let
 		(p-assign (ident "b"))
 		(e-string
@@ -427,9 +427,9 @@ main! = |_| {
 		(p-assign (ident "anotherIdentity"))
 		(e-lambda
 			(args
-				(p-assign (ident "y")))
+				(p-assign (ident "yy")))
 			(e-lookup-local
-				(p-assign (ident "y")))))
+				(p-assign (ident "yy")))))
 	(d-let
 		(p-assign (ident "combine"))
 		(e-lambda
