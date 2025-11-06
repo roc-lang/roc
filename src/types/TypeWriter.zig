@@ -706,7 +706,7 @@ fn writeNum(self: *TypeWriter, num: Num, root_var: Var) std.mem.Allocator.Error!
             _ = try self.buf.writer().write("num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
         },
         .frac_unbound => |_| {
-            _ = try self.buf.writer().write("num where [num.from_dec_digits : { before_dot : List(U8), after_dot : List(U8) } -> Try(num, [OutOfRange])]");
+            _ = try self.buf.writer().write("num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])]");
         },
         .int_precision => |prec| {
             try self.writeIntType(prec, .precision);

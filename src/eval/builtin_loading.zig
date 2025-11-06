@@ -78,6 +78,9 @@ pub fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_n
         // These must exist in the Builtin module which defines them
         .from_int_digits_ident = env.common.findIdent(Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
         .from_dec_digits_ident = env.common.findIdent(Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
+        .try_ident = env.common.findIdent("Try") orelse unreachable,
+        .out_of_range_ident = env.common.findIdent("OutOfRange") orelse unreachable,
+        .builtin_module_ident = env.common.findIdent("Builtin") orelse unreachable,
     };
 
     return LoadedModule{

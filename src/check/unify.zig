@@ -1197,12 +1197,13 @@ const Unifier = struct {
                                 // Create Try(Self, [OutOfRange]) - Try is a nominal type with 2 type params
                                 const try_ident_text = self.module_env.common.insertIdent(self.module_env.gpa, base.Ident.for_text("Try")) catch return error.AllocatorError;
                                 const try_type_ident = TypeIdent{ .ident_idx = try_ident_text };
+                                const builtin_module_ident = self.module_env.common.insertIdent(self.module_env.gpa, base.Ident.for_text("Builtin")) catch return error.AllocatorError;
                                 const try_vars_range = self.types_store.appendVars(&[_]Var{ self_var, error_tag_union_var }) catch return error.AllocatorError;
                                 const try_vars_nonempty = Var.SafeList.NonEmptyRange{ .nonempty = try_vars_range };
                                 const try_nominal = NominalType{
                                     .ident = try_type_ident,
                                     .vars = try_vars_nonempty,
-                                    .origin_module = undefined, // TODO: should be Builtin module
+                                    .origin_module = builtin_module_ident,
                                 };
                                 const try_return_var = self.types_store.register(.{ .content = .{ .structure = .{ .nominal_type = try_nominal } }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
 
@@ -1281,12 +1282,13 @@ const Unifier = struct {
                                 // Create Try(Self, [OutOfRange]) - Try is a nominal type with 2 type params
                                 const try_ident_text = self.module_env.common.insertIdent(self.module_env.gpa, base.Ident.for_text("Try")) catch return error.AllocatorError;
                                 const try_type_ident = TypeIdent{ .ident_idx = try_ident_text };
+                                const builtin_module_ident = self.module_env.common.insertIdent(self.module_env.gpa, base.Ident.for_text("Builtin")) catch return error.AllocatorError;
                                 const try_vars_range = self.types_store.appendVars(&[_]Var{ self_var, error_tag_union_var }) catch return error.AllocatorError;
                                 const try_vars_nonempty = Var.SafeList.NonEmptyRange{ .nonempty = try_vars_range };
                                 const try_nominal = NominalType{
                                     .ident = try_type_ident,
                                     .vars = try_vars_nonempty,
-                                    .origin_module = undefined, // TODO: should be Builtin module
+                                    .origin_module = builtin_module_ident,
                                 };
                                 const try_return_var = self.types_store.register(.{ .content = .{ .structure = .{ .nominal_type = try_nominal } }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
 
