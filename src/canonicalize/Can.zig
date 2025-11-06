@@ -3106,28 +3106,15 @@ pub fn canonicalizeExpr(
             }
 
             // Insert concrete expr
-            const expr_idx = blk: {
-                const is_not_base10 = int_base != DEFAULT_BASE;
-                if (is_not_base10) {
-                    // For non-decimal integers (hex, binary, octal), set as an int
-                    break :blk try self.env.addExpr(
-                        CIR.Expr{ .e_num = .{
-                            .value = int_value,
-                            .kind = .int_unbound,
-                        } },
-                        region,
-                    );
-                } else {
-                    // For decimal (base 10), use a num so it can be either Int or Frac
-                    break :blk try self.env.addExpr(
-                        CIR.Expr{ .e_num = .{
-                            .value = int_value,
-                            .kind = .num_unbound,
-                        } },
-                        region,
-                    );
-                }
-            };
+            // All integer literals (regardless of base) are treated as num_unbound
+            // so they can unify with both Int and Frac types
+            const expr_idx = try self.env.addExpr(
+                CIR.Expr{ .e_num = .{
+                    .value = int_value,
+                    .kind = .num_unbound,
+                } },
+                region,
+            );
 
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
         },
