@@ -1141,6 +1141,42 @@ const Unifier = struct {
         self.merge(vars, vars.b.desc.content);
     }
 
+    /// Check if a type variable is List(U8)
+    fn isListU8(self: *Self, var_: Var) bool {
+        const resolved = self.types_store.resolveVar(var_);
+        switch (resolved.desc.content) {
+            .structure => |structure| {
+                switch (structure) {
+                    .list => |elem_var| {
+                        const elem_resolved = self.types_store.resolveVar(elem_var);
+                        switch (elem_resolved.desc.content) {
+                            .structure => |elem_structure| {
+                                switch (elem_structure) {
+                                    .num => |num| {
+                                        // Check if it's the compact U8 representation
+                                        switch (num) {
+                                            .num_compact => |compact| {
+                                                switch (compact) {
+                                                    .int => |precision| return precision == .u8,
+                                                    else => return false,
+                                                }
+                                            },
+                                            else => return false,
+                                        }
+                                    },
+                                    else => return false,
+                                }
+                            },
+                            else => return false,
+                        }
+                    },
+                    else => return false,
+                }
+            },
+            else => return false,
+        }
+    }
+
     /// Check if a nominal type has a from_int_digits method with the correct signature:
     /// from_int_digits : List(U8) -> Try(Self, [OutOfRange])
     fn nominalTypeHasFromIntDigits(
@@ -1161,11 +1197,37 @@ const Unifier = struct {
         // Look for the from_int_digits field using fast integer comparison
         const fields_slice = self.types_store.getRecordFieldsSlice(backing_record.fields);
         const field_names = fields_slice.items(.name);
-        for (field_names) |name_idx| {
+        const field_vars = fields_slice.items(.var_);
+
+        for (field_names, 0..) |name_idx, i| {
             if (name_idx == from_int_digits_ident) {
-                // Found the method - for now we trust it has the right signature
-                // TODO: Check the actual signature matches List(U8) -> Try(Self, [OutOfRange])
-                return true;
+                // Found the method - now check it's a function type
+                const field_var = field_vars[i];
+                const field_resolved = self.types_store.resolveVar(field_var);
+
+                // Check that it's a function
+                switch (field_resolved.desc.content) {
+                    .structure => |structure| {
+                        switch (structure) {
+                            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                                // Check it takes exactly 1 argument: List(U8)
+                                const args_slice = self.types_store.sliceVars(func.args);
+                                if (args_slice.len != 1) return false;
+
+                                // Verify the argument is List(U8)
+                                if (!self.isListU8(args_slice[0])) return false;
+
+                                // We've verified: function exists with signature List(U8) -> <something>
+                                // The return type should be Try(Self, [OutOfRange]), but we'll be lenient
+                                // and just accept any function with List(U8) as the argument.
+                                // This allows for variations in the error type or return wrapper.
+                                return true;
+                            },
+                            else => return false,
+                        }
+                    },
+                    else => return false,
+                }
             }
         }
 
@@ -1173,7 +1235,7 @@ const Unifier = struct {
     }
 
     /// Check if a nominal type has a from_dec_digits method with the correct signature:
-    /// from_dec_digits : { before_dot : List(U8), after_dot : List(U8) } -> Try(Self, [OutOfRange])
+    /// from_dec_digits : (List(U8), List(U8)) -> Try(Self, [OutOfRange])
     fn nominalTypeHasFromDecDigits(
         self: *Self,
         nominal_type: NominalType,
@@ -1192,11 +1254,38 @@ const Unifier = struct {
         // Look for the from_dec_digits field using fast integer comparison
         const fields_slice = self.types_store.getRecordFieldsSlice(backing_record.fields);
         const field_names = fields_slice.items(.name);
-        for (field_names) |name_idx| {
+        const field_vars = fields_slice.items(.var_);
+
+        for (field_names, 0..) |name_idx, i| {
             if (name_idx == from_dec_digits_ident) {
-                // Found the method - for now we trust it has the right signature
-                // TODO: Check the actual signature matches the expected type
-                return true;
+                // Found the method - now check it's a function type
+                const field_var = field_vars[i];
+                const field_resolved = self.types_store.resolveVar(field_var);
+
+                // Check that it's a function
+                switch (field_resolved.desc.content) {
+                    .structure => |structure| {
+                        switch (structure) {
+                            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                                // Check it takes exactly 2 arguments: (List(U8), List(U8))
+                                const args_slice = self.types_store.sliceVars(func.args);
+                                if (args_slice.len != 2) return false;
+
+                                // Verify both arguments are List(U8)
+                                if (!self.isListU8(args_slice[0])) return false;
+                                if (!self.isListU8(args_slice[1])) return false;
+
+                                // We've verified: function exists with signature (List(U8), List(U8)) -> <something>
+                                // The return type should be Try(Self, [OutOfRange]), but we'll be lenient
+                                // and just accept any function with (List(U8), List(U8)) as arguments.
+                                // This allows for variations in the error type or return wrapper.
+                                return true;
+                            },
+                            else => return false,
+                        }
+                    },
+                    else => return false,
+                }
             }
         }
 
