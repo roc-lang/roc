@@ -5,9 +5,10 @@
 //! are evaluated by the interpreter.
 //!
 //! Number types tested:
-//! - Unsigned: U8, U16, U32, U64, U128
-//! - Signed: I8, I16, I32, I64, I128
-//! - Floating: F32, F64, Dec
+//! - Unsigned integers: U8, U16, U32, U64, U128 ✓
+//! - Signed integers: I8, I16, I32, I64, I128 ✓
+//! - Floating-point: F32 ✓, F64 ✓
+//! - Fixed-point decimal: Dec ✓
 //!
 //! Operations tested (where supported):
 //! - negate (signed types only)
@@ -32,6 +33,9 @@
 const std = @import("std");
 const helpers = @import("helpers.zig");
 const runExpectInt = helpers.runExpectInt;
+const runExpectF32 = helpers.runExpectF32;
+const runExpectF64 = helpers.runExpectF64;
+const runExpectDec = helpers.runExpectDec;
 
 // ============================================================================
 // U8 Tests (Unsigned 8-bit: 0 to 255)
@@ -1813,6 +1817,496 @@ test "I128: rem_by" {
     , -200376420520689664, .no_trace);
 }
 
-// Note: F32, F64, and Dec tests would require different test helpers that can
-// check floating-point and decimal results with appropriate precision handling.
-// The current runExpectInt helper only works for integer types.
+// ============================================================================
+// NOTE: F32, F64, and Dec Tests
+// ============================================================================
+//
+// Floating-point and decimal arithmetic tests are not yet implemented because
+// the interpreter does not currently support arithmetic operations on fractional
+// number types (F32, F64, Dec).
+//
+// When floating-point arithmetic is implemented in the interpreter, tests should
+// be added here following the same pattern as the integer tests above, using the
+// runExpectF32() and runExpectF64() helper functions that have been added to
+// helpers.zig.
+//
+// The StackValue module already has asF32(), asF64(), and asDec() methods
+// available for reading floating-point values.
+//
+// Example test structure (currently commented out):
+//
+// test "F32: negate" {
+//     try runExpectF32(
+//         \\{
+//         \\    a : F32
+//         \\    a = 3.14
+//         \\    -a
+//         \\}
+//     , -3.14, .no_trace);
+// }
+//
+// ============================================================================
+// F32 Tests (32-bit floating point)
+// ============================================================================
+
+test "F32: negate" {
+    try runExpectF32(
+        \\{
+        \\    a : F32
+        \\    a = 3.14f32
+        \\    -a
+        \\}
+    , -3.14, .no_trace);
+}
+
+test "F32: plus" {
+    try runExpectF32(
+        \\{
+        \\    a : F32
+        \\    a = 1.5f32
+        \\    b : F32
+        \\    b = 2.5f32
+        \\    a + b
+        \\}
+    , 4.0, .no_trace);
+
+    try runExpectF32(
+        \\{
+        \\    a : F32
+        \\    a = 3.14159f32
+        \\    b : F32
+        \\    b = 2.71828f32
+        \\    a + b
+        \\}
+    , 5.85987, .no_trace);
+
+    try runExpectF32(
+        \\{
+        \\    a : F32
+        \\    a = -10.5f32
+        \\    b : F32
+        \\    b = 10.5f32
+        \\    a + b
+        \\}
+    , 0.0, .no_trace);
+}
+
+test "F32: minus" {
+    try runExpectF32(
+        \\{
+        \\    a : F32
+        \\    a = 10.0f32
+        \\    b : F32
+        \\    b = 3.5f32
+        \\    a - b
+        \\}
+    , 6.5, .no_trace);
+
+    try runExpectF32(
+        \\{
+        \\    a : F32
+        \\    a = 2.5f32
+        \\    b : F32
+        \\    b = 5.0f32
+        \\    a - b
+        \\}
+    , -2.5, .no_trace);
+
+    try runExpectF32(
+        \\{
+        \\    a : F32
+        \\    a = 100.0f32
+        \\    b : F32
+        \\    b = 100.0f32
+        \\    a - b
+        \\}
+    , 0.0, .no_trace);
+}
+
+test "F32: times" {
+    try runExpectF32(
+        \\{
+        \\    a : F32
+        \\    a = 2.5f32
+        \\    b : F32
+        \\    b = 4.0f32
+        \\    a * b
+        \\}
+    , 10.0, .no_trace);
+
+    try runExpectF32(
+        \\{
+        \\    a : F32
+        \\    a = -3.0f32
+        \\    b : F32
+        \\    b = 2.5f32
+        \\    a * b
+        \\}
+    , -7.5, .no_trace);
+
+    try runExpectF32(
+        \\{
+        \\    a : F32
+        \\    a = 0.5f32
+        \\    b : F32
+        \\    b = 0.5f32
+        \\    a * b
+        \\}
+    , 0.25, .no_trace);
+}
+
+test "F32: div_by" {
+    try runExpectF32(
+        \\{
+        \\    a : F32
+        \\    a = 10.0f32
+        \\    b : F32
+        \\    b = 2.0f32
+        \\    a / b
+        \\}
+    , 5.0, .no_trace);
+
+    try runExpectF32(
+        \\{
+        \\    a : F32
+        \\    a = 7.5f32
+        \\    b : F32
+        \\    b = 2.5f32
+        \\    a / b
+        \\}
+    , 3.0, .no_trace);
+
+    try runExpectF32(
+        \\{
+        \\    a : F32
+        \\    a = 1.0f32
+        \\    b : F32
+        \\    b = 3.0f32
+        \\    a / b
+        \\}
+    , 0.3333333, .no_trace);
+}
+
+// ============================================================================
+// F64 Tests (64-bit floating point)
+// ============================================================================
+
+test "F64: negate" {
+    try runExpectF64(
+        \\{
+        \\    a : F64
+        \\    a = 3.141592653589793f64
+        \\    -a
+        \\}
+    , -3.141592653589793, .no_trace);
+
+    try runExpectF64(
+        \\{
+        \\    a : F64
+        \\    a = -2.718281828459045f64
+        \\    -a
+        \\}
+    , 2.718281828459045, .no_trace);
+
+    try runExpectF64(
+        \\{
+        \\    a : F64
+        \\    a = 0.0f64
+        \\    -a
+        \\}
+    , 0.0, .no_trace);
+}
+
+test "F64: plus" {
+    try runExpectF64(
+        \\{
+        \\    a : F64
+        \\    a = 1.5f64
+        \\    b : F64
+        \\    b = 2.5f64
+        \\    a + b
+        \\}
+    , 4.0, .no_trace);
+
+    try runExpectF64(
+        \\{
+        \\    a : F64
+        \\    a = 3.141592653589793f64
+        \\    b : F64
+        \\    b = 2.718281828459045f64
+        \\    a + b
+        \\}
+    , 5.859874482048838, .no_trace);
+
+    try runExpectF64(
+        \\{
+        \\    a : F64
+        \\    a = -100.123456789f64
+        \\    b : F64
+        \\    b = 100.123456789f64
+        \\    a + b
+        \\}
+    , 0.0, .no_trace);
+}
+
+test "F64: minus" {
+    try runExpectF64(
+        \\{
+        \\    a : F64
+        \\    a = 10.5f64
+        \\    b : F64
+        \\    b = 3.25f64
+        \\    a - b
+        \\}
+    , 7.25, .no_trace);
+
+    try runExpectF64(
+        \\{
+        \\    a : F64
+        \\    a = 2.5f64
+        \\    b : F64
+        \\    b = 5.75f64
+        \\    a - b
+        \\}
+    , -3.25, .no_trace);
+
+    try runExpectF64(
+        \\{
+        \\    a : F64
+        \\    a = 1000.0f64
+        \\    b : F64
+        \\    b = 1000.0f64
+        \\    a - b
+        \\}
+    , 0.0, .no_trace);
+}
+
+test "F64: times" {
+    try runExpectF64(
+        \\{
+        \\    a : F64
+        \\    a = 2.5f64
+        \\    b : F64
+        \\    b = 4.0f64
+        \\    a * b
+        \\}
+    , 10.0, .no_trace);
+
+    try runExpectF64(
+        \\{
+        \\    a : F64
+        \\    a = -3.5f64
+        \\    b : F64
+        \\    b = 2.0f64
+        \\    a * b
+        \\}
+    , -7.0, .no_trace);
+
+    try runExpectF64(
+        \\{
+        \\    a : F64
+        \\    a = 1.414213562373095f64
+        \\    b : F64
+        \\    b = 1.414213562373095f64
+        \\    a * b
+        \\}
+    , 2.0, .no_trace);
+}
+
+test "F64: div_by" {
+    try runExpectF64(
+        \\{
+        \\    a : F64
+        \\    a = 10.0f64
+        \\    b : F64
+        \\    b = 2.0f64
+        \\    a / b
+        \\}
+    , 5.0, .no_trace);
+
+    try runExpectF64(
+        \\{
+        \\    a : F64
+        \\    a = 22.0f64
+        \\    b : F64
+        \\    b = 7.0f64
+        \\    a / b
+        \\}
+    , 3.142857142857143, .no_trace);
+
+    try runExpectF64(
+        \\{
+        \\    a : F64
+        \\    a = 1.0f64
+        \\    b : F64
+        \\    b = 3.0f64
+        \\    a / b
+        \\}
+    , 0.3333333333333333, .no_trace);
+}
+
+// ============================================================================
+// Dec Tests (Fixed-point decimal: 18 decimal places precision)
+// Dec is stored as i128 with 18 decimal places (10^18 = 1.0)
+// ============================================================================
+
+test "Dec: negate" {
+    // 3.14dec stored as 3.14 * 10^18 = 3140000000000000000
+    try runExpectDec(
+        \\{
+        \\    a : Dec
+        \\    a = 3.14dec
+        \\    -a
+        \\}
+    , -3140000000000000000, .no_trace);
+
+    try runExpectDec(
+        \\{
+        \\    a : Dec
+        \\    a = -2.5dec
+        \\    -a
+        \\}
+    , 2500000000000000000, .no_trace);
+
+    try runExpectDec(
+        \\{
+        \\    a : Dec
+        \\    a = 0.0dec
+        \\    -a
+        \\}
+    , 0, .no_trace);
+}
+
+test "Dec: plus" {
+    // 1.5dec + 2.5dec = 4.0dec
+    // Stored as: 1500000000000000000 + 2500000000000000000 = 4000000000000000000
+    try runExpectDec(
+        \\{
+        \\    a : Dec
+        \\    a = 1.5dec
+        \\    b : Dec
+        \\    b = 2.5dec
+        \\    a + b
+        \\}
+    , 4000000000000000000, .no_trace);
+
+    try runExpectDec(
+        \\{
+        \\    a : Dec
+        \\    a = 3.14159dec
+        \\    b : Dec
+        \\    b = 2.71828dec
+        \\    a + b
+        \\}
+    , 5859870000000000000, .no_trace);
+
+    try runExpectDec(
+        \\{
+        \\    a : Dec
+        \\    a = -10.5dec
+        \\    b : Dec
+        \\    b = 10.5dec
+        \\    a + b
+        \\}
+    , 0, .no_trace);
+}
+
+test "Dec: minus" {
+    try runExpectDec(
+        \\{
+        \\    a : Dec
+        \\    a = 10.0dec
+        \\    b : Dec
+        \\    b = 3.5dec
+        \\    a - b
+        \\}
+    , 6500000000000000000, .no_trace);
+
+    try runExpectDec(
+        \\{
+        \\    a : Dec
+        \\    a = 2.5dec
+        \\    b : Dec
+        \\    b = 5.0dec
+        \\    a - b
+        \\}
+    , -2500000000000000000, .no_trace);
+
+    try runExpectDec(
+        \\{
+        \\    a : Dec
+        \\    a = 100.0dec
+        \\    b : Dec
+        \\    b = 100.0dec
+        \\    a - b
+        \\}
+    , 0, .no_trace);
+}
+
+test "Dec: times" {
+    // 2.5dec * 4.0dec = 10.0dec
+    // In fixed-point: (2.5 * 10^18) * (4.0 * 10^18) / 10^18 = 10.0 * 10^18
+    try runExpectDec(
+        \\{
+        \\    a : Dec
+        \\    a = 2.5dec
+        \\    b : Dec
+        \\    b = 4.0dec
+        \\    a * b
+        \\}
+    , 10000000000000000000, .no_trace);
+
+    try runExpectDec(
+        \\{
+        \\    a : Dec
+        \\    a = -3.0dec
+        \\    b : Dec
+        \\    b = 2.5dec
+        \\    a * b
+        \\}
+    , -7500000000000000000, .no_trace);
+
+    try runExpectDec(
+        \\{
+        \\    a : Dec
+        \\    a = 0.5dec
+        \\    b : Dec
+        \\    b = 0.5dec
+        \\    a * b
+        \\}
+    , 250000000000000000, .no_trace);
+}
+
+test "Dec: div_by" {
+    // 10.0dec / 2.0dec = 5.0dec
+    // In fixed-point: (10.0 * 10^18 * 10^18) / (2.0 * 10^18) = 5.0 * 10^18
+    try runExpectDec(
+        \\{
+        \\    a : Dec
+        \\    a = 10.0dec
+        \\    b : Dec
+        \\    b = 2.0dec
+        \\    a / b
+        \\}
+    , 5000000000000000000, .no_trace);
+
+    try runExpectDec(
+        \\{
+        \\    a : Dec
+        \\    a = 7.5dec
+        \\    b : Dec
+        \\    b = 2.5dec
+        \\    a / b
+        \\}
+    , 3000000000000000000, .no_trace);
+
+    try runExpectDec(
+        \\{
+        \\    a : Dec
+        \\    a = 1.0dec
+        \\    b : Dec
+        \\    b = 3.0dec
+        \\    a / b
+        \\}
+    , 333333333333333333, .no_trace);
+}

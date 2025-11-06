@@ -283,6 +283,39 @@ pub fn asBool(self: StackValue) bool {
     return bool_ptr.* != 0;
 }
 
+/// Read this StackValue's f32 value
+pub fn asF32(self: StackValue) f32 {
+    std.debug.assert(self.is_initialized); // Ensure initialized before reading
+    std.debug.assert(self.ptr != null);
+    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .frac);
+    std.debug.assert(self.layout.data.scalar.data.frac == .f32);
+
+    const typed_ptr = @as(*const f32, @ptrCast(@alignCast(self.ptr.?)));
+    return typed_ptr.*;
+}
+
+/// Read this StackValue's f64 value
+pub fn asF64(self: StackValue) f64 {
+    std.debug.assert(self.is_initialized); // Ensure initialized before reading
+    std.debug.assert(self.ptr != null);
+    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .frac);
+    std.debug.assert(self.layout.data.scalar.data.frac == .f64);
+
+    const typed_ptr = @as(*const f64, @ptrCast(@alignCast(self.ptr.?)));
+    return typed_ptr.*;
+}
+
+/// Read this StackValue's Dec value
+pub fn asDec(self: StackValue) RocDec {
+    std.debug.assert(self.is_initialized); // Ensure initialized before reading
+    std.debug.assert(self.ptr != null);
+    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .frac);
+    std.debug.assert(self.layout.data.scalar.data.frac == .dec);
+
+    const typed_ptr = @as(*const RocDec, @ptrCast(@alignCast(self.ptr.?)));
+    return typed_ptr.*;
+}
+
 /// Initialise the StackValue f32 value
 pub fn setF32(self: *StackValue, value: f32) void {
     // Assert this is pointing to a valid memory location
