@@ -773,7 +773,7 @@ test "check type - binops or mismatch" {
 
 // record access
 
-test "check type - record access" {
+test "check type - record - access" {
     const source =
         \\r =
         \\  {
@@ -786,20 +786,46 @@ test "check type - record access" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Str");
 }
 
-test "check type - record access func polymorphic" {
+test "check type - record - access func polymorphic" {
     const source =
         \\x = |r| r.my_field
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "{ my_field: a } -> a");
 }
 
-test "check type - record access - not a record" {
+test "check type - record - access - not a record" {
     const source =
         \\r = "hello"
         \\
         \\x = r.my_field
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+// record update
+
+test "check type - record - update" {
+    const source =
+        \\update_data = |container, new_value| { ..container, data: new_value }
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "update_data" } }, "a, b -> { data: b, ..a }");
+}
+
+test "check type - record - update 2" {
+    const source =
+        \\update_data = |container, new_value| { ..container, data: new_value }
+        \\
+        \\updated1 = update_data({ data: 10 }, 100)
+        \\updated2 = update_data({ data: 10, other: "hello" }, 100)
+        \\updated3 = update_data({ data: "hello", other: 20 }, "world")
+        \\
+        \\final = (updated1, updated2, updated3)
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "final" } },
+        "({ data: Num(_size) }, { data: Num(_size2), other: Str }, { data: Str, other: Num(_size3) })",
+    );
 }
 
 // tags //

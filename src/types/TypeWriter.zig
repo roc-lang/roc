@@ -594,11 +594,9 @@ fn writeRecordExtension(self: *TypeWriter, ext_var: Var, num_fields: usize, root
             },
         },
         .flex => |flex| {
-            // Only show flex vars if they have a name or if there are constraints
-            if (flex.name != null or flex.constraints.len() > 0) {
-                if (num_fields > 0) _ = try self.buf.writer().write(", ");
-                try self.writeVarWithContext(ext_var, .RecordExtension, root_var);
-            }
+            if (num_fields > 0) _ = try self.buf.writer().write(", ");
+            _ = try self.buf.writer().write("..");
+            try self.writeVarWithContext(ext_var, .RecordExtension, root_var);
 
             for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
                 try self.appendStaticDispatchConstraint(constraint);

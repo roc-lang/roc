@@ -2357,17 +2357,15 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             std.mem.sort(types_mod.RecordField, record_fields_scratch, self.cir.getIdentStore(), comptime types_mod.RecordField.sortByNameAsc);
             const record_fields_range = try self.types.appendRecordFields(record_fields_scratch);
 
-            // Check if we have an ext
+            try self.unifyWith(expr_var, .{ .structure = .{
+                .record_unbound = record_fields_range,
+            } }, env);
+
+            // Process the ext if it exists
             if (e.ext) |ext_expr| {
                 does_fx = try self.checkExpr(ext_expr, env, .no_expectation) or does_fx;
-                try self.unifyWith(expr_var, .{ .structure = .{ .record = .{
-                    .ext = ModuleEnv.varFrom(ext_expr),
-                    .fields = record_fields_range,
-                } } }, env);
-            } else {
-                try self.unifyWith(expr_var, .{ .structure = .{
-                    .record_unbound = record_fields_range,
-                } }, env);
+                const ext_var = ModuleEnv.varFrom(ext_expr);
+                _ = try self.unify(expr_var, ext_var, env);
             }
         },
         .e_empty_record => {
