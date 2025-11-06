@@ -870,6 +870,21 @@ fn addMainExe(
         copy_cross_int_host.addCopyFileToSource(cross_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform/targets", cross_target.name, "libhost.a" }));
         b.getInstallStep().dependOn(&copy_cross_int_host.step);
 
+        // Create cross-compiled str host library
+        const cross_str_host_lib = createTestPlatformHostLib(
+            b,
+            b.fmt("test_platform_str_host_{s}", .{cross_target.name}),
+            "test/str/platform/host.zig",
+            cross_resolved_target,
+            optimize,
+            roc_modules,
+        );
+
+        // Copy to target-specific directory
+        const copy_cross_str_host = b.addUpdateSourceFiles();
+        copy_cross_str_host.addCopyFileToSource(cross_str_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/str/platform/targets", cross_target.name, "libhost.a" }));
+        b.getInstallStep().dependOn(&copy_cross_str_host.step);
+
         // Generate glibc stubs for gnu targets
         if (cross_target.query.abi == .gnu) {
             const glibc_stub = generateGlibcStub(b, cross_resolved_target, cross_target.name);
