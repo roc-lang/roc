@@ -579,6 +579,9 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // Import needed modules
+    const target_mod = @import("target.zig");
+
     // Initialize cache - used to store our shim, and linked interpreter executables in cache
     const cache_config = CacheConfig{
         .enabled = !args.no_cache,
@@ -735,17 +738,32 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
             return err;
         };
 
-        // Platforms provide their own CRT files and libraries in a targets/ directory
-        const platform_files_pre: []const []const u8 = &.{};
-        const platform_files_post: []const []const u8 = &.{};
+        // Get platform directory and CRT files
+        const platform_dir = std.fs.path.dirname(platform_paths.host_lib_path) orelse {
+            std.log.err("Invalid platform host library path", .{});
+            return error.InvalidPlatform;
+        };
+
+        const crt_files = try target_mod.getVendoredCRTFiles(allocs.arena, shim_target, platform_dir);
+
+        // Setup platform files based on CRT files
+        var platform_files_pre = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 16);
+        var platform_files_post = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 16);
+
+        // Add CRT files in correct order
+        if (crt_files.crt1_o) |crt1| try platform_files_pre.append(crt1);
+        if (crt_files.crti_o) |crti| try platform_files_pre.append(crti);
+        if (crt_files.crtn_o) |crtn| try platform_files_post.append(crtn);
+        if (crt_files.libc_a) |libc| try platform_files_post.append(libc);
+
         const target_abi: ?linker.TargetAbi = null;
 
         const link_config = linker.LinkConfig{
             .target_abi = target_abi,
             .output_path = exe_path,
             .object_files = object_files.items,
-            .platform_files_pre = platform_files_pre,
-            .platform_files_post = platform_files_post,
+            .platform_files_pre = platform_files_pre.items,
+            .platform_files_post = platform_files_post.items,
             .extra_args = extra_args.items,
             .can_exit_early = false,
             .disable_output = false,
