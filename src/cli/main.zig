@@ -735,266 +735,18 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
             return err;
         };
 
-        // Determine platform-specific dependencies based on platform spec
-        var platform_files_pre = std.array_list.Managed([]const u8).initCapacity(allocs.arena, 16) catch |err| {
-            std.log.err("Failed to allocate platform files pre list: {}", .{err});
-            return err;
-        };
-        var platform_files_post = std.array_list.Managed([]const u8).initCapacity(allocs.arena, 16) catch |err| {
-            std.log.err("Failed to allocate platform files post list: {}", .{err});
-            return err;
-        };
-        var target_abi: ?linker.TargetAbi = null;
-
-        // Determine platform type from host library path to configure dependencies
-        std.log.debug("Platform host library path: {s}", .{platform_paths.host_lib_path});
-
-        // Check if path contains "int" and "platform" directories using cross-platform path handling
-        const contains_int_platform = blk: {
-            var has_int = false;
-            var has_platform = false;
-            var iter = std.fs.path.componentIterator(platform_paths.host_lib_path) catch break :blk false;
-            while (iter.next()) |component| {
-                if (std.mem.eql(u8, component.name, "int")) {
-                    has_int = true;
-                } else if (std.mem.eql(u8, component.name, "platform")) {
-                    has_platform = true;
-                }
-            }
-            break :blk has_int and has_platform;
-        };
-
-        if (contains_int_platform) {
-            std.log.debug("Detected int platform - using musl static linking", .{});
-            // Int platform: use musl static linking with target-specific libraries
-            target_abi = .musl;
-            if (builtin.target.os.tag == .linux) {
-                // Use native target-specific libraries (x64musl for x64 hosts, etc.)
-                const native_target = if (builtin.target.cpu.arch.isX86())
-                    "x64musl"
-                else if (builtin.target.cpu.arch == .aarch64)
-                    "arm64musl"
-                else
-                    "x64musl"; // fallback
-
-                const crt1_path = std.fmt.allocPrint(allocs.arena, "test/int/platform/targets/{s}/crt1.o", .{native_target}) catch |err| {
-                    std.log.err("Failed to allocate crt1 path", .{});
-                    return err;
-                };
-                const libc_path = std.fmt.allocPrint(allocs.arena, "test/int/platform/targets/{s}/libc.a", .{native_target}) catch |err| {
-                    std.log.err("Failed to allocate libc path", .{});
-                    return err;
-                };
-
-                platform_files_pre.append(crt1_path) catch |err| {
-                    std.log.err("Failed to add musl crt1.o", .{});
-                    return err;
-                };
-                platform_files_post.append(libc_path) catch |err| {
-                    std.log.err("Failed to add musl libc.a", .{});
-                    return err;
-                };
-            }
-        } else {
-            // Check if path contains "str" and "platform" directories using cross-platform path handling
-            const contains_str_platform = blk: {
-                var has_str = false;
-                var has_platform = false;
-                var iter = std.fs.path.componentIterator(platform_paths.host_lib_path) catch break :blk false;
-                while (iter.next()) |component| {
-                    if (std.mem.eql(u8, component.name, "str")) {
-                        has_str = true;
-                    } else if (std.mem.eql(u8, component.name, "platform")) {
-                        has_platform = true;
-                    }
-                }
-                break :blk has_str and has_platform;
-            };
-
-            if (contains_str_platform) {
-                std.log.debug("Detected str platform - using musl static linking like int platform", .{});
-                // Str platform: use musl static linking to match the embedded shim library ABI
-                target_abi = .musl;
-                if (builtin.target.os.tag == .linux) {
-                    // Use the same musl approach as int platform
-                    const native_target = if (builtin.target.cpu.arch.isX86())
-                        "x64musl"
-                    else if (builtin.target.cpu.arch == .aarch64)
-                        "arm64musl"
-                    else
-                        "x64musl"; // fallback
-
-                    const crt1_path = std.fmt.allocPrint(allocs.arena, "test/int/platform/targets/{s}/crt1.o", .{native_target}) catch |err| {
-                        std.log.err("Failed to allocate crt1 path", .{});
-                        return err;
-                    };
-                    const libc_path = std.fmt.allocPrint(allocs.arena, "test/int/platform/targets/{s}/libc.a", .{native_target}) catch |err| {
-                        std.log.err("Failed to allocate libc path", .{});
-                        return err;
-                    };
-
-                    platform_files_pre.append(crt1_path) catch |err| {
-                        std.log.err("Failed to add musl crt1.o", .{});
-                        return err;
-                    };
-                    platform_files_post.append(libc_path) catch |err| {
-                        std.log.err("Failed to add musl libc.a", .{});
-                        return err;
-                    };
-                }
-            } else if (false) { // Disable the old str platform GNU logic for now
-                std.log.debug("OLD str platform GNU logic (disabled)", .{});
-                if (builtin.target.os.tag == .linux) {
-                    // TEMPORARY SOLUTION: Auto-detecting CRT files and library paths (DISABLED)
-                    //
-                    // According to the platform design (see Platform modules and linking design.md),
-                    // platform authors should explicitly provide all required CRT files (Scrt1.o, crti.o,
-                    // crtn.o) in their platform's targets/ directory. For example:
-                    //   targets/x64glibc/crti.o
-                    //   targets/x64glibc/crtn.o
-                    //   targets/x64musl/crti.o
-                    //   targets/x64musl/crtn.o
-                    //
-                    // The platform module header would then specify these in the targets section:
-                    //   shared_lib: {
-                    //       x64glibc: ["crti.o", "host.o", app, "crtn.o"],
-                    //       x64musl: ["crti.o", "host.o", app, "crtn.o"],
-                    //   }
-                    //
-                    // Current implementation: We auto-detect system libc and use system CRT files as a
-                    // convenience during platform development. This allows platform authors to develop
-                    // and test without immediately vendoring architecture-specific CRT files.
-                    //
-                    // This auto-detection will be removed once platforms properly vendor their CRT files
-                    // as specified in the design document.
-
-                    const libc_finder = @import("libc_finder.zig");
-                    if (libc_finder.findLibc(allocs.gpa)) |libc_info| {
-                        defer {
-                            var info = libc_info;
-                            info.deinit();
-                        }
-
-                        // Use system CRT files from the detected lib directory
-                        // TODO: Remove this once platforms provide their own CRT files
-                        const scrt1_path = std.fmt.allocPrint(allocs.arena, "{s}/Scrt1.o", .{libc_info.lib_dir}) catch |err| {
-                            std.log.err("Failed to allocate Scrt1.o path", .{});
-                            return err;
-                        };
-                        const crti_path = std.fmt.allocPrint(allocs.arena, "{s}/crti.o", .{libc_info.lib_dir}) catch |err| {
-                            std.log.err("Failed to allocate crti.o path", .{});
-                            return err;
-                        };
-                        const crtn_path = std.fmt.allocPrint(allocs.arena, "{s}/crtn.o", .{libc_info.lib_dir}) catch |err| {
-                            std.log.err("Failed to allocate crtn.o path", .{});
-                            return err;
-                        };
-
-                        // Check if system CRT files exist, fall back to vendored ones if not (for x86_64 only)
-                        if (std.fs.openFileAbsolute(scrt1_path, .{})) |file| {
-                            file.close();
-                            platform_files_pre.append(scrt1_path) catch |err| {
-                                std.log.err("Failed to add system Scrt1.o", .{});
-                                return err;
-                            };
-                        } else |_| {
-                            if (builtin.target.cpu.arch == .x86_64) {
-                                platform_files_pre.append("test/str/platform/vendored/gnu/Scrt1.o") catch |err| {
-                                    std.log.err("Failed to add vendored Scrt1.o", .{});
-                                    return err;
-                                };
-                            } else {
-                                std.log.err("CRT file Scrt1.o not found at {s} and no vendored version for this architecture", .{scrt1_path});
-                                return error.CrtFileNotFound;
-                            }
-                        }
-
-                        if (std.fs.openFileAbsolute(crti_path, .{})) |file| {
-                            file.close();
-                            platform_files_pre.append(crti_path) catch |err| {
-                                std.log.err("Failed to add system crti.o", .{});
-                                return err;
-                            };
-                        } else |_| {
-                            if (builtin.target.cpu.arch == .x86_64) {
-                                platform_files_pre.append("test/str/platform/vendored/gnu/crti.o") catch |err| {
-                                    std.log.err("Failed to add vendored crti.o", .{});
-                                    return err;
-                                };
-                            } else {
-                                std.log.err("CRT file crti.o not found at {s} and no vendored version for this architecture", .{crti_path});
-                                return error.CrtFileNotFound;
-                            }
-                        }
-
-                        if (std.fs.openFileAbsolute(crtn_path, .{})) |file| {
-                            file.close();
-                            platform_files_post.append(crtn_path) catch |err| {
-                                std.log.err("Failed to add system crtn.o", .{});
-                                return err;
-                            };
-                        } else |_| {
-                            if (builtin.target.cpu.arch == .x86_64) {
-                                platform_files_post.append("test/str/platform/vendored/gnu/crtn.o") catch |err| {
-                                    std.log.err("Failed to add vendored crtn.o", .{});
-                                    return err;
-                                };
-                            } else {
-                                std.log.err("CRT file crtn.o not found at {s} and no vendored version for this architecture", .{crtn_path});
-                                return error.CrtFileNotFound;
-                            }
-                        }
-
-                        const lib_path = std.fmt.allocPrint(allocs.arena, "-L{s}", .{libc_info.lib_dir}) catch |err| {
-                            std.log.err("Failed to allocate library path", .{});
-                            return err;
-                        };
-                        extra_args.append(lib_path) catch |err| {
-                            std.log.err("Failed to add library path", .{});
-                            return err;
-                        };
-                    } else |_| {
-                        // Fallback to vendored files for x86_64 or error for other architectures
-                        if (builtin.target.cpu.arch == .x86_64) {
-                            platform_files_pre.append("test/str/platform/vendored/gnu/Scrt1.o") catch |err| {
-                                std.log.err("Failed to add gnu Scrt1.o", .{});
-                                return err;
-                            };
-                            platform_files_pre.append("test/str/platform/vendored/gnu/crti.o") catch |err| {
-                                std.log.err("Failed to add gnu crti.o", .{});
-                                return err;
-                            };
-                            platform_files_post.append("test/str/platform/vendored/gnu/crtn.o") catch |err| {
-                                std.log.err("Failed to add gnu crtn.o", .{});
-                                return err;
-                            };
-                            extra_args.append("-L/usr/lib/x86_64-linux-gnu") catch |err| {
-                                std.log.err("Failed to add library path", .{});
-                                return err;
-                            };
-                        } else {
-                            std.log.err("Cannot detect system libc for architecture {} and no vendored CRT files available", .{builtin.target.cpu.arch});
-                            return error.LibcNotAvailable;
-                        }
-                    }
-                    extra_args.append("-lc") catch |err| {
-                        std.log.err("Failed to add libc", .{});
-                        return err;
-                    };
-                }
-            } else {
-                std.log.debug("No platform-specific configuration found, using defaults", .{});
-            }
-        }
-
-        std.log.debug("Final target_abi: {?}", .{target_abi});
+        // Platforms should provide their own CRT files and libraries in a targets/ directory
+        // For now, rely on system defaults
+        const platform_files_pre: []const []const u8 = &.{};
+        const platform_files_post: []const []const u8 = &.{};
+        const target_abi: ?linker.TargetAbi = if (builtin.target.os.tag == .linux) .gnu else null;
 
         const link_config = linker.LinkConfig{
             .target_abi = target_abi,
             .output_path = exe_path,
             .object_files = object_files.items,
-            .platform_files_pre = platform_files_pre.items,
-            .platform_files_post = platform_files_post.items,
+            .platform_files_pre = platform_files_pre,
+            .platform_files_post = platform_files_post,
             .extra_args = extra_args.items,
             .can_exit_early = false,
             .disable_output = false,
@@ -2166,35 +1918,8 @@ fn rocBuild(allocs: *Allocators, args: cli_args.BuildArgs) !void {
         },
     }
 
-    // Check if we're actually cross-compiling
-    const is_cross_compiling = host_target != target;
-
     // Get platform paths from the app file
-    const platform_paths = if (is_cross_compiling) blk: {
-        // Only support int test platform for cross-compilation
-        // Check if path contains "int" directory using cross-platform path handling
-        var iter = std.fs.path.componentIterator(args.path) catch {
-            std.log.err("roc build cross-compilation currently only supports the int test platform", .{});
-            std.log.err("Your app path: {s}", .{args.path});
-            return error.UnsupportedPlatform;
-        };
-        while (iter.next()) |component| {
-            if (std.mem.eql(u8, component.name, "int")) {
-                const platform_dir = try std.fs.path.join(allocs.arena, &.{ "test", "int", "platform" });
-                const host_lib_filename = if (target.toOsTag() == .windows) "host.lib" else "libhost.a";
-                const host_lib_path = try std.fs.path.join(allocs.arena, &.{ platform_dir, host_lib_filename });
-                const platform_source_path = try std.fs.path.join(allocs.arena, &.{ platform_dir, "main.roc" });
-                break :blk PlatformPaths{
-                    .host_lib_path = host_lib_path,
-                    .platform_source_path = platform_source_path,
-                };
-            }
-        }
-        std.log.err("roc build cross-compilation currently only supports the int test platform", .{});
-        std.log.err("Your app path: {s}", .{args.path});
-        std.log.err("For str platform and other platforms, please use regular 'roc' command", .{});
-        return error.UnsupportedPlatform;
-    } else resolvePlatformPaths(allocs, args.path) catch |err| {
+    const platform_paths = resolvePlatformPaths(allocs, args.path) catch |err| {
         std.log.err("Failed to resolve platform paths for {s}: {}", .{ args.path, err });
         return err;
     };
@@ -2204,10 +1929,9 @@ fn rocBuild(allocs: *Allocators, args: cli_args.BuildArgs) !void {
         return error.InvalidPlatform;
     };
 
-    // For cross-compilation, try target-specific host library
-    const host_lib_path = if (is_cross_compiling) blk: {
+    // Try target-specific host library first, fallback to generic
+    const host_lib_path = blk: {
         const host_lib_filename = if (target.toOsTag() == .windows) "host.lib" else "libhost.a";
-        // Try target-specific host library first
         const target_specific_path = try std.fs.path.join(allocs.arena, &.{ platform_dir, "targets", @tagName(target), host_lib_filename });
         std.fs.cwd().access(target_specific_path, .{}) catch {
             // Fallback to generic host library
@@ -2215,7 +1939,7 @@ fn rocBuild(allocs: *Allocators, args: cli_args.BuildArgs) !void {
             break :blk platform_paths.host_lib_path;
         };
         break :blk target_specific_path;
-    } else platform_paths.host_lib_path;
+    };
 
     std.fs.cwd().access(host_lib_path, .{}) catch |err| {
         std.log.err("Host library not found: {s} ({})", .{ host_lib_path, err });
@@ -2284,39 +2008,26 @@ fn rocBuild(allocs: *Allocators, args: cli_args.BuildArgs) !void {
     if (crt_files.libc_a) |libc| {
         try platform_files_post.append(libc);
     } else if (target.isDynamic()) {
-        // For dynamic linking with glibc, generate stub library for cross-compilation
-        if (is_cross_compiling) {
-            // For cross-compilation, use pre-built vendored stubs from the platform targets folder
-            const target_name = switch (target) {
-                .x64glibc => "x64glibc",
-                .arm64glibc => "arm64glibc",
-                else => {
-                    std.log.err("Cross-compilation target {} not supported for glibc", .{target});
-                    return error.UnsupportedTarget;
-                },
-            };
+        // For dynamic linking with glibc, check platform targets folder for stubs
+        const target_name = @tagName(target);
+        const stub_dir_path = try std.fs.path.join(allocs.arena, &.{ platform_dir, "targets", target_name });
+        const stub_so_path = try std.fs.path.join(allocs.arena, &.{ stub_dir_path, "libc.so.6" });
 
-            // Check if vendored stubs exist in the platform targets folder
-            const stub_dir = try std.fmt.allocPrint(allocs.arena, "test/int/platform/targets/{s}", .{target_name});
+        // Try to use platform-provided glibc stubs if they exist
+        const has_platform_stubs = blk: {
+            std.fs.cwd().access(stub_so_path, .{}) catch break :blk false;
+            break :blk true;
+        };
 
-            const stub_so_path = try std.fmt.allocPrint(allocs.arena, "{s}/libc.so.6", .{stub_dir});
-
-            // Verify the vendored stub exists
-            std.fs.cwd().access(stub_so_path, .{}) catch |err| {
-                std.log.err("Pre-built glibc stub not found: {s}", .{stub_so_path});
-                std.log.err("Error: {}", .{err});
-                std.log.err("This suggests the build system didn't generate the required stubs.", .{});
-                std.log.err("Try running 'zig build' first to generate platform target files.", .{});
-                return err;
-            };
-
-            // Use the vendored stub library
-            const stub_dir_arg = try std.fmt.allocPrint(allocs.arena, "-L{s}", .{stub_dir});
+        if (has_platform_stubs) {
+            // Platform stubs exist, use them
+            const stub_dir_arg = try std.fmt.allocPrint(allocs.arena, "-L{s}", .{stub_dir_path});
             try extra_args.append(stub_dir_arg);
             try extra_args.append("-lc");
-            std.log.info("Using pre-built glibc stub from platform targets: {s}", .{stub_dir});
+            std.log.info("Using platform-provided glibc stubs from: {s}", .{stub_dir_path});
         } else {
-            // For native compilation, use system libraries
+            // No platform stubs found, use system libraries
+            std.log.debug("No platform-provided glibc stubs found at {s}, using system libraries", .{stub_so_path});
             const common_lib_paths = [_][]const u8{
                 "/lib/x86_64-linux-gnu",
                 "/usr/lib/x86_64-linux-gnu",
@@ -2329,7 +2040,6 @@ fn rocBuild(allocs: *Allocators, args: cli_args.BuildArgs) !void {
             };
 
             for (common_lib_paths) |lib_path| {
-                // Check if the directory exists before adding it
                 std.fs.cwd().access(lib_path, .{}) catch continue;
                 const search_arg = try std.fmt.allocPrint(allocs.arena, "-L{s}", .{lib_path});
                 try extra_args.append(search_arg);
