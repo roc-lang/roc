@@ -49,5 +49,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[Ok(Num(_size)), Err(Num(_size2))]_others"))
+(expr (type "[Ok(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]), Err(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])])]_others"))
 ~~~

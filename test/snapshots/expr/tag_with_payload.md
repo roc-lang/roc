@@ -34,5 +34,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[Some(Num(_size))]_others"))
+(expr (type "[Some(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])])]_others"))
 ~~~

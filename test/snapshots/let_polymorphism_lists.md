@@ -442,9 +442,9 @@ main = |_| {
 (inferred-types
 	(defs
 		(patt (type "List(_elem)"))
-		(patt (type "List(Num(_size))"))
+		(patt (type "List(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])])"))
 		(patt (type "List(Str)"))
-		(patt (type "List(Num(Frac(_size)))"))
+		(patt (type "List(Num(num where [num.from_dec_digits : { before_dot : List(U8), after_dot : List(U8) } -> Try(num, [OutOfRange])]))"))
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "Error"))
@@ -454,9 +454,9 @@ main = |_| {
 		(patt (type "_arg -> Error")))
 	(expressions
 		(expr (type "List(_elem)"))
-		(expr (type "List(Num(_size))"))
+		(expr (type "List(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])])"))
 		(expr (type "List(Str)"))
-		(expr (type "List(Num(Frac(_size)))"))
+		(expr (type "List(Num(num where [num.from_dec_digits : { before_dot : List(U8), after_dot : List(U8) } -> Try(num, [OutOfRange])]))"))
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))

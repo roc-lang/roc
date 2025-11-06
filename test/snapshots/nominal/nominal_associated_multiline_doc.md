@@ -82,12 +82,12 @@ Foo := [A, B].{
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(_size)")))
+		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
 		(nominal (type "Foo.Bar")
 			(ty-header (name "Foo.Bar"))))
 	(expressions
-		(expr (type "Num(_size)"))))
+		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))))
 ~~~

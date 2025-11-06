@@ -123,8 +123,8 @@ t = 0
 (inferred-types
 	(defs
 		(patt (type "Error"))
-		(patt (type "Num(_size)")))
+		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]")))
 	(expressions
 		(expr (type "Error"))
-		(expr (type "Num(_size)"))))
+		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))))
 ~~~
