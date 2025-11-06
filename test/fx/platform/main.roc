@@ -1,12 +1,19 @@
 platform ""
     requires {} {
-        writeToStdout : Str => {},
-        writeToStderr : Str => {}
+        main! : () => {},
+        putStdout! : Str => {},
+        putStderr! : Str => {}
     }
     exposes []
     packages {}
-    provides { writeToStdout: "writeToStdout", writeToStderr: "writeToStderr" }
+    provides {
+        main_for_host: "main_for_host",
+        putStdout: "putStdout",
+        putStderr: "putStderr"
+    }
 
-writeToStdout : Str => {}
+main_for_host! : () => {}
+main_for_host! = || main!()
 
-writeToStderr : Str => {}
+putStdout! : Str => {}
+putStderr! : Str => {}

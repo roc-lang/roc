@@ -65,7 +65,6 @@ test "fx platform effectful functions" {
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello from stdout!") != null);
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Line 1 to stdout") != null);
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Line 3 to stdout") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "ALL TESTS COMPLETED") != null);
 
     // Verify stderr contains expected messages
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Error from stderr!") != null);
@@ -75,7 +74,8 @@ test "fx platform effectful functions" {
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Error from stderr!") == null);
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Line 2 to stderr") == null);
 
-    // Verify stdout messages are NOT in stderr (except the ones we intentionally put there for display)
-    // Note: The host.zig writes "STDOUT: ..." to stdout and "STDERR: ..." to stderr
-    // so we check that the actual content is separated correctly
+    // Verify stdout messages are NOT in stderr
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Hello from stdout!") == null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Line 1 to stdout") == null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Line 3 to stdout") == null);
 }

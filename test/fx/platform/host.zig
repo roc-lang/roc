@@ -60,8 +60,9 @@ fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaqu
 
 // External symbols provided by the Roc runtime object file
 // Follows RocCall ABI: ops, ret_ptr, then argument pointers
-extern fn roc__writeToStdout(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
-extern fn roc__writeToStderr(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+extern fn roc__main_for_host(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+extern fn roc__putStdout(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+extern fn roc__putStderr(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
 
 // OS-specific entry point handling
 comptime {
@@ -146,6 +147,18 @@ const RocStr = extern struct {
     }
 };
 
+/// Host-provided effectful function: write to stdout
+pub export fn roc_fx_putStdout(msg: *RocStr) callconv(.c) void {
+    const stdout = std.fs.File.stdout().deprecatedWriter();
+    stdout.print("{s}\n", .{msg.asSlice()}) catch unreachable;
+}
+
+/// Host-provided effectful function: write to stderr
+pub export fn roc_fx_putStderr(msg: *RocStr) callconv(.c) void {
+    const stderr = std.fs.File.stderr().deprecatedWriter();
+    stderr.print("{s}\n", .{msg.asSlice()}) catch unreachable;
+}
+
 /// Platform host entrypoint
 fn platform_main() !void {
     var host_env = HostEnv{
@@ -165,50 +178,42 @@ fn platform_main() !void {
         .roc_dbg = rocDbgFn,
         .roc_expect_failed = rocExpectFailedFn,
         .roc_crashed = rocCrashedFn,
-        .host_fns = undefined, // No host functions needed for this test
+        .host_fns = undefined, // Host functions provided via roc_fx_* exports
     };
 
-    // Test writeToStdout
-    try stdout.print("=== Testing writeToStdout ===\n", .{});
+    // Call the app's main! entrypoint
+    // This demonstrates platform-app integration: the platform requires and calls main!
+    // The app implements main! which calls other effectful functions
+    // Those functions are also provided by the app (as stubs), demonstrating composition
+    var unit_result: [0]u8 = undefined; // Result is {} which is zero-sized
+    var unit_arg: [0]u8 = undefined; // Argument is () which is zero-sized
+    roc__main_for_host(&roc_ops, @as(*anyopaque, @ptrCast(&unit_result)), @as(*anyopaque, @ptrCast(&unit_arg)));
 
-    const stdout_msg = "Hello from stdout!";
-    var stdout_roc_str = RocStr.fromSlice(stdout_msg, &roc_ops);
+    // Verify the app's effectful functions work by calling them directly
+    // This tests that the calling convention and type signatures are correct
+    const messages = [_]struct {
+        text: []const u8,
+        func: *const fn (*builtins.host_abi.RocOps, *anyopaque, ?*anyopaque) callconv(.c) void,
+        stream: enum { stdout, stderr },
+    }{
+        .{ .text = "Hello from stdout!", .func = roc__putStdout, .stream = .stdout },
+        .{ .text = "Error from stderr!", .func = roc__putStderr, .stream = .stderr },
+        .{ .text = "Line 1 to stdout", .func = roc__putStdout, .stream = .stdout },
+        .{ .text = "Line 2 to stderr", .func = roc__putStderr, .stream = .stderr },
+        .{ .text = "Line 3 to stdout", .func = roc__putStdout, .stream = .stdout },
+    };
 
-    var stdout_result: [0]u8 = undefined; // Result is {} which is zero-sized
-    roc__writeToStdout(&roc_ops, @as(*anyopaque, @ptrCast(&stdout_result)), @as(*anyopaque, @ptrCast(&stdout_roc_str)));
+    for (messages) |msg| {
+        var roc_str = RocStr.fromSlice(msg.text, &roc_ops);
+        var result: [0]u8 = undefined;
+        msg.func(&roc_ops, @as(*anyopaque, @ptrCast(&result)), @as(*anyopaque, @ptrCast(&roc_str)));
 
-    try stdout.print("STDOUT: {s}\n", .{stdout_msg});
-
-    // Test writeToStderr
-    try stdout.print("\n=== Testing writeToStderr ===\n", .{});
-
-    const stderr_msg = "Error from stderr!";
-    var stderr_roc_str = RocStr.fromSlice(stderr_msg, &roc_ops);
-
-    var stderr_result: [0]u8 = undefined; // Result is {} which is zero-sized
-    roc__writeToStderr(&roc_ops, @as(*anyopaque, @ptrCast(&stderr_result)), @as(*anyopaque, @ptrCast(&stderr_roc_str)));
-
-    try stderr.print("STDERR: {s}\n", .{stderr_msg});
-
-    // Test both together
-    try stdout.print("\n=== Testing both ===\n", .{});
-
-    const msg1 = "Line 1 to stdout";
-    const msg2 = "Line 2 to stderr";
-    const msg3 = "Line 3 to stdout";
-
-    var msg1_roc = RocStr.fromSlice(msg1, &roc_ops);
-    var msg2_roc = RocStr.fromSlice(msg2, &roc_ops);
-    var msg3_roc = RocStr.fromSlice(msg3, &roc_ops);
-
-    roc__writeToStdout(&roc_ops, @as(*anyopaque, @ptrCast(&stdout_result)), @as(*anyopaque, @ptrCast(&msg1_roc)));
-    try stdout.print("STDOUT: {s}\n", .{msg1});
-
-    roc__writeToStderr(&roc_ops, @as(*anyopaque, @ptrCast(&stderr_result)), @as(*anyopaque, @ptrCast(&msg2_roc)));
-    try stderr.print("STDERR: {s}\n", .{msg2});
-
-    roc__writeToStdout(&roc_ops, @as(*anyopaque, @ptrCast(&stdout_result)), @as(*anyopaque, @ptrCast(&msg3_roc)));
-    try stdout.print("STDOUT: {s}\n", .{msg3});
-
-    try stdout.print("\n=== ALL TESTS COMPLETED ===\n", .{});
+        // The Roc function returned successfully, now perform the actual I/O
+        // In a full implementation with platform modules, the Roc code would call
+        // host-provided functions (via import pf.Stdout) to perform I/O directly
+        switch (msg.stream) {
+            .stdout => try stdout.print("{s}\n", .{msg.text}),
+            .stderr => try stderr.print("{s}\n", .{msg.text}),
+        }
+    }
 }
