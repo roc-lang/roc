@@ -1928,17 +1928,8 @@ fn rocBuild(allocs: *Allocators, args: cli_args.BuildArgs) !void {
         return error.InvalidPlatform;
     };
 
-    // Try target-specific host library first, fallback to generic
-    const host_lib_path = blk: {
-        const host_lib_filename = if (target.toOsTag() == .windows) "host.lib" else "libhost.a";
-        const target_specific_path = try std.fs.path.join(allocs.arena, &.{ platform_dir, "targets", @tagName(target), host_lib_filename });
-        std.fs.cwd().access(target_specific_path, .{}) catch {
-            // Fallback to generic host library
-            std.log.warn("Target-specific host library not found, falling back to generic: {s}", .{target_specific_path});
-            break :blk platform_paths.host_lib_path;
-        };
-        break :blk target_specific_path;
-    };
+    const host_lib_filename = if (target.toOsTag() == .windows) "host.lib" else "libhost.a";
+    const host_lib_path = try std.fs.path.join(allocs.arena, &.{ platform_dir, "targets", @tagName(target), host_lib_filename });
 
     std.fs.cwd().access(host_lib_path, .{}) catch |err| {
         std.log.err("Host library not found: {s} ({})", .{ host_lib_path, err });
