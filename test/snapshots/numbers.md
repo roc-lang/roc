@@ -105,5 +105,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(Num(Int(_size)), Num(Int(_size2)), Num(Int(_size3)), Num(Int(_size4)), Num(Int(_size5)), Num(Int(_size6)), Num(Frac(_size7)), Num(Frac(_size8)), Num(Int(_size9)), Num(Int(_size10)), Num(Int(_size11)))"))
+(expr (type "(Num(_size), Num(_size2), Num(_size3), Num(_size4), Num(_size5), Num(_size6), Num(Frac(_size7)), Num(Frac(_size8)), Num(_size9), Num(_size10), Num(_size11))"))
 ~~~
