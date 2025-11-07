@@ -3,7 +3,7 @@ app [main!] { pf: platform "./platform/main.roc" }
 import pf.Stdout
 import pf.Stderr
 
-main! = |_|
+main! = ||
     Stdout.line!("Hello from stdout!")
     Stdout.line!("Line 1 to stdout")
     Stderr.line!("Line 2 to stderr")

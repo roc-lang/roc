@@ -1,6 +1,6 @@
 platform ""
     requires {} { main! : () => {} }
-    exposes []
+    exposes [Stdout, Stderr, Host]
     packages {}
     provides { main_for_host! }
 

@@ -206,10 +206,8 @@ fn platform_main() !void {
 
     // Call the app's main! entrypoint
     var unit_result: [0]u8 = undefined; // Result is {} which is zero-sized
-    // Arguments are always passed as a tuple, even for single parameters
-    // For a function with signature () => {}, the argument is a tuple containing unit: ((),)
-    // But since both the tuple and the unit inside it are zero-sized, we just pass a zero-sized value
-    const Args = extern struct { unit: [0]u8 };
-    var args = Args{ .unit = undefined };
+    // For a function with signature () => {}, the argument is an empty tuple (zero parameters)
+    // An empty tuple is zero-sized, so we pass a zero-sized value
+    var args: [0]u8 = undefined;
     roc__main_for_host(&roc_ops, @as(*anyopaque, @ptrCast(&unit_result)), @as(*anyopaque, @ptrCast(&args)));
 }
