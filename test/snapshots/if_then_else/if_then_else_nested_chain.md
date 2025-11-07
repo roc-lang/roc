@@ -125,7 +125,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] -> Str")))
+		(patt (type "Num(_size) -> Str")))
 	(expressions
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] -> Str"))))
+		(expr (type "Num(_size) -> Str"))))
 ~~~

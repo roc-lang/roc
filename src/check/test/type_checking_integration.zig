@@ -22,7 +22,7 @@ test "check type - num - unbound" {
     const source =
         \\50
     ;
-    try checkTypesExpr(source, .pass, "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+    try checkTypesExpr(source, .pass, "Num(_size)");
 }
 
 test "check type - num - int suffix 1" {
@@ -55,7 +55,7 @@ test "check type - num - float" {
     const source =
         \\10.1
     ;
-    try checkTypesExpr(source, .pass, "Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])])");
+    try checkTypesExpr(source, .pass, "Num(Frac(_size))");
 }
 
 test "check type - num - float suffix 1" {
@@ -108,7 +108,7 @@ test "check type - list - same elems 2" {
     const source =
         \\[100, 200]
     ;
-    try checkTypesExpr(source, .pass, "List(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])])");
+    try checkTypesExpr(source, .pass, "List(Num(_size))");
 }
 
 test "check type - list - 1st elem more specific coreces 2nd elem" {
@@ -150,7 +150,7 @@ test "check type - record" {
         \\  world: 10,
         \\}
     ;
-    try checkTypesExpr(source, .pass, "{ hello: Str, world: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] }");
+    try checkTypesExpr(source, .pass, "{ hello: Str, world: Num(_size) }");
 }
 
 // tags //
@@ -166,7 +166,7 @@ test "check type - tag - args" {
     const source =
         \\MyTag("hello", 1)
     ;
-    try checkTypesExpr(source, .pass, "[MyTag(Str, num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])])]_others");
+    try checkTypesExpr(source, .pass, "[MyTag(Str, Num(_size))]_others");
 }
 
 // blocks //
@@ -213,7 +213,7 @@ test "check type - def - func" {
     const source =
         \\id = |_| 20
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Num(_size)");
 }
 
 test "check type - def - id without annotation" {
@@ -240,23 +240,23 @@ test "check type - def - func with annotation 1" {
 }
 
 // TODO: This test is currently failing because annotation parsing doesn't correctly handle
-// constraint syntax like `num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]`
-// It's getting truncated to `num where [num.from_int_digits : num]`
+// constraint syntax like `Num(_size)`
+// It's getting truncated to `Num(_size)`
 // This needs to be fixed in the annotation parser, but is separate from the numeric literal work.
 test "check type - def - func with annotation 2" {
     if (true) return error.SkipZigTest;
     const source =
-        \\id : x -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]
+        \\id : x -> Num(_size)
         \\id = |_| 15
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "x -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "x -> Num(_size)");
 }
 
 test "check type - def - nested lambda" {
     const source =
         \\id = (((|a| |b| |c| a + b + c)(100))(20))(3)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
 }
 
 test "check type - def - forward ref" {
@@ -282,14 +282,14 @@ test "check type - def - forward ref" {
 }
 
 test "check type - def - nested lambda with wrong annotation" {
-    return error.SkipZigTest;
+    if (true) return error.SkipZigTest;
 
     // Currently the below produces two errors instead of just one.
-    // const source =
-    //     \\curried_add : Num(a), Num(a), Num(a), Num(a) -> Num(a)
-    //     \\curried_add = |a| |b| |c| |d| a + b + c + d
-    // ;
-    // try checkTypesModule(source, .fail, "Num(_size)");
+    const source =
+        \\curried_add : Num(a), Num(a), Num(a), Num(a) -> Num(a)
+        \\curried_add = |a| |b| |c| |d| a + b + c + d
+    ;
+    try checkTypesModule(source, .fail, "Num(_size)");
 }
 
 // calling functions
@@ -311,7 +311,7 @@ test "check type - def - polymorphic id 1" {
         \\
         \\test = id(5)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
 }
 
 test "check type - def - polymorphic id 2" {
@@ -321,23 +321,23 @@ test "check type - def - polymorphic id 2" {
         \\
         \\test = (id(5), id("hello"))
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], Str)");
+    try checkTypesModule(source, .{ .pass = .last_def }, "(Num(_size), Str)");
 }
 
 test "check type - def - out of order" {
     // Currently errors out in czer
-    return error.SkipZigTest;
+    if (true) return error.SkipZigTest;
 
-    // const source =
-    //     \\id_1 : x -> x
-    //     \\id_1 = |x| id_2(x)
-    //     \\
-    //     \\id_2 : x -> x
-    //     \\id_2 = |x| x
-    //     \\
-    //     \\test = id_1("Hellor")
-    // ;
-    // try checkTypesModule(source, .{ .pass = .{ .def = "test" } }, "Str");
+    const source =
+        \\id_1 : x -> x
+        \\id_1 = |x| id_2(x)
+        \\
+        \\id_2 : x -> x
+        \\id_2 = |x| x
+        \\
+        \\test = id_1("Hellor")
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "test" } }, "Str");
 }
 
 test "check type - def - polymorphic higher order 1" {
@@ -357,7 +357,7 @@ test "check type - top level polymorphic function is generalized" {
         \\    a
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
 }
 
 test "check type - let-def polymorphic function is generalized" {
@@ -369,7 +369,7 @@ test "check type - let-def polymorphic function is generalized" {
         \\    a
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
 }
 
 test "check type - polymorphic function function param should be constrained" {
@@ -560,7 +560,7 @@ test "check type - nominal w/ polymorphic function" {
         \\
         \\test = swapPair((1, "test"))
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Pair(Str, num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Pair(Str, Num(_size))");
 }
 
 // bool
@@ -598,12 +598,12 @@ test "check type - if else" {
 }
 
 test "check type - if else - qualified bool" {
-    return error.SkipZigTest; // Qualified tags from other modules don't work yet.
-    // const source =
-    //     \\x : Str
-    //     \\x = if Bool.True "true" else "false"
-    // ;
-    // try checkTypesModule(source, .{ .pass = .last_def }, "Str");
+    if (true) return error.SkipZigTest;
+    const source =
+        \\x : Str
+        \\x = if Bool.True "true" else "false"
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
 }
 
 test "check type - if else - invalid condition 1" {
@@ -708,7 +708,7 @@ test "check type - unary minus" {
     const source =
         \\x = -10
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
 }
 
 test "check type - unary minus mismatch" {
@@ -733,7 +733,7 @@ test "check type - binops math sub" {
     const source =
         \\x = 1 - 0.2
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Num(Frac(_size))");
 }
 
 test "check type - binops ord" {
@@ -1021,7 +1021,7 @@ test "check type - patterns record 2" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .pass, "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+    try checkTypesExpr(source, .pass, "Num(_size)");
 }
 
 test "check type - patterns record field mismatch" {
@@ -1048,7 +1048,7 @@ test "check type - var ressignment" {
         \\  x
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
 }
 
 // expect //
@@ -1061,7 +1061,7 @@ test "check type - expect" {
         \\  x
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Num(_size)");
 }
 
 test "check type - expect not bool" {
@@ -1132,7 +1132,7 @@ test "check type - for" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "main" } },
-        "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]",
+        "Num(_size)",
     );
 }
 
@@ -1371,7 +1371,7 @@ test "check type - static dispatch - polymorphic type" {
     ;
     try checkTypesModule(
         source,
-        .{ .pass = .{ .def = "Container.map" } },
+        .{ .pass = .{ .def = "Test.Container.map" } },
         "Container(a), (a -> b) -> Container(b)",
     );
 }
@@ -1392,7 +1392,7 @@ test "check type - static dispatch - polymorphic type 2" {
     ;
     try checkTypesModule(
         source,
-        .{ .pass = .{ .def = "Container.map" } },
+        .{ .pass = .{ .def = "Test.Container.map" } },
         "Container(a), (a -> b) -> Container(b)",
     );
 }
@@ -1414,7 +1414,7 @@ test "check type - static dispatch - polymorphic type 3" {
     ;
     try checkTypesModule(
         source,
-        .{ .pass = .{ .def = "Container.map" } },
+        .{ .pass = .{ .def = "Test.Container.map" } },
         "Container(a), (a -> b) -> Container(b)",
     );
 }
@@ -1843,8 +1843,8 @@ test "associated item: type annotation followed by body should not create duplic
     try testing.expectEqual(@as(usize, 0), type_problems.len);
 
     // Verify the types
-    try test_env.assertDefType("Test.apply", "a -> b, a -> b");
-    try test_env.assertDefType("result", "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+    try test_env.assertDefType("Test.apply", "(a -> b), a -> b");
+    try test_env.assertDefType("result", "Num(_size)");
 }
 
 // TODO: Move this test to can

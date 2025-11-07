@@ -145,7 +145,7 @@ deepType = C
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
+		(patt (type "Num(_size)"))
 		(patt (type "Num(Int(Unsigned64))"))
 		(patt (type "Foo.Level1.Level2.Level3")))
 	(type_decls
@@ -158,7 +158,7 @@ deepType = C
 		(nominal (type "Foo.Level1.Level2.Level3")
 			(ty-header (name "Foo.Level1.Level2.Level3"))))
 	(expressions
-		(expr (type "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
+		(expr (type "Num(_size)"))
 		(expr (type "Num(Int(Unsigned64))"))
 		(expr (type "Foo.Level1.Level2.Level3"))))
 ~~~

@@ -2458,7 +2458,7 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Bool -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
+		(patt (type "Bool -> Num(_size)"))
 		(patt (type "Error -> Num(Int(Unsigned64))"))
 		(patt (type "[Red][Blue, Green]_others, _arg -> Error"))
 		(patt (type "List(Error) -> Error"))
@@ -2504,7 +2504,7 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Bool -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
+		(expr (type "Bool -> Num(_size)"))
 		(expr (type "Error -> Num(Int(Unsigned64))"))
 		(expr (type "[Red][Blue, Green]_others, _arg -> Error"))
 		(expr (type "List(Error) -> Error"))

@@ -611,7 +611,7 @@ fn unifyWith(self: *Self, target_var: Var, content: types_mod.Content, env: *Env
             const target_var_rank = self.types.resolveVar(target_var).desc.rank;
             const fresh_var_rank = self.types.resolveVar(fresh_var).desc.rank;
             if (@intFromEnum(target_var_rank) > @intFromEnum(fresh_var_rank)) {
-                std.debug.panic("trying unifyWith unexpcted ranks {} & {}", .{ @intFromEnum(target_var_rank), @intFromEnum(fresh_var_rank) });
+                std.debug.panic("trying unifyWith unexpected ranks {} & {}", .{ @intFromEnum(target_var_rank), @intFromEnum(fresh_var_rank) });
             }
         }
         _ = try self.unify(target_var, fresh_var, env);
@@ -723,7 +723,7 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     }
 
     // Note that we can't use SCCs to determine the order to resolve defs
-    // because anonmyous static dispatch makes function order not knowable
+    // because anonymous static dispatch makes function order not knowable
     // before type inference
 }
 
@@ -3029,7 +3029,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     };
 
                     // TODO Why do we have to create the static dispatch fn at the
-                    // reciever rank instead of the  cur rank?
+                    // receiver rank instead of the  cur rank?
 
                     // Since the return type of this dispatch is unknown, create a
                     // flex to represent it
@@ -3992,7 +3992,6 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             // Iterate over the constraints
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
             for (constraints) |constraint| {
-
                 // Extract the function and return type from the constraint
                 const resolved_constraint = self.types.resolveVar(constraint.fn_var);
                 const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
@@ -4002,12 +4001,25 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 // Get the name fully qualified name of the function
                 // Czer creates this as `TypeName.method_name`
                 const constraint_fn_name_bytes = self.cir.getIdent(constraint.fn_name);
+
+                // Calculate the name of the static dispatch function
+                //
+                // TODO: This works for top-level types, but not for deeply
+                // nested types like: MyModule.A.B.C.my_func
                 self.static_dispatch_method_name_buf.clearRetainingCapacity();
-                try self.static_dispatch_method_name_buf.print(
-                    self.gpa,
-                    "{s}.{s}",
-                    .{ type_name_bytes, constraint_fn_name_bytes },
-                );
+                if (std.mem.eql(u8, type_name_bytes, original_env.module_name)) {
+                    try self.static_dispatch_method_name_buf.print(
+                        self.gpa,
+                        "{s}.{s}",
+                        .{ type_name_bytes, constraint_fn_name_bytes },
+                    );
+                } else {
+                    try self.static_dispatch_method_name_buf.print(
+                        self.gpa,
+                        "{s}.{s}.{s}",
+                        .{ original_env.module_name, type_name_bytes, constraint_fn_name_bytes },
+                    );
+                }
                 const qualified_name_bytes = self.static_dispatch_method_name_buf.items;
 
                 // Get the ident of this method in the original env
@@ -4034,6 +4046,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                     );
                     continue;
                 };
+
                 const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_original_env)));
                 const def_var: Var = ModuleEnv.varFrom(def_idx);
 
@@ -4188,9 +4201,9 @@ const EnvPool = struct {
     /// Return an Env to the pool for reuse.
     /// If the pool cannot fit it, then deinit the env
     ///
-    /// * If we aquire an existing env from the pool, there should be a slot
-    ///   availble to return it
-    /// * If we init a new env when we aquire, the aquire func should expand the
+    /// * If we acquire an existing env from the pool, there should be a slot
+    ///   available to return it
+    /// * If we init a new env when we acquire, the acquire func should expand the
     ///   pool so we have room to return it
     fn release(self: *EnvPool, env: Env) void {
         const trace = tracy.trace(@src());

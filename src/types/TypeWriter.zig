@@ -763,13 +763,19 @@ fn writeNum(self: *TypeWriter, num: Num, root_var: Var) std.mem.Allocator.Error!
             _ = try self.buf.writer().write(")");
         },
         .num_unbound => |_| {
-            _ = try self.buf.writer().write("num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+            _ = try self.buf.writer().write("Num(_");
+            try self.generateContextualName(.NumContent);
+            _ = try self.buf.writer().write(")");
         },
         .int_unbound => |_| {
-            _ = try self.buf.writer().write("num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
+            _ = try self.buf.writer().write("Int(_");
+            try self.generateContextualName(.NumContent);
+            _ = try self.buf.writer().write(")");
         },
         .frac_unbound => |_| {
-            _ = try self.buf.writer().write("num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])]");
+            _ = try self.buf.writer().write("Frac(_");
+            try self.generateContextualName(.NumContent);
+            _ = try self.buf.writer().write(")");
         },
         .int_precision => |prec| {
             try self.writeIntType(prec, .precision);

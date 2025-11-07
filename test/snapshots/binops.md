@@ -177,5 +177,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], Bool, Bool, Bool, Bool, Bool, Bool, num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], Bool, Bool, _field)"))
+(expr (type "(Num(_size), Num(_size2), Num(_size3), Num(_size4), Num(_size5), Bool, Bool, Bool, Bool, Bool, Bool, Num(_size6), Bool, Bool, _field)"))
 ~~~

@@ -498,23 +498,6 @@ pub const VarPool = struct {
         }
     }
 
-    /// Remove a var from the specified rank
-    ///
-    /// This removal reorders the vars at that rank, but var order is not important
-    pub fn removeVarFromRank(self: *Self, variable: Var, rank: Rank) void {
-        if (builtin.mode == .Debug) {
-            if (@intFromEnum(rank) > @intFromEnum(self.current_rank)) {
-                std.debug.panic("trying to remove var at rank {}, but current rank is {}", .{ @intFromEnum(rank), @intFromEnum(self.current_rank) });
-            }
-        }
-        for (self.ranks.items[@intFromEnum(rank)].items, 0..) |cur_var, i| {
-            if (cur_var == variable) {
-                _ = self.ranks.items[@intFromEnum(rank)].swapRemove(i);
-                return;
-            }
-        }
-    }
-
     pub fn addVarToRank(self: *Self, variable: Var, rank: Rank) !void {
         if (builtin.mode == .Debug) {
             if (@intFromEnum(rank) > @intFromEnum(self.current_rank)) {

@@ -69,9 +69,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{ age: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], name: Str }"))
-		(patt (type "{ age: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], name: Str }")))
+		(patt (type "{ age: Num(_size), name: Str }"))
+		(patt (type "{ age: Num(_size), name: Str }")))
 	(expressions
-		(expr (type "{ age: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], name: Str }"))
-		(expr (type "{ age: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], name: Str }"))))
+		(expr (type "{ age: Num(_size), name: Str }"))
+		(expr (type "{ age: Num(_size), name: Str }"))))
 ~~~
