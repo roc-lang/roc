@@ -1,34 +1,9 @@
 Builtin := [].{
-	Str := [ProvidedByCompiler].{
-		is_empty : Str -> Bool
-
-		contains : Str, Str -> Bool
-		contains = |_str, _other| True
-	}
-
-	List := [ProvidedByCompiler].{
-		len : List(a) -> U64
-
-		is_empty : List(a) -> Bool
-
-		first : List(a) -> Try(a, [ListWasEmpty])
-		first = |_| Err(ListWasEmpty)
-
-		map : List(a), (a -> b) -> List(b)
-		map = |_, _| []
-
-		keep_if : List(a), (a -> Bool) -> List(a)
-		keep_if = |_, _| []
-
-		concat : List(a), List(a) -> List(a)
-		concat = |_, _| []
-	}
-
 	Bool := [True, False].{
 		not : Bool -> Bool
 		not = |bool| match bool {
-			Bool.True => Bool.False
-			Bool.False => Bool.True
+			True => False
+			False => True
 		}
 
 		is_eq : Bool, Bool -> Bool
@@ -73,6 +48,33 @@ Builtin := [].{
 		#		}
 		#	}
 		#}
+	}
+
+	Str := [ProvidedByCompiler].{
+		is_empty : Str -> Bool
+
+		contains : Str, Str -> Bool
+		contains = |_str, _other| True
+	}
+
+	List := [ProvidedByCompiler].{
+		len : List(_elem) -> U64
+		is_empty : List(_elem) -> Bool
+
+		first : List(elem) -> Try(a, [ListWasEmpty])
+		first = |list| List.get(list, 0)
+
+		get : List(elem), U64 -> Try(elem, [ListWasEmpty])
+		get = |list, index| if List.is_empty(list) Err(ListWasEmpty) else Ok(list_get_unsafe(list, index))
+
+		map : List(a), (a -> b) -> List(b)
+		map = |_, _| []
+
+		keep_if : List(a), (a -> Bool) -> List(a)
+		keep_if = |_, _| []
+
+		concat : List(a), List(a) -> List(a)
+		concat = |_, _| []
 	}
 
 	Dict := [EmptyDict].{}
@@ -333,3 +335,5 @@ Builtin := [].{
 		}
 	}
 }
+
+list_get_unsafe : List(elem), U64 -> elem

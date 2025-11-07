@@ -385,6 +385,18 @@ pub fn listIsEmpty(list: RocList) callconv(.c) bool {
     return list.isEmpty();
 }
 
+/// Get a pointer to an element at the given index without bounds checking.
+/// UNSAFE: No bounds checking is performed. Index must be < list.len().
+/// This is intended for internal use by low-level operations only.
+/// Returns a pointer to the element at the given index.
+pub fn listGetUnsafe(list: RocList, index: u64, element_width: usize) callconv(.c) ?[*]u8 {
+    if (list.bytes) |bytes| {
+        const byte_offset = @as(usize, @intCast(index)) * element_width;
+        return bytes + byte_offset;
+    }
+    return null;
+}
+
 /// Decrement reference count and deallocate when no longer shared.
 pub fn listDecref(
     list: RocList,

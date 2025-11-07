@@ -2151,6 +2151,57 @@ pub const Interpreter = struct {
 
                 return try self.makeSimpleBoolValue(result);
             },
+            .list_get_unsafe => {
+                // Internal operation: Get element at index without bounds checking
+                // Args: List(a), U64 (index)
+                // Returns: a (the element)
+                if (args.len != 2) return error.TypeMismatch;
+
+                const list_arg = args[0];
+                const index_arg = args[1];
+
+                if (list_arg.ptr == null) return error.TypeMismatch;
+
+                // Extract element layout from List(a)
+                if (list_arg.layout.tag != .list and list_arg.layout.tag != .list_of_zst) {
+                    return error.TypeMismatch;
+                }
+
+                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                const index = index_arg.asI128(); // U64 stored as i128
+
+                // Get element layout
+                const elem_layout_idx = list_arg.layout.data.list;
+                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+
+                if (elem_size == 0) {
+                    // ZST element - return zero-sized value
+                    return StackValue{
+                        .layout = elem_layout,
+                        .ptr = null,
+                        .is_initialized = true,
+                    };
+                }
+
+                // Get pointer to element (no bounds checking!)
+                const elem_ptr = builtins.list.listGetUnsafe(roc_list.*, @intCast(index), elem_size);
+
+                if (elem_ptr == null) {
+                    self.triggerCrash("list_get_unsafe: null pointer returned", false, roc_ops);
+                    return error.Crash;
+                }
+
+                // Create StackValue pointing to the element
+                const elem_value = StackValue{
+                    .layout = elem_layout,
+                    .ptr = @ptrCast(elem_ptr.?),
+                    .is_initialized = true,
+                };
+
+                // Copy to new location and increment refcount
+                return try self.pushCopy(elem_value, roc_ops);
+            },
             .set_is_empty => {
                 // TODO: implement Set.is_empty
                 self.triggerCrash("Set.is_empty not yet implemented", false, roc_ops);

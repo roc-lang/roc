@@ -618,6 +618,10 @@ fn processAssociatedItemsSecondPass(
                     const type_text = self.env.getIdent(type_ident);
                     const qualified_idx = try self.env.insertQualifiedIdent(parent_text, type_text);
 
+                    // Enter a new scope for the nested associated block
+                    try self.scopeEnter(self.env.gpa, false);
+                    defer self.scopeExit(self.env.gpa) catch unreachable;
+
                     try self.processAssociatedItemsSecondPass(qualified_idx, assoc.statements);
                 }
             },
@@ -689,6 +693,25 @@ fn processAssociatedItemsSecondPass(
                                         // Register this associated item by its qualified name
                                         const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                                         try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+
+                                        // Also make the unqualified name and short qualified name available in the current scope
+                                        // (This allows `get`, `List.get`, and `Builtin.List.get` to all work)
+                                        const def_cir = self.env.store.getDef(def_idx);
+                                        const pattern_idx = def_cir.pattern;
+                                        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+
+                                        // Add unqualified name (e.g., "get")
+                                        try current_scope.idents.put(self.env.gpa, name_ident, pattern_idx);
+
+                                        // Also add short qualified name (e.g., "List.get")
+                                        // Extract the last component of parent_name (e.g., "List" from "Builtin.List")
+                                        const parent_full_text = self.env.getIdent(parent_name);
+                                        const short_parent_text = if (std.mem.lastIndexOf(u8, parent_full_text, ".")) |last_dot|
+                                            parent_full_text[last_dot + 1..]
+                                        else
+                                            parent_full_text;
+                                        const short_qualified_idx = try self.env.insertQualifiedIdent(short_parent_text, decl_text);
+                                        try current_scope.idents.put(self.env.gpa, short_qualified_idx, pattern_idx);
                                     } else {}
                                 }
                             }
@@ -710,6 +733,25 @@ fn processAssociatedItemsSecondPass(
                             // Register this associated item by its qualified name
                             const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                             try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+
+                            // Also make the unqualified name and short qualified name available in the current scope
+                            // (This allows `is_empty`, `List.is_empty`, and `Builtin.List.is_empty` to all work)
+                            const def_cir = self.env.store.getDef(def_idx);
+                            const pattern_idx = def_cir.pattern;
+                            const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+
+                            // Add unqualified name (e.g., "is_empty")
+                            try current_scope.idents.put(self.env.gpa, name_ident, pattern_idx);
+
+                            // Also add short qualified name (e.g., "List.is_empty")
+                            // Extract the last component of parent_name (e.g., "List" from "Builtin.List")
+                            const parent_full_text = self.env.getIdent(parent_name);
+                            const short_parent_text = if (std.mem.lastIndexOf(u8, parent_full_text, ".")) |last_dot|
+                                parent_full_text[last_dot + 1..]
+                            else
+                                parent_full_text;
+                            const short_qualified_idx = try self.env.insertQualifiedIdent(short_parent_text, name_text);
+                            try current_scope.idents.put(self.env.gpa, short_qualified_idx, pattern_idx);
 
                             try self.env.store.addScratchDef(def_idx);
                         },
@@ -823,6 +865,8 @@ fn processAssociatedItemsFirstPass(
             },
             else => {
                 // Skip other statement types in first pass
+                // Note: .type_anno is skipped here because anno-only patterns are created
+                // in the second pass, not the first pass
             },
         }
     }
@@ -1148,6 +1192,20 @@ pub fn canonicalizeFile(
                     }
                     break;
                 }
+
+                // If we didn't find any next statement, create an anno-only def
+                // (This handles the case where the type annotation is the last statement in the file)
+                if (next_i >= ast_stmt_idxs.len) {
+                    const def_idx = try self.createAnnoOnlyDef(name_ident, type_anno_idx, where_clauses, region);
+                    try self.env.store.addScratchDef(def_idx);
+
+                    // If this identifier should be exposed, register it
+                    const ident_text = self.env.getIdent(name_ident);
+                    if (self.exposed_ident_texts.contains(ident_text)) {
+                        const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                        try self.env.setExposedNodeIndexById(name_ident, def_idx_u16);
+                    }
+                }
             },
             .malformed => |malformed| {
                 // We won't touch this since it's already a parse error.
@@ -1248,11 +1306,48 @@ pub fn canonicalizeFile(
                                     }
                                 }
                             },
-                            else => {},
+                            else => {
+                                // Note: .type_anno is not handled here because anno-only patterns
+                                // are created during processAssociatedItemsSecondPass, so they need
+                                // to be re-introduced AFTER that call completes
+                            },
                         }
                     }
 
                     try self.processAssociatedItemsSecondPass(type_ident, assoc.statements);
+
+                    // After processing, re-introduce anno-only defs into the associated block scope
+                    // (They were just created by processAssociatedItemsSecondPass and need to be available
+                    // for use within the associated block)
+                    for (self.parse_ir.store.statementSlice(assoc.statements)) |anno_stmt_idx| {
+                        const anno_stmt = self.parse_ir.store.getStatement(anno_stmt_idx);
+                        switch (anno_stmt) {
+                            .type_anno => |type_anno| {
+                                if (self.parse_ir.tokens.resolveIdentifier(type_anno.name)) |anno_ident| {
+                                    // Build qualified name
+                                    const parent_text = self.env.getIdent(type_ident);
+                                    const anno_text = self.env.getIdent(anno_ident);
+                                    const qualified_ident_idx = try self.env.insertQualifiedIdent(parent_text, anno_text);
+
+                                    // Look up the qualified pattern that was just created
+                                    switch (self.scopeLookup(.ident, qualified_ident_idx)) {
+                                        .found => |pattern_idx| {
+                                            const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                                            // Add both unqualified and qualified names to the current scope
+                                            // This allows both `len` and `List.len` to work inside the associated block
+                                            try current_scope.idents.put(self.env.gpa, anno_ident, pattern_idx);
+                                            try current_scope.idents.put(self.env.gpa, qualified_ident_idx, pattern_idx);
+                                        },
+                                        .not_found => {
+                                            // This can happen if the type_anno was followed by a matching decl
+                                            // (in which case it's not an anno-only def)
+                                        },
+                                    }
+                                }
+                            },
+                            else => {},
+                        }
+                    }
                 }
             },
             else => {
@@ -2755,21 +2850,52 @@ pub fn canonicalizeExpr(
                             break :blk null;
                         } orelse {
                             // Not a module alias and not an auto-imported module
-                            // This is a qualified identifier with an invalid qualifier
+                            // Check if the qualifier is a type - if so, try to lookup associated items
+                            if (self.scopeLookupTypeBinding(module_alias)) |_| {
+                                // This is a type with a potential associated item
+                                // Build the fully qualified name and try to look it up
+                                const type_text = self.env.getIdent(module_alias);
+                                const field_text = self.env.getIdent(ident);
+                                const type_qualified_idx = try self.env.insertQualifiedIdent(type_text, field_text);
 
-                            // Check if the qualifier is in scope as a type/value
-                            // If so, provide a more helpful error message
-                            const diagnostic = if (self.scopeLookupTypeBinding(module_alias) != null)
-                                Diagnostic{ .nested_value_not_found = .{
-                                    .parent_name = module_alias,
-                                    .nested_name = ident,
-                                    .region = region,
-                                } }
-                            else
-                                Diagnostic{ .qualified_ident_does_not_exist = .{
-                                    .ident = qualified_ident,
-                                    .region = region,
-                                } };
+                                // Try to look up the associated item in the current scope
+                                switch (self.scopeLookup(.ident, type_qualified_idx)) {
+                                    .found => |found_pattern_idx| {
+                                        // Found the associated item! Mark it as used.
+                                        try self.used_patterns.put(self.env.gpa, found_pattern_idx, {});
+
+                                        // Return a local lookup expression
+                                        const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
+                                            .pattern_idx = found_pattern_idx,
+                                        } }, region);
+
+                                        const free_vars_start = self.scratch_free_vars.top();
+                                        try self.scratch_free_vars.append(found_pattern_idx);
+                                        return CanonicalizedExpr{
+                                            .idx = expr_idx,
+                                            .free_vars = DataSpan.init(free_vars_start, 1)
+                                        };
+                                    },
+                                    .not_found => {
+                                        // Associated item not found - generate error
+                                        const diagnostic = Diagnostic{ .nested_value_not_found = .{
+                                            .parent_name = module_alias,
+                                            .nested_name = ident,
+                                            .region = region,
+                                        } };
+                                        return CanonicalizedExpr{
+                                            .idx = try self.env.pushMalformed(Expr.Idx, diagnostic),
+                                            .free_vars = null,
+                                        };
+                                    },
+                                }
+                            }
+
+                            // Not a type either - generate appropriate error
+                            const diagnostic = Diagnostic{ .qualified_ident_does_not_exist = .{
+                                .ident = qualified_ident,
+                                .region = region,
+                            } };
 
                             return CanonicalizedExpr{
                                 .idx = try self.env.pushMalformed(Expr.Idx, diagnostic),

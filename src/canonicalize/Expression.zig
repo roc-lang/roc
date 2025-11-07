@@ -390,6 +390,7 @@ pub const Expr = union(enum) {
         // List operations
         list_len,
         list_is_empty,
+        list_get_unsafe, // Internal only - private top-level function
 
         // Set operations
         set_is_empty,
