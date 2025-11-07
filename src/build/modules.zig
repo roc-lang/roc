@@ -32,25 +32,14 @@ fn aggregatorFilters(module_type: ModuleType) []const []const u8 {
 }
 
 fn extendWithAggregatorFilters(
-    b: *Build,
     base: []const []const u8,
     module_type: ModuleType,
 ) []const []const u8 {
-    if (base.len == 0) return base;
+    // If user provided custom filters, use only those (don't add aggregators)
+    if (base.len > 0) return base;
 
-    const extras = aggregatorFilters(module_type);
-    if (extras.len == 0) return base;
-
-    var list = std.ArrayList([]const u8).empty;
-    list.ensureTotalCapacity(b.allocator, base.len + extras.len) catch @panic("OOM while extending module test filters");
-    list.appendSlice(b.allocator, base) catch @panic("OOM while extending module test filters");
-
-    for (extras) |extra| {
-        if (filtersContain(base, extra)) continue;
-        list.append(b.allocator, b.dupe(extra)) catch @panic("OOM while extending module test filters");
-    }
-
-    return list.toOwnedSlice(b.allocator) catch @panic("OOM while finalizing module test filters");
+    // No user filters provided, use aggregator filters for this module
+    return aggregatorFilters(module_type);
 }
 
 /// Represents a test module with its compilation and execution steps.
@@ -323,7 +312,7 @@ pub const RocModules = struct {
 
         inline for (test_configs, 0..) |module_type, i| {
             const module = self.getModule(module_type);
-            const module_filters = extendWithAggregatorFilters(b, test_filters, module_type);
+            const module_filters = extendWithAggregatorFilters(test_filters, module_type);
             const test_step = b.addTest(.{
                 .name = b.fmt("{s}", .{@tagName(module_type)}),
                 .root_module = b.createModule(.{

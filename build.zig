@@ -48,7 +48,11 @@ const TestsSummaryStep = struct {
             passed += @intCast(dependency.test_results.passCount());
         }
 
-        std.debug.print("✅ All {d} tests passed.\n", .{passed});
+        if (passed == 0) {
+            std.debug.print("No tests ran (all tests filtered out).\n", .{});
+        } else {
+            std.debug.print("✅ All {d} tests passed.\n", .{passed});
+        }
     }
 };
 

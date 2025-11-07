@@ -12,6 +12,6 @@ pub const base58_hash_bytes = base58.base58_hash_bytes;
 pub const encode = base58.encode;
 pub const decode = base58.decode;
 
-test {
+test "base58 mod" {
     _ = base58;
 }

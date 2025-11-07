@@ -20,7 +20,7 @@ pub const SmallCollections = @import("PackedDataSpan.zig").SmallCollections;
 
 pub const CommonEnv = @import("CommonEnv.zig");
 
-test {
+test "base mod" {
     _ = @import("Ident.zig");
 }
 
