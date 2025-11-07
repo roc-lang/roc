@@ -1,3 +1,7 @@
+# Private top-level function for unsafe list access
+# This is a low-level operation that gets replaced by the compiler
+list_get_unsafe : List(elem), U64 -> elem
+
 Builtin := [].{
 	Str := [ProvidedByCompiler].{
 		is_empty : Str -> Bool
@@ -5,10 +9,6 @@ Builtin := [].{
 		contains : Str, Str -> Bool
 		contains = |_str, _other| True
 	}
-
-	# Private top-level function for unsafe list access
-	# This is a low-level operation that gets replaced by the compiler
-	list_get_unsafe : List(elem), U64 -> elem
 
 	List := [ProvidedByCompiler].{
 		len : List(_elem) -> U64
