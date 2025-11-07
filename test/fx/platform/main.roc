@@ -5,4 +5,4 @@ platform ""
     provides { main_for_host! }
 
 main_for_host! : () => {}
-main_for_host! = |_| main!()
+main_for_host! = main!

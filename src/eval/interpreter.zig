@@ -310,7 +310,9 @@ pub const Interpreter = struct {
 
                 const tuple_idx = try self.runtime_layout_store.putTuple(param_layouts);
                 const tuple_layout = self.runtime_layout_store.getLayout(tuple_idx);
-                args_tuple_value = StackValue{ .layout = tuple_layout, .ptr = args_ptr, .is_initialized = true };
+                const tuple_size = self.runtime_layout_store.layoutSize(tuple_layout);
+                const tuple_ptr = if (tuple_size > 0) args_ptr else null;
+                args_tuple_value = StackValue{ .layout = tuple_layout, .ptr = tuple_ptr, .is_initialized = true };
                 args_accessor = try args_tuple_value.asTuple(&self.runtime_layout_store);
 
                 var j: usize = 0;
@@ -1715,9 +1717,11 @@ pub const Interpreter = struct {
 
                 if (!treat_as_method) {
                     if (receiver_value.layout.tag != .record) return error.TypeMismatch;
-                    if (receiver_value.ptr == null) return error.ZeroSizedType;
                     const rec_data = self.runtime_layout_store.getRecordData(receiver_value.layout.data.record.idx);
-                    if (rec_data.fields.count == 0) return error.ZeroSizedType;
+                    if (rec_data.fields.count == 0 or receiver_value.ptr == null) {
+                        // Empty record or zero-sized record - field access should fail
+                        return error.TypeMismatch;
+                    }
                     var accessor = try receiver_value.asRecord(&self.runtime_layout_store);
                     const field_idx = accessor.findFieldIndex(self.env, field_name) orelse return error.TypeMismatch;
                     const field_value = try accessor.getFieldByIndex(field_idx);

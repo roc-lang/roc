@@ -158,6 +158,8 @@ pub const PackageEnv = struct {
     compiler_version: []const u8,
     /// Builtin modules (Bool, Result, Str) for auto-importing in canonicalization (not owned)
     builtin_modules: *const BuiltinModules,
+    /// Whether the root module is a platform (determines if Type Module transformation should be applied)
+    root_is_platform: bool = false,
 
     lock: Mutex = .{},
     cond: Condition = .{},
@@ -212,6 +214,7 @@ pub const PackageEnv = struct {
         schedule_hook: ScheduleHook,
         compiler_version: []const u8,
         builtin_modules: *const BuiltinModules,
+        is_platform: bool,
     ) PackageEnv {
         return .{
             .gpa = gpa,
@@ -224,6 +227,7 @@ pub const PackageEnv = struct {
             .schedule_hook = schedule_hook,
             .compiler_version = compiler_version,
             .builtin_modules = builtin_modules,
+            .root_is_platform = is_platform,
             .injector = std.ArrayList(Task).empty,
             .modules = std.ArrayList(ModuleState).empty,
             .discovered = std.ArrayList(ModuleId).empty,
@@ -549,6 +553,9 @@ pub const PackageEnv = struct {
         // init CIR fields
         try env.initCIRFields(self.gpa, st.name);
 
+        // Set building_platform_modules based on whether root is a platform
+        env.building_platform_modules = self.root_is_platform;
+
         try env.common.calcLineStarts(self.gpa);
 
         // replace env - save old source to free it after deinit
@@ -604,6 +611,7 @@ pub const PackageEnv = struct {
         var czer = try Can.init(env, &parse_ast, &module_envs_map);
         try czer.canonicalizeFile();
         czer.deinit();
+
         const canon_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         if (@import("builtin").target.cpu.arch != .wasm32) {
             self.total_canonicalize_ns += @intCast(canon_end - canon_start);

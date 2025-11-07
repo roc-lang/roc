@@ -1097,6 +1097,7 @@ pub const BuildEnv = struct {
                 schedule_hook,
                 self.compiler_version,
                 self.builtin_modules,
+                pkg.kind == .platform,
             );
 
             const key = try self.gpa.dupe(u8, name);
