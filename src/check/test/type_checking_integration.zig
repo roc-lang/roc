@@ -1725,80 +1725,47 @@ test "check type - comprehensive: polymorphism + lambdas + dispatch + annotation
     );
 }
 
-// helpers - module //
+// scoped type variables
 
-const ModuleExpectation = union(enum) {
-    pass: DefExpectation,
-    fail,
-};
-
-const DefExpectation = union(enum) {
-    last_def,
-    def: []const u8,
-};
-
-/// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
-///
-/// Behavior depends on the expectation:
-/// Pass: Asserts whole module type checks, and assert the specified def matches the expected type string
-/// Fail: Asserts that there is exactly 1 type error in the module and it's title matches the expected string
-fn checkTypesModule(
-    comptime source_expr: []const u8,
-    comptime expectation: ModuleExpectation,
-    comptime expected: []const u8,
-) !void {
-    var test_env = try TestEnv.init("Test", source_expr);
-    defer test_env.deinit();
-
-    switch (expectation) {
-        .pass => |def_expectation| {
-            switch (def_expectation) {
-                .last_def => {
-                    return test_env.assertLastDefType(expected);
-                },
-                .def => |def_name| {
-                    return test_env.assertDefType(def_name, expected);
-                },
-            }
-        },
-        .fail => {
-            return test_env.assertOneTypeError(expected);
-        },
-    }
-
-    return test_env.assertLastDefType(expected);
+test "check type - scoped type variables - pass" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\pass : a -> a
+        \\pass = |x| {
+        \\  inner : a -> a
+        \\  inner = |y| y
+        \\  
+        \\  inner(x)
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "pass" } },
+        "a -> a",
+    );
 }
 
-// helpers - expr //
-
-const ExprExpectation = union(enum) {
-    pass,
-    fail,
-};
-
-/// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
-///
-/// Behavior depends on the expectation:
-/// Pass: Asserts expr type checks, and asserts that the expr's type match the expected type string
-/// Fail: Asserts that there is exactly 1 type error and it's title matches the expected string
-fn checkTypesExpr(
-    comptime source_expr: []const u8,
-    comptime expectation: ExprExpectation,
-    comptime expected: []const u8,
-) !void {
-    var test_env = try TestEnv.initExpr("Test", source_expr);
-    defer test_env.deinit();
-
-    switch (expectation) {
-        .pass => {
-            return test_env.assertLastDefType(expected);
-        },
-        .fail => {
-            return test_env.assertOneTypeError(expected);
-        },
-    }
-
-    return test_env.assertLastDefType(expected);
+test "check type - scoped type variables - fail" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\fail : a -> a
+        \\fail = |x| {
+        \\  g : b -> b
+        \\  g = |z| z
+        \\
+        \\  result : c
+        \\  result = g(x)
+        \\
+        \\  result
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .fail,
+        "TYPE MISMATCH",
+    );
 }
 
 // Associated items referencing each other
@@ -1880,6 +1847,7 @@ test "associated item: type annotation followed by body should not create duplic
     try test_env.assertDefType("result", "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]");
 }
 
+// TODO: Move this test to can
 test "top-level: type annotation followed by body should not create duplicate definition - REGRESSION TEST" {
     // This reproduces the bug seen in test/snapshots/pass/underscore_in_regular_annotations.md
     // and test/snapshots/type_function_simple.md where a type annotation followed by its body
@@ -1920,4 +1888,80 @@ test "top-level: type annotation followed by body should not create duplicate de
     if (duplicate_def_found) {
         return error.TestUnexpectedResult;
     }
+}
+
+// helpers - module //
+
+const ModuleExpectation = union(enum) {
+    pass: DefExpectation,
+    fail,
+};
+
+const DefExpectation = union(enum) {
+    last_def,
+    def: []const u8,
+};
+
+/// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
+///
+/// Behavior depends on the expectation:
+/// Pass: Asserts whole module type checks, and assert the specified def matches the expected type string
+/// Fail: Asserts that there is exactly 1 type error in the module and it's title matches the expected string
+fn checkTypesModule(
+    comptime source_expr: []const u8,
+    comptime expectation: ModuleExpectation,
+    comptime expected: []const u8,
+) !void {
+    var test_env = try TestEnv.init("Test", source_expr);
+    defer test_env.deinit();
+
+    switch (expectation) {
+        .pass => |def_expectation| {
+            switch (def_expectation) {
+                .last_def => {
+                    return test_env.assertLastDefType(expected);
+                },
+                .def => |def_name| {
+                    return test_env.assertDefType(def_name, expected);
+                },
+            }
+        },
+        .fail => {
+            return test_env.assertOneTypeError(expected);
+        },
+    }
+
+    return test_env.assertLastDefType(expected);
+}
+
+// helpers - expr //
+
+const ExprExpectation = union(enum) {
+    pass,
+    fail,
+};
+
+/// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
+///
+/// Behavior depends on the expectation:
+/// Pass: Asserts expr type checks, and asserts that the expr's type match the expected type string
+/// Fail: Asserts that there is exactly 1 type error and it's title matches the expected string
+fn checkTypesExpr(
+    comptime source_expr: []const u8,
+    comptime expectation: ExprExpectation,
+    comptime expected: []const u8,
+) !void {
+    var test_env = try TestEnv.initExpr("Test", source_expr);
+    defer test_env.deinit();
+
+    switch (expectation) {
+        .pass => {
+            return test_env.assertLastDefType(expected);
+        },
+        .fail => {
+            return test_env.assertOneTypeError(expected);
+        },
+    }
+
+    return test_env.assertLastDefType(expected);
 }

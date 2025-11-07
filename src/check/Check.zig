@@ -2570,9 +2570,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const pat_var = ModuleEnv.varFrom(lookup.pattern_idx);
             const resolved_pat = self.types.resolveVar(pat_var).desc;
 
-            var tw = try self.cir.initTypeWriter();
-            defer tw.deinit();
-
             if (resolved_pat.rank == Rank.generalized) {
                 const instantiated = try self.instantiateVar(pat_var, env, .use_last_var);
                 _ = try self.unify(expr_var, instantiated, env);
@@ -3165,27 +3162,33 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 try self.checkPattern(decl_stmt.pattern, env, .no_expectation);
                 const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
 
-                // Check the annotation, if it exists
-                const expectation = blk: {
-                    if (decl_stmt.anno) |annotation_idx| {
-                        // Generate the annotation type var in-place
-                        try self.generateAnnotationType(annotation_idx, env);
-                        const annotation_var = ModuleEnv.varFrom(annotation_idx);
-
-                        // TODO: Instantiate annotation at current rank
-
-                        // Return the expectation
-                        break :blk Expected{
-                            .expected = .{ .var_ = annotation_var, .from_annotation = true },
-                        };
-                    } else {
-                        break :blk Expected.no_expectation;
-                    }
-                };
-
                 // Evaluate the rhs of the expression
                 const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
                 {
+                    // Check the annotation, if it exists
+                    const expectation = blk: {
+                        if (decl_stmt.anno) |annotation_idx| {
+                            // Generate the annotation type var in-place
+                            try self.generateAnnotationType(annotation_idx, env);
+                            const annotation_var = ModuleEnv.varFrom(annotation_idx);
+
+                            // TODO: If we instantiate here, then var lookups break. But if we don't
+                            // then the type anno gets corrupted if we have an error in the body
+                            // const instantiated_anno_var = try self.instantiateVarPreserveRigids(
+                            //     annotation_var,
+                            //     rank,
+                            //     .use_last_var,
+                            // );
+
+                            // Return the expectation
+                            break :blk Expected{
+                                .expected = .{ .var_ = annotation_var, .from_annotation = true },
+                            };
+                        } else {
+                            break :blk Expected.no_expectation;
+                        }
+                    };
+
                     // Enter a new rank
                     try env.var_pool.pushRank();
                     defer env.var_pool.popRank();
