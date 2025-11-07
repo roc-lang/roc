@@ -590,7 +590,10 @@ fn freshBool(self: *Self, env: *Env, new_region: Region) Allocator.Error!Var {
 
 // updating vars //
 
-/// Update a variable to have the provided content & rank
+/// Unify the provided variable with the provided content
+///
+/// If the var is a flex at the current rank, skip unifcation and simply update
+/// the type descriptor
 ///
 /// This should primarily be use to set CIR node vars that were initially filled with placeholders
 fn unifyWith(self: *Self, target_var: Var, content: types_mod.Content, env: *Env) std.mem.Allocator.Error!void {
@@ -603,15 +606,6 @@ fn unifyWith(self: *Self, target_var: Var, content: types_mod.Content, env: *Env
         desc.content = content;
         try self.types.setVarDesc(target_var, desc);
     } else {
-        var tw = try self.cir.initTypeWriter();
-        defer tw.deinit();
-
-        std.debug.print("CANNOT OPTIMIZE {} {s} {}\n", .{
-            resolved_target.var_,
-            try tw.writeGet(resolved_target.var_),
-            .{ resolved_target.is_root, resolved_target.desc.rank, env.rank() },
-        });
-
         const fresh_var = try self.freshFromContent(content, env, self.getRegionAt(target_var));
         if (builtin.mode == .Debug) {
             const target_var_rank = self.types.resolveVar(target_var).desc.rank;
@@ -2358,9 +2352,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_record => |e| {
             // Create a record type in the type system and assign it the expr_var
 
-            var tw = try self.cir.initTypeWriter();
-            defer tw.deinit();
-
             // Write down the top of the scratch records array
             const record_fields_top = self.scratch_record_fields.top();
             defer self.scratch_record_fields.clearFrom(record_fields_top);
@@ -2725,7 +2716,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                         });
 
                                         // Stop execution
-                                        std.debug.print("ashtasht\n", .{});
                                         _ = try self.unifyWith(expr_var, .err, env);
                                         break :for_blk;
                                     }
@@ -3903,7 +3893,6 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             for (constraints) |constraint| {
                 try self.markConstraintFunctionAsError(constraint, env);
             }
-            std.debug.print("AAA\n", .{});
             try self.unifyWith(deferred_constraint.var_, .err, env);
         } else if (dispatcher_content == .rigid) {
             // Get the rigid variable and the constraints it has defined
@@ -3949,7 +3938,6 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                     // similar to e_call
                     const result = try self.unify(rigid_var, constraint.fn_var, env);
                     if (result.isProblem()) {
-                        std.debug.print("BBBB\n", .{});
                         try self.unifyWith(deferred_constraint.var_, .err, env);
                         try self.unifyWith(resolved_func.ret, .err, env);
                     }
@@ -4081,7 +4069,6 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 const result = try self.unify(real_method_var, constraint.fn_var, env);
 
                 if (result.isProblem()) {
-                    std.debug.print("CCCC\n", .{});
                     try self.unifyWith(deferred_constraint.var_, .err, env);
                     try self.unifyWith(resolved_func.ret, .err, env);
                 }
@@ -4115,7 +4102,6 @@ fn markConstraintFunctionAsError(self: *Self, constraint: StaticDispatchConstrai
     const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
     std.debug.assert(mb_resolved_func != null);
     const resolved_func = mb_resolved_func.?;
-    std.debug.print("DDDD\n", .{});
     try self.unifyWith(resolved_func.ret, .err, env);
 }
 
