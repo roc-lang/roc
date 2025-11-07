@@ -2250,7 +2250,7 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "Error"))
-		(patt (type "Bool -> Num(_size)"))
+		(patt (type "Bool -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
 		(patt (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(patt (type "[Red, Blue]_others, _arg -> Error"))
 		(patt (type "List(Error) -> Error"))
@@ -2287,7 +2287,7 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "Error"))
-		(expr (type "Bool -> Num(_size)"))
+		(expr (type "Bool -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
 		(expr (type "Num(Int(Unsigned64)) -> Num(Int(Unsigned64))"))
 		(expr (type "[Red, Blue]_others, _arg -> Error"))
 		(expr (type "List(Error) -> Error"))

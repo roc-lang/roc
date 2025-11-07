@@ -241,12 +241,12 @@ pub fn init(
 /// This function is called BEFORE Can.init() by both production and test environments
 /// to ensure they use identical module setup logic.
 ///
-/// Adds Bool, Result, Dict, Set, and Str from the Builtin module to module_envs.
+/// Adds Bool, Result, Dict, Set, Str, and numeric types from the Builtin module to module_envs.
 pub fn populateModuleEnvs(
     module_envs_map: *std.AutoHashMap(Ident.Idx, AutoImportedType),
     calling_module_env: *ModuleEnv,
     builtin_module_env: *const ModuleEnv,
-    builtin_indices: anytype, // Has fields: bool_type, try_type, dict_type, set_type, str_type, list_type
+    builtin_indices: anytype, // Has fields: bool_type, try_type, dict_type, set_type, str_type, and numeric types
 ) !void {
     const types_to_add = .{
         .{ "Bool", builtin_indices.bool_type },
@@ -254,6 +254,19 @@ pub fn populateModuleEnvs(
         .{ "Dict", builtin_indices.dict_type },
         .{ "Set", builtin_indices.set_type },
         .{ "Str", builtin_indices.str_type },
+        .{ "U8", builtin_indices.u8_type },
+        .{ "I8", builtin_indices.i8_type },
+        .{ "U16", builtin_indices.u16_type },
+        .{ "I16", builtin_indices.i16_type },
+        .{ "U32", builtin_indices.u32_type },
+        .{ "I32", builtin_indices.i32_type },
+        .{ "U64", builtin_indices.u64_type },
+        .{ "I64", builtin_indices.i64_type },
+        .{ "U128", builtin_indices.u128_type },
+        .{ "I128", builtin_indices.i128_type },
+        .{ "Dec", builtin_indices.dec_type },
+        .{ "F32", builtin_indices.f32_type },
+        .{ "F64", builtin_indices.f64_type },
     };
 
     inline for (types_to_add) |type_info| {
@@ -268,7 +281,7 @@ pub fn populateModuleEnvs(
     }
 }
 
-/// Set up auto-imported builtin types (Bool, Result, Dict, Set, Str) from the Builtin module.
+/// Set up auto-imported builtin types (Bool, Result, Dict, Set, Str, and numeric types) from the Builtin module.
 /// This function is shared between production and test environments to ensure consistency.
 ///
 /// These nested types in Builtin.roc need special handling:
@@ -279,13 +292,13 @@ pub fn setupAutoImportedBuiltinTypes(
     gpa: std.mem.Allocator,
     module_envs: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType),
 ) std.mem.Allocator.Error!void {
-    // Auto-import builtin types (Bool, Result, Dict, Set, Str)
+    // Auto-import builtin types (Bool, Result, Dict, Set, Str, and numeric types)
     // These are nested types in Builtin module but need to be auto-imported like standalone modules
     if (module_envs) |envs_map| {
         const zero_region = Region{ .start = Region.Position.zero(), .end = Region.Position.zero() };
         const current_scope = &self.scopes.items[0]; // Top-level scope
 
-        const builtin_types = [_][]const u8{ "Bool", "Result", "Dict", "Set", "Str" };
+        const builtin_types = [_][]const u8{ "Bool", "Result", "Dict", "Set", "Str", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
         for (builtin_types) |type_name_text| {
             const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
             if (envs_map.get(type_ident)) |type_entry| {

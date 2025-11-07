@@ -19,18 +19,18 @@ const Content = types.Content;
 
 test "infers type for small nums" {
     const test_cases = [_]struct { source: []const u8, expected: []const u8 }{
-        .{ .source = "1", .expected = "Num(_size)" },
-        .{ .source = "-1", .expected = "Num(_size)" },
-        .{ .source = "10", .expected = "Num(_size)" },
-        .{ .source = "-10", .expected = "Num(_size)" },
-        .{ .source = "255", .expected = "Num(_size)" },
-        .{ .source = "-128", .expected = "Num(_size)" },
-        .{ .source = "256", .expected = "Num(_size)" },
-        .{ .source = "-129", .expected = "Num(_size)" },
-        .{ .source = "32767", .expected = "Num(_size)" },
-        .{ .source = "-32768", .expected = "Num(_size)" },
-        .{ .source = "65535", .expected = "Num(_size)" },
-        .{ .source = "-32769", .expected = "Num(_size)" },
+        .{ .source = "1", .expected = "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]" },
+        .{ .source = "-1", .expected = "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]" },
+        .{ .source = "10", .expected = "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]" },
+        .{ .source = "-10", .expected = "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]" },
+        .{ .source = "255", .expected = "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]" },
+        .{ .source = "-128", .expected = "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]" },
+        .{ .source = "256", .expected = "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]" },
+        .{ .source = "-129", .expected = "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]" },
+        .{ .source = "32767", .expected = "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]" },
+        .{ .source = "-32768", .expected = "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]" },
+        .{ .source = "65535", .expected = "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]" },
+        .{ .source = "-32769", .expected = "num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]" },
     };
 
     inline for (test_cases) |tc| {

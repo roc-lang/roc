@@ -360,9 +360,9 @@ y =
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "(Num(Int(_size)), Num(Int(_size2)), Num(Int(_size3)), Error, Error, Error, Error, Num(Int(_size4)), Error, Num(Int(_size5)), Num(Int(_size6)), Error, Error, Error)"))
+		(patt (type "(Num(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]), Num(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]), Num(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]), Error, Error, Error, Error, Num(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]), Error, Num(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]), Num(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]), Error, Error, Error)"))
 		(patt (type "Error")))
 	(expressions
-		(expr (type "(Num(Int(_size)), Num(Int(_size2)), Num(Int(_size3)), Error, Error, Error, Error, Num(Int(_size4)), Error, Num(Int(_size5)), Num(Int(_size6)), Error, Error, Error)"))
+		(expr (type "(Num(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]), Num(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]), Num(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]), Error, Error, Error, Error, Num(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]), Error, Num(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]), Num(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]), Error, Error, Error)"))
 		(expr (type "Error"))))
 ~~~

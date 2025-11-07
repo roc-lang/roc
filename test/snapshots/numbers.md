@@ -105,5 +105,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(Num(_size), Num(_size2), Num(_size3), Num(_size4), Num(_size5), Num(_size6), Num(Frac(_size7)), Num(Frac(_size8)), Num(_size9), Num(_size10), Num(_size11))"))
+(expr (type "(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])]), Num(num where [num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])]), num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])])"))
 ~~~

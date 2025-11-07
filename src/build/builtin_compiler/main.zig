@@ -38,6 +38,32 @@ const BuiltinIndices = struct {
     str_type: CIR.Statement.Idx,
     /// Statement index of nested List type declaration within Builtin module
     list_type: CIR.Statement.Idx,
+    /// Statement index of nested U8 type declaration within Builtin module
+    u8_type: CIR.Statement.Idx,
+    /// Statement index of nested I8 type declaration within Builtin module
+    i8_type: CIR.Statement.Idx,
+    /// Statement index of nested U16 type declaration within Builtin module
+    u16_type: CIR.Statement.Idx,
+    /// Statement index of nested I16 type declaration within Builtin module
+    i16_type: CIR.Statement.Idx,
+    /// Statement index of nested U32 type declaration within Builtin module
+    u32_type: CIR.Statement.Idx,
+    /// Statement index of nested I32 type declaration within Builtin module
+    i32_type: CIR.Statement.Idx,
+    /// Statement index of nested U64 type declaration within Builtin module
+    u64_type: CIR.Statement.Idx,
+    /// Statement index of nested I64 type declaration within Builtin module
+    i64_type: CIR.Statement.Idx,
+    /// Statement index of nested U128 type declaration within Builtin module
+    u128_type: CIR.Statement.Idx,
+    /// Statement index of nested I128 type declaration within Builtin module
+    i128_type: CIR.Statement.Idx,
+    /// Statement index of nested Dec type declaration within Builtin module
+    dec_type: CIR.Statement.Idx,
+    /// Statement index of nested F32 type declaration within Builtin module
+    f32_type: CIR.Statement.Idx,
+    /// Statement index of nested F64 type declaration within Builtin module
+    f64_type: CIR.Statement.Idx,
 };
 
 /// Transform all Str nominal types to .str primitive types in a module.
@@ -122,6 +148,162 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     // We need to find the actual ident that was created during canonicalization
     if (env.common.findIdent("Builtin.Str.is_empty")) |str_is_empty_ident| {
         try low_level_map.put(str_is_empty_ident, .str_is_empty);
+    }
+    if (env.common.findIdent("Builtin.Set.is_empty")) |set_is_empty_ident| {
+        try low_level_map.put(set_is_empty_ident, .set_is_empty);
+    }
+
+    // Bool operations
+    if (env.common.findIdent("Builtin.Bool.is_eq")) |bool_is_eq_ident| {
+        try low_level_map.put(bool_is_eq_ident, .bool_is_eq);
+    }
+    if (env.common.findIdent("Builtin.Bool.is_ne")) |bool_is_ne_ident| {
+        try low_level_map.put(bool_is_ne_ident, .bool_is_ne);
+    }
+
+    // Numeric type checking operations (all numeric types)
+    const numeric_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
+    for (numeric_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        // is_zero (all types)
+        const is_zero = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_zero", .{num_type});
+        if (env.common.findIdent(is_zero)) |ident| {
+            try low_level_map.put(ident, .num_is_zero);
+        }
+    }
+
+    // Numeric sign checking operations (signed types only)
+    const signed_types = [_][]const u8{ "I8", "I16", "I32", "I64", "I128", "Dec", "F32", "F64" };
+    for (signed_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        // is_negative
+        const is_negative = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_negative", .{num_type});
+        if (env.common.findIdent(is_negative)) |ident| {
+            try low_level_map.put(ident, .num_is_negative);
+        }
+
+        // is_positive
+        const is_positive = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_positive", .{num_type});
+        if (env.common.findIdent(is_positive)) |ident| {
+            try low_level_map.put(ident, .num_is_positive);
+        }
+    }
+
+    // Numeric equality operations (integer types + Dec only, NOT F32/F64)
+    const eq_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec" };
+    for (eq_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        // is_eq
+        const is_eq = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_eq", .{num_type});
+        if (env.common.findIdent(is_eq)) |ident| {
+            try low_level_map.put(ident, .num_is_eq);
+        }
+    }
+
+    // Numeric inequality operation (Dec only)
+    if (env.common.findIdent("Builtin.Num.Dec.is_ne")) |ident| {
+        try low_level_map.put(ident, .num_is_ne);
+    }
+
+    // Numeric comparison operations (all numeric types)
+    for (numeric_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        // is_gt
+        const is_gt = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_gt", .{num_type});
+        if (env.common.findIdent(is_gt)) |ident| {
+            try low_level_map.put(ident, .num_is_gt);
+        }
+
+        // is_gte
+        const is_gte = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_gte", .{num_type});
+        if (env.common.findIdent(is_gte)) |ident| {
+            try low_level_map.put(ident, .num_is_gte);
+        }
+
+        // is_lt
+        const is_lt = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_lt", .{num_type});
+        if (env.common.findIdent(is_lt)) |ident| {
+            try low_level_map.put(ident, .num_is_lt);
+        }
+
+        // is_lte
+        const is_lte = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_lte", .{num_type});
+        if (env.common.findIdent(is_lte)) |ident| {
+            try low_level_map.put(ident, .num_is_lte);
+        }
+    }
+
+    // Numeric parsing operations (all numeric types have from_int_digits)
+    for (numeric_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        // from_int_digits
+        const from_int_digits = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.from_int_digits", .{num_type});
+        if (env.common.findIdent(from_int_digits)) |ident| {
+            try low_level_map.put(ident, .num_from_int_digits);
+        }
+    }
+
+    // from_dec_digits (Dec, F32, F64 only)
+    const dec_types = [_][]const u8{ "Dec", "F32", "F64" };
+    for (dec_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        // from_dec_digits
+        const from_dec_digits = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.from_dec_digits", .{num_type});
+        if (env.common.findIdent(from_dec_digits)) |ident| {
+            try low_level_map.put(ident, .num_from_dec_digits);
+        }
+    }
+
+    // Numeric arithmetic operations (all numeric types have plus, minus, times, div_by, rem_by)
+    for (numeric_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        // plus
+        const plus = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.plus", .{num_type});
+        if (env.common.findIdent(plus)) |ident| {
+            try low_level_map.put(ident, .num_plus);
+        }
+
+        // minus
+        const minus = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.minus", .{num_type});
+        if (env.common.findIdent(minus)) |ident| {
+            try low_level_map.put(ident, .num_minus);
+        }
+
+        // times
+        const times = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.times", .{num_type});
+        if (env.common.findIdent(times)) |ident| {
+            try low_level_map.put(ident, .num_times);
+        }
+
+        // div_by
+        const div_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.div_by", .{num_type});
+        if (env.common.findIdent(div_by)) |ident| {
+            try low_level_map.put(ident, .num_div_by);
+        }
+
+        // rem_by
+        const rem_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.rem_by", .{num_type});
+        if (env.common.findIdent(rem_by)) |ident| {
+            try low_level_map.put(ident, .num_rem_by);
+        }
+    }
+
+    // Numeric negate operation (signed types only)
+    for (signed_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        // negate
+        const negate = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.negate", .{num_type});
+        if (env.common.findIdent(negate)) |ident| {
+            try low_level_map.put(ident, .num_negate);
+        }
     }
 
     // Iterate through all defs and replace matching anno-only defs with low-level implementations
@@ -324,6 +506,21 @@ pub fn main() !void {
     const str_type_idx = try findTypeDeclaration(builtin_env, "Str");
     const list_type_idx = try findTypeDeclaration(builtin_env, "List");
 
+    // Find numeric types nested inside Num (e.g., Builtin.Num.U8)
+    const u8_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "U8");
+    const i8_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "I8");
+    const u16_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "U16");
+    const i16_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "I16");
+    const u32_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "U32");
+    const i32_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "I32");
+    const u64_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "U64");
+    const i64_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "I64");
+    const u128_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "U128");
+    const i128_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "I128");
+    const dec_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "Dec");
+    const f32_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "F32");
+    const f64_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "F64");
+
     // Expose the nested types so they can be found by getExposedNodeIndexById
     // For builtin types, the statement index IS the node index
     const bool_ident = builtin_env.common.findIdent("Bool") orelse unreachable;
@@ -333,12 +530,41 @@ pub fn main() !void {
     const str_ident = builtin_env.common.findIdent("Str") orelse unreachable;
     const list_ident = builtin_env.common.findIdent("List") orelse unreachable;
 
+    // Expose numeric types with their simple names (not Num.U8, just U8)
+    const u8_ident = builtin_env.common.findIdent("U8") orelse unreachable;
+    const i8_ident = builtin_env.common.findIdent("I8") orelse unreachable;
+    const u16_ident = builtin_env.common.findIdent("U16") orelse unreachable;
+    const i16_ident = builtin_env.common.findIdent("I16") orelse unreachable;
+    const u32_ident = builtin_env.common.findIdent("U32") orelse unreachable;
+    const i32_ident = builtin_env.common.findIdent("I32") orelse unreachable;
+    const u64_ident = builtin_env.common.findIdent("U64") orelse unreachable;
+    const i64_ident = builtin_env.common.findIdent("I64") orelse unreachable;
+    const u128_ident = builtin_env.common.findIdent("U128") orelse unreachable;
+    const i128_ident = builtin_env.common.findIdent("I128") orelse unreachable;
+    const dec_ident = builtin_env.common.findIdent("Dec") orelse unreachable;
+    const f32_ident = builtin_env.common.findIdent("F32") orelse unreachable;
+    const f64_ident = builtin_env.common.findIdent("F64") orelse unreachable;
+
     try builtin_env.common.setNodeIndexById(gpa, bool_ident, @intCast(@intFromEnum(bool_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, try_ident, @intCast(@intFromEnum(try_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, dict_ident, @intCast(@intFromEnum(dict_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, set_ident, @intCast(@intFromEnum(set_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, str_ident, @intCast(@intFromEnum(str_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, list_ident, @intCast(@intFromEnum(list_type_idx)));
+
+    try builtin_env.common.setNodeIndexById(gpa, u8_ident, @intCast(@intFromEnum(u8_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, i8_ident, @intCast(@intFromEnum(i8_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, u16_ident, @intCast(@intFromEnum(u16_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, i16_ident, @intCast(@intFromEnum(i16_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, u32_ident, @intCast(@intFromEnum(u32_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, i32_ident, @intCast(@intFromEnum(i32_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, u64_ident, @intCast(@intFromEnum(u64_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, i64_ident, @intCast(@intFromEnum(i64_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, u128_ident, @intCast(@intFromEnum(u128_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, i128_ident, @intCast(@intFromEnum(i128_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, dec_ident, @intCast(@intFromEnum(dec_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, f32_ident, @intCast(@intFromEnum(f32_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, f64_ident, @intCast(@intFromEnum(f64_type_idx)));
 
     // Transform nominal types to primitive types as necessary.
     // This must happen BEFORE serialization to ensure the .bin file contains
@@ -360,6 +586,19 @@ pub fn main() !void {
         .set_type = set_type_idx,
         .str_type = str_type_idx,
         .list_type = list_type_idx,
+        .u8_type = u8_type_idx,
+        .i8_type = i8_type_idx,
+        .u16_type = u16_type_idx,
+        .i16_type = i16_type_idx,
+        .u32_type = u32_type_idx,
+        .i32_type = i32_type_idx,
+        .u64_type = u64_type_idx,
+        .i64_type = i64_type_idx,
+        .u128_type = u128_type_idx,
+        .i128_type = i128_type_idx,
+        .dec_type = dec_type_idx,
+        .f32_type = f32_type_idx,
+        .f64_type = f64_type_idx,
     };
     try serializeBuiltinIndices(builtin_indices, "zig-out/builtins/builtin_indices.bin");
 }
@@ -603,6 +842,34 @@ fn findTypeDeclaration(env: *const ModuleEnv, type_name: []const u8) !CIR.Statem
     // Types in nested declarations are stored with their full qualified names
     var qualified_name_buf: [256]u8 = undefined;
     const qualified_name = try std.fmt.bufPrint(&qualified_name_buf, "{s}.{s}", .{ env.module_name, type_name });
+
+    // Search in all_statements (where Builtin.roc's own types are stored)
+    const all_stmts = env.store.sliceStatements(env.all_statements);
+    for (all_stmts) |stmt_idx| {
+        const stmt = env.store.getStatement(stmt_idx);
+        switch (stmt) {
+            .s_nominal_decl => |decl| {
+                const header = env.store.getTypeHeader(decl.header);
+                const ident_idx = header.name;
+                const ident_text = env.getIdentText(ident_idx);
+                if (std.mem.eql(u8, ident_text, qualified_name)) {
+                    return stmt_idx;
+                }
+            },
+            else => continue,
+        }
+    }
+
+    return error.TypeDeclarationNotFound;
+}
+
+/// Find a nested type declaration by parent and type name in a compiled module
+/// For example, findNestedTypeDeclaration(env, "Num", "U8") finds "Builtin.Num.U8"
+/// Returns the statement index of the type declaration
+fn findNestedTypeDeclaration(env: *const ModuleEnv, parent_name: []const u8, type_name: []const u8) !CIR.Statement.Idx {
+    // Construct the qualified name (e.g., "Builtin.Num.U8")
+    var qualified_name_buf: [256]u8 = undefined;
+    const qualified_name = try std.fmt.bufPrint(&qualified_name_buf, "{s}.{s}.{s}", .{ env.module_name, parent_name, type_name });
 
     // Search in all_statements (where Builtin.roc's own types are stored)
     const all_stmts = env.store.sliceStatements(env.all_statements);

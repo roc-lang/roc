@@ -131,6 +131,102 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     try std.testing.expectEqual(expected_bool, actual);
 }
 
+/// Helper function to run an expression and expect an f32 result (with epsilon tolerance).
+pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { trace, no_trace }) !void {
+    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var test_env_instance = TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
+    defer interpreter.deinit();
+
+    const enable_trace = should_trace == .trace;
+    if (enable_trace) {
+        interpreter.startTrace();
+    }
+    defer if (enable_trace) interpreter.endTrace();
+
+    const ops = test_env_instance.get_ops();
+    const result = try interpreter.evalMinimal(resources.expr_idx, ops);
+    const layout_cache = &interpreter.runtime_layout_store;
+    defer result.decref(layout_cache, ops);
+
+    const actual = result.asF32();
+    const epsilon: f32 = 0.0001;
+    const diff = @abs(actual - expected_f32);
+    if (diff > epsilon) {
+        std.debug.print("Expected {d}, got {d}, diff {d}\n", .{ expected_f32, actual, diff });
+        return error.TestExpectedEqual;
+    }
+}
+
+/// Helper function to run an expression and expect an f64 result (with epsilon tolerance).
+pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { trace, no_trace }) !void {
+    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var test_env_instance = TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
+    defer interpreter.deinit();
+
+    const enable_trace = should_trace == .trace;
+    if (enable_trace) {
+        interpreter.startTrace();
+    }
+    defer if (enable_trace) interpreter.endTrace();
+
+    const ops = test_env_instance.get_ops();
+    const result = try interpreter.evalMinimal(resources.expr_idx, ops);
+    const layout_cache = &interpreter.runtime_layout_store;
+    defer result.decref(layout_cache, ops);
+
+    const actual = result.asF64();
+    const epsilon: f64 = 0.000000001;
+    const diff = @abs(actual - expected_f64);
+    if (diff > epsilon) {
+        std.debug.print("Expected {d}, got {d}, diff {d}\n", .{ expected_f64, actual, diff });
+        return error.TestExpectedEqual;
+    }
+}
+
+/// Helper function to run an expression and expect a Dec result.
+/// Dec is a fixed-point decimal type stored as i128 with 18 decimal places.
+/// For testing, we compare the raw i128 values directly.
+pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum { trace, no_trace }) !void {
+    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var test_env_instance = TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, &[_]*const can.ModuleEnv{});
+    defer interpreter.deinit();
+
+    const enable_trace = should_trace == .trace;
+    if (enable_trace) {
+        interpreter.startTrace();
+    }
+    defer if (enable_trace) interpreter.endTrace();
+
+    const ops = test_env_instance.get_ops();
+    const result = try interpreter.evalMinimal(resources.expr_idx, ops);
+    const layout_cache = &interpreter.runtime_layout_store;
+    defer result.decref(layout_cache, ops);
+
+    const actual_dec = result.asDec();
+    if (actual_dec.num != expected_dec_num) {
+        std.debug.print("Expected Dec({d}), got Dec({d})\n", .{ expected_dec_num, actual_dec.num });
+        return error.TestExpectedEqual;
+    }
+}
+
 /// Helpers to setup and run an interpreter expecting a string result.
 pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
