@@ -813,21 +813,21 @@ const Unifier = struct {
                     },
                     .nominal_type => |b_nominal| {
                         // Check if the number literal can unify with this nominal type
-                        // based on whether the nominal type has the appropriate from_*_digits method
+                        // by unifying the nominal type's from_*_digits method signature with the expected type
                         switch (a_num) {
                             .int_unbound, .num_unbound => {
-                                // Integer literal - check for from_int_digits
+                                // Integer literal - unify with from_int_digits: List(U8) -> Try(Self, [OutOfRange])
                                 if (try self.nominalTypeHasFromIntDigits(b_nominal)) {
-                                    // The nominal type can accept integer literals
+                                    // Unification succeeded - the nominal type can accept integer literals
                                     self.merge(vars, vars.b.desc.content);
                                 } else {
                                     return error.TypeMismatch;
                                 }
                             },
                             .frac_unbound => {
-                                // Decimal literal - check for from_dec_digits
+                                // Decimal literal - unify with from_dec_digits: (List(U8), List(U8)) -> Try(Self, [OutOfRange])
                                 if (try self.nominalTypeHasFromDecDigits(b_nominal)) {
-                                    // The nominal type can accept decimal literals
+                                    // Unification succeeded - the nominal type can accept decimal literals
                                     self.merge(vars, vars.b.desc.content);
                                 } else {
                                     return error.TypeMismatch;
@@ -1141,8 +1141,9 @@ const Unifier = struct {
         self.merge(vars, vars.b.desc.content);
     }
 
-    /// Check if a nominal type has a from_int_digits method with the correct signature
-    /// by unifying the method signature with: List(U8) -> Try(Self, [OutOfRange])
+    /// Check if a nominal type has a from_int_digits method by unifying its signature
+    /// with the expected type: List(U8) -> Try(Self, [OutOfRange])
+    /// Returns true if unification succeeds, false otherwise.
     fn nominalTypeHasFromIntDigits(
         self: *Self,
         nominal_type: NominalType,
@@ -1223,8 +1224,9 @@ const Unifier = struct {
         return false;
     }
 
-    /// Check if a nominal type has a from_dec_digits method with the correct signature
-    /// by unifying the method signature with: (List(U8), List(U8)) -> Try(Self, [OutOfRange])
+    /// Check if a nominal type has a from_dec_digits method by unifying its signature
+    /// with the expected type: (List(U8), List(U8)) -> Try(Self, [OutOfRange])
+    /// Returns true if unification succeeds, false otherwise.
     fn nominalTypeHasFromDecDigits(
         self: *Self,
         nominal_type: NominalType,
