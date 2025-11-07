@@ -46,6 +46,6 @@ pub const ResolvedVarDescs = store.ResolvedVarDescs;
 pub const Store = store.Store;
 pub const DescStoreIdx = store.DescStoreIdx;
 
-test "types mod" {
+test {
     std.testing.refAllDecls(@import("test/test_rigid_instantiation.zig"));
 }

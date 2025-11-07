@@ -26,7 +26,7 @@ const crash_context = @import("crash_context.zig");
 pub const CrashContext = crash_context.CrashContext;
 pub const CrashState = crash_context.CrashState;
 
-test "eval tests" {
+test {
     std.testing.refAllDecls(@This());
 
     std.testing.refAllDecls(@import("interpreter.zig"));

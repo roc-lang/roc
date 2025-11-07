@@ -36,7 +36,7 @@ pub const freeForZstd = bundle.freeForZstd;
 // - Hash generation
 // - Streaming compression
 // - Large file handling
-test "bundle mod" {
+test {
     const std = @import("std");
     _ = @import("test_bundle.zig");
     _ = @import("test_streaming.zig");

@@ -34,7 +34,7 @@ pub const truncateUtf8 = @import("config.zig").truncateUtf8;
 pub const formatUtf8 = @import("config.zig").formatUtf8;
 pub const formatUtf8Bounded = @import("config.zig").formatUtf8Bounded;
 
-test "reporting mod" {
+test {
     const std = @import("std");
     std.testing.refAllDecls(@import("test.zig"));
 }
