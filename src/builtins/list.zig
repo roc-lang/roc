@@ -375,6 +375,16 @@ pub fn listIncref(list: RocList, amount: isize, elements_refcounted: bool) callc
     list.incref(amount, elements_refcounted);
 }
 
+/// Get the number of elements in the list.
+pub fn listLen(list: RocList) callconv(.c) usize {
+    return list.len();
+}
+
+/// Check if the list is empty.
+pub fn listIsEmpty(list: RocList) callconv(.c) bool {
+    return list.isEmpty();
+}
+
 /// Decrement reference count and deallocate when no longer shared.
 pub fn listDecref(
     list: RocList,

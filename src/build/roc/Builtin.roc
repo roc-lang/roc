@@ -8,10 +8,8 @@ Builtin := [].{
 
 	List := [ProvidedByCompiler].{
 		len : List(a) -> U64
-		len = |_| 0
 
 		is_empty : List(a) -> Bool
-		is_empty = |_| True
 
 		first : List(a) -> Try(a, [ListWasEmpty])
 		first = |_| Err(ListWasEmpty)
