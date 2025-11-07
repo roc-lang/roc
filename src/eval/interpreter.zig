@@ -310,9 +310,8 @@ pub const Interpreter = struct {
 
                 const tuple_idx = try self.runtime_layout_store.putTuple(param_layouts);
                 const tuple_layout = self.runtime_layout_store.getLayout(tuple_idx);
-                const tuple_size = self.runtime_layout_store.layoutSize(tuple_layout);
-                const tuple_ptr = if (tuple_size > 0) args_ptr else null;
-                args_tuple_value = StackValue{ .layout = tuple_layout, .ptr = tuple_ptr, .is_initialized = true };
+                // Keep args_ptr even for zero-sized tuples to preserve address information
+                args_tuple_value = StackValue{ .layout = tuple_layout, .ptr = args_ptr, .is_initialized = true };
                 args_accessor = try args_tuple_value.asTuple(&self.runtime_layout_store);
 
                 var j: usize = 0;
