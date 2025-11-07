@@ -17,14 +17,17 @@ TYPE DOES NOT HAVE METHODS - type_app_with_vars.md:4:22:4:34
 TYPE MISMATCH - type_app_with_vars.md:6:13:6:33
 # PROBLEMS
 **TYPE DOES NOT HAVE METHODS**
-You're trying to call the `map` method on a `List(a)`:
+You're calling the method `map` on a type that doesn't support methods:
 **type_app_with_vars.md:4:22:4:34:**
 ```roc
 mapList = |list, fn| list.map(fn)
 ```
                      ^^^^^^^^^^^^
 
-But `List(a)` doesn't support methods.
+This type doesn't support methods:
+    _List(a)_
+
+
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

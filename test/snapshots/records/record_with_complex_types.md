@@ -234,5 +234,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ callback: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], metadata: [Ok({ permissions: List([Read, Write, Admin]), tags: List(Str) })], name: Str, nested: { items: List([Some(Str)][None]), result: [Success({ data: List(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]), timestamp: Str })] }, preferences: { notifications: [Email(Str)], theme: [Dark] }, scores: List(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]), status: [Active({ since: Str })] }"))
+(expr (type "{ callback: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], metadata: [Ok({ permissions: List([Read, Write, Admin]_others), tags: List(Str) })]_others2, name: Str, nested: { items: List([Some(Str)][None]_others3), result: [Success({ data: List(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]), timestamp: Str })]_others4 }, preferences: { notifications: [Email(Str)]_others5, theme: [Dark]_others6 }, scores: List(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]), status: [Active({ since: Str })]_others7 }"))
 ~~~

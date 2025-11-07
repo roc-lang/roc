@@ -159,7 +159,7 @@ test "check type - tag" {
     const source =
         \\MyTag
     ;
-    try checkTypesExpr(source, .pass, "[MyTag]");
+    try checkTypesExpr(source, .pass, "[MyTag]_others");
 }
 
 test "check type - tag - args" {

@@ -164,5 +164,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ addOne: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], errTag: [Err(Str)], nested: [Some([Ok([Just(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])])])])], noneTag: [None], okTag: [Ok(Str)], result: Error, someTag: [Some(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])])], tagList: List([Some(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])])][None]) }"))
+(expr (type "{ addOne: num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])] -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])], errTag: [Err(Str)]_others, nested: [Some([Ok([Just(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])])]_others2)]_others3)]_others4, noneTag: [None]_others5, okTag: [Ok(Str)]_others6, result: Error, someTag: [Some(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])])]_others7, tagList: List([Some(num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])])][None]_others8) }"))
 ~~~

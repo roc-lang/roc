@@ -102,9 +102,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{ name: Str, age: Num(Int(Unsigned64)) } -> Str"))
+		(patt (type "{ age: Num(Int(Unsigned64)), name: Str } -> Str"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "{ name: Str, age: Num(Int(Unsigned64)) } -> Str"))
+		(expr (type "{ age: Num(Int(Unsigned64)), name: Str } -> Str"))
 		(expr (type "_arg -> {}"))))
 ~~~

@@ -2358,6 +2358,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_record => |e| {
             // Create a record type in the type system and assign it the expr_var
 
+            var tw = try self.cir.initTypeWriter();
+            defer tw.deinit();
+
             // Write down the top of the scratch records array
             const record_fields_top = self.scratch_record_fields.top();
             defer self.scratch_record_fields.clearFrom(record_fields_top);
@@ -2575,6 +2578,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             const pat_var = ModuleEnv.varFrom(lookup.pattern_idx);
             const resolved_pat = self.types.resolveVar(pat_var).desc;
+
+            var tw = try self.cir.initTypeWriter();
+            defer tw.deinit();
 
             if (resolved_pat.rank == Rank.generalized) {
                 const instantiated = try self.instantiateVar(pat_var, env, .use_last_var);

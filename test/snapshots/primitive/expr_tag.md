@@ -40,7 +40,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "[FortyTwo]")))
+		(patt (type "[FortyTwo]_others")))
 	(expressions
-		(expr (type "[FortyTwo]"))))
+		(expr (type "[FortyTwo]_others"))))
 ~~~

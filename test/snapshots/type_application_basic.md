@@ -16,14 +16,17 @@ main! = |_| processList(["one","two","three"])
 TYPE DOES NOT HAVE METHODS - type_application_basic.md:4:22:4:32
 # PROBLEMS
 **TYPE DOES NOT HAVE METHODS**
-You're trying to call the `len` method on a `List(Str)`:
+You're calling the method `len` on a type that doesn't support methods:
 **type_application_basic.md:4:22:4:32:**
 ```roc
 processList = |list| list.len()
 ```
                      ^^^^^^^^^^
 
-But `List(Str)` doesn't support methods.
+This type doesn't support methods:
+    _List(Str)_
+
+
 
 # TOKENS
 ~~~zig

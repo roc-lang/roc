@@ -113,7 +113,7 @@ test "polymorphic record constructor" {
         \\{
         \\    make_pair = |x, y| { first: x, second: y }
         \\    pair1 = make_pair(1, "a")
-        \\    pair2 = make_pair(1512351, 42)
+        \\    pair2 = make_pair("b", 42)
         \\    pair3 = make_pair(True, False)
         \\    { pair1, pair2, pair3 }
         \\}

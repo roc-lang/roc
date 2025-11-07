@@ -26,22 +26,9 @@ pass = |x| {
 main! = |_| {}
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_local_scope_vars.md:8:11:8:12
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-The first argument being passed to this function has the wrong type:
-**type_local_scope_vars.md:8:11:8:12:**
-```roc
-    inner(x)
-```
-          ^
-
-This argument has the type:
-    _a_
-
-But `inner` needs the first argument to be:
-    _b_
-
+NIL
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -210,11 +197,11 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Error"))
+		(patt (type "a -> a"))
 		(patt (type "a -> a"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "Error -> Error"))
+		(expr (type "a -> a"))
 		(expr (type "a -> a"))
 		(expr (type "_arg -> {}"))))
 ~~~

@@ -129,19 +129,14 @@ pub fn writeGet(self: *TypeWriter, var_: Var) std.mem.Allocator.Error![]const u8
 /// Returns the current contents of the type writer's buffer as a slice.
 /// This contains the formatted type representation built up by write operations.
 pub fn get(self: *const TypeWriter) []const u8 {
-    // std.debug.print("WRITTEN TYPE {s}\n", .{self.buf.items});
     return self.buf.items;
 }
 
 /// Writes a type variable to the buffer, formatting it as a human-readable string.
 /// This clears any existing content in the buffer before writing.
 pub fn write(self: *TypeWriter, var_: Var) std.mem.Allocator.Error!void {
-    // std.debug.print("XXX {}\n", .{self.types.resolveVar(var_).desc.content});
-
     self.reset();
     try self.writeVar(var_, var_);
-
-    // std.debug.print("DONE {}\n\n", .{var_});
 
     if (self.static_dispatch_constraints.items.len > 0) {
         _ = try self.buf.writer().write(" where [");
@@ -511,8 +506,6 @@ fn writeNominalType(self: *TypeWriter, nominal_type: NominalType, root_var: Var)
 
 /// Write record fields without extension
 fn writeRecordFields(self: *TypeWriter, fields: RecordField.SafeMultiList.Range, root_var: Var) std.mem.Allocator.Error!void {
-    std.debug.print("\n----- writeRecordFields -----\n", .{});
-
     if (fields.isEmpty()) {
         _ = try self.buf.writer().write("{}");
         return;
@@ -561,11 +554,14 @@ fn writeFuncWithArrow(self: *TypeWriter, func: Func, arrow: []const u8, root_var
 
 /// Write a record type
 fn writeRecord(self: *TypeWriter, record: Record, root_var: Var) std.mem.Allocator.Error!void {
+    const scratch_fields_top = self.scratch_record_fields.items.len;
+    defer self.scratch_record_fields.shrinkRetainingCapacity(scratch_fields_top);
+
     const ext = try self.gatherRecordFields(record.fields, record.ext);
-    const gathered_fields = self.scratch_record_fields.items;
+    const gathered_fields = self.scratch_record_fields.items[scratch_fields_top..];
     const num_fields = gathered_fields.len;
 
-    // TODO: Sort gathered fields alphabetically
+    std.mem.sort(types_mod.RecordField, gathered_fields, self.idents, comptime types_mod.RecordField.sortByNameAsc);
 
     _ = try self.buf.writer().write("{ ");
 
@@ -575,7 +571,9 @@ fn writeRecord(self: *TypeWriter, record: Record, root_var: Var) std.mem.Allocat
                 _ = try self.buf.writer().write("..");
                 _ = try self.buf.writer().write(self.getIdent(ident_idx));
                 if (num_fields > 0) _ = try self.buf.writer().write(", ");
-            } else if (flex.payload.constraints.len() > 0 or try self.countVarOccurrences(flex.var_, root_var) > 1) {
+            } else if (true) {
+                // TODO: ^ here, we should consider polarity
+
                 _ = try self.buf.writer().write("..");
                 try self.writeFlexVarName(flex.var_, .RecordExtension, root_var);
                 if (num_fields > 0) _ = try self.buf.writer().write(", ");
@@ -598,7 +596,7 @@ fn writeRecord(self: *TypeWriter, record: Record, root_var: Var) std.mem.Allocat
                 try self.appendStaticDispatchConstraint(constraint);
             }
         },
-        .unbound, .invalid => {},
+        .unbound, .invalid, .empty_record => {},
     }
 
     for (gathered_fields, 0..) |field, i| {
@@ -613,24 +611,22 @@ fn writeRecord(self: *TypeWriter, record: Record, root_var: Var) std.mem.Allocat
 }
 
 /// Recursively unwrap all record fields
-fn gatherRecordFields(self: *TypeWriter, fields: RecordField.SafeMultiList.Range, ext_var: Var) std.mem.Allocator.Error!union(enum) {
+fn gatherRecordFields(self: *TypeWriter, fields: RecordField.SafeMultiList.Range, initial_ext: Var) std.mem.Allocator.Error!union(enum) {
     flex: struct { var_: Var, payload: types_mod.Flex },
     rigid: types_mod.Rigid,
+    empty_record,
     unbound,
     invalid,
 } {
-    self.scratch_record_fields.clearRetainingCapacity();
-
     const slice = self.types.getRecordFieldsSlice(fields);
     try self.scratch_record_fields.ensureUnusedCapacity(fields.len());
     for (slice.items(.name), slice.items(.var_)) |name, var_| {
         self.scratch_record_fields.appendAssumeCapacity(.{ .name = name, .var_ = var_ });
     }
 
-    var ext = ext_var;
+    var ext = initial_ext;
     while (true) {
         const resolved = self.types.resolveVar(ext);
-
         switch (resolved.desc.content) {
             .flex => |flex| {
                 return .{ .flex = .{ .var_ = resolved.var_, .payload = flex } };
@@ -659,6 +655,7 @@ fn gatherRecordFields(self: *TypeWriter, fields: RecordField.SafeMultiList.Range
                         }
                         return .unbound;
                     },
+                    .empty_record => return .empty_record,
                     else => return .invalid,
                 }
             },
@@ -699,7 +696,9 @@ fn writeTagUnion(self: *TypeWriter, tag_union: TagUnion, root_var: Var) std.mem.
         .flex => |flex| {
             if (flex.name) |ident_idx| {
                 _ = try self.buf.writer().write(self.getIdent(ident_idx));
-            } else if (flex.constraints.len() > 0 or try self.countVarOccurrences(ext_resolved.var_, root_var) > 1) {
+            } else if (true) {
+                // TODO: ^ here, we should consider polarity
+
                 try self.writeFlexVarName(tag_union.ext, .TagUnionExtension, root_var);
             }
 

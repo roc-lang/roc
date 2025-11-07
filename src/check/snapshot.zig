@@ -543,6 +543,20 @@ pub const SnapshotRecord = struct {
 pub const SnapshotRecordField = struct {
     name: Ident.Idx,
     content: SnapshotContentIdx, // Instead of var_
+
+    const Self = @This();
+
+    /// A function to be passed into std.mem.sort to sort fields by name
+    pub fn sortByNameAsc(ident_store: *const Ident.Store, a: Self, b: Self) bool {
+        return Self.orderByName(ident_store, a, b) == .lt;
+    }
+
+    /// Get the ordering of how a compares to b
+    pub fn orderByName(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
+        const a_text = store.getText(a.name);
+        const b_text = store.getText(b.name);
+        return std.mem.order(u8, a_text, b_text);
+    }
 };
 
 /// TODO
@@ -1018,11 +1032,14 @@ pub const SnapshotWriter = struct {
 
     /// Write a record type
     fn writeRecord(self: *Self, record: SnapshotRecord, root_idx: SnapshotContentIdx) Allocator.Error!void {
+        const scratch_fields_top = self.scratch_record_fields.items.len;
+        defer self.scratch_record_fields.shrinkRetainingCapacity(scratch_fields_top);
+
         const ext = try self.gatherRecordFields(record.fields, record.ext);
-        const gathered_fields = self.scratch_record_fields.items;
+        const gathered_fields = self.scratch_record_fields.items[scratch_fields_top..];
         const num_fields = gathered_fields.len;
 
-        // TODO: Sort gathered fields alphabetically
+        std.mem.sort(SnapshotRecordField, gathered_fields, self.idents, comptime SnapshotRecordField.sortByNameAsc);
 
         _ = try self.buf.writer().write("{ ");
 
@@ -1032,7 +1049,9 @@ pub const SnapshotWriter = struct {
                     _ = try self.buf.writer().write("..");
                     _ = try self.buf.writer().write(self.idents.getText(ident_idx));
                     if (num_fields > 0) _ = try self.buf.writer().write(", ");
-                } else if (flex.payload.constraints.len() > 0 or try self.countOccurrences(flex.payload.var_, root_idx) > 1) {
+                } else if (true) {
+                    // TODO: ^ here, we should consider polarity
+
                     _ = try self.buf.writer().write("..");
                     try self.writeFlexVarName(flex.payload.var_, flex.idx, .RecordExtension, root_idx);
                     if (num_fields > 0) _ = try self.buf.writer().write(", ");
@@ -1076,8 +1095,6 @@ pub const SnapshotWriter = struct {
         unbound,
         invalid,
     } {
-        self.scratch_record_fields.clearRetainingCapacity();
-
         const slice = self.snapshots.sliceRecordFields(fields);
         try self.scratch_record_fields.ensureUnusedCapacity(fields.len());
         for (slice.items(.name), slice.items(.content)) |name, content| {
@@ -1170,7 +1187,9 @@ pub const SnapshotWriter = struct {
             .flex => |flex| {
                 if (flex.name) |ident_idx| {
                     _ = try self.buf.writer().write(self.idents.getText(ident_idx));
-                } else {
+                } else if (true) {
+                    // TODO: ^ here, we should consider polarity
+
                     _ = try self.writeFlexVarName(flex.var_, tag_union.ext, .TagUnionExtension, root_idx);
                 }
 

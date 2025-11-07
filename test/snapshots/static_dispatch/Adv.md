@@ -74,14 +74,17 @@ The **Adv** type does not have a **update_strr** method:
 **Hint:** Did you forget to define **update_strr** in the type's method block?
 
 **TYPE DOES NOT HAVE METHODS**
-You're trying to call the `update` method on a `Str`:
+You're calling the method `update` on a type that doesn't support methods:
 **Adv.md:28:13:28:32:**
 ```roc
 	next_val = "Hello".update(100)
 ```
 	           ^^^^^^^^^^^^^^^^^^^
 
-But `Str` doesn't support methods.
+This type doesn't support methods:
+    _Str_
+
+
 
 # TOKENS
 ~~~zig
