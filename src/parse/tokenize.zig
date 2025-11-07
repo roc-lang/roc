@@ -688,7 +688,7 @@ pub const Cursor = struct {
     /// Returns either the original token hypothesis, or a malformed token tag.
     pub fn chompNumberSuffix(self: *Cursor, hypothesis: Token.Tag) Token.Tag {
         if (self.peek()) |c| {
-            const is_ident_char = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c >= 0x80;
+            const is_ident_char = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c == '$' or c >= 0x80;
             if (!is_ident_char) {
                 return hypothesis;
             }
@@ -1465,13 +1465,12 @@ pub const Tokenizer = struct {
                     if (next) |n| {
                         if (n >= 'a' and n <= 'z') {
                             // Dollar sign followed by lowercase letter - reusable identifier
+                            var tag: Token.Tag = .LowerIdent;
                             self.cursor.pos += 1;
-                            const tag = self.cursor.chompIdentLower();
-                            if (tag == .LowerIdent or tag == .MalformedUnicodeIdent) {
-                                try self.pushTokenInternedHere(gpa, tag, start, start);
-                            } else {
-                                try self.pushTokenNormalHere(gpa, tag, start);
+                            if (!self.cursor.chompIdentGeneral()) {
+                                tag = .MalformedUnicodeIdent;
                             }
+                            try self.pushTokenInternedHere(gpa, tag, start, start);
                         } else if (n >= 'A' and n <= 'Z') {
                             // Dollar sign followed by uppercase letter - reusable identifier
                             var tag: Token.Tag = .UpperIdent;
