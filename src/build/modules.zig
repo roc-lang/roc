@@ -35,11 +35,12 @@ fn extendWithAggregatorFilters(
     base: []const []const u8,
     module_type: ModuleType,
 ) []const []const u8 {
-    // If user provided custom filters, use only those (don't add aggregators)
-    if (base.len > 0) return base;
+    _ = module_type;
 
-    // No user filters provided, use aggregator filters for this module
-    return aggregatorFilters(module_type);
+    // Always return the base filters as-is
+    // - If empty: run all tests (Zig default behavior)
+    // - If provided: run only matching tests (don't add aggregators)
+    return base;
 }
 
 /// Represents a test module with its compilation and execution steps.
