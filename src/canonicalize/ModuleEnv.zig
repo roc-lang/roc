@@ -52,6 +52,8 @@ types: TypeStore,
 
 /// The kind of module (type_module, app, etc.) - set during canonicalization
 module_kind: ModuleKind,
+/// Whether we're currently building platform modules (set to true when processing a platform header)
+building_platform_modules: bool,
 /// All the definitions in the module (populated by canonicalization)
 all_defs: CIR.Def.Span,
 /// All the top-level statements in the module (populated by canonicalization)
@@ -128,6 +130,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .common = try CommonEnv.init(gpa, source),
         .types = try TypeStore.initCapacity(gpa, 2048, 512),
         .module_kind = .deprecated_module, // Set during canonicalization
+        .building_platform_modules = false,
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .exports = .{ .span = .{ .start = 0, .len = 0 } },
@@ -1554,6 +1557,7 @@ pub const Serialized = struct {
             .common = self.common.deserialize(offset, source).*,
             .types = self.types.deserialize(offset, gpa).*,
             .module_kind = self.module_kind,
+            .building_platform_modules = false,
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
             .exports = self.exports,

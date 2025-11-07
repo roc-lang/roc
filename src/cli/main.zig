@@ -1551,7 +1551,15 @@ fn extractEntrypointsFromPlatform(allocs: *Allocators, roc_file_path: []const u8
             for (provides_fields) |field_idx| {
                 const field = parse_ast.store.getRecordField(field_idx);
                 const field_name = parse_ast.resolve(field.name);
-                try entrypoints.append(try allocs.arena.dupe(u8, field_name));
+
+                // Strip the `!` suffix from effectful function names
+                // The `!` is Roc syntax for effects, but shouldn't be in C symbols
+                const clean_name = if (std.mem.endsWith(u8, field_name, "!"))
+                    field_name[0 .. field_name.len - 1]
+                else
+                    field_name;
+
+                try entrypoints.append(try allocs.arena.dupe(u8, clean_name));
             }
 
             if (provides_fields.len == 0) {

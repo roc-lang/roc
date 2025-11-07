@@ -858,6 +858,7 @@ pub fn canonicalizeFile(
         },
         .platform => |h| {
             self.env.module_kind = .platform;
+            self.env.building_platform_modules = true;
             try self.createExposedScope(h.exposes);
         },
         .hosted => |h| {
@@ -1258,7 +1259,8 @@ pub fn canonicalizeFile(
 
     // For Type Modules, transform annotation-only defs into hosted lambdas (in-place)
     // This allows platforms to import these modules and use the hosted functions
-    if (self.env.module_kind == .type_module) {
+    // Only do this when building platform modules (i.e., when root module is a platform)
+    if (self.env.module_kind == .type_module and self.env.building_platform_modules) {
         var modified_def_indices = try HostedCompiler.replaceAnnoOnlyWithHosted(self.env);
         defer modified_def_indices.deinit(self.env.gpa);
 

@@ -2014,6 +2014,15 @@ pub const Interpreter = struct {
                     return error.NotImplemented;
                 };
 
+                // Check what type of node this is by using the store's method
+                const is_def = other_env.store.isDefNode(lookup.target_node_idx);
+
+                // If it's not a def node, we can't evaluate it currently
+                // This might be a type declaration, lambda_capture, or other non-def node
+                if (!is_def) {
+                    return error.NotImplemented;
+                }
+
                 // The target_node_idx is a Def.Idx in the other module
                 const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
                 const target_def = other_env.store.getDef(target_def_idx);

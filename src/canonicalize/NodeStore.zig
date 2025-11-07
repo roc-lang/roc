@@ -2221,6 +2221,13 @@ pub fn addDef(store: *NodeStore, def: CIR.Def, region: base.Region) Allocator.Er
     return @enumFromInt(@intFromEnum(nid));
 }
 
+/// Checks if a node index points to a def node.
+pub fn isDefNode(store: *const NodeStore, idx: u16) bool {
+    const nid: Node.Idx = @enumFromInt(idx);
+    const node = store.nodes.get(nid);
+    return node.tag == .def;
+}
+
 /// Retrieves a definition from the store.
 pub fn getDef(store: *const NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
     const nid: Node.Idx = @enumFromInt(@intFromEnum(def_idx));
