@@ -158,8 +158,8 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     // Note: List.get is now a real function implementation in Builtin.roc,
     // not a bare type annotation, so it's not in the low_level_map
 
-    // list_get_unsafe is a top-level function in Builtin module
-    if (env.common.findIdent("Builtin.list_get_unsafe")) |list_get_unsafe_ident| {
+    // list_get_unsafe is a top-level function outside the Builtin type
+    if (env.common.findIdent("list_get_unsafe")) |list_get_unsafe_ident| {
         try low_level_map.put(list_get_unsafe_ident, .list_get_unsafe);
     }
     if (env.common.findIdent("Builtin.Set.is_empty")) |set_is_empty_ident| {
