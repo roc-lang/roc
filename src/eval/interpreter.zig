@@ -2119,6 +2119,38 @@ pub const Interpreter = struct {
 
                 return try self.makeSimpleBoolValue(result);
             },
+            .list_len => {
+                // List.len : List(a) -> U64
+                // Note: listLen returns usize, but List.len always returns U64.
+                // We need to cast usize -> u64 for 32-bit targets (e.g. wasm32).
+                if (args.len != 1) return error.TypeMismatch;
+
+                const list_arg = args[0];
+                if (list_arg.ptr == null) return error.TypeMismatch;
+
+                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                const len_usize = builtins.list.listLen(roc_list.*);
+                const len_u64: u64 = @intCast(len_usize);
+
+                const result_layout = layout.Layout.int(.u64);
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+                out.setInt(@intCast(len_u64));
+                out.is_initialized = true;
+                return out;
+            },
+            .list_is_empty => {
+                // List.is_empty : List(a) -> Bool
+                if (args.len != 1) return error.TypeMismatch;
+
+                const list_arg = args[0];
+                if (list_arg.ptr == null) return error.TypeMismatch;
+
+                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                const result = builtins.list.listIsEmpty(roc_list.*);
+
+                return try self.makeSimpleBoolValue(result);
+            },
             .set_is_empty => {
                 // TODO: implement Set.is_empty
                 self.triggerCrash("Set.is_empty not yet implemented", false, roc_ops);
