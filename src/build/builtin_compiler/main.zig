@@ -155,6 +155,11 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.List.is_empty")) |list_is_empty_ident| {
         try low_level_map.put(list_is_empty_ident, .list_is_empty);
     }
+    // list_get_unsafe is a private top-level function (not in Builtin.List)
+    // Module-level functions use simple names, not qualified names
+    if (env.common.findIdent("list_get_unsafe")) |list_get_unsafe_ident| {
+        try low_level_map.put(list_get_unsafe_ident, .list_get_unsafe);
+    }
     if (env.common.findIdent("Builtin.Set.is_empty")) |set_is_empty_ident| {
         try low_level_map.put(set_is_empty_ident, .set_is_empty);
     }

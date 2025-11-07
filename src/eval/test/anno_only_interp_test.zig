@@ -210,3 +210,20 @@ test "e_anno_only - value only crashes when accessed (False branch)" {
     try testing.expectEqual(@as(u32, 2), summary.evaluated);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 }
+
+test "List.first on nonempty list" {
+    const src =
+        \\import Builtin exposing [List, Try]
+        \\
+        \\result = List.first([1, 2, 3])
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 1 declaration with 0 crashes (List.first should succeed)
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
