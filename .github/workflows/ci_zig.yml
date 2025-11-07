@@ -104,7 +104,7 @@ jobs:
       - name: build roc + repro executables
         uses: ./.github/actions/flaky-retry
         with:
-          command: 'zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast'
+          command: 'zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dcpu=x86_64_v3'
           error_string_contains: 'EndOfStream'
           retry_count: 3
 
