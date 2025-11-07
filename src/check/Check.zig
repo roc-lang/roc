@@ -579,19 +579,7 @@ fn freshFromContent(self: *Self, content: Content, rank: types_mod.Rank, new_reg
 /// The the region for a variable
 fn freshBool(self: *Self, rank: Rank, new_region: Region) Allocator.Error!Var {
     // Use the copied Bool type from the type store (set by copyBuiltinTypes)
-    const resolved_bool = self.types.resolveVar(self.bool_var);
-    std.debug.print("\nDEBUG: freshBool called\n", .{});
-    std.debug.print("  self.bool_var={} rank={} content_tag={s}\n", .{ @intFromEnum(self.bool_var), resolved_bool.desc.rank, @tagName(resolved_bool.desc.content) });
-    if (resolved_bool.desc.content == .structure) {
-        std.debug.print("  structure tag: {s}\n", .{@tagName(resolved_bool.desc.content.structure)});
-    }
-    const result = try self.instantiateVar(self.bool_var, rank, .{ .explicit = new_region });
-    const resolved_result = self.types.resolveVar(result);
-    std.debug.print("  result var={} rank={} content_tag={s}\n", .{ @intFromEnum(result), resolved_result.desc.rank, @tagName(resolved_result.desc.content) });
-    if (resolved_result.desc.content == .structure) {
-        std.debug.print("  result structure tag: {s}\n", .{@tagName(resolved_result.desc.content.structure)});
-    }
-    return result;
+    return try self.instantiateVar(self.bool_var, rank, .{ .explicit = new_region });
 }
 
 // fresh vars //
@@ -791,30 +779,8 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
     // Unify the fresh pattern var with the placeholder
     _ = try self.unify(fresh_ptrn_var, placeholder_ptrn_var, rank);
 
-    // Debug: check if this is is_empty
-    const pattern = self.cir.store.getPattern(def.pattern);
-    if (pattern == .assign) {
-        const ident_text = self.cir.getIdent(pattern.assign.ident);
-        std.debug.print("\nDEBUG: Checking def for ident: {s}\n", .{ident_text});
-        if (std.mem.eql(u8, ident_text, "is_empty")) {
-            const before_generalize = self.types.resolveVar(placeholder_ptrn_var).desc;
-            std.debug.print("\nDEBUG: Before generalizing is_empty\n", .{});
-            std.debug.print("  placeholder_ptrn_var={} rank={} content_tag={s}\n", .{ @intFromEnum(placeholder_ptrn_var), before_generalize.rank, @tagName(before_generalize.content) });
-        }
-    }
-
     // Now that we are existing the scope, we must generalize then pop this rank
     try self.generalizer.generalize(&self.var_pool, rank);
-
-    // Debug: check after generalization
-    if (pattern == .assign) {
-        const ident_text = self.cir.getIdent(pattern.assign.ident);
-        if (std.mem.eql(u8, ident_text, "is_empty")) {
-            const after_generalize = self.types.resolveVar(placeholder_ptrn_var).desc;
-            std.debug.print("\nDEBUG: After generalizing is_empty\n", .{});
-            std.debug.print("  placeholder_ptrn_var={} rank={} content_tag={s}\n", .{ @intFromEnum(placeholder_ptrn_var), after_generalize.rank, @tagName(after_generalize.content) });
-        }
-    }
 }
 
 // create types for type decls //
@@ -921,28 +887,16 @@ fn generateStmtTypeDeclType(
                 .num_args = @intCast(header_args.len),
             } });
 
-            const nominal_content = try self.types.mkNominal(
-                .{ .ident_idx = header.name },
-                backing_var,
-                header_vars,
-                self.common_idents.module_name,
-            );
             try self.updateVar(
                 decl_var,
-                nominal_content,
+                try self.types.mkNominal(
+                    .{ .ident_idx = header.name },
+                    backing_var,
+                    header_vars,
+                    self.common_idents.module_name,
+                ),
                 Rank.generalized,
             );
-
-            // Debug: print ALL nominal type declarations
-            const ident_text = self.cir.getIdent(header.name);
-            std.debug.print("\nDEBUG: Generated nominal type: {s}\n", .{ident_text});
-            std.debug.print("  decl_var={} decl_idx={}\n", .{ @intFromEnum(decl_var), @intFromEnum(decl_idx) });
-            std.debug.print("  backing_var={}\n", .{ @intFromEnum(backing_var) });
-            const resolved = self.types.resolveVar(decl_var);
-            std.debug.print("  decl_var resolves to: rank={} content_tag={s}\n", .{ resolved.desc.rank, @tagName(resolved.desc.content) });
-            if (resolved.desc.content == .structure) {
-                std.debug.print("  structure tag: {s}\n", .{@tagName(resolved.desc.content.structure)});
-            }
         },
         .s_runtime_error => {
             try self.updateVar(decl_var, .err, Rank.generalized);
@@ -2508,17 +2462,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             const pat_var = ModuleEnv.varFrom(lookup.pattern_idx);
             const resolved_pat = self.types.resolveVar(pat_var).desc;
 
-            // Debug: check if this is is_empty
-            const pattern = self.cir.store.getPattern(lookup.pattern_idx);
-            if (pattern == .assign) {
-                const ident_text = self.cir.getIdent(pattern.assign.ident);
-                if (std.mem.eql(u8, ident_text, "is_empty")) {
-                    std.debug.print("\nDEBUG: Looking up is_empty\n", .{});
-                    std.debug.print("  pat_var={} rank={} content_tag={s}\n", .{ @intFromEnum(pat_var), resolved_pat.rank, @tagName(resolved_pat.content) });
-                    std.debug.print("  Will instantiate: {}\n", .{resolved_pat.rank == Rank.generalized and resolved_pat.content != .rigid});
-                }
-            }
-
             // We never instantiate rigid variables
             if (resolved_pat.rank == Rank.generalized and resolved_pat.content != .rigid) {
                 const instantiated = try self.instantiateVar(pat_var, rank, .use_last_var);
@@ -3346,23 +3289,6 @@ fn checkIfElseExpr(
     var does_fx = try self.checkExpr(first_branch.cond, rank, .no_expectation);
     const first_cond_var: Var = ModuleEnv.varFrom(first_branch.cond);
     const bool_var = try self.freshBool(rank, expr_region);
-
-    // Debug: print types before unification
-    const resolved_cond = self.types.resolveVar(first_cond_var);
-    const resolved_bool = self.types.resolveVar(bool_var);
-    std.debug.print("\nDEBUG: If condition analysis\n", .{});
-    std.debug.print("  Condition var={} rank={} content_tag={s}\n", .{@intFromEnum(first_cond_var), resolved_cond.desc.rank, @tagName(resolved_cond.desc.content)});
-    std.debug.print("  Expected var={} rank={} content_tag={s}\n", .{@intFromEnum(bool_var), resolved_bool.desc.rank, @tagName(resolved_bool.desc.content)});
-
-    // Debug: if both are structure (nominal), print their details
-    if (resolved_cond.desc.content == .structure and resolved_bool.desc.content == .structure) {
-        std.debug.print("  Both are nominal types\n", .{});
-        const cond_structure = resolved_cond.desc.content.structure;
-        const bool_structure = resolved_bool.desc.content.structure;
-        std.debug.print("  Condition structure tag: {s}\n", .{@tagName(cond_structure)});
-        std.debug.print("  Expected structure tag: {s}\n", .{@tagName(bool_structure)});
-    }
-
     const first_cond_result = try self.unify(bool_var, first_cond_var, rank);
     self.setDetailIfTypeMismatch(first_cond_result, .incompatible_if_cond);
 

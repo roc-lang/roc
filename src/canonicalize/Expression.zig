@@ -402,7 +402,7 @@ pub const Expr = union(enum) {
         // List operations
         list_len,
         list_is_empty,
-        list_get_unsafe, // Internal only - private top-level function
+        list_get_unsafe, // Internal only - returns element or crashes if out of bounds
 
         // Set operations
         set_is_empty,

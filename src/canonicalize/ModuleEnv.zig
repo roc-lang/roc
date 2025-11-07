@@ -1610,11 +1610,17 @@ pub const Serialized = struct {
             .store = self.store.deserialize(offset, gpa).*,
             .evaluation_order = null, // Not serialized, will be recomputed if needed
             // Well-known identifiers for type checking - look them up in the deserialized common env
-            .from_int_digits_ident = env.common.findIdent(Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
-            .from_dec_digits_ident = env.common.findIdent(Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
-            .try_ident = env.common.findIdent("Try") orelse unreachable,
-            .out_of_range_ident = env.common.findIdent("OutOfRange") orelse unreachable,
-            .builtin_module_ident = env.common.findIdent("Builtin") orelse unreachable,
+            // If not found, insert them (this can happen if Builtin.roc doesn't reference them)
+            .from_int_digits_ident = env.common.findIdent(Ident.FROM_INT_DIGITS_METHOD_NAME) orelse
+                try env.common.insertIdent(gpa, Ident.for_text(Ident.FROM_INT_DIGITS_METHOD_NAME)),
+            .from_dec_digits_ident = env.common.findIdent(Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse
+                try env.common.insertIdent(gpa, Ident.for_text(Ident.FROM_DEC_DIGITS_METHOD_NAME)),
+            .try_ident = env.common.findIdent("Try") orelse
+                try env.common.insertIdent(gpa, Ident.for_text("Try")),
+            .out_of_range_ident = env.common.findIdent("OutOfRange") orelse
+                try env.common.insertIdent(gpa, Ident.for_text("OutOfRange")),
+            .builtin_module_ident = env.common.findIdent("Builtin") orelse
+                try env.common.insertIdent(gpa, Ident.for_text("Builtin")),
         };
 
         return env;

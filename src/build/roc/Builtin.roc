@@ -1,9 +1,52 @@
 Builtin := [].{
+	Str := [ProvidedByCompiler].{
+		is_empty : Str -> Bool
+
+		contains : Str, Str -> Bool
+		contains = |_str, _other| True
+	}
+
+	# Private top-level function for unsafe list access
+	# This is a low-level operation that gets replaced by the compiler
+	list_get_unsafe : List(elem), U64 -> elem
+
+	List := [ProvidedByCompiler].{
+		len : List(_elem) -> U64
+		is_empty : List(_elem) -> Bool
+
+		first : List(elem) -> Try(elem, [ListWasEmpty])
+		first = |list| List.get(list, 0)
+
+		get : List(elem), U64 -> Try(elem, [ListWasEmpty])
+		get = |list, index|
+			if List.is_empty(list) {
+				Try.Err(ListWasEmpty)
+			} else {
+				# list_get_unsafe is a top-level low-level function
+				# It returns the element if in bounds, or crashes if out of bounds
+				# We need to check bounds first
+				if index >= List.len(list) {
+					Try.Err(ListWasEmpty)
+				} else {
+					Try.Ok(list_get_unsafe(list, index))
+				}
+			}
+
+		map : List(a), (a -> b) -> List(b)
+		map = |_, _| []
+
+		keep_if : List(a), (a -> Bool) -> List(a)
+		keep_if = |_, _| []
+
+		concat : List(a), List(a) -> List(a)
+		concat = |_, _| []
+	}
+
 	Bool := [True, False].{
 		not : Bool -> Bool
 		not = |bool| match bool {
-			True => False
-			False => True
+			Bool.True => Bool.False
+			Bool.False => Bool.True
 		}
 
 		is_eq : Bool, Bool -> Bool
@@ -48,33 +91,6 @@ Builtin := [].{
 		#		}
 		#	}
 		#}
-	}
-
-	Str := [ProvidedByCompiler].{
-		is_empty : Str -> Bool
-
-		contains : Str, Str -> Bool
-		contains = |_str, _other| True
-	}
-
-	List := [ProvidedByCompiler].{
-		len : List(_elem) -> U64
-		is_empty : List(_elem) -> Bool
-
-		first : List(elem) -> Try(a, [ListWasEmpty])
-		first = |list| List.get(list, 0)
-
-		get : List(elem), U64 -> Try(elem, [ListWasEmpty])
-		get = |list, index| if List.is_empty(list) Err(ListWasEmpty) else Ok(list_get_unsafe(list, index))
-
-		map : List(a), (a -> b) -> List(b)
-		map = |_, _| []
-
-		keep_if : List(a), (a -> Bool) -> List(a)
-		keep_if = |_, _| []
-
-		concat : List(a), List(a) -> List(a)
-		concat = |_, _| []
 	}
 
 	Dict := [EmptyDict].{}
@@ -335,5 +351,3 @@ Builtin := [].{
 		}
 	}
 }
-
-list_get_unsafe : List(elem), U64 -> elem

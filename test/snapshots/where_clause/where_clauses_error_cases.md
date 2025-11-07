@@ -194,15 +194,29 @@ broken_fn3 : a -> b
 				(ty-rigid-var (name "a"))
 				(ty-rigid-var (name "b")))
 			(where
-				(malformed)))))
+				(malformed))))
+	(d-let
+		(p-assign (ident "broken_fn3"))
+		(e-anno-only)
+		(annotation
+			(ty-fn (effectful false)
+				(ty-rigid-var (name "a"))
+				(ty-rigid-var (name "b")))
+			(where
+				(method (ty-rigid-var (name "c")) (name "method")
+					(args
+						(ty-rigid-var-lookup (ty-rigid-var (name "c"))))
+					(ty-rigid-var (name "d")))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
-		(patt (type "Error")))
+		(patt (type "a -> b"))
+		(patt (type "a -> b"))
+		(patt (type "a -> b")))
 	(expressions
-		(expr (type "Error"))
-		(expr (type "Error"))))
+		(expr (type "a -> b"))
+		(expr (type "a -> b"))
+		(expr (type "a -> b"))))
 ~~~

@@ -143,21 +143,28 @@ NO CHANGE
 					(ty-malformed))
 				(ty-apply (name "Result") (builtin)
 					(ty-record)
-					(ty-underscore))))))
+					(ty-underscore)))))
+	(d-let
+		(p-assign (ident "tag_tuple"))
+		(e-anno-only)
+		(annotation
+			(ty-malformed))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
+		(patt (type "Num(Int(Unsigned64))"))
 		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
+		(patt (type "(_a, _b, _c)"))
+		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned16)) -> Num(Int(Unsigned32))"))
+		(patt (type "List(Error) -> Try({  }, _a)"))
 		(patt (type "Error")))
 	(expressions
+		(expr (type "Num(Int(Unsigned64))"))
 		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))
+		(expr (type "(_a, _b, _c)"))
+		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned16)) -> Num(Int(Unsigned32))"))
+		(expr (type "List(Error) -> Try({  }, _a)"))
 		(expr (type "Error"))))
 ~~~

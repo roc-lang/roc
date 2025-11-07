@@ -45,11 +45,18 @@ b : r
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(d-let
+		(p-assign (ident "b"))
+		(e-anno-only)
+		(annotation
+			(ty-rigid-var (name "r")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs)
-	(expressions))
+	(defs
+		(patt (type "r")))
+	(expressions
+		(expr (type "r"))))
 ~~~
