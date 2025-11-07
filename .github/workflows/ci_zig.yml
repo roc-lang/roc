@@ -156,6 +156,22 @@ jobs:
           error_string_contains: 'double roundtrip bundle'
           retry_count: 3
 
+      - name: Build and execute tests, build repro executables. All in release mode. (x64)
+        if: ${{ !endsWith(matrix.os, '-arm') && matrix.os != 'macos-15' }}
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: 'zig build test -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false -Dcpu=x86_64_v3'
+          error_string_contains: 'double roundtrip bundle'
+          retry_count: 3
+             
+      - name: Build and execute tests, build repro executables. All in release mode. (ARM64)
+        if: ${{ endsWith(matrix.os, '-arm') || matrix.os == 'macos-15' }}
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: 'zig build test -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false'
+          error_string_contains: 'double roundtrip bundle'
+          retry_count: 3
+
       - name: Check for snapshot changes
         run: |
           git diff --exit-code test/snapshots || {
