@@ -85,13 +85,22 @@ b! : Str => Str
 		(annotation
 			(ty-fn (effectful true)
 				(ty-lookup (name "Str") (builtin))
+				(ty-lookup (name "Str") (builtin)))))
+	(d-let
+		(p-assign (ident "b!"))
+		(e-anno-only)
+		(annotation
+			(ty-fn (effectful true)
+				(ty-lookup (name "Str") (builtin))
 				(ty-lookup (name "Str") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "Str => Str"))
+		(patt (type "Str => Str")))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "Str => Str"))
+		(expr (type "Str => Str"))))
 ~~~

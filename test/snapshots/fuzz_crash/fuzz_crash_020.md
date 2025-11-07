@@ -1986,14 +1986,14 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
+		(patt (type "()"))
 		(patt (type "Bool -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
 		(patt (type "Error"))
 		(patt (type "[Rum]_others -> Error"))
 		(patt (type "[Blue]_others -> Error"))
 		(patt (type "Error"))
 		(patt (type "_arg -> [Stdo!(Error)]_others"))
-		(patt (type "Error"))
+		(patt (type "{  }"))
 		(patt (type "{}"))
 		(patt (type "Error")))
 	(type_decls
@@ -2023,14 +2023,14 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Error"))
+		(expr (type "()"))
 		(expr (type "Bool -> num where [num.from_int_digits : List(U8) -> Try(num, [OutOfRange])]"))
 		(expr (type "Error"))
 		(expr (type "[Rum]_others -> Error"))
 		(expr (type "[Blue]_others -> Error"))
 		(expr (type "Error"))
 		(expr (type "_arg -> [Stdo!(Error)]_others"))
-		(expr (type "Error"))
+		(expr (type "{  }"))
 		(expr (type "{}"))
 		(expr (type "Error"))))
 ~~~

@@ -707,7 +707,7 @@ fn processAssociatedItemsSecondPass(
                                         // Extract the last component of parent_name (e.g., "List" from "Builtin.List")
                                         const parent_full_text = self.env.getIdent(parent_name);
                                         const short_parent_text = if (std.mem.lastIndexOf(u8, parent_full_text, ".")) |last_dot|
-                                            parent_full_text[last_dot + 1..]
+                                            parent_full_text[last_dot + 1 ..]
                                         else
                                             parent_full_text;
                                         const short_qualified_idx = try self.env.insertQualifiedIdent(short_parent_text, decl_text);
@@ -747,7 +747,7 @@ fn processAssociatedItemsSecondPass(
                             // Extract the last component of parent_name (e.g., "List" from "Builtin.List")
                             const parent_full_text = self.env.getIdent(parent_name);
                             const short_parent_text = if (std.mem.lastIndexOf(u8, parent_full_text, ".")) |last_dot|
-                                parent_full_text[last_dot + 1..]
+                                parent_full_text[last_dot + 1 ..]
                             else
                                 parent_full_text;
                             const short_qualified_idx = try self.env.insertQualifiedIdent(short_parent_text, name_text);
@@ -2871,10 +2871,7 @@ pub fn canonicalizeExpr(
 
                                         const free_vars_start = self.scratch_free_vars.top();
                                         try self.scratch_free_vars.append(found_pattern_idx);
-                                        return CanonicalizedExpr{
-                                            .idx = expr_idx,
-                                            .free_vars = DataSpan.init(free_vars_start, 1)
-                                        };
+                                        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.init(free_vars_start, 1) };
                                     },
                                     .not_found => {
                                         // Associated item not found - generate error

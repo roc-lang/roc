@@ -455,11 +455,18 @@ pkg :
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(d-let
+		(p-assign (ident "pkg"))
+		(e-anno-only)
+		(annotation
+			(ty-malformed))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs)
-	(expressions))
+	(defs
+		(patt (type "Error")))
+	(expressions
+		(expr (type "Error"))))
 ~~~

@@ -227,3 +227,107 @@ test "List.first on nonempty list" {
     try testing.expectEqual(@as(u32, 1), summary.evaluated);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 }
+
+test "List.get with valid index returns Ok" {
+    const src =
+        \\import Builtin exposing [List, Try]
+        \\
+        \\result = List.get([1, 2, 3], 1)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 1 declaration with 0 crashes (List.get should succeed)
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "List.get with invalid index returns Err" {
+    const src =
+        \\import Builtin exposing [List, Try]
+        \\
+        \\result = List.get([1, 2, 3], 10)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 1 declaration with 0 crashes (List.get should return Err but not crash)
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "List.get on empty list returns Err" {
+    const src =
+        \\import Builtin exposing [List, Try]
+        \\
+        \\empty : List(U64)
+        \\empty = []
+        \\result = List.get(empty, 0)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 2 declarations with 0 crashes (List.get should return Err but not crash)
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "List.get with different element types - Str" {
+    const src =
+        \\import Builtin exposing [List, Try]
+        \\
+        \\result = List.get(["foo", "bar", "baz"], 1)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 1 declaration with 0 crashes
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "List.get with different element types - Bool" {
+    const src =
+        \\import Builtin exposing [List, Try, Bool]
+        \\
+        \\result = List.get([Bool.True, Bool.False, Bool.True], 2)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 1 declaration with 0 crashes
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "List.get with nested lists" {
+    const src =
+        \\import Builtin exposing [List, Try]
+        \\
+        \\result = List.get([[1, 2], [3, 4], [5, 6]], 1)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+
+    // Should evaluate 1 declaration with 0 crashes
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}

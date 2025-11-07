@@ -71,6 +71,18 @@ decode_things # After member name
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(d-let
+		(p-assign (ident "decode_things"))
+		(e-anno-only)
+		(annotation
+			(ty-fn (effectful false)
+				(ty-apply (name "List") (builtin)
+					(ty-apply (name "List") (builtin)
+						(ty-lookup (name "U8") (builtin))))
+				(ty-apply (name "List") (builtin)
+					(ty-rigid-var (name "a"))))
+			(where
+				(alias (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "Decode")))))
 	(s-import (module "Decode")
 		(exposes
 			(exposed (name "Decode") (wildcard false)))))
@@ -78,6 +90,8 @@ decode_things # After member name
 # TYPES
 ~~~clojure
 (inferred-types
-	(defs)
-	(expressions))
+	(defs
+		(patt (type "List(List(Num(Int(Unsigned8)))) -> List(a)")))
+	(expressions
+		(expr (type "List(List(Num(Int(Unsigned8)))) -> List(a)"))))
 ~~~
