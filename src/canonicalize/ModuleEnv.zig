@@ -972,6 +972,33 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             );
 
             break :blk report;
+        },        
+        .value_not_exposed => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "VALUE NOT EXPOSED", .runtime_error);
+
+            // Format the message to match origin/main
+            try report.document.addText("The value ");
+            try report.document.addInlineCode(self.getIdent(data.value_name));
+            try report.document.addReflowingText(" is not an exposed by the module ");
+            try report.document.addInlineCode(self.getIdent(data.module_name));
+            try report.document.addReflowingText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("You're attempting to use this value here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
         },
         .module_not_found => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
