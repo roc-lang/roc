@@ -25,8 +25,8 @@ jobs:
 
           zig build check-fmt
 
-        # We run zig check with tracy enabled.
-        # This ensure it compiles and doesn't go stale.
+      # We run zig check with tracy enabled.
+      # This ensure it compiles and doesn't go stale.
       - name: Checkout Tracy
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
         with:
@@ -74,15 +74,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [
-            macos-15-intel,
-            macos-15,
-            ubuntu-22.04,
-            ubuntu-24.04-arm,
-            windows-2022,
-            windows-2025,
-            windows-11-arm,
-          ] # macos-15 uses arm64
+        include:
+          - os: macos-15-intel
+            cpu_flag: -Dcpu=x86_64_v3
+          - os: macos-15
+            cpu_flag: ''
+          - os: ubuntu-22.04
+            cpu_flag: -Dcpu=x86_64_v3
+          - os: ubuntu-24.04-arm
+            cpu_flag: ''
+          - os: windows-2022
+            cpu_flag: -Dcpu=x86_64_v3
+          - os: windows-2025
+            cpu_flag: -Dcpu=x86_64_v3
+          - os: windows-11-arm
+            cpu_flag: ''
+
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
@@ -96,7 +103,7 @@ jobs:
           nix_path: nixpkgs=channel:nixos-25.05
 
       # temp fix, see https://roc.zulipchat.com/#narrow/channel/395097-compiler-development/topic/CI/near/542085291
-      - name: delete llvm-config 
+      - name: delete llvm-config
         if: startsWith(matrix.os, 'ubuntu') && endsWith(matrix.os, '-arm')
         run: |
           sudo rm /usr/lib/llvm-18/bin/llvm-config
@@ -104,8 +111,8 @@ jobs:
       - name: build roc + repro executables
         uses: ./.github/actions/flaky-retry
         with:
-          command: 'zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast'
-          error_string_contains: 'EndOfStream'
+          command: "zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }}"
+          error_string_contains: "EndOfStream"
           retry_count: 3
 
       - name: Run Test Platforms (Unix)
@@ -142,18 +149,20 @@ jobs:
       - name: zig snapshot tests
         run: zig build snapshot -- --debug
 
+      # 1) in debug mode
       - name: build and execute tests, build repro executables
         uses: ./.github/actions/flaky-retry
         with:
-          command: 'zig build test -Dfuzz -Dsystem-afl=false'
-          error_string_contains: 'double roundtrip bundle'
+          command: "zig build test -Dfuzz -Dsystem-afl=false"
+          error_string_contains: "double roundtrip bundle"
           retry_count: 3
 
+      # 2) in release mode
       - name: Build and execute tests, build repro executables. All in release mode.
         uses: ./.github/actions/flaky-retry
         with:
-          command: 'zig build test -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false'
-          error_string_contains: 'double roundtrip bundle'
+          command: "zig build test -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false ${{ matrix.cpu_flag }}"
+          error_string_contains: "double roundtrip bundle"
           retry_count: 3
 
       - name: Check for snapshot changes
