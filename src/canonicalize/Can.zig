@@ -889,16 +889,14 @@ fn processAssociatedItemsSecondPass(
                                         const pattern_idx = def_cir.pattern;
                                         const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
-                                        // Add unqualified name (e.g., "my_not") - overwrites placeholder alias
+                                        // Add unqualified name (e.g., "my_not")
                                         try current_scope.idents.put(self.env.gpa, decl_ident, pattern_idx);
 
-                                        // Add type-qualified name (e.g., "MyBool.my_not") - overwrites placeholder alias
-                                        // Use parent_type_name directly (no string parsing needed!)
+                                        // Add type-qualified name (e.g., "MyBool.my_not")
                                         const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), decl_text);
                                         try current_scope.idents.put(self.env.gpa, type_qualified_idx, pattern_idx);
 
-                                        // Add fully qualified name (e.g., "Test.MyBool.my_not") - shadows placeholder in parent scope
-                                        // We already have qualified_idx = insertQualifiedIdent(parent_text, decl_text)
+                                        // Add fully qualified name (e.g., "Test.MyBool.my_not")
                                         try current_scope.idents.put(self.env.gpa, qualified_idx, pattern_idx);
                                     }
                                 }
@@ -927,16 +925,14 @@ fn processAssociatedItemsSecondPass(
                             const pattern_idx = def_cir.pattern;
                             const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
-                            // Add unqualified name (e.g., "is_empty") - overwrites placeholder alias
+                            // Add unqualified name (e.g., "is_empty")
                             try current_scope.idents.put(self.env.gpa, name_ident, pattern_idx);
 
-                            // Add type-qualified name (e.g., "List.is_empty") - overwrites placeholder alias
-                            // Use parent_type_name directly (no string parsing needed!)
+                            // Add type-qualified name (e.g., "List.is_empty")
                             const type_qualified_idx = try self.env.insertQualifiedIdent(self.env.getIdent(parent_type_name), name_text);
                             try current_scope.idents.put(self.env.gpa, type_qualified_idx, pattern_idx);
 
-                            // Add fully qualified name (e.g., "Builtin.List.is_empty") - shadows placeholder in parent scope
-                            // We already have qualified_idx = insertQualifiedIdent(parent_text, name_text)
+                            // Add fully qualified name (e.g., "Builtin.List.is_empty")
                             try current_scope.idents.put(self.env.gpa, qualified_idx, pattern_idx);
 
                             try self.env.store.addScratchDef(def_idx);
