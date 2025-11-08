@@ -596,26 +596,16 @@ fn updateVar(self: *Self, target_var: Var, content: types_mod.Content, rank: typ
 /// other modules directly. The Bool and Result types are used in language constructs like
 /// `if` conditions and need to be available in every module's type store.
 fn copyBuiltinTypes(self: *Self) !void {
+    const bool_stmt_idx = self.common_idents.bool_stmt;
+
     if (self.common_idents.builtin_module) |builtin_env| {
         // Copy Bool type from Builtin module using the direct reference
-        const bool_stmt_idx = self.common_idents.bool_stmt;
         const bool_type_var = ModuleEnv.varFrom(bool_stmt_idx);
         self.bool_var = try self.copyVar(bool_type_var, builtin_env, Region.zero());
     } else {
-        // If Builtin module reference is null, we're compiling the Builtin module itself
-        // Search for the Bool type declaration in all_statements
-        const all_stmts = self.cir.store.sliceStatements(self.cir.all_statements);
-        for (all_stmts) |stmt_idx| {
-            const stmt = self.cir.store.getStatement(stmt_idx);
-            if (stmt == .s_nominal_decl) {
-                const header = self.cir.store.getTypeHeader(stmt.s_nominal_decl.header);
-                const ident_text = self.cir.getIdent(header.name);
-                if (std.mem.eql(u8, ident_text, "Builtin.Bool")) {
-                    self.bool_var = ModuleEnv.varFrom(stmt_idx);
-                    break;
-                }
-            }
-        }
+        // If Builtin module reference is null, use the statement from the current module
+        // This happens when compiling the Builtin module itself
+        self.bool_var = ModuleEnv.varFrom(bool_stmt_idx);
     }
 
     // Result type is accessed via external references, no need to copy it here
