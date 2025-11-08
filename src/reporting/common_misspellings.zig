@@ -33,6 +33,7 @@ pub const CommonMisspellings = struct {
         .{ "fn", "`fn` is not a keyword in Roc. Use `fn_name = |arg1, arg2| body` to define functions." },
         .{ "fun", "`fun` is not a keyword in Roc. Use `fn_name = |arg1, arg2| body` to define functions." },
         .{ "fn", "`fn` is not a keyword in Roc. Use `fn_name = |arg1, arg2| body` to define functions." },
+        .{ "is", "`is` is not a keyword in Roc." },
         .{ "lambda", "`lambda` is not a keyword in Roc. Use `fn_name = |arg1, arg2| body` to define functions." },
         .{ "class", "Roc doesn't have a `class` keyword, but it does have nominal types. Docs for nominal types can be found at <https://www.roc-lang.org/docs>" },
         .{ "trait", "Roc doesn't have a `trait` keyword, but it does have static dispatch. Docs for nominal types can be found at <https://www.roc-lang.org/docs>" },
