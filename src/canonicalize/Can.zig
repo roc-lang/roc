@@ -1280,36 +1280,55 @@ pub fn canonicalizeFile(
         }
     }
 
-    // Phase 1.5.5: Create placeholders for top-level decls and type annos
+    // Phase 1.5.5: Create placeholders for top-level decls
     // This ensures they're available when processing associated blocks
     // IMPORTANT: Only do this for type-modules, not apps/hosted/etc
     // Apps and other module types process their decls normally without placeholders
-    if (self.env.module_kind == .type_module) {
-        const top_level_stmts = self.parse_ir.store.statementSlice(file.statements);
-        for (top_level_stmts) |stmt_id| {
-            const stmt = self.parse_ir.store.getStatement(stmt_id);
-            switch (stmt) {
-                .decl => |decl| {
-                    const pattern = self.parse_ir.store.getPattern(decl.pattern);
-                    if (pattern == .ident) {
-                        const pattern_ident_tok = pattern.ident.ident_tok;
-                        if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
-                            const region = self.parse_ir.tokenizedRegionToRegion(decl.region);
+    switch (self.env.module_kind) {
+        .type_module => {
+            const top_level_stmts = self.parse_ir.store.statementSlice(file.statements);
+            for (top_level_stmts) |stmt_id| {
+                const stmt = self.parse_ir.store.getStatement(stmt_id);
+                switch (stmt) {
+                    .decl => |decl| {
+                        const pattern = self.parse_ir.store.getPattern(decl.pattern);
+                        if (pattern == .ident) {
+                            const pattern_ident_tok = pattern.ident.ident_tok;
+                            if (self.parse_ir.tokens.resolveIdentifier(pattern_ident_tok)) |decl_ident| {
+                                const region = self.parse_ir.tokenizedRegionToRegion(decl.region);
+                                const placeholder_pattern = Pattern{
+                                    .assign = .{
+                                        .ident = decl_ident,
+                                    },
+                                };
+                                const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, region);
+                                try self.placeholder_idents.put(self.env.gpa, decl_ident, {});
+                                const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                                try current_scope.idents.put(self.env.gpa, decl_ident, placeholder_pattern_idx);
+                            }
+                        }
+                    },
+                    .type_anno => |type_anno| {
+                        // Also create placeholders for top-level type annotations (like list_get_unsafe)
+                        // These are anno-only defs that need to be available in associated blocks
+                        if (self.parse_ir.tokens.resolveIdentifier(type_anno.name)) |anno_ident| {
+                            const region = self.parse_ir.tokenizedRegionToRegion(type_anno.region);
                             const placeholder_pattern = Pattern{
                                 .assign = .{
-                                    .ident = decl_ident,
+                                    .ident = anno_ident,
                                 },
                             };
                             const placeholder_pattern_idx = try self.env.addPattern(placeholder_pattern, region);
-                            try self.placeholder_idents.put(self.env.gpa, decl_ident, {});
+                            try self.placeholder_idents.put(self.env.gpa, anno_ident, {});
                             const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-                            try current_scope.idents.put(self.env.gpa, decl_ident, placeholder_pattern_idx);
+                            try current_scope.idents.put(self.env.gpa, anno_ident, placeholder_pattern_idx);
                         }
-                    }
-                },
-                else => {},
+                    },
+                    else => {},
+                }
             }
-        }
+        },
+        else => {},
     }
 
     // Phase 1.6: Now process all deferred type declaration associated blocks
@@ -1668,27 +1687,50 @@ fn createAnnoOnlyDef(
     where_clauses: ?WhereClause.Span,
     region: Region,
 ) std.mem.Allocator.Error!CIR.Def.Idx {
-    // Create the pattern for this def
-    const pattern = Pattern{
-        .assign = .{
-            .ident = ident,
-        },
-    };
-    const pattern_idx = try self.env.addPattern(pattern, region);
-
-    // Introduce the identifier to scope so it can be referenced
-    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident, pattern_idx, false, true)) {
-        .success => {},
-        .shadowing_warning => |shadowed_pattern_idx| {
-            const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
-            try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+    // Check if a placeholder exists for this identifier (from multi-phase canonicalization)
+    const pattern_idx = if (self.isPlaceholder(ident)) placeholder_check: {
+        // Use scopeLookup to search up the scope chain for the placeholder
+        switch (self.scopeLookup(.ident, ident)) {
+            .found => |existing_pattern| {
+                // Note: We don't remove from placeholder_idents here. The calling code
+                // (processAssociatedItemsSecondPass) will call updatePlaceholder to do that.
+                break :placeholder_check existing_pattern;
+            },
+            .not_found => {
+                // Placeholder is tracked but not found in any scope - this shouldn't happen
+                // Create a new pattern as fallback
+                const pattern = Pattern{
+                    .assign = .{
+                        .ident = ident,
+                    },
+                };
+                break :placeholder_check try self.env.addPattern(pattern, region);
+            },
+        }
+    } else create_new: {
+        // No placeholder - create new pattern and introduce to scope
+        const pattern = Pattern{
+            .assign = .{
                 .ident = ident,
-                .region = region,
-                .original_region = original_region,
-            } });
-        },
-        else => {},
-    }
+            },
+        };
+        const new_pattern_idx = try self.env.addPattern(pattern, region);
+
+        // Introduce the identifier to scope so it can be referenced
+        switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident, new_pattern_idx, false, true)) {
+            .success => {},
+            .shadowing_warning => |shadowed_pattern_idx| {
+                const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+                try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                    .ident = ident,
+                    .region = region,
+                    .original_region = original_region,
+                } });
+            },
+            else => {},
+        }
+        break :create_new new_pattern_idx;
+    };
 
     // Note: We don't update placeholders here. For associated items, the calling code
     // (processAssociatedItemsSecondPass) will update all three identifiers (qualified,
