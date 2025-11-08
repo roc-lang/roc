@@ -1075,9 +1075,9 @@ fn processAssociatedItemsFirstPass(
 
                     // Check if the fully qualified name starts with the module name
                     const user_facing_text = if (std.mem.startsWith(u8, fully_qualified_text, module_prefix) and
-                                                fully_qualified_text.len > module_prefix.len and
-                                                fully_qualified_text[module_prefix.len] == '.')
-                        fully_qualified_text[module_prefix.len + 1..] // Skip "module."
+                        fully_qualified_text.len > module_prefix.len and
+                        fully_qualified_text[module_prefix.len] == '.')
+                        fully_qualified_text[module_prefix.len + 1 ..] // Skip "module."
                     else
                         fully_qualified_text; // No module prefix, use as-is
 
@@ -1125,9 +1125,9 @@ fn processAssociatedItemsFirstPass(
                     const module_prefix = self.env.module_name;
 
                     const user_facing_text = if (std.mem.startsWith(u8, fully_qualified_text, module_prefix) and
-                                                fully_qualified_text.len > module_prefix.len and
-                                                fully_qualified_text[module_prefix.len] == '.')
-                        fully_qualified_text[module_prefix.len + 1..]
+                        fully_qualified_text.len > module_prefix.len and
+                        fully_qualified_text[module_prefix.len] == '.')
+                        fully_qualified_text[module_prefix.len + 1 ..]
                     else
                         fully_qualified_text;
 
