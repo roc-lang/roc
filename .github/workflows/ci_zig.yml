@@ -76,25 +76,18 @@ jobs:
       matrix:
         include:
           - os: macos-15-intel
-            artifact_name: macos_x86_64
             cpu_flag: -Dcpu=x86_64_v3
           - os: macos-15
-            artifact_name: macos_apple_silicon
             cpu_flag: ''
           - os: ubuntu-22.04
-            artifact_name: linux_x86_64
             cpu_flag: -Dcpu=x86_64_v3
           - os: ubuntu-24.04-arm
-            artifact_name: linux_arm64
             cpu_flag: ''
           - os: windows-2022
-            artifact_name: windows_x86_64
             cpu_flag: -Dcpu=x86_64_v3
           - os: windows-2025
-            artifact_name: windows_x86_64_new
             cpu_flag: -Dcpu=x86_64_v3
           - os: windows-11-arm
-            artifact_name: windows_arm64
             cpu_flag: ''
 
     steps:
