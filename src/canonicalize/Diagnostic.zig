@@ -525,7 +525,7 @@ pub const Diagnostic = union(enum) {
             try report.document.addLineBreak();
             try report.document.addLineBreak();
             try report.document.addText("Tip: ");
-            try report.document.addReflowingText(tip);
+            try report.document.addReflowingTextWithBackticks(tip);
         }
 
         try report.document.addLineBreak();

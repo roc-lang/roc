@@ -9,6 +9,7 @@ pub const CommonMisspellings = struct {
         // Boolean operators
         .{ "&&", "Roc uses the keyword `and` instead of `&&`, and the keyword `or` instead of `||`." },
         .{ "||", "Roc uses the keyword `and` instead of `&&`, and the keyword `or` instead of `||`." },
+        .{ "\\", "Roc syntax does not use single backslashes. Roc lambda syntax is `|arg1, arg2| body`, and double backslash (`\\\\`) begins a line in a multiline string." },
 
         // Comparison operators
         .{ "/=", "Roc uses `!=` for inequality, not `/=`." },

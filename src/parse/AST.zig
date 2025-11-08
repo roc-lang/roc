@@ -331,7 +331,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
                 try report.document.addLineBreak();
                 try report.document.addLineBreak();
                 try report.document.addText("Tip: ");
-                try report.document.addReflowingText(tip);
+                try report.document.addReflowingTextWithBackticks(tip);
             }
         },
         .pattern_list_rest_old_syntax => {
@@ -367,7 +367,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
                 try report.document.addLineBreak();
                 try report.document.addLineBreak();
                 try report.document.addText("Tip: ");
-                try report.document.addReflowingText(tip);
+                try report.document.addReflowingTextWithBackticks(tip);
             }
         },
         .string_unexpected_token => {
@@ -399,7 +399,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
                 try report.document.addLineBreak();
                 try report.document.addLineBreak();
                 try report.document.addText("Tip: ");
-                try report.document.addReflowingText(tip);
+                try report.document.addReflowingTextWithBackticks(tip);
             }
         },
         .import_must_be_top_level => {
