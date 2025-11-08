@@ -25,8 +25,8 @@ jobs:
 
           zig build check-fmt
 
-        # We run zig check with tracy enabled.
-        # This ensure it compiles and doesn't go stale.
+      # We run zig check with tracy enabled.
+      # This ensure it compiles and doesn't go stale.
       - name: Checkout Tracy
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
         with:
@@ -83,6 +83,12 @@ jobs:
             windows-2025,
             windows-11-arm,
           ] # macos-15 uses arm64
+    # Centralize the CPU flag here:
+    # - x86 runners get "-Dcpu=x86_64_v3"
+    # - arm runners / macos arm get ""
+    env:
+      CPU_FLAG: ${{ (endsWith(matrix.os, '-arm') || matrix.os == 'macos-15') && '' || '-Dcpu=x86_64_v3' }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
@@ -96,7 +102,7 @@ jobs:
           nix_path: nixpkgs=channel:nixos-25.05
 
       # temp fix, see https://roc.zulipchat.com/#narrow/channel/395097-compiler-development/topic/CI/near/542085291
-      - name: delete llvm-config 
+      - name: delete llvm-config
         if: startsWith(matrix.os, 'ubuntu') && endsWith(matrix.os, '-arm')
         run: |
           sudo rm /usr/lib/llvm-18/bin/llvm-config
@@ -104,8 +110,8 @@ jobs:
       - name: build roc + repro executables
         uses: ./.github/actions/flaky-retry
         with:
-          command: 'zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast'
-          error_string_contains: 'EndOfStream'
+          command: "zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ env.CPU_FLAG }}"
+          error_string_contains: "EndOfStream"
           retry_count: 3
 
       - name: Run Test Platforms (Unix)
@@ -142,34 +148,20 @@ jobs:
       - name: zig snapshot tests
         run: zig build snapshot -- --debug
 
+      # 1) debug-ish test build
       - name: build and execute tests, build repro executables
         uses: ./.github/actions/flaky-retry
         with:
-          command: 'zig build test -Dfuzz -Dsystem-afl=false'
-          error_string_contains: 'double roundtrip bundle'
+          command: "zig build test -Dfuzz -Dsystem-afl=false ${{ env.CPU_FLAG }}"
+          error_string_contains: "double roundtrip bundle"
           retry_count: 3
 
+      # 2) release test build (applies CPU_FLAG automatically)
       - name: Build and execute tests, build repro executables. All in release mode.
         uses: ./.github/actions/flaky-retry
         with:
-          command: 'zig build test -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false'
-          error_string_contains: 'double roundtrip bundle'
-          retry_count: 3
-
-      - name: Build and execute tests, build repro executables. All in release mode. (x64)
-        if: ${{ !endsWith(matrix.os, '-arm') && matrix.os != 'macos-15' }}
-        uses: ./.github/actions/flaky-retry
-        with:
-          command: 'zig build test -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false -Dcpu=x86_64_v3'
-          error_string_contains: 'double roundtrip bundle'
-          retry_count: 3
-             
-      - name: Build and execute tests, build repro executables. All in release mode. (ARM64)
-        if: ${{ endsWith(matrix.os, '-arm') || matrix.os == 'macos-15' }}
-        uses: ./.github/actions/flaky-retry
-        with:
-          command: 'zig build test -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false'
-          error_string_contains: 'double roundtrip bundle'
+          command: "zig build test -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false ${{ env.CPU_FLAG }}"
+          error_string_contains: "double roundtrip bundle"
           retry_count: 3
 
       - name: Check for snapshot changes
