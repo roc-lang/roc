@@ -876,8 +876,6 @@ fn processAssociatedItemsFirstPass(
             },
             else => {
                 // Skip other statement types in first pass
-                // Note: .type_anno is skipped here because anno-only patterns are created
-                // in the second pass, not the first pass
             },
         }
     }
