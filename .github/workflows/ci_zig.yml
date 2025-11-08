@@ -87,7 +87,7 @@ jobs:
     # - x86 runners get "-Dcpu=x86_64_v3"
     # - arm runners / macos arm get ""
     env:
-      CPU_FLAG: ${{ (endsWith(matrix.os, '-arm') || matrix.os == 'macos-15') && '' || '-Dcpu=x86_64_v3' }}
+      CPU_FLAG: ${{ (endsWith(matrix.os, '-arm') || matrix.os == 'macos-15') && '-Dcpu=generic' || '-Dcpu=x86_64_v3' }}
 
     steps:
       - name: Checkout
