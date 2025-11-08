@@ -155,6 +155,39 @@ const TypeBindingLocationConst = struct {
     binding: *const Scope.TypeBinding,
 };
 
+/// Add all qualified variants of a name to the current scope.
+/// For a name like "Builtin.List.get", this adds:
+/// - "get" (unqualified)
+/// - "List.get" (1 level of qualification)
+/// - "Builtin.List.get" (full qualification)
+/// Works for any depth of nesting.
+fn addAllQualifiedVariants(
+    self: *Self,
+    parent_full_text: []const u8,
+    name_text: []const u8,
+    pattern_idx: Pattern.Idx,
+) !void {
+    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+
+    // Add unqualified name (e.g., "get")
+    const name_ident = try self.env.insertIdent(base.Ident.for_text(name_text));
+    try current_scope.idents.put(self.env.gpa, name_ident, pattern_idx);
+
+    // Add all qualified variants by iterating through dots
+    // For "Builtin.List", add "List.get" and "Builtin.List.get"
+    var start: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, parent_full_text, start, '.')) |dot_pos| {
+        const prefix = parent_full_text[dot_pos + 1..];
+        const qualified_idx = try self.env.insertQualifiedIdent(prefix, name_text);
+        try current_scope.idents.put(self.env.gpa, qualified_idx, pattern_idx);
+        start = dot_pos + 1;
+    }
+
+    // Add the full qualified name (e.g., "Builtin.List.get")
+    const full_qualified_idx = try self.env.insertQualifiedIdent(parent_full_text, name_text);
+    try current_scope.idents.put(self.env.gpa, full_qualified_idx, pattern_idx);
+}
+
 /// Deinitialize canonicalizer resources
 pub fn deinit(
     self: *Self,
@@ -694,24 +727,12 @@ fn processAssociatedItemsSecondPass(
                                         const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                                         try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
 
-                                        // Also make the unqualified name and short qualified name available in the current scope
-                                        // (This allows `get`, `List.get`, and `Builtin.List.get` to all work)
+                                        // Also make all qualified variants available in the current scope
+                                        // (This allows `get`, `List.get`, `Builtin.List.get`, etc. to all work)
                                         const def_cir = self.env.store.getDef(def_idx);
                                         const pattern_idx = def_cir.pattern;
-                                        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-
-                                        // Add unqualified name (e.g., "get")
-                                        try current_scope.idents.put(self.env.gpa, name_ident, pattern_idx);
-
-                                        // Also add short qualified name (e.g., "List.get")
-                                        // Extract the last component of parent_name (e.g., "List" from "Builtin.List")
                                         const parent_full_text = self.env.getIdent(parent_name);
-                                        const short_parent_text = if (std.mem.lastIndexOf(u8, parent_full_text, ".")) |last_dot|
-                                            parent_full_text[last_dot + 1 ..]
-                                        else
-                                            parent_full_text;
-                                        const short_qualified_idx = try self.env.insertQualifiedIdent(short_parent_text, decl_text);
-                                        try current_scope.idents.put(self.env.gpa, short_qualified_idx, pattern_idx);
+                                        try self.addAllQualifiedVariants(parent_full_text, decl_text, pattern_idx);
                                     } else {}
                                 }
                             }
@@ -734,24 +755,12 @@ fn processAssociatedItemsSecondPass(
                             const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                             try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
 
-                            // Also make the unqualified name and short qualified name available in the current scope
-                            // (This allows `is_empty`, `List.is_empty`, and `Builtin.List.is_empty` to all work)
+                            // Also make all qualified variants available in the current scope
+                            // (This allows `is_empty`, `List.is_empty`, `Builtin.List.is_empty`, etc. to all work)
                             const def_cir = self.env.store.getDef(def_idx);
                             const pattern_idx = def_cir.pattern;
-                            const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-
-                            // Add unqualified name (e.g., "is_empty")
-                            try current_scope.idents.put(self.env.gpa, name_ident, pattern_idx);
-
-                            // Also add short qualified name (e.g., "List.is_empty")
-                            // Extract the last component of parent_name (e.g., "List" from "Builtin.List")
                             const parent_full_text = self.env.getIdent(parent_name);
-                            const short_parent_text = if (std.mem.lastIndexOf(u8, parent_full_text, ".")) |last_dot|
-                                parent_full_text[last_dot + 1 ..]
-                            else
-                                parent_full_text;
-                            const short_qualified_idx = try self.env.insertQualifiedIdent(short_parent_text, name_text);
-                            try current_scope.idents.put(self.env.gpa, short_qualified_idx, pattern_idx);
+                            try self.addAllQualifiedVariants(parent_full_text, name_text, pattern_idx);
 
                             try self.env.store.addScratchDef(def_idx);
                         },
