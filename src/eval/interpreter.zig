@@ -2101,7 +2101,6 @@ pub const Interpreter = struct {
                     return error.NotImplemented;
                 };
 
-
                 // Check what type of node this is by using the store's method
                 const is_def = other_env.store.isDefNode(lookup.target_node_idx);
 

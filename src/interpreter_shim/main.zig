@@ -215,12 +215,10 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*Modu
         return error.ModuleEnvSetupFailed;
     };
 
-
     // Deserialize ALL module environments
     for (0..header_ptr.module_count) |i| {
         const env_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(module_env_offsets[i]));
         const serialized_ptr: *ModuleEnv.Serialized = @ptrFromInt(env_addr);
-
 
         // Extract and relocate module_name from serialized data
         const module_name_slice_parts = serialized_ptr.module_name;
@@ -235,12 +233,10 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*Modu
         // Deserialize the ModuleEnv with the relocated module_name
         // Empty string is used for source since it's not needed in the interpreter
         module_envs[i] = try serialized_ptr.deserialize(offset, std.heap.page_allocator, "", module_name);
-
     }
 
     // Store all module envs globally
     global_module_envs = module_envs;
-
 
     // Return the first (primary/root) module
     return module_envs[0];
