@@ -213,8 +213,6 @@ test "e_anno_only - value only crashes when accessed (False branch)" {
 
 test "List.first on nonempty list" {
     const src =
-        \\import Builtin exposing [List, Try]
-        \\
         \\result = List.first([1, 2, 3])
     ;
 
@@ -230,8 +228,6 @@ test "List.first on nonempty list" {
 
 test "List.get with valid index returns Ok" {
     const src =
-        \\import Builtin exposing [List, Try]
-        \\
         \\result = List.get([1, 2, 3], 1)
     ;
 
@@ -247,8 +243,6 @@ test "List.get with valid index returns Ok" {
 
 test "List.get with invalid index returns Err" {
     const src =
-        \\import Builtin exposing [List, Try]
-        \\
         \\result = List.get([1, 2, 3], 10)
     ;
 
@@ -264,8 +258,6 @@ test "List.get with invalid index returns Err" {
 
 test "List.get on empty list returns Err" {
     const src =
-        \\import Builtin exposing [List, Try]
-        \\
         \\empty : List(U64)
         \\empty = []
         \\result = List.get(empty, 0)
@@ -283,8 +275,6 @@ test "List.get on empty list returns Err" {
 
 test "List.get with different element types - Str" {
     const src =
-        \\import Builtin exposing [List, Try]
-        \\
         \\result = List.get(["foo", "bar", "baz"], 1)
     ;
 
@@ -300,9 +290,7 @@ test "List.get with different element types - Str" {
 
 test "List.get with different element types - Bool" {
     const src =
-        \\import Builtin exposing [List, Try, Bool]
-        \\
-        \\result = List.get([Bool.True, Bool.False, Bool.True], 2)
+        \\result = List.get([True, False, True], 2)
     ;
 
     var result = try parseCheckAndEvalModule(src);
@@ -317,8 +305,6 @@ test "List.get with different element types - Bool" {
 
 test "List.get with nested lists" {
     const src =
-        \\import Builtin exposing [List, Try]
-        \\
         \\result = List.get([[1, 2], [3, 4], [5, 6]], 1)
     ;
 

@@ -950,7 +950,7 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx) std.m
     try self.generateAnnoTypeInPlace(annotation.anno, .annotation);
 
     // Redirect the root annotation to inner annotation
-    _ = try self.types.setVarRedirect(ModuleEnv.varFrom(annotation_idx), ModuleEnv.varFrom(annotation.anno));
+    try self.types.setVarRedirect(ModuleEnv.varFrom(annotation_idx), ModuleEnv.varFrom(annotation.anno));
 }
 
 /// Given a where clause, generate static dispatch constraints and add to scratch_static_dispatch_constraints
@@ -2455,9 +2455,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
             // We never instantiate rigid variables
             if (resolved_pat.rank == Rank.generalized and resolved_pat.content != .rigid) {
                 const instantiated = try self.instantiateVar(pat_var, rank, .use_last_var);
-                _ = try self.types.setVarRedirect(expr_var, instantiated);
+                try self.types.setVarRedirect(expr_var, instantiated);
             } else {
-                _ = try self.types.setVarRedirect(expr_var, pat_var);
+                try self.types.setVarRedirect(expr_var, pat_var);
             }
 
             // Unify this expression with the referenced pattern
@@ -2649,7 +2649,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
         },
         .e_closure => |closure| {
             does_fx = try self.checkExpr(closure.lambda_idx, rank, expected) or does_fx;
-            _ = try self.types.setVarRedirect(expr_var, ModuleEnv.varFrom(closure.lambda_idx));
+            try self.types.setVarRedirect(expr_var, ModuleEnv.varFrom(closure.lambda_idx));
         },
         // function calling //
         .e_call => |call| {
@@ -2816,7 +2816,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                                 }
 
                                 // Redirect the expr to the function's return type
-                                _ = try self.types.setVarRedirect(expr_var, func.ret);
+                                try self.types.setVarRedirect(expr_var, func.ret);
                             } else {
                                 // TODO(jared): Better arity difference error message
 
@@ -2833,7 +2833,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                                 try self.var_pool.addVarToRank(call_func_var, rank);
 
                                 _ = try self.unify(func_var, call_func_var, rank);
-                                _ = try self.types.setVarRedirect(expr_var, call_func_ret);
+                                try self.types.setVarRedirect(expr_var, call_func_ret);
                             }
                         } else {
                             // We get here if the type of expr being called
@@ -2861,7 +2861,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                             // Then, we set the root expr to redirect to the return
                             // type of that function, since a call expr ultimate
                             // resolve to the  returned type
-                            _ = try self.types.setVarRedirect(expr_var, call_func_ret);
+                            try self.types.setVarRedirect(expr_var, call_func_ret);
                         }
                     }
                 },
@@ -2986,7 +2986,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
         },
         .e_dbg => |dbg| {
             does_fx = try self.checkExpr(dbg.expr, rank, expected) or does_fx;
-            _ = try self.types.setVarRedirect(expr_var, ModuleEnv.varFrom(dbg.expr));
+            try self.types.setVarRedirect(expr_var, ModuleEnv.varFrom(dbg.expr));
         },
         .e_expect => |expect| {
             does_fx = try self.checkExpr(expect.body, rank, expected) or does_fx;
@@ -3006,7 +3006,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, rank: types_mod.Rank, expected
                 },
                 .expected => |expected_type| {
                     // Redirect expr_var to the annotation var so that lookups get the correct type
-                    _ = try self.types.setVarRedirect(expr_var, expected_type.var_);
+                    try self.types.setVarRedirect(expr_var, expected_type.var_);
                 },
             }
         },
